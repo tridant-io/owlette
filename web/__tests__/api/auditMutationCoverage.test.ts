@@ -85,6 +85,12 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'hoot/autonomous',
   // internal-secret + cron-secret escalation notifier; no user actor.
   'hoot/escalation',
+  // e2e-only issue file sink standing in for an R2 presigned PUT — hard 404
+  // unless OWLETTE_E2E=1, so it does not exist in any real deployment.
+  'issue-attachments/e2e-put',
+  // session-only: mints signed PUT urls for the dashboard's issue screenshots and videos, writes
+  // nothing. The issue that names them is filed by `bug-report`, itself exempt above.
+  'issue-attachments/upload-url',
   // public DMCA § 512(c)(3) notice intake; touches no fleet, account, or security state.
   'legal/dmca',
   // login-time TOTP / backup-code verification (+ optional device-trust cookie); the sign-in ceremony.

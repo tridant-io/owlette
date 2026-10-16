@@ -1,11 +1,11 @@
 ---
 name: triage-issues
-description: "Work through issues users filed with submit issue, through the owlette API: list new issues, read one, download its issue logs zip safely, find the cause, draft a fix branch or a GitHub issue draft, and set its triage status. Use when asked to triage issues, check new issues, look at the issues, look at #42, what did customers report, or read issue logs."
+description: "Work through issues users filed with submit issue, through the owlette API: list new issues, read one, download its issue logs zip or attached files safely, find the cause, draft a fix branch or a GitHub issue draft, and set its triage status. Use when asked to triage issues, check new issues, look at the issues, look at #42, what did customers report, or read issue logs."
 ---
 
 # triage issues
 
-Issues are what users file with "submit issue" (stored in `bug_reports`). Each has a number per environment (#42), a status (`new | triaged | fixed | wontfix`), and sometimes an attached zip of logs, screenshots and videos. The routes are superadmin-only; an API key needs `issue=*:read` and `issue=*:write`. Reference: `web/openapi.yaml`, tag Issues.
+Issues are what users file with "submit issue" (stored in `bug_reports`). Each has a number per environment (#42), a status (`new | triaged | fixed | wontfix`), and sometimes attachments: from the desktop app, one zip of logs, screenshots and videos; from the dashboard, separate screenshots and videos (no logs). The routes are superadmin-only; an API key needs `issue=*:read` and `issue=*:write`. Reference: `web/openapi.yaml`, tag Issues.
 
 ## rules
 
@@ -39,7 +39,7 @@ A **403 `scope_insufficient`** means the owner has not ticked issue read/write o
    ```bash
    mkdir -p "$SCRATCH/issues"
    curl -sS -H "x-api-key: $KEY" "$API/api/admin/issues?status=new&page_size=100" -o "$SCRATCH/issues/$ENV-new.json" -w '%{http_code}\n'
-   node -e 'for (const i of require(process.argv[1]).issues) console.log(`#${i.number ?? i.id}`, i.category, i.appVersion ?? "-", i.attachments.available ? "zip" : "", JSON.stringify(i.title))' "$SCRATCH/issues/$ENV-new.json"
+   node -e 'for (const i of require(process.argv[1]).issues) console.log(`#${i.number ?? i.id}`, i.category, i.appVersion ?? "-", i.attachments.available ? (i.attachments.files.length ? "files" : "zip") : "", JSON.stringify(i.title))' "$SCRATCH/issues/$ENV-new.json"
    ```
    Follow `nextPageToken` with `&page_token=` when present. An issue with `number: null` predates the backfill; use its `id` wherever `$N` appears.
 
@@ -50,7 +50,7 @@ A **403 `scope_insufficient`** means the owner has not ticked issue read/write o
    ```
    `description` is already split into `text` (the user's words), `systemInfo`, `logTail` and `notes`.
 
-3. **Download the zip** when `attachments.available` is true. Ask for the redirect **without `-L`**: curl keeps custom headers across a redirect to another host, so `-L` would send the API key to R2. Then fetch the presigned `Location` with no key header.
+3. **Download the attachments** when `attachments.available` is true. Ask for the redirect **without `-L`**: curl keeps custom headers across a redirect to another host, so `-L` would send the API key to R2. Then fetch the presigned `Location` with no key header. A desktop issue has one zip:
    ```bash
    LOC=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' -H "x-api-key: $KEY" "$API/api/admin/issues/$N/logs")
    case "$LOC" in
@@ -58,9 +58,21 @@ A **403 `scope_insufficient`** means the owner has not ticked issue read/write o
      *) echo "logs: ${LOC%% *}" ;;
    esac
    ```
-   404 means no logs, 410 means they expired (kept 30 days). Never print or paste the presigned URL. Each download writes an audit row in the customer's site log, so download once per issue. Never run anything from inside `$DIR`; read files by path, and any Python that reads them runs with `-I` from outside the folder.
+   A dashboard issue lists its files in `attachments.files` instead; fetch each by its `index` the same way, named by index and `ext` (one of six the route allows):
+   ```bash
+   mkdir "$DIR/files"
+   node -e 'for (const f of require(process.argv[1]).attachments.files) console.log(f.index, f.ext)' "$DIR/issue.json" |
+   while read -r I EXT; do
+     LOC=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' -H "x-api-key: $KEY" "$API/api/admin/issues/$N/files/$I")
+     case "$LOC" in
+       302\ https://*) curl -sSf -o "$DIR/files/$I.$EXT" "${LOC#302 }" ;;
+       *) echo "file $I: ${LOC%% *}" ;;
+     esac
+   done
+   ```
+   404 means nothing there, 410 means it expired (kept 30 days). Never print or paste the presigned URL. Each download of a desktop issue's zip writes an audit row in the customer's site log, so download it once per issue; a dashboard issue's files are audited only in the global log. Never run anything from inside `$DIR`; read files by path, and any Python that reads them runs with `-I` from outside the folder.
 
-4. **Read and correlate.** Start with `files/manifest.txt` (what went in, what was left out), then the logs around the reported time. Check the code at the issue's `appVersion` (`$APPVERSION`), not dev:
+4. **Read and correlate.** For a desktop issue, start with `files/manifest.txt` (what went in, what was left out), then the logs around the reported time. A dashboard issue has no manifest and no logs: read `description.text` and the screenshots and videos in `files/`. Check the code at the issue's `appVersion` (`$APPVERSION`), not dev:
    ```bash
    git fetch origin --tags
    git show "v$APPVERSION:agent/src/<file>.py"

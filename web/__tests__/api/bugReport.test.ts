@@ -178,7 +178,7 @@ describe('POST /api/bug-report', () => {
     it('writes nothing and sends no email when the request is refused', async () => {
       counter.next = 3;
       asAgent();
-      expect((await report({ title: '' })).status).toBe(400);
+      expect((await report({ category: 'nope' })).status).toBe(400);
       expect(written).toHaveLength(0);
       expect(counter.next).toBe(3);
       expect(mockSend).not.toHaveBeenCalled();
@@ -505,5 +505,211 @@ describe('POST /api/bug-report', () => {
     expect((await report({ logsKey: KEY })).status).toBe(400);
     expect(written).toHaveLength(0);
     quiet.mockRestore();
+  });
+
+  describe('title', () => {
+    it.each([
+      ['absent', undefined],
+      ['blank', '   '],
+      ['not a string', 42],
+    ])('derives the title from the first line of the text when it is %s', async (_label, title) => {
+      mockRequireSession.mockResolvedValue('user-1');
+      const res = await report({ title, description: '\n\n  the   dashboard\tfroze  \nafter login' }, {});
+
+      expect(res.status).toBe(200);
+      expect(written[0].data.title).toBe('the dashboard froze');
+      expect(sent().subject).toBe('[DEVELOPMENT] issue #1 · something broke — the dashboard froze');
+    });
+
+    it("replaces the agent's placeholder title with the user's words", async () => {
+      asAgent();
+      await report({
+        title: 'agent feedback',
+        description: 'kiosk went black\n\nscreenshots attached: 1\n\n--- system info ---\n  hostname: KIOSK-01',
+      });
+
+      expect(written[0].data.title).toBe('kiosk went black');
+    });
+
+    it('cuts a long first line to 120 characters with an ellipsis', async () => {
+      asAgent();
+      await report({ title: undefined, description: `${'a'.repeat(150)}\nsecond line` });
+
+      const title = written[0].data.title as string;
+      expect(title).toHaveLength(120);
+      expect(title).toBe(`${'a'.repeat(119)}…`);
+    });
+
+    it('falls back to the category label when there is no text', async () => {
+      asAgent();
+      await report({ title: 'agent feedback', category: 'rant', description: '--- system info ---\n  hostname: KIOSK-01' });
+
+      expect(written[0].data.title).toBe('i just need to vent');
+    });
+
+    it('keeps a sent title as it is', async () => {
+      asAgent();
+      await report({ title: '  the service stopped  ' });
+      expect(written[0].data.title).toBe('the service stopped');
+    });
+
+    it('400s a sent title over 200 characters', async () => {
+      asAgent();
+      expect((await report({ title: 'x'.repeat(201) })).status).toBe(400);
+      expect(written).toHaveLength(0);
+    });
+  });
+
+  describe('web files', () => {
+    const USER = 'user-1';
+    const MB = 1024 * 1024;
+    const fileKey = (n: number, ext = 'png', uid = USER) =>
+      `issues/web/${uid}/0b5c1f2e-8a6d-4c3e-9f1a-${n.toString(16).padStart(12, '0')}.${ext}`;
+    const fromWeb = (extra: Record<string, unknown>) => report(extra, {});
+
+    beforeEach(() => {
+      mockRequireSession.mockResolvedValue(USER);
+    });
+
+    it('stores each file with its HEAD size and a 30 day expiry, and counts them in the email', async () => {
+      const files = [fileKey(1, 'png'), fileKey(2, 'mp4'), fileKey(3, 'jpg')];
+      const sizes: Record<string, number> = { [files[0]]: 1000, [files[1]]: 5 * MB, [files[2]]: 2000 };
+      mockHead.mockImplementation(async (key: string) => ({ size: sizes[key] }));
+      const before = Date.now();
+      // the client's own sizes are never read
+      const res = await fromWeb({ files, sizes: [1, 1, 1] });
+
+      expect(res.status).toBe(200);
+      expect(mockHead.mock.calls.map((c) => c[0])).toEqual(files);
+      const data = written[0].data;
+      expect(data.files).toEqual([
+        { key: files[0], ext: 'png', kind: 'screenshot', size: 1000 },
+        { key: files[1], ext: 'mp4', kind: 'video', size: 5 * MB },
+        { key: files[2], ext: 'jpg', kind: 'screenshot', size: 2000 },
+      ]);
+      const expiresAt = data.filesExpireAt as Timestamp;
+      expect(expiresAt).toBeInstanceOf(Timestamp);
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      expect(expiresAt.toMillis()).toBeGreaterThanOrEqual(before + thirtyDays);
+      expect(expiresAt.toMillis()).toBeLessThanOrEqual(Date.now() + thirtyDays);
+      expect(data).not.toHaveProperty('logs');
+      expect(sent().html).toContain(attached('2 screenshots and 1 video'));
+    });
+
+    it('takes 10 screenshots and 20 videos within the total', async () => {
+      const files = [
+        ...Array.from({ length: 10 }, (_, i) => fileKey(i, 'webp')),
+        ...Array.from({ length: 20 }, (_, i) => fileKey(100 + i, 'webm')),
+      ];
+      mockHead.mockResolvedValue({ size: MB });
+      const res = await fromWeb({ files });
+
+      expect(res.status).toBe(200);
+      expect(written[0].data.files).toHaveLength(30);
+    });
+
+    it.each([
+      ['another user', [fileKey(1, 'png', 'user-2')]],
+      ['the agent zip prefix', [KEY]],
+      ['a key that is not a uuid', ['issues/web/user-1/screenshot.png']],
+      ['a type issues do not take', [fileKey(1, 'gif')]],
+      ['a nested path', [`issues/web/${USER}/../user-2/0b5c1f2e-8a6d-4c3e-9f1a-000000000001.png`]],
+    ])('400s a file key for %s, before any lookup', async (_label, files) => {
+      const res = await fromWeb({ files });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('files names an attachment that is not yours');
+      expect(mockHead).not.toHaveBeenCalled();
+      expect(written).toHaveLength(0);
+    });
+
+    it.each([
+      ['a string', fileKey(1)],
+      ['an empty list', []],
+      ['a list with a number', [fileKey(1), 42]],
+      ['over 30 entries', Array.from({ length: 31 }, (_, i) => fileKey(i))],
+      ['an object', { key: fileKey(1) }],
+    ])('400s files that are %s', async (_label, files) => {
+      const res = await fromWeb({ files });
+
+      expect(res.status).toBe(400);
+      expect(mockHead).not.toHaveBeenCalled();
+      expect(written).toHaveLength(0);
+    });
+
+    it('400s a file named twice', async () => {
+      const res = await fromWeb({ files: [fileKey(1), fileKey(1)] });
+      expect(res.status).toBe(400);
+      expect(mockHead).not.toHaveBeenCalled();
+    });
+
+    it('400s more than 10 screenshots', async () => {
+      const res = await fromWeb({ files: Array.from({ length: 11 }, (_, i) => fileKey(i, 'png')) });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('up to 10 screenshots per issue');
+      expect(mockHead).not.toHaveBeenCalled();
+      expect(written).toHaveLength(0);
+    });
+
+    it('400s a file that did not finish uploading', async () => {
+      mockHead.mockImplementation(async (key: string) => (key === fileKey(2) ? null : { size: 10 }));
+      const res = await fromWeb({ files: [fileKey(1), fileKey(2)] });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('an attachment did not finish uploading');
+      expect(written).toHaveLength(0);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('400s when storage cannot be checked', async () => {
+      mockHead.mockRejectedValue(new Error('r2 down'));
+      const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await fromWeb({ files: [fileKey(1)] });
+
+      expect(res.status).toBe(400);
+      expect(written).toHaveLength(0);
+      quiet.mockRestore();
+    });
+
+    it('400s a screenshot over 8 MB, by its HEAD size', async () => {
+      mockHead.mockResolvedValue({ size: 8 * MB + 1 });
+      const res = await fromWeb({ files: [fileKey(1, 'png')] });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('images must be 8 MB or smaller');
+      expect(written).toHaveLength(0);
+    });
+
+    it('takes a video over 8 MB', async () => {
+      mockHead.mockResolvedValue({ size: 50 * MB });
+      expect((await fromWeb({ files: [fileKey(1, 'mov')] })).status).toBe(200);
+    });
+
+    it('400s files over 100 MB together', async () => {
+      mockHead.mockResolvedValue({ size: 50 * MB + 1 });
+      const res = await fromWeb({ files: [fileKey(1, 'mp4'), fileKey(2, 'mp4')] });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('attachments must total 100 MB or less');
+      expect(written).toHaveLength(0);
+    });
+
+    it('400s files from an agent', async () => {
+      mockRequireSession.mockRejectedValue(new Error('no session'));
+      asAgent();
+      const res = await report({ files: [fileKey(1)] });
+
+      expect(res.status).toBe(400);
+      expect(mockHead).not.toHaveBeenCalled();
+      expect(written).toHaveLength(0);
+    });
+
+    it('leaves a web issue without files as it was', async () => {
+      const res = await fromWeb({});
+
+      expect(res.status).toBe(200);
+      expect(written[0].data).not.toHaveProperty('files');
+      expect(written[0].data).not.toHaveProperty('filesExpireAt');
+      expect(written[0].data).not.toHaveProperty('logs');
+      expect(sent().html).not.toContain('>attached</td>');
+    });
   });
 });

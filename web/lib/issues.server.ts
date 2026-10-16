@@ -8,13 +8,28 @@ import 'server-only';
 import type { DocumentSnapshot, Firestore } from 'firebase-admin/firestore';
 import { timestampToIso, timestampToMs } from '@/lib/firestoreTime.server';
 import { trustedBaseUrl } from '@/lib/resendClient.server';
-import { ISSUE_STATUSES, type IssueStatus } from '@/lib/issues';
+import {
+  ISSUE_FILE_TYPES,
+  ISSUE_STATUSES,
+  issueFileKind,
+  type IssueFileExt,
+  type IssueFileKind,
+  type IssueStatus,
+} from '@/lib/issues';
 
 export interface IssueDescription {
   text: string;
   systemInfo: string;
   logTail: string;
   notes: string[];
+}
+
+export interface IssueFile {
+  /** 1-based, its place in the stored list; `GET /api/admin/issues/{id}/files/{index}` */
+  index: number;
+  kind: IssueFileKind;
+  ext: IssueFileExt;
+  size: number;
 }
 
 export interface Issue {
@@ -41,6 +56,7 @@ export interface Issue {
     screenshots: number;
     videos: number;
     logs: boolean;
+    files: IssueFile[];
   };
 }
 
@@ -115,14 +131,44 @@ function count(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : 0;
 }
 
+/**
+ * The files a browser attached to a web issue, with their keys, from the stored
+ * `files` list. A malformed entry is skipped but keeps its place, so an index
+ * always names the same stored file.
+ */
+export function issueFiles(files: unknown): Array<IssueFile & { key: string }> {
+  if (!Array.isArray(files)) return [];
+  return files.flatMap((file: unknown, i) => {
+    const f = (file ?? {}) as Record<string, unknown>;
+    if (typeof f.key !== 'string' || typeof f.ext !== 'string') return [];
+    if (!Object.prototype.hasOwnProperty.call(ISSUE_FILE_TYPES, f.ext)) return [];
+    const ext = f.ext as IssueFileExt;
+    const kind = issueFileKind(ext);
+    if (f.kind !== kind || typeof f.size !== 'number' || !Number.isInteger(f.size) || f.size < 0) return [];
+    return [{ index: i + 1, kind, ext, size: f.size, key: f.key }];
+  });
+}
+
 /** A `bug_reports` doc as the issue JSON the admin routes return. */
 export function serializeIssue(doc: DocumentSnapshot): Issue {
   const data = doc.data() ?? {};
   const logs = (data.logs ?? {}) as Record<string, unknown>;
   const hasZip = typeof logs.key === 'string';
-  const expiresMs = hasZip ? timestampToMs(logs.expiresAt) : null;
-  const screenshots = hasZip ? count(logs.screenshots) : 0;
-  const videos = hasZip ? count(logs.videos) : 0;
+  // a machine attaches one zip, a browser separate files; never both. keys stay server-side
+  const files: IssueFile[] = hasZip
+    ? []
+    : issueFiles(data.files).map(({ index, kind, ext, size }) => ({ index, kind, ext, size }));
+  let expiresMs: number | null = null;
+  let size: number | null = null;
+  if (hasZip) {
+    expiresMs = timestampToMs(logs.expiresAt);
+    size = typeof logs.size === 'number' ? logs.size : null;
+  } else if (files.length) {
+    expiresMs = timestampToMs(data.filesExpireAt);
+    size = files.reduce((sum, f) => sum + f.size, 0);
+  }
+  const screenshots = hasZip ? count(logs.screenshots) : files.filter((f) => f.kind === 'screenshot').length;
+  const videos = hasZip ? count(logs.videos) : files.filter((f) => f.kind === 'video').length;
   const status = ISSUE_STATUSES.includes(data.status) ? (data.status as IssueStatus) : 'new';
 
   return {
@@ -145,13 +191,14 @@ export function serializeIssue(doc: DocumentSnapshot): Issue {
     statusUpdatedBy: str(data.statusUpdatedBy),
     attachments: {
       available: expiresMs !== null && expiresMs > Date.now(),
-      size: hasZip && typeof logs.size === 'number' ? logs.size : null,
+      size,
       expiresAt: expiresMs === null ? null : new Date(expiresMs).toISOString(),
       screenshots,
       videos,
       // a doc from before `hasLogs` was stored: a zip with no screenshots or videos
       // holds only logs
       logs: hasZip && (typeof logs.hasLogs === 'boolean' ? logs.hasLogs : !screenshots && !videos),
+      files,
     },
   };
 }

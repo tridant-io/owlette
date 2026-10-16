@@ -22,6 +22,17 @@ also list, read and triage issues through the owlette API with an API key that
 holds the new superadmin-only `issue` scope; an existing key gains it by
 ticking issue read and write when you edit it.
 
+### added — screenshots and videos on dashboard issues
+
+The dashboard's submit issue dialog now matches the desktop app's: a category,
+a description, and screenshots and videos, added with add screenshots or video
+or pasted, within the same limits of 10 screenshots and 100 MB in all. It no
+longer asks for a title, the category picker spans the dialog, and there is no
+attach logs box, since only the desktop app can send logs. The files are kept
+30 days and seen only by owlette support. Issues from the desktop app now get a
+real title from the first line of their description instead of all reading
+"agent feedback".
+
 ## [4.1.17] - 2026-10-15
 
 ### added — videos on submitted issues

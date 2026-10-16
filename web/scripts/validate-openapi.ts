@@ -47,6 +47,8 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/generate-installer',
   '/api/alerts/trigger',
   '/api/bug-report',
+  // signs the dashboard issue dialog's file uploads; session only, like /api/bug-report.
+  '/api/issue-attachments/upload-url',
   // hoot internals. The `/api/cortex/*` twins are back-compat re-export aliases from the
   // hoot rename, undocumented for the same reason as their canonical paths.
   '/api/hoot',
@@ -78,6 +80,8 @@ const INTERNAL_ROUTES = new Set([
   // E2E-only chunk PUT sink (hard 404 unless OWLETTE_E2E=1) — the local stand-in
   // for the R2 presigned URL, never reachable in production.
   '/api/chunks/e2e-put',
+  // E2E-only issue file PUT sink, same posture as /api/chunks/e2e-put.
+  '/api/issue-attachments/e2e-put',
   '/api/legal/dmca',
   '/api/setup/generate-token',
   '/api/test-email',

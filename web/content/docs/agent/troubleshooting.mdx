@@ -1,7 +1,7 @@
 ---
 title: "agent troubleshooting"
 description: "where the agent's logs are on Windows, macOS and Linux, how to run it in the foreground, how to start and stop the service, and fixes for the common problems."
-keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck", "submit issue", "attach logs", "attach video", "send logs", "send logs to support", "export logs", "zip logs", "swoop viewer log", "crash events", "crash reports", "DiagnosticReports", "install.log", "journal", "owlette-update", "setup log"]
+keywords: ["logs", "log file", "service.log", "journalctl", "launchctl", "systemctl", "service not running", "not connecting", "offline", "debug", "re-pair", "screen recording", "accessibility", "selfcheck", "submit issue", "dashboard issue", "attach screenshots", "attach logs", "attach video", "send logs", "send logs to support", "export logs", "zip logs", "swoop viewer log", "crash events", "crash reports", "DiagnosticReports", "install.log", "journal", "owlette-update", "setup log"]
 ---
 
 ---
@@ -455,6 +455,8 @@ if the zip cannot be built or uploaded, the issue is still sent without it, and 
 - use **submit issue** in the desktop app's menu — it also takes feature requests and general feedback. every issue carries the machine's system info and the last 100 lines of `service.log`, along with the hostname, machine ID and site ID, so it arrives diagnosable. to send the full logs too, tick **attach logs**; see [sending logs to support](#sending-logs-to-support).
 
   ![the submit issue dialog, with a category and a description field](/docs-screens/agent-report-issue.png)
+
+  the dashboard's help menu has **submit issue** too. its dialog takes a category, a description, and screenshots and videos from **add screenshots or video** or a pasted image, within the desktop app's limits: up to 10 PNG, JPEG or WebP screenshots of 8 MB or less, and MP4, MOV or WebM videos, 100 MB together. there is no title; the issue is named after the first line of the description. it cannot attach logs: only the desktop app can. the files are kept 30 days and seen only by owlette support, and every download is audited. owlette support may use an AI assistant (Anthropic's Claude) to help diagnose the issue.
 
   every issue gets a number, and the confirmation names it: "thanks — your issue was sent as #42" in the desktop app (versions after 4.1.17), "issue #42 submitted — thank you!" in the dashboard. owlette support sees the same number, so quote it when you follow up.
 

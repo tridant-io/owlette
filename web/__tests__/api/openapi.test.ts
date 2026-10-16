@@ -79,5 +79,7 @@ describe('/api/openapi', () => {
       .toEqual(['issue=*:write']);
     expect(findOperation(spec, 'get', '/api/admin/issues/{id}/logs')?.['x-required-scopes'])
       .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}/files/{n}')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
   });
 });
