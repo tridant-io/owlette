@@ -51,7 +51,7 @@ use std::fmt;
 use std::ptr::{self, NonNull};
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use block2::RcBlock;
@@ -61,6 +61,8 @@ use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, AnyThread, DefinedClass, Message};
 use objc2_core_foundation::CFRetained;
 use objc2_core_graphics::CGPreflightScreenCaptureAccess;
+
+use crate::capture::sck::SCK_LIST_TIMEOUT;
 use objc2_core_media::{
     kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
     CMAudioFormatDescriptionGetStreamBasicDescription, CMBlockBuffer, CMSampleBuffer, CMTime,
@@ -73,7 +75,7 @@ use objc2_screen_capture_kit::{
 
 use super::opus::{CHANNELS, SAMPLE_RATE_HZ};
 
-/// How long a ScreenCaptureKit completion handler is waited for. They answer
+/// How long a ScreenCaptureKit stream start or stop is waited for. They answer
 /// in well under a second when they answer at all; this bounds a hang.
 const SCK_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -566,14 +568,28 @@ fn any_display() -> Result<Retained<SCDisplay>> {
             let _ = tx.try_send(answer);
         },
     );
+    // The cheap form and the long bound, for the reasons `capture::sck` gives:
+    // the window walk is what made the plain form miss 5 s on a loaded laptop.
+    let asked = Instant::now();
     // SAFETY: the block has the signature the method declares, and owns
     // everything it touches.
-    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
-    let content = match rx.recv_timeout(SCK_TIMEOUT) {
+    unsafe {
+        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+            true, true, &handler,
+        )
+    };
+    let content = match rx.recv_timeout(SCK_LIST_TIMEOUT) {
         Ok(Ok(content)) => content,
         Ok(Err(code)) => return Err(sck_error(code, "list the shareable displays")),
-        Err(_) => bail!("screencapturekit did not list the shareable displays within 5 s"),
+        Err(_) => bail!(
+            "screencapturekit did not list the shareable displays within {} s",
+            SCK_LIST_TIMEOUT.as_secs()
+        ),
     };
+    ::log::info!(
+        "swoop: screencapturekit listed the shareable displays for audio in {} ms",
+        asked.elapsed().as_millis()
+    );
     // SAFETY: a plain read of an immutable snapshot.
     unsafe { content.0.displays() }
         .iter()
@@ -760,8 +776,6 @@ mod tests {
     #[test]
     #[ignore = "needs the screen recording grant and records the mac's audio; cargo test ... -- --ignored audio::sck"]
     fn captures_whatever_this_mac_is_playing() {
-        use std::time::Instant;
-
         assert!(
             CGPreflightScreenCaptureAccess(),
             "this shell has no screen recording grant; the test would raise a prompt"

@@ -44,6 +44,7 @@ import type { SwoopFeedbackDiagnostics } from '@/lib/swoop/feedback';
 import { leaseFailure, SwoopLeaseRefused } from '@/lib/swoop/lease';
 import { createSwoopIdentity, createSwoopPeer, type SwoopNoPath, type SwoopPeer } from '@/lib/swoop/peer';
 import { backoffDelayMs, isPlanRefusal, isTransientEnd, isWithdrawal } from '@/lib/swoop/backoff';
+import { machineFailureCopy, machineFailureStops } from '@/lib/swoop/machineFailure';
 import { controlRefusedForCapability } from '@/lib/swoop/intent';
 import { probeClientCaps } from '@/lib/swoop/clientCaps';
 import { clearThisMachine, markThisMachine } from '@/lib/swoop/thisMachine';
@@ -303,6 +304,15 @@ export function useSwoopSession(
   const retryIn = retryAt === null ? null : Math.max(0, Math.ceil((retryAt - now) / 1000));
   const retryAttemptRef = useRef(0);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // the session the ladder is retrying from: its record says whether the
+  // machine ended it for a reason a retry cannot fix.
+  const lastSidRef = useRef<string | null>(null);
+  // bumped whenever the ladder is cleared, so a record read still in flight
+  // when the operator reconnects or ends cannot act on a run it no longer owns.
+  const retryGenRef = useRef(0);
+  // how the session before this one ended at the machine's hand, for the
+  // reasons that stop the ladder only on the second in a row.
+  const lastMachineFailureRef = useRef<string | null>(null);
   // when this tab last replaced a frozen picture's session on its own; see `STALL_RECOVERY_CAP`.
   const stallReconnectsRef = useRef<number[]>([]);
   // when the machine first left an offer unanswered since its last picture; see `HOST_SILENT_LIMIT_MS`.
@@ -344,6 +354,7 @@ export function useSwoopSession(
   const clearRetry = useCallback(() => {
     if (retryTimerRef.current !== null) clearTimeout(retryTimerRef.current);
     retryTimerRef.current = null;
+    retryGenRef.current += 1;
     setRetryAt(null);
   }, []);
 
@@ -373,10 +384,39 @@ export function useSwoopSession(
   }, [startNext]);
 
   /**
+   * why the machine ended `sid`, when its record says it did: the agent posts
+   * a refusal to start or the streamer's exit reason as `session_ended`, and
+   * this is the page's only view of it — a host that never dialled in, or
+   * died before it answered, said nothing on the wire. null when the record
+   * is live, gone, or unreadable: all of those are the ladder's to retry.
+   */
+  const recordedEnd = useCallback(
+    async (sid: string | null): Promise<string | null> => {
+      if (sid === null) return null;
+      try {
+        const res = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(sid)}`,
+        );
+        if (!res.ok) return null;
+        const body = (await res.json()) as { data?: { state?: unknown; endReason?: unknown } };
+        return body.data?.state === 'ended' && typeof body.data.endReason === 'string'
+          ? body.data.endReason
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    [siteId, machineId],
+  );
+
+  /**
    * the end of a session that was not a decision — a lost path, a host that
    * went away, a room that closed — is the start of the next one, after a
    * delay that grows with each attempt. an operator who ended it, an admin
-   * who killed it, and an api that refused it are decisions, and stop here.
+   * who killed it, an api that refused it, and a machine that said why it
+   * cannot show a picture are decisions, and stop here. the machine's word
+   * is read when the retry is due, not at the end: its agent posts it after
+   * the streamer is gone, and the delay is what lets it land.
    */
   const scheduleReconnect = useCallback(() => {
     if (stoppedRef.current || retryTimerRef.current !== null) return;
@@ -387,9 +427,24 @@ export function useSwoopSession(
     retryTimerRef.current = setTimeout(() => {
       retryTimerRef.current = null;
       setRetryAt(null);
-      startNext();
+      const gen = retryGenRef.current;
+      void recordedEnd(lastSidRef.current).then((reason) => {
+        // the operator reconnected or ended while the record was being read
+        if (gen !== retryGenRef.current || stoppedRef.current) return;
+        const previous = lastMachineFailureRef.current;
+        lastMachineFailureRef.current = reason;
+        const why = reason !== null && machineFailureStops(reason, previous) ? machineFailureCopy(reason) : null;
+        if (reason === null || why === null) {
+          startNext();
+          return;
+        }
+        stoppedRef.current = true;
+        setRefusal(reason);
+        setError(why);
+        setState('error');
+      });
     }, delay);
-  }, [startNext]);
+  }, [recordedEnd, startNext]);
 
   const end = useCallback(() => {
     clearRetry();
@@ -595,9 +650,20 @@ export function useSwoopSession(
       if (!res.ok) {
         // one read of the body: every branch below wants both the code and the
         // sentence.
-        const problem = (await res.json().catch(() => ({}))) as { code?: string; detail?: string; error?: string };
+        const problem = (await res.json().catch(() => ({}))) as {
+          code?: string;
+          detail?: string;
+          error?: string;
+          errors?: Record<string, unknown>;
+        };
         const code = typeof problem.code === 'string' ? problem.code : null;
-        const detail = problem.detail || problem.error || 'this swoop session could not be started.';
+        // a machine id the api refuses outright (a hostname with a dot, seeded
+        // before the agent trimmed them) is fixed by pairing again, not by
+        // the api's sentence about its format.
+        const badMachineId = res.status === 400 && problem.errors !== undefined && 'machineId' in problem.errors;
+        const detail = badMachineId
+          ? "this machine's id is not one swoop can use. leave the site from its tray, then pair it again."
+          : problem.detail || problem.error || 'this swoop session could not be started.';
         // a member holds the view capability only: the control ask is refused
         // before swoop's own gate, and the watch ask is the one to make. once,
         // and only for that refusal.
@@ -640,6 +706,7 @@ export function useSwoopSession(
 
       grant = await createSession(identity.fingerprint);
       if (!grant || disposed) return;
+      lastSidRef.current = grant.sid;
 
       pendingJwt = grant.viewerJwt;
       leaseExpiresAt = grant.expiresAt;
@@ -748,6 +815,8 @@ export function useSwoopSession(
             connected = true;
             silentSinceRef.current = null;
             setState('connected');
+            // a picture clears the machine's record: the next failure is a first one
+            lastMachineFailureRef.current = null;
             // a picture from it is a session the machine let in, so a record
             // naming it as this browser's own is stale
             clearThisMachine(siteId, machineId);

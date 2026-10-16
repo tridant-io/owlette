@@ -354,7 +354,7 @@ one swoop session. `sid` is a 32-character hex ID. **access**: server only — t
 | `createdAt`, `updatedAt` | timestamp | |
 | `viewers` | array | `{ viewerId, uid, ctl, joinedAt, leaseExpiresAt }`; `ctl` is whether that viewer holds control. |
 | `continuityHash`, `continuityUsedAt` | string, timestamp | reconnect continuity. |
-| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked` or `error`. |
+| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked` or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
 | `viewerReason`, `endedAt` | string, timestamp | the page's own reason for ending, and when. |
 
 a daily cron (`/api/cron/swoop-retention`) closes sessions whose leases have expired and deletes sessions older than 30 days.

@@ -293,14 +293,14 @@ class SwoopManager:
         refusal = self._spawn_gate()
         if refusal:
             _wipe(bundle)
-            self._refuse(refusal)
+            self._refuse(refusal, sid=sid)
             return
 
         try:
             exe_path = self._spawn.verify_install()
         except swoop_spawn.SwoopSpawnError as e:
             _wipe(bundle)
-            self._refuse(e.reason, str(e))
+            self._refuse(e.reason, str(e), sid=sid)
             return
 
         with self._lock:
@@ -317,11 +317,11 @@ class SwoopManager:
             proc = self._spawn.spawn(exe_path, sid=sid)
         except swoop_spawn.SwoopSpawnError as e:
             _wipe(bundle)
-            self._refuse(e.reason, str(e))
+            self._refuse(e.reason, str(e), sid=sid)
             return
         except Exception as e:
             _wipe(bundle)
-            self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e))
+            self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e), sid=sid)
             return
 
         try:
@@ -330,7 +330,7 @@ class SwoopManager:
             # a streamer that never got its bundle must not be left running.
             _wipe(bundle)
             proc.close()
-            self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e))
+            self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e), sid=sid)
             return
 
         with self._lock:
@@ -358,9 +358,9 @@ class SwoopManager:
                 sid, self._site_id(), self._machine_id(), self._auth_manager(),
             )
         except swoop_spawn.SwoopSpawnError as e:
-            self._refuse(e.reason, str(e))
+            self._refuse(e.reason, str(e), sid=sid)
         except Exception as e:
-            self._refuse(swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, str(e))
+            self._refuse(swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, str(e), sid=sid)
         return None
 
     # host token refresh
@@ -441,7 +441,7 @@ class SwoopManager:
                 return 'spawn_rate_ceiling'
         return None
 
-    def _refuse(self, reason, detail=None):
+    def _refuse(self, reason, detail=None, sid=None):
         with self._lock:
             self._last_refusal = reason
             if self._proc is None:
@@ -451,6 +451,11 @@ class SwoopManager:
                        f': {detail}' if detail else '')
         self._log_event('swoop_spawn_refused', 'warning',
                         f'reason={reason}' + (f' detail={detail}' if detail else ''))
+        # the viewer learns nothing from a streamer that never dials in: the
+        # record is ended with the refusal so the page can say it and stop
+        # asking, instead of "connecting" until its ladder gives up.
+        if sid is not None:
+            self._queue_host_event({'kind': 'session_ended', 'sid': sid, 'reason': reason})
 
     # teardown
 
@@ -512,6 +517,10 @@ class SwoopManager:
                 self._token_timer = None
         self._log_event('swoop_session_end', 'info',
                         f'sid={sid} reason={reason} exit={code}')
+        # the streamer posts no end of its own; the record carries this reason
+        # so a viewer whose streamer is gone can tell a crash it should not retry
+        # (no capture source, no encoder) from a path that may come back.
+        self._queue_host_event({'kind': 'session_ended', 'sid': sid, 'reason': reason})
 
     def _apply_backoff(self, code):
         """Called under the lock. A clean exit clears the ladder; a crash climbs it."""
@@ -632,6 +641,9 @@ class SwoopManager:
 
     def _queue_host_event(self, event):
         """Turn one ``host_event`` line into the audit route's row shape.
+
+        The manager's own ``session_ended`` rows (a refusal, an exit reason)
+        come through here too, in the same shape.
 
         The streamer's ``kind`` is that route's closed ``type`` vocabulary
         (PROTOCOL.md section 6), so it is copied across rather than mapped. A row

@@ -8072,7 +8072,7 @@ paths:
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }
-                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error] }
+                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
