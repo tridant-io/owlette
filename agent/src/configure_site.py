@@ -861,9 +861,15 @@ def _attachments_not_sent(reason: str) -> str:
     return f"\n\nattachments could not be sent: {reason}"
 
 
+class _SubmittedIssue(NamedTuple):
+    logs_attached: bool
+    number: Optional[int]
+
+
 def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int = 0,
-                  logs: bool = False, videos: int = 0) -> bool:
-    """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it.
+                  logs: bool = False, videos: int = 0) -> _SubmittedIssue:
+    """POST an issue to `/api/bug-report`; returns whether `logs_key` went with it
+    and the issue's number, or None from a server that does not number issues.
 
     Ported from `report_issue.submit_report`. The agent's own access token is
     the credential; the endpoint accepts it as a bearer token and files the
@@ -932,11 +938,16 @@ def submit_report(data: dict, logs_key: Optional[str] = None, screenshots: int =
         raise RuntimeError(f"the server rejected the report ({response.status_code}): {error_msg}")
 
     try:
-        report_id = response.json().get('id', 'unknown')
+        result = response.json()
+        report_id = result.get('id', 'unknown')
+        number = result.get('number')
     except Exception:
-        report_id = 'unknown'
+        report_id, number = 'unknown', None
+    # bool is an int subclass; a true is no issue number
+    if isinstance(number, bool) or not isinstance(number, int):
+        number = None
     logging.info(f"issue submitted via API: {report_id}")
-    return logs_key is not None
+    return _SubmittedIssue(logs_key is not None, number)
 
 
 # a smaller zip goes quickly enough that a bare "uploading attachments" says it all
@@ -1160,12 +1171,14 @@ def _send_report(payload: dict, screenshots: list, videos: list) -> int:
 
     _emit('status', 'submitting')
     try:
-        attached = submit_report(report, logs_key, shots, has_logs, vids)
+        attached, number = submit_report(report, logs_key, shots, has_logs, vids)
     except Exception as e:
         _emit('error', str(e) or repr(e))
         return 1
 
     done = {'category': category}
+    if number is not None:
+        done['issueNumber'] = number
     if attach_logs:
         done['logsAttached'] = attached
     if screenshots:

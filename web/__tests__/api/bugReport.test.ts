@@ -3,7 +3,8 @@
  *
  * POST /api/bug-report — an agent is known by its token's claims, its issue
  * records the site and machine, and a logsKey is accepted only from that
- * machine's agent, under its own prefix, for an object that exists.
+ * machine's agent, under its own prefix, for an object that exists. Each issue
+ * is numbered from `counters/bug_reports` in the transaction that writes it.
  */
 
 import type { NextRequest, NextResponse } from 'next/server';
@@ -15,6 +16,11 @@ const mockRequireSession = jest.fn();
 const mockHead = jest.fn();
 const mockSend = jest.fn();
 const written: { id: string; data: Record<string, unknown> }[] = [];
+const counter: { next?: number } = {};
+let docSeq = 0;
+
+type Ref = { id: string; path: string };
+const COUNTER_PATH = 'counters/bug_reports';
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: () => ({
@@ -22,14 +28,29 @@ jest.mock('@/lib/firebase-admin', () => ({
     getUser: async (uid: string) => ({ uid, email: `${uid}@example.test` }),
   }),
   getAdminDb: () => ({
-    collection: () => ({
-      doc: () => ({
-        id: 'report-1',
-        set: async (data: Record<string, unknown>) => {
-          written.push({ id: 'report-1', data });
-        },
-      }),
+    collection: (name: string) => ({
+      doc: (id?: string): Ref => {
+        const docId = id ?? `report-${++docSeq}`;
+        return { id: docId, path: `${name}/${docId}` };
+      },
     }),
+    // writes apply only once the callback resolves, as a committed transaction's do
+    runTransaction: async (fn: (tx: unknown) => Promise<unknown>) => {
+      const sets: { ref: Ref; data: Record<string, unknown> }[] = [];
+      const result = await fn({
+        get: async (ref: Ref) => ({
+          data: () => (ref.path === COUNTER_PATH && counter.next !== undefined ? { ...counter } : undefined),
+        }),
+        set: (ref: Ref, data: Record<string, unknown>) => {
+          sets.push({ ref, data });
+        },
+      });
+      for (const { ref, data } of sets) {
+        if (ref.path === COUNTER_PATH) Object.assign(counter, data);
+        else written.push({ id: ref.id, data });
+      }
+      return result;
+    },
   }),
 }));
 jest.mock('@/lib/apiAuth.server', () => ({
@@ -60,6 +81,8 @@ beforeAll(async () => {
 
 beforeEach(() => {
   written.length = 0;
+  delete counter.next;
+  docSeq = 0;
   mockVerifyIdToken.mockReset();
   mockRequireSession.mockReset();
   mockHead.mockReset();
@@ -82,13 +105,20 @@ function report(extra: Record<string, unknown> = {}, headers: Record<string, str
         title: 'the service stopped',
         category: 'bug',
         description: 'it stopped after the update',
-        browserUA: 'Owlette Agent 4.1.12',
+        browserUA: 'Owlette Agent v4.1.12 / Windows 11',
         pageUrl: 'agent://KIOSK-01',
         ...extra,
       },
     }),
   );
 }
+
+function sent(): { subject: string; html: string } {
+  return mockSend.mock.calls[0][0] as { subject: string; html: string };
+}
+
+// the email's "attached" fact, as its value cell renders it
+const attached = (summary: string) => `>${summary}</span>`;
 
 describe('POST /api/bug-report', () => {
   it("records an agent's site and machine from its claims, as source agent", async () => {
@@ -110,54 +140,169 @@ describe('POST /api/bug-report', () => {
     expect(written[0].data).toMatchObject({ source: 'web', siteId: null, machineId: null, userEmail: 'user-1@example.test' });
   });
 
-  it('stores a valid logsKey with its size and a 30 day expiry, and links it in the email', async () => {
+  describe('numbering', () => {
+    it('numbers the issue from the counter, in the write, the response and the email', async () => {
+      counter.next = 41;
+      asAgent();
+      const res = await report();
+
+      expect(await res.json()).toEqual({ success: true, id: 'report-1', number: 42 });
+      expect(written[0].data).toMatchObject({ number: 42 });
+      expect(counter.next).toBe(42);
+      const { subject, html } = sent();
+      expect(subject).toBe('[DEVELOPMENT] issue #42 · something broke — the service stopped');
+      expect(html).toContain('/admin/issues/42"');
+      expect(html).toContain('open issue #42');
+    });
+
+    it('starts at 1 when no counter exists', async () => {
+      asAgent();
+      const res = await report();
+
+      expect((await res.json()).number).toBe(1);
+      expect(written[0].data.number).toBe(1);
+      expect(counter.next).toBe(1);
+    });
+
+    it('gives two sequential issues N and N+1', async () => {
+      counter.next = 7;
+      asAgent();
+      const first = await (await report()).json();
+      const second = await (await report()).json();
+
+      expect([first.number, second.number]).toEqual([8, 9]);
+      expect(written.map((w) => [w.id, w.data.number])).toEqual([['report-1', 8], ['report-2', 9]]);
+      expect(counter.next).toBe(9);
+    });
+
+    it('writes nothing and sends no email when the request is refused', async () => {
+      counter.next = 3;
+      asAgent();
+      expect((await report({ title: '' })).status).toBe(400);
+      expect(written).toHaveLength(0);
+      expect(counter.next).toBe(3);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('email', () => {
+    const description = [
+      'it stopped after the update',
+      'screenshots attached: 2',
+      '--- system info ---\n  hostname: KIOSK-01',
+      '--- recent logs (last ~100 lines) ---\n2026-10-15 ERROR boom',
+    ].join('\n\n');
+
+    it("carries the user's words only, never the system info or log tail", async () => {
+      asAgent();
+      await report({ description });
+
+      const { html } = sent();
+      expect(html).toContain('it stopped after the update');
+      expect(html).not.toContain('--- system info ---');
+      expect(html).not.toContain('hostname: KIOSK-01');
+      expect(html).not.toContain('recent logs');
+      expect(html).not.toContain('ERROR boom');
+      expect(html).not.toContain('screenshots attached');
+      // the record keeps the description whole
+      expect(written[0].data.description).toBe(description);
+    });
+
+    it('names an agent by its host and version, never its user agent', async () => {
+      asAgent();
+      await report();
+
+      const { html } = sent();
+      expect(html).toContain('>owlette agent on KIOSK-01</span>');
+      expect(html).toContain('>KIOSK-01</span>');
+      expect(html).toContain('>desktop app · 4.1.12</span>');
+      expect(html).toContain(`>${SITE}</span>`);
+      expect(html).not.toContain('Owlette Agent v');
+    });
+
+    it('names an agent without a host plainly', async () => {
+      asAgent();
+      await report({ pageUrl: '' });
+
+      expect(sent().html).toContain('>owlette agent</span>');
+    });
+
+    it('stores the app version and user agent as before', async () => {
+      asAgent();
+      await report();
+      expect(written[0].data.appVersion).toBe(process.env.NEXT_PUBLIC_APP_VERSION ?? null);
+      expect(written[0].data.browserUA).toBe('Owlette Agent v4.1.12 / Windows 11');
+    });
+
+    it('names a web user by their email', async () => {
+      mockRequireSession.mockResolvedValue('user-1');
+      await report({ pageUrl: 'https://owlette.app/dashboard' }, {});
+
+      const { html } = sent();
+      expect(html).toContain('>user-1@example.test</span>');
+      expect(html).not.toContain('>machine</td>');
+    });
+
+    it('answers success when the email fails to send', async () => {
+      asAgent();
+      mockSend.mockRejectedValue(new Error('resend down'));
+      const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await report();
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(res.status).toBe(200);
+      expect(written).toHaveLength(1);
+      quiet.mockRestore();
+    });
+  });
+
+  it('stores a valid logsKey with its size and a 30 day expiry, and summarises it in the email', async () => {
     asAgent();
     const before = Date.now();
     const res = await report({ logsKey: KEY });
 
     expect(res.status).toBe(200);
     expect(mockHead).toHaveBeenCalledWith(KEY);
-    const logs = written[0].data.logs as { key: string; size: number; expiresAt: Timestamp };
+    const logs = written[0].data.logs as { key: string; size: number; expiresAt: Timestamp; hasLogs: boolean };
     expect(logs.key).toBe(KEY);
     expect(logs.size).toBe(2048);
+    expect(logs.hasLogs).toBe(true);
     expect(logs.expiresAt).toBeInstanceOf(Timestamp);
     const thirtyDays = 30 * 24 * 60 * 60 * 1000;
     expect(logs.expiresAt.toMillis()).toBeGreaterThanOrEqual(before + thirtyDays);
     expect(logs.expiresAt.toMillis()).toBeLessThanOrEqual(Date.now() + thirtyDays);
 
     expect(mockSend).toHaveBeenCalledTimes(1);
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('/api/admin/issues/report-1/logs');
-    expect(html).toContain('download logs');
+    const { html } = sent();
+    expect(html).toContain(attached('logs'));
+    // the issue page holds the download; the email links only to it
+    expect(html).toContain('/admin/issues/1"');
+    expect(html).not.toContain('/api/admin/issues/');
     expect(logs).not.toHaveProperty('screenshots');
   });
 
   it.each([
-    [1, true, 'logs and 1 screenshot are attached to this issue: <a'],
-    [5, true, 'logs and 5 screenshots are attached to this issue: <a'],
-    [1, undefined, '>1 screenshot is attached to this issue: <a'],
-    [5, undefined, '>5 screenshots are attached to this issue: <a'],
-  ])('counts %i screenshots, logs %s, on the record and in the email', async (n, logs, wording) => {
+    [1, true, 'logs and 1 screenshot'],
+    [5, true, 'logs and 5 screenshots'],
+    [1, undefined, '1 screenshot'],
+    [5, undefined, '5 screenshots'],
+  ])('counts %i screenshots, logs %s, on the record and in the email', async (n, logs, summary) => {
     asAgent();
     const res = await report({ logsKey: KEY, screenshots: n, logs });
 
     expect(res.status).toBe(200);
-    expect((written[0].data.logs as { screenshots?: number }).screenshots).toBe(n);
-    // whether the zip holds logs is for the email only, not the record
-    expect(written[0].data.logs).not.toHaveProperty('hasLogs');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain(wording);
-    expect(html).toContain('download attachments</a> (superadmin only, kept 30 days)');
-    expect(html).not.toContain('download logs');
+    const record = written[0].data.logs as { screenshots?: number; hasLogs: boolean };
+    expect(record.screenshots).toBe(n);
+    expect(record.hasLogs).toBe(logs === true);
+    expect(sent().html).toContain(attached(summary));
   });
 
   it('says logs are attached when the agent sends logs without screenshots', async () => {
     asAgent();
     await report({ logsKey: KEY, logs: true });
 
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('>logs are attached to this issue: <a');
-    expect(html).toContain('download logs</a> (superadmin only, kept 30 days)');
+    expect((written[0].data.logs as { hasLogs: boolean }).hasLogs).toBe(true);
+    expect(sent().html).toContain(attached('logs'));
   });
 
   it.each([
@@ -168,32 +313,31 @@ describe('POST /api/bug-report', () => {
     asAgent();
     await report({ logsKey: KEY, screenshots: 2, logs });
 
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('>2 screenshots are attached to this issue: <a');
+    expect((written[0].data.logs as { hasLogs: boolean }).hasLogs).toBe(false);
+    const { html } = sent();
+    expect(html).toContain(attached('2 screenshots'));
     expect(html).not.toContain('logs and');
   });
 
   it.each([
-    [1, undefined, undefined, '>1 video is attached to this issue: <a'],
-    [3, undefined, undefined, '>3 videos are attached to this issue: <a'],
-    [20, undefined, undefined, '>20 videos are attached to this issue: <a'],
-    [1, undefined, true, '>logs and 1 video are attached to this issue: <a'],
-    [1, 1, undefined, '>1 screenshot and 1 video are attached to this issue: <a'],
-    [2, 10, undefined, '>10 screenshots and 2 videos are attached to this issue: <a'],
-    [1, 1, true, '>logs, 1 screenshot and 1 video are attached to this issue: <a'],
-    [2, 2, true, '>logs, 2 screenshots and 2 videos are attached to this issue: <a'],
-  ])('names %s videos, screenshots %s, logs %s, on the record and in the email', async (videos, n, logs, wording) => {
+    [1, undefined, undefined, '1 video'],
+    [3, undefined, undefined, '3 videos'],
+    [20, undefined, undefined, '20 videos'],
+    [1, undefined, true, 'logs and 1 video'],
+    [1, 1, undefined, '1 screenshot and 1 video'],
+    [2, 10, undefined, '10 screenshots and 2 videos'],
+    [1, 1, true, 'logs, 1 screenshot and 1 video'],
+    [2, 2, true, 'logs, 2 screenshots and 2 videos'],
+  ])('names %s videos, screenshots %s, logs %s, on the record and in the email', async (videos, n, logs, summary) => {
     asAgent();
     const res = await report({ logsKey: KEY, videos, screenshots: n, logs });
 
     expect(res.status).toBe(200);
-    const record = written[0].data.logs as { screenshots?: number; videos?: number };
+    const record = written[0].data.logs as { screenshots?: number; videos?: number; hasLogs: boolean };
     expect(record.videos).toBe(videos);
     expect(record.screenshots).toBe(n);
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain(wording);
-    expect(html).toContain('download attachments</a> (superadmin only, kept 30 days)');
-    expect(html).not.toContain('download logs');
+    expect(record.hasLogs).toBe(logs === true);
+    expect(sent().html).toContain(attached(summary));
   });
 
   it.each([
@@ -211,8 +355,8 @@ describe('POST /api/bug-report', () => {
 
     expect(res.status).toBe(200);
     expect(written[0].data.logs).not.toHaveProperty('videos');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('>logs are attached to this issue: <a');
+    const { html } = sent();
+    expect(html).toContain(attached('logs'));
     expect(html).not.toContain('video');
   });
 
@@ -223,8 +367,7 @@ describe('POST /api/bug-report', () => {
     expect(res.status).toBe(200);
     expect(written[0].data).not.toHaveProperty('logs');
     expect(written[0].data).not.toHaveProperty('videos');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).not.toContain('video');
+    expect(sent().html).not.toContain('video');
   });
 
   it('ignores a video from a user session', async () => {
@@ -234,8 +377,7 @@ describe('POST /api/bug-report', () => {
     expect(res.status).toBe(200);
     expect(written[0].data).not.toHaveProperty('logs');
     expect(written[0].data).not.toHaveProperty('videos');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).not.toContain('video');
+    expect(sent().html).not.toContain('video');
   });
 
   it('mentions no logs without an attached zip, whatever the logs field says', async () => {
@@ -243,8 +385,7 @@ describe('POST /api/bug-report', () => {
     await report({ logs: true, screenshots: 2 });
 
     expect(written[0].data).not.toHaveProperty('logs');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).not.toContain('attached to this issue');
+    expect(sent().html).not.toContain('>attached</td>');
   });
 
   it.each([
@@ -261,8 +402,7 @@ describe('POST /api/bug-report', () => {
 
     expect(res.status).toBe(200);
     expect(written[0].data.logs).not.toHaveProperty('screenshots');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('download logs');
+    expect(sent().html).toContain(attached('logs'));
   });
 
   it('no longer reads the count from a description line', async () => {
@@ -270,9 +410,9 @@ describe('POST /api/bug-report', () => {
     await report({ logsKey: KEY, description: 'it stopped\n\nscreenshots attached: 3\n' });
 
     expect(written[0].data.logs).not.toHaveProperty('screenshots');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).toContain('download logs');
-    expect(html).not.toContain('download attachments');
+    const { html } = sent();
+    expect(html).toContain(attached('logs'));
+    expect(html).not.toContain('screenshot');
   });
 
   it('counts no screenshots without an attached zip', async () => {
@@ -280,8 +420,7 @@ describe('POST /api/bug-report', () => {
     await report({ screenshots: 2 });
 
     expect(written[0].data).not.toHaveProperty('logs');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).not.toContain('download attachments');
+    expect(sent().html).not.toContain('screenshot');
   });
 
   it('ignores screenshots from a user session', async () => {
@@ -291,14 +430,14 @@ describe('POST /api/bug-report', () => {
     expect(res.status).toBe(200);
     expect(written[0].data).not.toHaveProperty('logs');
     expect(written[0].data).not.toHaveProperty('screenshots');
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
-    expect(html).not.toContain('screenshot');
+    expect(sent().html).not.toContain('screenshot');
   });
 
-  it('sends no logs link when nothing is attached', async () => {
+  it('lists no attachments when nothing is attached', async () => {
     asAgent();
     await report();
-    const { html } = mockSend.mock.calls[0][0] as { html: string };
+    const { html } = sent();
+    expect(html).not.toContain('>attached</td>');
     expect(html).not.toContain('/api/admin/issues/');
   });
 

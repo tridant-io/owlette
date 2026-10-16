@@ -40,6 +40,7 @@ const EMAIL_TEMPLATES = [
   { id: 'machines_offline', label: 'machines offline', description: 'stale heartbeat detected by health check' },
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
+  { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
   { id: 'welcome', label: 'welcome email', description: 'sent to new users on signup' },
   { id: 'user_signup', label: 'admin signup notification', description: 'admin notified of new user registration' },
 ] as const;

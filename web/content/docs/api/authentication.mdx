@@ -127,7 +127,7 @@ each key carries a `scopes` array. a request is allowed only when one entry matc
 
 | field | meaning |
 |---|---|
-| `resource` | one of `roost`, `site`, `machine`, `chat`, `deploy`, `process`, `user`, or `installer` |
+| `resource` | one of `roost`, `site`, `machine`, `chat`, `deploy`, `process`, `user`, `installer`, or `issue` |
 | `id` | a specific resource ID (up to 128 characters), or `*` for every resource of that type the owner can access |
 | `permissions` | a non-empty list of `read`, `write`, `deploy`, `rollback`, `admin` |
 
@@ -137,13 +137,13 @@ permissions are exact, not a ladder: `write` does not imply `read`, `deploy` doe
 
 | permission | typical use |
 |---|---|
-| `read` | lists and detail reads |
-| `write` | creating, updating, publishing, queueing machine commands |
+| `read` | lists and detail reads, including issues and their attachments |
+| `write` | creating, updating, publishing, queueing machine commands, setting an issue's triage status |
 | `deploy` | roost deploys and resyncs |
 | `rollback` | roost rollbacks |
 | `admin` | site creation, editing, and deletion; membership and ownership changes (together with `read` or `write`); clearing logs; deployment uninstalls (with `write`); superadmin platform, user, and installer routes |
 
-`user` and `installer` scopes are superadmin-only and must use `id: "*"`.
+`user`, `installer` and `issue` scopes are superadmin-only and must use `id: "*"`. `issue=*:read` lists issues, reads one by its number or ID and downloads its attachments; `issue=*:write` sets an issue's triage status.
 
 ### presets
 
@@ -181,7 +181,8 @@ curl -X PATCH "https://owlette.app/api/keys/$KEY_ID" \
 ```
 
 - `scopes` replaces the whole list; it is not merged. send the complete list you want the key to end up with.
-- the creation rules apply: `user` and `installer` stay superadmin-only, so a key cannot be edited into permissions its owner could not have been issued.
+- the creation rules apply: `user`, `installer` and `issue` stay superadmin-only, so a key cannot be edited into permissions its owner could not have been issued.
+- a superadmin gives an existing key issue access by editing it and adding an `issue` scope with `read` and `write` ticked; the key's other scopes stay as they are.
 - `environment` and `ttlDays` are rejected with `400`. rotate to change the expiry.
 - a revoked key, or one that has been rotated, returns `409`. edit the successor instead.
 

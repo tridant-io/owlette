@@ -155,6 +155,7 @@ describe('visibleNavItems', () => {
   it('gives a superadmin every destination, with no membership', () => {
     expect(visibleNavItems('superadmin', false).map((item) => item.name)).toEqual([
       'installers',
+      'issues',
       'template library',
       'members',
       'users',
@@ -190,6 +191,7 @@ describe('requiredRoleForPath', () => {
   it('lets subpaths inherit their page requirement', () => {
     expect(requiredRoleForPath('/admin/schedules/abc123')).toBe('admin');
     expect(requiredRoleForPath('/admin/installers/3.2.3')).toBe('superadmin');
+    expect(requiredRoleForPath('/admin/issues/42')).toBe('superadmin');
   });
 
   it('fails closed on unknown paths and on prefix look-alikes', () => {

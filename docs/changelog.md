@@ -11,6 +11,17 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — numbered issues, an issue page and an issues API
+
+Every issue now gets a number, and the confirmation names it: "issue #42
+submitted — thank you!" in the dashboard, and "your issue was sent as #42" in
+the desktop app. Quote it when you follow up with owlette support. The issue
+email is shorter and links to a page for that issue, where owlette support sees
+its system info, log tail and attachments and sets its status. Superadmins can
+also list, read and triage issues through the owlette API with an API key that
+holds the new superadmin-only `issue` scope; an existing key gains it by
+ticking issue read and write when you edit it.
+
 ## [4.1.17] - 2026-10-15
 
 ### added — videos on submitted issues

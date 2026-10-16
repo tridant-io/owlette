@@ -2,12 +2,14 @@
  * @jest-environment node
  *
  * GET /api/admin/issues/{id}/logs — superadmin only, through the real platform
- * gate (its role read is the stubbed Firestore below), with a global audit row and
+ * gate (its role read is the stubbed Firestore below); an API key also needs
+ * issue=*:read. By issue number or doc id, with a global audit row and
  * a customer-facing site audit row before every redirect, and 404/410 for
  * missing or expired logs.
  */
 
 import { Timestamp } from 'firebase-admin/firestore';
+import type { ApiKeyScope } from '@/lib/apiKeyTypes';
 import { createMockRequest } from './helpers/utils';
 
 const mockResolveAuth = jest.fn();
@@ -17,13 +19,22 @@ const mockHead = jest.fn();
 const mockPresign = jest.fn();
 const docs = new Map<string, Record<string, unknown>>();
 
+function snapshot(name: string, id: string) {
+  return { id, exists: docs.has(`${name}/${id}`), data: () => docs.get(`${name}/${id}`) };
+}
+
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     collection: (name: string) => ({
-      doc: (id: string) => ({
-        get: async () => ({
-          exists: docs.has(`${name}/${id}`),
-          data: () => docs.get(`${name}/${id}`),
+      doc: (id: string) => ({ get: async () => snapshot(name, id) }),
+      where: (field: string, _op: '==', value: unknown) => ({
+        limit: () => ({
+          get: async () => {
+            const hits = [...docs.keys()]
+              .filter((path) => path.startsWith(`${name}/`) && docs.get(path)?.[field] === value)
+              .map((path) => snapshot(name, path.slice(name.length + 1)));
+            return { empty: hits.length === 0, docs: hits };
+          },
         }),
       }),
     }),
@@ -37,6 +48,11 @@ jest.mock('@/lib/auditLog.server', () => ({
   ...jest.requireActual('@/lib/auditLog.server'),
   writeGlobalAuditEntryBlocking: (...args: unknown[]) => mockAudit(...args),
   writeAuditEntryBlocking: (...args: unknown[]) => mockSiteAudit(...args),
+}));
+jest.mock('@/lib/auditLogClient', () => ({
+  emitApiKeyUsed: jest.fn(),
+  emitMutation: jest.fn(),
+  scopeFingerprint: jest.fn(() => 'fp'),
 }));
 jest.mock('@/lib/issueLogsStorage.server', () => ({
   headIssueLogs: (...args: unknown[]) => mockHead(...args),
@@ -52,6 +68,14 @@ const DAY = 24 * 60 * 60 * 1000;
 function signIn(uid: string, role: string) {
   docs.set(`users/${uid}`, { role });
   mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
+}
+
+function signInWithKey(uid: string, scopes: ApiKeyScope[]) {
+  docs.set(`users/${uid}`, { role: 'superadmin' });
+  mockResolveAuth.mockResolvedValue({
+    userId: uid,
+    keyContext: { keyId: 'key-1', scopes, environment: 'live', expiresAt: null, isLegacy: false },
+  });
 }
 
 function seedIssue(expiresInMs = 10 * DAY, extra: Record<string, unknown> = {}) {
@@ -164,6 +188,43 @@ describe('GET /api/admin/issues/{id}/logs', () => {
 
     expect(res.status).toBe(503);
     expect(mockPresign).not.toHaveBeenCalled();
+  });
+
+  it('resolves an issue by its number, auditing it under its doc id', async () => {
+    signIn('staff-1', 'superadmin');
+    seedIssue(10 * DAY, { number: 42 });
+    const res = await download('42');
+
+    expect(res.status).toBe(302);
+    expect(mockPresign).toHaveBeenCalledWith(KEY, expect.any(String));
+    expect(mockAudit.mock.calls[0][0].metadata.issueId).toBe(ISSUE);
+    expect(mockSiteAudit.mock.calls[0][1].metadata.issueId).toBe(ISSUE);
+  });
+
+  it('404s a number no issue carries', async () => {
+    signIn('staff-1', 'superadmin');
+    seedIssue(10 * DAY, { number: 42 });
+    expect((await download('43')).status).toBe(404);
+  });
+
+  it('lets a superadmin API key with issue=*:read download', async () => {
+    signInWithKey('staff-1', [{ resource: 'issue', id: '*', permissions: ['read'] }]);
+    seedIssue();
+    const res = await download();
+
+    expect(res.status).toBe(302);
+    expect(mockAudit.mock.calls[0][0].actor).toMatchObject({ userId: 'staff-1', apiKeyId: 'key-1' });
+  });
+
+  it('403s a superadmin API key with only user=*:admin, before reading the issue', async () => {
+    signInWithKey('staff-1', [{ resource: 'user', id: '*', permissions: ['admin'] }]);
+    seedIssue();
+    const res = await download();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('scope_insufficient');
+    expect(mockHead).not.toHaveBeenCalled();
+    expect(mockAudit).not.toHaveBeenCalled();
   });
 
   it.each(['admin', 'member'])('403s a global %s, before reading the issue', async (role) => {

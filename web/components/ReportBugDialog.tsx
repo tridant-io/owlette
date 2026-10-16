@@ -120,7 +120,9 @@ export function ReportBugDialog({ open, onOpenChange }: ReportBugDialogProps) {
         throw new Error(data.error || 'failed to submit issue');
       }
 
-      toast.success('issue submitted — thank you!');
+      const data = await res.json().catch(() => ({}));
+      const number = Number.isInteger(data.number) ? data.number : null;
+      toast.success(number !== null ? `issue #${number} submitted — thank you!` : 'issue submitted — thank you!');
       resetForm();
       onOpenChange(false);
     } catch (error: unknown) {

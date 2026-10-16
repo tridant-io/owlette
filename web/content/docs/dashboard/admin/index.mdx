@@ -92,9 +92,10 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | `USER_DELETE` | no | no | no | platform |
 | `SYSTEM_PRESET_MANAGE` (deployment template presets) | no | no | no | platform |
 | `INSTALLER_MANAGE` | no | no | no | platform |
+| `ISSUE_MANAGE` (issue triage status) | no | no | no | platform |
 | `GLOBAL_SETTINGS_WRITE` | no | no | no | platform |
 
-the five platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site.
+the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site.
 
 a capability is the floor, not the whole check. watching swoop also needs the site's `membersMayWatch` setting for a member, and taking control also needs a fresh second factor; see [watching versus control](/docs/dashboard/swoop#watching-versus-control).
 

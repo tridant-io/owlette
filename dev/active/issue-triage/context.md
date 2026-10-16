@@ -62,7 +62,22 @@
 11. **No prod triage until the privacy wording ships.** The current privacy page says no data reaches an AI provider unless hoot is enabled.
 
 ## Owner sign-off
-- Privacy wording: _draft goes here in Task 3.4; awaiting approval_
+- Privacy wording (Task 3.4): **approved by the owner 2026-10-15**. Triage runs on the owner's Claude Pro plan, a consumer plan, so the claude.ai privacy setting that allows model training ("help improve Claude") must be off before any prod issue is triaged. That is a gate in the skill and in Task 5.3. Applied on this branch, the troubleshooting line included.
+  - **Privacy page, section 6, "issue logs"** (`web/app/privacy/page.tsx`)
+    - before: "only owlette support staff can access them."
+    - after: "only owlette support staff can access them. support staff may use an AI assistant (Anthropic's Claude) to help diagnose any issue you submit, which sends the issue and its attachments to Anthropic."
+  - **Privacy page, section 7, subprocessor table**: a new row above the hoot row
+    - provider "Anthropic", purpose "support triage of issues you submit (see section 6)", region "USA"
+  - **Privacy page, section 8, first paragraph**
+    - before: "we do not provide a shared key and we do not send your data to any AI provider unless you have supplied a key and enabled the feature."
+    - after: "we do not provide a shared key, and hoot sends nothing to any AI provider unless you have supplied a key and enabled the feature. separately, when you submit an issue, owlette support may use an AI assistant (Anthropic's Claude) to help diagnose it (see section 6)."
+  - **Privacy page, last updated**: "September 14, 2026" → "October 15, 2026"
+  - **Desktop submit issue dialog** (`desktop/src/components/ReportIssueDialog.tsx`, under attach logs)
+    - before: "kept 30 days, seen only by owlette support."
+    - after: "kept 30 days. owlette support reads them and may use Anthropic's Claude to help diagnose the issue."
+  - **Troubleshooting doc** (`web/content/docs/agent/troubleshooting.mdx` ~:447), not yet applied; the orchestrator replaces the sentence "only owlette support can download it, not the site's owners or admins. every download is audited." with:
+    - "only owlette support can download it, not the site's owners or admins, and every download is audited. owlette support may use an AI assistant (Anthropic's Claude) to help diagnose the issue."
+  - **For the owner to confirm before approving**: the wording claims nothing about Anthropic's retention or training, so it holds on any plan. But if triage runs on a consumer Claude plan with model training turned on, customer issues could be used for training, which no customer would expect. Run triage under API or Claude for Work terms, or turn that setting off.
 - Email and page design: _screenshots in Task 5.2; awaiting approval_
 
 ## Next Steps

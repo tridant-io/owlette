@@ -5,6 +5,7 @@
  */
 
 import { ENV_LABEL, isProduction } from '@/lib/resendClient.server';
+import { issueAttachmentsSummary, issueSourceLabel } from '@/lib/issues';
 
 // Color palette (OKLCH dashboard values → email-safe hex)
 
@@ -135,14 +136,18 @@ export function wrapEmailLayout(content: string, options: EmailLayoutOptions = {
     ? `<p style="margin:0 0 6px;font-size:12px;">${footerLinks.join(sep)}</p>`
     : '';
 
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>owlette</title></head><body style="margin:0;padding:0;background-color:${EMAIL_COLORS.bodyBg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">${preheaderHtml}<table width="100%" bgcolor="${EMAIL_COLORS.bodyBg}" cellpadding="0" cellspacing="0" role="presentation" style="background-color:${EMAIL_COLORS.bodyBg};"><tr><td align="center" style="padding:32px 16px;"><table width="600" style="max-width:600px;background-color:${EMAIL_COLORS.cardBg};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="padding:28px 32px 20px;text-align:center;border-bottom:1px solid ${EMAIL_COLORS.border};"><a href="https://owlette.app" style="text-decoration:none;"><img src="${logoUrl}" width="48" height="48" alt="owlette" style="display:block;margin:0 auto 12px;border-radius:50%;"></a><table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;"><tr><td><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};font-size:20px;font-weight:700;text-transform:lowercase;letter-spacing:0.5px;text-decoration:none;line-height:1;">owlette</a></td>${envBadgeHtml}</tr></table></td></tr><tr><td style="padding:28px 32px;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.7;">${content}</td></tr><tr><td style="padding:20px 32px;border-top:1px solid ${EMAIL_COLORS.border};text-align:center;">${actionsHtml}<p style="color:${EMAIL_COLORS.muted};font-size:11px;margin:0;"><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};text-decoration:none;">owlette.app</a></p></td></tr></table></td></tr></table></body></html>`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark"><title>owlette</title></head><body style="margin:0;padding:0;background-color:${EMAIL_COLORS.bodyBg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;-webkit-font-smoothing:antialiased;">${preheaderHtml}<table width="100%" bgcolor="${EMAIL_COLORS.bodyBg}" cellpadding="0" cellspacing="0" role="presentation" style="background-color:${EMAIL_COLORS.bodyBg};"><tr><td align="center" style="padding:32px 16px;"><!--[if mso]><table width="600" cellpadding="0" cellspacing="0" role="presentation"><tr><td><![endif]--><table width="100%" style="max-width:600px;background-color:${EMAIL_COLORS.cardBg};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="padding:28px 32px 20px;text-align:center;border-bottom:1px solid ${EMAIL_COLORS.border};"><a href="https://owlette.app" style="text-decoration:none;"><img src="${logoUrl}" width="48" height="48" alt="owlette" style="display:block;margin:0 auto 12px;border-radius:50%;"></a><table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;"><tr><td><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};font-size:20px;font-weight:700;text-transform:lowercase;letter-spacing:0.5px;text-decoration:none;line-height:1;">owlette</a></td>${envBadgeHtml}</tr></table></td></tr><tr><td style="padding:28px 32px;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.7;">${content}</td></tr><tr><td style="padding:20px 32px;border-top:1px solid ${EMAIL_COLORS.border};text-align:center;">${actionsHtml}<p style="color:${EMAIL_COLORS.muted};font-size:11px;margin:0;"><a href="https://owlette.app" style="color:${EMAIL_COLORS.cyan};text-decoration:none;">owlette.app</a></p></td></tr></table><!--[if mso]></td></tr></table><![endif]--></td></tr></table></body></html>`;
 }
 
-/** Cyan call-to-action button for a transactional email's one link. */
+/**
+ * Cyan call-to-action button for a transactional email's one link. Outlook drops
+ * the link's padding and css background, so the cell carries bgcolor and
+ * mso-padding-alt too.
+ */
 function emailCtaButton(url: string, label: string): string {
   return (
     `<table cellpadding="0" cellspacing="0" role="presentation" style="margin:24px 0;">` +
-    `<tr><td style="border-radius:6px;background:${EMAIL_COLORS.cyan};">` +
+    `<tr><td bgcolor="${EMAIL_COLORS.cyan}" style="border-radius:6px;background:${EMAIL_COLORS.cyan};mso-padding-alt:12px 28px;">` +
     `<a href="${url}" style="display:inline-block;padding:12px 28px;color:${EMAIL_COLORS.bodyBg};text-decoration:none;font-weight:700;font-size:14px;border-radius:6px;">${label}</a>` +
     `</td></tr></table>`
   );
@@ -504,6 +509,87 @@ export function buildApiKeyExpiryEmail(
     preheader: `${keys.length} api keys expiring`,
     unsubscribeUrl,
   });
+}
+
+// issue email
+
+export interface IssueEmailInput {
+  number: number;
+  categoryLabel: string;
+  title: string;
+  /** the user's own words only: no system info, no log tail */
+  text: string;
+  from: string;
+  host: string | null;
+  siteId: string | null;
+  appVersion: string | null;
+  source: string;
+  envLabel: string;
+  attachments: { screenshots: number; videos: number; logs: boolean };
+  issueUrl: string;
+}
+
+const ISSUE_TEXT_LIMIT = 600;
+
+// the email shows a taste of the text; the issue page holds all of it
+function issueTextExcerpt(text: string): string {
+  const clean = text.replace(/\r\n?/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  if (clean.length <= ISSUE_TEXT_LIMIT) return clean;
+  const cut = clean.slice(0, ISSUE_TEXT_LIMIT);
+  // end on a word when one ends close to the limit
+  const space = cut.search(/\s\S*$/);
+  return `${(space > ISSUE_TEXT_LIMIT * 0.8 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}
+
+/**
+ * The email owlette support gets for a new issue. Deliberately short: who, where and
+ * the user's words, then one button to the issue page, which holds system info, the
+ * log tail and the attachments.
+ */
+export function buildIssueEmail(issue: IssueEmailInput): { subject: string; html: string } {
+  const C = EMAIL_COLORS;
+  const label = `issue #${issue.number}`;
+  const subject = safeEmailSubject(
+    `[${issue.envLabel}] ${label} · ${issue.categoryLabel} — ${issue.title}`,
+  );
+
+  const excerpt = issueTextExcerpt(issue.text);
+  const preheader = excerpt.split('\n').find((line) => line.trim())?.trim().slice(0, 140) || issue.title;
+  const via = [issueSourceLabel(issue.source), issue.appVersion]
+    .filter(Boolean)
+    .join(' · ');
+  const attached = issueAttachmentsSummary(issue.attachments);
+
+  const facts: [string, string][] = [
+    ['from', issue.from || 'unknown'],
+    ...(issue.host ? [['machine', issue.host] as [string, string]] : []),
+    ...(issue.siteId ? [['site', issue.siteId] as [string, string]] : []),
+    ...(via ? [['via', via] as [string, string]] : []),
+    ...(attached ? [['attached', attached] as [string, string]] : []),
+  ];
+  // the span keeps clients from restyling auto-linked addresses and hostnames
+  const factRows = facts
+    .map(
+      ([k, v]) =>
+        `<tr><td valign="top" style="width:76px;padding:7px 12px 7px 0;border-bottom:1px solid ${C.border};color:${C.muted};font-size:13px;line-height:20px;white-space:nowrap;">${k}</td><td valign="top" style="padding:7px 0;border-bottom:1px solid ${C.border};color:${C.text};font-size:13px;line-height:20px;word-break:break-word;"><span style="color:${C.text};text-decoration:none;">${escapeHtml(v)}</span></td></tr>`,
+    )
+    .join('');
+
+  const bodyHtml = escapeHtml(excerpt).replace(/\n/g, '<br>');
+
+  const content =
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation"><tr><td style="padding:0 0 20px;">` +
+    `<h1 style="margin:0;font-size:22px;line-height:30px;font-weight:700;color:${C.text};letter-spacing:-0.2px;">${label}` +
+    `<span style="display:inline-block;margin:0 0 0 10px;padding:3px 10px;border:1px solid ${C.border};border-radius:999px;background-color:${C.altRow};color:${C.muted};font-size:12px;line-height:16px;font-weight:500;letter-spacing:0;vertical-align:4px;">${escapeHtml(issue.categoryLabel)}</span></h1>` +
+    `</td></tr></table>` +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="border-collapse:separate;"><tr><td bgcolor="${C.bodyBg}" style="padding:18px 20px;background-color:${C.bodyBg};border:1px solid ${C.border};border-radius:8px;">` +
+    `<p style="margin:0 0 8px;font-size:16px;line-height:24px;font-weight:600;color:${C.text};word-break:break-word;">${escapeHtml(issue.title)}</p>` +
+    `<p style="margin:0;font-size:14px;line-height:22px;color:${C.text};word-break:break-word;">${bodyHtml}</p>` +
+    `</td></tr></table>` +
+    `<table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="margin:20px 0 0;border-collapse:collapse;border-top:1px solid ${C.border};">${factRows}</table>` +
+    emailCtaButton(escapeHtml(issue.issueUrl), `open ${label}`);
+
+  return { subject, html: wrapEmailLayout(content, { preheader }) };
 }
 
 /**

@@ -140,6 +140,7 @@ import {
   PRO_ENTITLEMENTS,
   stopEnforcingPlans,
 } from './helpers/planEnforcement';
+import { scopeMatches, type ApiKeyScope } from '@/lib/apiKeyTypes';
 import { POST } from '@/app/api/keys/route';
 import { DELETE, PATCH } from '@/app/api/keys/[keyId]/route';
 import { POST as rotatePOST } from '@/app/api/keys/[keyId]/rotate/route';
@@ -197,22 +198,26 @@ beforeEach(() => {
 });
 
 describe('/api/keys POST', () => {
-  it.each(['user', 'installer'] as const)(
-    'rejects non-superadmin creation of %s scopes',
-    async (resource) => {
+  it.each([
+    ['user', 'admin'],
+    ['installer', 'admin'],
+    ['issue', 'read'],
+  ] as const)(
+    'rejects non-superadmin creation of %s=*:%s scopes',
+    async (resource, permission) => {
       store.set('users/user-member', { role: 'member' });
 
       const res = await makePost({
         name: 'Platform key',
         environment: 'live',
-        scopes: [{ resource, id: '*', permissions: ['admin'] }],
+        scopes: [{ resource, id: '*', permissions: [permission] }],
       });
       const body = await res.json();
 
       expect(res.status).toBe(403);
       expect(body.code).toBe('forbidden');
       expect(body.detail).toBe(
-        'superadmin access required to grant user or installer scopes',
+        'superadmin access required to grant user, installer or issue scopes',
       );
       expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
     },
@@ -562,18 +567,44 @@ describe('/api/keys/{keyId} PATCH', () => {
     expect(store.get('api_keys/hash-a')).not.toHaveProperty('name');
   });
 
-  it.each(['user', 'installer'] as const)(
-    'refuses %s scopes for a non-superadmin — same gate as create',
-    async (resource) => {
+  it.each([
+    ['user', 'admin'],
+    ['installer', 'admin'],
+    ['issue', 'read'],
+  ] as const)(
+    'refuses %s=*:%s scopes for a non-superadmin — same gate as create',
+    async (resource, permission) => {
       seedKey();
       const res = await makePatch('key-a', {
-        scopes: [{ resource, id: '*', permissions: ['admin'] }],
+        scopes: [{ resource, id: '*', permissions: [permission] }],
       });
       expect(res.status).toBe(403);
       // Unchanged on rejection.
       expect((store.get('api_keys/hash-a') as { scopes: unknown[] }).scopes).toHaveLength(1);
     },
   );
+
+  it('lets a superadmin add issue read and write while keeping the other scopes', async () => {
+    store.set('users/user-member', { role: 'superadmin' });
+    seedKey();
+    const existing = [{ resource: 'site', id: 'site-1', permissions: ['read'] }];
+    const res = await makePatch('key-a', {
+      scopes: [
+        ...existing,
+        { resource: 'issue', id: '*', permissions: ['read'] },
+        { resource: 'issue', id: '*', permissions: ['write'] },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const lookup = store.get('api_keys/hash-a') as { scopes: ApiKeyScope[] };
+    expect(scopeMatches(lookup.scopes, 'site', 'site-1', 'read')).toBe(true);
+    expect(scopeMatches(lookup.scopes, 'issue', '*', 'read')).toBe(true);
+    expect(scopeMatches(lookup.scopes, 'issue', '*', 'write')).toBe(true);
+    expect(lookup.scopes).toHaveLength(3);
+    const record = store.get('users/user-member/api_keys/key-a') as { scopes: unknown };
+    expect(record.scopes).toEqual(lookup.scopes);
+  });
 
   it('409s on a revoked key', async () => {
     seedKey({ revokedAt: Date.now() - 1000 });

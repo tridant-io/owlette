@@ -555,11 +555,13 @@ class TestReportIssue:
 
         with patch.object(configure_site, 'build_report_data',
                           return_value={'category': 'bug'}) as build, \
-             patch.object(configure_site, 'submit_report') as submit:
+             patch.object(configure_site, 'submit_report',
+                          return_value=configure_site._SubmittedIssue(False, 7)) as submit:
             code = configure_site.run_report_issue(path)
 
         assert code == 0
-        assert _events(capsys)[-1] == {'event': 'done', 'value': {'category': 'bug'}}
+        assert _events(capsys)[-1] == {
+            'event': 'done', 'value': {'category': 'bug', 'issueNumber': 7}}
         build.assert_called_once_with('bug', 'it broke')
         submit.assert_called_once()
         # The operator's description must not be left lying on disk.
@@ -625,7 +627,8 @@ class TestReportIssueAttachLogs:
     def _run(self, tmp_path, *, attach=True, zip_error=None, upload_url_status=200,
              put_statuses=(200,), report_statuses=(200,), headless=False,
              screenshots=None, shots_in_zip=None, logs_in_zip=None,
-             description='it broke', videos=None, videos_in_zip=None):
+             description='it broke', videos=None, videos_in_zip=None,
+             report_body=None):
         payload = tmp_path / 'feedback.json'
         fields = {'category': 'bug', 'description': description}
         if attach is not None:
@@ -659,7 +662,8 @@ class TestReportIssueAttachLogs:
             if url.endswith('/upload-url'):
                 return _http(upload_url_status, {
                     'uploadUrl': _SIGNED_URL, 'key': _LOGS_KEY, 'expiresIn': 900})
-            return _http(next(report_responses), {'success': True, 'id': 'r1'})
+            return _http(next(report_responses),
+                         report_body or {'success': True, 'id': 'r1', 'number': 42})
 
         def put(url, data=None, headers=None, timeout=None):
             puts.append({'url': url, 'body': data.read(), 'headers': headers, 'timeout': timeout})
@@ -705,7 +709,21 @@ class TestReportIssueAttachLogs:
         assert [e['value'] for e in events if e['event'] == 'status'] == [
             'collecting system info and recent logs', 'submitting']
         # logs were not asked for, so the outcome says nothing about them
-        assert events[-1] == {'event': 'done', 'value': {'category': 'bug'}}
+        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'issueNumber': 42}}
+
+    @pytest.mark.parametrize('report_body', [
+        # an older server does not number issues
+        {'success': True, 'id': 'r1'},
+        {'success': True, 'id': 'r1', 'number': True},
+        {'success': True, 'id': 'r1', 'number': '42'},
+        {'success': True, 'id': 'r1', 'number': None},
+    ])
+    def test_a_response_without_a_numeric_number_says_nothing_of_it(
+            self, tmp_path, capsys, report_body):
+        run = self._run(tmp_path, report_body=report_body)
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': True}
 
     def test_attached_logs_are_uploaded_and_their_key_sent(self, tmp_path, capsys):
         run = self._run(tmp_path)
@@ -715,7 +733,8 @@ class TestReportIssueAttachLogs:
         assert [e['value'] for e in events if e['event'] == 'status'] == [
             'collecting system info and recent logs', 'zipping logs', 'uploading attachments',
             'submitting']
-        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': True}}
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True}}
         upload_url = run.posts[0]
         assert upload_url['url'] == (
             'https://owlette.test/api/sites/site-1/machines/m-1/issue-logs/upload-url')
@@ -739,7 +758,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, upload_url_status=404)
 
         assert run.code == 0
-        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
         assert run.puts == []
         body = run.reports[0]['json']
         assert 'logsKey' not in body
@@ -760,7 +779,7 @@ class TestReportIssueAttachLogs:
         assert 'attachments could not be sent: the upload to storage failed' in body['description']
         assert 'signed-url' not in body['description']
         # the reason stays in the issue; the event only says the logs did not go
-        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
         assert 'Issue attachments could not be sent' in caplog.text
         # the signed url carries a credential: it stays out of the issue and the log
         assert 'sekrit' not in body['description']
@@ -771,7 +790,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, zip_error=OSError('disk full'))
 
         assert run.code == 0
-        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
         assert run.puts == []
         assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
         assert 'attachments could not be sent: disk full' in run.reports[0]['json']['description']
@@ -781,7 +800,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, report_statuses=(400, 200))
 
         assert run.code == 0
-        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
         first, second = run.reports
         assert first['json']['logsKey'] == _LOGS_KEY
         assert first['json']['logs'] is True
@@ -814,7 +833,8 @@ class TestReportIssueAttachLogs:
         captured = capsys.readouterr()
         # stdout stays the event stream alone; stderr still gets the warning
         events = [json.loads(line) for line in captured.out.splitlines()]
-        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'logsAttached': False}}
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': False}}
         assert 'Issue attachments could not be sent' in captured.err
 
     def test_a_report_log_that_cannot_be_opened_does_not_stop_the_report(
@@ -829,7 +849,7 @@ class TestReportIssueAttachLogs:
 
         assert run.code == 0
         assert not log.exists()
-        assert self._done(capsys) == {'category': 'bug', 'logsAttached': False}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
         assert 'attachments could not be sent' in run.reports[0]['json']['description']
 
     # screenshots
@@ -861,8 +881,8 @@ class TestReportIssueAttachLogs:
             'collecting system info and recent logs', 'adding attachments',
             'uploading attachments', 'submitting']
         # logs were not asked for, so the outcome says nothing about them
-        assert events[-1] == {'event': 'done',
-                              'value': {'category': 'bug', 'screenshotsAttached': 2}}
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 2}}
         body = run.reports[0]['json']
         assert body['logsKey'] == _LOGS_KEY
         # the count rides as its own integer field; the line is for people
@@ -885,7 +905,7 @@ class TestReportIssueAttachLogs:
             'collecting system info and recent logs', 'adding attachments', 'zipping logs',
             'uploading attachments', 'submitting']
         assert events[-1]['value'] == {
-            'category': 'bug', 'logsAttached': True, 'screenshotsAttached': 2}
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'screenshotsAttached': 2}
         assert len(run.puts) == 1
         body = run.reports[0]['json']
         assert body['screenshots'] == 2
@@ -908,7 +928,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, screenshots=self.SHOTS, shots_in_zip=1)
 
         assert self._done(capsys) == {
-            'category': 'bug', 'logsAttached': True, 'screenshotsAttached': 1}
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'screenshotsAttached': 1}
         assert run.reports[0]['json']['screenshots'] == 1
         assert 'screenshots attached: 1' in run.reports[0]['json']['description']
 
@@ -931,7 +951,8 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, put_statuses=(403,))
 
         assert run.code == 0
-        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
         body = run.reports[0]['json']
         assert 'logsKey' not in body
         assert 'screenshots' not in body
@@ -953,7 +974,8 @@ class TestReportIssueAttachLogs:
         assert 'screenshots attached' not in second['json']['description']
         assert 'attachments could not be sent: the server refused them (400)' in (
             second['json']['description'])
-        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
 
     def test_no_readable_screenshot_and_no_logs_uploads_nothing(self, tmp_path, capsys):
         self._stage(tmp_path)
@@ -964,7 +986,8 @@ class TestReportIssueAttachLogs:
         assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
         assert 'attachments could not be sent: no screenshot could be read' in (
             run.reports[0]['json']['description'])
-        assert self._done(capsys) == {'category': 'bug', 'screenshotsAttached': 0}
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
 
     def test_a_rejected_report_keeps_the_staged_screenshots_for_a_retry(
             self, tmp_path, capsys):
@@ -1038,7 +1061,7 @@ class TestReportIssueAttachLogs:
             'collecting system info and recent logs', 'adding attachments',
             'uploading attachments', 'submitting']
         assert events[-1] == {'event': 'done',
-                              'value': {'category': 'bug', 'videosAttached': 1}}
+                              'value': {'category': 'bug', 'issueNumber': 42, 'videosAttached': 1}}
         body = run.reports[0]['json']
         assert body['logsKey'] == _LOGS_KEY
         assert body['videos'] == 1 and type(body['videos']) is int
@@ -1058,7 +1081,7 @@ class TestReportIssueAttachLogs:
         assert [e['value'] for e in events if e['event'] == 'status'] == [
             'collecting system info and recent logs', 'adding attachments',
             'zipping logs', 'uploading attachments', 'submitting']
-        assert events[-1]['value'] == {'category': 'bug', 'logsAttached': True,
+        assert events[-1]['value'] == {'category': 'bug', 'issueNumber': 42, 'logsAttached': True,
                                        'screenshotsAttached': 2, 'videosAttached': 1}
         assert len(run.puts) == 1
         body = run.reports[0]['json']
@@ -1072,7 +1095,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, videos=self.VIDEO, videos_in_zip=0)
 
         assert self._done(capsys) == {
-            'category': 'bug', 'logsAttached': True, 'videosAttached': 0}
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'videosAttached': 0}
         body = run.reports[0]['json']
         assert body['logs'] is True
         assert 'videos' not in body
@@ -1086,7 +1109,7 @@ class TestReportIssueAttachLogs:
         assert run.puts == []
         assert 'attachments could not be sent: no video could be read' in (
             run.reports[0]['json']['description'])
-        assert self._done(capsys) == {'category': 'bug', 'videosAttached': 0}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
         # the issue was filed, so the staged file goes all the same
         assert self._left(staging) == ['c' * 32 + '.png']
 
@@ -1109,7 +1132,7 @@ class TestReportIssueAttachLogs:
         assert 'videos' not in second['json']
         assert 'videos attached: 1' in first['json']['description']
         assert 'videos attached' not in second['json']['description']
-        assert self._done(capsys) == {'category': 'bug', 'videosAttached': 0}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
 
     def test_a_filed_issue_whose_upload_failed_still_deletes_the_staged_video(
             self, tmp_path, capsys):
@@ -1118,7 +1141,7 @@ class TestReportIssueAttachLogs:
         run = self._run(tmp_path, attach=None, videos=self.VIDEO, put_statuses=(403,))
 
         assert run.code == 0
-        assert self._done(capsys) == {'category': 'bug', 'videosAttached': 0}
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
         assert 'videos' not in run.reports[0]['json']
         assert self._left(staging) == ['c' * 32 + '.png']
 

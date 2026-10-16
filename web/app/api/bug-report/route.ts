@@ -3,14 +3,17 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { requireSession, ApiAuthError } from '@/lib/apiAuth.server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { getResend, FROM_EMAIL, ENV_LABEL, trustedBaseUrl } from '@/lib/resendClient.server';
-import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS } from '@/lib/emailTemplates.server';
+import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
+import { buildIssueEmail } from '@/lib/emailTemplates.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { ISSUE_LOGS_RETENTION_DAYS, headIssueLogs } from '@/lib/issueLogsStorage.server';
+import { ISSUE_CATEGORY_LABELS, issueCategoryLabel } from '@/lib/issues';
+import { agentVersionFromUA, hostFromPageUrl, issuePageUrl, parseIssueDescription } from '@/lib/issues.server';
 
 /**
- * POST /api/bug-report — writes the top-level `bug_reports` doc and emails
- * ISSUE_EMAIL, or ADMIN_EMAIL when that is unset. Body: title (<=200),
+ * POST /api/bug-report — writes the top-level `bug_reports` doc, numbered from
+ * `counters/bug_reports` in the same transaction, and emails ISSUE_EMAIL, or
+ * ADMIN_EMAIL when that is unset. Answers `{ success, id, number }`. Body: title (<=200),
  * category, description (<=50,000), browserUA,
  * pageUrl, and from an agent only, logsKey, screenshots, videos and logs.
  *
@@ -37,15 +40,7 @@ function attachedCount(sent: unknown, max: number): number {
   return typeof sent === 'number' && Number.isInteger(sent) && sent >= 1 && sent <= max ? sent : 0;
 }
 
-const VALID_CATEGORIES = ['bug', 'feature_request', 'other', 'compliment', 'rant'] as const;
-
-const CATEGORY_LABELS: Record<string, string> = {
-  bug: 'something broke',
-  feature_request: "wouldn't it be nice if...",
-  other: "it's complicated",
-  compliment: "actually, you're doing great",
-  rant: 'i just need to vent',
-};
+const VALID_CATEGORIES = Object.keys(ISSUE_CATEGORY_LABELS);
 
 const isProduction =
   process.env.NODE_ENV === 'production' &&
@@ -54,57 +49,6 @@ const isProduction =
 const ADMIN_EMAIL = isProduction
   ? process.env.ADMIN_EMAIL_PROD
   : process.env.ADMIN_EMAIL_DEV;
-
-function attachmentsLine(url: string, screenshots: number, videos: number, hasLogs: boolean): string {
-  const link = (text: string) => `<a href="${url}" style="color:${EMAIL_COLORS.cyan};">${text}</a>`;
-  if (!screenshots && !videos) return `logs are attached to this issue: ${link('download logs')}`;
-  const parts = [
-    ...(hasLogs ? ['logs'] : []),
-    ...(screenshots ? [`${screenshots} screenshot${screenshots === 1 ? '' : 's'}`] : []),
-    ...(videos ? [`${videos} video${videos === 1 ? '' : 's'}`] : []),
-  ];
-  const last = parts.pop();
-  const what = parts.length ? `${parts.join(', ')} and ${last}` : last;
-  const plural = parts.length > 0 || screenshots + videos > 1;
-  return `${what} ${plural ? 'are' : 'is'} attached to this issue: ${link('download attachments')}`;
-}
-
-function buildBugReportEmail(
-  category: string,
-  title: string,
-  description: string,
-  userEmail: string,
-  source: string,
-  pageUrl: string,
-  logsUrl: string | null,
-  screenshots: number,
-  videos: number,
-  hasLogs: boolean,
-): string {
-  const categoryLabel = CATEGORY_LABELS[category] || category;
-  const color = category === 'compliment' ? EMAIL_COLORS.cyan
-    : category === 'rant' ? EMAIL_COLORS.amber
-    : EMAIL_COLORS.blue;
-
-  const content = `
-    <h2 style="color:${color};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">new feedback: ${categoryLabel}</h2>
-    <p style="margin:0 0 20px;color:${EMAIL_COLORS.muted};">a user submitted feedback via the ${source} app.</p>
-    ${emailDataTable([
-      { label: 'title', value: title },
-      { label: 'category', value: categoryLabel },
-      { label: 'from', value: userEmail || 'unknown' },
-      { label: 'page', value: pageUrl || 'n/a' },
-      { label: 'time', value: emailTimestamp() },
-      { label: 'environment', value: ENV_LABEL },
-    ])}
-    ${logsUrl ? `<p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};">${attachmentsLine(logsUrl, screenshots, videos, hasLogs)} (superadmin only, kept ${ISSUE_LOGS_RETENTION_DAYS} days).</p>` : ''}
-    <div style="margin:20px 0 0;padding:16px;background:${EMAIL_COLORS.altRow};border-radius:8px;border:1px solid ${EMAIL_COLORS.border};">
-      <p style="margin:0 0 8px;color:${EMAIL_COLORS.muted};font-size:12px;text-transform:uppercase;letter-spacing:0.5px;">description</p>
-      <p style="margin:0;color:${EMAIL_COLORS.text};font-size:14px;line-height:1.6;white-space:pre-wrap;">${description.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
-    </div>
-  `;
-  return wrapEmailLayout(content, { preheader: `${categoryLabel}: ${title}` });
-}
 
 export const POST = withRateLimit(
   async (request: NextRequest) => {
@@ -158,8 +102,14 @@ export const POST = withRateLimit(
         return NextResponse.json({ error: `Description must be ${maxDescLength} characters or less` }, { status: 400 });
       }
 
-      let logs: { key: string; size: number; expiresAt: Timestamp; screenshots?: number; videos?: number } | null = null;
-      let zipHoldsLogs = false;
+      let logs: {
+        key: string;
+        size: number;
+        expiresAt: Timestamp;
+        hasLogs: boolean;
+        screenshots?: number;
+        videos?: number;
+      } | null = null;
       if (logsKey !== undefined && logsKey !== null) {
         const prefix = agent ? `issues/${agent.siteId}/${agent.machineId}/` : null;
         if (
@@ -182,12 +132,12 @@ export const POST = withRateLimit(
         // prefix is set, so this is an agent
         const screenshots = attachedCount(body.screenshots, MAX_SCREENSHOTS);
         const videos = attachedCount(body.videos, MAX_VIDEOS);
-        // an agent before 4.1.14 sends none of these fields, and its zip holds only logs
-        zipHoldsLogs = body.logs === true || (!screenshots && !videos);
         logs = {
           key: logsKey,
           size: head.size,
           expiresAt: Timestamp.fromMillis(Date.now() + ISSUE_LOGS_RETENTION_DAYS * 24 * 60 * 60 * 1000),
+          // an agent before 4.1.14 sends none of these fields, and its zip holds only logs
+          hasLogs: body.logs === true || (!screenshots && !videos),
           ...(screenshots ? { screenshots } : {}),
           ...(videos ? { videos } : {}),
         };
@@ -197,7 +147,10 @@ export const POST = withRateLimit(
       const isAgent = agent !== null;
       const source = isAgent ? 'agent' : 'web';
 
-      // agents have no email; browserUA identifies them instead
+      const page = typeof pageUrl === 'string' ? pageUrl.slice(0, 500) : '';
+      const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? null;
+
+      // agents have no email; the machine's host names them instead
       let userEmail = '';
       if (!isAgent) {
         try {
@@ -208,57 +161,70 @@ export const POST = withRateLimit(
           // non-critical
         }
       }
-      const fromLabel = userEmail || (isAgent ? ua : userId);
+      const host = hostFromPageUrl(page) || null;
+      const fromLabel = userEmail || (isAgent ? (host ? `owlette agent on ${host}` : 'owlette agent') : userId);
 
       const db = getAdminDb();
       const docRef = db.collection('bug_reports').doc();
+      const counterRef = db.collection('counters').doc('bug_reports');
 
-      await docRef.set({
-        source,
-        category,
-        title: title.trim(),
-        description: description.trim(),
-        status: 'new',
-        createdAt: FieldValue.serverTimestamp(),
-        userId,
-        userEmail,
-        browserUA: ua,
-        pageUrl: typeof pageUrl === 'string' ? pageUrl.slice(0, 500) : '',
-        appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? null,
-        siteId: agent?.siteId ?? null,
-        machineId: agent?.machineId ?? null,
-        ...(logs ? { logs } : {}),
+      // the counter advances only inside a committed transaction, so a retried
+      // loser reads the new value and two issues never share a number
+      const number = await db.runTransaction(async (tx) => {
+        const counter = await tx.get(counterRef);
+        const next = counter.data()?.next;
+        const n = (typeof next === 'number' ? next : 0) + 1;
+        tx.set(docRef, {
+          source,
+          category,
+          title: title.trim(),
+          description: description.trim(),
+          status: 'new',
+          createdAt: FieldValue.serverTimestamp(),
+          userId,
+          userEmail,
+          browserUA: ua,
+          pageUrl: page,
+          appVersion,
+          siteId: agent?.siteId ?? null,
+          machineId: agent?.machineId ?? null,
+          number: n,
+          ...(logs ? { logs } : {}),
+        });
+        tx.set(counterRef, { next: n }, { merge: true });
+        return n;
       });
 
-      console.log(`[bug-report] Submitted by ${fromLabel}: ${title.trim()}`);
+      console.log(`[bug-report] issue #${number} submitted by ${fromLabel}: ${title.trim()}`);
 
       // non-blocking
       const resendClient = getResend();
       const issueEmail = process.env.ISSUE_EMAIL || ADMIN_EMAIL;
       if (resendClient && issueEmail) {
-        const categoryLabel = CATEGORY_LABELS[category] || category;
-        resendClient.emails.send({
-          from: FROM_EMAIL,
-          to: issueEmail,
-          subject: `[${ENV_LABEL}] feedback: ${categoryLabel} — ${title.trim()}`,
-          html: buildBugReportEmail(
-            category,
-            title.trim(),
-            description.trim(),
-            fromLabel,
-            source,
-            typeof pageUrl === 'string' ? pageUrl : '',
-            logs ? `${trustedBaseUrl()}/api/admin/issues/${docRef.id}/logs` : null,
-            logs?.screenshots ?? 0,
-            logs?.videos ?? 0,
-            zipHoldsLogs,
-          ),
-        }).catch((err) => {
+        const { subject, html } = buildIssueEmail({
+          number,
+          categoryLabel: issueCategoryLabel(category),
+          title: title.trim(),
+          text: parseIssueDescription(description.trim()).text,
+          from: fromLabel,
+          host,
+          siteId: agent?.siteId ?? null,
+          appVersion: (isAgent && agentVersionFromUA(ua)) || appVersion,
+          source,
+          envLabel: ENV_LABEL,
+          attachments: {
+            screenshots: logs?.screenshots ?? 0,
+            videos: logs?.videos ?? 0,
+            logs: logs?.hasLogs ?? false,
+          },
+          issueUrl: issuePageUrl(number),
+        });
+        resendClient.emails.send({ from: FROM_EMAIL, to: issueEmail, subject, html }).catch((err) => {
           console.error('[bug-report] Failed to send email notification:', err);
         });
       }
 
-      return NextResponse.json({ success: true, id: docRef.id });
+      return NextResponse.json({ success: true, id: docRef.id, number });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
         return NextResponse.json({ error: error.message }, { status: error.status });
