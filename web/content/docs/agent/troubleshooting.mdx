@@ -444,7 +444,7 @@ nothing else goes in: never a token, never `config/config.json`, never another p
 
 you can also add screenshots and videos to an issue with **add screenshots or video**, or paste an image into the dialog (a video cannot be pasted). screenshots must be PNG, JPEG or WebP images of 8 MB or less, up to 10 of them; videos must be MP4, MOV or WebM files. together they can take up to 100 MB. they go in the same zip, the screenshots under `screenshots/` and then the videos under `videos/`, ahead of any logs, whether or not **attach logs** is ticked: with it unticked, the zip holds only them and `manifest.txt`. the issue's description then gains the lines `screenshots attached: N` and `videos attached: N`. a large video takes a while to upload on a slow connection, and the issue is sent once the upload finishes.
 
-the zip is stored in Cloudflare R2 and deleted automatically 30 days after upload. only owlette support can download it, not the site's owners or admins. every download is audited.
+the zip is stored in Cloudflare R2 and deleted automatically 30 days after upload. only owlette support can download it, not the site's owners or admins, and every download is audited. owlette support may use an AI assistant (Anthropic's Claude) to help diagnose the issue.
 
 if the zip cannot be built or uploaded, the issue is still sent without it, and its description ends with `attachments could not be sent: <reason>`. send the issue again later, or email the files from [log locations](#log-locations) to support.
 
@@ -455,6 +455,8 @@ if the zip cannot be built or uploaded, the issue is still sent without it, and 
 - use **submit issue** in the desktop app's menu — it also takes feature requests and general feedback. every issue carries the machine's system info and the last 100 lines of `service.log`, along with the hostname, machine ID and site ID, so it arrives diagnosable. to send the full logs too, tick **attach logs**; see [sending logs to support](#sending-logs-to-support).
 
   ![the submit issue dialog, with a category and a description field](/docs-screens/agent-report-issue.png)
+
+  every issue gets a number, and the confirmation names it: "thanks — your issue was sent as #42" in the desktop app (versions after 4.1.17), "issue #42 submitted — thank you!" in the dashboard. owlette support sees the same number, so quote it when you follow up.
 
 - email us at [support@tridant.io](mailto:support@tridant.io)
 - file a bug or feature request on [GitHub](https://github.com/tridant-io/owlette/issues)

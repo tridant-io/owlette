@@ -62,6 +62,8 @@ export type AuditTargetKind =
   | 'process'
   | 'preset'
   | 'installer'
+  // one issue in `bug_reports`, named by its number or doc id as the route was called
+  | 'issue'
   // one swoop session, named by its opaque sid — the row's `machineId` says
   // which machine it ran against.
   | 'swoop_session'

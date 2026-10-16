@@ -58,10 +58,12 @@ export const MAX_DESCRIPTION = 1000
 /**
  * The `report-issue` run's done value. `logsAttached` is present only when logs were
  * asked for: false means the issue went without them. `screenshotsAttached` and
- * `videosAttached` are present only when screenshots or videos were sent.
+ * `videosAttached` are present only when screenshots or videos were sent. `issueNumber`
+ * is present only when the server numbered the issue.
  */
 interface ReportIssueDone {
   category: string
+  issueNumber?: number
   logsAttached?: boolean
   screenshotsAttached?: number
   videosAttached?: number
@@ -286,6 +288,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
         // partial: a done line from an older helper carries none of these fields
         const done: Partial<ReportIssueDone> =
           outcome.terminal?.event === 'done' ? outcome.terminal.value : {}
+        const sent = typeof done.issueNumber === 'number' ? `sent as #${done.issueNumber}` : 'sent'
         const logsFailed = done.logsAttached === false
         const shots = missed('screenshot', sentShots.length, done.screenshotsAttached)
         const videos = missed('video', sentVideos.length, done.videosAttached)
@@ -294,7 +297,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
         if (failed.length > 0) {
           const resend =
             failed.length > 1 ? 'them' : logsFailed ? 'the logs folder' : shots.count + videos.count === 1 ? 'it' : 'them'
-          toast.warning(`your issue was sent, but ${listOf(failed)} could not be attached`, {
+          toast.warning(`your issue was ${sent}, but ${listOf(failed)} could not be attached`, {
             description: `try again, or send ${resend} another way.`,
           })
         } else {
@@ -304,7 +307,7 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
             ...counted(done.screenshotsAttached, 'screenshot'),
             ...counted(done.videosAttached, 'video'),
           ]
-          toast.success('thanks — your issue was sent', { description: `${listOf(went)} went with it.` })
+          toast.success(`thanks — your issue was ${sent}`, { description: `${listOf(went)} went with it.` })
         }
         onClose()
       })
@@ -393,7 +396,8 @@ export function ReportIssueDialog({ open, onClose }: ReportIssueDialogProps) {
             includes this machine's owlette logs, owlette swoop's log, crash reports where the
             system keeps them, and a file list. they can contain hostnames, user names, file paths
             and process names.
-            kept 30 days, seen only by owlette support.
+            kept 30 days. owlette support reads them and may use Anthropic's Claude to help
+            diagnose the issue.
           </p>
         </div>
 

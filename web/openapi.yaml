@@ -204,6 +204,12 @@ tags:
       upload/download urls, cross-roost mount. See [chunks.md](/docs/api/chunks).
   - name: Utility
     description: Identity, version, live event stream, and platform diagnostics.
+  - name: Issues
+    description: |
+      Issues users file with "submit issue" from the dashboard or a machine:
+      list them, read one, download the logs a machine attached, and set a
+      triage status. Issues are visible only to owlette support (superadmins);
+      an API key needs the superadmin-only `issue` scope.
 
 # Sidebar grouping (Scalar / Redocly `x-tagGroups`). NOTE: every tag declared
 # above must appear in exactly one group — Scalar hides any tag that is not in
@@ -222,7 +228,7 @@ x-tagGroups:
   - name: access & identity
     tags: [Users, Site Members, API Keys]
   - name: platform
-    tags: [Webhooks, Utility]
+    tags: [Webhooks, Issues, Utility]
 
 paths:
   /api/account/api-keys:
@@ -394,35 +400,175 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
-  /api/admin/issues/{id}/logs:
+  /api/admin/issues:
     get:
-      operationId: downloadIssueLogs
-      tags: [Utility]
-      summary: download the logs attached to an issue
+      operationId: listIssues
+      tags: [Issues]
+      summary: list issues
       description: |
-        Redirects to a 15-minute presigned download of the logs zip a machine
-        attached to an issue (`owlette-logs-<hostname>-<YYYY-MM-DD>.zip`). The
-        issue's alert email links here. Each download writes an audit row
-        naming the caller and the issue, and one in the issue's site audit log
-        naming the actor only as `owlette_support`; if either write fails the
-        route answers 503 and no url is minted. Logs are kept 30 days.
+        Returns issues, newest first, optionally filtered by triage status.
+        Issues are visible only to owlette support (superadmins). An issue
+        filed before numbering began may carry `number: null` until it is
+        backfilled; ordering by creation time keeps it in the list.
 
         ### Authentication and scopes
 
         Superadmin only. Sessions and Firebase ID tokens need the superadmin
-        role; an API key additionally needs `user=*:admin`.
+        role, rechecked on every request; an API key additionally needs the
+        superadmin-only `issue=*:read`.
       security:
         - apiKey: []
         - bearerApiKey: []
         - firebaseIdToken: []
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: The issue's `bug_reports` document id.
+        - name: status
+          in: query
+          required: false
+          description: Only issues with this triage status.
           schema:
             type: string
-            pattern: '^[A-Za-z0-9_-]{1,128}$'
+            enum: [new, triaged, fixed, wontfix]
+        - name: page_size
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+          description: Maximum issues per page.
+        - $ref: '#/components/parameters/PageTokenQuery'
+      responses:
+        '200':
+          description: A page of issues.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IssueList' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin (`code: forbidden`) or the API key lacks `issue=*:read` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
+  /api/admin/issues/{id}:
+    parameters:
+      - $ref: '#/components/parameters/IssueIdPath'
+    get:
+      operationId: getIssue
+      tags: [Issues]
+      summary: get an issue
+      description: |
+        Returns one issue. Its description is split into the user's own text,
+        the system info and log tail a machine appended, and the attachment
+        notes, so issues filed before the split work too. An unknown or
+        malformed `{id}` is `404`.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role, rechecked on every request; an API key additionally needs the
+        superadmin-only `issue=*:read`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The issue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin (`code: forbidden`) or the API key lacks `issue=*:read` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '500': { $ref: '#/components/responses/Problem500' }
+    patch:
+      operationId: updateIssueStatus
+      tags: [Issues]
+      summary: set an issue's triage status
+      description: |
+        Sets the issue's triage status and, when `note` is sent, replaces its
+        triage note. Stamps `statusUpdatedAt` and `statusUpdatedBy` with the
+        caller and returns the updated issue. A blocking `global/audit_log` row
+        is written before anything changes; if it cannot be written the route
+        answers `503`. Rate-limited per caller.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role; an API key additionally needs the superadmin-only
+        `issue=*:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                  enum: [new, triaged, fixed, wontfix]
+                note:
+                  type: string
+                  maxLength: 2000
+                  description: Triage note, trimmed. An empty string clears it; omit it to keep the current note.
+            example:
+              status: triaged
+              note: reproduced on 4.1.13; fix on branch fix/issue-42
+      responses:
+        '200':
+          description: The updated issue.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Issue' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: 'Forbidden — the caller is not a superadmin or lacks the capability (`code: forbidden`), or the API key lacks `issue=*:write` (`code: scope_insufficient`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+
+  /api/admin/issues/{id}/logs:
+    get:
+      operationId: downloadIssueLogs
+      tags: [Issues]
+      summary: download the logs attached to an issue
+      description: |
+        Redirects to a 15-minute presigned download of the zip a machine
+        attached to an issue (`owlette-issue-<hostname>-<YYYY-MM-DD>.zip`); it
+        may hold screenshots and videos as well as logs. The issue's email and
+        page link here. Each download writes an audit row naming the caller
+        and the issue, and one in the issue's site audit log naming the actor
+        only as `owlette_support`; if either write fails the route answers 503
+        and no url is minted. Attachments are kept 30 days.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role; an API key additionally needs the superadmin-only `issue=*:read`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - $ref: '#/components/parameters/IssueIdPath'
       responses:
         '302':
           description: Redirect to the presigned download.
@@ -3338,8 +3484,8 @@ paths:
         Creates a scoped api key. The raw `key` value is returned
         **exactly once** — store it in a secrets manager immediately.
         Requires a user session or Firebase ID token. Non-superadmin
-        callers cannot create `user` or `installer` scopes; those
-        platform resources must use `id: "*"`.
+        callers cannot create `user`, `installer` or `issue` scopes;
+        those platform resources must use `id: "*"`.
         See [authentication.md](/docs/api/authentication#creating-keys).
       security:
         - firebaseIdToken: []
@@ -10535,6 +10681,15 @@ components:
         pattern: '^[0-9a-f]{64}$'
       description: Audit record hash as raw lowercase sha-256 hex.
 
+    IssueIdPath:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9_-]{1,128}$'
+      description: The issue's number (1 to 9 digits, e.g. `42`) or its document id.
+
   headers:
     RateLimitLimit:
       description: Window limit for the active rate-limit bucket.
@@ -12026,6 +12181,113 @@ components:
         codecMimeType:
           type: string
           description: The negotiated codec, such as `video/H265`.
+    Issue:
+      type: object
+      description: An issue a user filed with "submit issue", from the dashboard or a machine.
+      required: [id, number, status, category, title, source, createdAt, appVersion, siteId, machineId, from, host, description, triageNote, statusUpdatedAt, statusUpdatedBy, attachments]
+      properties:
+        id:
+          type: string
+          description: Document id.
+        number:
+          type: integer
+          nullable: true
+          description: Sequential issue number, per environment; null until an older issue is backfilled.
+        status:
+          type: string
+          enum: [new, triaged, fixed, wontfix]
+        category:
+          type: string
+          description: '`bug`, `feature_request`, `other`, `compliment` or `rant`.'
+        title:
+          type: string
+        source:
+          type: string
+          description: '`web` for the dashboard, `agent` for a machine.'
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+        appVersion:
+          type: string
+          nullable: true
+        siteId:
+          type: string
+          nullable: true
+        machineId:
+          type: string
+          nullable: true
+        from:
+          type: string
+          description: The filer's email; empty when unknown.
+        host:
+          type: string
+          nullable: true
+          description: Hostname of the machine that filed the issue; null for a dashboard issue.
+        description:
+          type: object
+          required: [text, systemInfo, logTail, notes]
+          properties:
+            text:
+              type: string
+              description: The user's own words.
+            systemInfo:
+              type: string
+              description: System info a machine appended; empty for a dashboard issue.
+            logTail:
+              type: string
+              description: The last ~100 log lines a machine appended; empty for a dashboard issue.
+            notes:
+              type: array
+              items: { type: string }
+              description: 'Attachment notes a machine appended, such as `screenshots attached: 2`.'
+        triageNote:
+          type: string
+          nullable: true
+        statusUpdatedAt:
+          type: string
+          format: date-time
+          nullable: true
+        statusUpdatedBy:
+          type: string
+          nullable: true
+          description: Uid of the superadmin who last set the status.
+        attachments:
+          type: object
+          required: [available, size, expiresAt, screenshots, videos, logs]
+          properties:
+            available:
+              type: boolean
+              description: True while the attached zip can still be downloaded through `GET /api/admin/issues/{id}/logs`.
+            size:
+              type: integer
+              nullable: true
+              description: Zip size in bytes.
+            expiresAt:
+              type: string
+              format: date-time
+              nullable: true
+            screenshots:
+              type: integer
+              minimum: 0
+            videos:
+              type: integer
+              minimum: 0
+            logs:
+              type: boolean
+              description: Whether the zip holds logs.
+    IssueList:
+      type: object
+      required: [issues, next_page_token]
+      properties:
+        issues:
+          type: array
+          items: { $ref: '#/components/schemas/Issue' }
+        next_page_token:
+          type: string
+        nextPageToken:
+          type: string
+          deprecated: true
     ProblemDetails:
       type: object
       description: |
@@ -12195,7 +12457,7 @@ components:
       properties:
         resource:
           type: string
-          enum: [roost, site, machine, chat, deploy, process, user, installer]
+          enum: [roost, site, machine, chat, deploy, process, user, installer, issue]
           description: Resource type this entry grants against.
         id:
           type: string
@@ -12203,8 +12465,9 @@ components:
           maxLength: 128
           description: |
             Specific resource id or `*` to match any resource of the
-            given type within the caller's own access. Platform resources
-            `user` and `installer` must use `*`. A concrete id on `site`,
+            given type within the caller's own access. The superadmin-only
+            platform resources `user`, `installer` and `issue` must use
+            `*`. A concrete id on `site`,
             `chat` or `deploy` must be a site the creating user can access.
         permissions:
           type: array
@@ -12371,8 +12634,9 @@ components:
         is not merged with what is already there.
 
         Scopes may be broadened as well as narrowed, subject to the same
-        grant rules as key creation: `user` and `installer` scopes require
-        superadmin, and platform resources must use `id: "*"`.
+        grant rules as key creation: `user`, `installer` and `issue`
+        scopes require superadmin, and platform resources must use
+        `id: "*"`.
       properties:
         name:
           type: string

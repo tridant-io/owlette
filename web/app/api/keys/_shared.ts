@@ -12,6 +12,7 @@ import {
   type ApiKeyResource,
   type ApiKeyScope,
   SUPERADMIN_ONLY_RESOURCES,
+  SUPERADMIN_ONLY_RESOURCES_LABEL,
 } from '@/lib/apiKeyTypes';
 
 export const VALID_RESOURCES: readonly ApiKeyResource[] = ALL_RESOURCES;
@@ -96,7 +97,7 @@ export async function assertScopesGrantable(
   );
   if (needsSuperadminGrant && (activeUserData.role ?? null) !== 'superadmin') {
     return problemForbidden(
-      'superadmin access required to grant user or installer scopes',
+      `superadmin access required to grant ${SUPERADMIN_ONLY_RESOURCES_LABEL} scopes`,
     );
   }
 

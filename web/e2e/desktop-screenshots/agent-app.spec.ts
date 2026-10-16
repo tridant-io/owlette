@@ -246,7 +246,7 @@ test('the submit issue dialog', async () => {
   const attachLogs = page.getByTestId('report-attach-logs')
   await expect(attachLogs).toBeVisible()
   await expect(attachLogs).toHaveAttribute('aria-checked', 'false')
-  await expect(dialog.getByText('seen only by owlette support', { exact: false })).toBeVisible()
+  await expect(dialog.getByText('owlette support reads them', { exact: false })).toBeVisible()
   await clearFocus()
   await page.mouse.move(POINTER_PARK.x, POINTER_PARK.y)
 

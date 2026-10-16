@@ -174,7 +174,7 @@ describe('ReportIssueDialog', () => {
     // consent must be an act: a pre-ticked box is not valid consent under gdpr
     open()
     expect(attachLogs().getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText(/kept 30 days, seen only by owlette support\./)).toBeTruthy()
+    expect(screen.getByText(/kept 30 days\. owlette support reads them and may use Anthropic's Claude to help diagnose the issue\./)).toBeTruthy()
   })
 
   it('asks for the log zip when attach logs is ticked', async () => {
@@ -240,6 +240,27 @@ describe('ReportIssueDialog', () => {
     )
     expect(toastSuccess).not.toHaveBeenCalled()
     expect(props.onClose).toHaveBeenCalledOnce()
+  })
+
+  it('names the issue number when the server gave one', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', issueNumber: 42 }))
+    open()
+    await submitIssue(false)
+
+    expect(toastSuccess).toHaveBeenCalledExactlyOnceWith('thanks — your issue was sent as #42', {
+      description: 'system info and the last lines of the service log went with it.',
+    })
+  })
+
+  it('names the issue number when the logs could not be attached', async () => {
+    runAgent.mockResolvedValue(doneWith({ category: 'bug', issueNumber: 42, logsAttached: false }))
+    open()
+    await submitIssue(true)
+
+    expect(toastWarning).toHaveBeenCalledExactlyOnceWith(
+      'your issue was sent as #42, but the logs could not be attached',
+      { description: 'try again, or send the logs folder another way.' },
+    )
   })
 
   it('counts down to the legacy dialog\'s limit and holds the line there', () => {

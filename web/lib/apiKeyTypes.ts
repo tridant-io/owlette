@@ -8,7 +8,8 @@ export type ApiKeyResource =
   | 'deploy' // site-scoped classic-installer deploys (distinct from the `deploy` permission on roosts)
   | 'process' // machine-scoped process management
   | 'user' // platform-wide user administration (superadmin)
-  | 'installer'; // platform-wide installer-binary management (superadmin)
+  | 'installer' // platform-wide installer-binary management (superadmin)
+  | 'issue'; // platform-wide issue triage (superadmin)
 /**
  * `test` is kept in the union although nothing mints it: it is the second
  * component of the idempotency cache key (`hashCacheKey(userId, environment,
@@ -35,10 +36,16 @@ export const ALL_RESOURCES: readonly ApiKeyResource[] = [
   'process',
   'user',
   'installer',
+  'issue',
 ];
 
 /** Resources only a superadmin may grant; route validators reject the rest. */
-export const SUPERADMIN_ONLY_RESOURCES: readonly ApiKeyResource[] = ['user', 'installer'];
+export const SUPERADMIN_ONLY_RESOURCES: readonly ApiKeyResource[] = ['user', 'installer', 'issue'];
+
+/** The superadmin-only resources as prose ("user, installer or issue"), for 403 details. */
+export const SUPERADMIN_ONLY_RESOURCES_LABEL = `${SUPERADMIN_ONLY_RESOURCES.slice(0, -1).join(', ')} or ${
+  SUPERADMIN_ONLY_RESOURCES[SUPERADMIN_ONLY_RESOURCES.length - 1]
+}`;
 
 export interface ApiKeyScope {
   resource: ApiKeyResource;

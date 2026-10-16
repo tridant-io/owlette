@@ -1,10 +1,11 @@
 /**
  * GET /api/admin/issues/{id}/logs — the logs zip a machine attached to an issue.
  *
- * Linked from the issue's alert email, so it is a plain browser GET: a superadmin
- * gets a 302 to a 15-minute presigned download; everyone else 403. 404 when the
- * issue does not exist or carries no logs, 410 once they have expired (R2's
- * lifecycle rule deletes the object after 30 days).
+ * `{id}` is the issue number or its doc id. Linked from the issue's alert email,
+ * so it is a plain browser GET: a superadmin gets a 302 to a 15-minute presigned
+ * download; everyone else 403. An API key also needs the superadmin-only
+ * `issue=*:read` scope. 404 when the issue does not exist or carries no logs,
+ * 410 once they have expired (R2's lifecycle rule deletes the object after 30 days).
  *
  * Every download writes a blocking `global/audit_log` row naming the actor and
  * the issue, and, when the issue names a site, a row in that site's own
@@ -31,6 +32,7 @@ import {
 import { Capability } from '@/lib/capabilities';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { headIssueLogs, presignIssueLogsDownload } from '@/lib/issueLogsStorage.server';
+import { findIssue, hostFromPageUrl } from '@/lib/issues.server';
 import logger from '@/lib/logger';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
@@ -56,11 +58,6 @@ function gone(): NextResponse {
   });
 }
 
-/** The agent posts `pageUrl` as `agent://<hostname>`. */
-function hostname(pageUrl: string | undefined): string {
-  return pageUrl?.startsWith('agent://') ? pageUrl.slice('agent://'.length) : '';
-}
-
 /** `owlette-issue-<hostname>-<YYYY-MM-DD>.zip`; it may hold screenshots as well as logs */
 function downloadName(host: string): string {
   const day = new Date().toISOString().slice(0, 10);
@@ -69,8 +66,8 @@ function downloadName(host: string): string {
 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
-    // superadmin only; an api key would also need the platform-wide user=*:admin scope
-    const auth = await requirePlatformAuthAndScope(request, 'user', 'admin');
+    // superadmin only; an api key also needs the superadmin-only issue=*:read scope
+    const auth = await requirePlatformAuthAndScope(request, 'issue', 'read');
     if (!auth.ok) return auth.response;
 
     const { id } = await params;
@@ -78,10 +75,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       return problemValidation('invalid issue id', { 'path.id': ['letters, digits, underscore, hyphen only'] });
     }
 
-    const snap = await getAdminDb().collection('bug_reports').doc(id).get();
-    const issue = snap.exists ? (snap.data() as IssueDoc) : null;
+    const snap = await findIssue(getAdminDb(), id);
+    const issue = snap?.data() as IssueDoc | undefined;
     const key = issue?.logs?.key;
-    if (!issue || typeof key !== 'string') {
+    if (!snap || !issue || typeof key !== 'string') {
       return problemNotFound('no logs are attached to this issue');
     }
 
@@ -93,7 +90,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const correlationId = generateCorrelationId();
     const machineId = issue.machineId ?? 'unknown';
-    const host = hostname(issue.pageUrl);
+    const host = hostFromPageUrl(issue.pageUrl);
     try {
       const globalRow = writeGlobalAuditEntryBlocking({
         correlationId,
@@ -111,7 +108,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
           route: request.nextUrl.pathname,
           method: 'GET',
           action: 'issue_logs_download',
-          issueId: id,
+          issueId: snap.id,
           siteId: issue.siteId ?? null,
         },
       });
@@ -125,7 +122,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
             outcome: 'allow',
             metadata: {
               action: 'issue_logs_download',
-              issueId: id,
+              issueId: snap.id,
               ...(host ? { machineName: host } : {}),
             },
           })

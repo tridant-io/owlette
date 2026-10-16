@@ -16,6 +16,7 @@ import {
   Clock,
   Bell,
   MonitorPlay,
+  Inbox,
   type LucideIcon,
 } from 'lucide-react';
 import type { UserRole } from '@/contexts/AuthContext';
@@ -37,6 +38,13 @@ const NAV_ITEMS: AdminNavItem[] = [
     href: '/admin/installers',
     icon: Package,
     description: 'manage agent installer versions',
+    minRole: 'superadmin',
+  },
+  {
+    name: 'issues',
+    href: '/admin/issues',
+    icon: Inbox,
+    description: 'read and triage what users sent',
     minRole: 'superadmin',
   },
   {

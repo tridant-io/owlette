@@ -300,7 +300,7 @@ describe('POST /api/cli/device-code/authorize', () => {
     expect(body.type).toBe('https://owlette.app/problems/forbidden');
     expect(body.code).toBe('forbidden');
     expect(body.detail).toBe(
-      'superadmin access required to create user or installer scopes',
+      'superadmin access required to create user, installer or issue scopes',
     );
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockTxUpdate).not.toHaveBeenCalled();
