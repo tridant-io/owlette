@@ -12,6 +12,7 @@ import threading
 import time
 import json
 import os
+import sys
 import logging
 import hashlib
 from typing import Dict, Any, Callable, Optional
@@ -1353,6 +1354,28 @@ class FirebaseClient:
                 f"Failed to update display autoRestore circuit-breaker state: {e}"
             )
 
+    def _display_drift_count(self) -> int:
+        """Live monitors against the assigned layout, on every heartbeat so the
+        list and card views draw the drift dot without each opening its own
+        assigned-layout subscription. display_manager is windows-only, so
+        elsewhere there is nothing to compare."""
+        if sys.platform != 'win32':
+            return 0
+        try:
+            import display_manager
+
+            live_monitors = (
+                self._cached_display_profile.get('monitors')
+                if isinstance(self._cached_display_profile, dict) else None
+            )
+            assigned_monitors = shared_utils.read_config(
+                ['displays', 'assigned', 'monitors']
+            )
+            return display_manager.compute_drift_count(live_monitors, assigned_monitors)
+        except Exception as e:
+            self.logger.debug(f"compute_drift_count failed: {e}")
+            return 0
+
     def _ensure_display_profile(self, force: bool = False) -> Optional[Dict[str, Any]]:
         """
         Keep sites/{siteId}/machines/{machineId}/hardware/display current.
@@ -1372,11 +1395,13 @@ class FirebaseClient:
         except Exception:
             pass
 
-        # Behind the kill switch and inside a try, like every other lazy
-        # display import: the module is Windows-only and never ported, so
-        # importing it above the switch takes the heartbeat down elsewhere.
-        # Not ImportError - display_manager asserts the Windows x64 ABI while
-        # it builds its structures, so off Windows it is an AssertionError.
+        # display_manager is windows-only and never ported: it asserts the
+        # windows x64 abi while it builds its structures, so importing it on a
+        # mac failed every heartbeat. the try stays, behind the kill switch like
+        # every other lazy display import, for a windows box whose import
+        # breaks - the heartbeat must not go down with it.
+        if sys.platform != 'win32':
+            return self._cached_display_profile
         try:
             import display_manager
             import nvapi_display
@@ -1507,24 +1532,7 @@ class FirebaseClient:
 
             profile_hash = profile.get('signatureHash') if profile else None
 
-            # On every heartbeat so list/card views can draw the drift dot without
-            # each opening its own assigned-layout subscription.
-            try:
-                import display_manager
-
-                live_monitors = (
-                    self._cached_display_profile.get('monitors')
-                    if isinstance(self._cached_display_profile, dict) else None
-                )
-                assigned_monitors = shared_utils.read_config(
-                    ['displays', 'assigned', 'monitors']
-                )
-                display_drift_count = display_manager.compute_drift_count(
-                    live_monitors, assigned_monitors
-                )
-            except Exception as e:
-                self.logger.debug(f"compute_drift_count failed: {e}")
-                display_drift_count = 0
+            display_drift_count = self._display_drift_count()
 
             # update() + dot notation REPLACES nested maps rather than deep-merging,
             # so deleted processes/devices don't linger as ghost entries.

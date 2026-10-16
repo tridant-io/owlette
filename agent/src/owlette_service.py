@@ -3105,7 +3105,9 @@ class OwletteService:
         switching and the login/lock transitions are what land here, and the
         streamer's session bundle is tied to the session it was spawned into.
         """
-        if self.swoop_manager is None:
+        # console sessions are a windows notion: the mac and linux streamers
+        # are not tied to one, and win32ts failed here on every mac tick.
+        if self.swoop_manager is None or sys.platform != 'win32':
             return
         try:
             # Local, like every other win32ts caller here: wave 1 took the

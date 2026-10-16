@@ -809,22 +809,24 @@ class TestTerminalCommandStatus:
 class TestDisplayProfileOffWindows:
     """display_manager asserts the Windows x64 ABI while it builds its
     structures, so off Windows the lazy import raises AssertionError rather
-    than ImportError - and a guard that caught only ImportError put that
-    assertion through every single heartbeat."""
+    than ImportError. first a guard that caught only ImportError put that
+    assertion through every heartbeat, then the catch-all logged it on every
+    heartbeat (issue #27, #28 log tails); now the platform gate returns ahead
+    of the import, so off windows nothing is attempted and nothing is logged."""
 
     def test_the_heartbeat_skips_display_enumeration(
         self, firebase_client, monkeypatch, caplog,
     ):
         monkeypatch.delitem(sys.modules, 'display_manager', raising=False)
         firebase_client._cached_display_profile = {'cached': True}
+        firebase_client._last_display_check = 0.0
 
         with caplog.at_level(logging.DEBUG):
             assert firebase_client._ensure_display_profile() == {'cached': True}
 
-        # THE negative control: with `except ImportError` the assertion
-        # escapes instead, and the caller logs it as a warning every heartbeat.
-        assert 'not available here' in caplog.text
-        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert firebase_client._last_display_check == 0.0
+        assert 'display' not in caplog.text.lower()
+        assert 'display_manager' not in sys.modules
 
 
 class TestProfilesUploadOncePerClient:

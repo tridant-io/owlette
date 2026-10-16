@@ -38,6 +38,14 @@ def _reset_watchdog_latch():
     shared_utils._temp_suppressed_until = 0.0
 
 
+@pytest.fixture(autouse=True)
+def _sensors_as_on_windows():
+    """the librehardwaremonitor arm is windows-only; these tests exercise it
+    on every ci leg, so they run as windows unless a test says otherwise."""
+    with patch.object(shared_utils, '_IS_WINDOWS', True):
+        yield
+
+
 @pytest.fixture
 def _no_pynvml():
     """Make the pynvml fallback unavailable so tests isolate the LHM branch."""
@@ -180,6 +188,29 @@ class TestPynvmlFallback:
             }):
                 assert shared_utils.get_gpu_temperatures() == []
         assert shutdown_calls == []
+
+
+class TestWindowsOnlySensors:
+    """librehardwaremonitor is a .net library over the pawnio driver. off
+    windows the reads can only fail, and each one spun up a worker and logged
+    a failure on every metrics pass (issue #27, #28 log tails)."""
+
+    def test_cpu_read_is_skipped_off_windows(self):
+        sensors = _mock_temp_sensors(cpu_raises=AssertionError('read on a mac'))
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_WINDOWS', False), \
+                patch.object(shared_utils, '_temp_read_with_timeout') as read:
+            with patch.dict(sys.modules, {'temp_sensors': sensors}):
+                assert shared_utils.get_cpu_temperature() is None
+        read.assert_not_called()
+
+    def test_gpu_lhm_read_is_skipped_off_windows(self, _no_pynvml):
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_WINDOWS', False), \
+                patch.object(shared_utils, '_temp_read_with_timeout') as read:
+            with patch.dict(sys.modules, {'temp_sensors': _mock_temp_sensors(gpus=[70.0])}):
+                assert shared_utils.get_gpu_temperatures() == []
+        read.assert_not_called()
 
 
 class TestConfigDefaults:

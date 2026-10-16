@@ -573,6 +573,22 @@ def test_the_console_session_check_does_nothing_before_swoop_starts(monkeypatch)
     assert reads == []
 
 
+def test_the_console_session_check_is_windows_only(monkeypatch):
+    # a mac or linux streamer is not tied to a console session, and the win32ts
+    # read logged a failure on every 5s tick there (issue #27, #28 log tails).
+    svc = ServiceDouble()
+    svc.swoop_manager = RecordingManager()
+    reads = []
+    import win32ts
+    monkeypatch.setattr(win32ts, 'WTSGetActiveConsoleSessionId',
+                        lambda: reads.append(1))
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+
+    svc._check_console_session()
+
+    assert reads == []
+
+
 def test_stopping_swoop_is_safe_when_it_never_started():
     # graceful_shutdown calls this on every stop, including one where Firebase
     # is disabled and no doorbell or manager was ever built.
