@@ -1422,6 +1422,12 @@ class OwletteService:
             self.firebase_client.start()
             logging.info(f"[OK] Firebase client initialized and started for site: {site_id}")
 
+            # swoop mints and audits with this client's credentials: a manager
+            # left on the stopped one served every session request after a
+            # dashboard remove + in-place re-pair with a dead token and no
+            # doorbell for eleven hours (elm-fort, 2026-10-14).
+            self._restart_swoop()
+
             # Cache site timezone for schedule evaluation
             self._cached_site_timezone = self.firebase_client.site_timezone
 
@@ -3001,7 +3007,8 @@ class OwletteService:
     def _start_swoop(self):
         """Build the swoop manager and doorbell, and start the doorbell.
 
-        Called once from main() after the Firebase client is up, because the
+        Called from main() after the Firebase client is up, and again through
+        ``_restart_swoop`` whenever that client is rebuilt, because the
         doorbell mints its token with the agent's credentials and only dials
         while the machine is connected to Firestore. Everything swoop owns runs
         on its own daemon threads — nothing here is ever on the 5s tick.
@@ -3038,7 +3045,8 @@ class OwletteService:
             logging.info("swoop doorbell started")
         except Exception as e:
             # Non-fatal: the agent runs without swoop, and swoop_commands
-            # returns "Error: swoop_manager unavailable" until a restart.
+            # returns "Error: swoop_manager unavailable" until the client or
+            # the service next restarts.
             logging.warning(f"Failed to start swoop: {e}")
 
     def _stop_swoop(self):
@@ -3055,6 +3063,28 @@ class OwletteService:
                 logging.debug(f"[SHUTDOWN] swoop kill failed: {e}")
         self._swoop_shutdown.set()
 
+    def _restart_swoop(self):
+        """Rebuild swoop on the current Firebase client.
+
+        Runs after every client (re)start. The old manager and doorbell hold
+        the client they were built with, so they are ended first: the
+        streamer is killed and the old doorbell's event is set, then a fresh
+        event and a fresh pair are built on the client the service now has.
+        The command handlers and the doorbell's ring resolve ``swoop_manager``
+        through the service at call time, so the old manager's idle worker
+        thread is never asked for anything again. Its kill is queued, not
+        waited for: a streamer live at this moment gets its grace on the old
+        worker while the new pair comes up, and the new manager spawns only
+        on the next session request.
+        """
+        if self.swoop_manager is not None:
+            self._stop_swoop()
+            self.swoop_manager = None
+            self.swoop_doorbell = None
+            logging.info("swoop ended for the firebase client restart")
+        self._swoop_shutdown = threading.Event()
+        self._start_swoop()
+
     def unpair(self, reason):
         """Leave the site because the server cut this machine off.
 
@@ -3062,7 +3092,8 @@ class OwletteService:
         does not reach it: a viewer must not keep a picture of a machine the
         site has just revoked, and the doorbell would keep minting with a
         credential the server now refuses. Swoop then stays down until the
-        service next starts, as it already does after an in-place re-pair.
+        service next starts or the machine is re-paired in place, which
+        rebuilds it with the new client (``_restart_swoop``).
         Hoot is ended for the same reason: it holds its own access token for
         up to an hour, and site members could keep chatting with and running
         tools on a revoked machine through it. A relaunch exits on its own

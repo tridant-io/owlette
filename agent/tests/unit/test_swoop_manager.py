@@ -845,3 +845,60 @@ class TestHostTokenRefresh:
         backend.bundle_error = None
         assert wait_for(lambda: any(w.get('type') == 'token' for w in backend.proc.written), timeout=4.0)
         manager.kill()
+
+
+class TestEndReasonsReachTheRecord:
+    """A refusal or a crash ends the session record with its reason, so the
+    viewer can say it and stop asking (elm-fort laptop, 2026-10-15: five
+    `no_capture_source` deaths, then `spawn_rate_ceiling`, shown as
+    "connecting" for as long as the tab was open)."""
+
+    @staticmethod
+    def posted_rows(backend):
+        return [row for events, _, _ in backend.posted for row in events]
+
+    def test_a_refusal_ends_the_record_with_the_refusal(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager._spawn_times = [time.monotonic()] * swoop_manager.SPAWN_CEILING
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: self.posted_rows(backend))
+        assert self.posted_rows(backend) == [
+            {'type': 'session_ended', 'sid': 'sid_1', 'reason': 'spawn_rate_ceiling'},
+        ]
+
+    def test_a_bundle_refusal_names_the_sid_it_was_for(self, firebase):
+        backend = FakeSpawn(bundle_error=swoop_spawn.SwoopSpawnError(
+            swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, 'bundle fetch failed: 404'))
+        manager = make_manager(backend, firebase)
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: self.posted_rows(backend))
+        assert self.posted_rows(backend) == [
+            {'type': 'session_ended', 'sid': 'sid_1', 'reason': 'bundle_unavailable'},
+        ]
+
+    def test_a_crash_ends_the_record_with_the_exit_reason(self, firebase):
+        backend = FakeSpawn(proc=FakeProc(exit_code=swoop_spawn.EXIT_NO_CAPTURE_SOURCE))
+        manager = make_manager(backend, firebase)
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: manager._proc is not None)
+        backend.proc.close()  # the streamer is gone; the reader finds exit 12
+        assert wait_for(lambda: self.posted_rows(backend))
+        assert self.posted_rows(backend) == [
+            {'type': 'session_ended', 'sid': 'sid_1', 'reason': 'no_capture_source'},
+        ]
+
+    def test_a_kill_ends_the_record_as_a_kill(self, firebase):
+        backend = FakeSpawn()
+        manager = make_manager(backend, firebase)
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: manager._proc is not None)
+
+        manager.kill('kill')
+        assert wait_for(lambda: self.posted_rows(backend))
+        assert self.posted_rows(backend) == [
+            {'type': 'session_ended', 'sid': 'sid_1', 'reason': 'kill'},
+        ]

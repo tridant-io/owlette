@@ -90,9 +90,17 @@ use crate::gpu::Frame;
 use crate::platform::clock;
 use crate::session::StoppedAtHost;
 
-/// How long any ScreenCaptureKit completion handler is waited for. They
+/// How long a ScreenCaptureKit stream start or stop is waited for. They
 /// answer in well under a second when they answer at all; this bounds a hang.
 const SCK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long the shareable-content listing is waited for. The framework walks
+/// every window of every app before it answers, and on a loaded laptop that
+/// took over 5 s on every session for days (elm-fort, 2026-10-13 to 10-15:
+/// exit 12 six seconds after each start, never one picture). The listing
+/// below asks for displays only, which is the cheap form; this bound is for
+/// the rare slow answer, not a dead framework. `audio::sck` lists the same way.
+pub(crate) const SCK_LIST_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A rebuild's retry cadence and deadline, the Windows source's numbers: a
 /// source that never comes back is exit 12 rather than a hung session.
@@ -642,14 +650,28 @@ fn shareable_display(id: u32) -> anyhow::Result<Retained<SCDisplay>> {
             let _ = tx.try_send(answer);
         },
     );
+    // Desktop windows out and on-screen windows only: the displays are listed
+    // either way, and the window walk is what makes the plain form slow.
+    let asked = Instant::now();
     // SAFETY: the block has the signature the method declares, and owns
     // everything it touches.
-    unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&handler) };
-    let content = match rx.recv_timeout(SCK_TIMEOUT) {
+    unsafe {
+        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
+            true, true, &handler,
+        )
+    };
+    let content = match rx.recv_timeout(SCK_LIST_TIMEOUT) {
         Ok(Ok(content)) => content,
         Ok(Err(code)) => return Err(sck_error(code, "list the shareable displays")),
-        Err(_) => bail!("screencapturekit did not list the shareable displays within 5 s"),
+        Err(_) => bail!(
+            "screencapturekit did not list the shareable displays within {} s",
+            SCK_LIST_TIMEOUT.as_secs()
+        ),
     };
+    ::log::info!(
+        "swoop: screencapturekit listed the shareable displays in {} ms",
+        asked.elapsed().as_millis()
+    );
     // SAFETY: plain reads of an immutable snapshot.
     unsafe { content.0.displays() }
         .iter()

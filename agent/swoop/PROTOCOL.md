@@ -407,6 +407,9 @@ loop.
 (§5). `kind` is that route's own closed vocabulary — `jwt_rejected`, `fp_mismatch`, `lease_expired`,
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
+The service also posts `session_ended` rows of its own, never the streamer's: one when it refuses to spawn
+(`reason` is the refusal) and one when the streamer is gone (`reason` is the exit's name, or the `exiting`
+reason on exit 0), so the session record says why a viewer got no picture.
 
 `exiting` is the last line before the process exits, and its `code` is the one it exits with. on macos a stop
 from the menu bar's capture indicator ends the session the way a `kill` does: viewers leave with `kill`, and

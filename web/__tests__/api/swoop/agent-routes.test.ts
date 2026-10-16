@@ -503,6 +503,19 @@ describe('POST /api/agent/swoop/events', () => {
       expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'host_exit' });
     });
 
+    it("keeps the agent's own refusal or exit reason, which the viewer acts on", async () => {
+      agentToken();
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'no_capture_source' }],
+        }),
+      );
+
+      expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'no_capture_source' });
+    });
+
     it('moves a pending record to live on session_started', async () => {
       agentToken();
       await eventsPOST(

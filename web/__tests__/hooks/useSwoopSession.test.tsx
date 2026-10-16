@@ -138,14 +138,24 @@ interface Reply {
 
 let mint: Reply;
 let lease: Reply;
+/** the session record, read when a retry is due. */
+let record: Reply;
 
 const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
-  const reply = init?.method === 'DELETE' ? { status: 200 } : url.endsWith('/lease') ? lease : mint;
+  const reply =
+    init?.method === 'DELETE'
+      ? { status: 200 }
+      : url.endsWith('/lease')
+        ? lease
+        : url === `${SESSIONS}/${GRANT.sid}`
+          ? record
+          : mint;
   return { ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response;
 });
 
 const deletes = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE');
 const mints = () => fetchMock.mock.calls.filter(([url]) => url === SESSIONS);
+const recordReads = () => fetchMock.mock.calls.filter(([url, init]) => url === `${SESSIONS}/${GRANT.sid}` && !init?.method);
 
 let swoop: UseSwoopSession;
 
@@ -190,6 +200,7 @@ beforeEach(() => {
   jest.useFakeTimers();
   mint = { status: 201, body: { data: GRANT } };
   lease = { status: 200, body: { data: { viewerJwt: 'renewed.jwt', expiresAt: Date.now() + 300_000 } } };
+  record = { status: 404 };
   wired.peer = null;
   wired.signaling = null;
   wired.session = null;
@@ -214,6 +225,72 @@ describe('useSwoopSession — how a session ends', () => {
     await advance(30_000);
     expect(mints()).toHaveLength(2);
     expect(deletes()).toHaveLength(0);
+  });
+
+  /**
+   * a machine that cannot show a picture says so on its session record (the
+   * agent posts its refusal or the streamer's exit reason). the page reads it
+   * when the retry is due and stops there, instead of asking every few
+   * seconds until the machine's spawn ceiling refuses it too.
+   */
+  it("a machine that refused to start is final, with the machine's reason", async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('timeout'));
+    expect(swoop.state).toBe('ended');
+    expect(swoop.retryIn).not.toBeNull();
+
+    record = { status: 200, body: { data: { sid: GRANT.sid, state: 'ended', endReason: 'spawn_rate_ceiling' } } };
+    await advance(30_000);
+
+    expect(recordReads()).toHaveLength(1);
+    expect(mints()).toHaveLength(1);
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('spawn_rate_ceiling');
+    expect(swoop.error).toMatch(/too many swoop starts/);
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a streamer that died at start gets one more try, and the second death is final', async () => {
+    await open();
+    record = { status: 200, body: { data: { sid: GRANT.sid, state: 'ended', endReason: 'no_capture_source' } } };
+
+    act(() => wired.peer!.onClosed!('timeout'));
+    await advance(30_000);
+    // a display that was asleep may have woken: the second session is asked for
+    expect(mints()).toHaveLength(2);
+    expect(swoop.state).toBe('connecting');
+
+    act(() => wired.peer!.onClosed!('timeout'));
+    await advance(30_000);
+    expect(mints()).toHaveLength(2);
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('no_capture_source');
+    expect(swoop.error).toMatch(/can't capture its screen/);
+    expect(swoop.retryIn).toBeNull();
+  });
+
+  it("a machine id the api refuses says to pair again, and the ladder stops", async () => {
+    mint = {
+      status: 400,
+      body: { detail: 'invalid machineId format', errors: { machineId: ['must be 1-128 chars'] } },
+    };
+    await open();
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toMatch(/pair it again/);
+    expect(swoop.retryIn).toBeNull();
+  });
+
+  it('a record ended for a reason the ladder can retry does not stop it', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('timeout'));
+
+    record = { status: 200, body: { data: { sid: GRANT.sid, state: 'ended', endReason: 'host_exit' } } };
+    await advance(30_000);
+
+    expect(recordReads()).toHaveLength(1);
+    expect(mints()).toHaveLength(2);
   });
 
   it('a kill is final, and the silence it leaves behind does not bring it back', async () => {

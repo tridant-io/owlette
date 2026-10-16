@@ -28,6 +28,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import type { SwoopMachineFailureReason } from '@/lib/swoop/machineFailure';
 import { SWOOP_LEASE_GRACE_SECONDS, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
@@ -35,7 +36,9 @@ export type SwoopSessionState = 'pending' | 'live' | 'ended';
 /**
  * Why a session stopped. `closed`, `killed` and `revoked` are ours; the rest
  * are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
- * host reports it, plus `host_exit` for a stop it named no reason for.
+ * host reports it, plus `host_exit` for a stop it named no reason for, and
+ * the agent's own refusals and exit reasons the page can act on
+ * (`machineFailure.ts`).
  */
 export type SwoopSessionEndReason =
   | 'closed'
@@ -46,7 +49,8 @@ export type SwoopSessionEndReason =
   | 'signal_lost'
   | 'host_exit'
   | 'revoked'
-  | 'error';
+  | 'error'
+  | SwoopMachineFailureReason;
 
 export interface SwoopSessionViewer {
   viewerId: string;
