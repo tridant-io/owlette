@@ -1,5 +1,5 @@
 # Issue triage through the owlette API — Tasks
-**Progress**: 19/21 complete
+**Progress**: 21/21 complete
 
 Read `plan.md` first. It holds the owner's decisions and the contracts that every task depends on. Work in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-issues-wt` (branch `feat/issue-triage`), never in the main checkout.
 
@@ -302,7 +302,7 @@ Shared contracts:
   - Done when `/preflight` is green, with the new spec included.
   - Depends on: 2.1, 2.4, 4.1
 
-- [ ] **Task 5.2: Visual review**
+- [x] **Task 5.2: Visual review**
   - Files: none committed; screenshots go to the scratchpad.
   - Do:
     - Screenshot the issue email, the issue list and the issue detail. Use the email HTML from Task 1.7, and the pages from a headed local preview on the e2e emulators (memory `owner-ux-review-local-preview.md`).
@@ -311,7 +311,7 @@ Shared contracts:
   - Done when the owner approves the design in prose.
   - Depends on: 1.7, 4.1
 
-- [ ] **Task 5.3: Dev proof**
+- [x] **Task 5.3: Dev proof**
   - Files: `dev/active/issue-triage/tasks.md` (log)
   - Do:
     1. Run `/verify`, open a PR to dev, wait for green, and merge on the owner's go.
@@ -373,3 +373,19 @@ Shared contracts:
   - The index was deployed to owlette-dev-3838a: `firebase deploy --only firestore:indexes --non-interactive`, no `--force`.
   - The dev backfill was written: 25 issues numbered #1 to #25, and the counter's next is 25.
   - dev.owlette.app `GET /api/admin/issues` with the dev key returns 403 `scope_insufficient`, so the route is deployed and gated. Waiting on the owner to tick issue read/write on that key.
+- Task 5.3 done, 2026-10-15:
+  - The owner added `issue` read/write to the existing dev key (prefix `owk_live_tRf`); `GET /api/admin/issues` now returns 200.
+  - A real issue was filed from TEC-A4D's installed 4.1.17 desktop app, with logs and a pasted screenshot. As expected, the toast shows no number.
+  - It arrived as #26, with appVersion 4.1.17 (from the agent's UA), host TEC-A4D and attachments `{screenshots: 1, logs: true}`; the stored `hasLogs` works.
+  - The triage-issues skill steps were run as written (the skill is not loaded in this session's checkout):
+    - the list, the read, and the logs redirect taken without `-L`;
+    - the presigned URL fetched with no key, then unzipped (21 files, including the manifest and `screenshots/1.png`);
+    - #26 PATCHed to `wontfix` with a note.
+- Task 5.2 is still open: the owner is previewing the pages in a headed emulator window; the email arrives with #26.
+- The owner asked for an admin sidebar fix (sticky, grouped under headings, descriptions in tooltips): PR #395. They also asked for a create-API-key modal: branch `feat/api-key-modal`, in progress.
+- Task 5.2 done, 2026-10-16: on dev.owlette.app the owner went through the checklist (the #26 email, issue pages, the sidebar and the create-key modal): "everything is looking good from the checklist".
+- On top of the plan, at the owner's request: PR #395, the admin sidebar is sticky and grouped under headings; PR #396, create api key opens a modal.
+- Plan complete on dev.
+  - Prod waits for promotion: deploy the index, run the backfill with `--env=prod` (owner's go), tick issue read/write on `OWLETTE_API_KEY_PROD`, and turn the claude.ai "help improve Claude" setting off.
+  - The desktop toast number ships with the next installer.
+- Next, raised by the owner: the dashboard submit-issue dialog should match the desktop's (screenshots and video, the same copy, a title on the desktop).
