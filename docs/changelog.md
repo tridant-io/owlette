@@ -33,6 +33,14 @@ attach logs box, since only the desktop app can send logs. The files are kept
 real title from the first line of their description instead of all reading
 "agent feedback".
 
+### fixed — cancel on the two-factor screen reaches the login page
+
+**cancel and sign out** on the two-factor screen signed the user out but
+could leave them on that screen with only a "signed out" toast: the browser
+signed out before the server session ended, so the trip to the login page
+bounced straight back. Sign-out now ends the session first, and cancel opens
+the login page with a full page load.
+
 ## [4.1.17] - 2026-10-15
 
 ### added — videos on submitted issues

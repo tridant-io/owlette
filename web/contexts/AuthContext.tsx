@@ -858,8 +858,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       intentionalSignOutRef.current = true;
-      await firebaseSignOut(auth);
+      // the session before the user: once the user clears, pages send them to
+      // /login, and a cookie still valid then bounces them straight back.
       await destroySessionCookie();
+      await firebaseSignOut(auth);
       toast.success('Signed Out', {
         description: 'You have been signed out successfully.',
       });
