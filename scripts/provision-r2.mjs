@@ -22,8 +22,9 @@ const ROOT = join(__dirname, '..');
 const ENV_FILE = join(ROOT, '.claude', '.env.local');
 
 /**
- * Logs attached to issue reports (web/lib/issueLogsStorage.server.ts). The agent PUTs the
- * zip from the machine, never a browser, so these stay CORS-less too.
+ * Logs and attachments on issue reports (web/lib/issueLogsStorage.server.ts). The agent PUTs
+ * its log zip from the machine, but dashboard issue attachments upload straight from the
+ * browser on a presigned PUT, so these buckets need a PUT-only CORS rule of their own.
  */
 const ISSUE_LOGS_BUCKETS = [
   'owlette-prod-issue-logs',
@@ -41,27 +42,53 @@ const BUCKETS = [
   ...ISSUE_LOGS_BUCKETS,
 ];
 
-/**
- * Content buckets take direct browser uploads (presigned PUT) so they need CORS.
- * Manifests only move server-side (`putManifestBody` in web/lib/r2Client.server.ts) and
- * agent-side, so manifest buckets stay CORS-less — fewer origins a rogue page can reach.
- */
-const CORS_ENABLED_BUCKETS = [
-  'owlette-prod-content',
-  'owlette-dev-content',
-];
-
 // Next dev falls back to 3001, 3002… when the primary port is taken, so allow a small
 // range — otherwise port-hopping shows up as a CORS preflight failure on roost uploads
 // (which PUT to R2 straight from the browser). Re-run this script after adding a port.
-const CORS_ALLOWED_ORIGINS = [
-  ...[3000, 3001, 3002, 3003, 3100].flatMap((port) => [
-    `http://localhost:${port}`,
-    `http://127.0.0.1:${port}`,
-  ]),
-  'https://dev.owlette.app',
-  'https://owlette.app',
-];
+const LOCAL_ORIGINS = [3000, 3001, 3002, 3003, 3100].flatMap((port) => [
+  `http://localhost:${port}`,
+  `http://127.0.0.1:${port}`,
+]);
+// The Vercel failover is reached as https://owlette.app, so it needs no origin of its own.
+const HOSTED_ORIGINS = ['https://dev.owlette.app', 'https://owlette.app'];
+
+/**
+ * Content buckets take roost's browser uploads: a HEAD dedup probe, the PUT and a GET
+ * download; ETag is exposed for a future multipart client.
+ */
+const CONTENT_CORS_RULE = {
+  allowed: {
+    origins: [...LOCAL_ORIGINS, ...HOSTED_ORIGINS],
+    methods: ['GET', 'PUT', 'HEAD'],
+    headers: ['*'],
+  },
+  exposeHeaders: ['ETag'],
+  maxAgeSeconds: 3600,
+};
+
+/**
+ * Issue-logs buckets only take the dashboard's attachment PUT, whose one non-simple
+ * header is the signed content-type. Downloads are presigned redirects the browser
+ * follows as a navigation, which CORS never sees. Local dev uploads to the dev bucket.
+ */
+function issueLogsCorsRule(origins) {
+  return {
+    allowed: { origins, methods: ['PUT'], headers: ['content-type'] },
+    maxAgeSeconds: 3600,
+  };
+}
+
+/**
+ * The CORS rule per bucket. Manifests only move server-side (`putManifestBody` in
+ * web/lib/r2Client.server.ts) and agent-side, so manifest buckets stay CORS-less — fewer
+ * origins a rogue page can reach.
+ */
+const CORS_RULES = {
+  'owlette-prod-content': CONTENT_CORS_RULE,
+  'owlette-dev-content': CONTENT_CORS_RULE,
+  'owlette-prod-issue-logs': issueLogsCorsRule(HOSTED_ORIGINS),
+  'owlette-dev-issue-logs': issueLogsCorsRule([...LOCAL_ORIGINS, ...HOSTED_ORIGINS]),
+};
 
 /** R2 jurisdiction — 'default' (automatic) / 'eu' / 'fedramp'. Start default. */
 const JURISDICTION = 'default';
@@ -177,29 +204,14 @@ class CfApi {
   }
 
   /**
-   * Apply CORS rules to a bucket. R2's CORS endpoint is a full-replace PUT — no merging,
-   * so this function is the source of truth for which origins can reach the bucket.
-   * Methods are scoped to what the browser needs (HEAD dedup probe, PUT upload, GET
-   * download); ETag is exposed for a future multipart client.
+   * Apply one CORS rule to a bucket. R2's CORS endpoint is a full-replace PUT — no merging,
+   * so `CORS_RULES` is the source of truth for which origins can reach each bucket.
    */
-  async putBucketCors(bucketName) {
-    const rules = {
-      rules: [
-        {
-          allowed: {
-            origins: CORS_ALLOWED_ORIGINS,
-            methods: ['GET', 'PUT', 'HEAD'],
-            headers: ['*'],
-          },
-          exposeHeaders: ['ETag'],
-          maxAgeSeconds: 3600,
-        },
-      ],
-    };
+  async putBucketCors(bucketName, rule) {
     const { status, json } = await this.call(
       'PUT',
       `/accounts/${this.accountId}/r2/buckets/${bucketName}/cors`,
-      rules,
+      { rules: [rule] },
     );
     if (status === 200 && json?.success) return { ok: true };
     const msg = json?.errors?.[0]?.message || `HTTP ${status}`;
@@ -286,11 +298,11 @@ async function main() {
     }
   }
 
-  console.log(`→ applying CORS rules to content buckets (origins: ${CORS_ALLOWED_ORIGINS.length})…`);
-  for (const name of CORS_ENABLED_BUCKETS) {
-    const result = await api.putBucketCors(name);
+  console.log('→ applying CORS rules to content + issue-logs buckets…');
+  for (const [name, rule] of Object.entries(CORS_RULES)) {
+    const result = await api.putBucketCors(name, rule);
     if (result.ok) {
-      console.log(`  ✓ CORS applied: ${name}`);
+      console.log(`  ✓ CORS applied: ${name} (${rule.allowed.methods.join('/')}, ${rule.allowed.origins.length} origins)`);
     } else {
       console.error(`  ✗ CORS failed on ${name}: ${result.reason}`);
       process.exit(1);

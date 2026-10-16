@@ -587,6 +587,56 @@ paths:
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
 
+  /api/admin/issues/{id}/files/{n}:
+    get:
+      operationId: downloadIssueFile
+      tags: [Issues]
+      summary: download one file attached to a dashboard issue
+      description: |
+        Redirects to a 15-minute presigned download of one screenshot or video
+        a user attached to an issue from the dashboard
+        (`owlette-issue-<number>-<n>.<ext>`). `{n}` is the file's `index` in
+        the issue's `attachments.files`. The issue page links here. Each
+        download writes an audit row naming the caller, the issue and the
+        file; a dashboard issue names no site, so no site's audit log gets a
+        row. If the write fails the route answers 503 and no url is minted.
+        Attachments are kept 30 days.
+
+        ### Authentication and scopes
+
+        Superadmin only. Sessions and Firebase ID tokens need the superadmin
+        role; an API key additionally needs the superadmin-only `issue=*:read`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - $ref: '#/components/parameters/IssueIdPath'
+        - name: n
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+          description: The file's 1-based `index` in `attachments.files`.
+      responses:
+        '302':
+          description: Redirect to the presigned download.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '410':
+          description: 'The files have expired or this one is gone from storage (`code: issue_attachment_expired`).'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+
   /api/platform/email/config:
     get:
       operationId: getPlatformEmailConfig
@@ -12254,15 +12304,20 @@ components:
           description: Uid of the superadmin who last set the status.
         attachments:
           type: object
-          required: [available, size, expiresAt, screenshots, videos, logs]
+          description: |
+            A machine attaches one zip, downloaded through
+            `GET /api/admin/issues/{id}/logs`. The dashboard attaches separate
+            screenshots and videos, listed in `files` and downloaded one at a
+            time through `GET /api/admin/issues/{id}/files/{n}`.
+          required: [available, size, expiresAt, screenshots, videos, logs, files]
           properties:
             available:
               type: boolean
-              description: True while the attached zip can still be downloaded through `GET /api/admin/issues/{id}/logs`.
+              description: True while the attachments can still be downloaded.
             size:
               type: integer
               nullable: true
-              description: Zip size in bytes.
+              description: Zip size in bytes, or the dashboard files' total.
             expiresAt:
               type: string
               format: date-time
@@ -12275,7 +12330,28 @@ components:
               minimum: 0
             logs:
               type: boolean
-              description: Whether the zip holds logs.
+              description: Whether the zip holds logs; always false for a dashboard issue.
+            files:
+              type: array
+              description: The dashboard issue's files; empty for a machine's issue.
+              items:
+                type: object
+                required: [index, kind, ext, size]
+                properties:
+                  index:
+                    type: integer
+                    minimum: 1
+                    description: The `{n}` that downloads this file.
+                  kind:
+                    type: string
+                    enum: [screenshot, video]
+                  ext:
+                    type: string
+                    enum: [png, jpg, webp, mp4, mov, webm]
+                  size:
+                    type: integer
+                    minimum: 0
+                    description: Size in bytes.
     IssueList:
       type: object
       required: [issues, next_page_token]

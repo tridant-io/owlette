@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, ChevronDown, Download, SearchX } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Download, Film, ImageIcon, SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIssue, type Issue } from '@/hooks/useIssues';
 import { Button } from '@/components/ui/button';
@@ -43,8 +43,14 @@ function attachedSummary(attachments: Issue['attachments']): string {
   return issueAttachmentsSummary(attachments) || 'a zip';
 }
 
+// "1 screenshot was", "a zip was", but "logs were" and "2 screenshots and 1 video were"
+function deletedVerb({ logs, screenshots, videos }: Issue['attachments']): string {
+  return !logs && screenshots + videos <= 1 ? 'was' : 'were';
+}
+
 function expiresIn(iso: string): string {
-  const days = Math.floor((Date.parse(iso) - Date.now()) / DAY_MS);
+  // ceil: a fresh 30-day upload reads "expires in 30 days", not 29
+  const days = Math.ceil((Date.parse(iso) - Date.now()) / DAY_MS);
   if (days < 1) return 'expires today';
   return `expires in ${plural(days, 'day')}`;
 }
@@ -104,11 +110,41 @@ function Facts({ issue, timeFormat }: { issue: Issue; timeFormat: TimeFormat }) 
   );
 }
 
+/** a dashboard issue's files, each with its own download; numbered within its kind */
+function FileList({ files, base }: { files: Issue['attachments']['files']; base: string }) {
+  const seen = { screenshot: 0, video: 0 };
+  return (
+    <ul className="mt-3 border-t border-border">
+      {files.map((file) => {
+        const label = `${file.kind} ${++seen[file.kind]}`;
+        const Icon = file.kind === 'video' ? Film : ImageIcon;
+        return (
+          <li key={file.index} className="flex items-center gap-3 border-b border-border py-2 last:border-0 last:pb-0">
+            <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm text-foreground">{label}</p>
+              <p className="text-xs tabular-nums text-muted-foreground">
+                {file.ext} · {formatFileSize(file.size)}
+              </p>
+            </div>
+            <Button asChild variant="outline" size="sm">
+              <a href={`${base}/files/${file.index}`} aria-label={`download ${label}`}>
+                <Download />
+                download
+              </a>
+            </Button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function Attachments({ issue, timeFormat }: { issue: Issue; timeFormat: TimeFormat }) {
   const { attachments } = issue;
   const { notes } = issue.description;
   const expired = !attachments.available && attachments.expiresAt !== null;
-  const ref = issue.number ?? issue.id;
+  const base = `/api/admin/issues/${encodeURIComponent(String(issue.number ?? issue.id))}`;
 
   return (
     <Panel id="issue-attachments-heading" title="attachments">
@@ -121,18 +157,22 @@ function Attachments({ issue, timeFormat }: { issue: Issue; timeFormat: TimeForm
               <span title={formatIssueDate(attachments.expiresAt, timeFormat)}>{expiresIn(attachments.expiresAt)}</span>
             )}
           </p>
-          <Button asChild variant="outline" size="sm" className="mt-3 w-full">
-            <a href={`/api/admin/issues/${encodeURIComponent(String(ref))}/logs`}>
-              <Download />
-              download attachments
-            </a>
-          </Button>
+          {attachments.files.length > 0 ? (
+            <FileList files={attachments.files} base={base} />
+          ) : (
+            <Button asChild variant="outline" size="sm" className="mt-3 w-full">
+              <a href={`${base}/logs`}>
+                <Download />
+                download attachments
+              </a>
+            </Button>
+          )}
         </>
       ) : expired ? (
         <>
           <p className="text-sm text-foreground">attachments expired</p>
           <p className="mt-1 text-xs text-muted-foreground">
-            {attachedSummary(attachments)} were deleted on {formatIssueDay(attachments.expiresAt as string)}.
+            {attachedSummary(attachments)} {deletedVerb(attachments)} deleted on {formatIssueDay(attachments.expiresAt as string)}.
           </p>
         </>
       ) : (

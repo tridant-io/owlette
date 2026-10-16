@@ -68,10 +68,11 @@ function agentIssue(overrides: Partial<Issue> = {}): Issue {
     attachments: {
       available: true,
       size: 5 * 1024 * 1024,
-      expiresAt: new Date(Date.now() + 21 * DAY + HOUR).toISOString(),
+      expiresAt: new Date(Date.now() + 21 * DAY - HOUR).toISOString(),
       screenshots: 2,
       videos: 1,
       logs: true,
+      files: [],
     },
     ...overrides,
   };
@@ -93,7 +94,7 @@ function webIssue(overrides: Partial<Issue> = {}): Issue {
     from: 'ana@example.com',
     host: null,
     description: { text: 'please', systemInfo: '', logTail: '', notes: [] },
-    attachments: { available: false, size: null, expiresAt: null, screenshots: 0, videos: 0, logs: false },
+    attachments: { available: false, size: null, expiresAt: null, screenshots: 0, videos: 0, logs: false, files: [] },
     ...overrides,
   };
 }
@@ -370,6 +371,7 @@ describe('issue detail', () => {
           screenshots: 3,
           videos: 0,
           logs: true,
+      files: [],
         },
       }),
     );
@@ -379,6 +381,30 @@ describe('issue detail', () => {
     expect(attachments).toHaveTextContent('attachments expired');
     expect(attachments).toHaveTextContent('logs and 3 screenshots were deleted on');
     expect(within(attachments).queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['1 screenshot was', { screenshots: 1, videos: 0, logs: false }],
+    ['1 video was', { screenshots: 0, videos: 1, logs: false }],
+    ['a zip was', { screenshots: 0, videos: 0, logs: false }],
+    ['logs were', { screenshots: 0, videos: 0, logs: true }],
+    ['1 screenshot and 1 video were', { screenshots: 1, videos: 1, logs: false }],
+  ])('says "%s deleted" by the counts', async (expected, counts) => {
+    serve(
+      agentIssue({
+        attachments: {
+          available: false,
+          size: 1024,
+          expiresAt: new Date(Date.now() - DAY).toISOString(),
+          ...counts,
+          files: [],
+        },
+      }),
+    );
+    renderWithTooltips(<IssueDetail idOrNumber="42" />);
+
+    const attachments = await screen.findByRole('region', { name: 'attachments' });
+    expect(attachments).toHaveTextContent(`${expected} deleted on`);
   });
 
   it('leaves out what a dashboard issue does not have', async () => {
@@ -392,6 +418,77 @@ describe('issue detail', () => {
     const details = screen.getByRole('region', { name: 'details' });
     expect(within(details).getByText('from').nextElementSibling).toHaveTextContent('ana@example.com');
     expect(within(details).getByText('source').nextElementSibling).toHaveTextContent('dashboard');
+  });
+
+  it('lists a dashboard issue’s files, each downloaded on its own', async () => {
+    serve(
+      webIssue({
+        attachments: {
+          available: true,
+          size: 3 * 1024 * 1024,
+          expiresAt: new Date(Date.now() + 29 * DAY - HOUR).toISOString(),
+          screenshots: 2,
+          videos: 1,
+          logs: false,
+          files: [
+            { index: 1, kind: 'screenshot', ext: 'png', size: 512 * 1024 },
+            { index: 2, kind: 'video', ext: 'mp4', size: 2 * 1024 * 1024 },
+            { index: 3, kind: 'screenshot', ext: 'jpg', size: 512 * 1024 },
+          ],
+        },
+      }),
+    );
+    renderWithTooltips(<IssueDetail idOrNumber="7" />);
+
+    const attachments = await screen.findByRole('region', { name: 'attachments' });
+    expect(attachments).toHaveTextContent('2 screenshots and 1 video');
+    expect(attachments).toHaveTextContent('3 MB');
+    expect(attachments).toHaveTextContent('expires in 29 days');
+    // no zip, so no single download
+    expect(within(attachments).queryByRole('link', { name: 'download attachments' })).not.toBeInTheDocument();
+
+    const rows = within(attachments).getAllByRole('listitem');
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toHaveTextContent('screenshot 1');
+    expect(rows[0]).toHaveTextContent('png · 512 KB');
+    expect(rows[1]).toHaveTextContent('video 1');
+    expect(rows[1]).toHaveTextContent('mp4 · 2 MB');
+    expect(rows[2]).toHaveTextContent('screenshot 2');
+    expect(within(attachments).getByRole('link', { name: 'download screenshot 1' })).toHaveAttribute(
+      'href',
+      '/api/admin/issues/7/files/1',
+    );
+    expect(within(attachments).getByRole('link', { name: 'download video 1' })).toHaveAttribute(
+      'href',
+      '/api/admin/issues/7/files/2',
+    );
+    expect(within(attachments).getByRole('link', { name: 'download screenshot 2' })).toHaveAttribute(
+      'href',
+      '/api/admin/issues/7/files/3',
+    );
+  });
+
+  it('says when a dashboard issue’s files have expired, with no downloads', async () => {
+    serve(
+      webIssue({
+        attachments: {
+          available: false,
+          size: 1024,
+          expiresAt: new Date(Date.now() - DAY).toISOString(),
+          screenshots: 1,
+          videos: 0,
+          logs: false,
+          files: [{ index: 1, kind: 'screenshot', ext: 'webp', size: 1024 }],
+        },
+      }),
+    );
+    renderWithTooltips(<IssueDetail idOrNumber="7" />);
+
+    const attachments = await screen.findByRole('region', { name: 'attachments' });
+    expect(attachments).toHaveTextContent('attachments expired');
+    expect(attachments).toHaveTextContent('1 screenshot');
+    expect(within(attachments).queryByRole('listitem')).not.toBeInTheDocument();
+    expect(within(attachments).queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('opens an unnumbered issue by its doc id', async () => {

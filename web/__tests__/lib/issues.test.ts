@@ -15,7 +15,18 @@ import {
   serializeIssue,
   agentVersionFromUA,
 } from '@/lib/issues.server';
-import { ISSUE_STATUSES, issueAttachmentsSummary } from '@/lib/issues';
+import {
+  ISSUE_ATTACHMENT_MAX_BYTES,
+  ISSUE_FILE_TYPES,
+  ISSUE_MAX_SCREENSHOTS,
+  ISSUE_MAX_VIDEOS,
+  ISSUE_SCREENSHOT_MAX_BYTES,
+  ISSUE_STATUSES,
+  issueAttachmentsSummary,
+  issueFileExt,
+  issueFileKind,
+  type IssueFileExt,
+} from '@/lib/issues';
 
 const SYSTEM_INFO = '  hostname: kiosk-1\n  os: Windows 11';
 const LOG_TAIL = '2026-10-15 10:00:00 INFO started\n2026-10-15 10:00:05 ERROR boom';
@@ -44,6 +55,36 @@ describe('issueAttachmentsSummary', () => {
 
   it('is empty when nothing is attached', () => {
     expect(issueAttachmentsSummary({ logs: false, screenshots: 0, videos: 0 })).toBe('');
+  });
+});
+
+describe('issue file limits', () => {
+  it("match the desktop app's", () => {
+    expect(ISSUE_MAX_SCREENSHOTS).toBe(10);
+    expect(ISSUE_MAX_VIDEOS).toBe(20);
+    expect(ISSUE_SCREENSHOT_MAX_BYTES).toBe(8 * 1024 * 1024);
+    expect(ISSUE_ATTACHMENT_MAX_BYTES).toBe(100 * 1024 * 1024);
+  });
+});
+
+describe('issueFileExt', () => {
+  it.each(Object.entries(ISSUE_FILE_TYPES))('maps %s to its content type and back', (ext, type) => {
+    expect(issueFileExt(type)).toBe(ext);
+  });
+
+  it.each([['image/gif'], ['application/zip'], ['IMAGE/PNG'], ['image/png; charset=x'], ['']])(
+    'refuses %p',
+    (type) => {
+      expect(issueFileExt(type)).toBeNull();
+    },
+  );
+});
+
+describe('issueFileKind', () => {
+  it('reads images as screenshots and the rest as videos', () => {
+    const kinds = (exts: IssueFileExt[]) => exts.map(issueFileKind);
+    expect(kinds(['png', 'jpg', 'webp'])).toEqual(['screenshot', 'screenshot', 'screenshot']);
+    expect(kinds(['mp4', 'mov', 'webm'])).toEqual(['video', 'video', 'video']);
   });
 });
 
@@ -236,7 +277,7 @@ describe('serializeIssue', () => {
       triageNote: null,
       statusUpdatedAt: null,
       statusUpdatedBy: null,
-      attachments: { available: false, size: null, expiresAt: null, screenshots: 0, videos: 0, logs: false },
+      attachments: { available: false, size: null, expiresAt: null, screenshots: 0, videos: 0, logs: false, files: [] },
     });
   });
 
@@ -302,6 +343,7 @@ describe('serializeIssue', () => {
       screenshots: 0,
       videos: 0,
       logs: true,
+      files: [],
     });
   });
 
@@ -321,6 +363,104 @@ describe('serializeIssue', () => {
   it('ignores a hasLogs without a zip', () => {
     const issue = serializeIssue(snap('agent4', { status: 'new', logs: { hasLogs: true } }));
     expect(issue.attachments.logs).toBe(false);
+  });
+
+  const PNG = 'issues/web/u1/0b5c1f2e-8a6d-4c3e-9f1a-2b3c4d5e6f70.png';
+  const MP4 = 'issues/web/u1/1c6d2f3e-9b7e-4d4f-8a2b-3c4d5e6f7a81.mp4';
+
+  it('lists the files a dashboard issue carries, without their keys, while they are live', () => {
+    const expires = Timestamp.fromMillis(Date.now() + 86_400_000);
+    const issue = serializeIssue(
+      snap('web2', {
+        source: 'web',
+        status: 'new',
+        files: [
+          { key: PNG, ext: 'png', kind: 'screenshot', size: 100 },
+          { key: MP4, ext: 'mp4', kind: 'video', size: 900 },
+          { key: PNG, ext: 'webp', kind: 'screenshot', size: 50 },
+        ],
+        filesExpireAt: expires,
+      }),
+    );
+    expect(issue.attachments).toEqual({
+      available: true,
+      size: 1050,
+      expiresAt: new Date(expires.toMillis()).toISOString(),
+      screenshots: 2,
+      videos: 1,
+      logs: false,
+      files: [
+        { index: 1, kind: 'screenshot', ext: 'png', size: 100 },
+        { index: 2, kind: 'video', ext: 'mp4', size: 900 },
+        { index: 3, kind: 'screenshot', ext: 'webp', size: 50 },
+      ],
+    });
+    expect(JSON.stringify(issue)).not.toContain('issues/web/');
+  });
+
+  it('reads expired dashboard files as unavailable, and a missing expiry the same way', () => {
+    const files = [{ key: PNG, ext: 'png', kind: 'screenshot', size: 100 }];
+    const expired = serializeIssue(
+      snap('web3', { status: 'new', files, filesExpireAt: Timestamp.fromMillis(Date.now() - 1000) }),
+    );
+    expect(expired.attachments).toMatchObject({ available: false, size: 100, expiresAt: expect.any(String), screenshots: 1 });
+    expect(expired.attachments.files).toHaveLength(1);
+    expect(serializeIssue(snap('web4', { status: 'new', files })).attachments).toMatchObject({
+      available: false,
+      expiresAt: null,
+    });
+  });
+
+  it('skips malformed file entries, keeping each good one at its stored index', () => {
+    const issue = serializeIssue(
+      snap('web5', {
+        status: 'new',
+        files: [
+          null,
+          'issues/web/u1/x.png',
+          { ext: 'png', kind: 'screenshot', size: 1 },
+          { key: PNG, ext: 'gif', kind: 'screenshot', size: 1 },
+          { key: PNG, ext: 'toString', kind: 'screenshot', size: 1 },
+          { key: PNG, ext: 'png', kind: 'video', size: 1 },
+          { key: PNG, ext: 'png', kind: 'screenshot', size: -1 },
+          { key: PNG, ext: 'png', kind: 'screenshot', size: 1.5 },
+          { key: PNG, ext: 'png', kind: 'screenshot', size: '1' },
+          { key: MP4, ext: 'mp4', kind: 'video', size: 7 },
+        ],
+        filesExpireAt: Timestamp.fromMillis(Date.now() + 1000),
+      }),
+    );
+    expect(issue.attachments.files).toEqual([{ index: 10, kind: 'video', ext: 'mp4', size: 7 }]);
+    expect(issue.attachments).toMatchObject({ available: true, size: 7, screenshots: 0, videos: 1 });
+  });
+
+  it('reads a dashboard issue whose files are all malformed as having none', () => {
+    const issue = serializeIssue(
+      snap('web6', { status: 'new', files: [{ key: 1 }], filesExpireAt: Timestamp.fromMillis(Date.now() + 1000) }),
+    );
+    expect(issue.attachments).toEqual({
+      available: false, size: null, expiresAt: null, screenshots: 0, videos: 0, logs: false, files: [],
+    });
+  });
+
+  it("leaves an agent issue's zip attachments as they were, with no files", () => {
+    const expires = Timestamp.fromMillis(Date.now() + 1000);
+    const issue = serializeIssue(
+      snap('agent5', {
+        status: 'new',
+        logs: { key: 'issues/s1/m1/abc.zip', size: 2048, expiresAt: expires, screenshots: 1, videos: 1, hasLogs: true },
+        files: [{ key: PNG, ext: 'png', kind: 'screenshot', size: 100 }],
+      }),
+    );
+    expect(issue.attachments).toEqual({
+      available: true,
+      size: 2048,
+      expiresAt: new Date(expires.toMillis()).toISOString(),
+      screenshots: 1,
+      videos: 1,
+      logs: true,
+      files: [],
+    });
   });
 
   it('falls back safely on an old or malformed doc', () => {

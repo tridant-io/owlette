@@ -158,6 +158,20 @@ export const issueLogsUploadRateLimit = redis
   : null;
 
 /**
+ * Web issue upload urls: 20/hr per user. One call signs a whole issue's
+ * screenshots and videos (up to 100 MB), so twenty covers retries and still
+ * bounds how much one account can land in the bucket.
+ */
+export const webIssueUploadRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(20, '1 h'),
+      prefix: 'web-issue-upload',
+      analytics: true,
+    })
+  : null;
+
+/**
  * Swoop stall reports: 1 per 30 s per session. A report is one log line about
  * a frozen picture, and a page declares a stall at most once per episode.
  */
