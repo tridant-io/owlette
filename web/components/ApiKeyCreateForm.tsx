@@ -20,13 +20,11 @@ import {
 } from '@/lib/apiKeyTypes';
 
 /**
- * The create-key form, inline rather than in its own modal.
+ * The create-key form body: fields and actions, no heading or chrome.
  *
- * It used to live only inside CreateKeyDialog on /settings/api-keys, which is
- * why the account dialog's create could not offer a ttl or custom scopes —
- * that surface had a reduced reimplementation instead of this. Rendering
- * inline lets one panel host it: nesting a modal inside the account settings
- * dialog would stack two focus traps.
+ * ApiKeysManager wraps it in a dialog that carries the title and the
+ * shown-once warning, so the page and the account settings dialog (where it
+ * opens as a nested modal) get the same form with ttl and custom scopes.
  */
 
 interface Props {
@@ -71,13 +69,7 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
   }
 
   return (
-    <div className="space-y-4 rounded-md border border-border bg-background/40 p-3">
-      {/* Heading kept from the modal this replaced — the e2e specs anchor on
-          it, and it still labels the region now that it is inline. */}
-      <h3 className="text-sm font-medium text-foreground">create api key</h3>
-      <p className="text-xs text-muted-foreground">
-        the raw key is shown once, right after creation. store it somewhere safe.
-      </p>
+    <div className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="keyName" className="text-foreground">
           name

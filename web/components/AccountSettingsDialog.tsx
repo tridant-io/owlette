@@ -1127,12 +1127,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   {/* Usage example */}
                   <div className="rounded-md border border-border bg-card/50 p-4 space-y-2">
                     <p className="text-xs text-muted-foreground font-medium">usage</p>
-                    <code className="block text-[11px] bg-background rounded px-3 py-2 text-muted-foreground font-mono whitespace-pre-wrap">
-                      {`curl "https://owlette.app/api/sites/SITE_ID/machines?api_key=owk_..."`}
+                    {/* wrap-anywhere: the url has no spaces to wrap at, and a phone is narrower than it */}
+                    <code className="block text-[11px] bg-background rounded px-3 py-2 text-muted-foreground font-mono whitespace-pre-wrap wrap-anywhere">
+                      {`curl -H "x-api-key: owk_..." "https://owlette.app/api/sites/SITE_ID/machines"`}
                     </code>
-                    <p className="text-[11px] text-muted-foreground">
-                      or pass as header: <code className="font-mono">x-api-key: owk_...</code>
-                    </p>
                   </div>
                 </div>
               )}
