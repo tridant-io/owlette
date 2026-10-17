@@ -102,7 +102,7 @@ ed25519-dalek = "=3.0.0"
 
 # Bundle secrets and derived keys are wiped on drop; `derive` for the
 # ZeroizeOnDrop the bundle types need.
-zeroize = { version = "=1.9.0", features = ["derive"] }
+zeroize = { version = "=1.9.1", features = ["derive"] }
 
 # Single-use `jti` values and DTLS/ICE nonces.
 rand = "=0.10.3"
@@ -306,7 +306,7 @@ str0m = { version = "=0.23.1", default-features = false, features = ["rust-crypt
 # interface walk (`getifaddrs`, Task 4.7). 0.2.189 is what Cargo.lock already
 # resolved through the rest of the graph, so this adds no version. Exit condition: the standing
 # dependency-currency review; libc 1.0 is a deliberate re-pin, not a bump.
-libc = "=0.2.189"
+libc = "=0.2.190"
 
 # The macOS backends (dev/active/swoop-macos): ScreenCaptureKit captures the
 # picture and the system audio, VideoToolbox encodes and scales, CoreGraphics
@@ -324,7 +324,7 @@ libc = "=0.2.189"
 # on 2026-09-28. Exit condition: the standing dependency-currency review,
 # moving the set as one.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "=0.6.4"
+objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-core-foundation = "=0.3.2"
 objc2-core-graphics = "=0.3.2"
