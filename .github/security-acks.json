@@ -26,6 +26,20 @@
       "expires": "2026-12-12",
       "revisit": "When Tauri moves the gtk-rs stack to glib 0.20, drop this entry and let the bump land normally."
     },
+    "alert:dependabot:289": {
+      "reason": "sprintf-js 1.0.3 (GHSA-hp3w-g68c-fv3c, unbounded precision specifiers) is a dev-only dependency: jest coverage pulls it in through @istanbuljs/load-nyc-config -> argparse 1.x, in both the root and web package-lock.json. It runs only under the test runner; it is in no web bundle and no installer (the desktop lockfile does not contain it). No patched release exists to bump to.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-10-16",
+      "expires": "2027-01-16",
+      "revisit": "When sprintf-js or argparse publishes a fix, or jest coverage stops pulling argparse 1.x, drop this entry and let the bump land."
+    },
+    "alert:dependabot:290": {
+      "reason": "sprintf-js 1.0.3 (GHSA-hp3w-g68c-fv3c, unbounded precision specifiers) is a dev-only dependency: jest coverage pulls it in through @istanbuljs/load-nyc-config -> argparse 1.x, in both the root and web package-lock.json. It runs only under the test runner; it is in no web bundle and no installer (the desktop lockfile does not contain it). No patched release exists to bump to.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-10-16",
+      "expires": "2027-01-16",
+      "revisit": "When sprintf-js or argparse publishes a fix, or jest coverage stops pulling argparse 1.x, drop this entry and let the bump land."
+    },
     "alert:code-scanning:315": {
       "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/turnRunner.server.ts:518, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
       "accepted_by": "rosco@theexperiential.com",

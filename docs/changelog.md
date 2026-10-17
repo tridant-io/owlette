@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.18] - 2026-10-16
+
 ### fixed — swoop says why a machine cannot show a picture, instead of "connecting" forever
 
 A machine whose streamer failed before it answered — its screen could not be

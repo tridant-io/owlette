@@ -7,6 +7,24 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [4.1.18] - 2026-10-16
+
+### fixed — swoop says why a machine cannot show a picture, instead of "connecting" forever
+
+A machine whose streamer failed before it answered — its screen could not be
+captured, it had no encoder, or its agent refused to start one — left the
+viewer on "connecting" and "reconnecting in N s" for as long as the tab was
+open, and the retries themselves tripped the machine's start-rate ceiling. The
+agent now records the refusal or the exit reason on the session, and the
+viewer reads it when its retry is due, says it, and stops. Two causes behind
+the report are fixed too: on macOS the streamer asked ScreenCaptureKit for
+every window on the machine and gave up after 5 s, which a loaded laptop
+missed on every session; it now asks for displays only and waits up to 20 s,
+logging how long the answer took. And a machine removed from its site on the
+dashboard and re-paired in place kept swoop on its old, stopped cloud client,
+so it minted no doorbell and refused every session until the service next
+restarted; swoop is now rebuilt whenever the cloud client is.
+
 ### added — numbered issues, an issue page and an issues API
 
 Every issue now gets a number, and the confirmation names it: "issue #42
