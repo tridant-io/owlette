@@ -231,7 +231,7 @@ audiopus_sys = { version = "=0.2.2", optional = true, features = ["static"] }
 # Carried forward, not solved here: str0m's pacer is unusable as configured —
 # BWE on measured 1015.6 ms p50 of pacer queue with zero loss, PLI or NACK, so
 # it presents as latency and never as loss. That lands on Tasks 3.8 and 4.7.
-str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-dimpl"] }
+str0m = { version = "=0.24.1", default-features = false, features = ["wincrypto-dimpl"] }
 
 # Every Win32 subsystem this crate's modules use, declared up front because a
 # Wave 3+ task must not edit this manifest: Direct3D11/DXGI for capture and the
