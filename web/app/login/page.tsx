@@ -10,6 +10,7 @@ import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/co
 import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { Fingerprint, Globe } from 'lucide-react';
 import { SwoopLockup } from '@/components/swoop/SwoopLockup';
+import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { toast } from '@/lib/toast';
 import { sanitizeError } from '@/lib/errorHandler';
 import { isPopupUnavailableError } from '@/lib/inAppBrowser';
@@ -46,11 +47,18 @@ const APP_LINK_WAIT_MS = 10 * 60 * 1000;
 
 /**
  * owlette swoop's login is the app's own: its "owlette | swoop" lockup, as the picker's header
- * shows it, and no tagline, in one narrow column.
+ * shows it, naming the installed release on hover as it does there, and no tagline, in one
+ * narrow column.
  */
 const SWOOP_SHELL = {
   minimal: true,
-  brandTitle: <SwoopLockup size="lg" />,
+  brandTitle: (
+    <SwoopVersionTooltip>
+      <span data-testid="swoop-login-mark">
+        <SwoopLockup size="lg" />
+      </span>
+    </SwoopVersionTooltip>
+  ),
   brandDescription: null,
 };
 

@@ -7,13 +7,14 @@ import type { ViewerAppPlatform } from '@/lib/swoop/viewerApp';
 export interface ViewerApp {
   platform: ViewerAppPlatform | null;
   nativeKeys: boolean;
+  version: string | null;
 }
 
 // null outside the provider: the hooks then read navigator after hydration
 const ViewerAppContext = createContext<ViewerApp | null>(null);
 
-export function ViewerAppProvider({ platform, nativeKeys, children }: ViewerApp & { children: ReactNode }) {
-  const value = useMemo(() => ({ platform, nativeKeys }), [platform, nativeKeys]);
+export function ViewerAppProvider({ platform, nativeKeys, version, children }: ViewerApp & { children: ReactNode }) {
+  const value = useMemo(() => ({ platform, nativeKeys, version }), [platform, nativeKeys, version]);
   return <ViewerAppContext.Provider value={value}>{children}</ViewerAppContext.Provider>;
 }
 

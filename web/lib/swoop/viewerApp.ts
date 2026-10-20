@@ -13,6 +13,7 @@
 const TOKEN = 'owlette-swoop-viewer/';
 // ` (keys)` right after the version (`desktop/viewer/src/windows.rs`)
 const NATIVE_KEYS_RE = /owlette-swoop-viewer\/\S+ \(keys\)/;
+const VERSION_RE = /owlette-swoop-viewer\/(\S+)/;
 
 // the app re-checks the host and rewrites the link to https, so these only
 // keep a path segment from carrying anything but an id.
@@ -36,6 +37,11 @@ export function isViewerApp(ua: string = currentUserAgent()): boolean {
  */
 export function viewerAppHasNativeKeys(ua: string = currentUserAgent()): boolean {
   return NATIVE_KEYS_RE.test(ua);
+}
+
+/** the owlette swoop release the page is in, as its ua token names it. null in a browser. */
+export function viewerAppVersion(ua: string = currentUserAgent()): string | null {
+  return VERSION_RE.exec(ua)?.[1] ?? null;
 }
 
 export type ViewerAppPlatform = 'mac' | 'windows' | 'linux';

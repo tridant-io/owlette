@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — owlette swoop says which version it is
+
+Hover the owlette swoop mark, at the top left of the machine picker or on the
+sign-in page, and a tooltip names the installed version, such as "owlette swoop
+v4.1.19".
+
 ### fixed — swoop draws the machine's pointer at its own size, and never leaves you without one
 
 In owlette swoop a Mac's pointer showed at twice its size. The streamer draws

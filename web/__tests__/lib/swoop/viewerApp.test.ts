@@ -1,4 +1,10 @@
-import { isViewerApp, viewerAppHasNativeKeys, viewerAppLink, viewerAppPlatform } from '@/lib/swoop/viewerApp';
+import {
+  isViewerApp,
+  viewerAppHasNativeKeys,
+  viewerAppLink,
+  viewerAppPlatform,
+  viewerAppVersion,
+} from '@/lib/swoop/viewerApp';
 
 const CHROME =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0';
@@ -46,6 +52,16 @@ describe('viewerApp', () => {
 
     jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(`${APP} (keys)`);
     expect(viewerAppHasNativeKeys()).toBe(true);
+  });
+
+  it('reads its release off the ua token, keys or not, and none in a browser', () => {
+    expect(viewerAppVersion(APP)).toBe('4.1.8');
+    expect(viewerAppVersion(`${CHROME} owlette-swoop-viewer/4.1.19 (keys)`)).toBe('4.1.19');
+    expect(viewerAppVersion(CHROME)).toBeNull();
+    expect(viewerAppVersion('')).toBeNull();
+
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP);
+    expect(viewerAppVersion()).toBe('4.1.8');
   });
 
   it('links to the app-link page with the session as next', () => {

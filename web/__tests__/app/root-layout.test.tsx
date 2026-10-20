@@ -47,19 +47,20 @@ async function providerFor(ua: string | null) {
   const tree = await RootLayout({ children: PAGE });
   const provider = find(tree, ofType(ViewerAppProvider)) as ReactElement | null;
   if (!provider) throw new Error('no ViewerAppProvider in the root layout');
-  return provider.props as { platform: unknown; nativeKeys: unknown; children: ReactNode };
+  return provider.props as { platform: unknown; nativeKeys: unknown; version: unknown; children: ReactNode };
 }
 
 it.each([
-  ['a mac app with its keys', `${MAC} owlette-swoop-viewer/4.1.8 (keys)`, 'mac', true],
-  ['a windows app without them', `${WINDOWS} owlette-swoop-viewer/4.1.8`, 'windows', false],
-  ['a linux app', `${LINUX} owlette-swoop-viewer/4.1.8 (keys)`, 'linux', true],
-  ['a browser', WINDOWS, null, false],
-  ['no user agent at all', null, null, false],
-])('passes %s from the request header', async (_case, ua, platform, nativeKeys) => {
+  ['a mac app with its keys', `${MAC} owlette-swoop-viewer/4.1.8 (keys)`, 'mac', true, '4.1.8'],
+  ['a windows app without them', `${WINDOWS} owlette-swoop-viewer/4.1.8`, 'windows', false, '4.1.8'],
+  ['a linux app', `${LINUX} owlette-swoop-viewer/4.1.8 (keys)`, 'linux', true, '4.1.8'],
+  ['a browser', WINDOWS, null, false, null],
+  ['no user agent at all', null, null, false, null],
+])('passes %s from the request header', async (_case, ua, platform, nativeKeys, version) => {
   const provider = await providerFor(ua);
   expect(provider.platform).toBe(platform);
   expect(provider.nativeKeys).toBe(nativeKeys);
+  expect(provider.version).toBe(version);
 });
 
 it('wraps the page and the footer, which both branch on the app', async () => {

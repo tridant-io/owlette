@@ -241,6 +241,21 @@ describe('SwoopPicker', () => {
     expect(screen.queryByTestId('swoop-picker-dashboard-link')).toBeNull();
   });
 
+  it('inside owlette swoop the mark says which owlette swoop is installed, on hover', async () => {
+    const user = userEvent.setup();
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_UA);
+    renderPicker();
+    await user.hover(screen.getByTestId('swoop-picker-mark'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('owlette swoop v4.1.8');
+  });
+
+  it('in a browser the mark has no version to give', async () => {
+    const user = userEvent.setup();
+    renderPicker();
+    await user.hover(screen.getByTestId('swoop-picker-mark'));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+  });
+
   it("in a browser, a ready card's corner button opens the machine in owlette swoop", async () => {
     const user = userEvent.setup();
     const open = jest.spyOn(window, 'open').mockReturnValue(null);
@@ -462,7 +477,7 @@ describe("SwoopPicker in the server's html", () => {
   // the root layout's provider carries what the request's ua said
   const serve = (platform: 'windows' | null) =>
     renderToString(
-      <ViewerAppProvider platform={platform} nativeKeys={false}>
+      <ViewerAppProvider platform={platform} nativeKeys={false} version={platform ? '4.1.8' : null}>
         <TooltipProvider delayDuration={0}>
           <SwoopPicker />
         </TooltipProvider>
