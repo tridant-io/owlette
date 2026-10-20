@@ -355,10 +355,16 @@ pub mod channel {
             #[serde(default, skip_serializing_if = "Option::is_none")]
             h: Option<u16>,
             /// Machine pixels per png pixel, sent only when above 1: the host
-            /// shrinks a shape past the css ceiling for the wire and the
-            /// viewer draws it back at `w * scale`.
+            /// shrinks a shape past the wire's cap and the viewer draws it
+            /// back at `w * scale` machine pixels.
             #[serde(default, skip_serializing_if = "Option::is_none")]
             scale: Option<u16>,
+            /// The dpi the shape was drawn at, 96 being 100%, with every
+            /// upload: the viewer draws it at `w * scale * 96 / dpi` css
+            /// pixels, the machine's own pointer size. Absent from a host
+            /// older than the field.
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            dpi: Option<u16>,
             #[serde(default, skip_serializing_if = "Option::is_none")]
             png: Option<String>,
         },

@@ -617,6 +617,18 @@ describe('channel messages', () => {
     });
   });
 
+  it('a cursor shape upload names the dpi it was drawn at, absent from an older host, and never zero', () => {
+    const upload = { t: 'cshape', id: 8, hotX: 10, hotY: 10, w: 56, h: 80, png: 'AA==' };
+    const older = decodeCursorMessage(JSON.stringify(upload));
+    expect(older.ok && older.value.t === 'cshape' && older.value.dpi).toBeUndefined();
+    const retina = decodeCursorMessage(JSON.stringify({ ...upload, dpi: 192 }));
+    expect(retina.ok && retina.value.t === 'cshape' && retina.value.dpi).toBe(192);
+    expect(verdict(decodeCursorMessage(JSON.stringify({ ...upload, dpi: 0 })))).toEqual({
+      expect: 'reject',
+      reason: 'malformed_message',
+    });
+  });
+
   it('never throws on junk', () => {
     for (const decode of [decodeInputMessage, decodeCursorMessage, decodeControlMessage, decodeFeedbackMessage]) {
       expect(decode('not json').ok).toBe(false);

@@ -28,7 +28,9 @@
 //! the alpha is made straight before the bytes leave: that is the `Color`
 //! shape [`super::CursorTracker::on_shape`] and [`super::decode`] already take
 //! from Desktop Duplication. The call answers a new object every time, so the
-//! bytes are hashed and only a changed hash is handed on.
+//! bytes are hashed and only a changed hash is handed on. The display's dpi
+//! (96 times its scale) goes with the upload, so the viewer draws the shape
+//! at its size in points.
 //!
 //! **When there is no shape.** Whether the call answers in a child that is not
 //! an AppKit app, off the main thread, was the open question;
@@ -55,8 +57,9 @@
 //!
 //! It reads the pointer on the main display for 20 s (`SWOOP_CURSOR_SECS`
 //! changes that) while a human moves it, and prints `shapes_available`, each
-//! shape change as a size, hot spot and hash, and the counts. Nothing is
-//! saved. With `SWOOP_CURSOR_SWEEP=1` it instead **moves the real pointer**
+//! shape change as a size, hot spot and hash with the size, scale and dpi its
+//! upload names, and the counts. Nothing is saved. With
+//! `SWOOP_CURSOR_SWEEP=1` it instead **moves the real pointer**
 //! over the main display in a serpentine (rows inset from every edge, so no
 //! hot corner), which needs Accessibility for whatever started it, and puts
 //! the pointer back at the end.
@@ -620,12 +623,18 @@ mod tests {
             let hash = shape_hash(&info, bytes);
             let alpha = bytes[(info.hot_y * info.pitch + info.hot_x * 4 + 3) as usize];
             let told = match tracker
-                .on_shape(&info, bytes)
+                .on_shape(&info, bytes, &geometry)
                 .expect("decode takes the shape")
             {
                 Some(Cursor::Cshape {
-                    id, png: Some(_), ..
-                }) => format!("new, id {id}"),
+                    id,
+                    w,
+                    h,
+                    scale,
+                    dpi,
+                    png: Some(_),
+                    ..
+                }) => format!("new, id {id}, sent {w:?}x{h:?} at scale {scale:?}, dpi {dpi:?}"),
                 Some(Cursor::Cshape { id, .. }) => format!("cached, id {id}"),
                 _ => "the shape already drawn".to_owned(),
             };

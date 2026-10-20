@@ -4220,7 +4220,9 @@ mod host {
                         }
                     }
                     if let Some((shape, bytes)) = sample.shape {
-                        match tracker.on_shape(&shape, bytes) {
+                        // the dpi read again with every shape: a scaling
+                        // change rebuilds nothing, and is the next shape's.
+                        match tracker.on_shape(&shape, bytes, &geometry.at_current_dpi()) {
                             Ok(Some(message)) => pointer.push(message),
                             Ok(None) => {}
                             Err(e) => ::log::warn!("swoop: cursor shape: {e}"),

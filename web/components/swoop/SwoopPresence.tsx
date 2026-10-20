@@ -88,7 +88,8 @@ export function SwoopPresence({ session }: SwoopPresenceProps) {
           <div
             key={cursor.viewer}
             aria-hidden
-            className={`pointer-events-none absolute flex items-start gap-0.5 ${tintOf(cursor.viewer)}`}
+            // above the panels, as the machine's pointer is
+            className={`pointer-events-none absolute z-10 flex items-start gap-0.5 ${tintOf(cursor.viewer)}`}
             style={{
               left: toPixel(cursor.x, box.left, box.width),
               top: toPixel(cursor.y, box.top, box.height),

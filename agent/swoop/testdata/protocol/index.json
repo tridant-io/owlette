@@ -345,7 +345,7 @@
       "format": "json",
       "expect": "accept",
       "reason": "ok",
-      "description": "cursor position and a shape upload, then the same shape by cached id"
+      "description": "cursor position and a shape upload, then the same shape by cached id, then a 2x display's arrow naming the dpi it was drawn at"
     },
     {
       "file": "messages/msg-clipboard-text.json",

@@ -782,6 +782,8 @@ export type CursorMessage =
       h?: number;
       /** machine pixels per png pixel; the host sends it only when above 1. */
       scale?: number;
+      /** the dpi the host drew the shape at, 96 being 100%; absent from a host older than the field. */
+      dpi?: number;
       png?: string;
     };
 
@@ -817,13 +819,18 @@ export function decodeCursorMessage(raw: unknown): SwoopResult<CursorMessage> {
     if (hotX === undefined || hotY === undefined || w === undefined || h === undefined || png === undefined) {
       return reject('malformed_message', 'cshape upload');
     }
-    // the host shrinks a shape past the css ceiling for the wire and says by
-    // how much; absent means as captured, and stays absent so the decoded
-    // message is the wire message.
-    if (!('scale' in o)) return accept({ t: 'cshape', id, hotX, hotY, w, h, png });
-    const scale = int(o, 'scale');
-    if (scale === undefined || scale < 1) return reject('malformed_message', 'cshape scale');
-    return accept({ t: 'cshape', id, hotX, hotY, w, h, scale, png });
+    // the host says how much it shrank a shape for the wire (`scale`, absent
+    // meaning as captured) and the dpi it drew the shape at (absent from an
+    // older host). each stays absent when it is, so the decoded message is the
+    // wire message.
+    const sizing: { scale?: number; dpi?: number } = {};
+    for (const key of ['scale', 'dpi'] as const) {
+      if (!(key in o)) continue;
+      const value = int(o, key);
+      if (value === undefined || value < 1) return reject('malformed_message', `cshape ${key}`);
+      sizing[key] = value;
+    }
+    return accept({ t: 'cshape', id, hotX, hotY, w, h, ...sizing, png });
   }
   return reject('unknown_type', 'cursor');
 }

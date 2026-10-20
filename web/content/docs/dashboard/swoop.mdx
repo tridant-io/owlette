@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker"]
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -113,6 +113,8 @@ every button in the bar says what it does when you hover it, a greyed-out one in
 
 over the dark bars around the picture your own pointer shows and nothing reaches the machine, so a click there never lands on the edge of its screen. a drag that runs off the picture keeps going, held at its edge.
 
+the machine's pointer is drawn at the size it is on the machine, which is the size of your own, however big the picture is: a Mac's arrow is as big as a Mac shows it. your own pointer stays until the machine has said where its pointer is, connecting included, and it comes back whenever a program on the machine hides its pointer, a kiosk or a player, so you never click blind. two cases follow the machine instead: dragging a window by its title bar, which Windows paints into the picture, and fullscreen with the mouse captured, where a program that hides its pointer, such as a game, means it. watching without control, your pointer is always your own, and the machine's is drawn where it is.
+
 ### quality
 
 the quality menu has one row per setting. it opens once the session has connected, and it sets your view only; other viewers keep their own.
@@ -199,7 +201,8 @@ the app keeps its own sign-in, apart from your browser's, and you rarely meet it
 ### known gaps
 
 - on Windows the app gets h264 only: WebView2, the engine inside it, cannot decode HEVC over WebRTC, any more than Edge can. on a Mac it gets h264 for now too, until a fix to the viewer's HEVC check lands
-- the machine's cursor is drawn at its real size but looks soft, because the machine sends it shrunk to 32 pixels; it sharpens once the streamer sends it whole
+- the machine's cursor is only as sharp as the machine draws it, so on a screen denser than the machine's it looks soft, and a Mac's is sent at half its pixels to keep its message small
+- from a machine on an older agent a Mac's cursor shows at twice its size: that agent does not say its display's scale. updating the machine's agent fixes it
 - cmd+tab cannot be sent from macOS, and the mouse is not captured there (above)
 - on Linux the app is in the package, but no session has been tried in it yet
 

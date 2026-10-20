@@ -21,7 +21,7 @@
  */
 
 import crypto from 'crypto';
-import { test, expect, type Locator, type Page } from '@playwright/test';
+import { test, expect, devices, type Locator, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -46,6 +46,10 @@ const CODEC_ID = `mach-codec-${SUFFIX}`;
 const FRESH_ID = `mach-fresh-${SUFFIX}`;
 const LIVE_ID = `mach-live-${SUFFIX}`;
 const KILLED_ID = `mach-killed-${SUFFIX}`;
+const CURSOR_ID = `mach-cursor-${SUFFIX}`;
+const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
+/** a real png, so the drawn pointer is an image the page lays out. */
+const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 const SESSIONS = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/sessions`;
 const KILL = `/api/sites/${SITE_ID}/machines/${MACHINE_ID}/swoop/kill`;
 
@@ -58,6 +62,9 @@ const CLIENT_CAPS = { codecs: ['h264'], hardware: [], playoutDelay: true, webCod
 let operator: TestUser;
 let operatorSecret = '';
 let watcher: TestUser;
+// an operator of its own, so its sign-in never spends a code another spec's just did.
+let pointerOperator: TestUser;
+let pointerOperatorSecret = '';
 
 async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
   const user = await seedDedicatedUser(dedicatedUser('member', suffix));
@@ -99,15 +106,18 @@ const alertLine = (page: Page) => page.locator('p[role="alert"]');
 /**
  * signs in; returns the totp code the sign-in spent, so the next ceremony can move
  * past it. a totp sign-in is dated ten minutes back unless `fresh`, so the step-up
- * still asks.
+ * still asks. it lands on the dashboard, or on `redirect`; `inApp` is owlette
+ * swoop's sign-in page.
  */
 async function signIn(
   page: Page,
   user: TestUser,
   secret?: string,
-  { fresh = false }: { fresh?: boolean } = {},
+  { fresh = false, inApp = false, redirect }: { fresh?: boolean; inApp?: boolean; redirect?: string } = {},
 ): Promise<string | undefined> {
-  await page.goto('/login');
+  await page.goto(redirect ? `/login?redirect=${encodeURIComponent(redirect)}` : '/login');
+  // inside owlette swoop the email form waits behind its link
+  if (inApp) await page.getByRole('button', { name: 'or use your email and password' }).click();
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).first().fill(user.password);
   await page.getByRole('button', { name: /sign in with email/i }).click();
@@ -118,7 +128,7 @@ async function signIn(
     await page.getByPlaceholder('000000').fill(spent);
     await page.getByRole('button', { name: /^verify$/i }).click();
   }
-  await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });
+  await expect(page).toHaveURL(redirect ? (url) => url.pathname === redirect : /\/dashboard/, { timeout: 20_000 });
   if (secret && !fresh) await ageSignInCeremony(page);
   return spent;
 }
@@ -186,6 +196,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, FRESH_ID, { displayName: `fresh box ${SUFFIX}` });
   await seedMachine(SITE_ID, LIVE_ID, { displayName: `live box ${SUFFIX}` });
   await seedMachine(SITE_ID, KILLED_ID, { displayName: `killed box ${SUFFIX}` });
+  await seedMachine(SITE_ID, CURSOR_ID, { displayName: `cursor box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -193,6 +204,11 @@ test.beforeAll(async () => {
   operator = seeded.user;
   operatorSecret = seeded.secret;
   await grantMembership(SITE_ID, operator.uid, 'admin');
+
+  const pointerSeeded = await seedTotpUser(`swoop-pointer-${SUFFIX}`);
+  pointerOperator = pointerSeeded.user;
+  pointerOperatorSecret = pointerSeeded.secret;
+  await grantMembership(SITE_ID, pointerOperator.uid, 'admin');
 
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
   await getAdminDb()
@@ -553,6 +569,57 @@ test.describe('through a host', () => {
       await expect(page.getByRole('button', { name: /reconnect/i })).toBeVisible();
       const record = await readSession(page, grant.sid, KILLED_ID);
       expect([record.state, record.endReason]).toEqual(['ended', 'killed']);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
+test.describe('through a host, inside owlette swoop', () => {
+  test.use({ userAgent: APP_UA });
+
+  test('the local pointer stays until the host places its own, a 2x mac arrow keeps its size in points, and the local one is back when a program hides it', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: CURSOR_ID });
+    try {
+      // a fresh sign-in is the step-up, so control comes without a dialog.
+      await signIn(page, pointerOperator, pointerOperatorSecret, { fresh: true, inApp: true, redirect: '/swoop' });
+      const granted = nextGrant(page, CURSOR_ID);
+      await page.goto(`/swoop/${SITE_ID}/${CURSOR_ID}`);
+      const grant = await granted;
+      expect(grant.ctl).toBe(true);
+      await expectHostPicture(page);
+
+      // a picture, and no word from the host on its pointer yet: the local one is the only one.
+      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      const drawn = page.getByTestId('machine-cursor');
+      await expect(stage).not.toHaveCSS('cursor', 'none');
+      await expect(drawn).toHaveCount(0);
+
+      // the rig's arrow as its host sends it: 28x40 points, drawn at 56x80 pixels, halved for the wire.
+      const arrow = JSON.stringify({ t: 'cshape', id: 1, hotX: 5, hotY: 5, w: 28, h: 40, scale: 2, dpi: 192, png: ONE_PIXEL_PNG });
+      const centre = JSON.stringify({ t: 'cpos', x: 0.5, y: 0.5, visible: true, tsUs: 1 });
+      // the cursor channel is unreliable, so the host says it again until the page has it.
+      await expect(async () => {
+        await host.cursor(grant.viewerId, arrow);
+        await host.cursor(grant.viewerId, centre);
+        await expect(drawn).toBeVisible({ timeout: 1_000 });
+      }).toPass({ timeout: 15_000 });
+      const box = (await drawn.boundingBox())!;
+      expect([box.width, box.height]).toEqual([28, 40]);
+      await expect(stage).toHaveCSS('cursor', 'none');
+      await test.info().attach('machine pointer', { body: await page.screenshot(), contentType: 'image/png' });
+
+      // a program on the machine hides its pointer, with no drag under way: the local one comes back.
+      const hidden = JSON.stringify({ t: 'cpos', x: 0.5, y: 0.5, visible: false, tsUs: 2 });
+      await expect(async () => {
+        await host.cursor(grant.viewerId, hidden);
+        await expect(drawn).toHaveCount(0, { timeout: 1_000 });
+      }).toPass({ timeout: 15_000 });
+      await expect(stage).not.toHaveCSS('cursor', 'none');
       expect(host.problems).toEqual([]);
     } finally {
       await host.stop();

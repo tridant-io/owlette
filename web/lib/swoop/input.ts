@@ -113,6 +113,10 @@ export interface InputCapture {
   readonly pointerOutside: boolean;
   /** called whenever `pointerOutside` changes; returns the unsubscribe. */
   onPointerOutsideChange(listener: () => void): () => void;
+  /** a press the host was sent is still down: a drag, or a click on its way. */
+  readonly buttonHeld: boolean;
+  /** called whenever `buttonHeld` changes; returns the unsubscribe. */
+  onButtonHeldChange(listener: () => void): () => void;
   /**
    * the keyboard's way off the stage, which otherwise sends every key — tab
    * included — to the host. a second tap of escape within half a second, with
@@ -191,6 +195,26 @@ function defaultSchedule(tick: () => void): () => void {
 
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
 
+/** a flag the page reads, and is told about each time it changes. */
+function watchedFlag() {
+  let value = false;
+  const listeners = new Set<() => void>();
+  return {
+    get: (): boolean => value,
+    set: (next: boolean): void => {
+      if (next === value) return;
+      value = next;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: () => void): (() => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
 const wheelMode = (deltaMode: number): 'pixel' | 'line' | 'page' =>
   deltaMode === 1 ? 'line' : deltaMode === 2 ? 'page' : 'pixel';
 
@@ -231,13 +255,9 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   // held. nothing reaches the host from there: a move pinned to the edge drags
   // the machine's pointer along it, and a click in the bars lands on whatever
   // sits at the screen's edge.
-  let outside = false;
-  const outsideListeners = new Set<() => void>();
-  const setOutside = (value: boolean): void => {
-    if (value === outside) return;
-    outside = value;
-    for (const listener of outsideListeners) listener();
-  };
+  const outside = watchedFlag();
+  // whether `heldButtons` has anything in it, for the page.
+  const held = watchedFlag();
 
   /** a client point in the picture's `0..1`, or null while there is no picture box. */
   const onPicture = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -299,6 +319,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     const tsUs = nowUs();
     for (const button of heldButtons) enqueue({ t: 'b', button, down: false, tsUs });
     heldButtons.clear();
+    held.set(false);
   };
 
   const releaseAll = (): void => {
@@ -439,10 +460,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // a drag keeps going past the picture, pinned to its edge; a pointer that
     // only wanders over the bars moves nothing on the host.
     if (heldButtons.size === 0 && !inPicture(point)) {
-      setOutside(true);
+      outside.set(true);
       return;
     }
-    setOutside(false);
+    outside.set(false);
     enqueue({ t: 'm', x: clamp01(point.x), y: clamp01(point.y), tsUs });
   };
 
@@ -461,6 +482,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       }
     }
     heldButtons.add(event.button);
+    held.set(true);
     enqueueNow({ t: 'b', button: event.button, down: true, tsUs: nowUs() });
   };
 
@@ -469,13 +491,14 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // only a press the host was sent: one in the bars never was, and one
     // already released on blur or cancel was released there.
     if (!heldButtons.delete(event.button)) return;
+    held.set(heldButtons.size > 0);
     event.preventDefault();
     enqueueNow({ t: 'b', button: event.button, down: false, tsUs: nowUs() });
   };
 
   // off the stage is off the picture, unless a drag carries the pointer there.
   const onPointerLeave = (): void => {
-    if (heldButtons.size === 0) setOutside(true);
+    if (heldButtons.size === 0) outside.set(true);
   };
 
   // a cancelled pointer never sends its up, and the button would stay down on
@@ -522,7 +545,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (nowLocked === locked) return;
     locked = nowLocked;
     if (locked) {
-      setOutside(false);
+      outside.set(false);
       return;
     }
 
@@ -569,15 +592,13 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       return locked;
     },
     get pointerOutside(): boolean {
-      return outside;
+      return outside.get();
     },
-
-    onPointerOutsideChange(listener: () => void): () => void {
-      outsideListeners.add(listener);
-      return () => {
-        outsideListeners.delete(listener);
-      };
+    onPointerOutsideChange: outside.subscribe,
+    get buttonHeld(): boolean {
+      return held.get();
     },
+    onButtonHeldChange: held.subscribe,
 
     onEscapeTwice(listener: () => void): () => void {
       escapeTwiceListeners.add(listener);
@@ -644,6 +665,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       target.removeEventListener('compositionend', onCompositionEnd);
       doc.removeEventListener('visibilitychange', onVisibilityChange);
       doc.removeEventListener('pointerlockchange', onPointerLockChange);
+      // a session that is gone draws no pointer, so a lock it kept would leave
+      // none at all until the next one. let go after the listener is off, so
+      // the host is sent no escape for it.
+      if (doc.pointerLockElement === target) doc.exitPointerLock?.();
       view?.removeEventListener('blur', onBlur);
       // a newer capture's keeps its place
       if (nativeKeyHost?.__owletteNativeKey === nativeKey) delete nativeKeyHost.__owletteNativeKey;

@@ -11,6 +11,30 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop draws the machine's pointer at its own size, and never leaves you without one
+
+In owlette swoop a Mac's pointer showed at twice its size. The streamer draws
+the pointer in the display's pixels, and the app drew those pixels as its own,
+so a Retina Mac's 28-point arrow came out 56 tall; Windows at 150% came out
+half again too big the same way. The streamer now says the dpi it drew the
+pointer at, read again with each new pointer shape so a scaling change counts
+mid-session, and the viewer draws it at the size it is on the machine, in a
+browser and in the app alike and whatever the picture is scaled to; a browser
+no longer sizes it by the picture, which also changed its size going in and
+out of fullscreen.
+
+Your own pointer no longer vanishes. The viewer hid it from the moment a
+session existed, over "connecting" and until the machine first said where its
+pointer was; it now stays until the machine's has a place on the picture. A
+machine that hides its pointer, such as a kiosk or a player, no longer leaves
+you clicking blind: yours shows, except in a title-bar drag, which Windows
+paints into the picture, and with the mouse captured in fullscreen, where a
+game that hides its pointer means it. The pointer is drawn above the viewers
+list and the latency stats, a watch-only session keeps its own pointer and
+sees the machine's where it is, and a reconnect in fullscreen hands the mouse
+back instead of holding it hidden. The size needs the machine's agent updated;
+the rest is the viewer's alone.
+
 ## [4.1.18] - 2026-10-16
 
 ### fixed — swoop says why a machine cannot show a picture, instead of "connecting" forever

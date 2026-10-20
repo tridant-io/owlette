@@ -20,7 +20,8 @@
  * and on a queued `swoop_kill` says `bye` with reason `kill` and stops.
  *
  * what it is not: capture, the encoder's tuning, input, audio, the rate
- * governor or `swoop-meta` records. the picture is h.264 because the real
+ * governor or `swoop-meta` records, and its pointer is whatever a spec has it
+ * send on `swoop-cursor` (`cursor`). the picture is h.264 because the real
  * host's is, and because playwright's bundled chrome encodes and decodes it
  * headless (spike 2.12 section 8b); never hevc, which headless cannot decode.
  */
@@ -154,6 +155,7 @@ interface HostPageApi {
   answer(viewer: string, sdp: string): Promise<string>;
   candidate(viewer: string, candidate: RTCIceCandidateInit): Promise<void>;
   control(viewer: string, message: string): void;
+  cursor(viewer: string, message: string): void;
   close(): void;
   codecs(): Promise<string[]>;
 }
@@ -184,6 +186,7 @@ function installHostPage([colour, out]: [readonly number[], string]): void {
   const track = canvas.captureStream(30).getVideoTracks()[0];
   const peers = new Map<string, RTCPeerConnection>();
   const controls = new Map<string, RTCDataChannel>();
+  const cursors = new Map<string, RTCDataChannel>();
   const send = (window as unknown as Record<string, (message: unknown) => void>)[out];
 
   const api: HostPageApi = {
@@ -196,6 +199,7 @@ function installHostPage([colour, out]: [readonly number[], string]): void {
           send({ kind: 'refused', viewer, reason: `channel_protocol ${channel.label}` });
           return;
         }
+        if (channel.label === 'swoop-cursor') cursors.set(viewer, channel);
         if (channel.label !== 'swoop-control') return;
         controls.set(viewer, channel);
         channel.onmessage = ({ data }) => {
@@ -236,10 +240,15 @@ function installHostPage([colour, out]: [readonly number[], string]): void {
       const channel = controls.get(viewer);
       if (channel?.readyState === 'open') channel.send(message);
     },
+    cursor(viewer, message) {
+      const channel = cursors.get(viewer);
+      if (channel?.readyState === 'open') channel.send(message);
+    },
     close() {
       for (const pc of peers.values()) pc.close();
       peers.clear();
       controls.clear();
+      cursors.clear();
     },
     async codecs() {
       const seen: string[] = [];
@@ -298,6 +307,14 @@ export class FakeSwoopHost {
       (err) => host.problems.push(`commands: ${err.message}`),
     );
     return host;
+  }
+
+  /** a `swoop-cursor` message to one viewer; dropped while its channel is not open, as on the wire. */
+  async cursor(viewer: string, message: string): Promise<void> {
+    await this.hostPage.evaluate(
+      ([v, m]) => (window as unknown as HostWindow).swoopHost.cursor(v, m),
+      [viewer, message] as const,
+    );
   }
 
   /** the video codecs the host is encoding, by mime type. */
