@@ -816,7 +816,7 @@ impl Duplication {
     ///         }
     ///     }
     ///     if let Some((shape, bytes)) = sample.shape {
-    ///         match tracker.on_shape(&shape, bytes) {
+    ///         match tracker.on_shape(&shape, bytes, &geometry) {
     ///             Ok(Some(msg)) => send(msg),
     ///             Ok(None) => {}          // a shape the viewer already has
     ///             Err(e) => log_and_continue(e),

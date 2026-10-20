@@ -5,12 +5,13 @@
  * encoded frames carry no cursor at all: the host sends where it is (`cpos`)
  * and what it looks like (`cshape`) on `swoop-cursor`, and this module keeps
  * the latest of each. **the pointer is drawn in one of two ways, never both**:
- * outside pointer lock the local css cursor is already on screen where the
- * machine's pointer went, so the shape is applied to it and nothing is
- * overlaid; under pointer lock the browser hides the local cursor and the
- * shape is overlaid at `cpos` instead. `SwoopCursor.tsx` owns both halves —
- * turning a position into a pixel is a layout read and belongs after a
- * commit, not here.
+ * as the local css cursor, which is already on screen where the machine's
+ * pointer went, where its size allows; otherwise as an overlay at `cpos`.
+ * `SwoopCursor.tsx` owns the rules and both halves — turning a position into
+ * a pixel is a layout read and belongs after a commit, not here.
+ *
+ * until the first `cpos` the host has not said where its pointer is, and
+ * `positioned` says so: nothing can stand in for the local pointer yet.
  *
  * shapes are cached by id: the host uploads each distinct bitmap once per
  * viewer and repeats `{"t":"cshape","id":n}` alone after that. the channel is
@@ -36,6 +37,11 @@ export interface SwoopCursorShape {
    * a big pointer for the wire and this is what draws it back at full size.
    */
   scale: number;
+  /**
+   * the dpi the host drew the shape at, 96 being 100%: a 2x mac's is 192.
+   * absent from a host older than the field.
+   */
+  dpi?: number;
   /** base64 png, as it arrived. */
   png: string;
 }
@@ -43,6 +49,8 @@ export interface SwoopCursorShape {
 export interface SwoopCursorState {
   /** the current shape, or null before the first upload or after a lost one. */
   shape: SwoopCursorShape | null;
+  /** whether a `cpos` has arrived, so `x`, `y` and `visible` are the host's word. */
+  positioned: boolean;
   /** normalised over the picture, exactly as it arrived. */
   x: number;
   y: number;
@@ -50,7 +58,7 @@ export interface SwoopCursorState {
 }
 
 /** the snapshot before the first message lands, and the server's. */
-export const NO_CURSOR: SwoopCursorState = { shape: null, x: 0, y: 0, visible: false };
+export const NO_CURSOR: SwoopCursorState = { shape: null, positioned: false, x: 0, y: 0, visible: false };
 
 export interface SwoopCursorStore {
   subscribe(listener: () => void): SwoopDetach;
@@ -79,12 +87,12 @@ export function attach(session: SwoopSession): SwoopDetach {
     if (!decoded.ok) return;
     const message = decoded.value;
     if (message.t === 'cpos') {
-      set({ shape: state.shape, x: message.x, y: message.y, visible: message.visible });
+      set({ shape: state.shape, positioned: true, x: message.x, y: message.y, visible: message.visible });
       return;
     }
     if (message.png !== undefined) {
-      const { id, hotX, hotY, w, h, scale, png } = message;
-      shapes.set(id, { id, hotX: hotX ?? 0, hotY: hotY ?? 0, w: w ?? 0, h: h ?? 0, scale: scale ?? 1, png });
+      const { id, hotX, hotY, w, h, scale, dpi, png } = message;
+      shapes.set(id, { id, hotX: hotX ?? 0, hotY: hotY ?? 0, w: w ?? 0, h: h ?? 0, scale: scale ?? 1, dpi, png });
     }
     set({ ...state, shape: shapes.get(message.id) ?? null });
   });

@@ -238,6 +238,57 @@ describe('off the picture', () => {
   });
 });
 
+describe('a held button', () => {
+  it('says while a press the host was sent is down, and never for one in the bars', () => {
+    const h = harness();
+    const changes = jest.fn();
+    h.capture.onButtonHeldChange(changes);
+
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 250, clientY: 50, button: 0 }));
+    expect(h.capture.buttonHeld).toBe(false);
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 2 }));
+    expect(h.capture.buttonHeld).toBe(true);
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 0 }));
+    expect(h.capture.buttonHeld).toBe(true);
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 2 }));
+    expect(h.capture.buttonHeld).toBe(false);
+    expect(changes).toHaveBeenCalledTimes(2);
+
+    // a press the window loses on its way out is released on the host, and here.
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    window.dispatchEvent(new Event('blur'));
+    expect(h.capture.buttonHeld).toBe(false);
+  });
+});
+
+describe('detach', () => {
+  const exitPointerLock = jest.fn(() => setPointerLock(null));
+  beforeEach(() => {
+    exitPointerLock.mockClear();
+    Object.defineProperty(document, 'exitPointerLock', { value: exitPointerLock, configurable: true });
+  });
+  afterEach(() => {
+    delete (document as { exitPointerLock?: unknown }).exitPointerLock;
+  });
+
+  it('gives a locked pointer back, sending the host no escape for it', () => {
+    const h = harness();
+    setPointerLock(h.target);
+    h.capture.detach();
+    // a session that is gone draws no pointer, so a lock it kept left none at all.
+    expect(exitPointerLock).toHaveBeenCalledTimes(1);
+    expect(h.sent()).toEqual([]);
+  });
+
+  it('leaves a lock it does not hold alone', () => {
+    const h = harness();
+    setPointerLock(document.createElement('div'));
+    h.capture.detach();
+    expect(exitPointerLock).not.toHaveBeenCalled();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // keys
 // ---------------------------------------------------------------------------

@@ -34,10 +34,19 @@
 //! `hotX`/`hotY` are in pixels of the PNG that goes with them, so every scaling
 //! step this module applies has to move the hotspot with it or the I-beam
 //! selects from its corner. [`fit_for_wire`] is the only place that resizes,
-//! and it resizes for the byte cap alone: the viewer draws a shape at
-//! `width * scale` machine pixels whatever the output's dpi, so shrinking a
-//! 64 px pointer to the css ceiling only cost detail (B4A, 2026-09-24: the
-//! pointer came back at the right size and blocky).
+//! and it resizes for the byte cap alone, so a shrink only ever costs detail
+//! (B4A, 2026-09-24: a 64 px pointer shrunk to the css ceiling came back at
+//! the right size and blocky).
+//!
+//! # Size
+//!
+//! A shape is drawn in the output's pixels, at its dpi: a 2x mac's arrow is
+//! 56x80 pixels for 28x40 points (sent as 28x40 at `scale` 2), windows' at
+//! 150% is 48 for 32. The dpi goes with every upload, and the viewer draws a
+//! shape at `width * scale * 96 / dpi` css pixels: the pointer at the
+//! machine's own size, the size of the viewer's own, whatever the picture is
+//! scaled to (2026-10-20: the app drew the mac's arrow at its pixels, twice
+//! its size).
 //!
 //! Hardware tests are `#[ignore]`d. With the working directory `agent/swoop`:
 //!
@@ -247,13 +256,28 @@ impl OutputGeometry {
         }
     }
 
+    /// This geometry with the output's dpi read again. A scaling change moves
+    /// no pixels, so nothing rebuilds the capture for it, and the pointer is
+    /// drawn at the new dpi from the next shape on.
+    pub fn at_current_dpi(&self) -> Self {
+        Self {
+            dpi: crate::platform::dpi_for_rect(&self.desktop_rect),
+            ..*self
+        }
+    }
+
+    /// The dpi the output is drawn at: 0 is one that could not be read, and
+    /// is taken as 100%.
+    pub fn effective_dpi(&self) -> u32 {
+        match self.dpi {
+            0 => DEFAULT_DPI,
+            dpi => dpi,
+        }
+    }
+
     /// Host pixels per css pixel on this output.
     pub fn scale(&self) -> f64 {
-        if self.dpi == 0 {
-            1.0
-        } else {
-            f64::from(self.dpi) / f64::from(DEFAULT_DPI)
-        }
+        f64::from(self.effective_dpi()) / f64::from(DEFAULT_DPI)
     }
 
     /// An output-local pointer position, normalised over the texture the
@@ -381,8 +405,8 @@ fn mask_bit(row: &[u8], x: usize) -> bool {
 
 /// Downscale a decoded shape until it fits the message, moving the hotspot
 /// with it and recording the factor in `scale` so the viewer draws it at its
-/// true size. One ceiling: [`MAX_IMAGE_SIZE`]. The output's dpi is not read —
-/// the viewer scales by the picture, not by css pixels.
+/// true size. One ceiling: [`MAX_IMAGE_SIZE`]. The output's dpi is not read
+/// here: it goes beside the shape, and the viewer divides by it.
 pub fn fit_for_wire(image: CursorImage) -> CursorImage {
     let longest = image.width.max(image.height);
     let factor = longest.div_ceil(MAX_IMAGE_SIZE).max(1);
@@ -479,6 +503,9 @@ pub struct CursorTracker {
 struct CachedShape {
     id: u32,
     image: CursorImage,
+    /// What the shape was drawn at: the same bitmap at another dpi is another
+    /// size on the viewer, so another shape.
+    dpi: u32,
     png: String,
 }
 
@@ -491,6 +518,7 @@ impl CachedShape {
             w: Some(self.image.width as u16),
             h: Some(self.image.height as u16),
             scale: (self.image.scale > 1).then_some(self.image.scale as u16),
+            dpi: Some(self.dpi as u16),
             png: Some(self.png.clone()),
         }
     }
@@ -513,22 +541,27 @@ impl CursorTracker {
         }
     }
 
-    /// A new shape buffer from `GetFramePointerShape`.
+    /// A new shape buffer from `GetFramePointerShape`, or a mac's system
+    /// cursor, drawn on `geometry`'s output at its dpi.
     ///
     /// `Ok(None)` when the decoded shape is the one the viewer is already
     /// drawing — the common case, 142 updates for 11 shapes.
-    pub fn on_shape(&mut self, info: &ShapeInfo, buf: &[u8]) -> Result<Option<Cursor>, CursorError> {
+    pub fn on_shape(
+        &mut self,
+        info: &ShapeInfo,
+        buf: &[u8],
+        geometry: &OutputGeometry,
+    ) -> Result<Option<Cursor>, CursorError> {
         let image = fit_for_wire(decode(info, buf)?);
+        // a viewer refuses a shape that names a dpi of 0.
+        let dpi = geometry.effective_dpi();
+        let same = |s: &CachedShape| s.image == image && s.dpi == dpi;
         if let Some(current) = self.current {
-            if self
-                .shapes
-                .iter()
-                .any(|s| s.id == current && s.image == image)
-            {
+            if self.shapes.iter().any(|s| s.id == current && same(s)) {
                 return Ok(None);
             }
         }
-        if let Some(cached) = self.shapes.iter().find(|s| s.image == image) {
+        if let Some(cached) = self.shapes.iter().find(|s| same(s)) {
             let id = cached.id;
             self.current = Some(id);
             return Ok(Some(Cursor::Cshape {
@@ -538,6 +571,7 @@ impl CursorTracker {
                 w: None,
                 h: None,
                 scale: None,
+                dpi: None,
                 png: None,
             }));
         }
@@ -545,7 +579,7 @@ impl CursorTracker {
         let id = self.next_id;
         self.next_id += 1;
         let png = BASE64_STANDARD.encode(encode_png(&image));
-        self.shapes.push(CachedShape { id, image, png });
+        self.shapes.push(CachedShape { id, image, dpi, png });
         if self.shapes.len() > MAX_CACHED_SHAPES {
             self.shapes.remove(0);
         }
@@ -1075,11 +1109,12 @@ mod tests {
 
     #[test]
     fn an_unchanged_shape_produces_no_message_and_a_return_to_a_cached_one_is_an_id() {
+        let (_, standard) = mixed_dpi_layout();
         let mut tracker = CursorTracker::new();
         let (arrow, arrow_bits) = mono([0xf0, 0x00, 0xcc, 0xa0]);
         let (beam, beam_bits) = mono([0x00, 0xff, 0x18, 0x18]);
 
-        let first = tracker.on_shape(&arrow, &arrow_bits).expect("decode");
+        let first = tracker.on_shape(&arrow, &arrow_bits, &standard).expect("decode");
         let Some(Cursor::Cshape { id, png, w, h, .. }) = first else {
             panic!("the first shape must carry its bitmap");
         };
@@ -1088,19 +1123,19 @@ mod tests {
         assert!(png.is_some_and(|p| !p.is_empty()));
 
         // 141 of spike 0.8's 142 shape updates were this case.
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits), Ok(None));
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, &standard), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, &standard), Ok(None));
 
-        let second = tracker.on_shape(&beam, &beam_bits).expect("decode");
+        let second = tracker.on_shape(&beam, &beam_bits, &standard).expect("decode");
         assert!(matches!(
             second,
             Some(Cursor::Cshape { id: 2, png: Some(_), .. })
         ));
-        assert_eq!(tracker.on_shape(&beam, &beam_bits), Ok(None));
+        assert_eq!(tracker.on_shape(&beam, &beam_bits, &standard), Ok(None));
 
         // Back to the arrow: cached, so an id and nothing else.
         assert_eq!(
-            tracker.on_shape(&arrow, &arrow_bits),
+            tracker.on_shape(&arrow, &arrow_bits, &standard),
             Ok(Some(Cursor::Cshape {
                 id: 1,
                 hot_x: None,
@@ -1108,6 +1143,7 @@ mod tests {
                 w: None,
                 h: None,
                 scale: None,
+                dpi: None,
                 png: None,
             }))
         );
@@ -1119,6 +1155,65 @@ mod tests {
         };
         assert_eq!(id, 1);
         assert!(png.is_some());
+    }
+
+    #[test]
+    fn every_upload_names_the_dpi_it_was_drawn_at_and_another_dpi_is_another_shape() {
+        let (hidpi, standard) = mixed_dpi_layout();
+        let mut tracker = CursorTracker::new();
+        let (arrow, arrow_bits) = mono([0xf0, 0x00, 0xcc, 0xa0]);
+
+        let first = tracker.on_shape(&arrow, &arrow_bits, &hidpi).expect("decode");
+        assert!(matches!(first, Some(Cursor::Cshape { id: 1, dpi: Some(192), .. })));
+        let wire = serde_json::to_value(&first).expect("it serialises");
+        assert_eq!(wire["dpi"], 192, "the viewer reads it off the wire");
+
+        // The same bitmap on the 100% output draws at twice the css size, so
+        // it is a new upload rather than the 192 dpi id.
+        let moved = tracker.on_shape(&arrow, &arrow_bits, &standard).expect("decode");
+        assert!(matches!(
+            moved,
+            Some(Cursor::Cshape { id: 2, dpi: Some(96), png: Some(_), .. })
+        ));
+        let back = tracker.on_shape(&arrow, &arrow_bits, &hidpi).expect("decode");
+        assert!(matches!(back, Some(Cursor::Cshape { id: 1, dpi: None, png: None, .. })));
+        assert!(matches!(
+            tracker.current_shape(),
+            Some(Cursor::Cshape { id: 1, dpi: Some(192), .. })
+        ));
+
+        // An unread dpi is 100%, as `OutputGeometry::scale` takes it.
+        let unread = OutputGeometry { dpi: 0, ..standard };
+        let mut tracker = CursorTracker::new();
+        assert!(matches!(
+            tracker.on_shape(&arrow, &arrow_bits, &unread),
+            Ok(Some(Cursor::Cshape { dpi: Some(96), .. }))
+        ));
+    }
+
+    #[test]
+    fn the_largest_upload_fits_one_message() {
+        let (hidpi, _) = mixed_dpi_layout();
+        let side = MAX_IMAGE_SIZE;
+        let info = ShapeInfo {
+            kind: ShapeKind::Color,
+            width: side,
+            height: side,
+            pitch: side * 4,
+            hot_x: side - 1,
+            hot_y: side - 1,
+        };
+        let buf = vec![0xab; (side * side * 4) as usize];
+        let upload = CursorTracker::new()
+            .on_shape(&info, &buf, &hidpi)
+            .expect("decode")
+            .expect("a first shape is an upload");
+        assert!(matches!(upload, Cursor::Cshape { scale: None, .. }), "sent whole");
+        let bytes = serde_json::to_vec(&upload).expect("it serialises").len();
+        assert!(
+            bytes < crate::signal::messages::MAX_MESSAGE_BYTES,
+            "a {side} px upload is {bytes} bytes"
+        );
     }
 
     #[test]
@@ -1250,7 +1345,7 @@ mod tests {
                     if let Some((shape, bytes)) = sample.shape {
                         shape_updates += 1;
                         if tracker
-                            .on_shape(&shape, bytes)
+                            .on_shape(&shape, bytes, &geometry)
                             .expect("decode shape")
                             .is_some()
                         {

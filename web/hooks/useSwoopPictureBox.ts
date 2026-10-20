@@ -22,28 +22,31 @@ export interface PictureBox {
   scale: number;
 }
 
-function measure(session: SwoopSession): PictureBox {
+/** null before the first frame: there is no picture yet, and so nothing to put a pointer on. */
+function measure(session: SwoopSession): PictureBox | null {
+  // the machine's width is the frame's, and 0 until the first one lands.
+  const machineWidth = session.video.videoWidth;
+  if (machineWidth <= 0) return null;
   const picture = session.contentRect();
   const stage = session.stage.getBoundingClientRect();
-  // the machine's width is the frame's; before the first frame it is 0 and the
-  // picture is taken as unscaled.
-  const machineWidth = session.video.videoWidth;
   return {
     left: picture.left - stage.left,
     top: picture.top - stage.top,
     width: picture.width,
     height: picture.height,
-    scale: machineWidth > 0 && picture.width > 0 ? picture.width / machineWidth : 1,
+    scale: picture.width > 0 ? picture.width / machineWidth : 1,
   };
 }
 
-const sameBox = (a: PictureBox | null, b: PictureBox): boolean =>
-  a !== null &&
-  a.left === b.left &&
-  a.top === b.top &&
-  a.width === b.width &&
-  a.height === b.height &&
-  a.scale === b.scale;
+const sameBox = (a: PictureBox | null, b: PictureBox | null): boolean =>
+  a === b ||
+  (a !== null &&
+    b !== null &&
+    a.left === b.left &&
+    a.top === b.top &&
+    a.width === b.width &&
+    a.height === b.height &&
+    a.scale === b.scale);
 
 /** a normalised coordinate to a pixel along one axis of the box. */
 export const toPixel = (normalised: number, offset: number, size: number): number =>
@@ -51,10 +54,11 @@ export const toPixel = (normalised: number, offset: number, size: number): numbe
 
 /**
  * re-measured on a window resize, on entering or leaving fullscreen, and on the
- * `<video>` element's own `resize` — the last one is the display switch, which
- * changes the picture's aspect ratio inside an element whose box never moved
- * and so fires nothing else. re-measuring per cursor message instead would be a
- * layout read sixty times a second for a box that changes when the window does.
+ * `<video>` element's own `resize` — which is the first frame, before which
+ * there is no box, and the display switch, which changes the picture's aspect
+ * ratio inside an element whose box never moved and so fires nothing else.
+ * re-measuring per cursor message instead would be a layout read sixty times a
+ * second for a box that changes when the window does.
  */
 export function useSwoopPictureBox(session: SwoopSession | null): PictureBox | null {
   const [box, setBox] = useState<PictureBox | null>(null);

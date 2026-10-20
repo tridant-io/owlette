@@ -271,14 +271,17 @@ types, as it does on windows, and it drops `PrintScreen` and `Pause`, which a ma
 | `t` | fields |
 |---|---|
 | `cpos` | `x`, `y` normalised, `visible`, `tsUs` |
-| `cshape` | `id`, and on first use `hotX`, `hotY`, `w`, `h`, `png` (base64), and `scale` when above 1 |
+| `cshape` | `id`, and on first use `hotX`, `hotY`, `w`, `h`, `png` (base64), `dpi`, and `scale` when above 1 |
 | `vpos` | `viewer`, `x`, `y` normalised, `tsUs` — where **another** controller's pointer is |
 
 shapes are cached by `id`; a repeat is `{"t":"cshape","id":n}` alone. css cursors above 128×128 are silently
 ignored by browsers, so a shape larger than 32×32 css px is presented as an overlay instead. `w`, `h`, `hotX`
 and `hotY` are pixels of the png; `scale` is machine pixels per png pixel, present only when the host shrank
-the shape for the 64 px message cap, and a viewer draws such a shape at `w × scale` machine pixels — as an
-overlay, since a css cursor cannot be scaled up.
+the shape for the 64 px message cap. `dpi` is the dpi the machine drew the shape at, 96 being 100%: a 2x mac
+display is 192, windows at 150% is 144. a viewer draws a shape at `w × scale × 96 / dpi` css pixels, the
+machine's pointer at its own size whatever the picture is scaled to, so a 2x mac's 56×80 arrow, sent as 28×40
+at `scale` 2, is 28×40 css px. a css cursor draws a png pixel per css pixel, so a shape at any other size is
+an overlay. a host older than `dpi` sends none, and a viewer keeps the sizes it drew such a shape at before.
 
 `cpos` is the **machine's own** pointer, which is one thing however many people are watching. `vpos` is where
 each *other* controller is pointing, so a session with more than one controller can draw them — the host
