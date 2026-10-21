@@ -241,7 +241,7 @@ jobs:
           }
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-windows
           path: agent/build/installer_output/Owlette-Installer-v${{ steps.version.outputs.version }}.exe
@@ -318,7 +318,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "building installer version $v"
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           # the lockfile is desktop/package-lock.json, not at the root, and
@@ -327,7 +327,7 @@ jobs:
 
       # same pin and rationale as rust-build.yml: no version tags upstream, the
       # toolchain comes through the input.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
 
@@ -429,7 +429,7 @@ jobs:
           fi
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-macos
           path: agent/build/macos/Owlette-Installer-v${{ steps.version.outputs.version }}.pkg
@@ -479,12 +479,12 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libxdo-dev libssl-dev build-essential
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           package-manager-cache: false
 
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-09-12
         with:
           toolchain: '1.98.1'
 
@@ -492,7 +492,7 @@ jobs:
         run: agent/build/linux/build.sh
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-linux
           path: agent/build/linux/Owlette-Installer-v${{ steps.version.outputs.version }}.deb
@@ -512,7 +512,7 @@ jobs:
       subjects-b64: ${{ steps.digest.outputs.subjects-b64 }}
       version: ${{ needs.build-windows.outputs.version }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true
@@ -583,7 +583,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true
@@ -624,7 +624,7 @@ jobs:
           chmod +x /usr/local/bin/slsa-verifier
 
       - name: download installers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true
