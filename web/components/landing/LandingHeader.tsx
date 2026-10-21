@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAuth } from '@/contexts/AuthContext';
-import { INSTALLER_PLATFORMS, PLATFORM_LABEL } from '@/lib/installerPlatform';
+import { PLATFORM_LABEL, type InstallerPlatform } from '@/lib/installerPlatform';
 import { OwletteEyeIcon } from './OwletteEye';
 
 type NavLinkDef = { label: string; href: string; external?: boolean };
@@ -27,14 +27,17 @@ const SECTION_LINKS: NavLinkDef[] = [
 // External / product links, shown to everyone.
 const UTIL_LINKS: NavLinkDef[] = [{ label: 'docs', href: '/docs' }];
 
-// one installer per platform. /download?os= redirects to the latest build, so
-// these are plain links that need no sign-in. `short` is the label's first
-// word, for the phone menu's single row.
-const DOWNLOAD_LINKS = INSTALLER_PLATFORMS.map((platform) => ({
-  label: PLATFORM_LABEL[platform],
-  short: PLATFORM_LABEL[platform].split(' ')[0],
-  href: `/download?os=${platform.split('_')[0]}`,
-}));
+// one link per platform the latest release has a build for, so none ends in
+// "no macos build". /download?os= redirects to that build, so these are plain
+// links that need no sign-in. `short` is the label's first word, for the phone
+// menu's single row.
+function downloadLinks(platforms: readonly InstallerPlatform[]) {
+  return platforms.map((platform) => ({
+    label: PLATFORM_LABEL[platform],
+    short: PLATFORM_LABEL[platform].split(' ')[0],
+    href: `/download?os=${platform.split('_')[0]}`,
+  }));
+}
 
 // Appended only while signed out — offering "sign in" to a signed-in visitor is
 // the thing this header used to get wrong.
@@ -62,10 +65,11 @@ function linkEl(link: NavLinkDef, className?: string, onClick?: () => void) {
   );
 }
 
-export function LandingHeader() {
+export function LandingHeader({ downloadPlatforms }: { downloadPlatforms: readonly InstallerPlatform[] }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const close = () => setMenuOpen(false);
   const { user, loading } = useAuth();
+  const downloads = downloadLinks(downloadPlatforms);
 
   /**
    * Nothing auth-dependent renders until auth resolves. An earlier version let
@@ -109,21 +113,23 @@ export function LandingHeader() {
           ))}
           {/* not modal: a modal menu locks the page's scroll, and dropping the
               scrollbar shifts the whole page sideways */}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="sm" className={`${ghostClass} gap-1`}>
-                download
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {DOWNLOAD_LINKS.map((link) => (
-                <DropdownMenuItem key={link.href} asChild className="cursor-pointer">
-                  <a href={link.href}>{link.label}</a>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {downloads.length > 0 && (
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="sm" className={`${ghostClass} gap-1`}>
+                  download
+                  <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {downloads.map((link) => (
+                  <DropdownMenuItem key={link.href} asChild className="cursor-pointer">
+                    <a href={link.href}>{link.label}</a>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           {/* Both states occupy the SAME grid cell, so the column is always as
               wide as the wider of the two and nothing to the left of it can move
               when auth resolves. Only opacity changes — a width swap here would
@@ -221,20 +227,22 @@ export function LandingHeader() {
             {UTIL_LINKS.map((link) =>
               linkEl(link, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close),
             )}
-            <div className="py-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 text-base">
-              <span className="text-muted-foreground">download</span>
-              {DOWNLOAD_LINKS.map((link) => (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  aria-label={`download for ${link.label}`}
-                  className="text-foreground/80 hover:text-foreground transition-colors"
-                  onClick={close}
-                >
-                  {link.short}
-                </a>
-              ))}
-            </div>
+            {downloads.length > 0 && (
+              <div className="py-3 flex flex-wrap items-baseline gap-x-5 gap-y-2 text-base">
+                <span className="text-muted-foreground">download</span>
+                {downloads.map((link) => (
+                  <a
+                    key={link.href}
+                    href={link.href}
+                    aria-label={`download for ${link.label}`}
+                    className="text-foreground/80 hover:text-foreground transition-colors"
+                    onClick={close}
+                  >
+                    {link.short}
+                  </a>
+                ))}
+              </div>
+            )}
             {authReady &&
               !signedIn &&
               linkEl(SIGN_IN_LINK, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close)}

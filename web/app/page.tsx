@@ -8,6 +8,7 @@ import {
   LandingFooter,
 } from '@/components/landing';
 import { PRODUCT_JSONLD } from '@/lib/product-facts';
+import { landingDownloadPlatforms } from '@/lib/latestInstaller.server';
 import { pickHeroHeadline } from '@/lib/heroHeadlines';
 
 // Lazy-load below-fold sections to reduce initial JS bundle
@@ -31,6 +32,7 @@ export default async function LandingPage() {
   // page into per-request rendering, so the phrase re-rolls on every load
   // instead of freezing into a prerendered page.
   const heroHeadline = pickHeroHeadline();
+  const downloadPlatforms = await landingDownloadPlatforms();
 
   return (
     <div className="min-h-screen relative">
@@ -48,7 +50,7 @@ export default async function LandingPage() {
       />
       {/* Page-wide dot grid background */}
       <div className="fixed inset-0 dot-grid opacity-30 pointer-events-none" />
-      <LandingHeader />
+      <LandingHeader downloadPlatforms={downloadPlatforms} />
       <main>
         <HeroSection headline={heroHeadline} />
         <ValuePropSection />

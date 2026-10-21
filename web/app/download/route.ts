@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
-import { getAdminDb } from '@/lib/firebase-admin';
-import {
-  normalizeInstallerFiles,
-  platformFromOsParam,
-  platformFromUserAgent,
-} from '@/lib/installerPlatform';
+import { platformFromOsParam, platformFromUserAgent } from '@/lib/installerPlatform';
+import { loadLatestInstaller } from '@/lib/latestInstaller.server';
 
 /**
  * GET /download
@@ -19,38 +15,16 @@ export async function GET(request: Request) {
   const platform = platformFromOsParam(os) ?? platformFromUserAgent(request.headers.get('user-agent'));
 
   try {
-    const db = getAdminDb();
-    const latestDoc = await db.collection('installer_metadata').doc('latest').get();
-    const latestData = latestDoc.data();
-    const version =
-      typeof latestData?.version === 'string' && latestData.version.length > 0
-        ? latestData.version
-        : null;
-
-    if (!latestDoc.exists || !version) {
+    const latest = await loadLatestInstaller();
+    if (!latest) {
       return loginRedirect();
     }
 
-    const versionDoc = await db
-      .collection('installer_metadata')
-      .doc('data')
-      .collection('versions')
-      .doc(version)
-      .get();
-    const versionData = versionDoc.data();
-
-    if (!versionDoc.exists || typeof versionData?.deletedAt === 'number') {
-      return loginRedirect();
-    }
-
-    const file =
-      normalizeInstallerFiles(versionData ?? {})[platform] ??
-      normalizeInstallerFiles(latestData ?? {})[platform];
-
+    const file = latest.files[platform];
     if (!file) {
       // a permalink, not an api route: plain text, and never a silent exe
       const osWord = platform.split('_')[0];
-      return new NextResponse(`no ${osWord} build in v${version}`, {
+      return new NextResponse(`no ${osWord} build in v${latest.version}`, {
         status: 404,
         headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
       });
