@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.20] - 2026-10-21
+
 ### fixed — a token file the agent can't read no longer unpairs the machine
 
 Since 4.1.8 a machine that could not read its token file took that as a revoke
