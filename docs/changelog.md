@@ -26,6 +26,12 @@ reopening it, before it stops the service. A 3.2.0 desktop app answers a stopped
 service by restarting it with elevation, so updating a 3.2.0 machine put a
 Windows permission prompt over whatever the screen was showing.
 
+### fixed — the download menu offers only builds that exist
+
+The landing page's download menu, on a desktop and in the phone menu, lists only
+the platforms the latest release has a build for. A release without a macOS or
+Linux build no longer offers a link that ends in "no macos build".
+
 ## [4.1.19] - 2026-10-20
 
 ### added — owlette swoop says which version it is
