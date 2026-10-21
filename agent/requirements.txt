@@ -1,7 +1,7 @@
 pywin32==312 ; sys_platform == "win32"  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
 psutil==7.2.2
 email-validator==2.3.0
-cryptography==50.0.1
+cryptography==50.0.2
 # Pillow is a DIRECT dependency: screenshot_capture + owlette_service compress
 # captures to JPEG with it. It used to arrive transitively through pystray, which
 # 3.0.0 dropped along with the rest of the python UI (customtkinter, CTkListbox,
@@ -19,7 +19,7 @@ tzlocal==5.4.4  # Convert Windows registry tz names to IANA (e.g. "Pacific Stand
 # SILENTLY evaluating every site-time schedule against the machine's local clock
 # (the `except ... falling back to local time` branch), which is a wrong-hours
 # bug with no error to chase. Pinned directly so it can never be dropped.
-tzdata==2026.4
+tzdata==2026.5
 
 # Screenshot capture
 mss==9.0.2  # Fast cross-platform screenshot library
@@ -29,7 +29,7 @@ mss==9.0.2  # Fast cross-platform screenshot library
 # PawnIO driver the installer deploys — replaced WinTmp, whose bundled LHM
 # still extracted the blocklisted WinRing0 driver at runtime (python.sys).
 HardwareMonitor==1.2.1 ; sys_platform == "win32"
-pythonnet==3.2.0 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
+pythonnet==3.2.1 ; sys_platform == "win32"  # HardwareMonitor's CLR bridge (was transitive via WinTmp) — pinned like everything else
 wmi==1.5.1 ; sys_platform == "win32"  # DIRECT dependency (hardware_profile + shared_utils disk/BIOS probes); used to arrive transitively through WinTmp
 nvidia-ml-py==13.615.71  # NVML bindings — the GPU load/VRAM/temperature source (shared_utils, mcp_tools)
 
@@ -67,11 +67,11 @@ websocket-client==1.9.2
 # lands, or hoot keeps fetching the old CLI.
 # Only pin a release that ships a win_amd64 wheel: 0.2.157 and 0.2.160-0.2.163
 # ship none, and pip then builds the sdist, which has no CLI, and exits 0.
-claude-agent-sdk==0.2.159
-mcp==2.2.0
+claude-agent-sdk==0.2.166
+mcp==2.3.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
-sentry-sdk==2.71.0
+sentry-sdk==2.72.0
 
 # Firebase integration - now using REST API with OAuth tokens (no Admin SDK needed)
 # firebase-admin==6.4.0  # REMOVED - replaced with REST API client
