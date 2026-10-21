@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.19] - 2026-10-20
+
 ### added — owlette swoop says which version it is
 
 Hover the owlette swoop mark, at the top left of the machine picker or on the
