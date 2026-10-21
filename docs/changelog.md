@@ -19,6 +19,13 @@ mid-write, meant pairing the machine again on site. Now only a token the server
 refuses, or a token file that is gone, unpairs a machine. A file that is still
 there but can't be read is retried like any other failed refresh.
 
+### fixed — updating from 3.2.0 no longer puts a permission prompt on the screen
+
+The installer now closes the desktop app, and keeps the old service from
+reopening it, before it stops the service. A 3.2.0 desktop app answers a stopped
+service by restarting it with elevation, so updating a 3.2.0 machine put a
+Windows permission prompt over whatever the screen was showing.
+
 ## [4.1.19] - 2026-10-20
 
 ### added — owlette swoop says which version it is

@@ -520,6 +520,8 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remo
 var
   ServiceWasStopped: Boolean;
   InstallSucceeded: Boolean;
+  // True while an upgrade has the desktop exe parked (ParkDesktopExe).
+  DesktopExeParked: Boolean;
   PairingSucceeded: Boolean;
   // Set only by the GUI handoff, and read by ShouldOfferOpenApp to suppress
   // the finished page redundant "open owlette" checkbox.
@@ -1195,10 +1197,69 @@ begin
   end;
 end;
 
+// Where the desktop app's exe lives, and where an upgrade parks it. {app} cannot
+// be expanded while InitializeSetup runs, so this names the fixed install root
+// the way the libcrypto check does.
+function DesktopExePath(): String;
+begin
+  Result := ExpandConstant('{commonappdata}\Owlette\app\{#MyAppExeName}');
+end;
+
+function ParkedDesktopExePath(): String;
+begin
+  Result := DesktopExePath() + '.upgrading';
+end;
+
+// Move the desktop exe aside before the service stops, so no service version
+// can relaunch the app mid-upgrade: each skips a launch when the exe is
+// missing, and Windows lets a running image be renamed. The file copy lays the
+// new exe in place; SettleParkedDesktopExe deals with the parked one.
+procedure ParkDesktopExe();
+begin
+  if not FileExists(DesktopExePath()) then
+  begin
+    // an upgrade that died between its park and its end left only the parked
+    // copy; this one settles it
+    DesktopExeParked := FileExists(ParkedDesktopExePath());
+    Exit;
+  end;
+  // beside a live exe, a parked copy is a stale leftover
+  DeleteFile(ParkedDesktopExePath());
+  DesktopExeParked := RenameFile(DesktopExePath(), ParkedDesktopExePath());
+  if DesktopExeParked then
+    Log('Moved the desktop app aside for the upgrade')
+  else
+    Log('Could not move the desktop app aside; both kill passes still run');
+end;
+
+// Drop the parked exe once the new one is in place, or put it back when the
+// upgrade ended before the copy. Not in [InstallDelete]: that runs before the
+// copy, and a copy that aborts rolls the new exe back as a new file, which
+// would leave the machine with no desktop app at all.
+procedure SettleParkedDesktopExe();
+begin
+  if (not DesktopExeParked) or (not FileExists(ParkedDesktopExePath())) then
+    Exit;
+  if FileExists(DesktopExePath()) then
+  begin
+    if not DeleteFile(ParkedDesktopExePath()) then
+      Log('Could not delete the parked desktop app; the next upgrade removes it');
+  end
+  else if RenameFile(ParkedDesktopExePath(), DesktopExePath()) then
+    Log('Put the desktop app back after the incomplete upgrade')
+  else
+    Log('Could not put the desktop app back from ' + ParkedDesktopExePath());
+end;
+
 procedure DeinitializeSetup();
 var
   ResultCode: Integer;
 begin
+  // Settle a parked desktop exe: dropped once the copy laid the new one in, put
+  // back when the upgrade ended before that, since the old service (restarted
+  // below, or never stopped) looks for it in place.
+  SettleParkedDesktopExe();
+
   // If we stopped the service during an upgrade but installation failed or was
   // cancelled, restart it so the user isn't left with a dead service.
   if ServiceWasStopped and (not InstallSucceeded) then
@@ -1283,6 +1344,25 @@ begin
   end;
 end;
 
+// Close the desktop app and owlette swoop, scoped by exe path so a same-named
+// process elsewhere is never touched. owlette swoop (owlette-swoop-viewer.exe)
+// lives in {app}\app too and holds its image the same way; an upgrade closes
+// its windows, and any session in them ends. InitializeSetup runs this before
+// the service stop on an upgrade and again after it.
+procedure KillDesktopApps(const Stage: String);
+var
+  ResultCode: Integer;
+begin
+  Log('Killing the Owlette desktop app and owlette swoop (' + Stage + ')...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command ' +
+    '"Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Desktop app and owlette swoop kill (' + Stage + ') returned: ' + IntToStr(ResultCode));
+end;
+
 function InitializeSetup(): Boolean;
 var
   ResultCode: Integer;
@@ -1328,6 +1408,14 @@ begin
         Exit;
       end;
     end;
+
+    // Close the desktop app before the service stops, not only after. During a
+    // self-update the old app is what runs on the box, and a 3.2.0 app watches
+    // the service's status file and answers a stop with an elevated restart: a
+    // UAC prompt on the screen (ADR 0005). A closed app cannot, and with its exe
+    // parked the old service cannot relaunch it before its own stop lands.
+    ParkDesktopExe();
+    KillDesktopApps('before the service stop');
 
     // Stop the service before overwriting files.
     // Use 'net stop' which is synchronous — it waits for the service to fully
@@ -1418,20 +1506,11 @@ begin
   // the tray icon), so it holds its own image open across an upgrade. Inno's
   // CloseApplications would usually catch that, but Restart Manager sees a
   // process running in the interactive session while Setup is elevated, and a
-  // miss here costs a "DeleteFile failed: code 5" mid-copy. Kill it explicitly,
-  // scoped by exe path so a same-named process elsewhere is never touched.
-  // The service is already stopped at this point, so nothing relaunches it.
-  // owlette swoop (owlette-swoop-viewer.exe) lives in {app}\app too and holds
-  // its image the same way; an upgrade closes its windows, and any session in
-  // them ends.
-  Log('Killing the Owlette desktop app and owlette swoop...');
-  Exec('powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -Command ' +
-    '"Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
-    'Stop-Process -Force -ErrorAction SilentlyContinue"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('Desktop app and owlette swoop kill returned: ' + IntToStr(ResultCode));
+  // miss here costs a "DeleteFile failed: code 5" mid-copy, so kill it
+  // explicitly. The service is already stopped at this point, so nothing
+  // relaunches it; this second pass catches one relaunched before the stop
+  // landed, which only happens when the exe could not be parked.
+  KillDesktopApps('after the service stop');
 
   Log('Killing Owlette Python processes by exe path...');
   Exec('powershell.exe',
