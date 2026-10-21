@@ -126,7 +126,7 @@ test('the create-site dialog writes the site from the drawer route', async ({ pa
   await assertNoHorizontalOverflow(page);
 });
 
-test('inline site edit and delete are reachable at 390px', async ({ page }) => {
+test('inline site edit, its switches and delete are reachable at 390px', async ({ page }) => {
   const dialog = await openManageSitesViaDrawer(page);
 
   // The filter renders only above one site and is the control that used to inflate the
@@ -144,6 +144,16 @@ test('inline site edit and delete are reachable at 390px', async ({ page }) => {
   await expect(nameInput).toBeVisible();
   await expect(nameInput).toHaveValue(TAKEN_SITE_NAME);
   await assertNoHorizontalOverflow(page);
+
+  // the site's switches sit below name and timezone in the same panel. they write the
+  // moment they move, so here they are only reached, never tapped.
+  for (const name of ['swoop', 'keep screens awake']) {
+    await expectFullyWithinViewport(
+      page,
+      dialog.getByRole('switch', { name, exact: true }),
+      `the ${name} switch`,
+    );
+  }
 
   // Cancel returns the row to view mode without writing.
   await dialog.getByRole('button', { name: 'cancel', exact: true }).tap();

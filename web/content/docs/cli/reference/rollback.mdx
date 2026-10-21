@@ -1,43 +1,67 @@
 ---
 title: "rollback"
-description: "roll a roost back to a previous version from the top-level owlette rollback helper. this command is site-scoped and route-backed."
+description: "rollback points a roost back at an earlier published version. it shows the diff against the current version, asks for confirmation, then moves the pointer and queues the pull on the roost's machines."
+keywords: ["revert", "undo", "previous version"]
 ---
 
-**synopsis** - `owlette rollback <roostId> --site <siteId> [--to <versionRef>] [--yes] [--json]`
+a rollback publishes nothing: versions are immutable, so the roost's current-version pointer moves to a version that already exists.
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the roost |
-| `--to <versionRef>` | no | target version id, number, `#N`, `vN`, `current`, `previous`, or `first`; defaults to the roost's previous version |
-| `--yes` | no | skip the interactive confirmation; required when stdin is not a tty |
+---
+
+## rollback
 
 ```bash
-owlette rollback rst_my_project --site site-1
-owlette rollback rst_my_project --site site-1 --to v3 --yes
-owlette --json rollback rst_my_project --site site-1 --to previous --yes
+owlette rollback <roostId> --site <siteId> [--to <versionRef>] [--yes] [--idempotency-key <key>] [--json]
 ```
 
-**backing endpoints**:
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the roost |
+| `--to <versionRef>` | string | no | version to roll back to: a version ID, a number (`3`, `#3`, `v3`), or `current`, `previous` or `first`. default: the roost's previous version |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-rollback-<uuid>`) |
 
-- `GET /api/roosts/{roostId}?siteId=<siteId>`
-- `GET /api/roosts/{roostId}/versions/{versionRef}/diff?siteId=<siteId>&against=<currentVersionId>`
-- `POST /api/roosts/{roostId}/rollback`
+the CLI loads the roost, resolves the target by asking for the diff from the current version to it, prints that diff, and asks `proceed with rollback? [y/N]` on stderr. the mutation sends the version ID the diff resolved, so a retry with the same key sends the same body. if the request fails before a response arrives, the CLI prints the key and the exact `--to <versionId> --idempotency-key <key>` to re-run with.
 
-The CLI always previews the diff before firing the mutation. In human mode it prompts `[y/N]`; in non-tty contexts pass `--yes` so scripts cannot roll back silently.
+human mode prints the plan and diff, then:
+
+```text
+owlette: rolled back
+  current   vrs_2f1c0a9b…
+  previous  vrs_9ab04e17…
+```
+
+with `--json` the diff is not printed and stdout gets one object: `{ "action": "rolled_back", "roost", "target", "diff", "result" }`, where `result` is the rollback response (`ok`, `roostId`, `siteId`, `currentVersionId`, `currentVersionNumber`, `previousVersionId`). a declined prompt prints `{ "action": "cancelled", "roost", "target", "diff" }`. the prompt still appears without `--yes`.
+
+### examples
+
+```bash
+# back to the previous version, after confirming
+owlette rollback rst_my_project --site site-1
+```
+
+```bash
+owlette rollback rst_my_project --site site-1 --to v3 --yes
+```
+
+```bash
+owlette --json rollback rst_my_project --site site-1 --to previous --yes | jq '.result.currentVersionId'
+```
+
+backing: `GET /api/roosts/{roostId}?siteId=`, `GET /api/roosts/{roostId}/versions/{versionRef}/diff?siteId=&against=<currentVersionId>`, then `POST /api/roosts/{roostId}/rollback` with body `{ siteId, targetVersion }`.
 
 ---
 
 ## exit codes
 
-- `0` - rollback succeeded, or the operator declined the confirmation prompt
-- `1` - api call failed or the rollback target resolves to the current version
-- `2` - usage/auth problem, no rollback target, or non-tty execution without `--yes`
+- `0` — rolled back, or you declined the prompt
+- `1` — network failure, a non-2xx response, a tombstoned roost, or a missing `--site`
+- `2` — the roost has no current version; no `--to` and no previous version; a target that resolves to the current version; no `--yes` when stdin is not a tty; or no token configured
 
 ---
 
 ## notes
 
-- **scope**: `roost=<id>:rollback` or a broader site/admin scope that includes rollback.
-- **version refs**: the server resolves ids, numbers, `#N`, `vN`, and aliases; the CLI forwards the operator's raw `--to` value.
-- **eventing**: the rollback route flips `currentVersionId`; rollout/event fanout is handled by server-side follow-up workers, not by the CLI.
-- **see also**: [roost](/docs/cli/reference/roost), [overview](/docs/cli/overview), and [readiness matrix](/docs/cli/readiness).
+- **scope**: `roost=<id>:rollback` — a separate permission from `write`, so an operator key can roll back without being able to push
+- **fan-out**: the rollback route queues the pull commands on the roost's machines itself, and queues a `version.rolled_back` webhook delivery for each subscription
+- **related**: [roost](/docs/cli/reference/roost), [`roost versions`](/docs/cli/reference/roost#versions) to find a version ref, [readiness matrix](/docs/cli/readiness)

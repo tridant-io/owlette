@@ -55,13 +55,19 @@ jest.mock('@/lib/securityBoundaryMetrics.server', () => ({
   emitSecurityBoundaryMetric: jest.fn(),
 }));
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
+}));
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 import { POST as bundlePOST } from '@/app/api/agent/swoop/bundle/route';
 import { POST as doorbellPOST } from '@/app/api/agent/swoop/doorbell-token/route';
 import { POST as eventsPOST } from '@/app/api/agent/swoop/events/route';
 import { validateBundle, SWOOP_PROTOCOL_VERSION } from '@/lib/swoop/protocol';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 import { SWOOP_MIN_AGENT_VERSION } from '@/lib/versionUtils';
 
 const SITE = 'site-a';
@@ -99,7 +105,6 @@ function seedSession(machineId = MACHINE, sid = SID) {
     state: 'pending',
     createdBy: 'uid-1',
     startedAt: Date.now(),
-    absoluteExpiresAt: Date.now() + 43200_000,
     viewers: [],
   });
 }
@@ -195,6 +200,40 @@ describe('POST /api/agent/swoop/doorbell-token', () => {
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe('machine_excluded');
   });
+
+  it('answers a core payer, whose plan has no swoop, with the same designed 403 swoop_disabled', async () => {
+    agentToken();
+    docs.set(`sites/${SITE}`, { owner: 'payer-1' });
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': '1', 'owlette.swoop': '0' },
+      epoch: 1,
+    });
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.example.invalid';
+    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+
+    try {
+      const response = await doorbellPOST(
+        createMockRequest('http://localhost/api/agent/swoop/doorbell-token', {
+          method: 'POST',
+          headers: { Authorization: 'Bearer agent-token' },
+          body: {},
+        }),
+      );
+      expect(response.status).toBe(403);
+      expect((await response.json()).code).toBe('swoop_disabled');
+      expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+      expect(docs.get(settingsPath(SITE))).toMatchObject({ enabled: true });
+    } finally {
+      delete process.env.PLAN_ENFORCEMENT;
+      delete process.env.TRIDANT_API_URL;
+      delete process.env.TRIDANT_LICENSE_KEY;
+    }
+  });
 });
 
 describe('POST /api/agent/swoop/bundle', () => {
@@ -216,8 +255,37 @@ describe('POST /api/agent/swoop/bundle', () => {
     expect(parsed.value.site).toBe(SITE);
     expect(parsed.value.machine).toBe(MACHINE);
     expect(parsed.value.now).toBeGreaterThan(0);
-    expect(parsed.value.enablement.sessionCapSeconds).toBe(43200);
+    // a hundred years: no session reaches it, and a fielded streamer still gets the
+    // required u64 it ends a session at.
+    expect(parsed.value.enablement.sessionCapSeconds).toBe(100 * 365 * 24 * 60 * 60);
     expect(parsed.value.jwtKeys).toHaveLength(1);
+  });
+
+  it('carries stun when turn is not configured, so the streamer can gather a public candidate', async () => {
+    agentToken();
+    const body = await (await bundlePOST(bundleRequest())).json();
+    expect(body.iceServers).toEqual(STUN_ONLY);
+  });
+
+  it('carries the minted ice servers unchanged when turn is configured', async () => {
+    const minted = [
+      { urls: ['stun:stun.cloudflare.com:3478'] },
+      {
+        urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+        username: 'turn-user',
+        credential: 'turn-credential',
+      },
+    ];
+    jest.mocked(mintTurnCredentials).mockResolvedValueOnce({
+      ok: true,
+      iceServers: minted,
+      username: 'turn-user',
+      expiresAt: Date.now() + 60_000,
+    });
+    agentToken();
+    const body = await (await bundlePOST(bundleRequest())).json();
+    expect(body.iceServers).toEqual(minted);
+    expect(mintTurnCredentials).toHaveBeenCalledWith({ siteId: SITE });
   });
 
   it('carries the previous public key during a rotation overlap', async () => {
@@ -311,6 +379,14 @@ describe('POST /api/agent/swoop/bundle', () => {
     const response = await bundlePOST(bundleRequest({ agentVersion: '3.3.5' }));
     expect(response.status).toBe(403);
     expect((await response.json()).code).toBe('agent_too_old');
+  });
+
+  it('serves a 3.3.7 agent, the first installer that ships the streamer', async () => {
+    // the literal, not the constant: the other bundle tests send the constant
+    // itself, which is how a floor above the fielded agents passed unnoticed.
+    agentToken();
+    const response = await bundlePOST(bundleRequest({ agentVersion: '3.3.7' }));
+    expect(response.status).toBe(200);
   });
 });
 
@@ -427,6 +503,19 @@ describe('POST /api/agent/swoop/events', () => {
       expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'host_exit' });
     });
 
+    it("keeps the agent's own refusal or exit reason, which the viewer acts on", async () => {
+      agentToken();
+      await eventsPOST(
+        eventsRequest({
+          siteId: SITE,
+          machineId: MACHINE,
+          events: [{ type: 'session_ended', sid: SID, reason: 'no_capture_source' }],
+        }),
+      );
+
+      expect(recordWrite()).toMatchObject({ state: 'ended', endReason: 'no_capture_source' });
+    });
+
     it('moves a pending record to live on session_started', async () => {
       agentToken();
       await eventsPOST(
@@ -506,8 +595,8 @@ describe('POST /api/agent/swoop/events', () => {
     /**
      * The audit row is what this endpoint promises and is fail-closed; the
      * mirror is not. A 503 here would have the agent re-post the batch and
-     * duplicate the rows, to fix a record the 12-hour cap and the retention
-     * sweep both close anyway.
+     * duplicate the rows, to fix a record the retention sweep closes anyway
+     * once its lease has lapsed.
      */
     it('still records the audit row when the mirror cannot be written', async () => {
       agentToken();

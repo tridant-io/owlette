@@ -41,6 +41,20 @@ const noClientFirestoreWritesRule = {
     "Direct firestore client writes are not allowed here. Route the write through an API handler (web/lib/actions/*.server.ts), or add the file to the preference allowlist in eslint.config.mjs if it is genuinely per-device state.",
 };
 
+// Light mode (2026-10): every colour is a theme token, so a raw palette utility
+// is a colour that will not change with the theme. Server code (emails, webhook
+// embeds) and tests sit in the allowlist block below and keep raw colour. A
+// theme-invariant spot (white on a black scrim) takes an inline
+// `eslint-disable-next-line no-restricted-syntax -- <why>`. `\b` also stops at
+// a variant colon, so `hover:text-red-400` is caught.
+const RAW_PALETTE =
+  "\\b(?:text|bg|border|ring|fill|stroke|from|to|via|outline|divide|shadow|decoration|placeholder|caret|accent)-(?:red|green|emerald|amber|yellow|orange|blue|sky|cyan|teal|violet|purple|pink|rose|slate|gray|zinc|neutral|stone|lime|indigo|fuchsia)-\\d{2,3}\\b|\\btext-(?:white|gray-900)\\b";
+const rawPaletteMessage = "use a theme token (see DESIGN.md), not a raw palette colour";
+const noRawPaletteRules = [
+  { selector: `Literal[value=/${RAW_PALETTE}/]`, message: rawPaletteMessage },
+  { selector: `TemplateElement[value.raw=/${RAW_PALETTE}/]`, message: rawPaletteMessage },
+];
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
@@ -56,7 +70,7 @@ const eslintConfig = defineConfig([
           destructuredArrayIgnorePattern: "^_",
         },
       ],
-      "no-restricted-syntax": ["error", noTokenLogsRule, noClientFirestoreWritesRule],
+      "no-restricted-syntax": ["error", noTokenLogsRule, noClientFirestoreWritesRule, ...noRawPaletteRules],
     },
   },
   // Server code, tests, and the per-device preference hooks may write directly.

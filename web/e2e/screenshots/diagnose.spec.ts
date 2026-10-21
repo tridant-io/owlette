@@ -9,11 +9,12 @@
  * Hoot takes no conversation id via URL params, so the seeded conversation is
  * opened by clicking its (deterministic) sidebar title.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 test.use(roleState('admin'));
 
@@ -62,7 +63,7 @@ test('diagnose capability card preview', async ({ page }) => {
     await page.waitForTimeout(500);
 
     await page.screenshot({
-      path: 'public/landing-screens/preview-diagnose.png',
+      path: themedPath('public/landing-screens/preview-diagnose.png'),
       fullPage: false,
     });
   } finally {

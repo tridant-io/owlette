@@ -57,4 +57,47 @@ test.describe('landing capability grid', () => {
     await page.keyboard.press('Escape');
     await expect(lightbox).toHaveCount(0);
   });
+
+  test('the lightbox takes focus, keeps tab inside, and hands it back', async ({ page }) => {
+    await page.goto('/');
+
+    const desktop = page.locator('div.hidden.lg\\:block').first();
+    await desktop.getByRole('button', { name: /^monitor/i }).click();
+    const monitorPreview = desktop.getByRole('button', { name: 'open monitor preview' });
+    await monitorPreview.focus();
+    await page.keyboard.press('Enter');
+
+    const lightbox = page.getByRole('dialog', { name: 'monitor preview' });
+    await expect(lightbox).toBeVisible();
+    await expect(lightbox.getByRole('button', { name: 'close preview' })).toBeFocused();
+    await expect(lightbox.getByRole('button', { name: 'previous preview' })).toBeVisible();
+    await expect(lightbox.getByRole('button', { name: 'next preview' })).toBeVisible();
+    await expect(lightbox.getByRole('button', { name: 'show monitor preview' })).toHaveAttribute(
+      'aria-current',
+      'true',
+    );
+
+    // backwards off the first control wraps to the last, not out to the page.
+    await page.keyboard.press('Shift+Tab');
+    expect(await lightbox.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+
+    await page.keyboard.press('Escape');
+    await expect(lightbox).toHaveCount(0);
+    await expect(monitorPreview).toBeFocused();
+  });
+
+  test('focus returns to the preview of the capability shown last', async ({ page }) => {
+    await page.goto('/');
+
+    const desktop = page.locator('div.hidden.lg\\:block').first();
+    await desktop.getByRole('button', { name: /^monitor/i }).click();
+    await desktop.getByRole('button', { name: 'open monitor preview' }).click();
+
+    await page.getByRole('dialog').getByRole('button', { name: 'next preview' }).click();
+    await expect(page.getByRole('dialog', { name: 'control preview' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(desktop.getByRole('button', { name: 'open control preview' })).toBeFocused();
+  });
 });

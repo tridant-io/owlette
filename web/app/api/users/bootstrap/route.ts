@@ -16,6 +16,10 @@
  * Body is `{ displayName?, timezone? }`. uid comes from the bearer/session and
  * email from `getUser(uid).email` — NEVER the body, so a caller can neither
  * bootstrap someone else nor persist a falsified email (issue #22).
+ *
+ * Creating the doc for an unverified password account also sends the email
+ * verification link. A failed send never fails the bootstrap: the banner's
+ * resend (`/api/auth/verify-email`) is the way back.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -36,6 +40,7 @@ import { withIdempotency } from '@/lib/idempotency';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { bootstrapUser } from '@/lib/actions/bootstrapUser.server';
 import { isDisposableEmailDomain } from '@/lib/disposableEmailDomains';
+import { needsEmailVerification, sendVerificationEmail } from '@/lib/emailVerification.server';
 import { readAndParseJsonBody } from '../../_shared';
 
 interface BootstrapBody {
@@ -163,6 +168,14 @@ async function handleBootstrap(request: NextRequest): Promise<NextResponse> {
             alreadyExists: true,
             createdAt: result.createdAt,
           });
+        }
+
+        if (needsEmailVerification(userRecord)) {
+          try {
+            await sendVerificationEmail(verifiedEmail);
+          } catch (err) {
+            console.error('[users/bootstrap] verification email not sent:', err);
+          }
         }
 
         return NextResponse.json({

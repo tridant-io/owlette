@@ -147,9 +147,9 @@ export function DisplayEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="border-border bg-card text-foreground sm:max-w-lg">
+      <DialogContent className="border-border text-foreground sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="text-white">edit display</DialogTitle>
+          <DialogTitle className="text-foreground">edit display</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             {/* friendlyName is a vendor-supplied product name — exempt from
                 the lowercase UI copy rule per CLAUDE.md. */}
@@ -161,7 +161,7 @@ export function DisplayEditorDialog({
           <div className="grid grid-cols-2 gap-4">
             {/* Resolution — width × height */}
             <div className="space-y-2">
-              <Label htmlFor="display-resolution-width" className="text-white">
+              <Label htmlFor="display-resolution-width" className="text-foreground">
                 resolution
               </Label>
               <div className="flex items-center gap-2">
@@ -173,7 +173,7 @@ export function DisplayEditorDialog({
                   onChange={(e) =>
                     setResolution((prev) => ({ ...prev, width: toInt(e.target.value) }))
                   }
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                   aria-label="resolution width"
                 />
                 <span
@@ -193,7 +193,7 @@ export function DisplayEditorDialog({
                       height: toInt(e.target.value),
                     }))
                   }
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                   aria-label="resolution height"
                 />
               </div>
@@ -201,7 +201,7 @@ export function DisplayEditorDialog({
 
             {/* Refresh rate */}
             <div className="space-y-2">
-              <Label htmlFor="display-refresh-hz" className="text-white">
+              <Label htmlFor="display-refresh-hz" className="text-foreground">
                 refresh rate
               </Label>
               <div className="flex items-center gap-2">
@@ -211,7 +211,7 @@ export function DisplayEditorDialog({
                   min={0}
                   value={refreshHz}
                   onChange={(e) => setRefreshHz(toInt(e.target.value))}
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                 />
                 <span className="text-muted-foreground text-sm select-none">hz</span>
               </div>
@@ -221,7 +221,7 @@ export function DisplayEditorDialog({
           <div className="grid grid-cols-2 gap-4">
             {/* Rotation */}
             <div className="space-y-2">
-              <Label htmlFor="display-rotation" className="text-white">
+              <Label htmlFor="display-rotation" className="text-foreground">
                 rotation
               </Label>
               <Select
@@ -230,11 +230,11 @@ export function DisplayEditorDialog({
               >
                 <SelectTrigger
                   id="display-rotation"
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="border-border bg-background text-white">
+                <SelectContent className="border-border bg-background text-foreground">
                   {ROTATION_OPTIONS.map((opt) => (
                     <SelectItem key={opt.value} value={String(opt.value)}>
                       {opt.label}
@@ -246,7 +246,7 @@ export function DisplayEditorDialog({
 
             {/* Scale */}
             <div className="space-y-2">
-              <Label htmlFor="display-scale" className="text-white">
+              <Label htmlFor="display-scale" className="text-foreground">
                 scale
               </Label>
               <Select
@@ -255,11 +255,11 @@ export function DisplayEditorDialog({
               >
                 <SelectTrigger
                   id="display-scale"
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                 >
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="border-border bg-background text-white">
+                <SelectContent className="border-border bg-background text-foreground">
                   {SCALE_OPTIONS.map((pct) => (
                     <SelectItem key={pct} value={String(pct)}>
                       {pct}%
@@ -272,7 +272,7 @@ export function DisplayEditorDialog({
 
           {/* Position x / y */}
           <div className="space-y-2">
-            <Label htmlFor="display-position-x" className="text-white">
+            <Label htmlFor="display-position-x" className="text-foreground">
               position (x, y)
             </Label>
             <div className="grid grid-cols-2 gap-4">
@@ -283,7 +283,7 @@ export function DisplayEditorDialog({
                 onChange={(e) =>
                   setPosition((prev) => ({ ...prev, x: toInt(e.target.value) }))
                 }
-                className="border-border bg-background text-white"
+                className="border-border bg-background text-foreground"
                 aria-label="position x"
               />
               <Input
@@ -293,7 +293,7 @@ export function DisplayEditorDialog({
                 onChange={(e) =>
                   setPosition((prev) => ({ ...prev, y: toInt(e.target.value) }))
                 }
-                className="border-border bg-background text-white"
+                className="border-border bg-background text-foreground"
                 aria-label="position y"
               />
             </div>
@@ -301,7 +301,7 @@ export function DisplayEditorDialog({
 
           {/* Primary display toggle */}
           <div className="flex items-center justify-between gap-4">
-            <Label htmlFor="display-primary" className="text-white">
+            <Label htmlFor="display-primary" className="text-foreground">
               primary display
             </Label>
             <Switch
@@ -323,7 +323,7 @@ export function DisplayEditorDialog({
           <Button
             onClick={handleSave}
             disabled={!monitor || !hasChanges}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             save
           </Button>

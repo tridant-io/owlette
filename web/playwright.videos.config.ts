@@ -69,6 +69,7 @@ export default defineConfig({
     navigationTimeout: 20_000,
     // viewport: null — chromium honors the explicit --window-size launch arg below.
     viewport: null,
+    colorScheme: 'dark',
   },
 
   projects: [

@@ -90,10 +90,36 @@ describe('globals.css port', () => {
   })
 })
 
+/** every custom property declared in the top-level `selector { ... }` blocks, merged */
+function tokens(selector: ':root' | '.dark'): Set<string> {
+  const css = globalsCss.replace(/\r\n/g, '\n')
+  const escaped = selector.replace('.', '\\.')
+  const names = new Set<string>()
+  for (const [, body] of css.matchAll(new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`, 'g'))) {
+    // comments name tokens too ("--foreground: at 14%"), so read declarations only
+    for (const [, name] of body.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(--[a-z0-9-]+):/g)) {
+      names.add(name)
+    }
+  }
+  return names
+}
+
+describe('theme tokens', () => {
+  it('gives every dark token a light value', () => {
+    const dark = tokens('.dark')
+    const light = tokens(':root')
+    expect(dark.size).toBeGreaterThan(0)
+    expect([...dark].filter((name) => !light.has(name))).toEqual([])
+  })
+})
+
 describe('MENU_SURFACE', () => {
-  it('matches the web recipe verbatim', () => {
+  it('uses the elevation token recipe', () => {
     expect(MENU_SURFACE).toBe(
-      'border-border bg-secondary/85 backdrop-blur-sm shadow-2xl shadow-black/50 ring-1 ring-white/10',
+      'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring',
     )
+    // the utilities only exist while @theme inline maps the tokens
+    expect(globalsCss).toContain('--color-elevation-shadow: var(--elevation-shadow)')
+    expect(globalsCss).toContain('--color-elevation-ring: var(--elevation-ring)')
   })
 })

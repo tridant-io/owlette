@@ -1,9 +1,10 @@
 ---
 title: "owlette API overview"
-description: "the owlette public API lets you automate fleet operations from scripts, CI, internal tools, and SDKs. use it to inspect sites and machines, queue commands, manage deployments, publish roost content, run hoot diagnostics, manage webhooks, and read logs."
+description: "the owlette public API lets you automate fleet operations from scripts, CI, internal tools, and SDKs. use it to inspect sites and machines, queue commands, manage processes and deployments, publish roost content, run hoot diagnostics, manage webhooks, and read logs."
+keywords: ["rest api", "http api", "automation", "integration", "endpoints", "openapi"]
 ---
 
-The dashboard and API operate on the same underlying resources. Use the dashboard for exploration and one-off admin work; use the API when the workflow should be repeatable, audited, or integrated into another system.
+the dashboard and the API work on the same resources. use the dashboard for exploration and one-off admin work; use the API when a workflow should be repeatable, audited, or wired into another system.
 
 ---
 
@@ -12,12 +13,12 @@ The dashboard and API operate on the same underlying resources. Use the dashboar
 | environment | base URL |
 |---|---|
 | production | `https://owlette.app` |
-| developer preview | `https://dev.owlette.app` |
+| development | `https://dev.owlette.app` |
 | local development | `http://localhost:3000` |
 
-Public API paths are rooted at `/api`. The rendered endpoint reference is available at [`/docs/api`](/docs/api), with raw OpenAPI JSON at `/api/openapi`.
+API paths are rooted at `/api`. the rendered endpoint reference is at [`/docs/api`](/docs/api), and the raw OpenAPI document (JSON) at `/api/openapi`.
 
-![scalar api reference](/docs-screens/scalar-reference.png)
+![scalar API reference](/docs-screens/scalar-reference.png)
 
 ---
 
@@ -25,31 +26,32 @@ Public API paths are rooted at `/api`. The rendered endpoint reference is availa
 
 | resource | purpose |
 |---|---|
-| sites | tenant boundary for machines, quotas, logs, webhooks, deployments, and roost content |
-| machines | Windows agents registered to a site |
-| commands | async work queued to a machine, such as screenshots or process actions |
-| deployments | classic installer fan-out records and per-target status |
-| roosts | content-addressed project bundles, versions, chunks, rollouts, and rollback |
-| hoot | site and machine diagnostics over `/api/hoot/conversations` |
-| webhooks | outbound event subscriptions and delivery history |
+| sites | the tenant boundary for machines, members, quotas, logs, webhooks, deployments, and roost content |
+| machines | agents on Windows, macOS, and Linux machines registered to a site |
+| commands | async work queued to a machine, such as screenshots, restarts, or process actions |
+| processes | the monitored processes configured on each machine |
+| deployments | installer fan-out records and per-target status |
+| roosts | content-addressed project folders: versions, chunks, rollouts, and rollback |
+| hoot | AI diagnostics over [`/api/hoot/conversations`](/docs/api/hoot) |
+| webhooks | outbound event subscriptions and their delivery history |
 | API keys | scoped credentials for automation |
 
 ---
 
 ## shared conventions
 
-- **Authentication** uses scoped `owk_live_*` and `owk_test_*` API keys in `Authorization: Bearer ...`; dashboard and setup flows may use Firebase ID tokens or sessions. See [authentication](/docs/api/authentication).
-- **Errors**: Most public errors use `application/problem+json`; routes using the shared problem helper include stable `code`, `docsUrl`, and `requestId` fields, but some compatibility routes still return a smaller problem body. See [errors](/docs/api/errors).
-- **Pagination** uses `page_size`, `page_token`, and `next_page_token`, with documented compatibility aliases on older routes. See [pagination](/docs/api/pagination).
-- **Idempotency** uses `Idempotency-Key` for safe retries of mutating requests. See [idempotency](/docs/api/idempotency).
-- **Rate limits** use `RateLimit-*`, `Retry-After`, and `Roost-Rate-Limited-Reason` headers where the active limiter can report them. See [rate limits](/docs/api/rate-limits).
+- **authentication** uses scoped `owk_live_*` API keys in `Authorization: Bearer ...` (or `x-api-key`); the dashboard and setup flows use sessions or Firebase ID tokens. see [authentication](/docs/api/authentication).
+- **errors** use `application/problem+json` with a stable `code`, a `docsUrl`, and a `requestId`. see [errors](/docs/api/errors).
+- **pagination** uses `page_size`, `page_token`, and `next_page_token`. see [pagination](/docs/api/pagination).
+- **idempotency** uses `Idempotency-Key` for safe retries of the mutations that honor it. see [idempotency](/docs/api/idempotency).
+- **rate limits** report `RateLimit-*`, `Retry-After`, and `Roost-Rate-Limited-Reason` headers where a limiter applies. see [rate limits](/docs/api/rate-limits).
 
 ---
 
 ## developer path
 
-1. Start with the [quickstart](/docs/api/quickstart): create a key, verify auth, list inventory, queue a safe machine command, and poll it.
-2. Read the shared convention pages: [authentication](/docs/api/authentication), [pagination](/docs/api/pagination), [idempotency](/docs/api/idempotency), [errors](/docs/api/errors), and [rate limits](/docs/api/rate-limits).
-3. Use the [interactive reference](/docs/api) for operation-level scopes, parameters, required idempotency headers, and response shapes.
-4. Check the [SDK/CLI distribution gate](/docs/api/distribution), then use the SDK docs for [Node](/docs/api/sdk-node) and [Python](/docs/api/sdk-python) when you want typed clients.
-5. Move to the resource guide you need: [chunks](/docs/api/chunks), [versions](/docs/api/versions), [hoot](/docs/api/hoot), or [webhooks](/docs/api/webhooks).
+1. start with the [quickstart](/docs/api/quickstart): create a key, verify it, list inventory, queue a safe machine command, and poll it.
+2. read the shared convention pages: [authentication](/docs/api/authentication), [pagination](/docs/api/pagination), [idempotency](/docs/api/idempotency), [errors](/docs/api/errors), and [rate limits](/docs/api/rate-limits).
+3. use the [interactive reference](/docs/api) for each operation's scope, parameters, required headers, and response shape.
+4. check [SDK and CLI distribution](/docs/api/distribution), then the [Node](/docs/api/sdk-node) and [Python](/docs/api/sdk-python) SDK pages when you want typed clients.
+5. move on to the resource guide you need: [chunks](/docs/api/chunks), [versions](/docs/api/versions), [hoot](/docs/api/hoot), or [webhooks](/docs/api/webhooks).

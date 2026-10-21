@@ -183,8 +183,8 @@ fn every_golden_vector_is_exercised_and_reaches_the_manifest_verdict() {
         oracle.manifest.vectors.len(),
         "every entry in the manifest is exercised"
     );
-    assert_eq!(accepted, 26, "accept vectors");
-    assert_eq!(rejected, 13, "reject vectors");
+    assert_eq!(accepted, 27, "accept vectors");
+    assert_eq!(rejected, 14, "reject vectors");
 }
 
 /// Run one vector. `Err` is the implementation refusing it, and carries the

@@ -18,14 +18,18 @@ use std::io::{ErrorKind, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
 use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
+#[cfg(windows)]
 use windows::core::{w, PCWSTR};
+#[cfg(windows)]
 use windows::Win32::Foundation::{HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
   CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject, MUTEX_MODIFY_STATE,
   SYNCHRONIZATION_SYNCHRONIZE,
@@ -33,7 +37,16 @@ use windows::Win32::System::Threading::{
 
 /// Name of the cross-process mutex. Byte-identical to the Python constant —
 /// a typo here silently disables all coordination.
+#[cfg(windows)]
 const MUTEX_NAME: PCWSTR = w!("Global\\OwletteJsonFileMutex");
+/// The posix half of the same lock: flock(2) on this file under the data
+/// root, which `shared_utils._CrossProcessLock` takes for the same writes.
+#[cfg(unix)]
+const JSON_LOCK_REL: &str = "tmp/json.lock";
+/// How often a contended flock is retried inside the wait budget — python's
+/// `_JSON_LOCK_RETRY_SECONDS`.
+#[cfg(unix)]
+const LOCK_RETRY: Duration = Duration::from_millis(10);
 
 /// Wait budget for the mutex, mirroring `_CrossProcessLock(timeout_ms=2000)`.
 const MUTEX_WAIT_MS: u32 = 2000;
@@ -50,13 +63,17 @@ const INDENT: &[u8] = b"    ";
 static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Process-wide mutex handle, held for process lifetime like Python's `_json_file_mutex`.
+#[cfg(windows)]
 static JSON_MUTEX: OnceLock<Option<SharedMutex>> = OnceLock::new();
 
+#[cfg(windows)]
 struct SharedMutex(HANDLE);
 
 // SAFETY: a mutex HANDLE is a kernel handle, valid process-wide and usable from any thread. Lock
 // *ownership* is per-thread, which is why `LockGuard` is !Send; the handle itself need not be.
+#[cfg(windows)]
 unsafe impl Send for SharedMutex {}
+#[cfg(windows)]
 unsafe impl Sync for SharedMutex {}
 
 /// How the cross-process lock behaved for one operation; surfaced to the frontend.
@@ -67,6 +84,7 @@ pub enum LockOutcome {
   Acquired,
   /// Previous owner died without releasing. We own it and must release, as Python's
   /// `WAIT_ABANDONED` branch does.
+  #[cfg(windows)]
   Abandoned,
   /// 2 s budget elapsed. Proceeds unlocked, matching Python: the write is still atomic, so the
   /// worst case is a lost update, never a torn file.
@@ -288,7 +306,12 @@ fn write_then_rename(temp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), JsonI
 /// holds even though commands run on async worker threads.
 struct LockGuard {
   /// `Some` only when we own the mutex and therefore owe a release.
+  #[cfg(windows)]
   handle: Option<HANDLE>,
+  /// `Some` only when the flock is held and therefore owed a release; the
+  /// descriptor closing releases it too, so a lost guard cannot wedge the file.
+  #[cfg(unix)]
+  file: Option<fs::File>,
   outcome: LockOutcome,
   waited: Duration,
   _not_send: PhantomData<*const ()>,
@@ -307,6 +330,7 @@ impl LockGuard {
   }
 }
 
+#[cfg(windows)]
 impl Drop for LockGuard {
   fn drop(&mut self) {
     if let Some(handle) = self.handle {
@@ -318,6 +342,81 @@ impl Drop for LockGuard {
   }
 }
 
+#[cfg(unix)]
+impl Drop for LockGuard {
+  fn drop(&mut self) {
+    if let Some(file) = &self.file {
+      use std::os::unix::io::AsRawFd;
+      // SAFETY: the descriptor is open for as long as `file` is, and LOCK_UN on
+      // a descriptor this process locked is always sound.
+      unsafe {
+        let _ = libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+      }
+    }
+  }
+}
+
+/// flock(2) on `tmp/json.lock`, retried every `LOCK_RETRY` inside the same
+/// 2 s budget the windows mutex gets. the file is created at 0660 when the
+/// daemon has not built the tree yet (a dev box), and opened as it is
+/// otherwise — the daemon's `harden_data_root` owns its mode and group.
+#[cfg(unix)]
+fn acquire_lock() -> LockGuard {
+  use std::os::unix::fs::OpenOptionsExt;
+  use std::os::unix::io::AsRawFd;
+
+  let started = Instant::now();
+  let path = crate::paths::data_root().join(JSON_LOCK_REL);
+  let file = match fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).mode(0o660).open(&path) {
+    Ok(file) => file,
+    Err(error) => {
+      log::error!("could not open the owlette json lock {} ({error}) — json access will proceed unlocked", path.display());
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Unavailable,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+  };
+  let deadline = started + Duration::from_millis(u64::from(MUTEX_WAIT_MS));
+  loop {
+    // SAFETY: `file` is open for the life of this call; a non-blocking flock
+    // either takes the lock or fails without touching anything else.
+    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if taken {
+      return LockGuard {
+        file: Some(file),
+        outcome: LockOutcome::Acquired,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    let error = std::io::Error::last_os_error();
+    // EWOULDBLOCK and EAGAIN are one value on linux and two on macos.
+    let contended = matches!(error.raw_os_error(), Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN);
+    if !contended {
+      log::error!("could not lock {} ({error}) — json access will proceed unlocked", path.display());
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Unavailable,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    if Instant::now() >= deadline {
+      return LockGuard {
+        file: None,
+        outcome: LockOutcome::Timeout,
+        waited: started.elapsed(),
+        _not_send: PhantomData,
+      };
+    }
+    thread::sleep(LOCK_RETRY);
+  }
+}
+
+#[cfg(windows)]
 fn acquire_lock() -> LockGuard {
   let started = Instant::now();
 
@@ -357,6 +456,7 @@ fn acquire_lock() -> LockGuard {
   }
 }
 
+#[cfg(windows)]
 fn json_mutex() -> Option<HANDLE> {
   JSON_MUTEX
     .get_or_init(|| {
@@ -526,6 +626,22 @@ mod tests {
     );
   }
 
+  #[cfg(unix)]
+  #[test]
+  fn a_guard_only_holds_the_file_when_it_owns_the_flock() {
+    // the same invariant as the windows test below: never release what is not held.
+    let guard = acquire_lock();
+    assert_eq!(guard.file.is_some(), !guard.outcome.is_unprotected(), "{:?}", guard.outcome);
+    // a second guard on the same thread contends with the first and times out
+    // rather than taking a lock it does not own.
+    let second = acquire_lock();
+    if guard.file.is_some() {
+      assert_eq!(second.outcome, LockOutcome::Timeout, "{:?}", second.outcome);
+      assert!(second.file.is_none());
+    }
+  }
+
+  #[cfg(windows)]
   #[test]
   fn a_guard_only_holds_a_handle_when_it_owns_the_lock() {
     // Drop's invariant: never release a mutex we do not own. Whether we *can* own it is
@@ -550,6 +666,7 @@ mod tests {
   /// The holder falls back to `OpenMutex` for the same reason this module does.
   ///
   /// `cargo test --lib -- --ignored --exact json_io::tests::mutex_contention_with_python_holder --nocapture`
+  #[cfg(windows)]
   #[test]
   #[ignore = "needs the deployed agent interpreter and an elevated shell"]
   fn mutex_contention_with_python_holder() {

@@ -14,17 +14,31 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 import uuid
 import winreg
 
+import pywintypes
+import win32api
+import win32con
+import win32event
+import win32process
 import win32service
 import win32serviceutil
 import win32ts
 import winerror
 
-from . import NotSupportedHere, resolve_data_root
+from . import NotSupportedHere, keep_exit_code, resolve_data_root
 
 logger = logging.getLogger(__name__)
+
+# The service is not a managed process's parent (a helper in the user's session
+# launches it and exits), so its exit code is readable only through a handle
+# taken while it runs. Handles of the ones that ended are traded for their code
+# at the next read or watch.
+_watched = {}
+_exits = {}
+_watch_lock = threading.Lock()
 
 # Agent modules are imported inside the operation that uses them so the
 # adapter's import graph stays one-way: everything under agent/src can import
@@ -100,6 +114,28 @@ def launch_managed_process(spec: dict) -> int | None:
         'launch_managed_process: OwletteService.launch_process_as_user owns '
         'managed launches'
     )
+
+
+def watch_exit(pid: int) -> None:
+    """Hold a handle on `pid` so its exit code can be read once it ends."""
+    with _watch_lock:
+        if pid in _watched:
+            return
+        _collect_exits()
+        _exits.pop(pid, None)
+        try:
+            _watched[pid] = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.SYNCHRONIZE,
+                False, pid)
+        except pywintypes.error as e:
+            logger.debug(f"Cannot watch PID {pid} for its exit: {e}")
+
+
+def exit_code(pid: int) -> int | None:
+    """The exit code of a watched process that has ended, read once."""
+    with _watch_lock:
+        _collect_exits()
+        return _exits.pop(pid, None)
 
 
 def stable_machine_id() -> str:
@@ -244,6 +280,19 @@ with open(out_path, 'wb') as f:
     f.write(png_bytes)
 print(f'monitors={{monitors_count}} size={{len(png_bytes)}}')
 """
+
+
+def _collect_exits() -> None:
+    """Trade the handle of every watched process that has ended for its code.
+
+    Closing it releases the pid for reuse, so it is closed only once the
+    process has ended and its code is kept.
+    """
+    for pid, handle in list(_watched.items()):
+        if win32event.WaitForSingleObject(handle, 0) == win32event.WAIT_OBJECT_0:
+            keep_exit_code(_exits, pid, win32process.GetExitCodeProcess(handle))
+            handle.Close()
+            del _watched[pid]
 
 
 def _machine_guid() -> str:

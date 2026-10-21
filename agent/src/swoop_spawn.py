@@ -17,6 +17,11 @@ Two gates run before every spawn, and both refuse rather than degrade:
 the install directory must carry the ownership the installer laid down, and
 ``owlette-swoop.exe version`` must match this agent's version. Neither gate
 repairs anything.
+
+Off Windows, ``verify_install`` and ``spawn`` hand over to
+:mod:`swoop_spawn_posix`: there the desktop app launches the streamer as its
+own child, over a unix socket, and the process object it answers with is driven
+the same way.
 """
 
 import json
@@ -54,6 +59,7 @@ REFUSAL_VERSION_MISMATCH = 'version_mismatch'
 REFUSAL_NO_CONSOLE_SESSION = 'no_console_session'
 REFUSAL_BUNDLE_UNAVAILABLE = 'bundle_unavailable'
 REFUSAL_SPAWN_FAILED = 'spawn_failed'
+REFUSAL_DESKTOP_NOT_RUNNING = 'desktop_not_running'
 
 # the streamer's own stderr sink. the streamer rotates logs/swoop itself;
 # cleanup_old_logs() is non-recursive and must stay that way.
@@ -172,6 +178,10 @@ def verify_install(exe_path=None):
     by a delayed-until-reboot upgrade is caught here rather than by the
     streamer's own exit code 11.
     """
+    if os.name != 'nt':
+        import swoop_spawn_posix
+        return swoop_spawn_posix.verify_install(exe_path)
+
     exe_path = exe_path or shared_utils.get_swoop_exe_path()
     if not exe_path:
         raise SwoopSpawnError(REFUSAL_NOT_INSTALLED, 'swoop is not installed')
@@ -376,7 +386,22 @@ def _console_session_token():
         ctypes.sizeof(ctypes.c_ulong),
     )
     environment = win32profile.CreateEnvironmentBlock(token, False)
+    level = _configured_log_level()
+    if level:
+        environment['OWLETTE_SWOOP_LOG'] = level
     return token, environment
+
+
+def _configured_log_level():
+    """The streamer follows the agent's own ``logging.level`` in config.json:
+    one switch for a diagnosis, no key of its own. Only the two levels the
+    streamer knows; anything else leaves it at info."""
+    try:
+        level = (shared_utils.load_config() or {}).get('logging', {}).get('level')
+    except Exception:
+        return None
+    level = level.lower() if isinstance(level, str) else None
+    return level if level in ('debug', 'trace') else None
 
 
 def _open_stderr_handle(log_dir, sa):
@@ -397,12 +422,18 @@ def _open_stderr_handle(log_dir, sa):
     return handle
 
 
-def spawn(exe_path, log_dir=None):
+def spawn(exe_path, log_dir=None, *, sid=None):
     """Start the streamer suspended, box it in a job object, resume it.
 
     The caller writes the bundle as the first stdin line. Returns a
     :class:`SwoopProcess`; raises :class:`SwoopSpawnError` on any failure.
+    ``sid`` is the session the POSIX arm names in its log line; this arm
+    ignores it.
     """
+    if os.name != 'nt':
+        import swoop_spawn_posix
+        return swoop_spawn_posix.spawn(exe_path, log_dir, sid=sid)
+
     import win32con
     import win32api
     import win32job

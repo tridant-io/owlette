@@ -9,6 +9,7 @@
  * service coerces with int()/float() (`owlette_service.py:2097,:2271`).
  */
 
+import { launchCopyFor, type DesktopOs } from '@/lib/launchCopy'
 import {
   NEW_PROCESS_DEFAULTS,
   type LaunchMode,
@@ -90,6 +91,8 @@ export interface ClassifyOptions {
   pythonInstallRoot?: string
   /** Interpreters tried in order for a `.ps1`. */
   powershellCandidates?: string[]
+  /** The desktop the drop landed on: on macos an `.app` folder is the app to run. */
+  os?: DesktopOs
 }
 
 /**
@@ -105,6 +108,7 @@ export const DEFAULT_CLASSIFY_OPTIONS: Required<ClassifyOptions> = {
     'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
     'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
   ],
+  os: 'windows',
 }
 
 /** Everything the classifier needs to know about the disk. */
@@ -146,7 +150,7 @@ export function classifyDrop(
   return Promise.all(
     paths.map(async (path) => {
       try {
-        return await classifyOne(path, fs, resolver)
+        return await classifyOne(path, fs, resolver, resolved.os)
       } catch (error) {
         return unsupported(path, `could not read this path (${messageOf(error)})`)
       }
@@ -159,9 +163,14 @@ export function toProcessEntry(draft: ProcessEntryDraft, id: string): ProcessEnt
   return { id, ...draft }
 }
 
-async function classifyOne(path: string, fs: FsProbe, resolver: Resolver): Promise<DropResult> {
+async function classifyOne(
+  path: string,
+  fs: FsProbe,
+  resolver: Resolver,
+  os: DesktopOs,
+): Promise<DropResult> {
   if (!(await fs.exists(path))) return unsupported(path, 'this path no longer exists')
-  if (await fs.isDir(path)) return classifyDirectory(path, fs)
+  if (await fs.isDir(path)) return classifyDirectory(path, fs, os)
 
   switch (extname(path)) {
     case '.toe':
@@ -180,15 +189,16 @@ async function classifyOne(path: string, fs: FsProbe, resolver: Resolver): Promi
   }
 }
 
-/** A dropped folder is only useful as a Unity build: `<name>.exe` beside `<name>_Data`. */
-async function classifyDirectory(path: string, fs: FsProbe): Promise<DropResult> {
+/**
+ * A dropped folder is a macos `.app` bundle — the agent runs the binary inside
+ * it (`shared_utils.resolve_exec_target`) — or a windows Unity build:
+ * `<name>.exe` beside `<name>_Data`.
+ */
+async function classifyDirectory(path: string, fs: FsProbe, os: DesktopOs): Promise<DropResult> {
+  if (os === 'macos' && extname(path) === '.app') return classifyExecutable(path, fs)
+
   const unity = await findUnityPlayer(path, fs)
-  if (!unity) {
-    return unsupported(
-      path,
-      'this folder is not a unity build (no <name>.exe beside a <name>_Data folder)',
-    )
-  }
+  if (!unity) return unsupported(path, launchCopyFor(os).folderRefusal)
 
   return {
     kind: 'unity',

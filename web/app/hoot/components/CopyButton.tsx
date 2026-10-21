@@ -50,7 +50,7 @@ export function CopyButton({
           type="button"
         >
           {copied ? (
-            <Check className={`${size} text-green-400`} />
+            <Check className={`${size} text-success`} />
           ) : (
             <Copy className={size} />
           )}

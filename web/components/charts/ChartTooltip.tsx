@@ -8,15 +8,16 @@ import { DISK_IO_COLORS, formatDiskIO, isDiskIOKey, parseDiskIOKey } from '@/lib
 
 export type MetricType = 'cpu' | 'memory' | 'disk' | 'gpu' | 'cpuTemp' | 'gpuTemp' | 'display';
 
-// Explicit colors: CSS variables don't resolve in SVG stroke attributes.
+// recharts writes these straight into svg stroke/fill presentation attributes, which
+// browsers parse as css, so var() resolves there and repaints on a theme flip with no re-render
 export const metricConfig: Record<MetricType, { label: string; color: string; unit: string }> = {
-  cpu: { label: 'CPU', color: 'oklch(0.75 0.18 195)', unit: '%' },       // cyan accent (matches --accent-cyan)
-  memory: { label: 'RAM', color: 'oklch(0.65 0.25 250)', unit: '%' },    // blue (matches sidebar-primary)
-  disk: { label: 'Disk', color: 'rgb(34, 197, 94)', unit: '%' },         // green-500
-  gpu: { label: 'GPU', color: 'rgb(249, 115, 22)', unit: '%' },          // orange-500
-  cpuTemp: { label: 'CPU', color: 'rgb(239, 68, 68)', unit: '°C' },      // red-500 — thermometer icon disambiguates from cpu
-  gpuTemp: { label: 'GPU', color: 'rgb(236, 72, 153)', unit: '°C' },     // pink-500 — thermometer icon disambiguates from gpu
-  display: { label: 'Displays', color: 'oklch(0.70 0.15 280)', unit: '' }, // purple — display topology (not a time-series metric)
+  cpu: { label: 'CPU', color: 'var(--series-cpu)', unit: '%' },
+  memory: { label: 'RAM', color: 'var(--series-memory)', unit: '%' },
+  disk: { label: 'Disk', color: 'var(--series-disk)', unit: '%' },
+  gpu: { label: 'GPU', color: 'var(--series-gpu)', unit: '%' },
+  cpuTemp: { label: 'CPU', color: 'var(--series-cpu-temp)', unit: '°C' },  // thermometer icon disambiguates from cpu
+  gpuTemp: { label: 'GPU', color: 'var(--series-gpu-temp)', unit: '°C' },  // thermometer icon disambiguates from gpu
+  display: { label: 'Displays', color: 'var(--series-display)', unit: '' }, // display topology, not a time series
 };
 
 /** e.g. "Ethernet_tx_util", "Wi-Fi_rx_util". */

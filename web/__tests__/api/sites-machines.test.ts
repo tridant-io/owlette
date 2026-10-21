@@ -334,7 +334,7 @@ describe('GET /api/sites/{siteId}/machines', () => {
     seedSite();
     authedKey([siteScope('read')]);
     seedMachine('mach-b', { name: 'Beta' });
-    seedMachine('mach-a', { name: 'Alpha' });
+    seedMachine('mach-a', { name: 'Alpha', osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
     seedRoost('roost-one', {
       name: 'Main Show',
       targets: ['mach-a'],
@@ -352,6 +352,10 @@ describe('GET /api/sites/{siteId}/machines', () => {
     expect(body.items).toBeUndefined();
     expect(body.next_page_token).toBeUndefined();
     expect(body.machines.map((m: { id: string }) => m.id)).toEqual(['mach-a', 'mach-b']);
+    // the os fields the agent heartbeats, and null for a windows agent that
+    // predates them.
+    expect(body.machines[0]).toMatchObject({ osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
+    expect(body.machines[1]).toMatchObject({ osFamily: null, arch: null, osVersion: null });
     expect(body.machines[0].currentRoosts).toEqual([
       {
         roostId: 'roost-one',
@@ -372,6 +376,9 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       hostname: 'lobby-host',
       metrics: { cpu: 0.4 },
       processes: [{ id: 'proc-1', name: 'Player' }],
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
 
     const res = await machineGET(
@@ -387,6 +394,9 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       name: 'Lobby Player',
       hostname: 'lobby-host',
       metrics: { cpu: 0.4 },
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
     expect(body.processes).toHaveLength(1);
   });

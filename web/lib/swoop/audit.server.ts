@@ -14,7 +14,11 @@
  *
  * A control grant is not a row of its own: `session_started` with `ctl: true`
  * and `MACHINE_REMOTE_CONTROL` as the row's capability IS the grant, and a
- * second row would double-count one act.
+ * second row would double-count one act. A step-up window opened with no proof
+ * in the request IS a row of its own (`step_up_opened`), because that is the
+ * one opening no ceremony request evidences. So is the network half of a control
+ * decision (`step_up_network_check`): which network asked and whether the user
+ * had verified it, the record that says how often enforcing the binding asks.
  */
 
 import {
@@ -37,7 +41,9 @@ export type SwoopAuditEvent =
   | 'session_ended'
   | 'session_denied'
   | 'lease_denied'
-  | 'step_up_failed';
+  | 'step_up_failed'
+  | 'step_up_opened'
+  | 'step_up_network_check';
 
 export interface SwoopAuditBase {
   siteId: string;
@@ -111,11 +117,66 @@ export async function recordSwoopSessionStarted(
 }
 
 /**
+ * A step-up window opened without a proof in the request: the sign-in's own
+ * ceremony, minutes old, stood in for it (`reason: 'fresh_sign_in'`). Awaited,
+ * and written before the window is, so no window opens unrecorded.
+ */
+export async function recordSwoopStepUpOpened(
+  args: SwoopAuditBase & { reason: 'fresh_sign_in' },
+): Promise<void> {
+  await writeAuditEntryBlocking(
+    args.siteId,
+    swoopEntry({
+      base: args,
+      event: 'step_up_opened',
+      capability: Capability.MACHINE_REMOTE_CONTROL,
+      outcome: 'allow',
+      metadata: { reason: args.reason },
+    }),
+  );
+}
+
+/**
+ * The network half of one control decision (`lib/swoop/networks.server.ts`):
+ * the network that asked, whether this user verified it in the last 7 days, and
+ * the network the open window was opened on, if one is. An observation, so its
+ * outcome is always `allow` and `match` carries the answer: in `enforce` a
+ * ceremony in the same request can still turn a mismatch into control, and the
+ * decision's own row (`session_started`, `session_denied`) says which. Fire-and-forget.
+ */
+export function recordSwoopNetworkCheck(
+  args: SwoopAuditBase & {
+    mode: 'log' | 'enforce';
+    network: { key: string; prefix: string | null; viaEdge: boolean };
+    match: boolean;
+    windowNetwork: string | null;
+  },
+): void {
+  writeAuditEntry(
+    args.siteId,
+    swoopEntry({
+      base: args,
+      event: 'step_up_network_check',
+      capability: Capability.MACHINE_REMOTE_CONTROL,
+      outcome: 'allow',
+      metadata: {
+        mode: args.mode,
+        key: args.network.key,
+        prefix: args.network.prefix,
+        viaEdge: args.network.viaEdge,
+        match: args.match,
+        windowNetwork: args.windowNetwork,
+      },
+    }),
+  );
+}
+
+/**
  * A session stopped. `endReason` distinguishes an operator hanging up from a
  * kill or a revocation, and `durationMs` is how long control was held.
  */
 export async function recordSwoopSessionEnded(
-  args: SwoopAuditBase & { sid: string; endReason: string; durationMs?: number },
+  args: SwoopAuditBase & { sid: string; endReason: string; viewerReason?: string; durationMs?: number },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -126,6 +187,7 @@ export async function recordSwoopSessionEnded(
       outcome: 'allow',
       metadata: {
         endReason: reasonCode(args.endReason),
+        ...(args.viewerReason !== undefined ? { viewerReason: reasonCode(args.viewerReason) } : {}),
         ...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
       },
     }),

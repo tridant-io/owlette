@@ -73,6 +73,10 @@
 ; appears. Must stay byte-identical to `identifier` in desktop/src-tauri/
 ; tauri.conf.json and APP_USER_MODEL_ID in desktop/src-tauri/src/startup_link.rs.
 #define MyAppUserModelID "app.owlette.desktop"
+; owlette swoop, the viewer app (desktop/viewer), beside the desktop app: the
+; desktop app's tray and menu look for it there (viewer_launch.rs), and the
+; owlette-swoop:// registration and its shortcut below point at it.
+#define SwoopViewerExePath "{app}\app\owlette-swoop-viewer.exe"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application.
@@ -132,7 +136,9 @@ Source: "build\installer_package\agent\*"; DestDir: "{app}\agent"; Flags: ignore
 
 ; Desktop app (Tauri) — the tray icon, configuration window and reboot prompt.
 ; shared_utils.get_desktop_exe_path() resolves exactly this path, so the
-; directory name is a contract with the service, not a preference.
+; directory name is a contract with the service, not a preference. The same
+; line carries owlette-swoop-viewer.exe, owlette swoop, which both build scripts
+; copy into app\ and refuse to build without.
 Source: "build\installer_package\app\*"; DestDir: "{app}\app"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; WebView2 Evergreen bootstrapper. Never installed — `dontcopy` keeps it out of
@@ -378,6 +384,24 @@ Type: filesandordirs; Name: "{app}\python\Lib\site-packages\WinTmp-1.2.0.dist-in
 ; {app}\python\ itself, outside site-packages.
 Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 
+[Registry]
+; owlette-swoop:// opens owlette swoop: the website's "open in the owlette swoop
+; desktop app" hands it a session this way. The same four values
+; tauri-plugin-deep-link writes for a debug build, written machine-wide: HKA is
+; HKLM\Software\Classes in this administrative install, the machine half of
+; HKCR (Inno's documented spelling of an HKCR key). uninsdeletekey on the root
+; removes the whole tree at uninstall.
+;
+; A debug build of the viewer registers the same scheme in HKCU for itself,
+; pointing at its build tree, and HKCU shadows HKLM inside HKCR: on a dev box
+; that ran one, links keep opening the debug exe until
+; `reg delete HKCU\Software\Classes\owlette-swoop /f` clears it. The installer
+; never deletes HKCU keys; they are per user, not this installer's.
+Root: HKA; Subkey: "Software\Classes\owlette-swoop"; ValueType: string; ValueName: ""; ValueData: "URL:app.owlette.swoop-viewer protocol"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\owlette-swoop"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
+Root: HKA; Subkey: "Software\Classes\owlette-swoop\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{#SwoopViewerExePath},0"
+Root: HKA; Subkey: "Software\Classes\owlette-swoop\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{#SwoopViewerExePath}"" ""%1"""
+
 [Icons]
 ; Start Menu shortcuts. Exactly ONE Start-menu entry registers the
 ; AppUserModelID — and every shortcut that does is named "Owlette".
@@ -397,6 +421,9 @@ Type: filesandordirs; Name: "{app}\python\Lib\site-packages"
 ; that lifecycle. Upgrades delete the retired "Owlette Configuration" lnk via
 ; [InstallDelete] above.
 Name: "{group}\Owlette"; Filename: "{#MyAppExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
+; owlette swoop, the viewer app. A plain launcher: it raises no toasts, so it
+; carries no AppUserModelID of its own, and never the desktop app's (above).
+Name: "{group}\owlette swoop"; Filename: "{#SwoopViewerExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"
 Name: "{group}\View Logs"; Filename: "{commonappdata}\Owlette\logs"; IconFilename: "{sys}\shell32.dll"; IconIndex: 4
 Name: "{group}\Edit Configuration"; Filename: "{commonappdata}\Owlette\config\config.json"; IconFilename: "{sys}\shell32.dll"; IconIndex: 70
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
@@ -459,17 +486,25 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remo
 Filename: "{#MyAppExePath}"; WorkingDir: "{app}\app"; Description: "open owlette"; Flags: postinstall skipifsilent nowait runasoriginaluser; Check: ShouldOfferOpenApp
 
 [UninstallRun]
-; Close the desktop app first — it lives in {app}\app and would otherwise hold
-; its own image open while CurUninstallStepChanged tries to DelTree that folder.
-; Scoped by exe path (not a bare /IM name kill) for the same reason the install
-; path is: never touch a same-named process outside this installation.
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-Process -Name owlette-desktop -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\Owlette\*' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated
+; Close the desktop app and owlette swoop first — both live in {app}\app and
+; would otherwise hold their own images open while CurUninstallStepChanged tries
+; to DelTree that folder. Scoped by exe path (not a bare /IM name kill) for the
+; same reason the install path is: never touch a same-named process outside
+; this installation.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -like '*\Owlette\*' } | Stop-Process -Force -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated
 ; Stop and deregister the Windows service before uninstalling. One call: the
 ; host waits for the service to reach STOPPED (which is what lets the agent
 ; flush `online: false` and log agent_stopped) and only then removes the
 ; registration. `uninstall` succeeds on a machine where the service is already
 ; gone, so this is safe to run twice.
 Filename: "{app}\tools\owlette-host.exe"; Parameters: "uninstall"; Flags: runhidden waituntilterminated
+; swoop's machine-wide side effects (swoop_manager.py, task 7.7): the two
+; firewall rules go by group, and the SoftwareSASGeneration policy goes back to
+; what the agent recorded before it set 3 — 'absent' deletes the value, 0..3
+; sets it, anything else is left alone. The service is stopped by now, so the
+; agent cannot undo them itself; the uninstaller is already elevated, so no
+; runas. Always exits 0: a machine that never enabled swoop has nothing to undo.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$r = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; $f = '{commonappdata}\Owlette\tmp\swoop_side_effects.json'; Remove-NetFirewallRule -Group 'Owlette swoop' -ErrorAction SilentlyContinue; if (Test-Path $f) {{ $p = (Get-Content $f -Raw | ConvertFrom-Json).sasPrior; if ($p -eq 'absent') {{ Remove-ItemProperty -Path $r -Name SoftwareSASGeneration -ErrorAction SilentlyContinue } elseif (($p -is [int] -or $p -is [long]) -and $p -ge 0 -and $p -le 3) {{ Set-ItemProperty -Path $r -Name SoftwareSASGeneration -Value ([int]$p) -Type DWord } }; exit 0"""; Flags: runhidden waituntilterminated
 ; Retire the legacy WinRing0 kernel services on machines that never took a
 ; PawnIO-era upgrade (current versions never register them). The service is
 ; stopped by now, so the driver can unload and CurUninstallStepChanged's
@@ -485,6 +520,8 @@ Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -Command ""Remo
 var
   ServiceWasStopped: Boolean;
   InstallSucceeded: Boolean;
+  // True while an upgrade has the desktop exe parked (ParkDesktopExe).
+  DesktopExeParked: Boolean;
   PairingSucceeded: Boolean;
   // Set only by the GUI handoff, and read by ShouldOfferOpenApp to suppress
   // the finished page redundant "open owlette" checkbox.
@@ -1160,10 +1197,69 @@ begin
   end;
 end;
 
+// Where the desktop app's exe lives, and where an upgrade parks it. {app} cannot
+// be expanded while InitializeSetup runs, so this names the fixed install root
+// the way the libcrypto check does.
+function DesktopExePath(): String;
+begin
+  Result := ExpandConstant('{commonappdata}\Owlette\app\{#MyAppExeName}');
+end;
+
+function ParkedDesktopExePath(): String;
+begin
+  Result := DesktopExePath() + '.upgrading';
+end;
+
+// Move the desktop exe aside before the service stops, so no service version
+// can relaunch the app mid-upgrade: each skips a launch when the exe is
+// missing, and Windows lets a running image be renamed. The file copy lays the
+// new exe in place; SettleParkedDesktopExe deals with the parked one.
+procedure ParkDesktopExe();
+begin
+  if not FileExists(DesktopExePath()) then
+  begin
+    // an upgrade that died between its park and its end left only the parked
+    // copy; this one settles it
+    DesktopExeParked := FileExists(ParkedDesktopExePath());
+    Exit;
+  end;
+  // beside a live exe, a parked copy is a stale leftover
+  DeleteFile(ParkedDesktopExePath());
+  DesktopExeParked := RenameFile(DesktopExePath(), ParkedDesktopExePath());
+  if DesktopExeParked then
+    Log('Moved the desktop app aside for the upgrade')
+  else
+    Log('Could not move the desktop app aside; both kill passes still run');
+end;
+
+// Drop the parked exe once the new one is in place, or put it back when the
+// upgrade ended before the copy. Not in [InstallDelete]: that runs before the
+// copy, and a copy that aborts rolls the new exe back as a new file, which
+// would leave the machine with no desktop app at all.
+procedure SettleParkedDesktopExe();
+begin
+  if (not DesktopExeParked) or (not FileExists(ParkedDesktopExePath())) then
+    Exit;
+  if FileExists(DesktopExePath()) then
+  begin
+    if not DeleteFile(ParkedDesktopExePath()) then
+      Log('Could not delete the parked desktop app; the next upgrade removes it');
+  end
+  else if RenameFile(ParkedDesktopExePath(), DesktopExePath()) then
+    Log('Put the desktop app back after the incomplete upgrade')
+  else
+    Log('Could not put the desktop app back from ' + ParkedDesktopExePath());
+end;
+
 procedure DeinitializeSetup();
 var
   ResultCode: Integer;
 begin
+  // Settle a parked desktop exe: dropped once the copy laid the new one in, put
+  // back when the upgrade ended before that, since the old service (restarted
+  // below, or never stopped) looks for it in place.
+  SettleParkedDesktopExe();
+
   // If we stopped the service during an upgrade but installation failed or was
   // cancelled, restart it so the user isn't left with a dead service.
   if ServiceWasStopped and (not InstallSucceeded) then
@@ -1202,6 +1298,15 @@ begin
       DelTree(InstallDir + '\app', True, True, True);
       DelTree(InstallDir + '\tools', True, True, True);
       DelTree(InstallDir + '\scripts', True, True, True);
+      DelTree(InstallDir + '\swoop', True, True, True);
+      // swoop's runtime leftovers go with it whatever the user-data answer
+      // below: its logs are session transcripts nobody reads after the
+      // streamer is gone (owner ruling 2026-09-23), ipc\swoop is the
+      // service's own scratch, and the side-effect record was consumed by
+      // the [UninstallRun] step that restored the SAS policy.
+      DelTree(DataDir + '\logs\swoop', True, True, True);
+      DelTree(DataDir + '\ipc\swoop', True, True, True);
+      DeleteFile(DataDir + '\tmp\swoop_side_effects.json');
       // Remove installed doc files (but not user data files)
       DeleteFile(InstallDir + '\README.md');
       DeleteFile(InstallDir + '\LICENSE');
@@ -1237,6 +1342,25 @@ begin
       end;
     end;
   end;
+end;
+
+// Close the desktop app and owlette swoop, scoped by exe path so a same-named
+// process elsewhere is never touched. owlette swoop (owlette-swoop-viewer.exe)
+// lives in {app}\app too and holds its image the same way; an upgrade closes
+// its windows, and any session in them ends. InitializeSetup runs this before
+// the service stop on an upgrade and again after it.
+procedure KillDesktopApps(const Stage: String);
+var
+  ResultCode: Integer;
+begin
+  Log('Killing the Owlette desktop app and owlette swoop (' + Stage + ')...');
+  Exec('powershell.exe',
+    '-NoProfile -ExecutionPolicy Bypass -Command ' +
+    '"Get-Process -Name owlette-desktop, owlette-swoop-viewer -ErrorAction SilentlyContinue | ' +
+    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
+    'Stop-Process -Force -ErrorAction SilentlyContinue"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Log('Desktop app and owlette swoop kill (' + Stage + ') returned: ' + IntToStr(ResultCode));
 end;
 
 function InitializeSetup(): Boolean;
@@ -1284,6 +1408,14 @@ begin
         Exit;
       end;
     end;
+
+    // Close the desktop app before the service stops, not only after. During a
+    // self-update the old app is what runs on the box, and a 3.2.0 app watches
+    // the service's status file and answers a stop with an elevated restart: a
+    // UAC prompt on the screen (ADR 0005). A closed app cannot, and with its exe
+    // parked the old service cannot relaunch it before its own stop lands.
+    ParkDesktopExe();
+    KillDesktopApps('before the service stop');
 
     // Stop the service before overwriting files.
     // Use 'net stop' which is synchronous — it waits for the service to fully
@@ -1374,17 +1506,11 @@ begin
   // the tray icon), so it holds its own image open across an upgrade. Inno's
   // CloseApplications would usually catch that, but Restart Manager sees a
   // process running in the interactive session while Setup is elevated, and a
-  // miss here costs a "DeleteFile failed: code 5" mid-copy. Kill it explicitly,
-  // scoped by exe path so a same-named process elsewhere is never touched.
-  // The service is already stopped at this point, so nothing relaunches it.
-  Log('Killing the Owlette desktop app...');
-  Exec('powershell.exe',
-    '-NoProfile -ExecutionPolicy Bypass -Command ' +
-    '"Get-Process -Name owlette-desktop -ErrorAction SilentlyContinue | ' +
-    'Where-Object { $_.Path -like ''*\Owlette\*'' } | ' +
-    'Stop-Process -Force -ErrorAction SilentlyContinue"',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Log('Desktop app kill returned: ' + IntToStr(ResultCode));
+  // miss here costs a "DeleteFile failed: code 5" mid-copy, so kill it
+  // explicitly. The service is already stopped at this point, so nothing
+  // relaunches it; this second pass catches one relaunched before the stop
+  // landed, which only happens when the exe could not be parked.
+  KillDesktopApps('after the service stop');
 
   Log('Killing Owlette Python processes by exe path...');
   Exec('powershell.exe',

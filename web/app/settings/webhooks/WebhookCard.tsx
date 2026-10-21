@@ -4,7 +4,7 @@ import { useCallback, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -78,11 +78,11 @@ function formatRelative(ts: string | null): string {
 function stateIcon(state: DeliverySummary['state']) {
   switch (state) {
     case 'succeeded':
-      return <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
+      return <CheckCircle2 className="h-3.5 w-3.5 text-success" />;
     case 'failed':
-      return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+      return <XCircle className="h-3.5 w-3.5 text-danger" />;
     case 'pending':
-      return <Clock className="h-3.5 w-3.5 text-yellow-500" />;
+      return <Clock className="h-3.5 w-3.5 text-warning" />;
   }
 }
 
@@ -221,8 +221,9 @@ export function WebhookCard({
         <button
           type="button"
           onClick={handleToggleExpand}
-          className="mt-1 text-muted-foreground hover:text-white cursor-pointer"
+          className="mt-1 text-muted-foreground hover:text-foreground cursor-pointer"
           aria-label={expanded ? 'collapse' : 'expand'}
+          aria-expanded={expanded}
         >
           {expanded ? (
             <ChevronDown className="h-4 w-4" />
@@ -234,22 +235,22 @@ export function WebhookCard({
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1 flex-wrap">
             {webhook.paused ? (
-              <Badge variant="outline" className="border-yellow-600 text-yellow-400">
+              <Badge variant="outline" className="border-warning-border text-warning dark:border-warning-solid">
                 paused
               </Badge>
             ) : (
-              <Badge variant="outline" className="border-green-700 text-green-400">
+              <Badge variant="outline" className="border-success-border text-success dark:border-success-solid">
                 active
               </Badge>
             )}
             {webhook.failureCount > 0 && (
-              <Badge variant="outline" className="border-red-800 text-red-400">
+              <Badge variant="outline" className="border-danger-border text-danger">
                 <AlertTriangle className="h-3 w-3 mr-1" />
                 {webhook.failureCount} failure{webhook.failureCount === 1 ? '' : 's'}
               </Badge>
             )}
           </div>
-          <code className="block text-sm text-white font-mono truncate">{webhook.url}</code>
+          <code className="block text-sm text-foreground font-mono truncate">{webhook.url}</code>
           {webhook.description && (
             <p className="text-xs text-muted-foreground mt-1">{webhook.description}</p>
           )}
@@ -268,67 +269,55 @@ export function WebhookCard({
 
         {canManage && (
           <div className="flex items-center gap-1">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleTogglePaused}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border cursor-pointer"
-                >
-                  {busyAction === 'paused' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : webhook.paused ? (
-                    <Play className="h-3.5 w-3.5" />
-                  ) : (
-                    <Pause className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{webhook.paused ? 'resume' : 'pause'}</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label={webhook.paused ? 'resume webhook' : 'pause webhook'}
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleTogglePaused}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
+            >
+              {busyAction === 'paused' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : webhook.paused ? (
+                <Play className="h-3.5 w-3.5" />
+              ) : (
+                <Pause className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleRotateSecret}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border cursor-pointer"
-                >
-                  {busyAction === 'rotate' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>rotate secret</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label="rotate signing secret"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleRotateSecret}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border cursor-pointer"
+            >
+              {busyAction === 'rotate' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
 
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={handleDelete}
-                  disabled={busyAction !== null}
-                  className="h-8 w-8 p-0 border-border text-red-400 hover:bg-red-950 cursor-pointer"
-                >
-                  {busyAction === 'delete' ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>delete</TooltipContent>
-            </Tooltip>
+            <IconButton
+              label="delete webhook"
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={handleDelete}
+              disabled={busyAction !== null}
+              className="h-8 w-8 p-0 border-border text-danger hover:bg-danger-surface hover:text-danger cursor-pointer"
+            >
+              {busyAction === 'delete' ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+            </IconButton>
           </div>
         )}
       </div>
@@ -336,9 +325,9 @@ export function WebhookCard({
       {expanded && (
         <div className="mt-4 pt-4 border-t border-border">
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-xs font-semibold text-white uppercase tracking-wide">
+            <h2 className="text-xs font-semibold text-foreground uppercase tracking-wide">
               recent deliveries
-            </h4>
+            </h2>
             <Button
               type="button"
               size="sm"
@@ -370,7 +359,7 @@ export function WebhookCard({
                   className="flex items-center gap-2 text-xs py-1 px-2 rounded hover:bg-muted/30"
                 >
                   {stateIcon(d.state)}
-                  <span className="font-mono text-white flex-1 truncate">{d.event ?? '—'}</span>
+                  <span className="font-mono text-foreground flex-1 truncate">{d.event ?? '—'}</span>
                   <span className="text-muted-foreground tabular-nums">
                     {d.lastStatus ?? (d.state === 'pending' ? 'pending' : '—')}
                   </span>
@@ -380,25 +369,21 @@ export function WebhookCard({
                   <span className="text-muted-foreground w-24 text-right">
                     {formatRelative(d.createdAt)}
                   </span>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleRetryDelivery(d.id)}
-                        disabled={retryingId !== null}
-                        className="h-6 w-6 p-0 cursor-pointer"
-                      >
-                        {retryingId === d.id ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <RotateCcw className="h-3 w-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>retry this delivery</TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label="retry this delivery"
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleRetryDelivery(d.id)}
+                    disabled={retryingId !== null}
+                    className="h-6 w-6 p-0 cursor-pointer"
+                  >
+                    {retryingId === d.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                  </IconButton>
                 </div>
               ))}
             </div>

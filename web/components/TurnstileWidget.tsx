@@ -1,6 +1,7 @@
 'use client';
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from 'react';
+import { useTheme } from 'next-themes';
 
 /**
  * Cloudflare Turnstile widget.
@@ -99,6 +100,10 @@ export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>
     }, [onToken]);
 
     const siteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+    // never 'auto': that follows the os, and the app's choice can disagree with it.
+    // a change re-renders the widget, since turnstile can't re-theme a live one
+    const { resolvedTheme } = useTheme();
+    const theme = resolvedTheme === 'light' ? 'light' : 'dark';
 
     useImperativeHandle(
       ref,
@@ -129,9 +134,7 @@ export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>
           widgetIdRef.current = window.turnstile.render(containerRef.current, {
             sitekey: siteKey,
             action,
-            // 'dark', NOT 'auto': the app is hard-pinned dark in layout.tsx, so
-            // `auto` renders a white widget for OS-light visitors.
-            theme: 'dark',
+            theme,
             // Span the container so the widget lines up with the form inputs.
             size: 'flexible',
             callback: emit,
@@ -150,7 +153,7 @@ export const TurnstileWidget = forwardRef<TurnstileHandle, TurnstileWidgetProps>
           widgetIdRef.current = null;
         }
       };
-    }, [siteKey, action, emit]);
+    }, [siteKey, action, theme, emit]);
 
     if (!siteKey) return null;
 

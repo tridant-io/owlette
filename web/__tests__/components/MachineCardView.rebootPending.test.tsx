@@ -106,20 +106,20 @@ describe('MachineCardView — restart pending banner', () => {
     const banner = screen.getByTestId('reboot-pending-banner');
     expect(banner).toHaveTextContent('restart pending: lab-sleep crashed 9 times');
     expect(banner).toHaveTextContent('machine offline, cannot restart');
-    // Muted, not the amber alarm — nothing is pending that anything can act on.
-    expect(banner.className).not.toContain('amber');
+    // Muted, not the warning alarm — nothing is pending that anything can act on.
+    expect(banner.className).not.toContain('warning');
     expect(screen.queryByTestId('reboot-pending-approve')).not.toBeInTheDocument();
     expect(screen.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();
   });
 
-  it('an online machine keeps the amber banner and both actions', () => {
+  it('an online machine keeps the warning banner and both actions', () => {
     renderCard(machine({ online: true, lastHeartbeat: NOW_SEC }), {
       onDismiss: jest.fn(),
       onRestart: jest.fn(),
     });
 
     const banner = screen.getByTestId('reboot-pending-banner');
-    expect(banner.className).toContain('amber');
+    expect(banner.className).toContain('warning');
     expect(banner).not.toHaveTextContent('machine offline');
     expect(screen.getByTestId('reboot-pending-approve')).toBeInTheDocument();
     expect(screen.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();

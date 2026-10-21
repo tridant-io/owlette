@@ -43,6 +43,7 @@ import {
   recordSwoopHostEvent,
   recordSwoopSessionEnded,
   recordSwoopSessionStarted,
+  recordSwoopStepUpOpened,
 } from '@/lib/swoop/audit.server';
 
 const SITE = 'site-a';
@@ -88,11 +89,22 @@ describe('swoop audit rows', () => {
     expect(auditRows()[0].data.capability).toBe(Capability.MACHINE_REMOTE_VIEW);
   });
 
+  it('records a step-up the sign-in stood in for against the machine, with its reason', async () => {
+    await recordSwoopStepUpOpened({ ...base, reason: 'fresh_sign_in' });
+
+    const row = auditRows()[0].data;
+    expect(row.outcome).toBe('allow');
+    expect(row.capability).toBe(Capability.MACHINE_REMOTE_CONTROL);
+    expect(row.target).toEqual({ kind: 'machine', id: MACHINE, machineId: MACHINE });
+    expect(row.metadata).toEqual({ event: 'step_up_opened', reason: 'fresh_sign_in' });
+  });
+
   it('records an end with its reason and how long the session ran', async () => {
     await recordSwoopSessionEnded({
       ...base,
       sid: SID,
       endReason: 'killed',
+      viewerReason: 'kill',
       durationMs: 12_000,
     });
 
@@ -101,6 +113,7 @@ describe('swoop audit rows', () => {
     expect(row.metadata).toMatchObject({
       event: 'session_ended',
       endReason: 'killed',
+      viewerReason: 'kill',
       durationMs: 12_000,
     });
   });

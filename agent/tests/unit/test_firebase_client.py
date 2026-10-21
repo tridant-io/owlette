@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
 import logging
+import threading
 import time
 import sys
 
@@ -391,6 +392,65 @@ class TestSiteMetadataFromApi:
 
         assert firebase_client.site_name == 'TEC'
 
+    # keep screens awake — on by default (owner, 2026-10-03)
+
+    def test_keep_awake_is_on_before_the_first_answer(self, firebase_client):
+        assert firebase_client.site_keep_awake is True
+
+    def test_mirrors_the_keep_awake_switch_both_ways(self, firebase_client):
+        payload = self._response(200, {'name': 'TEC', 'keepAwake': False})
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=payload):
+            firebase_client._fetch_site_metadata()
+            assert firebase_client.site_keep_awake is False
+
+            payload.json.return_value = {'name': 'TEC', 'keepAwake': True}
+            firebase_client._fetch_site_metadata()
+            assert firebase_client.site_keep_awake is True
+
+    def test_an_answer_without_keep_awake_reads_as_on(self, firebase_client):
+        # A server that predates the field answers without it; only an explicit
+        # false turns the switch off.
+        firebase_client.site_keep_awake = False
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=self._response(200, {'name': 'TEC'})):
+            firebase_client._fetch_site_metadata()
+
+        assert firebase_client.site_keep_awake is True
+
+    @pytest.mark.parametrize('failure', [
+        {'return_value': MagicMock(status_code=500)},
+        {'side_effect': OSError('connection reset by peer')},
+    ])
+    def test_a_failed_fetch_keeps_the_last_keep_awake_value(
+        self, firebase_client, mock_rest_client, failure
+    ):
+        # Falling back to the default here would switch a site that turned it off
+        # back on for every blip. The Firestore fallback answering does not count
+        # either: keepAwake does not live on the site document.
+        firebase_client.site_keep_awake = False
+        mock_rest_client.get_document.return_value = {'name': 'TEC'}
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', **failure):
+            firebase_client._fetch_site_metadata()
+
+        assert firebase_client.site_keep_awake is False
+
+    def test_only_keep_awake_transitions_are_logged(self, firebase_client):
+        payload = self._response(200, {'name': 'TEC', 'keepAwake': False})
+        with patch('firebase_client.shared_utils.get_api_base_url',
+                   return_value='https://dev.owlette.app/api'), \
+             patch('requests.get', return_value=payload), \
+             patch.object(firebase_client, 'logger') as logger:
+            firebase_client._fetch_site_metadata()
+            firebase_client._fetch_site_metadata()
+
+        keep_awake_lines = [c for c in logger.info.call_args_list if 'Keep screens awake' in c[0][0]]
+        assert len(keep_awake_lines) == 1
+
 
 # TestSiteMetadata — the sites/{siteId} read kept for a future rule grant
 class TestSiteMetadata:
@@ -749,22 +809,100 @@ class TestTerminalCommandStatus:
 class TestDisplayProfileOffWindows:
     """display_manager asserts the Windows x64 ABI while it builds its
     structures, so off Windows the lazy import raises AssertionError rather
-    than ImportError - and a guard that caught only ImportError put that
-    assertion through every single heartbeat."""
+    than ImportError. first a guard that caught only ImportError put that
+    assertion through every heartbeat, then the catch-all logged it on every
+    heartbeat (issue #27, #28 log tails); now the platform gate returns ahead
+    of the import, so off windows nothing is attempted and nothing is logged."""
 
     def test_the_heartbeat_skips_display_enumeration(
         self, firebase_client, monkeypatch, caplog,
     ):
         monkeypatch.delitem(sys.modules, 'display_manager', raising=False)
         firebase_client._cached_display_profile = {'cached': True}
+        firebase_client._last_display_check = 0.0
 
         with caplog.at_level(logging.DEBUG):
             assert firebase_client._ensure_display_profile() == {'cached': True}
 
-        # THE negative control: with `except ImportError` the assertion
-        # escapes instead, and the caller logs it as a warning every heartbeat.
-        assert 'not available here' in caplog.text
-        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert firebase_client._last_display_check == 0.0
+        assert 'display' not in caplog.text.lower()
+        assert 'display_manager' not in sys.modules
+
+
+class TestProfilesUploadOncePerClient:
+    """A re-pair builds a new client, often onto the same site and machine id,
+    and removing a machine deletes its hardware docs. A hash persisted on disk
+    by the old client made the new one skip the upload for good, so the
+    dashboard showed `CPU0` for an `Apple M5 Max` (Bryant Place, 2026-10-12)."""
+
+    @staticmethod
+    def _client(mock_auth_manager, data_dir):
+        rest = MagicMock(spec=FirestoreRestClient)
+        rest.collection.return_value = MagicMock()
+        with patch("firebase_client.FirestoreRestClient", return_value=rest), \
+             patch("firebase_client.shared_utils") as mock_su:
+            mock_su.get_data_path.side_effect = lambda rel: str(data_dir / rel)
+            mock_su.get_machine_id.return_value = "TEST-MACHINE"
+            mock_su.APP_VERSION = "4.1.9"
+            client = FirebaseClient(
+                auth_manager=mock_auth_manager,
+                project_id="test-project",
+                site_id="test-site",
+            )
+        client.db = rest
+        client.connection_manager._state = ConnectionState.CONNECTED
+        return client
+
+    def test_a_new_client_uploads_the_hardware_profile_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import hardware_profile
+        monkeypatch.setattr(hardware_profile, 'build_profile', lambda: {
+            'signatureHash': 'hw-hash', 'cpus': [{'id': 'CPU0', 'model': 'Apple M5 Max'}],
+        })
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            client._ensure_profile()
+            client.db.collection.assert_called_once_with('sites')
+
+    def test_the_same_client_does_not_upload_an_unchanged_profile_twice(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import hardware_profile
+        monkeypatch.setattr(hardware_profile, 'build_profile', lambda: {'signatureHash': 'hw-hash'})
+        client = self._client(mock_auth_manager, tmp_path)
+        client._ensure_profile()
+        client._last_profile_check = 0.0
+        client._ensure_profile()
+        client.db.collection.assert_called_once_with('sites')
+
+    @pytest.mark.windows(reason='patches display_manager, which is windows-only')
+    def test_a_new_client_uploads_the_display_profile_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import display_manager
+        import nvapi_display
+        monkeypatch.setattr(display_manager, 'build_display_profile', lambda: {'monitors': [{}]})
+        monkeypatch.setattr(display_manager, 'display_signature', lambda profile: 'display-hash')
+        monkeypatch.setattr(nvapi_display, 'detect_mosaic', lambda: None)
+        monkeypatch.setattr(nvapi_display, 'detect_sync', lambda: None)
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            client._ensure_display_profile()
+            client.db.collection.assert_called_once_with('sites')
+
+    @pytest.mark.windows(reason='patches display_manager, which is windows-only')
+    def test_a_new_client_uploads_the_display_modes_again(
+        self, mock_auth_manager, tmp_path, monkeypatch,
+    ):
+        import display_manager
+        monkeypatch.setattr(display_manager, 'enumerate_modes_via_user_session', lambda: {
+            'ok': True, 'signatureHash': 'modes-hash', 'byEdidHash': {'edid-1': {'modes': []}},
+            'enumerationFailed': False,
+        })
+        for _ in range(2):
+            client = self._client(mock_auth_manager, tmp_path)
+            assert client._ensure_display_modes_catalogue()['uploaded'] is True
 
 
 # TestSendDisplayAlert — the funnels hand every audit action to
@@ -825,3 +963,113 @@ class TestSendDisplayAlert:
 
         assert web_keys, 'failed to parse DISPLAY_EVENT_ROUTING keys'
         assert web_keys == set(DISPLAY_ALERT_EVENT_TYPES)
+
+
+# TestRemovedFromSite — the dashboard deleted this machine (#326)
+class TestRemovedFromSite:
+    """The config doc goes in the same batch as the machine doc, so the config
+    listener seeing it vanish is the removal signal. Before this, nothing in
+    the agent ever noticed: it kept writing on its access token and each
+    heartbeat upserted the deleted row straight back."""
+
+    @pytest.fixture
+    def connected_client(self, firebase_client, mock_rest_client):
+        """A started-looking client whose config listener has registered its
+        poll callback; yields (client, that callback)."""
+        mock_rest_client.listen_to_document.return_value = (
+            MagicMock(), threading.Event(), threading.Event())
+        with patch.object(type(firebase_client.connection_manager), 'is_connected',
+                          new_callable=PropertyMock, return_value=True):
+            # running stays False so the listener loop returns right after
+            # registering, instead of sleeping until the test is torn down.
+            firebase_client._config_listener_loop()
+            on_config_changed = mock_rest_client.listen_to_document.call_args.args[1]
+            firebase_client.running = True
+            yield firebase_client, on_config_changed
+
+    def test_a_vanished_config_doc_ends_every_cloud_write(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        on_config_changed(None)
+
+        assert client._removed is True
+        assert client.connected is False, 'every writer checks connected'
+        assert client.running is False, 'the metrics loop is the heartbeat'
+        left.assert_called_once()
+        assert 'removed from the site' in left.call_args.args[0]
+
+    def test_the_row_is_deleted_again_after_the_site_is_left(self, connected_client, mock_rest_client):
+        """A heartbeat between the dashboard's delete and the poll wrote the
+        row back; hoot could still be writing until the callback ends it. So
+        the delete comes after the callback, and `running` drops only once the
+        callback has switched cloud sync off (the recovery reinit reads both)."""
+        client, on_config_changed = connected_client
+        order = []
+        client.register_removed_callback(
+            lambda reason: order.append(('callback', client.running, client.connected)))
+        mock_rest_client.delete_document.side_effect = lambda path: order.append(('delete', path))
+
+        on_config_changed(None)
+
+        assert order == [
+            ('callback', True, False),
+            ('delete', 'sites/test-site/machines/TEST-MACHINE'),
+        ]
+
+    def test_a_delete_that_fails_does_not_undo_the_detach(self, connected_client, mock_rest_client, caplog):
+        client, on_config_changed = connected_client
+        client.register_removed_callback(MagicMock())
+        mock_rest_client.delete_document.side_effect = RuntimeError('boom')
+
+        with caplog.at_level(logging.WARNING):
+            on_config_changed(None)
+
+        assert client.connected is False
+        assert 'could not delete the row again' in caplog.text
+
+    def test_stop_after_a_removal_writes_no_offline_presence(self, connected_client, mock_rest_client):
+        client, on_config_changed = connected_client
+        client.register_removed_callback(MagicMock())
+        on_config_changed(None)
+
+        client.stop()
+
+        # set(merge=True) on the deleted row would have recreated it as an
+        # offline ghost.
+        mock_rest_client.collection.assert_not_called()
+        mock_rest_client.set_document.assert_not_called()
+
+    def test_a_removal_is_reported_once(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+
+        on_config_changed(None)
+        on_config_changed(None)
+
+        left.assert_called_once()
+
+    def test_a_present_config_doc_is_not_a_removal(self, connected_client):
+        client, on_config_changed = connected_client
+        left = MagicMock()
+        client.register_removed_callback(left)
+        client.config_update_callback = MagicMock()
+
+        with patch('firebase_client.config_sync') as cs:
+            cs.configs_equal.return_value = False
+            on_config_changed({'processes': []})
+
+        left.assert_not_called()
+        assert client._removed is False
+        client.config_update_callback.assert_called_once_with({'processes': []})
+
+    def test_a_removal_with_no_callback_still_stops_the_writes(self, connected_client, caplog):
+        client, on_config_changed = connected_client
+
+        with caplog.at_level(logging.WARNING):
+            on_config_changed(None)
+
+        assert client.connected is False
+        assert 'No removal callback registered' in caplog.text

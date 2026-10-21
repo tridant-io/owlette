@@ -73,12 +73,20 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         agentVersion:
           data.agent_version ?? data.presence?.agent_version ?? null,
         os: data.os ?? data.presence?.os ?? null,
+        // what the agent writes on every heartbeat (firebase_client._os_identity):
+        // 'windows' | 'macos' | 'linux', 'x64' | 'arm64', and the version string.
+        // an absent osFamily is a pre-3.4 windows agent.
+        osFamily: data.osFamily ?? null,
+        arch: data.arch ?? null,
+        osVersion: data.osVersion ?? null,
         hostname: data.hostname ?? data.presence?.hostname ?? null,
         metrics: data.metrics ?? data.status?.metrics ?? null,
         // what the agent reports it can do, as the heartbeat wrote it. the
         // dashboard reads this from firestore directly; api callers had no
         // way to see it at all, so every capability gate read undefined.
         capabilities: data.capabilities ?? null,
+        // live swoop viewers, mirrored by the server from the session records
+        swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : null,
         processes: Array.isArray(data.processes)
           ? data.processes
           : Array.isArray(data.status?.processes)

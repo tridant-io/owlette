@@ -10,7 +10,7 @@
  *
  * b07 IS HALF NATIVE. The dashboard half — help menu → docs, opening /docs
  * in-app — is web capture and is shot here. The machine half — the owlette
- * app's ⋯ menu → "submit bug report" — is the Tauri app, filmed by the
+ * app's ⋯ menu → "submit issue" — is the Tauri app, filmed by the
  * desktop-screenshots video sibling over WebView2 CDP.
  *
  * `control-process-restarting` seeds processes but not logs, so this scene
@@ -253,12 +253,12 @@ test('episode 16 — logs & troubleshooting', async ({ browser }) => {
         await page.waitForTimeout(250);
         await crashRow.click({ force: true });
         await page.waitForTimeout(400);
-        const crashThumb = crashRow.locator('img[alt="Crash screenshot"]');
+        const crashThumb = crashRow.locator('img[alt="crash screenshot"]');
         await expect(crashThumb).toBeVisible();
         await highlight(page, crashThumb, 2200);
         await narrate(page, 'b04 crash thumbnail', 10);
         await clickWithCursor(page, crashThumb);
-        const fullModal = page.locator('img[alt="Crash screenshot"]').last();
+        const fullModal = page.locator('img[alt="crash screenshot"]').last();
         await expect(fullModal).toBeVisible();
         await narrate(page, 'b04 full size', 10);
         await page.keyboard.press('Escape');
@@ -321,7 +321,7 @@ test('episode 16 — logs & troubleshooting', async ({ browser }) => {
 
         // [b07] when you're still stuck (~23.2s). Web half: the header help menu
         // opens /docs in-app. The machine half — the owlette app's ⋯ menu →
-        // "submit bug report", which attaches system info and the last hundred
+        // "submit issue", which attaches system info and the last hundred
         // lines of the service log — is a NATIVE segment.
         await clickWithCursor(page, page.getByRole('button', { name: 'help' }));
         const docsItem = page.getByRole('menuitem', { name: /^docs$/i });

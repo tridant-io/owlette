@@ -16,10 +16,15 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  * firestore.rules grants an agent its machine subtree only
  * (`agentCanAccessMachine`), so a direct read of `sites/{siteId}` 403s.
  *
- * 200 `{ name: string | null, timezone: string | null, roostEnabled: boolean | null }`.
+ * 200 `{ name: string | null, timezone: string | null, roostEnabled: boolean | null,
+ * keepAwake: boolean }`.
  * `name` is null when the site has no name, so the caller falls back to the id
  * rather than rendering "null". 401 missing/invalid bearer, 403 non-agent token
  * or no `site_id` claim, 404 site gone.
+ *
+ * `keepAwake` comes from `sites/{siteId}/settings/display`, the one read here
+ * outside the site document. It is on by default: only an explicit `false`
+ * turns it off, so a site that never touched the switch keeps its screens awake.
  *
  * `roostEnabled` is passed through verbatim, including null for unset, because
  * the agent's kill-switch helper fails OPEN on a missing field and must be able
@@ -30,7 +35,7 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  * fail-open for the full TTL — so the kill switch had never once been observed
  * by an agent, while the changelog said it was checked before every sync_pull.
  *
- * PROJECTION, not the raw document: the three fields above are the whole contract.
+ * PROJECTION, not the raw documents: the four fields above are the whole contract.
  * `timezone` is gated on `schedulesFollowSiteTime === true` because a non-null
  * timezone flips schedule evaluation for every process on every machine at the
  * site from machine-local to site time. The field is three-state — absent means
@@ -40,7 +45,7 @@ import { problemForbidden, problemNotFound, problemUnauthorized } from '@/lib/ap
  *
  * The site comes from the token's own `site_id` claim (minted by
  * /api/agent/auth/device-code/poll), never from query or body, so a token can
- * only resolve its own site. `machine_id` is irrelevant — both fields are
+ * only resolve its own site. `machine_id` is irrelevant — every field is
  * site-scoped. No cache headers; the agent refreshes on its own schedule.
  */
 export const GET = withRateLimit(
@@ -70,7 +75,11 @@ export const GET = withRateLimit(
         return problemForbidden('agent token carries no site_id claim');
       }
 
-      const siteDoc = await getAdminDb().collection('sites').doc(siteId).get();
+      const siteRef = getAdminDb().collection('sites').doc(siteId);
+      const [siteDoc, displayDoc] = await Promise.all([
+        siteRef.get(),
+        siteRef.collection('settings').doc('display').get(),
+      ]);
       if (!siteDoc.exists) {
         return problemNotFound('site not found');
       }
@@ -93,7 +102,10 @@ export const GET = withRateLimit(
       const roostEnabled =
         typeof rawRoostEnabled === 'boolean' ? rawRoostEnabled : null;
 
-      return NextResponse.json({ name, timezone, roostEnabled });
+      // Default on — see the keepAwake note in the header.
+      const keepAwake = displayDoc.data()?.keepAwake !== false;
+
+      return NextResponse.json({ name, timezone, roostEnabled, keepAwake });
     } catch (error: unknown) {
       return apiError(error, 'agent/site');
     }

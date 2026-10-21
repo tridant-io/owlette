@@ -5,8 +5,8 @@
  *
  * The lease is where authorisation is re-checked while a session runs, so these
  * cases are all about a grant going away underneath a live viewer: membership,
- * site enablement, the machine exclusion list, the capability, and the 12-hour
- * cap that no renewal moves.
+ * site enablement, the machine exclusion list and the capability. nothing else
+ * ends a session that keeps renewing: there is no cap on its age.
  */
 
 import { generateKeyPairSync } from 'crypto';
@@ -75,7 +75,6 @@ jest.mock('@/lib/sessionManager.server', () => ({
 }));
 
 import { POST } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/lease/route';
-import { SWOOP_SESSION_CAP_SECONDS } from '@/lib/swoop/policy.server';
 import { verifySwoopToken } from '@/lib/swoop/tokens.server';
 
 const SITE = 'site-a';
@@ -106,7 +105,6 @@ function stageSession(opts: { startedAt?: number; ctl?: boolean; uid?: string } 
     state: 'live',
     createdBy: `user:${opts.uid ?? ADMIN}`,
     startedAt,
-    absoluteExpiresAt: startedAt + SWOOP_SESSION_CAP_SECONDS * 1000,
     viewers: [
       {
         viewerId: VIEWER,
@@ -244,30 +242,38 @@ describe('POST swoop/sessions/{sid}/lease', () => {
     expect(body.code).toBe('machine_excluded');
   });
 
-  it('refuses a lease past the 12 hour cap with 403 session_cap_reached', async () => {
-    stageSession({ startedAt: Date.now() - (SWOOP_SESSION_CAP_SECONDS * 1000 + 1000) });
+  // there is no absolute cap any more: a session lives as long as its tab keeps
+  // renewing, and what bounds it is the authorisation re-checked on every renewal.
+  it('renews a session that has been running for longer than 12 hours', async () => {
+    stageSession({ startedAt: Date.now() - 13 * 60 * 60 * 1000 });
 
     const res = await POST(request(), routeContext);
     const { status, body } = await parseResponse(res);
 
-    expect(status).toBe(403);
-    expect(body.code).toBe('session_cap_reached');
+    expect(status).toBe(200);
+    expect(typeof (body.data as Record<string, unknown>).viewerJwt).toBe('string');
   });
 
-  /**
-   * The cap is absolute and no renewal moves it, so the refusal IS the end of
-   * the session. Left open, the record answers as live to the revocation sweep
-   * forever and nothing else would ever close it.
-   */
-  it('closes the record when the cap ends the session', async () => {
-    stageSession({ startedAt: Date.now() - (SWOOP_SESSION_CAP_SECONDS * 1000 + 1000) });
+  it('still refuses a session older than 12 hours once its authorisation is withdrawn', async () => {
+    const startedAt = Date.now() - 13 * 60 * 60 * 1000;
 
-    await POST(request(), routeContext);
+    stageSession({ startedAt });
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+    const disabled = await parseResponse(await POST(request(), routeContext));
+    expect(disabled.status).toBe(403);
+    expect(disabled.body.code).toBe('swoop_disabled');
 
-    expect(mocks.set).toHaveBeenCalledWith(
-      expect.objectContaining({ state: 'ended', endReason: 'session_cap', viewers: [] }),
-      { merge: true },
-    );
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: true, excludedMachineIds: [MACHINE] });
+    const excluded = await parseResponse(await POST(request(), routeContext));
+    expect(excluded.status).toBe(403);
+    expect(excluded.body.code).toBe('machine_excluded');
+
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: true });
+    stageSession({ startedAt, ctl: true, uid: MEMBER });
+    signIn(MEMBER);
+    const demoted = await parseResponse(await POST(request(), routeContext));
+    expect(demoted.status).toBe(403);
+    expect(demoted.body.code).toBe('capability_missing');
   });
 
   it('leaves the record alone on a refusal the session can come back from', async () => {
@@ -281,16 +287,15 @@ describe('POST swoop/sessions/{sid}/lease', () => {
     expect(mocks.set).not.toHaveBeenCalled();
   });
 
-  it('still answers 403 when the record cannot be closed at the cap', async () => {
-    stageSession({ startedAt: Date.now() - (SWOOP_SESSION_CAP_SECONDS * 1000 + 1000) });
-    mocks.set.mockRejectedValueOnce(new Error('firestore down'));
+  it('writes nothing on a refusal, however old the session', async () => {
+    stageSession({ startedAt: Date.now() - 13 * 60 * 60 * 1000 });
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
 
     const res = await POST(request(), routeContext);
-    const { status, body } = await parseResponse(res);
 
-    // The refusal is the enforcement; the record is bookkeeping behind it.
-    expect(status).toBe(403);
-    expect(body.code).toBe('session_cap_reached');
+    // nothing ends a session at a fixed age now, so a refusal leaves the record as it is.
+    expect(res.status).toBe(403);
+    expect(mocks.set).not.toHaveBeenCalled();
   });
 
   it('refuses another user’s viewer row as if it did not exist', async () => {

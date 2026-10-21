@@ -36,18 +36,33 @@ interface Identity {
   controlCount: number;
   /** so a window that is dropping trickle says `rate_limited` once, not 600 times. */
   trickleWarned?: boolean;
-  /** set when the peer said bye, so webSocketClose does not announce it twice. */
+  /** the last frame this socket sent; keepalive pings are answered by the runtime and stamped separately. */
+  lastSeenMs?: number;
+  /** set when the peer said bye, was evicted or was killed: its close may never complete, and the flag takes it out of the count. */
   departed?: boolean;
+}
+
+/** the one knob the test worker turns down, so a stale viewer is a second old rather than a minute. */
+export interface RoomEnv {
+  SWOOP_VIEWER_STALE_MS?: string;
 }
 
 const JTI_PREFIX = 'jti:';
 const RING_WINDOW_KEY = 'ring:window';
+/** `announced:<viewer id>` -> the sid whose host has been told that viewer joined. */
+const ANNOUNCED_PREFIX = 'announced:';
+/** `offered:<viewer id>` -> the sid whose host has had an offer from that viewer, and so may hold its peer. */
+const OFFERED_PREFIX = 'offered:';
+/** what the room remembers of a viewer on the agent side: pruned together and forgotten together. */
+const VIEWER_NOTES = [ANNOUNCED_PREFIX, OFFERED_PREFIX] as const;
 
 export class SignalRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
+  private readonly viewerStaleMs: number;
 
-  constructor(ctx: DurableObjectState) {
+  constructor(ctx: DurableObjectState, env: RoomEnv = {}) {
     this.ctx = ctx;
+    this.viewerStaleMs = Number(env.SWOOP_VIEWER_STALE_MS) || LIMITS.viewerStaleMs;
     // answered by the runtime without waking this handler, and therefore free. a
     // browser cannot send a websocket protocol ping from javascript; the agent's
     // doorbell uses protocol pings instead and never an application heartbeat.
@@ -70,8 +85,112 @@ export class SignalRoom implements DurableObject {
     return {
       doorbell: this.socketsByRole('doorbell').length,
       host: this.socketsByRole('host').length,
-      viewer: this.socketsByRole('viewer').length,
+      viewer: this.admittedViewers().length,
     };
+  }
+
+  /** the viewers that count toward the cap: admitted, and neither departed nor evicted. */
+  private admittedViewers(): Array<[WebSocket, Identity]> {
+    const admitted: Array<[WebSocket, Identity]> = [];
+    for (const socket of this.socketsByRole('viewer')) {
+      const self = socket.deserializeAttachment() as Identity | null;
+      if (self && !self.departed) admitted.push([socket, self]);
+    }
+    return admitted;
+  }
+
+  /** when the room last heard from a viewer: its join, its last frame, or its last answered keepalive. */
+  private lastSeenMs(socket: WebSocket, self: Identity): number {
+    const pinged = this.ctx.getWebSocketAutoResponseTimestamp(socket)?.getTime() ?? 0;
+    return Math.max(self.joinedAtMs, self.lastSeenMs ?? 0, pinged);
+  }
+
+  /**
+   * a viewer that stopped pinging is gone, whatever the socket says: its slot is
+   * freed, and the host is told on the same rule as a close. the socket's own close
+   * may never complete — that is why the flag, not the close, is what takes it out
+   * of the count.
+   */
+  private async evictStaleViewers(nowMs: number): Promise<void> {
+    const gone: string[] = [];
+    for (const [socket, self] of this.admittedViewers()) {
+      if (nowMs - this.lastSeenMs(socket, self) < this.viewerStaleMs) continue;
+      socket.serializeAttachment({ ...self, departed: true });
+      socket.close(1000, 'stale');
+      if (!(await this.hostShouldHearOf(self))) continue;
+      this.toAgentSide(
+        JSON.stringify({ type: 'bye', from: self.id, fromRole: 'viewer', reason: 'stale', serverTimeMs: nowMs })
+      );
+      gone.push(self.id);
+    }
+    await this.forget(gone);
+  }
+
+  /**
+   * whether the host is to hear that this socket's viewer left. not while another
+   * live socket carries its id, and not once one of its offers reached its host:
+   * that host watches the peer itself, and a re-dial or a blip is no departure. a
+   * viewer that never offered has no peer to lose, and its next join is announced
+   * afresh; unsaid, a 4.0.1 host keeps that admission for good.
+   */
+  private async hostShouldHearOf(self: Identity): Promise<boolean> {
+    return !this.hasLiveTwin(self) && !(await this.noted(OFFERED_PREFIX, self));
+  }
+
+  /** whether another live socket carries this viewer's id. by jti: a woken room hands out new socket objects. */
+  private hasLiveTwin(self: Identity): boolean {
+    return this.ctx.getWebSockets(`id:${self.id}`).some((socket) => {
+      const other = socket.deserializeAttachment() as Identity | null;
+      return other !== null && other.jti !== self.jti && !other.departed;
+    });
+  }
+
+  /** whether a host of this session is in the room: the one whose view of a viewer the notes follow. */
+  private hostOf(sid: string): boolean {
+    return this.socketsByRole('host').some((host) => (host.deserializeAttachment() as Identity | null)?.sid === sid);
+  }
+
+  /**
+   * whether this viewer's note names its own session. `announced` is the one a
+   * re-dial reads: it is not a join, and a 4.0.1 host takes a repeated `viewer-join`
+   * for a new viewer, wiping the fingerprint it bound and counting the viewer twice
+   * against its admission cap (agent/swoop/src/signal/client.rs, `on_viewer_join`).
+   */
+  private async noted(prefix: string, viewer: Identity): Promise<boolean> {
+    return (await this.ctx.storage.get<string>(`${prefix}${viewer.id}`)) === viewer.sid;
+  }
+
+  /** note these viewers under `prefix` for `sid`; any other session's notes go, which keeps the keyspace one session wide. */
+  private async note(prefix: string, viewerIds: string[], sid: string): Promise<void> {
+    if (viewerIds.length === 0) return;
+    const stale: string[] = [];
+    for (const kind of VIEWER_NOTES) {
+      for (const [key, notedSid] of await this.ctx.storage.list<string>({ prefix: kind })) {
+        if (notedSid !== sid) stale.push(key);
+      }
+    }
+    if (stale.length > 0) await this.ctx.storage.delete(stale);
+    await this.ctx.storage.put(Object.fromEntries(viewerIds.map((id) => [`${prefix}${id}`, sid])));
+  }
+
+  /** the host no longer holds these viewers, so a later join of theirs is news to it again. */
+  private async forget(viewerIds: string[]): Promise<void> {
+    if (viewerIds.length === 0) return;
+    await this.ctx.storage.delete(viewerIds.flatMap((id) => VIEWER_NOTES.map((kind) => `${kind}${id}`)));
+  }
+
+  /** a live `viewer-join` to the agent side, noted once a host of the viewer's own session has had it. */
+  private async announce(viewer: Identity): Promise<void> {
+    this.toAgentSide(
+      JSON.stringify({
+        type: 'viewer-join',
+        viewer: viewer.id,
+        sid: viewer.sid,
+        ctl: viewer.ctl,
+        serverTimeMs: Date.now(),
+      })
+    );
+    if (viewer.sid !== null && this.hostOf(viewer.sid)) await this.note(ANNOUNCED_PREFIX, [viewer.id], viewer.sid);
   }
 
   private static refuse(code: string, status: number, reason: string): Response {
@@ -102,11 +221,14 @@ export class SignalRoom implements DurableObject {
     const expMs = Number(request.headers.get('x-swoop-exp-ms'));
     if (!isRole(role) || !id || !jti || !Number.isFinite(expMs)) return SignalRoom.refuse('bad_join', 400, 'protocol');
 
-    if (role === 'viewer' && this.socketsByRole('viewer').length >= LIMITS.viewersPerRoom) {
-      return SignalRoom.refuse('room_full', 429, 'room');
-    }
-
     const nowMs = Date.now();
+    if (role === 'viewer' && this.admittedViewers().length >= LIMITS.viewersPerRoom) {
+      // full of the living, or full of the dead: only the first is a refusal.
+      await this.evictStaleViewers(nowMs);
+      if (this.admittedViewers().length >= LIMITS.viewersPerRoom) {
+        return SignalRoom.refuse('room_full', 429, 'room');
+      }
+    }
     // a replayed jti is an auth failure the caller can fix: a fresh token carries a
     // fresh jti, so it gets the generic signal and re-mints rather than backing off.
     if (!(await this.claimJti(jti, expMs, nowMs))) return SignalRoom.refuse('auth', 401, 'auth');
@@ -148,24 +270,22 @@ export class SignalRoom implements DurableObject {
     );
 
     if (role === 'viewer') {
-      this.toAgentSide(
-        JSON.stringify({
-          type: 'viewer-join',
-          viewer: identity.id,
-          sid: identity.sid,
-          ctl: identity.ctl,
-          serverTimeMs: Date.now(),
-        })
-      );
+      if (!(await this.noted(ANNOUNCED_PREFIX, identity))) await this.announce(identity);
     } else if (role === 'host') {
       // a host is spawned by the ring, so every viewer waiting for it announced
       // itself before this socket existed and that `viewer-join` is gone. the
       // host would then refuse their offers as `unknown_viewer` -- replay the
       // joins it missed, to this socket alone so a second host cannot see them
       // twice. same shape as the live announcement; the host needs no new type.
+      // one join per viewer id: a re-dial whose old socket has not closed is still
+      // one viewer, and a 4.0.1 host on its first dial refuses the second join as
+      // `join_too_soon`.
+      const seen = new Set<string>();
+      const replayed: string[] = [];
       for (const waiting of this.socketsByRole('viewer')) {
         const viewer = waiting.deserializeAttachment() as Identity | null;
-        if (!viewer || viewer.departed) continue;
+        if (!viewer || viewer.departed || seen.has(viewer.id)) continue;
+        seen.add(viewer.id);
         server.send(
           JSON.stringify({
             type: 'viewer-join',
@@ -175,7 +295,9 @@ export class SignalRoom implements DurableObject {
             serverTimeMs: Date.now(),
           })
         );
+        if (viewer.sid === identity.sid) replayed.push(viewer.id);
       }
+      if (identity.sid !== null) await this.note(ANNOUNCED_PREFIX, replayed, identity.sid);
     }
 
     const headers: Record<string, string> = {};
@@ -236,12 +358,20 @@ export class SignalRoom implements DurableObject {
   private async kill(request: Request): Promise<Response> {
     const body = (await request.json()) as { sid: string | null };
     const payload = JSON.stringify({ type: 'kill', sid: body.sid, serverTimeMs: Date.now() });
-    const sockets = this.ctx.getWebSockets();
-    for (const socket of sockets) {
+    let closed = 0;
+    for (const socket of this.ctx.getWebSockets()) {
+      const self = socket.deserializeAttachment() as Identity | null;
+      // a kill that names a session is that session's host and viewers alone: the
+      // doorbell names none, and the page that ends one session may already have the
+      // next one in this room.
+      if (body.sid !== null && self?.sid !== body.sid) continue;
+      // a killed viewer's close may never complete either; the flag frees the slot now.
+      if (self?.role === 'viewer') socket.serializeAttachment({ ...self, departed: true });
       socket.send(payload);
       socket.close(1000, 'kill');
+      closed += 1;
     }
-    return Response.json({ ok: true, closed: sockets.length });
+    return Response.json({ ok: true, closed });
   }
 
   private sendError(socket: WebSocket, code: string): void {
@@ -256,7 +386,7 @@ export class SignalRoom implements DurableObject {
     socket.close(CLOSE_CODES.auth, code);
   }
 
-  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+  async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     const self = socket.deserializeAttachment() as Identity | null;
     if (!self) return this.closeForAuth(socket, 'auth');
 
@@ -287,6 +417,7 @@ export class SignalRoom implements DurableObject {
     const dropping = trickle && self.trickleCount > LIMITS.trickleFramesPerWindow;
     const warn = dropping && !self.trickleWarned;
     if (warn) self.trickleWarned = true;
+    self.lastSeenMs = nowMs;
     socket.serializeAttachment(self);
 
     if (self.controlCount > LIMITS.controlFramesPerWindow) {
@@ -315,10 +446,19 @@ export class SignalRoom implements DurableObject {
       if (self.role === 'viewer') {
         socket.serializeAttachment({ ...self, departed: true });
         socket.close(1000, 'bye');
+        await this.forget([self.id]);
+      } else if (to !== undefined) {
+        // the host has let that viewer go, so its re-join is news to the host again.
+        await this.forget([to]);
       }
       return;
     }
     this.fanOut(self.role, forwarded, to);
+    // an offer that reached the viewer's own host may have given it a peer there, and
+    // from then on only the host can tell that the viewer is gone.
+    if (msg.type === 'offer' && self.sid !== null && this.hostOf(self.sid) && !(await this.noted(OFFERED_PREFIX, self))) {
+      await this.note(OFFERED_PREFIX, [self.id], self.sid);
+    }
   }
 
   private toAgentSide(payload: string): void {
@@ -334,21 +474,21 @@ export class SignalRoom implements DurableObject {
     for (const socket of targets) socket.send(payload);
   }
 
-  webSocketClose(socket: WebSocket, code: number, _reason: string, wasClean: boolean): void {
+  async webSocketClose(socket: WebSocket, code: number, _reason: string, wasClean: boolean): Promise<void> {
     const self = socket.deserializeAttachment() as Identity | null;
-    // a viewer that vanishes without a bye still has to free the host's slot.
-    if (self && self.role === 'viewer' && !self.departed) {
-      this.toAgentSide(
-        JSON.stringify({
-          type: 'bye',
-          from: self.id,
-          fromRole: 'viewer',
-          reason: wasClean ? 'closed' : 'dropped',
-          code,
-          serverTimeMs: Date.now(),
-        })
-      );
-    }
+    if (!self || self.role !== 'viewer' || self.departed) return;
+    if (!(await this.hostShouldHearOf(self))) return;
+    this.toAgentSide(
+      JSON.stringify({
+        type: 'bye',
+        from: self.id,
+        fromRole: 'viewer',
+        reason: wasClean ? 'closed' : 'dropped',
+        code,
+        serverTimeMs: Date.now(),
+      })
+    );
+    await this.forget([self.id]);
   }
 
   webSocketError(socket: WebSocket): void {

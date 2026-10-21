@@ -1,19 +1,20 @@
 ---
 title: "auth"
-description: "auth groups the three verbs that manage the active profile's stored credential. it acts on the user's local config — the cli's own state — and never touches a site or machine. tier: [ready] for all three verbs."
+description: "auth logs the CLI in with the device-code flow, shows who the active profile is signed in as, and clears the stored credential. it acts on the CLI's local profile, never on a site or machine."
+keywords: ["sign in", "sign out"]
 ---
 
 verbs:
 
-- [`auth login`](#auth-login) — device-code pairing flow that mints + stores an `owk_*` api key
-- [`auth status`](#auth-status) — alias of [`whoami`](/docs/cli/reference/whoami); prints byte-identical output
-- [`auth logout`](#auth-logout) — strips the token from the active profile
+- [`auth login`](#login) — device-code pairing that mints and stores an `owk_*` API key
+- [`auth status`](#status) — alias of [`whoami`](/docs/cli/reference/whoami)
+- [`auth logout`](#logout) — removes the stored credential for the active profile
 
 ---
 
-## auth login
+## login
 
-starts the device-code flow against `/api/cli/device-code`, prints a 3-word pairing phrase + verification url, polls until the dashboard authorises, then stores the issued `owk_*` key for the active profile. the cli uses the OS keychain when the local platform tooling is available; otherwise it falls back to `~/.config/owlette/credentials.json` with `0600` permissions. `~/.config/owlette/config.toml` stores only non-secret profile metadata such as `api_url` and `environment`.
+requests a device code, prints a 3-word pairing phrase and the pairing URL, opens the URL in your browser, and polls until you approve the request in the dashboard. the issued key is then stored for the active profile.
 
 ```bash
 owlette auth login [--no-browser]
@@ -21,50 +22,74 @@ owlette auth login [--no-browser]
 
 | flag | type | required | description |
 |---|---|---|---|
-| `--no-browser` | boolean | no | skip the automatic browser open — print the url and let the user copy it (use on ssh / headless ci) |
+| `--no-browser` | boolean | no | print the URL without opening a browser (SSH, headless CI) |
 
-inherits the global `--profile <name>` flag so you can pair into a non-default profile (e.g. `--profile dev` to write into `[profiles.dev]`).
+the global `--profile <name>` picks the profile you pair into and `--api-url <url>` picks the host. the pairing URL is `<api url>/cli/authorize?code=<phrase>`; the phrase expires after 10 minutes and the CLI polls every 5 seconds.
+
+where the key is stored:
+
+- **macOS**: the login keychain, through `security`, service `owlette-cli`, account = profile name
+- **Linux**: the secret service, through `secret-tool`, service `owlette-cli`, when it is installed and unlocked
+- **Windows**, or when the keychain write fails: `~/.config/owlette/credentials.json`, written with mode `0600`
+
+`OWLETTE_CREDENTIAL_BACKEND` overrides the choice: `token-file` skips the keychain, `keychain` makes a failed keychain write fatal on macOS and Linux, and `auto` is the default. `~/.config/owlette/config.toml` gets only the profile's `api_url` and `environment`; a legacy `token` field for that profile is removed.
+
+`login` writes its progress, the phrase and the URL to stdout (errors go to stderr), one dot per pending poll, and ignores `--json`:
+
+```text
+owlette: requesting device code from https://owlette.app
+
+  pairing phrase : silver-compass-drift
+  verification   : https://owlette.app/cli/authorize?code=silver-compass-drift
+  expires in     : 600s
+
+owlette: opening the verification url in your browser…
+...
+owlette: authorised — storing credential...
+owlette: stored credential for profile 'default' in OS keychain
+       profile metadata: /home/you/.config/owlette/config.toml
+       keyId: 3f0c9a52-…
+```
 
 ### examples
 
 ```bash
-# default flow — opens browser, polls until you click "authorize"
+# default flow: opens the browser and waits for you to approve
 owlette auth login
 ```
 
 ```bash
-# headless host — print the pairing phrase + url and copy them somewhere with a browser
+# headless host: copy the phrase and url to a machine with a browser
 owlette auth login --no-browser
 ```
 
 ```bash
-# pair into a separate profile (e.g. for the dev tenant)
+# pair a separate profile against the dev host
 owlette --profile dev --api-url https://dev.owlette.app auth login
 ```
 
-backing: `POST /api/cli/device-code` (start) → `POST /api/cli/device-code/poll` (poll, 5s minimum interval, 10-minute hard cap).
+backing: `POST /api/cli/device-code`, then `POST /api/cli/device-code/poll` until it answers `200`. the poll response is encrypted to the device code and decrypted locally.
 
 ---
 
-## auth status
+## status
 
-alias of [`owlette whoami`](/docs/cli/reference/whoami) — calls `GET /api/whoami` with the active profile's token and prints the server-resolved identity. produces byte-identical stdout/stderr to `whoami` (same shared `runWhoami` runner under the hood), so anything you script against one works against the other.
+alias of [`owlette whoami`](/docs/cli/reference/whoami): both run the same code, so stdout, stderr, the `--json` shape and the exit codes are identical.
 
 ```bash
 owlette auth status [--json]
 ```
 
-no verb-specific flags. inherits `--json` and `--profile` from the global set.
+no verb-specific flags.
 
 ### examples
 
 ```bash
-# human-readable summary
 owlette auth status
 ```
 
 ```bash
-# json envelope — same shape as `owlette whoami --json`
+# same envelope as `owlette whoami --json`
 owlette auth status --json | jq '.whoami.key.scopes'
 ```
 
@@ -72,44 +97,42 @@ backing: `GET /api/whoami`.
 
 ---
 
-## auth logout
+## logout
 
-clears the stored credential for the active profile. local-only — does not revoke the key server-side. to actually revoke a key, use the dashboard — revoking is session-authenticated and has no cli equivalent (see [key](/docs/cli/reference/key)).
+removes the active profile's credential from the keychain and from `credentials.json`, and strips any legacy `token` from `config.toml`. it does not revoke the key on the server; revoke it in the dashboard under **settings → api keys** (see [key](/docs/cli/reference/key)).
 
 ```bash
 owlette auth logout
 ```
 
-no verb-specific flags. inherits `--profile` from the global set.
+no verb-specific flags. it prints `owlette: cleared stored credential for profile '<name>'`, or `owlette: profile '<name>' had no stored credential (nothing to clear).` when there was nothing to remove. if `OWLETTE_TOKEN` is set it adds a line saying that variable still authenticates.
 
 ### examples
 
 ```bash
-# clear the default profile's token
 owlette auth logout
 ```
 
 ```bash
-# clear the dev profile's token only — default stays signed in
+# sign the dev profile out and leave default signed in
 owlette --profile dev auth logout
 ```
 
-backing: none — local file write only.
+backing: none — local only.
 
 ---
 
 ## exit codes
 
-- `0` — success (token written, status printed, or token cleared)
-- `1` — network failure, non-2xx api response, login polling timeout, or expired pairing phrase
-- `2` — `auth status` only: no token configured for the active profile (run `auth login` first)
+- `0` — success: key stored, status printed, or credential cleared (also when there was nothing to clear)
+- `1` — network failure, a non-`200` from `/api/cli/device-code`, an expired phrase (`410`), an unexpected poll response, a credential that would not decrypt, or no approval within the 10-minute window; for `status`, any failure of `GET /api/whoami`
+- `2` — `status` only: no token configured for the active profile
 
 ---
 
 ## notes
 
-- **scope**: user (acts on the active profile in the local config file)
-- **tier**: `[ready]` for all three verbs
-- **token storage**: OS keychain when available, otherwise `~/.config/owlette/credentials.json` with file mode forced to `0o600`. legacy `token` fields in `config.toml` are still read but new logins do not write them
-- **profile selection**: `--profile <name>` (or `OWLETTE_PROFILE`) selects which `[profiles.X]` block reads/writes
-- **related**: [`whoami`](/docs/cli/reference/whoami) (identical to `auth status`), [`key`](/docs/cli/reference/key) for server-side key management, [overview](/docs/cli/overview) for config precedence
+- **scope**: the local CLI profile; no site or machine
+- **profiles**: `--profile <name>` or `OWLETTE_PROFILE` selects the profile; the default is `default`
+- **token precedence**: `OWLETTE_TOKEN` beats the stored credential, which beats a legacy `token` in `config.toml` — see [config precedence](/docs/cli/overview#config-precedence)
+- **related**: [`whoami`](/docs/cli/reference/whoami), [`key`](/docs/cli/reference/key) for minting more keys, [overview](/docs/cli/overview)

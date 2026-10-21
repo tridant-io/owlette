@@ -1,25 +1,22 @@
 ---
-title: "api reference links"
-description: "the interactive endpoint reference is rendered from the OpenAPI contract and is served at /docs/api."
+title: "API reference links"
+description: "the interactive endpoint reference is rendered from the OpenAPI contract and served at /docs/api; the raw document is at /api/openapi."
+keywords: ["openapi", "swagger", "spec", "scalar", "endpoint reference"]
 ---
 
 - production: [https://owlette.app/docs/api](https://owlette.app/docs/api)
 - local dev: [http://localhost:3000/docs/api](http://localhost:3000/docs/api)
-- raw json: `/api/openapi`
-- source contract: [`web/openapi.yaml`](../../web/openapi.yaml)
+- raw JSON: `/api/openapi` (public, cached for an hour)
+- source contract: [`web/openapi.yaml`](https://github.com/tridant-io/owlette/blob/main/web/openapi.yaml)
 
-the rendered reference is generated from `web/openapi.yaml` and includes examples, operation-level authentication, and scope notes for documented operations; compatibility routes not present in the spec are omitted.
+the rendered reference is generated from `web/openapi.yaml`. on the way out the server adds a request and response example to every operation, a curl sample, and an **authentication and scopes** note that names the API-key scope the operation needs. dashboard-internal and agent-only routes, and the `/api/chat/*` hoot aliases, are not in the contract.
 
-Use the shared convention pages for behavior that applies across operations:
-[authentication](/docs/api/authentication), [pagination](/docs/api/pagination),
-[idempotency](/docs/api/idempotency), [errors](/docs/api/errors), and
-[rate limits](/docs/api/rate-limits).
+use the shared convention pages for behavior that applies across operations: [authentication](/docs/api/authentication), [pagination](/docs/api/pagination), [idempotency](/docs/api/idempotency), [errors](/docs/api/errors), and [rate limits](/docs/api/rate-limits).
 
-run this before publishing API docs or changing public routes:
+before changing public routes or the contract, run the validator from `web/`:
 
-```powershell
-cd web
-npm.cmd run validate:api
+```bash
+npm run validate:api
 ```
 
-the validator checks route/spec drift and verifies the rendered reference still has examples plus auth/scope notes for every operation.
+it fails when a documented path has no route file, a documented method is not exported, an operation has no explicit `security`, or the rendered reference is missing an example or a scope note; it warns about route files the contract does not cover. CI runs the same check on every pull request that touches `web/openapi.yaml` or a route.

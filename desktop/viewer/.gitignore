@@ -1,0 +1,5 @@
+/target/
+/gen/schemas
+# the placeholder page tauri requires: desktop/.gitignore and the root ignore
+# every dist/ as build output, and this one is source
+!/dist/

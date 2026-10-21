@@ -78,7 +78,7 @@ const EXTENSIONS = new Set([
  * - `dev/` holds historical agent/review transcripts — rewriting them would
  *   falsify a record of what was actually run.
  * - `.claude/` documents external resources whose names only look like a repo
- *   slug (the Vercel project is `theexperiential/owlette` regardless of where
+ *   slug (the Vercel project is `tridant-7931a9aa/owlette` regardless of where
  *   the GitHub repo lives).
  * - lockfiles and build output are generated.
  */

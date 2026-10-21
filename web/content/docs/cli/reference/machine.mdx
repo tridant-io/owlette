@@ -1,21 +1,26 @@
 ---
 title: "machine"
-description: "manage windows machines from the cli — list + inspect health and per-roost deployment state, and queue remote-control commands (reboot, shutdown, screenshot). every verb is site-scoped and requires --site . six verbs are tier A — ready and hit a public api today; one verb (live-view) is a tier C stub reserving the namespace until remote desktop ships as swoop."
+description: "manage machines from the CLI: list them, inspect health and per-roost deployment state, and queue reboot, shutdown and screenshot commands. it works the same for Windows, macOS and Linux machines. every verb is site-scoped and requires --site. six verbs are tier A, ready against the public API today; live-view is a tier C stub that points at owlette swoop."
+keywords: ["reboot", "restart a machine", "shutdown", "screenshot", "machine list", "machine status", "remote desktop"]
 ---
 
-cross-reference: `owlette machine deployments` shows the per-roost intended-vs-reported state from the **machine's** perspective. `owlette roost get` shows the same data from the **roost's** perspective — same source-of-truth, different lens.
+cross-reference: `owlette machine deployments` shows the per-roost intended-versus-reported state from the **machine's** side. `owlette roost get` shows the same data from the **roost's** side: one source of truth, two lenses.
+
+for remote desktop, use [`owlette swoop`](/docs/cli/reference/swoop), not `machine live-view`.
 
 ---
 
 ## list
 
-list every machine on a site with online + last-heartbeat columns.
+list every machine on a site, with online state and last heartbeat.
 
-**synopsis** — `owlette machine list --site <siteId> [--json]`
+**synopsis**: `owlette machine list --site <siteId> [--json]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id to list machines for |
+| `--site <siteId>` | yes | site ID to list machines for |
+
+the table's columns are `id`, `name`, `online`, `last-heartbeat`, `agent` and `roosts`. `--json` prints `{ "machines": [...] }`.
 
 ```bash
 owlette machine list --site site-1
@@ -28,13 +33,15 @@ owlette machine list --site site-1 --json | jq '.machines[] | select(.online == 
 
 ## get
 
-print the detail record for one machine — host info, metrics snapshot, and the live process list.
+print the detail record for one machine: host info, a metrics snapshot and the live process list.
 
-**synopsis** — `owlette machine get <machineId> --site <siteId> [--json]`
+**synopsis**: `owlette machine get <machineId> --site <siteId> [--json]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
+| `--site <siteId>` | yes | site ID that owns the machine |
+
+`--json` prints the API's machine record unchanged, including `osFamily` (`windows`, `macos` or `linux`) and `capabilities`, such as `capabilities.swoop`.
 
 ```bash
 owlette machine get m_abc123 --site site-1
@@ -47,13 +54,15 @@ owlette machine get m_abc123 --site site-1 --json | jq '.metrics.cpu'
 
 ## deployments
 
-per-roost deployment state for one machine — shows the intended version (what the manifest says should be running) next to the reported version (what the agent last reported). use this when a roost rollout looks stuck on a specific machine.
+per-roost deployment state for one machine: the intended version (what the roost says should be running) beside the reported version (what the agent last reported). use it when a roost rollout looks stuck on one machine.
 
-**synopsis** — `owlette machine deployments <machineId> --site <siteId> [--json]`
+**synopsis**: `owlette machine deployments <machineId> --site <siteId> [--json]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
+| `--site <siteId>` | yes | site ID that owns the machine |
+
+the table's columns are `roostId`, `name`, `intended`, `reported`, `status` and `reportedAt`.
 
 ```bash
 owlette machine deployments m_abc123 --site site-1
@@ -66,14 +75,17 @@ owlette machine deployments m_abc123 --site site-1 --json | jq '.deployments[] |
 
 ## reboot
 
-queue a `reboot_machine` command on the machine. the command is allowlisted in wave-2A commands and auto-tagged with an `Idempotency-Key` so retrying after a network blip is safe.
+queue a `reboot_machine` command on the machine. every request carries an `Idempotency-Key`, generated unless you pass one, so retrying after a network blip is safe.
 
-**synopsis** — `owlette machine reboot <machineId> --site <siteId> [--delay-seconds <n>]`
+**synopsis**: `owlette machine reboot <machineId> --site <siteId> [--delay-seconds <n>] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--delay-seconds <n>` | no | non-negative integer; agent waits this long before firing (default 0) |
+| `--site <siteId>` | yes | site ID that owns the machine |
+| `--delay-seconds <n>` | no | non-negative number of seconds the agent waits before firing (default 0; a fraction is rounded down) |
+| `--idempotency-key <key>` | no | the `Idempotency-Key` to send. reuse the one a failed run printed to retry it safely |
+
+prints `owlette: reboot queued for machine <id> (commandId=<id>)`. `--json` prints the queued command.
 
 ```bash
 owlette machine reboot m_abc123 --site site-1
@@ -86,14 +98,15 @@ owlette machine reboot m_abc123 --site site-1 --delay-seconds 60 --json
 
 ## shutdown
 
-queue a `shutdown_machine` command on the machine. same idempotency + delay semantics as `reboot`.
+queue a `shutdown_machine` command on the machine, with the same idempotency and delay behaviour as `reboot`.
 
-**synopsis** — `owlette machine shutdown <machineId> --site <siteId> [--delay-seconds <n>]`
+**synopsis**: `owlette machine shutdown <machineId> --site <siteId> [--delay-seconds <n>] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--delay-seconds <n>` | no | non-negative integer; agent waits this long before firing (default 0) |
+| `--site <siteId>` | yes | site ID that owns the machine |
+| `--delay-seconds <n>` | no | non-negative number of seconds the agent waits before firing (default 0) |
+| `--idempotency-key <key>` | no | the `Idempotency-Key` to send |
 
 ```bash
 owlette machine shutdown m_abc123 --site site-1
@@ -106,20 +119,23 @@ owlette machine shutdown m_abc123 --site site-1 --delay-seconds 30
 
 ## screenshot
 
-capture a screenshot from the machine and download it locally. this is a queue → poll → download flow: the cli posts a `capture_screenshot` command, polls the command-state endpoint every 1.5s for up to 60s, then fetches the bytes from the signed url the agent uploaded to.
+capture a screenshot on the machine and download it. this is a queue → poll → download flow: the CLI posts a `capture_screenshot` command, polls the command's state every 1.5 seconds for up to 60 seconds (printing a dot per poll), then fetches the image from the signed URL the agent uploaded to.
 
-**synopsis** — `owlette machine screenshot <machineId> --site <siteId> [--monitor <m>] [--output <path>]`
+**synopsis**: `owlette machine screenshot <machineId> --site <siteId> [--monitor <n>] [--output <path>] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--monitor <m>` | no | `all`, `primary`, or a non-negative integer index. when omitted, the cli sends no monitor value and the agent defaults to `0` / all monitors. |
-| `--output <path>` | no | path to write the png (default: `screenshot-<machineId>-<timestamp>.png` in cwd) |
+| `--site <siteId>` | yes | site ID that owns the machine |
+| `--monitor <n>` | no | a non-negative integer monitor index; `0` captures all monitors. named values such as `all` or `primary` are refused. omitted, the CLI sends no monitor and the agent captures all monitors |
+| `--output <path>` | no | where to write the PNG (default: `screenshot-<machineId>-<timestamp>.png` in the current directory) |
+| `--idempotency-key <key>` | no | the `Idempotency-Key` to send |
+
+prints `owlette: screenshot saved to <path> (<n> bytes)`. `--json` prints `{ "commandId", "screenshotPath", "sizeBytes" }` and no dots.
 
 ```bash
 owlette machine screenshot m_abc123 --site site-1
-owlette machine screenshot m_abc123 --site site-1 --monitor all --output /tmp/wall.png
-owlette machine screenshot m_abc123 --site site-1 --monitor 0 --json
+owlette machine screenshot m_abc123 --site site-1 --monitor 0 --output /tmp/wall.png
+owlette machine screenshot m_abc123 --site site-1 --monitor 1 --json
 ```
 
 **backing endpoints**:
@@ -130,44 +146,50 @@ owlette machine screenshot m_abc123 --site site-1 --monitor 0 --json
 
 ## live-view
 
-> 🚧 **stub — remote desktop is shipping as swoop, and this verb lands with it**. exits 3 with a json envelope pointing at the dashboard. the namespace is reserved here so scripts can detect "not yet" with a stable exit code (3, not 1).
+> **stub.** remote desktop ships as swoop, so this verb does nothing but point at [`owlette swoop`](/docs/cli/reference/swoop). it exits 3, the code reserved for stubs, so a script can tell it apart from an error.
 
-streaming desktop feed. when shipped, this will open a live thumbnail / video stream from the agent. today, run it in the dashboard instead.
-
-**synopsis** — `owlette machine live-view <machineId> --site <siteId>`
+**synopsis**: `owlette machine live-view <machineId> --site <siteId>`
 
 | flag | required | purpose |
 |---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
+| `--site <siteId>` | yes | site ID that owns the machine |
+
+human mode writes the stub notice to stderr. `--json` prints the stub envelope on stdout:
 
 ```bash
-owlette machine live-view m_abc123 --site site-1
-# → exit 3, json envelope:
-#   { "ok": false, "stub": true, "noun": "machine",
-#     "reason": "remote desktop is shipping as swoop; this verb lands with it",
-#     "dashboard_url": "https://owlette.app/dashboard",
-#     "future_plan": "public-api deferred: swoop" }
+owlette --json machine live-view m_abc123 --site site-1
+# → exit 3
+# {
+#   "ok": false,
+#   "stub": true,
+#   "noun": "machine",
+#   "reason": "remote desktop ships as swoop — run `owlette swoop <machineId> --site <siteId>`",
+#   "dashboard_url": "https://owlette.app/dashboard",
+#   "future_plan": "public-api deferred: swoop"
+# }
 ```
 
-**backing endpoint**: none yet. future plan: `public-api deferred: swoop` (deferred — lands with swoop).
+`dashboard_url` follows the active profile's API URL.
+
+**backing endpoint**: none.
 
 ---
 
 ## exit codes
 
-- `0` — success
-- `1` — generic error (network, api 5xx, unexpected response shape, screenshot poll timeout, agent reported failure, missing `--site`, bad `--monitor` value, negative `--delay-seconds`)
-- `2` — usage error (no token configured)
-- `3` — stub (only `machine live-view`)
+- `0`: success
+- `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, or a missing `--site` (a usage error)
+- `2`: usage error: no token configured, a bad `--monitor` value, or a negative `--delay-seconds`
+- `3`: stub (`machine live-view` only)
 
-stable problem+json codes surfaced with a hint: `machine_offline`, `unsupported_command_type`, `scope_insufficient`.
+API errors print their problem code, with a hint for `machine_offline`, `unsupported_command_type` and `scope_insufficient`.
 
 ---
 
 ## notes
 
-- **scope**: site-scoped. mutations require an api key with `machine=<id>:write` (or `site=<id>:write`).
-- **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`. C stub for `live-view`.
-- **idempotency**: every mutation auto-generates an `Idempotency-Key`, so retrying a failed `reboot`/`shutdown`/`screenshot` will not double-fire.
-- **screenshot ttl**: the signed url returned by the agent expires shortly after capture — the cli downloads inline so you do not need to handle expiry yourself.
-- see [overview](/docs/cli/overview) for global flags (`--profile`, `--json`, `--api-url`) and config precedence.
+- **scope**: site-scoped. the mutating verbs need an API key with `machine=<id>:write` (or `machine=*:write`); `screenshot` needs `machine=<id>:read` as well. permissions are exact: `write` does not imply `read`
+- **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`; C stub for `live-view`
+- **idempotency**: every mutation sends an `Idempotency-Key`, so retrying a failed `reboot`, `shutdown` or `screenshot` will not fire it twice. a request that never got a confirmed response prints its key and the flag to retry with
+- **screenshot TTL**: the agent's signed URL expires shortly after capture; the CLI downloads it at once, so you never handle the expiry
+- see [overview](/docs/cli/overview) for the global flags (`--profile`, `--json`, `--api-url`) and config precedence

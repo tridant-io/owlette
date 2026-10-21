@@ -232,8 +232,7 @@ fn from_hresult(e: &windows::core::Error) -> NvencError {
 /// that is already in the process, rather than to the DLL search path.
 fn ensure_driver() -> Result<(), NvencError> {
     static LIBRARY: OnceLock<Result<libloading::Library, String>> = OnceLock::new();
-    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-    let path = format!("{system_root}\\System32\\nvEncodeAPI64.dll");
+    let path = crate::platform::process::system32("nvEncodeAPI64.dll");
     // SAFETY: loading the nvidia driver library runs its initialisers, which is
     // what every nvenc client does. The handle is kept for the process lifetime.
     let loaded = LIBRARY.get_or_init(|| unsafe {
@@ -967,7 +966,6 @@ mod tests {
     // at all: `numSlices` needs reportSliceOffsets, which needs
     // enableEncodeAsync = 0 (spike 0.9 §4).
 
-    const H264_NAL_IDR: u8 = 5;
     const H264_NAL_SPS: u8 = 7;
 
     /// One NAL unit inside an Annex-B buffer. `start`/`end` bracket the payload
@@ -979,41 +977,24 @@ mod tests {
         end: usize,
     }
 
-    /// Split an Annex-B buffer into NAL units, accepting 3- and 4-byte start codes.
+    /// Split an Annex-B buffer into NAL units with their codec's type.
     fn parse_annexb(data: &[u8], codec: Codec) -> Vec<Nal> {
-        let mut starts = Vec::new();
-        let mut i = 0usize;
-        while i + 2 < data.len() {
-            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
-                starts.push(i + 3);
-                i += 3;
-            } else {
-                i += 1;
-            }
-        }
         let header_len = match codec {
             Codec::H264 => 1,
             Codec::H265 => 2,
         };
-        let mut out = Vec::with_capacity(starts.len());
-        for (n, &start) in starts.iter().enumerate() {
-            // The unit runs to the byte before the next start code, minus the zero
-            // bytes that belong to it (a 4-byte code is a 3-byte code with a
-            // leading zero).
-            let mut end = starts.get(n + 1).map_or(data.len(), |&next| next - 3);
-            while end > start && data[end - 1] == 0 {
-                end -= 1;
-            }
-            if end < start + header_len {
-                continue;
-            }
-            let ty = match codec {
-                Codec::H264 => data[start] & 0x1f,
-                Codec::H265 => (data[start] >> 1) & 0x3f,
-            };
-            out.push(Nal { ty, start, end });
-        }
-        out
+        crate::encode::h264_sps::nal_ranges(data)
+            .into_iter()
+            .filter(|range| range.len() >= header_len)
+            .map(|range| Nal {
+                ty: match codec {
+                    Codec::H264 => data[range.start] & 0x1f,
+                    Codec::H265 => (data[range.start] >> 1) & 0x3f,
+                },
+                start: range.start,
+                end: range.end,
+            })
+            .collect()
     }
 
     /// Is this a coded slice? Only VCL units count towards the slice check.
@@ -1499,17 +1480,6 @@ mod tests {
             // emits maxNumRefFrames instead (spike 0.9 amendment 1).
             assert_eq!(sps.max_dec_frame_buffering, Some(4), "{}", vector.name);
         }
-    }
-
-    #[test]
-    fn annexb_splitting_handles_three_and_four_byte_start_codes() {
-        let data = [0, 0, 0, 1, 0x67, 0x42, 0, 0, 1, 0x65, 0xAA, 0xBB];
-        let nals = parse_annexb(&data, Codec::H264);
-        assert_eq!(nals.len(), 2);
-        assert_eq!(nals[0].ty, H264_NAL_SPS);
-        assert_eq!(&data[nals[0].start..nals[0].end], &[0x67, 0x42]);
-        assert_eq!(nals[1].ty, H264_NAL_IDR);
-        assert!(is_vcl(Codec::H264, nals[1].ty));
     }
 
     #[test]

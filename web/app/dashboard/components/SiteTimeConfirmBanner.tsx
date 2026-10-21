@@ -177,7 +177,7 @@ export function SiteTimeConfirmBanner({
               value={timezone}
               onValueChange={setPickedTimezone}
               disabled={pending !== null}
-              className="border-border bg-accent text-white"
+              className="border-border bg-accent text-accent-foreground"
             />
           </div>
 
@@ -197,7 +197,7 @@ export function SiteTimeConfirmBanner({
           {outdated.length > 0 && (
             <p
               data-testid="site-time-banner-version-advisory"
-              className="text-xs text-amber-400/90"
+              className="text-xs text-warning dark:text-warning/90"
             >
               these machines run an agent older than {SITE_TIME_MIN_AGENT_VERSION} and keep
               using their own clock until they update: {outdated.join(', ')}

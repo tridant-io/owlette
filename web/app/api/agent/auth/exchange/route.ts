@@ -3,6 +3,7 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
 import logger from '@/lib/logger';
+import { machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
 
 /**
  * POST /api/agent/auth/exchange — first step of agent pairing: trade the
@@ -10,7 +11,8 @@ import logger from '@/lib/logger';
  *
  * In:  `{registrationCode, machineId, version}`
  * Out: `{accessToken (1h ID token), refreshToken (no expiry, admin-revocable),
- *       expiresIn, siteId}`; 401 on an invalid/used/expired code.
+ *       expiresIn, siteId}`; 401 on an invalid/used/expired code; 402 `{error}`
+ *       when the site's plan has no machine slot (the code is left unused).
  *
  * Rate limited against brute-forcing registration codes.
  */
@@ -56,6 +58,11 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     if (!siteId || !createdBy) {
       return NextResponse.json({ error: 'Invalid registration code data' }, { status: 401 });
+    }
+
+    const refusal = await machineLimitRefusal(siteId, machineId);
+    if (refusal) {
+      return NextResponse.json({ error: refusal }, { status: 402 });
     }
 
     const agentUid = `agent_${siteId}_${machineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
@@ -164,6 +171,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       logger.warn(`Registration code claim race: ${message}`);
       return NextResponse.json({ error: 'Registration code already used' }, { status: 401 });
     }
+
+    await stampPairedAt(siteId, machineId);
 
     logger.info(`Agent token exchanged: site=${siteId}, machine=${machineId}, uid=${agentUid}`);
 

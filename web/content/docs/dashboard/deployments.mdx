@@ -1,19 +1,14 @@
 ---
 title: "deployments"
-description: "Deploy Windows installers to one or many machines. owlette creates a tracked deployment record, fans out install_software commands, and reconciles per-machine progress as agents report back."
+description: "install Windows software on one machine or many from the deploy page. owlette pins the installer's SHA-256, sends every machine an install, and tracks each one to completed, failed or cancelled, with retry, cancel and uninstall."
+keywords: ["install software", "push installer", "remote install", "silent install", "msi", "exe", "software rollout", "checksum", "sha256 mismatch", "deployment stuck", "retry install", "uninstall", "deployment template", "mac", "linux", "kiosk software update"]
 ---
 
----
+the **deploy** page (`/deployments`) installs software across a site's machines. each deployment is one record with one target per machine, and every target is tracked from queued to installed.
 
-## overview
+**deployments run on Windows only.** the dashboard lets you pick a Mac or Linux machine as a target, but its agent cannot run the installer: it closes the processes you chose, downloads and checks the file, then fails the target with "Error: No interactive user session available for installation. A user must be logged in." see [platform support](/docs/reference/platform-support#software).
 
-The deployments page lets operators:
-
-- Start installer deployments from admin-curated system presets, saved templates, or a direct installer URL
-- Select all machines, only online machines, or specific machines
-- Close managed or named processes before installation
-- Track each target through download, install, completion, failure, cancellation, or uninstall
-- Retry failed targets, uninstall deployed software, or delete completed records
+creating, retrying, cancelling, uninstalling and deleting need a site owner or admin.
 
 ![deployments list](/docs-screens/deployments.png)
 
@@ -21,154 +16,156 @@ The deployments page lets operators:
 
 ## creating a deployment
 
-1. Open **deployments** from the dashboard navigation.
-2. Click **new deployment**.
-3. Choose a starting point in the **template** selector:
-   - **none** starts from a blank form.
-   - Admin-curated system presets are grouped by category and fill the installer fields automatically.
-   - Saved templates are listed under **Saved** and can be reused.
-4. Optionally click the pencil button to set a deployment name. If you leave the name blank, owlette derives one from the selected preset/template, installer filename, or `Deployment`.
-5. Enter or confirm the installer fields.
-6. Choose target machines with **online only**, **select all**, or individual machine checkboxes.
-7. Click **deploy to N machines**.
+1. open **deploy** and click **new deployment**. the **deploy software** dialog opens.
+2. optionally pick a starting point in **template**: **none**, a preset from the library (grouped by category), or one of the site's own templates under **Saved**.
+3. enter the **installer URL**, a direct `https://` link. the filename is taken from the last part of the URL and needs an extension.
+4. wait for the checksum to finish (see [the checksum](#the-checksum)).
+5. set **silent install flags**, **parallel install (keep existing versions)** and **close running processes before install** as needed.
+6. choose the **target machines**: **online only (N)**, **select all**, or tick machines one by one.
+7. click **deploy to N machines**.
 
-| field | required | description |
-|-------|----------|-------------|
-| **Template** | No | Blank form, system preset, or saved template. System presets are read-only in this dialog. |
-| **Deployment name** | No | Optional label; otherwise derived automatically. |
-| **Installer URL** | Yes | Direct `https://` URL for the installer. The filename is derived from the URL path. |
-| **Silent install flags** | No | Command-line flags passed to the installer. Empty is allowed, but many installers need flags for unattended operation. |
-| **Parallel install** | No | `parallel install (keep existing versions)` installs alongside existing versions when the agent and installer support it. |
-| **Verify path** | No | Saved presets/templates can include a path the agent checks after installation. |
-| **Close running processes before install** | No | Select managed processes from the chosen machines and/or enter comma-separated executable names. |
-| **Target machines** | Yes | One or more machine ids in the current site. |
+the deployment's name is the name in the template row. pick a template, or click the pencil (**rename template**) and type one. left blank, it takes the selected template's name, then the installer filename, then `Deployment`.
 
-When close-process handling is enabled, owlette sends `close_processes` for executable names and `suppress_projects` for selected managed processes. The dialog warns which processes will be closed before the install begins.
+| field | what it does |
+|---|---|
+| **template** | fills the form from a preset or a saved template. see [templates and presets](#templates-and-presets) |
+| **installer URL** | required. a direct `https://` download, not a landing page. the API refuses anything else |
+| **silent install flags** | passed to the installer as one command line; line breaks are folded into spaces. empty is allowed, but most installers need flags to run unattended |
+| **parallel install (keep existing versions)** | installs alongside an existing version: the agent hides the registry entries of software with the same name (the filename up to its first dot) while the installer runs, so it cannot find and remove the old one |
+| **close running processes before install** | closes processes before the install starts. see [closing processes](#closing-processes) |
+| **target machines** | the site's machines, each marked online or offline. an offline machine picks the install up when it reconnects |
 
----
+**verify path.** the dialog has no field for it: it comes from a preset or a saved template. without one, the agent takes the folder from a `/DIR=` flag. after the installer exits, the agent checks the path exists and fails the target if it does not, which usually means the installer showed a dialog or needs different flags.
 
-## silent installation flags
+**target limit.** a deployment reaches at most 100 machines unless the site has its own `deployQuota`. more is refused with `413 over_quota`.
 
-Silent flags are installer-specific. They are not a dashboard requirement, but they are usually required for unattended installs.
+### the checksum
 
-| installer type | silent flags | example software |
-|----------------|--------------|------------------|
-| **Inno Setup** | `/VERYSILENT /SUPPRESSMSGBOXES` | owlette, many open-source tools |
-| **NSIS** | `/S` | Notepad++, 7-Zip |
-| **MSI** | `/qn` with `msiexec /i` | Windows Installer packages |
-| **InstallShield** | `/s /v"/qn"` | Enterprise software |
+every install carries the installer's SHA-256. the agent refuses an install without one ("Refusing to install … without sha256_checksum") and aborts when the downloaded file does not match.
 
-<Callout type="idea" title={"Testing flags"}>
+the dialog computes it for you. once the URL stops changing, owlette's server downloads the installer and hashes it: the row shows **computing sha256 checksum…**, then `sha256:` with the start and end of the digest. **deploy to N machines** is disabled while it computes, and neither deploying nor saving a template goes ahead without a checksum.
 
-Test installer flags on one machine before deploying to many. Some installers ignore generic silent flags or still require prerequisites.
+- **the server cannot reach the URL** (a LAN-only host, for example): the row shows the error with **retry** and **enter manually**. paste the 64-character hex digest, or click **compute automatically instead** to go back. **enter manually** is also offered while it computes
+- **templates and presets** carry their checksum, so picking one skips the download. one saved before checksums existed is hashed again
+- **the file behind a URL changes**: the stored checksum no longer matches, and every machine fails the check. point the template at the new file so the dialog hashes it, and save it again
 
-</Callout>
----
+### closing processes
 
-## deployment templates and presets
+**close running processes before install** opens two inputs:
 
-The template selector combines two sources:
+- **managed processes**: the processes owlette manages on the machines you selected, so select machines first. a ticked process is closed and kept from relaunching until the install ends, then owlette starts it again
+- **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says
 
-- **System presets** come from the admin-curated `system_presets` library. They are grouped by category, can include installer URL, silent flags, verification path, close-process names, and parallel-install preference, and cannot be edited from the deployment dialog.
-- **Saved templates** live under the current site and store `name`, `installer_name`, `installer_url`, `silent_flags`, optional `verify_path`, optional `close_processes`, and optional `parallel_install`.
-
-Template actions in the dialog:
-
-| action | behavior |
-|--------|----------|
-| **Edit name** | Switches the selector row into a name field for a new or saved template. |
-| **Save** | Creates a new saved template, or updates the selected saved template. |
-| **Delete** | Deletes the selected saved template after confirmation. |
-
-System presets are intentionally protected from these actions; update them through the admin preset workflow.
+a warning lists everything that will be closed before you deploy.
 
 ---
 
-## deployment progress
+## templates and presets
 
-Target states are stored per machine:
+the **template** list has two sources:
 
-| target state | description |
-|--------------|-------------|
-| `pending` | Deployment command is queued for the agent. |
-| `closing_processes` | Agent is closing configured processes before installation. |
-| `downloading` | Agent is downloading the installer; progress may be shown. |
-| `installing` | Installer is running; progress may be shown. |
-| `completed` | Installation completed successfully. |
-| `failed` | Installation failed; the row may include an error. |
-| `cancelled` | Deployment work was cancelled for this target. |
-| `uninstalled` | Software was uninstalled from this target. |
+- **presets** come from the [system preset library](/docs/dashboard/admin/system-presets) that owlette curates. they are read-only here: while one is selected, the rename, save and delete buttons are hidden. picking one names the deployment `Deploy <software name>`
+- **saved templates** belong to the site and store the name, installer URL and filename, silent flags, SHA-256 checksum and parallel-install setting, plus a verify path and the processes to close when they have them
 
-Overall deployment status is calculated from the target states:
+| button | what it does |
+|---|---|
+| **new template** (+) | clears the form and opens the name field, for a template from scratch. always shown |
+| **rename template** (pencil) | swaps the list for a name field |
+| **save as new template** / **save changes to template** (disk) | saves a new template, or updates the saved template that is selected. needs a name and a checksum |
+| **delete template** (bin) | deletes the selected saved template after a confirm. shown only for a saved template |
 
-| overall state | meaning |
-|---------------|---------|
-| `pending` | Deployment exists but no target has started yet. |
-| `in_progress` | At least one target is still non-terminal. |
-| `completed` | All non-cancelled targets completed successfully. |
-| `failed` | All remaining terminal targets failed. |
-| `partial` | Terminal targets ended in a mixed result. |
-| `cancelled` | Every target was cancelled. |
-| `uninstalled` | Every target was uninstalled. |
-
-During an uninstall handoff, the API may temporarily mark the deployment `uninstalling`; reconciliation settles the targets and aggregate state as agents finish.
+a template saves processes to close as executable names: the ticked managed processes' executables plus the additional names.
 
 ---
 
-## cancelling a deployment
+## following a deployment
 
-The cancel button is rendered beside active target rows, but the current API is deployment-wide. Clicking the cancel control on any active target calls:
+each row shows a status icon, the name, the installer filename, a status badge and when it was created. hover a **failed** or **partial** badge to see each failed machine's error. click the row to expand it: the installer URL, silent flags and verify path, then one line per target with its progress, its state, its error in full, and the buttons below.
 
-```http
-POST /api/sites/{siteId}/deployments/{deploymentId}/cancel
-Idempotency-Key: <unique-key>
-```
+the page header counts **total**, **in progress** and **templates**. times follow your **display times in** setting in [account settings](/docs/dashboard/account-settings#preferences); in the per-machine mode they use the site's timezone, since a deployment spans machines.
 
-The server cancels every target in the deployment that is still in a pre-install state:
+### target states
 
-- `pending`
-- `closing_processes`
-- `downloading`
+| state | meaning |
+|---|---|
+| `pending` | the install is queued for the agent |
+| `closing_processes` | the agent is closing the processes you chose |
+| `downloading` | the agent is downloading the installer; progress may show |
+| `installing` | the installer is running; progress may show |
+| `completed` | the installer succeeded, and the verify path exists if one was set. exit code 3010 counts as success and says a reboot is required |
+| `failed` | something stopped it; the error is on the target line |
+| `cancelled` | a cancel reached this target |
+| `uninstalling` / `uninstalled` | an uninstall tied to this deployment is running, or finished. see [uninstalling](#uninstalling) |
 
-For those targets, the API removes queued `install_software` commands, fans out `cancel_installation` commands, marks the targets `cancelled`, and returns the affected `machine_ids`. Targets that are already `completed`, `failed`, `cancelled`, or `uninstalled` are left alone. Targets already in `installing` may be past the cancellable phase; if no pre-install targets remain, the API returns `409 no_cancellable_targets`.
+### overall status
 
-<Callout type="warning">
+| status | when |
+|---|---|
+| `in_progress` | at least one target has not finished. a new deployment shows it almost at once |
+| `completed`, `failed`, `cancelled`, `uninstalled` | every target ended in that state |
+| `partial` | any mix of finished states: completed with failed, completed with cancelled, failed with cancelled |
+| `uninstalling` | set by the API's deployment uninstall until its targets report |
+| `pending` | only for the moment the record is being written |
 
-Treat cancellation as a whole-deployment action, not a per-machine action. The row-level button identifies the deployment to cancel, but the server applies the request to all currently cancellable targets in that deployment.
+one exception: when a cancel is what finishes the last targets, a mix of failed and cancelled with nothing completed reads `failed` rather than `partial`.
 
-</Callout>
+### how an install runs
+
+on Windows the agent runs the installer with SYSTEM rights in the machine's console session, not in the service's own session, so installers that start sub-installers have a desktop to run them on. anything the installer shows appears on the machine's screen. with no active console session, the target fails with the message above.
+
+the agent stops an installer that runs longer than 40 minutes. separately, a scheduled sweeper is meant to fail targets whose agent stops reporting: `pending` after 15 minutes, and `downloading`, `installing` or `uninstalling` after 30, both counted from when the deployment was created, not from the target's last change. it only reaches sites it is already sweeping, so do not count on it: a target whose agent never reports back can stay in its state.
+
+each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments).
+
 ---
 
-## row actions
+## retrying
 
-Each deployment row has an actions menu:
+- **retry failed**, in the row's menu (**more options**), requeues every failed target on the same record. the targets go back to `pending` with their errors cleared, and the deployment returns to `in_progress`. no new record is made
+- **retry this machine**, on a failed target's line, does the same for that one machine
 
-| action | when shown | behavior and risk |
-|--------|------------|-------------------|
-| **retry failed** | At least one target is `failed`. | Creates a new deployment named `<original name> (Retry)` for the failed targets only. The original record remains for history. |
-| **uninstall software** | Deployment is not already `uninstalled`. | Opens the uninstall workflow with the installer name prefilled and queues uninstall commands for selected machines. This removes software; it does not delete the deployment record. |
-| **delete record** | Always shown, but the API only allows terminal records. | Permanently removes the deployment record. It does not uninstall software, and the API rejects deletion while the deployment or any target is still in flight. |
+a deployment created before checksums were pinned has none. a retry then downloads and hashes the installer first, which takes a while for a large file (the button spins), and saves the checksum on the record.
+
+a retry sends the installer, flags, checksum, verify path and parallel setting again, but not the processes to close. close them yourself first, or start a new deployment.
 
 ---
 
-## deployment flow
+## cancelling
 
-```text
-Dashboard creates a deployment through POST /api/sites/{siteId}/deployments
-  -> API writes sites/{siteId}/deployments/{deploymentId}
-  -> API fans out install_software commands to target machines
-  -> Agent closes configured processes when close_processes is set
-  -> Agent downloads the installer
-  -> Agent runs the installer with silent_flags
-  -> Agent checks verify_path when provided
-  -> Agent reports command status
-  -> Cloud Functions reconcile target states and overall deployment status
-```
+the × on a target that is `pending`, `closing_processes`, `downloading` or `installing` cancels the **whole deployment**, not that machine, and asks for no confirm:
 
-The stale-deployment sweeper marks old stuck targets failed:
+- every target still `pending`, `closing_processes` or `downloading` has its queued install removed, gets a `cancel_installation` command, and is marked `cancelled`
+- targets that are `installing` or finished are left alone. the × shows on an installing target, but when nothing cancellable remains the request is refused with `409 no_cancellable_targets`, and the page shows nothing
 
-- `pending` targets older than 15 minutes
-- `downloading` or `installing` targets older than 30 minutes
+a cancel is only certain for a target the agent has not picked up. one already closing processes or downloading is marked `cancelled`, but the agent has no installer running to stop yet, so the install can carry on and the target can still end `completed`.
+
+---
+
+## uninstalling
+
+**uninstall software**, in the row's menu, opens the **uninstall software** dialog with the deployment's installer name used to find a match. it is hidden once the record is `uninstalled`.
+
+1. **select target machines**: the online machines are selected when it opens.
+2. **select software to uninstall**: the programs installed on the selected online machines, merged into one list with **filter software...**. the selected one shows its name, version, publisher, type and location.
+3. click **uninstall software** and confirm.
+
+owlette sends one uninstall per machine, by program name, and looks the program up in that machine's software list. a machine that does not list it stops the run there: the machines before it are queued and the rest are not, so select only machines that have it. an offline machine runs the uninstall when it reconnects.
+
+| platform | what happens |
+|---|---|
+| Windows | the program's own uninstaller runs silently, for up to 20 minutes. if it still appears in the registry afterwards, the result says a reboot may be needed |
+| macOS | the agent quits the application and removes its bundle, only for an application bundle the machine's software list shows (type `APP`) |
+| Linux | the uninstall fails |
+
+today the uninstall is not tied to the deployment: its targets keep their install states, the record never reaches `uninstalled`, and the menu keeps offering **uninstall software**.
+
+---
+
+## deleting a record
+
+**delete record**, in the row's menu, removes the record after a confirm. it does not uninstall anything.
+
+the API deletes only a record that is `completed`, `failed`, `partial`, `cancelled` or `uninstalled`, with no target still `pending`, `closing_processes`, `downloading` or `installing`. otherwise it refuses with `409 deployment_in_flight`, and the page shows the reason.
 
 ---
 
@@ -176,35 +173,37 @@ The stale-deployment sweeper marks old stuck targets failed:
 
 ### download failed
 
-- Confirm the URL is a direct `https://` download link, not a landing page.
-- Test the URL from a browser on the target network.
-- Check whether the URL is signed or time-limited and has expired.
-- For Dropbox links, use a direct-download variant such as `?dl=1`.
+- the URL must be a direct `https://` download, not a page that links to one. for Dropbox, use a direct-download form such as `?dl=1`
+- a signed or time-limited URL may have expired by the time a machine downloads it
+- test the URL in a browser on the machine's network: the machine downloads it itself, not through owlette's server
+
+### checksum verification failed
+
+the file the machine downloaded is not the one that was hashed. a URL that always points at the latest build changes under a saved checksum; use a versioned URL, or update the template so it is hashed again.
 
 ### installation fails
 
-- Verify the silent flags for that installer family.
-- Check whether prerequisites such as .NET, Visual C++ runtimes, or license services are required.
-- Review the agent log at `C:\ProgramData\Owlette\logs\service.log`.
-- Try the same installer URL and flags manually on one target machine.
+- check the silent flags for that installer family: `/VERYSILENT /SUPPRESSMSGBOXES` for Inno Setup, `/S` for NSIS, `/qn` for an MSI, `/s /v"/qn"` for InstallShield. try them by hand on one machine first
+- check for prerequisites such as .NET, the Visual C++ runtimes or a license service
+- read the agent log, `logs/service.log` in the data directory: `C:\ProgramData\Owlette\logs\service.log` on Windows, `/Library/Application Support/Owlette/logs/service.log` on macOS, `/var/lib/owlette/logs/service.log` on Linux. see [log locations](/docs/agent/troubleshooting#log-locations)
+- on a Mac or Linux machine, the failure is expected: see the top of this page
 
-### deployment cannot be cancelled
+### a target is stuck
 
-- Cancellation is deployment-wide but only applies to targets still in `pending`, `closing_processes`, or `downloading`.
-- If every target is terminal or already installing, the cancel API returns `no_cancellable_targets`.
-- Use **retry failed** for failed targets or **uninstall software** when cleanup is needed after a completed install.
+a target whose agent stops reporting, because it went offline or restarted mid-install, can stay in `downloading` or `installing`. an installing target cannot be cancelled or retried, and it keeps the record from being deleted; the dashboard has no way to clear it today. a machine that never picked the install up stays `pending` and takes it when it reconnects.
 
-### record cannot be deleted
+### the deployment cannot be cancelled
 
-- Wait until every target is terminal, or cancel the deployment if cancellable work remains.
-- Deleting a record does not uninstall software. Use **uninstall software** first when the installed application should be removed.
+the cancel only reaches targets still `pending`, `closing_processes` or `downloading`. once every target is installing or finished, there is nothing to cancel: use **retry failed** for failures, or **uninstall software** to remove a finished install.
+
+### the record cannot be deleted
+
+wait until every target has finished, or cancel what can be cancelled. deleting never uninstalls; use **uninstall software** first when the program should go.
 
 ---
 
-## security
+## notes
 
-- Deployment mutations require deployment-management access for the site.
-- Only deploy installers from trusted sources. The agent runs installers with SYSTEM privileges.
-- `https://` installer URLs are required by the API.
-- SHA256 checksum verification is supported by the API and agent when a `sha256_checksum` is provided, but the dashboard dialog does not currently expose a checksum field.
-- Pre-test installers and flags before broad deployments.
+- **trust the source.** the agent runs installers with SYSTEM rights. deploy only installers you trust, and try new ones on one machine first
+- **agent updates** are not deployments: **update owlette**, beside **new deployment**, updates the agent itself. see [self-update](/docs/agent/self-update#from-the-dashboard)
+- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` (with an optional `machines` list), `…/cancel` and `…/uninstall` act on it; `DELETE …/{deploymentId}` removes the record. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI

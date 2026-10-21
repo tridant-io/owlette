@@ -263,7 +263,7 @@ export function OutputsCard({
                     onClick={() => onChange(drafts.filter((_, i) => i !== index))}
                     disabled={disabled}
                     aria-label={`remove output ${index + 1}`}
-                    className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                    className="h-6 w-6 rounded-md text-muted-foreground hover:text-danger hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>

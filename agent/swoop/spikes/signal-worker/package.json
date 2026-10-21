@@ -11,6 +11,6 @@
     "measure": "node scripts/measure.mjs"
   },
   "devDependencies": {
-    "wrangler": "4.134.0"
+    "wrangler": "4.146.0"
   }
 }

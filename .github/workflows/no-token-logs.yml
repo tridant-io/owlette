@@ -8,6 +8,8 @@ on:
       - 'web/**/*.js'
       - 'web/**/*.mjs'
       - 'agent/**/*.py'
+      - 'scripts/**/*.mjs'
+      - 'scripts/**/*.js'
       - 'scripts/check-no-token-logs.mjs'
       - '.github/workflows/no-token-logs.yml'
   push:
@@ -18,6 +20,8 @@ on:
       - 'web/**/*.js'
       - 'web/**/*.mjs'
       - 'agent/**/*.py'
+      - 'scripts/**/*.mjs'
+      - 'scripts/**/*.js'
       - 'scripts/check-no-token-logs.mjs'
 
 concurrency:

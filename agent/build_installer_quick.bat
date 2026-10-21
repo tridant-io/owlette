@@ -80,6 +80,24 @@ if not exist "build\installer_package\app\owlette-desktop.exe" (
     exit /b 1
 )
 
+:: Re-copy owlette swoop, the viewer app, the same way: not built here either.
+:: The installer registers owlette-swoop:// and a shortcut for this exe, so a
+:: package without it is refused rather than shipped.
+set "VIEWER_EXE=%~dp0..\desktop\viewer\target\release\owlette-swoop-viewer.exe"
+if exist "%VIEWER_EXE%" (
+    copy /Y "%VIEWER_EXE%" build\installer_package\app\ >nul
+)
+if not exist "build\installer_package\app\owlette-swoop-viewer.exe" (
+    echo.
+    echo ERROR: No owlette swoop in the installer package and none built at:
+    echo   %VIEWER_EXE%
+    echo Run build_installer_full.bat, or build it manually with:
+    echo   cd ..\desktop\viewer ^&^& ..\node_modules\.bin\tauri build --no-bundle
+    echo.
+    pause
+    exit /b 1
+)
+
 :: Re-copy the swoop streamer if it has been rebuilt since the last full build.
 :: Like the desktop app above and unlike the service host below, it is NOT built
 :: here: its dependency graph is minutes, not the ~30 seconds this script is for.

@@ -24,7 +24,7 @@ import {
   listUnendedSwoopSessionsForUser,
   type SwoopSession,
 } from '@/lib/swoop/sessionStore.server';
-import { killSession } from '@/lib/swoop/signal.server';
+import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 
 export interface RevokeSwoopSessionsArgs {
   siteId: string;
@@ -54,9 +54,9 @@ function holdsControl(session: SwoopSession, uid: string): boolean {
 }
 
 /**
- * Ends every unended session this user is in, then stops the streamer over the
- * same two independent paths the session DELETE uses: the Worker broadcast
- * (authoritative, <= 2 s) and the polled `swoop_kill` command (last resort).
+ * Ends every unended session this user is in, then stops the streamer the way
+ * the session DELETE does: the Worker broadcast (authoritative, <= 2 s), and
+ * the polled `swoop_kill` command only when that did not land.
  *
  * The kill is sid-scoped, so a session with other viewers in it ends for them
  * too. That is the protocol's only per-session stop — §10 has no "evict one
@@ -85,34 +85,37 @@ export async function revokeSwoopSessionsForUser(
       });
       revokedSids.push(sid);
 
-      const [killed, queued] = await Promise.allSettled([
-        killSession({ siteId: args.siteId, machineId, sid }),
-        requestSwoopSession({
-          type: 'swoop_kill',
-          sid,
-          siteId: args.siteId,
-          machineId,
-          actor: args.actor,
-          auditActor: args.auditActor,
-          ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-        }),
-      ]);
-      if (killed.status === 'fulfilled' && !killed.value.ok) {
-        logger.warn('[swoop/revoke] kill broadcast failed; the lease still ends it', {
+      const broadcast = await killSession({ siteId: args.siteId, machineId, sid }).catch(
+        (): SwoopSignalResult => ({ ok: false, reason: 'unreachable' }),
+      );
+      // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+      // running, whatever sid it names, so a polled kill queued every time lands on the
+      // next session.
+      if (!broadcast.ok) {
+        logger.warn('[swoop/revoke] kill broadcast failed; falling back to the polled command', {
           context: 'swoop/revoke',
-          data: { siteId: args.siteId, machineId, reason: killed.value.reason },
+          data: { siteId: args.siteId, machineId, reason: broadcast.reason },
         });
-      }
-      if (queued.status === 'rejected') {
-        logger.warn('[swoop/revoke] kill command could not be queued', {
-          context: 'swoop/revoke',
-          data: {
+        try {
+          await requestSwoopSession({
+            type: 'swoop_kill',
+            sid,
             siteId: args.siteId,
             machineId,
-            err:
-              queued.reason instanceof Error ? queued.reason.message : String(queued.reason),
-          },
-        });
+            actor: args.actor,
+            auditActor: args.auditActor,
+            ...(args.correlationId ? { correlationId: args.correlationId } : {}),
+          });
+        } catch (err) {
+          logger.warn('[swoop/revoke] kill command could not be queued; the lease still ends it', {
+            context: 'swoop/revoke',
+            data: {
+              siteId: args.siteId,
+              machineId,
+              err: err instanceof Error ? err.message : String(err),
+            },
+          });
+        }
       }
 
       await recordSwoopSessionEnded({

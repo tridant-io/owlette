@@ -15,7 +15,9 @@
  * row of `SiteRoleCapabilityMatrix` and nowhere else. Renaming is
  * SITE_MEMBER_MANAGE, which both hold. So an owner sees both controls, a site
  * admin sees only edit, and a plain member sees neither — the last of which is
- * covered by `delete-site-owner.spec.ts`.
+ * covered by `delete-site-owner.spec.ts`. The site's swoop and keep screens
+ * awake switches live in the edit panel, so a member is offered neither; that
+ * is asserted here.
  *
  * NON-DESTRUCTIVE by design: these assert what is OFFERED. Actually deleting a
  * site is covered by `delete-site-owner.spec.ts` against a site it seeds itself,
@@ -137,6 +139,34 @@ test.describe('per-site role — site admin', () => {
     await expect(dialog.getByRole('button', { name: 'edit Site A (Assigned)' })).toBeVisible();
     await expect(
       dialog.getByRole('button', { name: 'delete Site A (Assigned)' })
+    ).toHaveCount(0);
+  });
+});
+
+test.describe('per-site role — member', () => {
+  // read-only: the shared member fixture only looks, so its auth state is untouched.
+  test.use(roleState('member'));
+
+  const ASSIGNED_SITE_NAME = 'Site A (Assigned)';
+
+  test('a member is offered neither site switch', async ({ page }) => {
+    const dialog = await openManageSitesDialog(page);
+
+    // no pencil, so no edit panel for the switches to live in.
+    const machinesToggle = dialog.getByRole('button', { name: `machines on ${ASSIGNED_SITE_NAME}` });
+    await expect(machinesToggle).toBeVisible();
+    await expect(
+      dialog.getByRole('button', { name: `edit ${ASSIGNED_SITE_NAME}` })
+    ).toHaveCount(0);
+
+    // the machines panel is where the swoop switch used to sit; it holds no switch now.
+    await machinesToggle.click();
+    await expect(machinesToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(dialog.getByText('loading machines…')).toHaveCount(0);
+
+    await expect(dialog.getByRole('switch', { name: 'swoop', exact: true })).toHaveCount(0);
+    await expect(
+      dialog.getByRole('switch', { name: 'keep screens awake', exact: true })
     ).toHaveCount(0);
   });
 });

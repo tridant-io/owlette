@@ -1,16 +1,21 @@
 ---
 title: "reference"
-description: "Technical reference material for Owlette's public API, platform internals, data model, agent command channel, and hoot tool surface."
+description: "technical reference for owlette: what each platform supports, the public API, authentication internals, the data model, the agent command channel, and hoot's tools."
+keywords: ["internals", "specification", "schema"]
 ---
+
+## platforms
+
+- [platform support](/docs/reference/platform-support) — what works on Windows, macOS and Linux, in one table, and what each difference means.
 
 ## public API
 
-- [API reference](/docs/api/reference) - entrypoint for the rendered OpenAPI endpoint reference, request/response examples, and API-wide conventions.
-- [API authentication](/docs/api/authentication) - API-key formats, bearer authentication, scope handling, and caller identity checks for external integrations.
+- [API reference](/docs/api/reference) — the rendered OpenAPI endpoint reference, request and response examples, and API-wide conventions.
+- [API authentication](/docs/api/authentication) — API key formats, bearer authentication, scopes, and caller identity checks for external integrations.
 
 ## platform internals
 
-- [Authentication internals](/docs/reference/authentication) - Firebase sessions, agent device-code pairing, passkeys, MFA, RBAC, and server auth helper boundaries.
-- [Firestore data model](/docs/reference/firestore-data-model) - collection hierarchy, document schemas, field meanings, indexes, and ownership patterns.
-- [Agent commands](/docs/reference/agent-commands) - command lifecycle, pending/completed document schemas, and command-specific payload fields accepted by the agent.
-- [hoot tools](/docs/reference/hoot-tools) - available tools, approval tiers, execution location, parameters, and response shapes.
+- [authentication internals](/docs/reference/authentication) — dashboard sessions, agent device-code pairing and token storage, passkeys, two-factor, roles and capabilities, and the server's auth helpers.
+- [Firestore data model](/docs/reference/firestore-data-model) — the collection hierarchy, document schemas, field meanings, indexes, and who writes what.
+- [agent commands](/docs/reference/agent-commands) — the command lifecycle, pending and completed document schemas, and the payload each command type takes.
+- [hoot tools](/docs/reference/hoot-tools) — every tool, its approval tier, where it runs, its parameters, and which platforms it works on.

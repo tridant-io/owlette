@@ -1,0 +1,18 @@
+#!/bin/sh
+# the owlette-agent package, before its files go (tri-platform 5.2). an
+# upgrade or a removal stops the service so nothing runs from a tree that is
+# being rewritten; config, tokens and logs under /var/lib/owlette stay — the
+# package never carried them and a reinstall reads them back.
+set -e
+
+case "$1" in
+  remove|upgrade|deconfigure)
+    systemctl stop owlette-agent.service >/dev/null 2>&1 || true
+    if [ "$1" = "remove" ]; then
+      systemctl disable owlette-agent.service >/dev/null 2>&1 || true
+      systemctl --global disable owlette-desktop.service >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
+exit 0

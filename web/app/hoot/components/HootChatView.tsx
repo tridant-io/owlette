@@ -12,9 +12,11 @@ import {
   HOOT_SIDEBAR_MAX_WIDTH,
   HOOT_SIDEBAR_MIN_WIDTH,
 } from '@/hooks/useHootSidebarPrefs';
+import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Plus, MessageSquare, Trash2, KeyRound, Check, X, Zap, Search, Loader2, Pencil, ChevronRight, ChevronsDownUp, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RotateCw, Clock, Share2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Input } from '@/components/ui/input';
@@ -40,6 +42,7 @@ import {
 import type { LastMachineSelection } from '@/contexts/AuthContext';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /** Arrow-key nudge for the sidebar resize handle; Shift multiplies it there. */
 const SIDEBAR_RESIZE_STEP = 16;
@@ -137,6 +140,18 @@ function timeUntil(runAtMs: number, nowMs: number): string {
   return `in ${days}d`;
 }
 
+/**
+ * The group a never-categorized conversation sits in — its own, not General:
+ * General is a category the categorizer assigns, and folding these into it hid
+ * the ones "categorize N unsorted" is about.
+ */
+const UNSORTED = 'Unsorted';
+
+/** The sidebar group a conversation is listed under. */
+function groupLabel(convo: ChatConversation): string {
+  return convo.category || UNSORTED;
+}
+
 /** Group conversations by category for sidebar display. */
 function groupConversationsByCategory(
   conversations: ChatConversation[]
@@ -144,19 +159,14 @@ function groupConversationsByCategory(
   const groups: Record<string, ChatConversation[]> = {};
 
   for (const convo of conversations) {
-    const label = convo.category || 'General';
-    (groups[label] ??= []).push(convo);
+    (groups[groupLabel(convo)] ??= []).push(convo);
   }
 
-  // Sort groups: most recently updated first, "General" always last
+  // Most recently updated first, then General, then Unsorted last
+  const rank = (label: string) => (label === UNSORTED ? 2 : label === 'General' ? 1 : 0);
+  const latest = (convos: ChatConversation[]) => Math.max(...convos.map((c) => c.updatedAt.getTime()));
   return Object.entries(groups)
-    .sort(([a, aConvos], [b, bConvos]) => {
-      if (a === 'General') return 1;
-      if (b === 'General') return -1;
-      const aLatest = Math.max(...aConvos.map((c) => c.updatedAt.getTime()));
-      const bLatest = Math.max(...bConvos.map((c) => c.updatedAt.getTime()));
-      return bLatest - aLatest;
-    })
+    .sort(([a, aConvos], [b, bConvos]) => rank(a) - rank(b) || latest(bConvos) - latest(aConvos))
     .map(([label, convos]) => ({ label, conversations: convos }));
 }
 
@@ -170,6 +180,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
+  const siteOwner = sites.find((s) => s.id === currentSiteId)?.owner ?? null;
+  const hootGated = usePlanGated('hoot', siteOwner);
   // What the user ticked, verbatim. Pruning against the site's machines happens
   // in a memo below, never here: a selection restored from a chat doc arrives
   // before the machine listing it would be pruned against.
@@ -630,7 +642,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     // Expand the selected conversation's group so its row is actually visible.
     const convo = conversationsRef.current.find((c) => c.id === conversationId);
     if (convo && !isUntitledChat(convo.title)) {
-      const label = convo.category || 'General';
+      const label = groupLabel(convo);
       setCollapsedGroups((prev) => {
         if (!prev.has(label)) return prev;
         const next = new Set(prev);
@@ -710,7 +722,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   // Category of the active conversation — flags a collapsed section holding it.
   const activeConvo = chat.conversations.find((c) => c.id === chat.chatId);
   const activeCategoryLabel = activeConvo && !isUntitledChat(activeConvo.title)
-    ? (activeConvo.category || 'General')
+    ? groupLabel(activeConvo)
     : null;
 
   // A share freezes this conversation as it stands, so it needs one that exists,
@@ -798,7 +810,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   return (
     // `h-dvh`, not `h-screen`: on iOS Safari `100vh` is the URL-bar-collapsed
     // height, so the shell overflows and pushes the composer below the fold.
-    <div className="h-dvh flex flex-col">
+    <PageCascade className="h-dvh flex flex-col">
       <PageHeader
         currentPage="hoot"
         sites={sites}
@@ -808,7 +820,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
         onAccountSettings={() => setAccountSettingsOpen(true)}
       />
 
-      <div className="flex-1 flex min-h-0 relative max-w-screen-2xl mx-auto w-full gap-3 p-3 md:p-4">
+      {/* no row gap: the aside carries its own, which collapses with it */}
+      <div className="flex-1 flex min-h-0 relative max-w-screen-2xl mx-auto w-full p-3 md:p-4">
 
         {/* No API key overlay */}
         {hasApiKey === false && (
@@ -819,18 +832,21 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               <p className="text-sm text-muted-foreground mb-6">
                 debug, diagnose, and manage your remote machines.
               </p>
-              <div className="rounded-lg border border-border bg-secondary p-5">
-                <KeyRound className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
-                <p className="text-sm text-muted-foreground mb-3">
-                  hoot requires an LLM API key. add your anthropic or openai key in account settings.
-                </p>
-                <button
-                  onClick={() => { setSettingsInitialSection('hoot'); setAccountSettingsOpen(true); }}
-                  className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-gray-900 font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
-                >
-                  open account settings
-                </button>
-              </div>
+              {/* a key is no use on a plan without hoot, so the upgrade comes first */}
+              <UpgradeGate flag="hoot" siteOwner={siteOwner} className="mt-0 md:mt-0">
+                <div className="rounded-lg border border-border bg-secondary p-5">
+                  <KeyRound className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground mb-3">
+                    hoot requires an LLM API key. add your anthropic or openai key in account settings.
+                  </p>
+                  <button
+                    onClick={() => { setSettingsInitialSection('hoot'); setAccountSettingsOpen(true); }}
+                    className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
+                  >
+                    open account settings
+                  </button>
+                </div>
+              </UpgradeGate>
             </div>
           </div>
         )}
@@ -880,6 +896,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                   <Input
                     autoFocus
                     placeholder="search..."
+                    aria-label="search conversations"
                     value={chat.searchQuery}
                     onChange={(e) => chat.setSearchQuery(e.target.value)}
                     onKeyDown={(e) => {
@@ -888,14 +905,17 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                         setSearchOpen(false);
                       }
                     }}
-                    className="h-8 pl-7 pr-7 text-xs bg-secondary border-border"
+                    className="h-8 pl-7 pr-7 text-base md:text-xs bg-secondary border-border"
                   />
-                  <button
+                  <IconButton
+                    label="close search"
+                    tooltip={false}
+                    variant="ghost"
                     onClick={() => { chat.setSearchQuery(''); setSearchOpen(false); }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer"
+                    className="absolute right-0.5 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
                   >
-                    <X className="h-3 w-3 text-muted-foreground hover:text-foreground transition-colors" />
-                  </button>
+                    <X className="size-3" />
+                  </IconButton>
                 </div>
               </>
             ) : (
@@ -959,7 +979,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             className={`${conversationPanelClass} flex-1 overflow-y-auto ${isDesktop ? 'border-r border-border' : ''}`}
             style={conversationPanelStyle}
           >
-            {chat.conversations.length === 0 ? (
+            {/* held until the saved collapsed groups land: the conversations can
+                arrive first, and every group would render open, then shut */}
+            {!prefsHydrated ? null : chat.conversations.length === 0 ? (
               <div className="p-4 text-center text-xs text-muted-foreground">
                 {chat.searchQuery ? 'no matches' : 'no conversations yet'}
               </div>
@@ -979,7 +1001,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               </div>
             ) : (
               /* New conversations pinned to top, then grouped by category */
-              <div className="py-1">
+              <div className="cascade-rows py-1">
                 {/* Unsaved "New conversation" entries always at top */}
                 {chat.conversations
                   .filter((c) => isUntitledChat(c.title))
@@ -1027,7 +1049,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                               <span className="sr-only">contains the current conversation</span>
                             </>
                           )}
-                          <span className="text-xs text-muted-foreground/40 ml-auto">
+                          <span className="text-xs text-muted-foreground dark:text-muted-foreground/80 ml-auto">
                             {group.conversations.length}
                           </span>
                         </button>
@@ -1084,11 +1106,13 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
         {/* Main Chat Area */}
         <main className="flex-1 flex flex-col min-h-0 rounded-lg border border-border bg-card overflow-hidden">
+          <h1 className="sr-only">hoot</h1>
           {/* Machine selector bar — matches sidebar header height above `md`
               (`md:h-12` + `md:py-0` keep that row pixel-identical). Below it the
-              row wraps instead: the target selector, the offline warning and the
-              approval/power toggles cannot share a single 366px line. */}
-          <div className="min-h-12 md:h-12 px-3 py-2 md:py-0 border-b border-border flex flex-wrap md:flex-nowrap items-center gap-x-3 gap-y-2">
+              controls still hold one row: the toggles drop to icons and the target
+              selector takes what width is left. Only the offline warning, while
+              there is one, takes a line of its own. */}
+          <div className="min-h-12 md:h-12 px-3 py-2 md:py-0 border-b border-border flex flex-wrap md:flex-nowrap items-center gap-x-2 md:gap-x-3 gap-y-2">
             {/* Two icon controls, one per breakpoint: below `md` the only entry
                 point to conversation history and "new conversation" (both live
                 in the sheet at that width), above it the sidebar collapse. Both
@@ -1132,7 +1156,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
             />
 
             {targetWarning && (
-              <span className="min-w-0 text-xs text-yellow-500">{targetWarning}</span>
+              <span className="min-w-0 basis-full order-last md:basis-auto md:order-none text-xs text-warning">{targetWarning}</span>
             )}
 
             <div className="ml-auto flex items-center gap-2">
@@ -1172,7 +1196,9 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               hasApiKey={hasApiKey}
               onOpenSettings={() => setAccountSettingsOpen(true)}
               onToolApproval={(id, approved) => chat.addToolApprovalResponse({ id, approved })}
-              onEditMessage={chat.editMessage}
+              // an edit re-sends, which the plan refuses
+              onEditMessage={hootGated ? undefined : chat.editMessage}
+              hideSuggestions={hootGated}
               /* Fallback only: a message stamped with its own turn metadata
                  names the machines THAT turn reached (5.3). This labels the
                  older ones, which carry none. */
@@ -1188,14 +1214,15 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
           {/* Error display */}
           {chat.error && !errorDismissed && (
-            <div className="px-4 py-2 bg-red-950/30 border-t border-red-800/50">
+            <div role="alert" className="px-4 py-2 bg-danger-surface border-t border-danger-border/50">
               <div className="flex items-center gap-2 max-w-3xl mx-auto">
-                <p className="text-xs text-red-400 flex-1">
+                <p className="text-xs text-danger flex-1">
                   {(() => {
                     const msg = chat.error?.message || 'Unknown error';
                     try {
                       const parsed = JSON.parse(msg);
-                      return parsed.error || msg;
+                      // refusals are problem+json, which carries `detail`, not `error`
+                      return parsed.error || parsed.detail || msg;
                     } catch {
                       return msg;
                     }
@@ -1206,7 +1233,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                     streams a fresh response from the last user message. */}
                 <button
                   onClick={() => { setErrorDismissed(true); void chat.regenerate(); }}
-                  className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200 transition-colors cursor-pointer flex-shrink-0"
+                  className="flex items-center gap-1 text-xs text-danger hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
                 >
                   <RotateCw className="h-3 w-3" />
                   retry
@@ -1214,7 +1241,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                 <button
                   onClick={() => setErrorDismissed(true)}
                   aria-label="dismiss error"
-                  className="text-red-400 hover:text-red-300 transition-colors cursor-pointer flex-shrink-0"
+                  className="text-danger hover:text-foreground transition-colors cursor-pointer flex-shrink-0"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -1258,28 +1285,36 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
 
           {/* Input */}
           {!showConversationNotFound && (
-            <ChatInput
-              input={chat.input}
-              isLoading={chat.isLoading}
-              onInputChange={(e) => chat.setInput(e.target.value)}
-              onSubmit={(e) => {
-                e.preventDefault();
-                chat.handleSend();
-              }}
-              onStop={chat.stop}
-              pendingImages={chat.pendingImages}
-              onPasteImage={chat.handlePasteImage}
-              onRemoveImage={chat.removePendingImage}
-              mentionOptions={machineOptions}
-              /* No target, no send: an empty selection has no encoding and an
-                 unreadable one refuses to build a body at all (requestBody.ts).
-                 `targetWarning` beside the picker says which it is. */
-              sendDisabled={sendDisabled}
-              /* Same label as the picker's trigger — and nothing at all when
-                 there is no target to name, so the field never reads "ask no
-                 machines anything". */
-              targetLabel={sendDisabled ? undefined : formatTargetLabel(target.machineIds)}
-            />
+            <UpgradeGate
+              flag="hoot"
+              siteOwner={siteOwner}
+              variant="inline"
+              // takes the composer's strip, so the transcript above keeps its place
+              className="justify-center rounded-none border-x-0 border-b-0 bg-transparent px-4 py-3"
+            >
+              <ChatInput
+                input={chat.input}
+                isLoading={chat.isLoading}
+                onInputChange={(e) => chat.setInput(e.target.value)}
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  chat.handleSend();
+                }}
+                onStop={chat.stop}
+                pendingImages={chat.pendingImages}
+                onPasteImage={chat.handlePasteImage}
+                onRemoveImage={chat.removePendingImage}
+                mentionOptions={machineOptions}
+                /* No target, no send: an empty selection has no encoding and an
+                   unreadable one refuses to build a body at all (requestBody.ts).
+                   `targetWarning` beside the picker says which it is. */
+                sendDisabled={sendDisabled}
+                /* Same label as the picker's trigger — and nothing at all when
+                   there is no target to name, so the field never reads "ask no
+                   machines anything". */
+                targetLabel={sendDisabled ? undefined : formatTargetLabel(target.machineIds)}
+              />
+            </UpgradeGate>
           )}
         </main>
       </div>
@@ -1299,7 +1334,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
         onOpenChange={(open) => { setAccountSettingsOpen(open); if (!open) setSettingsInitialSection('profile'); }}
         initialSection={settingsInitialSection}
       />
-    </div>
+    </PageCascade>
   );
 }
 
@@ -1350,7 +1385,7 @@ function ConversationPanelShell({
           [PANEL_WIDTH_VAR]: `${width}px`,
           width: sidebarOpen ? `var(${PANEL_WIDTH_VAR})` : 0,
         } as React.CSSProperties}
-        className={`relative bg-card flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? '' : 'border-0'}`}
+        className={`relative bg-card-sunken flex-col hidden md:flex rounded-lg border border-border ${animate ? 'transition-all duration-300 ease-in-out' : 'transition-none'} ${sidebarOpen ? 'mr-3' : 'border-0'}`}
       >
         {/* Collapsed there is no edge to grab, and nothing to resize. */}
         {sidebarOpen && resizeHandle}
@@ -1401,7 +1436,7 @@ function ConversationNotFoundState({ onStartNew }: { onStartNew: () => void }) {
         <button
           type="button"
           onClick={onStartNew}
-          className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-gray-900 font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
+          className="text-xs px-4 py-2 rounded-md bg-accent-cyan text-primary-foreground font-medium hover:bg-accent-cyan/90 transition-colors cursor-pointer"
         >
           start new chat
         </button>
@@ -1429,8 +1464,8 @@ function ConversationItem({
 
   if (confirming) {
     return (
-      <div className="flex items-center gap-1.5 px-3 py-2 bg-red-950/30 border-y border-red-800/30">
-        <p className="text-xs text-red-400 flex-1 truncate">delete?</p>
+      <div className="flex items-center gap-1.5 px-3 py-2 bg-danger-surface border-y border-danger-border/30">
+        <p className="text-xs text-danger flex-1 truncate">delete?</p>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -1440,9 +1475,9 @@ function ConversationItem({
                 setConfirming(false);
               }}
               aria-label={`confirm delete ${conversation.title}`}
-              className="p-1 rounded hover:bg-red-900/50 transition-colors cursor-pointer"
+              className="p-1 rounded hover:bg-danger-border/50 transition-colors cursor-pointer"
             >
-              <Check className="h-3.5 w-3.5 text-red-400" />
+              <Check className="h-3.5 w-3.5 text-danger" />
             </button>
           </TooltipTrigger>
           <TooltipContent>
@@ -1478,7 +1513,8 @@ function ConversationItem({
               setEditing(false);
             }
           }}
-          className="flex-1 text-sm bg-secondary rounded px-2 py-1 outline-none border border-border focus:border-accent-cyan min-w-0"
+          aria-label="conversation title"
+          className="flex-1 text-base md:text-sm bg-secondary rounded px-2 py-1 outline-none border border-border focus:border-accent-cyan min-w-0"
         />
         <Tooltip>
           <TooltipTrigger asChild>
@@ -1546,7 +1582,9 @@ function ConversationItem({
               {conversation.title}
             </p>
             {conversation.source === 'autonomous' && (
-              <span className="text-[10px] px-1 py-0.5 rounded bg-accent-cyan/15 text-accent-cyan font-medium flex-shrink-0">
+              // /10, not /15: on the sunken panel a /15 tint darkens the chip
+              // until its cyan text misses AA (4.43:1 in light)
+              <span className="text-[10px] px-1 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan font-medium flex-shrink-0">
                 auto
               </span>
             )}
@@ -1602,9 +1640,9 @@ function ConversationItem({
             setConfirming(true);
           }}
           aria-label={`delete ${conversation.title}`}
-          className="relative p-1 rounded bg-card hover:bg-red-900/60 transition-colors cursor-pointer"
+          className="relative p-1 rounded bg-card hover:bg-danger-border/60 transition-colors cursor-pointer"
         >
-          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-red-400 transition-colors" />
+          <Trash2 className="h-3 w-3 text-muted-foreground hover:text-danger transition-colors" />
         </button>
       </div>
     </div>

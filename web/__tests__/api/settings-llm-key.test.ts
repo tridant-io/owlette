@@ -76,7 +76,7 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => fakeDb,
 }));
 
-import { POST, GET, DELETE } from '@/app/api/settings/llm-key/route';
+import { POST, GET, DELETE, PATCH } from '@/app/api/settings/llm-key/route';
 import { emitMutation } from '@/lib/auditLogClient';
 
 function request(method: string, body?: Record<string, unknown>): NextRequest {
@@ -207,5 +207,47 @@ describe('GET /api/settings/llm-key', () => {
       updatedAt: null,
     });
     expect(emitMutation).not.toHaveBeenCalled();
+  });
+});
+
+// changing the model must not ask for the key again: it is stored, encrypted,
+// and the model is a separate field on the same doc.
+describe('PATCH /api/settings/llm-key — model only', () => {
+  const stored = { provider: 'anthropic', apiKeyEncrypted: 'enc(sk-ant-stored)', model: 'claude-old' };
+
+  it('changes the model and leaves the stored key and provider alone', async () => {
+    mockSettingsGet.mockResolvedValue({ exists: true, data: () => stored });
+    const res = await PATCH(request('PATCH', { model: 'claude-new' }));
+    expect(res.status).toBe(200);
+
+    expect(mockSettingsSet).toHaveBeenCalledTimes(1);
+    const [written, options] = mockSettingsSet.mock.calls[0] as [Record<string, unknown>, unknown];
+    expect(written).toEqual({ model: 'claude-new', updatedAt: '__SERVER_TS__' });
+    expect(options).toEqual({ merge: true });
+
+    expect(soleAudit().attributes).toEqual({
+      verb: 'llm_model_changed',
+      endpoint: '/api/settings/llm-key',
+      method: 'PATCH',
+      provider: 'anthropic',
+      model: 'claude-new',
+    });
+  });
+
+  it('refuses when no key is stored: a model alone has nothing to run on', async () => {
+    const res = await PATCH(request('PATCH', { model: 'claude-new' }));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'no_key' });
+    expect(mockSettingsSet).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a missing or empty model', async () => {
+    mockSettingsGet.mockResolvedValue({ exists: true, data: () => stored });
+    for (const body of [{}, { model: '' }, { model: 42 }]) {
+      const res = await PATCH(request('PATCH', body));
+      expect(res.status).toBe(400);
+    }
+    expect(mockSettingsSet).not.toHaveBeenCalled();
   });
 });

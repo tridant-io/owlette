@@ -10,6 +10,7 @@ import {
   query,
   where,
   Timestamp,
+  type DocumentData,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
@@ -87,6 +88,20 @@ function parseFirestoreSeconds(value: unknown): number {
   }
 
   return 0;
+}
+
+/** The agent's `displayAwake` mirror, or undefined when it is absent or not that shape. */
+function parseDisplayAwake(value: unknown): Machine['displayAwake'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as Record<string, unknown>;
+  if (typeof v.wanted !== 'boolean' || typeof v.held !== 'boolean') return undefined;
+  return {
+    wanted: v.wanted,
+    held: v.held,
+    session: typeof v.session === 'boolean' ? v.session : null,
+    how: typeof v.how === 'string' ? v.how : null,
+    reason: typeof v.reason === 'string' ? v.reason : null,
+  };
 }
 
 /**
@@ -224,7 +239,8 @@ export interface HardwareProfile {
 }
 
 export interface CpuMetric   { percent: number; temperature?: number | null }
-export interface MemoryMetric { percent: number; usedGb: number }
+/** `totalGb` arrives as the heartbeat's `total_gb`; absent on a heartbeat that predates it. */
+export interface MemoryMetric { percent: number; usedGb: number; totalGb?: number }
 export interface DiskMetric  { percent: number; usedGb: number }
 export interface GpuMetric   { usagePercent: number; vramUsedGb: number; temperature?: number | null }
 export interface NicMetric   { txBps: number; rxBps: number; txUtil: number; rxUtil: number }
@@ -269,11 +285,31 @@ export interface Machine {
    * Agent capability handshake, written as dotted paths by the heartbeat
    * (`firebase_client.py`). Absent on every agent that predates a key, so each
    * one gates off when missing. `swoop === 1` is the ONLY gate for the swoop
-   * entry — SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is advisory copy.
+   * entry here; SWOOP_MIN_AGENT_VERSION in lib/versionUtils.ts is enforced
+   * later, by the session bundle route, not by the dashboard.
    */
   capabilities?: {
     swoop?: number;
     displayRemoteApply?: number;
+    keepAwake?: number;
+  };
+  /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
+  swoopViewers?: number;
+  /**
+   * What the agent holds for the site's keep screens awake switch, mirrored on
+   * each change. `held` is the service's own hold (system sleep, and on macOS
+   * the display), `session` the desktop app's (idle lock, screensaver, and on
+   * Windows the display), null without a fresh report from
+   * it. `reason` says why a wanted hold is not fully held (`no_display` when
+   * nobody is signed in at the machine). Absent on agents without
+   * `capabilities.keepAwake`.
+   */
+  displayAwake?: {
+    wanted: boolean;
+    held: boolean;
+    session: boolean | null;
+    how: string | null;
+    reason: string | null;
   };
   // `reboot*` are agent-written wire contracts; the legacy spelling is deliberate (UI says "restart").
   rebooting?: boolean;
@@ -446,12 +482,14 @@ function shimLegacyMachine(machine: Machine): Machine {
   // Legacy memory is snake_case at runtime despite the camelCase TS type (which
   // describes the post-shim shape) — read structurally and normalize.
   const legacyMemory = legacy.memory as unknown as
-    | { percent: number; used_gb?: number; usedGb?: number }
+    | { percent: number; used_gb?: number; usedGb?: number; total_gb?: number; totalGb?: number }
     | undefined;
+  const legacyTotalGb = legacyMemory?.total_gb ?? legacyMemory?.totalGb;
   const memory: MemoryMetric | undefined = legacyMemory
     ? {
         percent: legacyMemory.percent,
         usedGb: legacyMemory.used_gb ?? legacyMemory.usedGb ?? 0,
+        ...(typeof legacyTotalGb === 'number' && legacyTotalGb > 0 ? { totalGb: legacyTotalGb } : {}),
       }
     : undefined;
 
@@ -517,6 +555,27 @@ function shimLegacyMachine(machine: Machine): Machine {
     metrics: shimmedMetrics,
     profile: machine.profile ?? shimmedProfile,
   };
+}
+
+/**
+ * Structural equality for Firestore document data. Timestamps and the SDK's
+ * other value types compare with their own `isEqual`; everything else is plain
+ * JSON-like data.
+ */
+function sameDocData(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  const isEqual = (a as { isEqual?: unknown }).isEqual;
+  if (typeof isEqual === 'function') return isEqual.call(a, b) === true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b)
+      && a.length === b.length && a.every((item, i) => sameDocData(item, b[i]));
+  }
+  const aRecord = a as Record<string, unknown>;
+  const bRecord = b as Record<string, unknown>;
+  const keys = Object.keys(aRecord);
+  return keys.length === Object.keys(bRecord).length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(bRecord, key) && sameDocData(aRecord[key], bRecord[key]));
 }
 
 /** Join `metrics` with `profile` into `devices`; flags isMissing / isOrphan. */
@@ -975,6 +1034,9 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
 
 // Module-level so consumers' memo/effect deps don't churn on a fresh [] each render.
 const EMPTY_MACHINES: Machine[] = [];
+// keyed by the pre-join machine object, so a machine whose doc and profile
+// are both unchanged keeps its joined object across renders
+const joinedMachineCache = new WeakMap<Machine, { profile: HardwareProfile | undefined; joined: Machine }>();
 const PROFILE_LISTENER_LIMIT = 50;
 
 // Heartbeat age at which the pill flips offline. 300s tolerates two missed idle
@@ -1061,6 +1123,11 @@ export function useMachines(siteId: string) {
   // list/card views need no per-row sub. Keyed by machineId; absent == false.
   const displayBreakerTrippedOverridesRef = useRef<Record<string, boolean>>({});
 
+  // Last snapshot's raw status-doc data by machineId. Every heartbeat snapshot
+  // carries every doc; comparing against this is how a machine whose doc did
+  // not change keeps its object, and with it every memoized row and card.
+  const statusDocDataRef = useRef<Map<string, DocumentData>>(new Map());
+
   // Config doc is source of truth; the status doc lags 10-120s. onSnapshot (not
   // getDocs) so agent-originated changes propagate.
   useEffect(() => {
@@ -1108,12 +1175,23 @@ export function useMachines(siteId: string) {
           next.processes = next.processes.map(p => {
             const override = machineOverrides[p.id];
             if (!override) return p;
-            return {
+            const launchMode = (override.launch_mode || p.launch_mode) as LaunchMode;
+            const updated: Process = {
               ...p,
-              launch_mode: (override.launch_mode || p.launch_mode) as LaunchMode,
+              launch_mode: launchMode,
               schedules: override.schedules ?? p.schedules,
               schedulePresetId: override.schedulePresetId,
             };
+            // the config doc now agrees with the optimistic write, so release the
+            // hold here too: an offline machine's status doc never changes again,
+            // and the status path alone would keep showing the stale mode
+            if (p._optimisticLaunchMode !== undefined && p._optimisticLaunchMode === launchMode) {
+              delete updated._optimisticLaunchMode;
+              delete updated._optimisticAutolaunch;
+              delete updated._optimisticSchedules;
+              delete updated._optimisticPresetId;
+            }
+            return updated;
           });
         }
         return next;
@@ -1162,6 +1240,9 @@ export function useMachines(siteId: string) {
     // No try/catch: collection() only throws on invalid paths (guarded above) and
     // onSnapshot reports runtime errors via its own callback.
     const machinesRef = collection(db, 'sites', siteId, 'machines');
+    // a new site's first snapshot rebuilds every machine, even one whose id the
+    // previous site shared
+    statusDocDataRef.current = new Map();
 
     const unsubscribe = onSnapshot(
       machinesRef,
@@ -1170,12 +1251,20 @@ export function useMachines(siteId: string) {
         // them and trusting `data.online` painted green pills on minutes-stale
         // machines until the 30s tick corrected them.
 
+        const previousDocData = statusDocDataRef.current;
+        const docData = new Map<string, DocumentData>();
+        const changedMachineIds = new Set<string>();
+        snapshot.forEach((d) => {
+          const data = d.data();
+          docData.set(d.id, data);
+          if (!sameDocData(previousDocData.get(d.id), data)) changedMachineIds.add(d.id);
+        });
+        statusDocDataRef.current = docData;
+
         // Reconcile the capped profile listeners; the first N IDs are deterministic
         // because the collection is sorted by machineId. Detail views use
         // useMachineHardware for an uncapped single-machine listener.
-        const currentMachineIds = new Set<string>();
-        snapshot.forEach((d) => currentMachineIds.add(d.id));
-        const profiledMachineIds = Array.from(currentMachineIds)
+        const profiledMachineIds = Array.from(docData.keys())
           .sort((a, b) => a.localeCompare(b))
           .slice(0, PROFILE_LISTENER_LIMIT);
         const profiledMachineIdSet = new Set(profiledMachineIds);
@@ -1220,12 +1309,17 @@ export function useMachines(siteId: string) {
         }
 
         setMachines(prevMachines => {
+          const prevById = new Map(prevMachines.map((m) => [m.machineId, m]));
           const machineData: Machine[] = [];
 
-          snapshot.forEach((doc) => {
-            const data = doc.data();
-
-            const prevMachine = prevMachines.find(m => m.machineId === doc.id);
+          docData.forEach((data, machineId) => {
+            const prevMachine = prevById.get(machineId);
+            // unchanged doc: the previous object already carries any optimistic
+            // and config-override state applied since
+            if (prevMachine && !changedMachineIds.has(machineId)) {
+              machineData.push(prevMachine);
+              return;
+            }
 
           // processes live under metrics in newer agents, top-level in older ones
           let processes: Process[] = [];
@@ -1259,7 +1353,7 @@ export function useMachines(siteId: string) {
               .map(([id, processData]) => {
                 const prev = prevProcessMap[id];
                 // config doc wins over the status doc for launch_mode/schedules
-                const configOverride = configOverridesRef.current[doc.id]?.[id];
+                const configOverride = configOverridesRef.current[machineId]?.[id];
                 const firestoreMode: LaunchMode = (configOverride?.launch_mode as LaunchMode) || processData.launch_mode || prev?.launch_mode || (processData.autolaunch ? 'always' : 'off');
                 const firestoreSchedules = configOverride?.schedules ?? processData.schedules ?? prev?.schedules ?? null;
                 const firestorePresetId = configOverride?.schedulePresetId ?? processData.schedulePresetId ?? null;
@@ -1319,7 +1413,7 @@ export function useMachines(siteId: string) {
             } : prevMachine?.metrics;
 
             machineData.push({
-              machineId: doc.id,
+              machineId,
               lastHeartbeat,
               online: isOnline,
               agent_version: data.agent_version,
@@ -1331,12 +1425,14 @@ export function useMachines(siteId: string) {
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
               capabilities: data.capabilities,
+              swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
+              displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,
               shutdownScheduledAt,
-              rebootSchedule: restartScheduleOverridesRef.current[doc.id],
-              displayBreakerTripped: displayBreakerTrippedOverridesRef.current[doc.id] === true,
+              rebootSchedule: restartScheduleOverridesRef.current[machineId],
+              displayBreakerTripped: displayBreakerTrippedOverridesRef.current[machineId] === true,
               rebootState: data.rebootState,
               // agent-published "needs restart" banner payload, passed through verbatim
               rebootPending: data.rebootPending,
@@ -1348,7 +1444,9 @@ export function useMachines(siteId: string) {
           // stable ordering prevents row flicker
           machineData.sort((a, b) => a.machineId.localeCompare(b.machineId));
 
-          return machineData;
+          const unchanged = machineData.length === prevMachines.length
+            && machineData.every((m, i) => m === prevMachines[i]);
+          return unchanged ? prevMachines : machineData;
         });
         setLoadedSiteId(siteId);
       },
@@ -1803,13 +1901,17 @@ export function useMachines(siteId: string) {
   };
 
   // Shim legacy machines to v2, then derive `devices`. Memoized on the raw
-  // inputs so unrelated re-renders don't re-derive.
+  // inputs so unrelated re-renders don't re-derive, and per machine so an
+  // unchanged one keeps its joined object.
   const joinedMachines = useMemo(() => {
     return machines.map((m) => {
       const profile = profiles[m.machineId];
+      const cached = joinedMachineCache.get(m);
+      if (cached && cached.profile === profile) return cached.joined;
       const withProfile = profile ? { ...m, profile } : m;
-      const shimmed = shimLegacyMachine(withProfile);
-      return joinMachineDevices(shimmed);
+      const joined = joinMachineDevices(shimLegacyMachine(withProfile));
+      joinedMachineCache.set(m, { profile, joined });
+      return joined;
     });
   }, [machines, profiles]);
 

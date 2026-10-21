@@ -1,13 +1,26 @@
 mod agent_cli;
+mod awake;
 mod commands;
+mod issue_attachments;
+#[cfg(unix)]
+mod jobrunner;
 mod json_io;
+#[cfg(target_os = "macos")]
+mod mac_window;
+#[cfg(target_os = "macos")]
+mod menu_bar_position;
 mod paths;
 mod pid_file;
 mod process_ctl;
+#[cfg(unix)]
+mod seam;
 mod service_ctl;
 mod shell_open;
 mod startup_link;
+#[cfg(target_os = "macos")]
+mod tcc;
 mod tray;
+mod viewer_launch;
 mod watchers;
 mod window_state;
 
@@ -18,7 +31,6 @@ use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 use tauri_plugin_log::{RotationStrategy, Target, TargetKind, TimezoneStrategy};
 
 use crate::paths::TRAY_PID_REL;
-
 /// Emitted when one of the seam files the service owns is replaced.
 pub const EVENT_FILE_CHANGED: &str = "owlette://file-changed";
 
@@ -79,6 +91,12 @@ pub fn run() {
       commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
+      commands::screen_recording_granted,
+      commands::open_screen_recording_settings,
+      commands::accessibility_granted,
+      commands::request_accessibility,
+      commands::clipboard_sharing,
+      commands::request_clipboard_sharing,
       commands::startup_link_enabled,
       commands::set_startup_link,
       commands::read_owlette_json,
@@ -86,11 +104,18 @@ pub fn run() {
       commands::service_status,
       commands::service_start,
       commands::service_stop,
+      #[cfg(unix)]
+      commands::service_restart,
       commands::terminate_pid,
       commands::agent_cli_start,
       commands::agent_cli_cancel,
       commands::open_owlette_path,
       commands::open_external_url,
+      commands::stage_issue_screenshot,
+      commands::stage_issue_video,
+      commands::discard_issue_screenshots,
+      commands::swoop_viewer_installed,
+      commands::open_swoop_viewer,
       commands::log_event,
       commands::sidebar_width,
       commands::set_sidebar_width,
@@ -98,6 +123,9 @@ pub fn run() {
       commands::set_sidebar_collapsed,
       commands::detail_sections,
       commands::set_detail_section,
+      commands::appearance_theme,
+      commands::set_appearance_theme,
+      commands::resolved_appearance,
     ])
     .setup(|app| {
       // Both profiles. A release build is `windows_subsystem = "windows"` with no console,
@@ -124,11 +152,30 @@ pub fn run() {
       }
       app.handle().plugin(logger.build())?;
 
+      // A menubar app: no Dock icon until the window is opened (owner ruling,
+      // 2026-09-25). `show_main_window` / `hide_main_window` switch the policy
+      // with the window, so the icon comes and goes with it.
+      #[cfg(target_os = "macos")]
+      app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
       let root = paths::data_root();
 
       // Running agent-CLI children, so a pairing poll can be cancelled from its dialog and
       // none outlive the app.
       app.manage(agent_cli::Runs::default());
+
+      // Off Windows the daemon has no display: captures, notifications and the
+      // swoop sidecar's launch arrive as job files for this app to run
+      // (tri-platform 4.3, swoop-macos 2.3), and on macOS the daemon is told
+      // about this app's Screen Recording and Accessibility grants (4.4).
+      #[cfg(unix)]
+      app.manage(jobrunner::spawn(app.handle().clone(), &root));
+      #[cfg(target_os = "macos")]
+      tcc::spawn(&root);
+
+      // The session's half of keep screens awake: the service asks through its
+      // status file, and this holds the idle lock and screensaver it cannot.
+      awake::spawn(&root);
 
       // Publish our PID so the service stops spawning trays at us. Process-lifetime;
       // `tmp/gui.pid` exists only while the window is up.
@@ -137,8 +184,8 @@ pub fn run() {
         Err(error) => log::warn!("could not write the tray pid file: {error}"),
       }
 
-      // Restore last-session geometry here: tray, plain launch and a forwarded second
-      // instance all reach `show_main_window`, and this is the only point ahead of all three.
+      // Restore last-session appearance and geometry here: tray, plain launch and a forwarded
+      // second instance all reach `show_main_window`, and this is the only point ahead of all three.
       app.manage(window_state::restore(app.handle()));
 
       // Configured hidden so a `--tray` launch never flashes a window; any other launch is
@@ -192,6 +239,13 @@ pub fn run() {
             layout.persist();
           }
           tray::hide_main_window(window.app_handle());
+        }
+        // the os moved an unpinned window: repaint the frame, which a reload or a
+        // resize edge would otherwise show in the old colour, and tell the page
+        WindowEvent::ThemeChanged(theme) => {
+          if let Some(window) = window.app_handle().get_webview_window("main") {
+            window_state::show_theme(&window, *theme);
+          }
         }
         _ => {}
       }

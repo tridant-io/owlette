@@ -1,34 +1,53 @@
 ---
 title: "deploy"
-description: "⚠️ disambiguation — read this first. owlette deploy … is the classic agent-installer deploy noun: it pushes a silent installer exe (with /SILENT-style flags) at a list of machines and tracks per-target install status. it is NOT owlette roost deploy, which is the content-addressed atomic-deploy surface for roost versions. same word, different surfaces. if you want the new content-addressed flow, jump to roost deploy."
+description: "deploy runs classic installer deployments: it sends a silent-install command for one installer file to a list of machines and tracks each machine's install. it is not owlette roost deploy, which ships roost versions."
+keywords: ["install software", "software rollout"]
 ---
 
-classic-installer deployment management — create new fan-outs, list / inspect them, requeue failed targets, cancel queued targets, queue an uninstall on every target, or delete terminal history records. every verb is **site-scoped** (`--site <siteId>` is required) and **tier A — ready** (real http surface, no stubs). all mutations carry an auto-generated `Idempotency-Key`; pass `--idempotency-key <key>` to pin one yourself for cross-tool replay.
+> **disambiguation**: `owlette deploy …` downloads one installer onto each target machine and runs it with silent-install flags. [`owlette roost deploy`](/docs/cli/reference/roost#deploy) ships a content-addressed roost version to a fleet. same word, different surfaces.
 
-quota: each site has a `sites/{siteId}.deployQuota` ceiling (default 100). exceeding it is a `413 over_quota` problem+json with `quota.max_targets` + `quota.requested` and a hint to either raise the quota on the site doc or shrink `--machines`.
+verbs:
+
+- [`deploy create`](#create) — start a deployment to one or more machines
+- [`deploy list`](#list) — list deployments on a site, one page per run
+- [`deploy get`](#get) — print one deployment with each target's status
+- [`deploy retry`](#retry) — re-queue the targets that failed
+- [`deploy cancel`](#cancel) — cancel targets that have not started
+- [`deploy uninstall`](#uninstall) — queue an uninstall on every target
+- [`deploy delete`](#delete) — delete a finished deployment's record
+
+every verb takes `--site <siteId>`. every mutation sends an `Idempotency-Key` (default `cli-deploy-<verb>-<uuid>`); pass `--idempotency-key <key>` to pin one. if a mutation fails before a response arrives, the CLI prints the key and the `--idempotency-key` to re-run with.
 
 ---
 
 ## create
 
-create a new classic-installer deployment that fans an installer binary out at one or more machines.
+creates a deployment and queues an install command on each machine in `--machines`.
 
-**synopsis** — `owlette deploy create --site <siteId> --name <name> --installer-url <url> --installer-name <name> --silent-flags <flags> --machines <csv> [--verify-path <path>] [--sha256 <hex>] [--close-processes <csv>] [--suppress-projects <csv>] [--parallel] [--idempotency-key <key>]`
+```bash
+owlette deploy create --site <siteId> --name <name> --installer-url <url> --installer-name <name> --silent-flags <flags> --machines <csv> [--verify-path <path>] [--sha256 <hex>] [--close-processes <csv>] [--suppress-projects <csv>] [--parallel] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
-| `--name <name>` | yes | human-readable deployment name |
-| `--installer-url <url>` | yes | https url of the installer binary |
-| `--installer-name <name>` | yes | installer file name (e.g. `Owlette-Installer-v2.10.0.exe`) |
-| `--silent-flags <flags>` | yes | silent-install flags passed to the exe (e.g. `/S`) |
-| `--machines <csv>` | yes | comma-separated machine ids (must be non-empty) |
-| `--verify-path <path>` | no | path that must exist after install to mark success |
-| `--sha256 <hex>` | no | 64-char sha256 digest of the installer for verification |
-| `--close-processes <csv>` | no | process exe names agents should close before install |
-| `--suppress-projects <csv>` | no | project names/paths agents should suppress before install |
-| `--parallel` | no | run the install on all targets concurrently (default: serial) |
-| `--idempotency-key <key>` | no | pin an `Idempotency-Key` (auto-generated if omitted) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+| `--name <name>` | string | yes | deployment name |
+| `--installer-url <url>` | HTTPS URL | yes | where agents download the installer |
+| `--installer-name <name>` | string | yes | file name to save the installer as (for example `Owlette-Installer-v2.10.0.exe`) |
+| `--silent-flags <flags>` | string | yes | flags passed to the installer (for example `/S`) |
+| `--machines <csv>` | string | yes | target machine IDs, comma-separated, at least one |
+| `--verify-path <path>` | string | no | path that must exist after install for it to count as a success |
+| `--sha256 <hex>` | string | no | 64-character SHA-256 of the installer; agents refuse a file that does not match |
+| `--close-processes <csv>` | string | no | process exe names agents close before installing |
+| `--suppress-projects <csv>` | string | no | project names or paths agents suppress before installing |
+| `--parallel` | boolean | no | install on all targets at once (default: one at a time) |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+an empty `--machines`, or a `--close-processes` / `--suppress-projects` that is present but empty, fails before a request is sent. a site may target at most `sites/{siteId}.deployQuota` machines per deployment (default 100); more returns `413 over_quota`, and the CLI prints the `max_targets` and `requested` counts.
+
+human mode prints `owlette: deployment <id> created on <siteId> — status <status>, <n> target(s)`. `--json` prints the raw response: `deploymentId`, `siteId`, `status` and `targets`.
+
+### examples
 
 ```bash
 owlette deploy create --site site-1 \
@@ -42,155 +61,190 @@ owlette deploy create --site site-1 \
   --parallel
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/deployments`
-
-quota error shape (413):
-
-```json
-{ "code": "over_quota", "detail": "...", "quota": { "max_targets": 100, "requested": 137 } }
-```
+backing: `POST /api/sites/{siteId}/deployments`.
 
 ---
 
 ## list
 
-list classic-installer deployments on a site, newest first. cursor-paged.
+lists deployments on a site, newest first, one page per run.
 
-**synopsis** — `owlette deploy list --site <siteId> [--limit <n>] [--cursor <token>] [--json]`
+```bash
+owlette deploy list --site <siteId> [--limit <n>] [--cursor <token>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id to list deployments for |
-| `--limit <n>` | no | page size, 1..100 (default 25) |
-| `--cursor <token>` | no | opaque `page_token` returned by a previous list call |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site to list |
+| `--limit <n>` | integer | no | page size; the server accepts 1–100 (default 25) |
+| `--cursor <token>` | string | no | `next_page_token` from an earlier page |
+
+the table has `id`, `name`, `status`, `targets`, `installer` and `createdAt`, or prints `(no deployments)`. when more pages remain it ends with `next page: --cursor <token>`. `--json` prints the raw response: `{ "items": [...], "next_page_token": "..." }`.
+
+### examples
 
 ```bash
 owlette deploy list --site site-1
-owlette deploy list --site site-1 --limit 50 --json | jq '.items[] | select(.status == "failed") | .id'
 ```
 
-**backing endpoint**: `GET /api/sites/{siteId}/deployments`
+```bash
+owlette --json deploy list --site site-1 --limit 50 | jq -r '.items[] | select(.status == "failed") | .id'
+```
+
+backing: `GET /api/sites/{siteId}/deployments?page_size=&page_token=`.
 
 ---
 
 ## get
 
-print one deployment incl. per-target install status (success / failed / pending / cancelled).
+prints one deployment, then a table of its targets with `machineId`, `status` and `error`.
 
-**synopsis** — `owlette deploy get <deploymentId> --site <siteId> [--json]`
+```bash
+owlette deploy get <deploymentId> --site <siteId> [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+
+`--json` prints the raw record: `id`, `siteId`, `name`, `installer_name`, `installer_url`, `silent_flags`, `verify_path`, `sha256_checksum`, `parallel_install`, `targets`, `status`, `createdAt`, `completedAt` and `updatedAt`.
+
+### examples
 
 ```bash
 owlette deploy get dep_abc123 --site site-1
-owlette deploy get dep_abc123 --site site-1 --json | jq '.targets[] | select(.status == "failed")'
 ```
 
-**backing endpoint**: `GET /api/sites/{siteId}/deployments/{deploymentId}`
+```bash
+owlette --json deploy get dep_abc123 --site site-1 | jq '.targets[] | select(.status == "failed")'
+```
+
+backing: `GET /api/sites/{siteId}/deployments/{deploymentId}`.
 
 ---
 
 ## retry
 
-requeue every target on a deployment that previously failed. successful + in-flight targets are left alone.
+re-queues every target whose status is `failed`. other targets are left alone.
 
-**synopsis** — `owlette deploy retry <deploymentId> --site <siteId> [--idempotency-key <key>]`
+```bash
+owlette deploy retry <deploymentId> --site <siteId> [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
-| `--idempotency-key <key>` | no | pin an `Idempotency-Key` (auto-generated if omitted) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--json` prints `deploymentId`, `siteId`, `status`, `retried` and `machine_ids`.
+
+### examples
 
 ```bash
 owlette deploy retry dep_abc123 --site site-1
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/deployments/{deploymentId}/retry`
+backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/retry`.
 
 ---
 
 ## cancel
 
-cancel queued targets on a deployment. installers already in flight are **not** interrupted — only pending commands are pulled. interactive by default; pass `--yes` to skip the confirmation, required when stdin is not a tty.
+cancels the targets that have not started. installers already running are not interrupted.
 
-**synopsis** — `owlette deploy cancel <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>]`
+```bash
+owlette deploy cancel <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
-| `--yes` | no | skip the confirmation prompt (required for non-tty / scripted use) |
-| `--idempotency-key <key>` | no | pin an `Idempotency-Key` (auto-generated if omitted) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--json` prints `deploymentId`, `siteId`, `status`, `cancelled` and `machine_ids`.
+
+### examples
 
 ```bash
 owlette deploy cancel dep_abc123 --site site-1
-owlette deploy cancel dep_abc123 --site site-1 --yes --json
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/deployments/{deploymentId}/cancel`
+```bash
+owlette --json deploy cancel dep_abc123 --site site-1 --yes
+```
+
+backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/cancel`.
 
 ---
 
 ## uninstall
 
-queue an uninstall on every target machine of a previous deployment. requires `site=<id>:admin` scope on the calling key — `:write` is **not** enough. interactive by default; pass `--yes` to skip the confirmation, required when stdin is not a tty.
+queues an uninstall of the deployment's software on every target machine. the calling key needs `site=<id>` with both `write` **and** `admin`; without `admin` the server returns `403 scope_insufficient` and the CLI adds a hint naming the missing scope.
 
-**synopsis** — `owlette deploy uninstall <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>]`
+```bash
+owlette deploy uninstall <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
-| `--yes` | no | skip the confirmation prompt (required for non-tty / scripted use) |
-| `--idempotency-key <key>` | no | pin an `Idempotency-Key` (auto-generated if omitted) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--json` prints `deploymentId`, `siteId`, `status`, `queued` and `machine_ids`.
+
+### examples
 
 ```bash
 owlette deploy uninstall dep_abc123 --site site-1
+```
+
+```bash
 owlette deploy uninstall dep_abc123 --site site-1 --yes
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall`
-
-a 403 with `code=scope_insufficient` is returned if the key only carries `:write`; the cli surfaces a hint pointing at the missing `:admin` scope.
+backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall`.
 
 ---
 
 ## delete
 
-delete a terminal deployment history record. this does **not** uninstall software; use `uninstall` first if targets still need removal.
+deletes a finished deployment's record. it does **not** uninstall anything — run [`uninstall`](#uninstall) first if the software should go. a deployment that is still running returns `409 deployment_in_flight`.
 
-**synopsis** — `owlette deploy delete <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>]`
+```bash
+owlette deploy delete <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the deployment |
-| `--yes` | no | skip the confirmation prompt (required for non-tty / scripted use) |
-| `--idempotency-key <key>` | no | pin an `Idempotency-Key` (auto-generated if omitted) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the deployment |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--json` prints `deploymentId`, `siteId` and `deleted`.
+
+### examples
 
 ```bash
 owlette deploy delete dep_abc123 --site site-1 --yes
 ```
 
-**backing endpoint**: `DELETE /api/sites/{siteId}/deployments/{deploymentId}`
-
-the server rejects non-terminal deployments with `409 deployment_in_flight`.
+backing: `DELETE /api/sites/{siteId}/deployments/{deploymentId}`.
 
 ---
 
 ## exit codes
 
-- `0` — success
-- `1` — generic error (network, api 5xx, 413 `over_quota`, 403 `scope_insufficient`, unexpected response shape)
-- `2` — usage error (missing `--site`, empty `--machines`, no token configured, refusal to run interactive prompt without `--yes` on a non-tty)
-
-stable problem+json codes surfaced with hints: `over_quota`, `scope_insufficient`, plus the standard `idempotency_key_mismatch` from the shared idempotency layer.
+- `0` — success, including a declined prompt (`cancel aborted`, `uninstall aborted`, `delete aborted`)
+- `1` — network failure, a non-2xx response (`413 over_quota`, `403 scope_insufficient`, `409 deployment_in_flight`, `idempotency_key_mismatch`), or a missing required flag
+- `2` — an empty `--machines`, an empty `--close-processes` or `--suppress-projects`, a `--limit` that is not a positive integer, `cancel`/`uninstall`/`delete` without `--yes` when stdin is not a tty, or no token configured
 
 ---
 
 ## notes
 
-- **scope**: site-scoped. `list` / `get` need `site=<id>:read`; `create` / `retry` / `cancel` / `delete` need `site=<id>:write`. `uninstall` needs `site=<id>:admin`.
-- **tier**: A — every verb hits a real public api (finalized in public-api Wave 2.6).
-- **idempotency**: every mutation auto-generates an `Idempotency-Key`. pin one with `--idempotency-key <key>` so a tool replaying the same request hits the cached response instead of issuing a second deployment.
-- **related**: [`owlette roost deploy`](/docs/cli/reference/roost) for the content-addressed atomic-deploy surface; [`owlette installer`](/docs/cli/reference/installer) for managing the installer binaries this command consumes.
-- see [overview](/docs/cli/overview) for global flags (`--profile`, `--json`, `--api-url`) and config precedence.
+- **scope**: site-scoped. `list` and `get` need `site=<id>:read`; `create`, `retry`, `cancel` and `delete` need `site=<id>:write`; `uninstall` needs `write` and `admin`
+- **JSON**: raw objects with no `{ ok, data }` wrapper
+- **idempotency**: a retry with the same key replays the cached response instead of queueing the installs twice — see [idempotency](/docs/api/idempotency)
+- **related**: [`roost deploy`](/docs/cli/reference/roost#deploy) for roost versions, [`installer`](/docs/cli/reference/installer) for owlette's own agent installers, [`machine`](/docs/cli/reference/machine) for the target machine IDs

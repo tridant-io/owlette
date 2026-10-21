@@ -32,7 +32,9 @@ function harness(options: Partial<Parameters<typeof attachInputCapture>[0]> = {}
   const capture = attachInputCapture({
     target,
     send: (payload) => payloads.push(payload),
-    cmdMapping: 'win',
+    // a pc viewing a windows machine: nothing to map, whatever jsdom's agent says.
+    hostOs: 'windows',
+    viewerIsMac: false,
     nowUs: () => TS_US,
     rect: () => ({ left: 0, top: 0, width: 200, height: 100 }),
     schedule: (flush) => {
@@ -139,11 +141,16 @@ describe('pointer batching', () => {
     expect(h.sent()).toEqual([{ t: 'mr', dx: 10, dy: 0, seq: 1, tsUs: TS_US }]);
   });
 
-  it('clamps an absolute move that leaves the video box', () => {
+  it('keeps a drag going past the video box, pinned to its edge', () => {
     const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
     h.target.dispatchEvent(pointerEvent('pointermove', { clientX: -40, clientY: 400 }));
     h.tick();
-    expect(h.sent()).toEqual([{ t: 'm', x: 0, y: 1, seq: 1, tsUs: TS_US }]);
+    expect(h.sent()).toEqual([
+      { t: 'b', button: 0, down: true, seq: 1, tsUs: TS_US },
+      { t: 'm', x: 0, y: 1, seq: 2, tsUs: TS_US },
+    ]);
+    expect(h.capture.pointerOutside).toBe(false);
   });
 
   it('flushes the pending move ahead of a key, without waiting for a tick', () => {
@@ -168,6 +175,117 @@ describe('pointer batching', () => {
       { t: 'w', dx: 0, dy: 42, mode: 'pixel', seq: 1, tsUs: TS_US },
       { t: 'w', dx: 0, dy: 1, mode: 'line', seq: 2, tsUs: TS_US },
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// off the picture
+// ---------------------------------------------------------------------------
+
+describe('off the picture', () => {
+  it('moves nothing on the host over the letterbox bars, and says the pointer is off the picture', () => {
+    const h = harness();
+    const changes = jest.fn();
+    h.capture.onPointerOutsideChange(changes);
+
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: -20 }));
+    h.tick();
+    expect(h.sent()).toEqual([]);
+    expect(h.capture.pointerOutside).toBe(true);
+
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: 50 }));
+    h.tick();
+    expect(h.sent()).toEqual([{ t: 'm', x: 0.5, y: 0.5, seq: 1, tsUs: TS_US }]);
+    expect(h.capture.pointerOutside).toBe(false);
+    expect(changes).toHaveBeenCalledTimes(2);
+  });
+
+  it('clicks nothing on the host for a press in the bars, and sends no release for it', () => {
+    const h = harness();
+    const down = pointerEvent('pointerdown', { clientX: 250, clientY: 50, button: 0 });
+    h.target.dispatchEvent(down);
+    h.target.dispatchEvent(pointerEvent('pointerup', { clientX: 250, clientY: 50, button: 0 }));
+    expect(h.sent()).toEqual([]);
+    expect(down.defaultPrevented).toBe(false);
+  });
+
+  it('scrolls nothing on the host for a wheel over the bars', () => {
+    const h = harness();
+    h.target.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, clientX: 100, clientY: 150, cancelable: true }));
+    h.tick();
+    expect(h.sent()).toEqual([]);
+  });
+
+  it('counts leaving the stage as off the picture, unless a drag carries the pointer out', () => {
+    const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerleave'));
+    expect(h.capture.pointerOutside).toBe(false);
+
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerleave'));
+    expect(h.capture.pointerOutside).toBe(true);
+  });
+
+  it('clicks under pointer lock wherever the local pointer sits: it has no position there', () => {
+    const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 100, clientY: -20 }));
+    setPointerLock(h.target);
+    expect(h.capture.pointerOutside).toBe(false);
+
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 250, clientY: -20, button: 0 }));
+    expect(h.sent()).toEqual([{ t: 'b', button: 0, down: true, seq: 1, tsUs: TS_US }]);
+  });
+});
+
+describe('a held button', () => {
+  it('says while a press the host was sent is down, and never for one in the bars', () => {
+    const h = harness();
+    const changes = jest.fn();
+    h.capture.onButtonHeldChange(changes);
+
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 250, clientY: 50, button: 0 }));
+    expect(h.capture.buttonHeld).toBe(false);
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 2 }));
+    expect(h.capture.buttonHeld).toBe(true);
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 0 }));
+    expect(h.capture.buttonHeld).toBe(true);
+    h.target.dispatchEvent(pointerEvent('pointerup', { button: 2 }));
+    expect(h.capture.buttonHeld).toBe(false);
+    expect(changes).toHaveBeenCalledTimes(2);
+
+    // a press the window loses on its way out is released on the host, and here.
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 100, clientY: 50, button: 0 }));
+    window.dispatchEvent(new Event('blur'));
+    expect(h.capture.buttonHeld).toBe(false);
+  });
+});
+
+describe('detach', () => {
+  const exitPointerLock = jest.fn(() => setPointerLock(null));
+  beforeEach(() => {
+    exitPointerLock.mockClear();
+    Object.defineProperty(document, 'exitPointerLock', { value: exitPointerLock, configurable: true });
+  });
+  afterEach(() => {
+    delete (document as { exitPointerLock?: unknown }).exitPointerLock;
+  });
+
+  it('gives a locked pointer back, sending the host no escape for it', () => {
+    const h = harness();
+    setPointerLock(h.target);
+    h.capture.detach();
+    // a session that is gone draws no pointer, so a lock it kept left none at all.
+    expect(exitPointerLock).toHaveBeenCalledTimes(1);
+    expect(h.sent()).toEqual([]);
+  });
+
+  it('leaves a lock it does not hold alone', () => {
+    const h = harness();
+    setPointerLock(document.createElement('div'));
+    h.capture.detach();
+    expect(exitPointerLock).not.toHaveBeenCalled();
   });
 });
 
@@ -240,35 +358,399 @@ describe('keyboard', () => {
   });
 });
 
-describe('cmd mapping', () => {
-  it('sends ctrl for cmd when configured that way', () => {
-    const h = harness({ cmdMapping: 'ctrl' });
+describe('escape twice, the keyboard way off the stage', () => {
+  const tapEscape = (h: Harness, init: KeyboardEventInit = {}): KeyboardEvent => {
+    const down = keyEvent('keydown', 'Escape', init);
+    h.target.dispatchEvent(down);
+    h.target.dispatchEvent(keyEvent('keyup', 'Escape'));
+    return down;
+  };
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+  });
+
+  it('sends the first tap to the host and keeps the second, telling the listener', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+
+    tapEscape(h);
+    expect(leave).not.toHaveBeenCalled();
+    const second = keyEvent('keydown', 'Escape');
+    h.target.dispatchEvent(second);
+
+    expect(leave).toHaveBeenCalledTimes(1);
+    expect(second.defaultPrevented).toBe(false);
+    expect(h.sent()).toEqual([
+      { t: 'k', code: 'Escape', down: true, seq: 1, tsUs: TS_US },
+      { t: 'k', code: 'Escape', down: false, seq: 2, tsUs: TS_US },
+    ]);
+  });
+
+  it('releases what is held before focus goes, so nothing sticks down on the host', () => {
+    const h = harness();
+    h.capture.onEscapeTwice(jest.fn());
+    h.target.dispatchEvent(keyEvent('keydown', 'ShiftLeft'));
+
+    tapEscape(h);
+    h.clear();
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+
+    expect(h.sent()).toEqual([{ t: 'k', code: 'ShiftLeft', down: false, seq: 4, tsUs: TS_US }]);
+  });
+
+  it('sends both taps when they are further apart than half a second', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+    const now = jest.spyOn(performance, 'now').mockReturnValue(1_000);
+
+    tapEscape(h);
+    now.mockReturnValue(1_501);
+    tapEscape(h);
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+
+  it('does not count a held escape repeating', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape', { repeat: true }));
+
+    expect(leave).not.toHaveBeenCalled();
+  });
+
+  it('leaves fullscreen to the browser escape hold', () => {
+    const h = harness();
+    const leave = jest.fn();
+    h.capture.onEscapeTwice(leave);
+    Object.defineProperty(document, 'fullscreenElement', { value: h.target, configurable: true });
+
+    tapEscape(h);
+    tapEscape(h);
+
+    expect(leave).not.toHaveBeenCalled();
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+
+  it('sends every escape to the host while nothing listens', () => {
+    const h = harness();
+    const off = h.capture.onEscapeTwice(jest.fn());
+    off();
+
+    tapEscape(h);
+    tapEscape(h);
+
+    expect(h.sent().filter((m) => m.t === 'k' && m.down)).toHaveLength(2);
+  });
+});
+
+describe('escape held for two seconds, the way out of fullscreen in owlette swoop', () => {
+  const APP_UA = 'Mozilla/5.0 owlette-swoop-viewer/0.0.0';
+  const BROWSER_UA = 'Mozilla/5.0 Chrome/140.0';
+  let exitFullscreen: jest.Mock;
+  let exitPointerLock: jest.Mock;
+
+  /** a capture on a fullscreen stage, under the given user agent. */
+  const fullscreenHarness = (ua: string): Harness => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
+    const h = harness();
+    Object.defineProperty(document, 'fullscreenElement', { value: h.target, configurable: true });
+    return h;
+  };
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    exitFullscreen = jest.fn(() => Promise.resolve());
+    exitPointerLock = jest.fn();
+    Object.defineProperty(document, 'exitFullscreen', { value: exitFullscreen, configurable: true });
+    Object.defineProperty(document, 'exitPointerLock', { value: exitPointerLock, configurable: true });
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    jest.restoreAllMocks();
+    Object.defineProperty(document, 'fullscreenElement', { value: null, configurable: true });
+    Reflect.deleteProperty(document, 'exitFullscreen');
+    Reflect.deleteProperty(document, 'exitPointerLock');
+  });
+
+  it('leaves fullscreen and lets go of the pointer two seconds into the hold, however it repeats', () => {
+    const h = fullscreenHarness(APP_UA);
+    setPointerLock(h.target);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    jest.advanceTimersByTime(1000);
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape', { repeat: true }));
+    jest.advanceTimersByTime(999);
+    expect(exitFullscreen).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    expect(exitFullscreen).toHaveBeenCalledTimes(1);
+    expect(exitPointerLock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does nothing when escape is let go at 1.9 s', () => {
+    const h = fullscreenHarness(APP_UA);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    jest.advanceTimersByTime(1900);
+    h.target.dispatchEvent(keyEvent('keyup', 'Escape'));
+    jest.advanceTimersByTime(10_000);
+
+    expect(exitFullscreen).not.toHaveBeenCalled();
+  });
+
+  it('never arms in a browser, which owns its own escape hold', () => {
+    const h = fullscreenHarness(BROWSER_UA);
+
+    h.target.dispatchEvent(keyEvent('keydown', 'Escape'));
+    expect(jest.getTimerCount()).toBe(0);
+    jest.advanceTimersByTime(10_000);
+
+    expect(exitFullscreen).not.toHaveBeenCalled();
+    expect(h.sent()).toEqual([{ t: 'k', code: 'Escape', down: true, seq: 1, tsUs: TS_US }]);
+  });
+});
+
+describe('keys owlette swoop captures itself', () => {
+  // desktop/viewer/src/windows.rs: the macos build ends its ua with ` (keys)`
+  const MAC_APP =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/4.1.8 (keys)';
+  type NativeKeyHost = { __owletteNativeKey?: (code: string, down: boolean) => void };
+  const nativeKeyHost = (): NativeKeyHost => window as unknown as NativeKeyHost;
+  const keys = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? `${m.code}:${m.down ? 'down' : 'up'}` : m.t));
+
+  /** a mac viewing a mac in the app, the stage focused as fullscreen leaves it. */
+  const appHarness = (options: Partial<Parameters<typeof attachInputCapture>[0]> = {}): Harness => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(MAC_APP);
+    const h = harness({ hostOs: 'macos', viewerIsMac: true, ...options });
+    h.target.tabIndex = -1;
+    h.target.focus();
+    return h;
+  };
+
+  afterEach(() => jest.restoreAllMocks());
+
+  it("sends the app's down, and the page's own keyup releases it", () => {
+    const h = appHarness();
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+    // macos hands over only the down; webkit gives the page the up
+    nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyQ'));
+    h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
+    expect(keys(h)).toEqual(['MetaLeft:down', 'KeyQ:down', 'KeyQ:up', 'MetaLeft:up']);
+
+    // nothing is left held for a blur to release
+    h.clear();
+    window.dispatchEvent(new Event('blur'));
+    expect(h.sent()).toHaveLength(0);
+  });
+
+  it('sends a second down of a held key once: a shortcut fires once on the host', () => {
+    const h = appHarness();
+    h.capture.nativeKey('KeyW', true);
+    h.capture.nativeKey('KeyW', true);
+    h.capture.nativeKey('KeyW', false);
+    expect(keys(h)).toEqual(['KeyW:down', 'KeyW:up']);
+  });
+
+  it('releases what it pressed on blur, with everything else', () => {
+    const h = appHarness();
+    h.capture.nativeKey('KeyQ', true);
+    h.clear();
+    window.dispatchEvent(new Event('blur'));
+    expect(keys(h)).toEqual(['KeyQ:up']);
+  });
+
+  it('goes through the modifier mapping, as a typed key does', () => {
+    const h = appHarness({ hostOs: 'windows' });
+    h.capture.nativeKey('MetaLeft', true);
+    h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
+    expect(keys(h)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
+  });
+
+  it('takes no down while the stage lacks focus, since its keyup would never reach the stage', () => {
+    const h = appHarness();
+    h.target.blur();
+    h.capture.nativeKey('KeyQ', true);
+    expect(h.sent()).toHaveLength(0);
+  });
+
+  it('exists only in the app that says it captures keys, and goes on detach', () => {
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 Chrome/141.0');
+    const browser = harness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    browser.capture.detach();
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) owlette-swoop-viewer/4.1.8');
+    const windowsApp = harness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    windowsApp.capture.detach();
+
+    const h = appHarness();
+    expect(nativeKeyHost().__owletteNativeKey).toBeDefined();
+    h.capture.detach();
+    expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
+    h.capture.nativeKey('KeyQ', true);
+    expect(keys(h)).toEqual([]);
+  });
+
+  it("leaves a newer capture's in place when an older one detaches", () => {
+    const older = appHarness();
+    const newer = appHarness();
+    older.capture.detach();
+    nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
+    expect(keys(newer)).toEqual(['KeyQ:down']);
+  });
+});
+
+describe('a held modifier', () => {
+  it('holds an armed modifier through the next key and releases it after', () => {
+    const h = harness({ hostOs: 'macos' });
+    h.capture.holdNextKey('MetaLeft');
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'MetaLeft:down',
+      'KeyC:down',
+      'KeyC:up',
+      'MetaLeft:up',
+    ]);
+  });
+
+  it('does not take the release of a key pressed before the hold as the next key', () => {
+    const h = harness({ hostOs: 'macos' });
+    h.capture.holdNextKey('MetaLeft');
+    // the enter that chose the menu item, released once focus is back on the stage.
+    h.target.dispatchEvent(keyEvent('keyup', 'Enter'));
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'MetaLeft:down',
+      'Enter:up',
+      'KeyC:down',
+      'KeyC:up',
+      'MetaLeft:up',
+    ]);
+  });
+
+  it('releases an armed modifier with everything else, and never arms it twice', () => {
+    const h = harness();
+    h.capture.holdNextKey('MetaLeft');
+    h.capture.holdNextKey('MetaLeft');
+    h.capture.releaseAll();
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual(['MetaLeft:down', 'MetaLeft:up']);
+  });
+});
+
+describe('modifier mapping', () => {
+  const codes = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? m.code : m.t));
+
+  it("sends a mac viewer's cmd to a windows host as ctrl by default", () => {
+    const h = harness({ hostOs: 'windows', viewerIsMac: true });
     h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
     h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
     h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
 
-    expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual([
-      'ControlLeft',
-      'ControlLeft',
-      'ControlRight',
-    ]);
+    expect(codes(h)).toEqual(['ControlLeft', 'ControlLeft', 'ControlRight']);
   });
 
-  it('sends the windows key for cmd when configured that way', () => {
-    const h = harness({ cmdMapping: 'win' });
-    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
-    h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
+  it("sends a pc viewer's ctrl to a mac host as cmd by default, so ctrl+c copies there", () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'KeyC'));
+    h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlRight'));
 
-    expect(h.sent().map((m) => (m.t === 'k' ? m.code : m.t))).toEqual(['MetaLeft', 'MetaRight']);
+    expect(codes(h)).toEqual(['MetaLeft', 'KeyC', 'KeyC', 'MetaLeft', 'MetaRight']);
+  });
+
+  it('sends every key as pressed under passthrough', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false, modifierMapping: 'passthrough' });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+
+    expect(codes(h)).toEqual(['ControlLeft', 'MetaLeft']);
+  });
+
+  it('sends every key as pressed where the viewer and the host agree', () => {
+    const mac = harness({ hostOs: 'macos', viewerIsMac: true });
+    const pc = harness({ hostOs: 'windows', viewerIsMac: false });
+    for (const h of [mac, pc]) {
+      h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      expect(codes(h)).toEqual(['MetaLeft', 'ControlLeft']);
+    }
+  });
+
+  it('sends a chord from the menu as written, never through the mapping', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.capture.pressChord(['MetaLeft', 'ControlLeft', 'KeyQ']);
+
+    expect(codes(h)).toEqual(['MetaLeft', 'ControlLeft', 'KeyQ', 'KeyQ', 'ControlLeft', 'MetaLeft']);
+  });
+
+  it('presses a chord in order and releases it in reverse, inside the one sequence', () => {
+    const h = harness();
+    h.capture.pressChord(['AltLeft', 'Tab']);
+
+    const keys = h.sent().filter((m) => m.t === 'k');
+    expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual([
+      'AltLeft:down',
+      'Tab:down',
+      'Tab:up',
+      'AltLeft:up',
+    ]);
+    const seqs = keys.map((m) => m.seq);
+    expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
   });
 
   it('releases what is held before the mapping changes under it', () => {
-    const h = harness({ cmdMapping: 'win' });
+    const h = harness({ hostOs: 'windows', viewerIsMac: true, modifierMapping: 'passthrough' });
     h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
     h.clear();
 
-    h.capture.setCmdMapping('ctrl');
+    h.capture.setModifierMapping('windows', 'swap');
     expect(h.sent()).toEqual([{ t: 'k', code: 'MetaLeft', down: false, seq: 2, tsUs: TS_US }]);
+    h.clear();
+
+    h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+    expect(codes(h)).toEqual(['ControlLeft']);
+  });
+
+  it('takes the machine it learns after attach, releasing what is held first', () => {
+    const h = harness({ viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.clear();
+
+    h.capture.setModifierMapping('macos', 'swap');
+    expect(h.sent()).toEqual([{ t: 'k', code: 'ControlLeft', down: false, seq: 2, tsUs: TS_US }]);
+    h.clear();
+
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    expect(codes(h)).toEqual(['MetaLeft']);
+  });
+
+  it('releases nothing when neither the machine nor the mapping changes', () => {
+    const h = harness({ hostOs: 'macos', viewerIsMac: false });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.clear();
+
+    h.capture.setModifierMapping('macos', 'swap');
+    expect(h.sent()).toEqual([]);
   });
 });
 

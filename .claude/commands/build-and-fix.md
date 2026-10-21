@@ -13,12 +13,12 @@ Build both projects and fix any errors found. Repeat until zero errors.
 
 2. **Build agent** (Python syntax check):
    ```bash
-   cd agent && python -m py_compile src/*.py
+   agent/.venv/Scripts/python -m py_compile agent/src/*.py
    ```
 
 3. If errors found:
    - Read the file, understand context, fix the error
-   - Follow project skills guidelines (auto-activated)
+   - Follow the frontend-dev-guidelines / backend-dev-guidelines skills
    - Fix root causes first — one fix may resolve multiple errors
    - Work in order: imports > syntax > types > logic
 

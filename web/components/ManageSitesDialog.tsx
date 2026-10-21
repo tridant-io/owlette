@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Pencil, Trash2, Check, X, Plus, User, Search, ChevronDown } from 'lucide-react';
+import { Pencil, Trash2, Check, X, Plus, User, Search, ChevronDown, MonitorPlay, MonitorOff } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
@@ -14,6 +14,7 @@ import { useUserManagement } from '@/hooks/useUserManagement';
 import { useAuth } from '@/contexts/AuthContext';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { useDisplaySettings } from '@/hooks/useDisplaySettings';
 import { Switch } from '@/components/ui/switch';
 
 interface Site {
@@ -39,8 +40,9 @@ function highlightMatch(text: string, query: string): React.ReactNode {
       break;
     }
     if (idx > i) parts.push(text.slice(i, idx));
+    // by day cyan glyphs on a cyan tint miss aa, so they go to ink, as the highlighter link does
     parts.push(
-      <mark key={key++} className="rounded-[2px] bg-accent-cyan/25 font-semibold text-accent-cyan">
+      <mark key={key++} className="rounded-[2px] bg-accent-cyan/25 font-semibold text-foreground dark:text-accent-cyan">
         {text.slice(idx, idx + q.length)}
       </mark>,
     );
@@ -49,60 +51,127 @@ function highlightMatch(text: string, query: string): React.ReactNode {
   return parts;
 }
 
+interface SiteSettingSwitchProps {
+  id: string;
+  label: string;
+  description: string;
+  checked: boolean;
+  loading: boolean;
+  /** PATCHed with `{ [field]: next }` the moment the switch moves. */
+  url: string;
+  field: string;
+}
+
 /**
- * Site-wide swoop switch. Off is the safe state and the default, and turning it
- * off reaches machines that are already connected — the api tells every online
- * machine to re-dial, and their next doorbell request is refused.
+ * One immediate site setting. It is not part of the edit panel's save: the
+ * PATCH nudges the site's online machines, which a cancel could not take back.
+ * The switch follows its snapshot hook, so only a failure needs saying.
  */
-function SwoopSiteToggle({ siteId }: { siteId: string }) {
-  const { settings, loading } = useSwoopSettings(siteId);
+function SiteSettingSwitch({ id, label, description, checked, loading, url, field }: SiteSettingSwitchProps) {
   const [busy, setBusy] = useState(false);
 
-  const setEnabled = async (next: boolean) => {
+  const save = async (next: boolean) => {
     if (busy) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/sites/${encodeURIComponent(siteId)}/swoop-settings`, {
+      const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: next }),
+        body: JSON.stringify({ [field]: next }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail || body?.title || 'failed to update swoop');
+        throw new Error(body?.detail || body?.title || `failed to update ${label}`);
       }
-      // The switch itself follows the snapshot, so only the failure needs saying.
     } catch (err) {
-      console.error('Failed to update swoop settings:', err);
-      toast.error(err instanceof Error ? err.message : 'failed to update swoop');
+      console.error(`Failed to update ${label}:`, err);
+      toast.error(err instanceof Error ? err.message : `failed to update ${label}`);
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
-      <div className="space-y-0.5">
-        <Label htmlFor={`swoop-${siteId}`} className="text-white">
-          swoop
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor={id} className="text-foreground">
+          {label}
         </Label>
-        <p className="text-xs text-muted-foreground">
-          let admins watch and control this site&apos;s machines remotely
-        </p>
+        <p className="text-xs text-muted-foreground">{description}</p>
       </div>
       <Switch
-        id={`swoop-${siteId}`}
-        checked={settings.enabled}
-        onCheckedChange={(next) => void setEnabled(next)}
+        id={id}
+        checked={checked}
+        onCheckedChange={(next) => void save(next)}
         disabled={busy || loading}
       />
     </div>
   );
 }
 
+/**
+ * The site's switches, in its edit panel. Swoop is off until a site turns it
+ * on, and turning it off ends live sessions; keep screens awake is on unless a
+ * site turns it off.
+ */
+function SiteSettingsSwitches({ siteId }: { siteId: string }) {
+  const swoop = useSwoopSettings(siteId);
+  const display = useDisplaySettings(siteId);
+  const base = `/api/sites/${encodeURIComponent(siteId)}`;
+
+  return (
+    <div className="mt-3 space-y-3 border-t border-border/60 pt-3">
+      <SiteSettingSwitch
+        id={`swoop-${siteId}`}
+        label="swoop"
+        description="let admins watch and control this site's machines remotely"
+        checked={swoop.settings.enabled}
+        loading={swoop.loading}
+        url={`${base}/swoop-settings`}
+        field="enabled"
+      />
+      <SiteSettingSwitch
+        id={`keep-awake-${siteId}`}
+        label="keep screens awake"
+        description="machines on this site never sleep, blank or lock"
+        checked={display.settings.keepAwake}
+        loading={display.loading}
+        url={`${base}/display-settings`}
+        field="keepAwake"
+      />
+    </div>
+  );
+}
+
+/** A row's swoop state, so whether a site has swoop on reads without its editor. */
+function SiteSwoopState({ siteId }: { siteId: string }) {
+  const { settings, loading } = useSwoopSettings(siteId);
+  if (loading) return null;
+  const label = settings.enabled ? 'swoop on' : 'swoop off';
+  const Icon = settings.enabled ? MonitorPlay : MonitorOff;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={label}
+          className={`shrink-0 ${settings.enabled ? 'text-primary' : 'text-muted-foreground'}`}
+        >
+          <Icon className="h-3.5 w-3.5" />
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <p>{label}</p>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 interface ManageSitesDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Opened as "site settings": this site's editor is open from the start. */
+  editSiteId?: string;
   sites: Site[];
   currentSiteId: string;
   /** Count for the CURRENT site only. Present => the "machines" column shows,
@@ -118,6 +187,7 @@ interface ManageSitesDialogProps {
 export function ManageSitesDialog({
   open,
   onOpenChange,
+  editSiteId,
   sites,
   currentSiteId,
   machineCount,
@@ -205,6 +275,15 @@ export function ManageSitesDialog({
     setEditingTimezone('UTC');
   };
 
+  // set during render, not in an effect, so the editor mounts with the dialog and
+  // its name field holds focus. starts false: a lazily loaded dialog can mount open.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    const site = open && editSiteId ? sites.find((s) => s.id === editSiteId) : undefined;
+    if (site) startEditingSite(site);
+  }
+
   const handleSaveSite = async (siteId: string) => {
     if (!editingName.trim()) {
       toast.error('Site name cannot be empty');
@@ -286,7 +365,7 @@ export function ManageSitesDialog({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent
           showCloseButton={false}
-          className="border-border bg-secondary text-white sm:max-w-5xl"
+          className="border-border text-foreground sm:max-w-5xl"
           onOpenAutoFocus={(e) => {
             // Search-first: focus the filter, not the first button.
             if (filterInputRef.current) {
@@ -310,7 +389,7 @@ export function ManageSitesDialog({
                 inflating the dialog's min-content — which used to push every
                 row's actions column off-screen on phones. */}
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <DialogTitle className="text-white">manage sites</DialogTitle>
+              <DialogTitle className="text-foreground">manage sites</DialogTitle>
               {/* Search, "new site", and close share one centered flex row with
                   the title so all four header controls sit on one axis. gap-6
                   keeps the close ✕ equidistant from its neighbor and the
@@ -326,7 +405,7 @@ export function ManageSitesDialog({
                       placeholder="filter sites…"
                       aria-label="filter sites"
                       autoComplete="off"
-                      className="border-border bg-accent pl-9 pr-8 text-white"
+                      className="border-border bg-background pl-9 pr-8 text-foreground"
                     />
                     {filter && (
                       <button
@@ -336,7 +415,7 @@ export function ManageSitesDialog({
                           filterInputRef.current?.focus();
                         }}
                         aria-label="clear filter"
-                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-white cursor-pointer"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground cursor-pointer"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -349,7 +428,7 @@ export function ManageSitesDialog({
                     onOpenChange(false);
                     onCreateSite();
                   }}
-                  className="shrink-0 cursor-pointer text-gray-900"
+                  className="shrink-0 cursor-pointer"
                 >
                   <Plus className="h-4 w-4 mr-1" />
                   new site
@@ -358,7 +437,7 @@ export function ManageSitesDialog({
                   type="button"
                   onClick={() => onOpenChange(false)}
                   aria-label="close"
-                  className="shrink-0 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:text-white hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary"
+                  className="shrink-0 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:text-foreground hover:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-secondary"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -366,7 +445,7 @@ export function ManageSitesDialog({
             </div>
             <div className="flex items-center justify-between gap-3">
               <DialogDescription className="text-muted-foreground">
-                edit site names, timezones, or delete sites
+                edit site names, timezones, swoop and keep screens awake, or delete sites
               </DialogDescription>
               {filter.trim() && (
                 <span className="shrink-0 text-xs text-muted-foreground">
@@ -386,7 +465,7 @@ export function ManageSitesDialog({
                 {/* Column header — sticky so it stays put while the list scrolls;
                     same grid template as the rows so the columns line up. */}
                 <div
-                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-secondary px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/70"
+                  className="sticky top-0 z-10 grid items-center gap-3 border-b border-border/60 bg-raised px-3 pb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground/80"
                   style={{ gridTemplateColumns: gridTemplate }}
                 >
                   <span className="min-w-0 truncate">site</span>
@@ -400,10 +479,14 @@ export function ManageSitesDialog({
                 {filteredSites.map((site) => (
                   <div
                     key={site.id}
+                    // emphasis is brightness in both themes: by day rows rest a step
+                    // down, brighten on hover, and the open one is lifted to white
                     className={`site-row-cv overflow-hidden rounded-lg border transition-colors ${
                       site.id === currentSiteId
                         ? 'border-accent-cyan/60 bg-accent-cyan/10'
-                        : 'border-border bg-card hover:bg-muted'
+                        : expandedSiteId === site.id
+                          ? 'border-border bg-card shadow-sm dark:shadow-none dark:hover:bg-muted'
+                          : 'border-border bg-card-sunken hover:bg-card dark:bg-card dark:hover:bg-muted'
                     }`}
                   >
                     {/* View row — aligned column grid. Stays visible while
@@ -412,12 +495,14 @@ export function ManageSitesDialog({
                       <div className="grid items-center gap-3 px-3 py-2" style={{ gridTemplateColumns: gridTemplate }}>
                         {/* name */}
                         <div className="flex min-w-0 items-center gap-2">
-                          <span className="truncate text-sm font-medium text-white">{highlightMatch(site.name, filter)}</span>
+                          <span className="truncate text-sm font-medium text-foreground">{highlightMatch(site.name, filter)}</span>
+                          {/* ink by day for the same reason as the match highlight */}
                           {site.id === currentSiteId && (
-                            <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-accent-cyan">
+                            <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground dark:text-accent-cyan">
                               current
                             </span>
                           )}
+                          <SiteSwoopState siteId={site.id} />
                         </div>
 
                         {/* id — click to copy */}
@@ -434,6 +519,7 @@ export function ManageSitesDialog({
                                   toast.error('Failed to copy Site ID');
                                 }
                               }}
+                              aria-label={`copy site ID ${site.id}`}
                               className="min-w-0 cursor-pointer truncate text-left font-mono text-[11px] text-muted-foreground hover:text-accent-cyan"
                             >
                               {highlightMatch(site.id, filter)}
@@ -457,11 +543,11 @@ export function ManageSitesDialog({
                           </span>
                         )}
 
-                        {/* owner — superadmin only */}
+                        {/* owner — superadmin only. full-strength amber by day: at 80% it misses aa on a light row */}
                         {isSuperadmin && (
                           site.owner && currentUserId && site.owner !== currentUserId ? (
                             <span
-                              className="flex min-w-0 items-center gap-1 text-[11px] text-amber-400/80"
+                              className="flex min-w-0 items-center gap-1 text-[11px] text-warning dark:text-warning/80"
                               title={ownerEmailByUid.get(site.owner) || site.owner}
                             >
                               <User className="h-3 w-3 shrink-0" />
@@ -470,8 +556,9 @@ export function ManageSitesDialog({
                           ) : site.owner && currentUserId && site.owner === currentUserId ? (
                             <span className="text-[11px] text-muted-foreground">you</span>
                           ) : (
-                            <span className="text-[11px] text-muted-foreground/40" title="no owner recorded">
-                              —
+                            <span className="text-[11px] text-muted-foreground/80" title="no owner recorded">
+                              <span aria-hidden="true">—</span>
+                              <span className="sr-only">no owner recorded</span>
                             </span>
                           )
                         )}
@@ -543,7 +630,7 @@ export function ManageSitesDialog({
                                   size="sm"
                                   onClick={() => confirmDeleteSite(site.id)}
                                   aria-label={`delete ${site.name}`}
-                                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-red-400 cursor-pointer"
+                                  className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-destructive cursor-pointer"
                                 >
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
@@ -559,7 +646,8 @@ export function ManageSitesDialog({
                     {/* Edit panel — attached beneath the row inside the same
                         card so the site being edited stays visible above its
                         own form. Name + timezone share one line (wrapping on
-                        narrow screens) to keep the panel short. */}
+                        narrow screens) to keep the panel short; the site's
+                        switches sit below and act at once, outside save. */}
                     {editingSiteId === site.id && (
                       <div className="animate-in slide-in-from-top-2 fade-in duration-200 border-t border-border/60 p-3">
                         <div className="flex flex-wrap items-end gap-3">
@@ -574,7 +662,7 @@ export function ManageSitesDialog({
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') handleSaveSite(site.id);
                               }}
-                              className="border-border bg-accent text-white"
+                              className="border-border bg-background text-foreground"
                               autoFocus
                             />
                           </div>
@@ -586,7 +674,7 @@ export function ManageSitesDialog({
                               id={`timezone-${site.id}`}
                               value={editingTimezone}
                               onValueChange={setEditingTimezone}
-                              className="border-border bg-accent text-white"
+                              className="border-border bg-background text-foreground"
                             />
                           </div>
                           <div className="flex shrink-0 items-center gap-2">
@@ -604,13 +692,14 @@ export function ManageSitesDialog({
                               size="sm"
                               onClick={() => handleSaveSite(site.id)}
                               disabled={isSaving}
-                              className="text-gray-900 cursor-pointer"
+                              className="cursor-pointer"
                             >
                               <Check className="h-4 w-4 mr-1" />
                               {isSaving ? 'saving...' : 'save'}
                             </Button>
                           </div>
                         </div>
+                        <SiteSettingsSwitches siteId={site.id} />
                       </div>
                     )}
 
@@ -619,7 +708,6 @@ export function ManageSitesDialog({
                         can act when things go wrong for a customer. */}
                     {expandedSiteId === site.id && (
                       <div className="animate-in slide-in-from-top-2 fade-in duration-200 border-t border-border/60">
-                        {isSiteAdmin(site.id) && <SwoopSiteToggle siteId={site.id} />}
                         <SiteMachinesList siteId={site.id} onCountLoaded={handleMachineCountLoaded} />
                       </div>
                     )}
@@ -633,16 +721,16 @@ export function ManageSitesDialog({
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deletingDialogOpen} onOpenChange={setDeletingDialogOpen}>
-        <DialogContent className="border-border bg-secondary text-white">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
-            <DialogTitle className="text-white">delete site</DialogTitle>
+            <DialogTitle className="text-foreground">delete site</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               are you sure you want to delete this site? this action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           {siteToDelete && (
             <div className="py-4">
-              <p className="text-white">
+              <p className="text-foreground">
                 site: <span className="font-semibold">{sites.find(s => s.id === siteToDelete)?.name}</span>
               </p>
               <p className="text-sm text-muted-foreground mt-2">
@@ -662,8 +750,9 @@ export function ManageSitesDialog({
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleDeleteSite}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               delete site
             </Button>

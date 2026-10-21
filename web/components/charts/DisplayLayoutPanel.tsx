@@ -20,6 +20,7 @@ import {
 import { toast } from '@/lib/toast';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Switch } from '@/components/ui/switch';
 import { AlertTriangle, Loader2, Monitor, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -48,6 +49,7 @@ import { DisplayCanvas } from './DisplayCanvas';
 import { DisplayMonitorTable } from './DisplayMonitorTable';
 import { DisplayEditorDialog } from './DisplayEditorDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
+import { ControlUpgradeLink } from '@/components/plan/MachinePlanNotice';
 import {
   Tooltip,
   TooltipContent,
@@ -61,6 +63,12 @@ interface DisplayLayoutPanelProps {
   /** The machine's agent-written `capabilities` map, handed down from the
    * machines subscription; `displayRemoteApply` gates restore. */
   capabilities?: Record<string, number>;
+  /**
+   * the viewer's plan leaves out control (`useSitePlan`): restore and the apply
+   * self-test send commands, so they give way to a "part of core" link. viewing,
+   * storing, editing and the restore settings are configuration, and stay.
+   */
+  controlLocked?: boolean;
   onClose: () => void;
 }
 
@@ -151,13 +159,13 @@ function eventDetailsSnippet(
   return '';
 }
 
-/** Severity badge classes — amber-500 / destructive tokens used elsewhere here. */
+/** Severity badge classes — the warning / destructive tokens used elsewhere here. */
 function eventLevelBadgeClass(level: string): string {
   if (level === 'critical') {
     return 'bg-destructive/20 text-destructive border-destructive/30';
   }
   if (level === 'warning') {
-    return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
+    return 'bg-warning-surface text-warning border-warning-border/75 dark:bg-warning-solid/20';
   }
   return 'bg-muted text-muted-foreground border-border';
 }
@@ -203,6 +211,7 @@ export function DisplayLayoutPanel({
   machineName,
   siteId,
   capabilities,
+  controlLocked,
   onClose,
 }: DisplayLayoutPanelProps) {
   const { isSiteAdmin, user } = useAuth();
@@ -255,7 +264,8 @@ export function DisplayLayoutPanel({
   // `triggerForHash` fires the agent enumerate once per (site, machine, hash).
   const { catalogue: displayModes } = useDisplayModes(siteId, machineId, {
     enabled: mode === 'edit',
-    triggerForHash: profile?.signatureHash,
+    // the enumerate is a command too; without control the editor makes do without the catalogue.
+    triggerForHash: controlLocked ? undefined : profile?.signatureHash,
   });
 
   const {
@@ -1025,9 +1035,9 @@ export function DisplayLayoutPanel({
         aria-label={badge ? `${label}, ${badge} display change${badge === '1' ? '' : 's'} from stored layout` : label}
         style={isActive ? { boxShadow: `inset 0 0 0 1px ${ringColor}` } : undefined}
         className={cn(
-          'relative bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs transition-colors',
+          'relative bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs transition-colors',
           isActive
-            ? 'border-transparent text-white hover:bg-card'
+            ? 'border-transparent text-foreground hover:bg-card'
             : 'hover:bg-card',
         )}
       >
@@ -1037,7 +1047,7 @@ export function DisplayLayoutPanel({
             className="absolute -top-0.5 -right-0.5 inline-flex"
             aria-hidden="true"
           >
-            <span className="inline-block w-2 h-2 rounded-full bg-amber-500" />
+            <span className="inline-block w-2 h-2 rounded-full bg-warning-solid" />
           </span>
         )}
       </Button>
@@ -1112,7 +1122,7 @@ export function DisplayLayoutPanel({
               {/* Restore setup flow: test -> store -> restore. Test is a
                   pre-enable safety check; once restore is enabled, real
                   restore/auto-restore runs are the meaningful verification. */}
-              {!remoteApplyEnabled && (
+              {!remoteApplyEnabled && !controlLocked && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span tabIndex={testApplyInFlight ? 0 : -1}>
@@ -1122,7 +1132,7 @@ export function DisplayLayoutPanel({
                         disabled={testApplyInFlight}
                         onClick={handleTestApply}
                         data-testid="display-test-apply-button"
-                        className="bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs"
+                        className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs"
                       >
                         {testApplyInFlight ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -1148,7 +1158,7 @@ export function DisplayLayoutPanel({
                         disabled={captureDisabled}
                         onClick={() => setCaptureDialogOpen(true)}
                         data-testid="display-store-button"
-                        className="bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs"
+                        className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs"
                       >
                         {actions.applying ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -1173,7 +1183,7 @@ export function DisplayLayoutPanel({
                         disabled={editDisabled}
                         onClick={() => setMode('edit')}
                         data-testid="display-edit-button"
-                        className="bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs"
+                        className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs"
                       >
                         edit
                       </Button>
@@ -1216,7 +1226,7 @@ export function DisplayLayoutPanel({
                       data-testid="display-auto-restore-status"
                       className="inline-flex h-8 items-center gap-1.5 rounded border border-border bg-card px-3 text-xs text-muted-foreground"
                     >
-                      <span className="bg-green-500 rounded-full h-1.5 w-1.5" />
+                      <span className="bg-success rounded-full h-1.5 w-1.5" />
                       auto
                     </span>
                   </TooltipTrigger>
@@ -1235,7 +1245,7 @@ export function DisplayLayoutPanel({
                         disabled={actions.applying}
                         onClick={() => setEnableRemoteApplyDialogOpen(true)}
                         data-testid="display-enable-remote-apply-button"
-                        className="bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs"
+                        className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs"
                       >
                         {actions.applying ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
@@ -1249,6 +1259,8 @@ export function DisplayLayoutPanel({
                     allow admins to restore the stored display layout on this machine
                   </TooltipContent>
                 </Tooltip>
+              ) : controlLocked ? (
+                <ControlUpgradeLink label="restore is part of core" className="h-8 px-3 text-xs" />
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1265,7 +1277,7 @@ export function DisplayLayoutPanel({
                             : undefined
                         }
                         className={cn(
-                          'bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs',
+                          'bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs',
                           hasDriftVisible && 'border-transparent',
                         )}
                       >
@@ -1302,7 +1314,7 @@ export function DisplayLayoutPanel({
                       disabled={!isDirty || actions.applying}
                       onClick={handleSaveDraft}
                       data-testid="display-save-button"
-                      className="bg-card border border-border text-muted-foreground hover:text-white h-8 px-3 text-xs"
+                      className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 px-3 text-xs"
                     >
                       {actions.applying ? (
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -1337,35 +1349,31 @@ export function DisplayLayoutPanel({
             </div>
           )}
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCloseClick}
-                className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0 shrink-0"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>close panel</TooltipContent>
-          </Tooltip>
+          <IconButton
+            label="close panel"
+            variant="ghost"
+            size="icon-sm"
+            onClick={handleCloseClick}
+            className="bg-card border border-border text-muted-foreground hover:text-foreground shrink-0"
+          >
+            <X className="h-4 w-4" />
+          </IconButton>
         </div>
 
         {ackSecondsLeft !== null && (
           <div
-            className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+            className="mt-3 flex items-center justify-between gap-3 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-sm"
             role="status"
             aria-live="polite"
           >
-            <span className="text-amber-200">
+            <span className="text-warning">
               keep this layout? auto-revert in {ackSecondsLeft}s
             </span>
             <Button
               size="sm"
               onClick={handleAckKeep}
               disabled={ackInFlight}
-              className="h-7 bg-amber-500 text-black hover:bg-amber-400"
+              className="h-7 bg-warning-solid text-warning-solid-foreground dark:hover:bg-warning"
             >
               {ackInFlight ? (
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -1378,7 +1386,7 @@ export function DisplayLayoutPanel({
 
         {draftHasOverlap && (
           <div
-            className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-xs text-amber-200"
+            className="mt-3 flex items-center gap-2 rounded-md border border-warning-border/75 bg-warning-surface/50 px-3 py-1.5 text-xs text-warning"
             role="status"
             aria-live="polite"
           >
@@ -1414,12 +1422,12 @@ export function DisplayLayoutPanel({
 
         {breakerTripped && !canSiteAdmin && (
           <div
-            className="mt-3 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+            className="mt-3 flex items-center gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-sm"
             role="status"
             data-testid="display-auto-restore-breaker-readonly"
           >
-            <AlertTriangle className="h-4 w-4 text-amber-300 shrink-0" />
-            <span className="text-amber-200 truncate">
+            <AlertTriangle className="h-4 w-4 text-warning shrink-0" />
+            <span className="text-warning truncate">
               auto-restore paused — 3 attempts failed. last error:{' '}
               {breakerLastError}.
             </span>
@@ -1438,19 +1446,19 @@ export function DisplayLayoutPanel({
             {testApplyResult !== null && (
               <div
                 key={testApplyResult}
-                className="flex items-center justify-between gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm"
+                className="flex items-center justify-between gap-3 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-sm"
                 role="status"
                 aria-live="polite"
                 data-testid="display-test-apply-result"
               >
-                <span className="text-amber-200 truncate">
+                <span className="text-warning truncate">
                   {testApplyResult}
                 </span>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setTestApply(null)}
-                  className="h-7 w-7 p-0 shrink-0 text-amber-200 hover:bg-amber-500/10 hover:text-amber-100"
+                  className="h-7 w-7 p-0 shrink-0 text-warning hover:bg-warning-surface hover:text-warning"
                   aria-label="dismiss"
                 >
                   <X className="h-3 w-3" />

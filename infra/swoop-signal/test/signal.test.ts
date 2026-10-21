@@ -21,8 +21,8 @@ function hostToken(machine: string) {
 function doorbellToken(machine: string) {
   return signToken(claimsFor('doorbell', { machine }));
 }
-function viewerToken(machine: string, viewer = 'viewer_0000000001') {
-  return signToken(claimsFor('viewer', { machine, viewer }));
+function viewerToken(machine: string, viewer = 'viewer_0000000001', sid?: string) {
+  return signToken(claimsFor('viewer', { machine, viewer, ...(sid ? { sid } : {}) }));
 }
 
 function dialAgent(token: string, machine: string) {
@@ -193,6 +193,45 @@ describe('admission', () => {
     expect(fifth.body).toMatchObject({ code: 'room_full' });
     for (const client of clients) client.close();
   });
+
+  it('frees the slot of a viewer that stopped pinging, and tells the host it left', async () => {
+    // four viewers that never send a keepalive, then silence past the stale window
+    // (1.5 s in the test worker): the fifth is admitted, the four are closed as
+    // `stale`, and the host hears a `bye` for each so it can drop their peers.
+    const machine = machineId('stale');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const stale: RoomClient[] = [];
+    for (let i = 1; i <= 4; i += 1) {
+      stale.push(await dialBrowser(viewerToken(machine, `viewer_000000000${i}`), machine));
+    }
+    await settle(1800);
+
+    const fifth = await dialBrowser(viewerToken(machine, 'viewer_0000000005'), machine);
+    const hello = await fifth.waitFor('hello');
+    expect(hello.peers).toMatchObject({ viewer: 1 });
+    for (const client of stale) expect(await client.whenClosed).toMatchObject({ code: 1000, reason: 'stale' });
+    const byes = host.frames.filter((frame) => frame.type === 'bye' && frame.reason === 'stale');
+    expect(byes.map((frame) => frame.from).sort()).toEqual(
+      ['viewer_0000000001', 'viewer_0000000002', 'viewer_0000000003', 'viewer_0000000004']
+    );
+    fifth.close();
+    host.close();
+  });
+
+  it('keeps a viewer that pings past the stale window', async () => {
+    const machine = machineId('pinging');
+    const clients: RoomClient[] = [];
+    for (let i = 1; i <= 4; i += 1) {
+      clients.push(await dialBrowser(viewerToken(machine, `viewer_000000000${i}`), machine));
+    }
+    await settle(1000);
+    for (const client of clients) client.sendRaw('ping');
+    await settle(1000);
+    const fifth = await upgradeStatus(port, viewerToken(machine, 'viewer_0000000005'), { machine });
+    expect(fifth.status).toBe(429);
+    for (const client of clients) client.close();
+  });
 });
 
 describe('the auth signal', () => {
@@ -342,19 +381,311 @@ describe('ring and kill', () => {
     doorbell.close();
   });
 
-  it('kills every socket in the room', async () => {
+  it('kills every socket in the room when the kill names no session', async () => {
     const machine = machineId('kill');
     const doorbell = await dialAgent(doorbellToken(machine), machine);
     const host = await dialAgent(hostToken(machine), machine);
     await Promise.all([doorbell.waitFor('hello'), host.waitFor('hello')]);
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    await viewer.waitFor('hello');
 
     const result = await serverCall(baseUrl, '/v1/kill', ringSecret, { site: SITE, machine, sid: null });
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ ok: true, closed: 2 });
+    expect(result.body).toMatchObject({ ok: true, closed: 3 });
 
     expect((await doorbell.waitFor('kill')).sid).toBe(null);
     expect((await host.waitFor('kill')).sid).toBe(null);
+    expect((await viewer.waitFor('kill')).sid).toBe(null);
     expect((await doorbell.whenClosed).code).toBe(1000);
+  });
+
+  it('kills only the named session, and never the doorbell', async () => {
+    // a page's teardown names its own sid while the next session may already be in
+    // the room: closing everything cut that one off, and the doorbell the next ring
+    // has to arrive on with it.
+    const machine = machineId('sidkill');
+    const doorbell = await dialAgent(doorbellToken(machine), machine);
+    const host = await dialAgent(hostToken(machine), machine);
+    await Promise.all([doorbell.waitFor('hello'), host.waitFor('hello')]);
+    const viewerA = await dialBrowser(viewerToken(machine, 'viewer_000000000a'), machine);
+    const viewerB = await dialBrowser(viewerToken(machine, 'viewer_000000000b', 'sid_0000000000000002'), machine);
+    await Promise.all([viewerA.waitFor('hello'), viewerB.waitFor('hello')]);
+
+    const result = await serverCall(baseUrl, '/v1/kill', ringSecret, {
+      site: SITE,
+      machine,
+      sid: 'sid_0000000000000001',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, closed: 2 });
+
+    expect((await host.waitFor('kill')).sid).toBe('sid_0000000000000001');
+    expect((await viewerA.waitFor('kill')).sid).toBe('sid_0000000000000001');
+    await settle();
+    expect(doorbell.closed).toBe(null);
+    expect(viewerB.closed).toBe(null);
+    expect(doorbell.frames.some((frame) => frame.type === 'kill')).toBe(false);
+    expect(viewerB.frames.some((frame) => frame.type === 'kill')).toBe(false);
+
+    doorbell.close();
+    viewerB.close();
+  });
+});
+
+const OFFER = { type: 'offer', sdp: 'v=0' };
+
+function framesOf(client: RoomClient, type: string, from?: string): Frame[] {
+  return client.frames.filter((frame) => frame.type === type && (from === undefined || frame.from === from));
+}
+
+/**
+ * a viewer that never offers closing now is the proof that every earlier close in
+ * this room has been handled: the room takes its events in order, and a viewer
+ * with no offer is always said to have left.
+ */
+async function drain(host: RoomClient, machine: string) {
+  const sentinel = await dialBrowser(viewerToken(machine, 'viewer_sentinel0'), machine);
+  await sentinel.waitFor('hello');
+  sentinel.close();
+  await waitForCount(() => framesOf(host, 'bye', 'viewer_sentinel0').length, 1);
+}
+
+describe('a viewer that re-dials', () => {
+  // the page closes and re-dials its socket for every fresh token, and a network blip
+  // or a durable-object restart drops it without asking. once the viewer has offered,
+  // none of that is it leaving -- the host watches the media peer itself -- and a
+  // repeat `viewer-join` makes a 4.0.1 host take the same viewer for a new one.
+
+  it('once it has offered, is neither said to have left nor announced again', async () => {
+    const machine = machineId('redial');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const first = await dialBrowser(viewerToken(machine), machine);
+    await first.waitFor('hello');
+    await host.waitFor('viewer-join');
+    first.send(OFFER);
+    await host.waitFor('offer');
+
+    first.close();
+    const again = await dialBrowser(viewerToken(machine), machine);
+    await again.waitFor('hello');
+    again.send(OFFER);
+    await waitForCount(() => framesOf(host, 'offer').length, 2);
+    await drain(host, machine);
+
+    // the offer, and nothing else: no bye, no second join.
+    expect(framesOf(host, 'viewer-join').filter((frame) => frame.viewer === 'viewer_0000000001')).toHaveLength(1);
+    expect(framesOf(host, 'bye', 'viewer_0000000001')).toHaveLength(0);
+    host.close();
+    again.close();
+  });
+
+  it('is replayed to a host that joined after it once, and its re-dial is not announced', async () => {
+    const machine = machineId('replayredial');
+    const waiting = await dialBrowser(viewerToken(machine), machine);
+    await waiting.waitFor('hello');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    await host.waitFor('viewer-join');
+    waiting.send(OFFER);
+    await host.waitFor('offer');
+
+    waiting.close();
+    const again = await dialBrowser(viewerToken(machine), machine);
+    await again.waitFor('hello');
+    again.send(OFFER);
+    await waitForCount(() => framesOf(host, 'offer').length, 2);
+    await drain(host, machine);
+
+    expect(framesOf(host, 'viewer-join').filter((frame) => frame.viewer === 'viewer_0000000001')).toHaveLength(1);
+    expect(framesOf(host, 'bye', 'viewer_0000000001')).toHaveLength(0);
+    host.close();
+    again.close();
+  });
+
+  it('is replayed once to a host that finds two of its sockets waiting', async () => {
+    // a re-dial whose old socket has not closed yet is still one viewer, and a 4.0.1
+    // host on its first dial has no replay window: a second join is `join_too_soon`.
+    const machine = machineId('replaytwins');
+    const old = await dialBrowser(viewerToken(machine), machine);
+    const current = await dialBrowser(viewerToken(machine), machine);
+    await Promise.all([old.waitFor('hello'), current.waitFor('hello')]);
+
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    await host.waitFor('viewer-join');
+    await settle();
+
+    expect(framesOf(host, 'viewer-join')).toHaveLength(1);
+    host.close();
+    old.close();
+    current.close();
+  });
+
+  it('is said to have left when it closes before it ever offered', async () => {
+    // no offer reached the host, so the host holds no peer for it: the admission it
+    // made at the join is all there is, and nothing else would ever release it.
+    const machine = machineId('nooffer');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    await viewer.waitFor('hello');
+    await host.waitFor('viewer-join');
+
+    viewer.close();
+    const bye = await host.waitFor('bye');
+    expect(bye).toMatchObject({ from: 'viewer_0000000001', fromRole: 'viewer' });
+    expect(typeof bye.code).toBe('number');
+    host.close();
+  });
+
+  it('is not said to have left when it closes after it has offered', async () => {
+    const machine = machineId('offered');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    await viewer.waitFor('hello');
+    await host.waitFor('viewer-join');
+    viewer.send(OFFER);
+    await host.waitFor('offer');
+
+    viewer.close();
+    await drain(host, machine);
+    expect(framesOf(host, 'bye', 'viewer_0000000001')).toHaveLength(0);
+    host.close();
+  });
+
+  it('is announced again after its host has dropped it', async () => {
+    // a host's `bye` to a viewer is the host letting go of it: whatever that viewer
+    // sends next goes to a host that no longer knows it, unless it is announced again.
+    const machine = machineId('hostdropped');
+    const host = await dialAgent(hostToken(machine), machine);
+    const hostId = (await host.waitFor('hello')).id as string;
+    const first = await dialBrowser(viewerToken(machine), machine);
+    const viewerId = (await first.waitFor('hello')).id as string;
+    await host.waitFor('viewer-join');
+    first.send(OFFER);
+    await host.waitFor('offer');
+
+    host.send({ type: 'bye', reason: 'lease_expired', to: viewerId });
+    expect((await first.waitFor('bye')).from).toBe(hostId);
+    first.close();
+    const again = await dialBrowser(viewerToken(machine), machine);
+    await again.waitFor('hello');
+    await waitForCount(() => framesOf(host, 'viewer-join').length, 2);
+    host.close();
+    again.close();
+  });
+
+  it('keeps its host when a stale socket it re-dialled away from is evicted', async () => {
+    // the old socket never closed (a laptop that slept on one network and woke on
+    // another) and the room is full: evicting that zombie must not tell the host
+    // the viewer left, or the host drops the peer the live socket is still using.
+    const machine = machineId('staletwin');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const zombie = await dialBrowser(viewerToken(machine, 'viewer_000000000a'), machine);
+    await zombie.waitFor('hello');
+    await host.waitFor('viewer-join');
+    zombie.send(OFFER);
+    await host.waitFor('offer');
+
+    const living = [
+      await dialBrowser(viewerToken(machine, 'viewer_000000000a'), machine),
+      await dialBrowser(viewerToken(machine, 'viewer_000000000b'), machine),
+      await dialBrowser(viewerToken(machine, 'viewer_000000000c'), machine),
+    ];
+    await Promise.all(living.map((client) => client.waitFor('hello')));
+    await settle(1800);
+    for (const client of living) client.sendRaw('ping');
+    await Promise.all(living.map((client) => client.waitFor('pong')));
+
+    const fifth = await dialBrowser(viewerToken(machine, 'viewer_000000000d'), machine);
+    await fifth.waitFor('hello');
+    expect(await zombie.whenClosed).toMatchObject({ code: 1000, reason: 'stale' });
+    await settle();
+    expect(framesOf(host, 'bye', 'viewer_000000000a')).toHaveLength(0);
+
+    host.close();
+    fifth.close();
+    for (const client of living) client.close();
+  });
+
+  it('keeps its host when its own re-dial evicts the dead socket it left behind', async () => {
+    // a full room evicts before the joining socket is accepted, so there is no twin
+    // to see yet: the offer is what says the host holds a peer this viewer still uses.
+    const machine = machineId('staleself');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const dead = await dialBrowser(viewerToken(machine, 'viewer_000000000a'), machine);
+    await dead.waitFor('hello');
+    await host.waitFor('viewer-join');
+    dead.send(OFFER);
+    await host.waitFor('offer');
+
+    const others = [
+      await dialBrowser(viewerToken(machine, 'viewer_000000000b'), machine),
+      await dialBrowser(viewerToken(machine, 'viewer_000000000c'), machine),
+      await dialBrowser(viewerToken(machine, 'viewer_000000000d'), machine),
+    ];
+    await Promise.all(others.map((client) => client.waitFor('hello')));
+    await settle(1800);
+    for (const client of others) client.sendRaw('ping');
+    await Promise.all(others.map((client) => client.waitFor('pong')));
+
+    const back = await dialBrowser(viewerToken(machine, 'viewer_000000000a'), machine);
+    await back.waitFor('hello');
+    expect(await dead.whenClosed).toMatchObject({ code: 1000, reason: 'stale' });
+    back.send(OFFER);
+    await waitForCount(() => framesOf(host, 'offer', 'viewer_000000000a').length, 2);
+    await settle();
+
+    expect(framesOf(host, 'bye', 'viewer_000000000a')).toHaveLength(0);
+    expect(framesOf(host, 'viewer-join').filter((frame) => frame.viewer === 'viewer_000000000a')).toHaveLength(1);
+
+    host.close();
+    back.close();
+    for (const client of others) client.close();
+  });
+
+  it('is announced for a new session, even under a viewer id the room has seen', async () => {
+    const machine = machineId('newsid');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const first = await dialBrowser(viewerToken(machine), machine);
+    await first.waitFor('hello');
+    await host.waitFor('viewer-join');
+    first.close();
+
+    const next = await dialBrowser(viewerToken(machine, 'viewer_0000000001', 'sid_0000000000000002'), machine);
+    await next.waitFor('hello');
+    await waitForCount(() => framesOf(host, 'viewer-join').length, 2);
+    expect(framesOf(host, 'viewer-join').map((frame) => frame.sid)).toEqual([
+      'sid_0000000000000001',
+      'sid_0000000000000002',
+    ]);
+    host.close();
+    next.close();
+  });
+
+  it('is announced again once it has said bye', async () => {
+    const machine = machineId('byerejoin');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const first = await dialBrowser(viewerToken(machine), machine);
+    await first.waitFor('hello');
+    await host.waitFor('viewer-join');
+    first.send(OFFER);
+    await host.waitFor('offer');
+
+    first.send({ type: 'bye', reason: 'closed' });
+    await host.waitFor('bye');
+    await first.whenClosed;
+    const again = await dialBrowser(viewerToken(machine), machine);
+    await again.waitFor('hello');
+    await waitForCount(() => framesOf(host, 'viewer-join').length, 2);
+    host.close();
+    again.close();
   });
 });
 
@@ -643,11 +974,15 @@ describe('golden signaling vectors, on the wire', () => {
     await settle();
     expect(host.frames.some((frame) => frame.type === 'ring')).toBe(false);
 
-    // kill: server-originated, to every socket, then close(1000)
+    // kill: server-originated, to the named session's sockets, then close(1000). the
+    // doorbell names no session, so it stays up for the next ring.
     const killFrameVector = readVector<{ message: Frame }>('signaling/signal-kill.json');
     await serverCall(baseUrl, '/v1/kill', ringSecret, { site: SITE, machine, sid: killFrameVector.message.sid });
-    expect(stripTime(await doorbell.waitFor('kill'))).toEqual(stripTime(killFrameVector.message));
     expect(stripTime(await host.waitFor('kill'))).toEqual(stripTime(killFrameVector.message));
     expect((await host.whenClosed).code).toBe(1000);
+    await settle();
+    expect(doorbell.closed).toBe(null);
+    expect(doorbell.frames.some((frame) => frame.type === 'kill')).toBe(false);
+    doorbell.close();
   });
 });

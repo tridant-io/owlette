@@ -2,7 +2,6 @@ import os
 import stat
 import sys
 import threading
-import socket
 import requests
 
 # Add the src directory to Python path so imports work when running as service
@@ -20,6 +19,7 @@ import watchdog_state
 import config_sync
 import configure_site
 from command_router import COMMAND_DEFERRED, CommandRouter
+from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 import logging
@@ -74,6 +74,12 @@ MAX_RELAUNCH_ATTEMPTS = 3
 SLEEP_INTERVAL = 5
 TIME_TO_INIT = 60
 
+# An exit code of 0 is never a crash: the app finished, or somebody closed it.
+# One this soon after launch holds the relaunch for the failed-launch cooldown,
+# so a program that quits straight away (a launcher that hands off to another
+# executable) is started once a minute rather than every tick.
+QUICK_EXIT_SECONDS = 60
+
 # Marker the desktop app writes to tmp/app_states.json just before terminating a
 # PID for the operator. It has no Firebase client, so without this the service
 # would read the vanished PID as a `process_crash`; KILLED would silence the
@@ -101,6 +107,11 @@ SCM_STOP_POLL_INTERVAL = 0.25
 # faster than the 5s main loop it used to ride — detection was costing up to a
 # full tick before an operator's edit even began uploading.
 LOCAL_CONFIG_POLL_INTERVAL = 0.5
+
+# the tray's "kill all swoop sessions on this machine" (desktop tray.rs), read on
+# the local config watcher's tick and audited under this reason.
+SWOOP_KILL_FLAG = 'tmp/swoop_kill.flag'
+SWOOP_KILL_LOCAL_TRAY = 'local_tray'
 
 # Shutdown budget once STOP_PENDING appears; overruns log a warning. MUST stay in
 # step with supervisor::CHILD_STOP_GRACE in agent/host, which terminates us after
@@ -163,6 +174,20 @@ DISPLAY_CHECK_ITERATIONS = max(1, DISPLAY_CHECK_INTERVAL_SECONDS // SLEEP_INTERV
 # the 5-second main loop never stalls.
 ROOST_SCRUB_CHECK_INTERVAL_SECONDS = 3600
 ROOST_SCRUB_CHECK_ITERATIONS = max(1, ROOST_SCRUB_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+# displayAwake on the machine document is worked out again this often, and at
+# once whenever the daemon's own hold changes. The desktop app rewrites its
+# report every minute, so a session hold shows within half a minute of it.
+DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS = 30
+DISPLAY_AWAKE_CHECK_ITERATIONS = max(1, DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS // SLEEP_INTERVAL)
+# What the desktop app holds of keep screens awake in the user's session
+# (desktop/src-tauri/src/awake.rs): a JSON object carrying `held` (bool) and
+# `at` (unix seconds), rewritten on every change and every minute as the
+# console user. A report three rewrites old is an app that is gone.
+KEEP_AWAKE_REPORT_FILE = 'ipc/keep_awake.json'
+KEEP_AWAKE_REPORT_MAX_AGE_SECONDS = 180
+# How far ahead of this clock a report may claim to be before it is refused.
+_KEEP_AWAKE_REPORT_CLOCK_SKEW_SECONDS = 60
+_KEEP_AWAKE_REPORT_LIMIT = 4096
 # A scheduled instant older than this is MISSED: skipped and marked fired for the
 # day. Prevents a catastrophic late reboot after a restart, deploy or schedule
 # edit.
@@ -813,7 +838,14 @@ def _console_session():
     """(session id, user name) at the physical console, or None while a
     session is being attached or detached, or when it cannot be read. The name
     is '' at the logon screen. Two cheap calls and no token handle: the local
-    config watcher reads it twice a second."""
+    config watcher reads it twice a second.
+
+    Windows only: the session ACL repair it feeds is a Windows ACL concept,
+    and off Windows there is no session to repair — the posix arms fix modes
+    at install. Answering None keeps the watcher from importing pywin32
+    twice a second on a Mac (measured on the MBA, 2026-09-25)."""
+    if sys.platform != 'win32':
+        return None
     try:
         import win32ts
         session_id = win32ts.WTSGetActiveConsoleSessionId()
@@ -905,6 +937,102 @@ def _pid_descends_from(pid, ancestor_pid, not_before, max_depth=5):
     except (psutil.Error, ValueError):
         return False
     return False
+
+
+def _read_console_users_file(path, limit):
+    """``(seat, raw)``: whether anybody is at the console, and the first
+    ``limit + 1`` bytes of ``path`` when that user wrote it.
+
+    ``ipc/`` is writable by every local user on Windows and by the owlette
+    group elsewhere, so ``raw`` is None unless the console user owns the file:
+    on Windows a single-link file of theirs (or SYSTEM's or Administrators'),
+    elsewhere a regular file of theirs, not a link, that nobody else can
+    write — the discipline darwin.py applies to the app's tcc.json.
+    """
+    if sys.platform == 'win32':
+        user_sid = acl_hardening.console_user_sid()
+        if user_sid is None:
+            return False, None
+        if not os.path.exists(path):
+            return True, None
+        if not acl_hardening.is_trusted_owner(path, user_sid):
+            logging.debug(f"Ignoring {path}: not the console user's own")
+            return True, None
+        try:
+            with open(path, 'rb') as f:
+                return True, f.read(limit + 1)
+        except OSError as e:
+            logging.debug(f"Could not read {path}: {e}")
+            return True, None
+
+    import pwd
+    from osadapter import posix
+
+    user = osadapter.console_user()
+    if user is None:
+        return False, None
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+        fd = posix._open_entry(path, False)
+    except (KeyError, FileNotFoundError):
+        return True, None
+    except OSError as e:
+        logging.debug(f"Could not open {path}: {e}")
+        return True, None
+    try:
+        with os.fdopen(fd, 'rb') as f:
+            owner = os.fstat(f.fileno())
+            if owner.st_uid != uid or owner.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                logging.debug(f"Ignoring {path}: not the console user's own")
+                return True, None
+            return True, f.read(limit + 1)
+    except OSError as e:
+        logging.debug(f"Could not read {path}: {e}")
+        return True, None
+
+
+def _read_session_keep_awake():
+    """``(seat, held)``: whether anybody is at the console, and whether the
+    desktop app there holds the session awake — None when it has not said so
+    in a fresh report of its own."""
+    seat, raw = _read_console_users_file(
+        shared_utils.get_data_path(KEEP_AWAKE_REPORT_FILE), _KEEP_AWAKE_REPORT_LIMIT)
+    if raw is None or len(raw) > _KEEP_AWAKE_REPORT_LIMIT:
+        return seat, None
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        return seat, None
+    if not isinstance(report, dict):
+        return seat, None
+    held, at = report.get('held'), report.get('at')
+    if not isinstance(held, bool) or isinstance(at, bool) or not isinstance(at, (int, float)):
+        return seat, None
+    age = time.time() - at
+    if age > KEEP_AWAKE_REPORT_MAX_AGE_SECONDS or age < -_KEEP_AWAKE_REPORT_CLOCK_SKEW_SECONDS:
+        return seat, None
+    return seat, held
+
+
+def _display_awake(daemon, seat, session):
+    """The machine document's ``displayAwake``.
+
+    ``daemon`` is KeepAwake.status(); ``session`` is the desktop app's report,
+    None without one. ``how`` names what holds the daemon's half and only
+    while it does. A wanted hold with no report and nobody at the seat has
+    nothing to hold the session with, which ``no_display`` says unless the
+    daemon has a reason of its own.
+    """
+    reason = daemon['reason']
+    if daemon['wanted'] and reason is None and session is None and not seat:
+        reason = 'no_display'
+    return {
+        'wanted': daemon['wanted'],
+        'held': daemon['held'],
+        'session': session,
+        'how': daemon['how'] if daemon['held'] else None,
+        'reason': reason,
+    }
 
 
 def _read_cortex_command(path, console_sid):
@@ -1129,6 +1257,17 @@ class OwletteService:
         # When capture started, for the tray's swoop row. Stamped by
         # _swoop_section, because the status writers are the only readers.
         self._swoop_active_since = 0
+        # keep screens awake (_check_keep_awake): the daemon's own hold, and
+        # what the loop last asked of it, which service_status.json hands on
+        # to the desktop app for the session's half. The rest paces and
+        # dedupes the displayAwake mirror; _display_awake_mirrored pairs the
+        # value with the client that wrote it, so a new client writes it again.
+        self.keep_awake = KeepAwake()
+        self._keep_awake_wanted = False
+        self._display_awake_counter = 0
+        self._display_awake_daemon = None
+        self._display_awake_thread = None
+        self._display_awake_mirrored = None
 
         # Checked BEFORE handle_firebase_command's legacy if/elif chain, falling
         # through when a type isn't registered. Register new handlers here.
@@ -1165,6 +1304,20 @@ class OwletteService:
             _register_swoop_handlers(self._command_router)
         except Exception as e:
             logging.warning(f"Failed to register swoop handlers: {e}")
+
+        # site_settings_refresh re-reads the site projection on a thread of its own.
+        try:
+            from site_commands import register_handlers as _register_site_handlers
+            _register_site_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register site handlers: {e}")
+
+        # unpair: the dashboard revoked this machine's agent token.
+        try:
+            from pairing_commands import register_handlers as _register_pairing_handlers
+            _register_pairing_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register pairing handlers: {e}")
 
         self.firebase_client = None
 
@@ -1221,7 +1374,7 @@ class OwletteService:
             logging.info(f"Initializing Firebase client - site: {site_id}, project: {project_id}")
 
             from auth_manager import AuthManager
-            auth_manager = AuthManager(api_base=api_base)
+            auth_manager = AuthManager(api_base=api_base, on_revoked=self.unpair)
 
             if not auth_manager.is_authenticated():
                 logging.error("Agent not authenticated - no refresh token found")
@@ -1245,6 +1398,7 @@ class OwletteService:
 
             self.firebase_client.register_command_callback(self.handle_firebase_command)
             self.firebase_client.register_config_update_callback(self.handle_config_update)
+            self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
             # Sync config: pull from Firestore (source of truth), or seed if new machine
             sync_result = self.firebase_client.sync_config_on_startup()
@@ -1267,6 +1421,12 @@ class OwletteService:
 
             self.firebase_client.start()
             logging.info(f"[OK] Firebase client initialized and started for site: {site_id}")
+
+            # swoop mints and audits with this client's credentials: a manager
+            # left on the stopped one served every session request after a
+            # dashboard remove + in-place re-pair with a dead token and no
+            # doorbell for eleven hours (elm-fort, 2026-10-14).
+            self._restart_swoop()
 
             # Cache site timezone for schedule evaluation
             self._cached_site_timezone = self.firebase_client.site_timezone
@@ -1328,9 +1488,15 @@ class OwletteService:
         section['since'] = since
         return section
 
+    def _keep_awake_section(self) -> dict:
+        """Build the keep_awake section for service_status.json: whether the
+        site wants this machine's screens kept awake, which the desktop app
+        follows to hold the session's half."""
+        return {'wanted': bool(getattr(self, '_keep_awake_wanted', False))}
+
     def _write_service_status_early(self, running=True):
         """
-        Write service, health and swoop sections to service_status.json
+        Write service, health, swoop and keep_awake sections to service_status.json
         immediately after the startup health probe, before Firebase is
         initialized.
         This lets the tray icon show health alerts right away.
@@ -1358,7 +1524,8 @@ class OwletteService:
                 'health': self._health_section(),
                 # Same builder as the steady-state write, so the zero shape is
                 # the shape: no reader ever tells "key absent" from "off".
-                'swoop': self._swoop_section()
+                'swoop': self._swoop_section(),
+                'keep_awake': self._keep_awake_section()
             }
 
             shared_utils.write_json_to_file(status, status_path)
@@ -1378,6 +1545,7 @@ class OwletteService:
         - Service version
         - Health probe results
         - Live swoop state, for the tray's session row
+        - Whether the site wants the screens kept awake, for the app's session hold
 
         This provides real-time IPC from service → tray icon without log parsing.
 
@@ -1432,6 +1600,7 @@ class OwletteService:
 
             health_section = self._health_section()
             swoop_section = self._swoop_section()
+            keep_awake_section = self._keep_awake_section()
 
             status = {
                 'service': {
@@ -1448,7 +1617,8 @@ class OwletteService:
                     'last_heartbeat': last_heartbeat
                 },
                 'health': health_section,
-                'swoop': swoop_section
+                'swoop': swoop_section,
+                'keep_awake': keep_awake_section
             }
 
             # Excludes timestamps and free-form strings so it only flips on real
@@ -1473,6 +1643,9 @@ class OwletteService:
                 swoop_section['viewers'],
                 swoop_section['controllers'],
                 swoop_section['indicator'],
+                # The desktop app holds the session awake on this alone, so
+                # the site's switch reaches it on the next tick too.
+                keep_awake_section['wanted'],
             )
 
             now_mono = time.monotonic()
@@ -1676,10 +1849,23 @@ class OwletteService:
         else:
             logging.warning("[SHUTDOWN] No Firebase client — presence not flushed")
 
+        # A stopped service asks nothing: the final status write tells the
+        # desktop app to let go of the session at once, rather than once the
+        # file has gone stale.
+        self._keep_awake_wanted = False
         try:
             self._write_service_status(running=False)
         except Exception as e:
             logging.debug(f"[SHUTDOWN] Final status write failed: {e}")
+
+        # After the writes that matter: the hold would go with the process
+        # anyway, and release() waits up to two seconds for the let-go.
+        keep_awake = getattr(self, 'keep_awake', None)
+        if keep_awake is not None:
+            try:
+                keep_awake.release()
+            except Exception as e:
+                logging.debug(f"[SHUTDOWN] keep-awake release failed: {e}")
 
         elapsed = time.monotonic() - started
         if elapsed > SCM_STOP_GRACE_SECONDS:
@@ -2610,12 +2796,18 @@ class OwletteService:
         """Hand any pending desktop-app requests to a drain worker.
 
         `configure_site`'s POSIX seam: off Windows the app runs as the console
-        user and can neither write the token store nor control the daemon, so
-        pairing, an agent restart and a machine reboot are requests the daemon
-        executes. Gated exactly like the hoot queue beside it — a platform that
-        has no seam, a single-flight worker and one directory listing — because
-        a `pair` polls for ten minutes and a `restart` ends this process, and
-        neither is the 5s tick's to hold.
+        user and can neither use the token store nor control the daemon, so
+        pairing, leaving the site, an agent restart, a machine reboot and
+        dismissing a pending one are requests the daemon executes. Gated exactly
+        like the hoot queue beside it — a platform that has no seam, a
+        single-flight worker and one directory listing — because a `pair` polls
+        for ten minutes and a `restart` ends this process, and neither is the 5s
+        tick's to hold.
+
+        The worker is handed the one thing a leave needs from this loop: whether
+        the cloud client the loop stops on the enabled -> disabled transition is
+        gone yet. A leave waits on it before deleting the machine document,
+        which a live client would write straight back.
         """
         thread = self._privileged_requests_thread
         if thread is not None and thread.is_alive():
@@ -2626,6 +2818,7 @@ class OwletteService:
 
         t = threading.Thread(
             target=configure_site.drain_privileged_requests,
+            args=(lambda: self.firebase_client is None,),
             daemon=True,
             name='ipc-requests',
         )
@@ -2794,7 +2987,7 @@ class OwletteService:
             'errorMessage': error_message,
             'eventType': event_type,
             'machineId': shared_utils.get_machine_id(),
-            'machineName': socket.gethostname(),
+            'machineName': shared_utils.get_hostname(),
             'timestamp': time.time(),
         }
 
@@ -2814,7 +3007,8 @@ class OwletteService:
     def _start_swoop(self):
         """Build the swoop manager and doorbell, and start the doorbell.
 
-        Called once from main() after the Firebase client is up, because the
+        Called from main() after the Firebase client is up, and again through
+        ``_restart_swoop`` whenever that client is rebuilt, because the
         doorbell mints its token with the agent's credentials and only dials
         while the machine is connected to Firestore. Everything swoop owns runs
         on its own daemon threads — nothing here is ever on the 5s tick.
@@ -2837,6 +3031,10 @@ class OwletteService:
                 get_agent_token=self.firebase_client.auth_manager.get_valid_token,
                 shutdown_event=self._swoop_shutdown,
                 is_connected=self.firebase_client.is_connected,
+                # the mint's 200 / 403 is the enable bit for the firewall and
+                # SAS side effects; set_enabled hands the work to the manager's
+                # own thread, so the doorbell never waits on it.
+                on_enabled=lambda enabled: self.swoop_manager.set_enabled(enabled),
             )
             self.swoop_manager = SwoopManager(
                 firebase_client=self.firebase_client,
@@ -2847,7 +3045,8 @@ class OwletteService:
             logging.info("swoop doorbell started")
         except Exception as e:
             # Non-fatal: the agent runs without swoop, and swoop_commands
-            # returns "Error: swoop_manager unavailable" until a restart.
+            # returns "Error: swoop_manager unavailable" until the client or
+            # the service next restarts.
             logging.warning(f"Failed to start swoop: {e}")
 
     def _stop_swoop(self):
@@ -2864,6 +3063,70 @@ class OwletteService:
                 logging.debug(f"[SHUTDOWN] swoop kill failed: {e}")
         self._swoop_shutdown.set()
 
+    def _restart_swoop(self):
+        """Rebuild swoop on the current Firebase client.
+
+        Runs after every client (re)start. The old manager and doorbell hold
+        the client they were built with, so they are ended first: the
+        streamer is killed and the old doorbell's event is set, then a fresh
+        event and a fresh pair are built on the client the service now has.
+        The command handlers and the doorbell's ring resolve ``swoop_manager``
+        through the service at call time, so the old manager's idle worker
+        thread is never asked for anything again. Its kill is queued, not
+        waited for: a streamer live at this moment gets its grace on the old
+        worker while the new pair comes up, and the new manager spawns only
+        on the next session request.
+        """
+        if self.swoop_manager is not None:
+            self._stop_swoop()
+            self.swoop_manager = None
+            self.swoop_doorbell = None
+            logging.info("swoop ended for the firebase client restart")
+        self._swoop_shutdown = threading.Event()
+        self._start_swoop()
+
+    def unpair(self, reason):
+        """Leave the site because the server cut this machine off.
+
+        Swoop is ended here because the cloud-client stop the main loop runs
+        does not reach it: a viewer must not keep a picture of a machine the
+        site has just revoked, and the doorbell would keep minting with a
+        credential the server now refuses. Swoop then stays down until the
+        service next starts or the machine is re-paired in place, which
+        rebuilds it with the new client (``_restart_swoop``).
+        Hoot is ended for the same reason: it holds its own access token for
+        up to an hour, and site members could keep chatting with and running
+        tools on a revoked machine through it. A relaunch exits on its own
+        once the config carries no site.
+        """
+        configure_site.unpair(reason)
+        self._stop_swoop()
+        if self._is_cortex_alive():
+            try:
+                psutil.Process(self.cortex_pid).terminate()
+                logging.info("Hoot process ended: this machine left its site")
+            except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+                logging.warning(f"Could not end the hoot process: {e}")
+
+    # How long a removal waits for hoot to exit before the cloud client deletes
+    # the machine row again: off Windows, terminate is SIGTERM and hoot answers
+    # it with an `offline` write of its own, which must land before that delete.
+    REMOVED_HOOT_EXIT_TIMEOUT_SECONDS = 5.0
+
+    def _on_removed_from_site(self, reason):
+        """The dashboard removed this machine (#326): leave the site, then wait
+        for hoot's exit so the cloud client's final delete is the last write."""
+        pid = self.cortex_pid if self._is_cortex_alive() else None
+        self.unpair(reason)
+        if pid is None:
+            return
+        try:
+            psutil.Process(pid).wait(timeout=self.REMOVED_HOOT_EXIT_TIMEOUT_SECONDS)
+        except psutil.TimeoutExpired:
+            logging.warning("Hoot did not exit in time; its last write may put the removed row back")
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
     def _check_console_session(self):
         """Tell swoop when the active console session changes. Runs on the 5s tick.
 
@@ -2873,7 +3136,9 @@ class OwletteService:
         switching and the login/lock transitions are what land here, and the
         streamer's session bundle is tied to the session it was spawned into.
         """
-        if self.swoop_manager is None:
+        # console sessions are a windows notion: the mac and linux streamers
+        # are not tied to one, and win32ts failed here on every mac tick.
+        if self.swoop_manager is None or sys.platform != 'win32':
             return
         try:
             # Local, like every other win32ts caller here: wave 1 took the
@@ -2901,6 +3166,70 @@ class OwletteService:
         self._swoop_session_thread = t
 
     # ─── End swoop ────────────────────────────────────────────────────────
+
+    # ─── keep screens awake ───────────────────────────────────────────────
+
+    def _check_keep_awake(self):
+        """Hold the machine awake while its site asks, and mirror what is held.
+        Runs on the 5s tick.
+
+        The switch is the cloud client's cached site_keep_awake, refreshed off
+        the loop, and set_wanted returns at once, so the hold costs the tick no
+        I/O. displayAwake does cost some — the desktop app's report and the
+        seat lookup, loginctl round-trips on Linux — so it is worked out
+        single-flight on a daemon thread: at once when the daemon's hold
+        changes, and every DISPLAY_AWAKE_CHECK_INTERVAL_SECONDS besides.
+        """
+        if not self.is_alive:
+            # graceful_shutdown has let go; a tick still under way must not
+            # take the hold back.
+            return
+        client = self.firebase_client
+        # No client is no site, and nobody asking.
+        wanted = client is not None and bool(client.site_keep_awake)
+        if wanted != self._keep_awake_wanted:
+            self.keep_awake.set_wanted(wanted)
+            self._keep_awake_wanted = wanted
+
+        daemon = self.keep_awake.status()
+        self._display_awake_counter += 1
+        if (daemon == self._display_awake_daemon
+                and self._display_awake_counter < DISPLAY_AWAKE_CHECK_ITERATIONS):
+            return
+        if self._display_awake_thread is not None and self._display_awake_thread.is_alive():
+            return
+        self._display_awake_daemon = daemon
+        self._display_awake_counter = 0
+        thread = threading.Thread(
+            target=self._mirror_display_awake, args=(client, daemon),
+            daemon=True, name='display-awake',
+        )
+        thread.start()
+        self._display_awake_thread = thread
+
+    def _mirror_display_awake(self, client, daemon):
+        """Write displayAwake onto the machine document when it has changed.
+
+        Off the loop (see _check_keep_awake). A write that does not land, the
+        client not connected included, is tried again on the next check.
+        """
+        if client is None:
+            return
+        try:
+            seat, session = _read_session_keep_awake()
+        except Exception as e:
+            # an unknown seat is not reported as no display.
+            logging.debug(f"Could not read the keep-awake report: {e}")
+            seat, session = True, None
+        value = _display_awake(daemon, seat, session)
+        if self._display_awake_mirrored == (client, value):
+            return
+        try:
+            client.set_machine_flags({'displayAwake': value})
+        except Exception as e:
+            logging.debug(f"displayAwake not mirrored: {e}")
+            return
+        self._display_awake_mirrored = (client, value)
 
     def _find_running_process_by_exe(self, exe_path, file_path=None, strict=False):
         """Find a running process by its executable path.
@@ -3196,6 +3525,37 @@ class OwletteService:
                 target=_repair, name='acl-session-repair', daemon=True).start()
         except Exception as e:
             logging.warning(f"Could not start the session ACL repair (non-fatal): {e}")
+
+    def _check_tray_swoop_kill(self):
+        """end every swoop session when the tray asks, through tmp/swoop_kill.flag.
+
+        the desktop app's "kill all swoop sessions on this machine": the same
+        manager kill a dashboard swoop_kill without a sid makes, audited as
+        local_tray. windows only, like the restart flag — off it tmp/ is
+        group-writable, so a flag there is nobody's word, and the tray does not
+        offer the item. never raises.
+        """
+        if sys.platform != 'win32':
+            return
+        flag = shared_utils.get_data_path(SWOOP_KILL_FLAG)
+        if not os.path.isfile(flag):
+            return
+        try:
+            os.remove(flag)
+        except OSError as e:
+            # retried next tick rather than obeyed: a flag that cannot be
+            # removed would end every session that starts after it
+            logging.warning(f"Could not remove the swoop kill flag: {e}")
+            return
+        manager = self.swoop_manager
+        if manager is None:
+            logging.info("Tray asked to end swoop sessions; swoop is not running")
+            return
+        logging.info("Tray asked to end every swoop session on this machine")
+        try:
+            manager.kill(SWOOP_KILL_LOCAL_TRAY)
+        except Exception as e:
+            logging.error(f"Tray swoop kill failed: {e}")
 
     def _check_console_session_acls(self):
         """Start a session ACL repair when the console session or its user has
@@ -3758,6 +4118,7 @@ class OwletteService:
         if pid is None:
             return None
 
+        osadapter.watch_exit(pid)
         self.current_timestamp = int(time.time())
 
         # Read existing results from the output file
@@ -3833,7 +4194,7 @@ class OwletteService:
             self._seat_probe = osadapter.console_user() is None
         return self._seat_probe
 
-    def reached_max_relaunch_attempts(self, process):
+    def reached_max_relaunch_attempts(self, process, after_crash=True):
         # The gate before anything else: while a reboot is pending nothing
         # relaunches, and off Windows nothing but a dashboard dismiss ends
         # that. Asking who is at the seat first billed the 5-second loop a
@@ -3843,6 +4204,11 @@ class OwletteService:
         # it, terminating the kiosk app of a machine frozen to preserve it.
         if self._is_restart_prompt_active():
             return True
+        # A process that exited 0 did not crash (see QUICK_EXIT_SECONDS): its
+        # relaunch spends nothing, or an app that exits on a schedule, or one
+        # somebody keeps closing, would escalate to a reboot.
+        if not after_crash:
+            return False
         # A launch that never happened is not a crash, and off Windows a box
         # with nobody at a graphical seat — logged out, at the display
         # manager's greeter, or imaged before its first login — refuses
@@ -4077,15 +4443,15 @@ class OwletteService:
         candidates.sort(key=lambda item: item[0], reverse=True)
         return [path for _, path in candidates[:max_results]]
 
-    def handle_process_launch(self, process):
+    def handle_process_launch(self, process, after_crash=True):
         # Callers decided "needs launching" outside the lock; if a launch lands
         # while we wait that decision is stale. _launch_locked re-checks this
         # against the post-lock value.
         pid_before_lock = self.last_started.get(process.get('id', ''), {}).get('pid')
         with self._launch_lock_for(process.get('id', '')):
-            return self._launch_locked(process, pid_before_lock)
+            return self._launch_locked(process, pid_before_lock, after_crash)
 
-    def _launch_locked(self, process, pid_before_lock):
+    def _launch_locked(self, process, pid_before_lock, after_crash=True):
         process_id = process.get('id', '')
         current_pid = self.last_started.get(process_id, {}).get('pid')
         if (current_pid and current_pid != pid_before_lock
@@ -4105,7 +4471,8 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not os.path.isfile(exe_path):
+        # a mac .app is a directory; what must exist is the binary it names
+        if not os.path.isfile(shared_utils.resolve_exec_target(exe_path)):
             process_name = Util.get_process_name(process)
             logging.error(f"Cannot launch '{process_name}': Executable path does not exist: {exe_path}")
             last_info = self.last_started.get(process_id, {})
@@ -4129,7 +4496,7 @@ class OwletteService:
             _surface_launch_failed(process_id)
             return None
 
-        if not self.reached_max_relaunch_attempts(process):
+        if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
             delay = float(process.get('time_delay', 0))
 
@@ -4297,8 +4664,9 @@ class OwletteService:
 
         else:
             # PID detection can fail on a successful launch, so scan by
-            # exe+cmdline before launching again.
-            if last_info.get('failed'):
+            # exe+cmdline before launching again. A relaunch held after a
+            # quick clean exit waits out the same cooldown.
+            if last_info.get('failed') or last_info.get('clean_exit'):
                 exe_path = process.get('exe_path', '')
                 file_path = process.get('file_path', '')
                 found_pid = self._find_running_process_by_exe(exe_path, file_path) if exe_path else None
@@ -4324,6 +4692,8 @@ class OwletteService:
                         return  # Still cooling down, skip this cycle
 
             if last_pid and Util.is_pid_running(last_pid):
+                # an adopted pid never passed through _record_launch.
+                osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
                 time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
@@ -4346,7 +4716,14 @@ class OwletteService:
                     shared_utils.update_process_status_in_json(last_pid, 'RUNNING', self.firebase_client, process_id=process_list_id)
 
             else:
+                # a held relaunch carries its clean exit until the launch.
+                exited_cleanly = last_info.get('clean_exit', False)
+                hold_relaunch = False
                 if last_pid:
+                    # read here, once: the read consumes it, whichever branch runs.
+                    code = osadapter.exit_code(last_pid)
+                    last_time = last_info.get('time')
+                    ran_seconds = (self.current_time - last_time).total_seconds() if last_time else 0
                     # KILLED = service/dashboard kill, RESTARTING = operator via
                     # the local app. Both are intended exits; only RESTARTING
                     # earns an audit event.
@@ -4397,8 +4774,24 @@ class OwletteService:
                                 f"'{Util.get_process_name(process)}' ended with the "
                                 f"graphical session (PID {last_pid}) - not a crash, "
                                 f"launching when somebody signs in")
+                    elif code == 0:
+                        exited_cleanly = True
+                        hold_relaunch = ran_seconds < QUICK_EXIT_SECONDS
+                        process_name = Util.get_process_name(process)
+                        logging.info(f"'{process_name}' (PID {last_pid}) exited normally after {int(ran_seconds)}s")
+                        if self.firebase_client and self.firebase_client.is_connected():
+                            self.firebase_client.log_event(
+                                action='process_exited',
+                                level='info',
+                                process_name=process_name,
+                                details=f'Process exited normally (PID {last_pid}, exit code 0)'
+                            )
                     else:
                         process_name = Util.get_process_name(process)
+                        details = (
+                            f'Process stopped unexpectedly (PID {last_pid} no longer running)'
+                            if code is None else
+                            f'Process stopped unexpectedly (PID {last_pid}, exit code {code})')
 
                         # Best-effort screenshot capture before relaunch
                         crash_screenshot_url = None
@@ -4412,13 +4805,13 @@ class OwletteService:
                                 action='process_crash',
                                 level='error',
                                 process_name=process_name,
-                                details=f'Process stopped unexpectedly (PID {last_pid} no longer running)',
+                                details=details,
                                 screenshot_url=crash_screenshot_url
                             )
                             self.firebase_client.send_process_alert(
-                                process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash'
+                                process_name, details, 'process_crash'
                             )
-                        self._write_cortex_event(process_name, f'Process stopped unexpectedly (PID {last_pid} no longer running)', 'process_crash')
+                        self._write_cortex_event(process_name, details, 'process_crash')
 
                 # Re-read: the GUI or Firestore may have changed launch_mode since
                 # the loop iteration began.
@@ -4461,6 +4854,11 @@ class OwletteService:
                         shared_utils.update_process_status_in_json(existing_pid, 'RUNNING', self.firebase_client, process_id=process_list_id, extra=inherit_extra)
                         logging.info(f"[OK] Adopted already-running '{Util.get_process_name(process)}' (PID {existing_pid})")
                         new_pid = None
+                    elif hold_relaunch:
+                        # the cooldown at the top of this method paces the retry.
+                        self.last_started[process_list_id] = {
+                            'time': datetime.datetime.now(), 'pid': None, 'clean_exit': True}
+                        new_pid = None
                     else:
                         # Keep failed markers so missing-exe alerts fire only on
                         # transition; clearing other stale entries makes the
@@ -4469,7 +4867,7 @@ class OwletteService:
                             self._skip_launch_delay.add(process_list_id)
                         else:
                             self.last_started.pop(process_list_id, None)
-                        new_pid = self.handle_process_launch(process)
+                        new_pid = self.handle_process_launch(process, after_crash=not exited_cleanly)
         
         # Real time, not loop-start, so cooldowns measure from the actual launch.
         if new_pid:
@@ -4753,8 +5151,9 @@ class OwletteService:
         assumes a single invoker — single-flight dispatch, the mtime baseline
         CAS — so the main loop must not call it as well.
 
-        Each tick also looks at the console session (_check_console_session_acls),
-        which never raises.
+        Each tick also looks at the console session (_check_console_session_acls)
+        and the tray's swoop kill flag (_check_tray_swoop_kill), neither of which
+        raises.
 
         Runs on its own daemon thread, like the SCM stop watcher, and stops with
         self.is_alive.
@@ -4776,6 +5175,7 @@ class OwletteService:
                             f"({consecutive_errors}): {e}"
                         )
                 self._check_console_session_acls()
+                self._check_tray_swoop_kill()
                 time.sleep(LOCAL_CONFIG_POLL_INTERVAL)
 
         thread = threading.Thread(
@@ -5264,10 +5664,12 @@ class OwletteService:
             # key collapses to the type alone: a second viewer's session
             # request, a revocation kill behind an operator kill, or a second
             # enablement toggle inside five seconds would be refused and
-            # recorded as a failed command.
+            # recorded as a failed command. site_settings_refresh is exempt for
+            # the same reason: an admin flipping a site switch twice inside five
+            # seconds must land the second flip too.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
-                                'swoop_refresh'):
+                                'swoop_refresh', 'site_settings_refresh'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
@@ -8943,6 +9345,7 @@ class OwletteService:
                 self.firebase_client.register_command_callback(self.handle_firebase_command)
 
                 self.firebase_client.register_config_update_callback(self.handle_config_update)
+                self.firebase_client.register_removed_callback(self._on_removed_from_site)
 
                 # Before the config sync, which routinely takes 15s: until this
                 # runs the status file says disconnected and the tray shows a red
@@ -9152,6 +9555,9 @@ class OwletteService:
                 # to take effect.
                 if self.firebase_client:
                     self._cached_site_timezone = self.firebase_client.site_timezone
+
+                # The site's keep screens awake switch, read the same way.
+                self._check_keep_awake()
 
                 self.current_time = datetime.datetime.now()
 

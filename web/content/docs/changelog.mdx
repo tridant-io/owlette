@@ -7,6 +7,1340 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+## [4.1.20] - 2026-10-21
+
+### fixed — a token file the agent can't read no longer unpairs the machine
+
+Since 4.1.8 a machine that could not read its token file took that as a revoke
+and left its site, so a file a virus scanner was holding, or one caught
+mid-write, meant pairing the machine again on site. Now only a token the server
+refuses, or a token file that is gone, unpairs a machine. A file that is still
+there but can't be read is retried like any other failed refresh.
+
+### fixed — updating from 3.2.0 no longer puts a permission prompt on the screen
+
+The installer now closes the desktop app, and keeps the old service from
+reopening it, before it stops the service. A 3.2.0 desktop app answers a stopped
+service by restarting it with elevation, so updating a 3.2.0 machine put a
+Windows permission prompt over whatever the screen was showing.
+
+### fixed — the download menu offers only builds that exist
+
+The landing page's download menu, on a desktop and in the phone menu, lists only
+the platforms the latest release has a build for. A release without a macOS or
+Linux build no longer offers a link that ends in "no macos build".
+
+## [4.1.19] - 2026-10-20
+
+### added — owlette swoop says which version it is
+
+Hover the owlette swoop mark, at the top left of the machine picker or on the
+sign-in page, and a tooltip names the installed version, such as "owlette swoop
+v4.1.19".
+
+### fixed — swoop draws the machine's pointer at its own size, and never leaves you without one
+
+In owlette swoop a Mac's pointer showed at twice its size. The streamer draws
+the pointer in the display's pixels, and the app drew those pixels as its own,
+so a Retina Mac's 28-point arrow came out 56 tall; Windows at 150% came out
+half again too big the same way. The streamer now says the dpi it drew the
+pointer at, read again with each new pointer shape so a scaling change counts
+mid-session, and the viewer draws it at the size it is on the machine, in a
+browser and in the app alike and whatever the picture is scaled to; a browser
+no longer sizes it by the picture, which also changed its size going in and
+out of fullscreen.
+
+Your own pointer no longer vanishes. The viewer hid it from the moment a
+session existed, over "connecting" and until the machine first said where its
+pointer was; it now stays until the machine's has a place on the picture. A
+machine that hides its pointer, such as a kiosk or a player, no longer leaves
+you clicking blind: yours shows, except in a title-bar drag, which Windows
+paints into the picture, and with the mouse captured in fullscreen, where a
+game that hides its pointer means it. The pointer is drawn above the viewers
+list and the latency stats, a watch-only session keeps its own pointer and
+sees the machine's where it is, and a reconnect in fullscreen hands the mouse
+back instead of holding it hidden. The size needs the machine's agent updated;
+the rest is the viewer's alone.
+
+## [4.1.18] - 2026-10-16
+
+### fixed — swoop says why a machine cannot show a picture, instead of "connecting" forever
+
+A machine whose streamer failed before it answered — its screen could not be
+captured, it had no encoder, or its agent refused to start one — left the
+viewer on "connecting" and "reconnecting in N s" for as long as the tab was
+open, and the retries themselves tripped the machine's start-rate ceiling. The
+agent now records the refusal or the exit reason on the session, and the
+viewer reads it when its retry is due, says it, and stops. Two causes behind
+the report are fixed too: on macOS the streamer asked ScreenCaptureKit for
+every window on the machine and gave up after 5 s, which a loaded laptop
+missed on every session; it now asks for displays only and waits up to 20 s,
+logging how long the answer took. And a machine removed from its site on the
+dashboard and re-paired in place kept swoop on its old, stopped cloud client,
+so it minted no doorbell and refused every session until the service next
+restarted; swoop is now rebuilt whenever the cloud client is.
+
+### added — numbered issues, an issue page and an issues API
+
+Every issue now gets a number, and the confirmation names it: "issue #42
+submitted — thank you!" in the dashboard, and "your issue was sent as #42" in
+the desktop app. Quote it when you follow up with owlette support. The issue
+email is shorter and links to a page for that issue, where owlette support sees
+its system info, log tail and attachments and sets its status. Superadmins can
+also list, read and triage issues through the owlette API with an API key that
+holds the new superadmin-only `issue` scope; an existing key gains it by
+ticking issue read and write when you edit it.
+
+### added — screenshots and videos on dashboard issues
+
+The dashboard's submit issue dialog now matches the desktop app's: a category,
+a description, and screenshots and videos, added with add screenshots or video
+or pasted, within the same limits of 10 screenshots and 100 MB in all. It no
+longer asks for a title, the category picker spans the dialog, and there is no
+attach logs box, since only the desktop app can send logs. The files are kept
+30 days and seen only by owlette support. Issues from the desktop app now get a
+real title from the first line of their description instead of all reading
+"agent feedback".
+
+### fixed — cancel on the two-factor screen reaches the login page
+
+**cancel and sign out** on the two-factor screen signed the user out but
+could leave them on that screen with only a "signed out" toast: the browser
+signed out before the server session ended, so the trip to the login page
+bounced straight back. Sign-out now ends the session first, and cancel opens
+the login page with a full page load.
+
+### fixed — quieter macOS and Linux agent logs
+
+Four Windows-only probes (the swoop console-session check, the CPU and GPU
+temperature sensors, display enumeration and the display drift count) ran on
+every tick off Windows and logged their failure each time. They now skip on
+macOS and Linux, so the agent log there carries only what the machine does.
+
+## [4.1.17] - 2026-10-15
+
+### added — videos on submitted issues
+
+The submit issue dialog now takes screenshots and videos from one add
+screenshots or video button. MP4, MOV and WebM videos go beside screenshots,
+now up to 10 rather than 5, 100 MB in all. They travel in the same zip as attached logs, which
+can now reach 150 MB, and are kept 30 days and seen only by owlette support,
+like the rest. A large video takes a while to upload on a slow connection.
+
+### changed — the sent toast names the screenshots and video that went
+
+After sending an issue, the confirmation lists everything that went with it,
+for example "system info, the logs and 2 screenshots went with it."
+
+## [4.1.16] - 2026-10-15
+
+### added — screenshots on submitted issues
+
+You can now add up to 5 screenshots to an issue from the desktop app's submit
+issue dialog, by picking files or pasting an image. PNG, JPEG and WebP images
+up to 8 MB each are accepted. They travel in the same zip as attached logs,
+with or without attach logs ticked, and like the logs they are kept 30 days and
+seen only by owlette support.
+
+## [4.1.15] - 2026-10-14
+
+### added — attached logs cover more of the machine
+
+Ticking attach logs when you submit an issue now also sends owlette swoop's
+log, `tmp/status_writer.log`, and a list of the files in owlette's data folder
+with their sizes and dates, never their contents. On Windows it adds owlette's
+installer logs and crash events for owlette's own programs; on macOS, crash
+reports for owlette's programs and the installer log's lines about owlette; on
+Linux, the journals of the agent service and the self-update unit. Tokens and
+`config.json` still never go in, and the zip is still kept 30 days and seen only
+by owlette support.
+
+### changed — submit issue's progress reads beside its buttons
+
+The step submit issue is on now sits in the button row, left of cancel, instead
+of on a line of its own above it.
+
+## [4.1.14] - 2026-10-14
+
+### added — submit issue shows what it is doing, and can go to its own inbox
+
+Sending an issue from the desktop app now shows a spinner and names each step,
+collecting system info, zipping and uploading the logs, then submitting, so a
+send that takes a minute no longer looks frozen. Each send is logged to
+`submit_issue.log` in the machine's logs, including why logs could not be
+attached. The new optional `ISSUE_EMAIL` setting sends issue alerts to their own
+inbox; without it they go where they went before.
+
+### changed — the app menu is reordered, and swoop's stats button shows when it is on
+
+The desktop app's menu now reads swoop; docs, submit issue, config, logs;
+appearance, start on login, restart service, reload window; and leave site last,
+on its own. swoop's stats button stays pressed while the stats are open, so a
+second click to hide them is obvious, and its tooltip just says stats.
+
+### fixed — swoop keeps its quality on a busy screen
+
+swoop counted every frame your screen did not get round to drawing as lost on
+the network. On a moving picture at 60 fps, two frames often arrive within one
+refresh of a 60 Hz screen and only the second is drawn, so swoop lowered the
+picture's quality every two seconds, even on a wired network where nothing was
+lost, and a busy screen went soft and blocky. swoop now counts only frames that
+were really lost.
+
+## [4.1.13] - 2026-10-13
+
+### added — send the machine's logs with an issue
+
+The desktop app's submit issue dialog has an **attach logs** box, unticked by
+default. Tick it and the machine's logs from the last 14 days, swoop's and the
+desktop app's own included, go to owlette support as one zip with the issue: no
+copying the logs folder by hand and no administrator password. The zip is kept
+30 days and only owlette support can open it; every download is audited. If
+the logs cannot be sent, the issue still is, with the reason. An issue from the
+desktop app now also records the machine and site it came from.
+
+### changed — "submit bug report" is now "submit issue"
+
+The desktop app's menu and the dashboard's help menu both say **submit issue**.
+It still takes feature requests and feedback.
+
+### fixed — swoop's picture no longer smears, and an NVIDIA machine encodes on its GPU again
+
+Since 4.1.9 a Windows machine with an NVIDIA GPU streamed swoop through the
+slower Windows encoder instead of NVENC, because checking for that encoder broke
+NVENC for the rest of the session. It also lost H.265. That encoder runs a little
+over its bitrate, and each frame swoop then held back left a hole the browser
+could not see, so the picture smeared, sometimes for seconds, until the next
+keyframe. Each hole was also mistaken for a bad network and cut the bitrate.
+
+swoop now uses NVENC again on NVIDIA machines. After a lost frame it sends
+nothing but a keyframe, so a viewer sees a brief pause instead of a smear. It
+leaves the encoder room above its bitrate and no longer cuts the bitrate for
+frames it held back itself. A 30 fps stream now uses its full bitrate, and
+renewing swoop's connection to the server no longer pauses the picture.
+
+## [4.1.11] - 2026-10-13
+
+### added — owlette free, the pro trial and per-machine billing, for after the beta
+
+The pricing page shows three plans for after the beta: owlette free, with one
+machine and one site, live status, metrics, crash-restart and updates; and
+core and pro, billed per active machine per month. Every account will start
+with a 14-day pro trial, no card. A new plans page in the docs covers each
+plan, the trial, what counts as an active machine, what happens when a
+subscription ends, and the `plan_required` (402) error. Nothing is enforced
+or billed during the beta: the plan limits ship switched off.
+
+### added — email verification at sign-up
+
+An email-and-password sign-up is sent a link to verify its address, and a
+banner offers to send it again until it is opened. Nothing waits on it.
+
+### fixed — a Mac shows its own disks and network, not simulator volumes and tunnels
+
+A Mac listed every volume macOS mounts for itself, including the iOS simulator
+runtimes Xcode installs, and every VPN and AirDrop interface. A simulator volume,
+nearly full by design, could show as the machine's main disk and a tunnel as its
+main network, and each one appearing or vanishing reloaded the machine's hardware
+details. A Mac now lists its startup and data volumes, external drives and real
+network interfaces only.
+
+### fixed — two Macs on one network no longer pair as one machine
+
+A Mac took its machine name from the hostname its network handed out, and some
+routers give every Mac the same one, such as `Mac.localdomain`. Two Macs on one
+network then paired onto one machine on the dashboard, each overwriting the
+other, and the dot in the name kept swoop from opening that machine. A Mac now
+takes its name from its local network name (System Settings, General, Sharing),
+which macOS keeps unique on the network. A Mac already paired keeps its name;
+leave the site from the owlette app and pair again to take the new one, on each
+of two Macs that shared one machine.
+
+### fixed — swoop stops asking a machine that never answers
+
+A machine whose swoop could not start, such as a Mac waiting for someone to
+allow screen recording, never answered the viewer, and the viewer asked again
+about every 45 seconds for as long as the tab stayed open. After ten minutes
+with no picture it now stops and says what to check: that the machine is on
+the network, and on a Mac, that the owlette app is running and macOS is not
+asking to allow screen recording. **reconnect** tries again. A slow connection from another
+network still gets the ten minutes to come through.
+
+## [4.1.10] - 2026-10-12
+
+### fixed — a re-paired machine shows its hardware again
+
+A machine removed and paired again, or moved to another site, kept showing
+`CPU0` in place of its processor's name, with no disk or GPU details, until its
+hardware changed. The agent remembered on disk what it had last uploaded and
+skipped the upload for the new machine record. It now uploads the hardware
+profile, the display profile and the display-modes catalogue once each time it
+starts or pairs, then only when they change.
+
+### fixed — owlette swoop opens on the server its machine is paired with
+
+Started for the first time from the Start menu, Applications or the Dock, owlette
+swoop always opened owlette.app, even on a computer paired with
+dev.owlette.app, so signing in there failed. With no server remembered from an
+earlier link, it now opens the one the owlette agent on the same computer is
+paired with, and owlette.app on a computer without the agent.
+
+## [4.1.9] - 2026-10-12
+
+### added — swoop hosts on Windows machines without an NVIDIA GPU
+
+A Windows machine with no NVIDIA GPU can now host a swoop session. NVENC still
+comes first and gives the best picture; without it the streamer encodes h264
+through Media Foundation, which ships with Windows: on an Intel or AMD GPU's
+hardware encoder, or, on a machine with none, such as a virtual machine, on the
+CPU at up to 1280x720 and 30 frames a second on two threads, so the machine's
+own work keeps the rest of it. A bigger screen is scaled down to fit. A Windows
+N edition without the Media Feature Pack still needs an NVIDIA GPU.
+
+### changed — a second factor you just passed is the step-up, and a step-up lasts 7 days
+
+A second factor passed at sign-in in the last five minutes now counts as swoop's
+step-up for the machines opened in those five minutes, so the first machine
+after signing in takes control without asking again. That holds for owlette
+swoop signed in from a browser that has just passed one; approving the app from
+a browser that signed in earlier still asks. One step-up now covers a machine
+for 7 days instead of 12 hours. A remembered browser still asks, a kill still
+closes every window on the machine, and a step-up a sign-in stood in for is
+recorded on the audit trail (`step_up_opened`).
+
+### changed — swoop control is tied to the networks you verified (watching only, for now)
+
+Each second factor you pass records the network it ran on (the ISP, not the
+address), and every control request now logs whether it came from one of those
+networks. Nothing is refused yet: this is a two-week observation before swoop
+starts asking once on a new network. Cloudflare adds the network to each
+request; a request that reached an origin around Cloudflare counts as an
+unknown network.
+
+### fixed — a request that reached an origin around Cloudflare could pick its own rate-limit bucket
+
+The origins also answer requests that bypass Cloudflare, and there a
+client-supplied CF-Connecting-IP header chose the per-IP bucket on the sign-in
+and pairing limits. The header now counts only when the request carries the
+edge's shared secret; otherwise the proxy's own view of the address is used.
+
+### fixed — owlette swoop has a sign-in of its own
+
+owlette swoop's sign-in is now a minimal card of its own: no site footer, the
+window draggable anywhere, browser sign-in first and email and password behind
+a link. Its pages render right on the first paint instead of flashing the
+site's layout, and the signed-in email no longer wraps.
+
+### fixed — the swoop picker's loading notice
+
+In owlette swoop the loading text sat just under the title bar; it now sits
+centred in the window with the same spinner as the stage's "connecting" notice.
+
+### fixed — "not you?" on the verify and approve pages
+
+The pages that verify a second factor and approve a device now offer "not you?
+sign in as someone else".
+
+## [4.1.8] - 2026-10-10
+
+### added — owlette swoop, the desktop app for swoop
+
+owlette swoop shows the swoop viewer in a window of its own instead of a
+browser tab: native fullscreen (hold esc for two seconds to leave it), the
+session bar as the window's title bar, and a machine picker at `/swoop` laid
+out as a grid of cards. A session opens in the same window; right-click a card
+for a new one. Closing a window ends its session.
+
+Open it from **swoop** in the owlette app's tray menu or window menu, from the
+monitor icon beside **swoop** in a machine's menu or on a picker card, or with
+`owlette swoop` in the CLI, which uses the browser when the app is not
+installed. Opened from the dashboard, the app arrives signed in as you; started
+on its own, it offers **sign in with your browser**, and taking control offers
+**verify in your browser** for the second factor. On Windows the clipboard
+works both ways without a permission prompt, and while a session captures the
+tray offers **kill all swoop sessions on this machine**. Every agent installer
+now carries the app on Windows, macOS and Linux and registers
+`owlette-swoop://` links; a download for computers without the agent is not
+published yet.
+
+Known gaps: Windows gets h264 only in the app; the machine's cursor stays soft
+until the streamer sends it at full size; cmd+tab cannot be sent from macOS
+(use the keyboard menu); and the app has no pointer lock on macOS. (#325)
+
+### changed — swoop's switch is easier to find
+
+The site switcher has a **site settings** item that opens the current site's
+settings, swoop switch included, without going through the list of every
+site. On a site with swoop off, the menu of a machine that can stream offers
+a site owner or admin **turn on swoop…**, which opens those settings, and
+tells a member that swoop is off and to ask a site owner or admin. Both get
+live view in the meantime. Each row in manage sites shows whether that site
+has swoop on.
+
+### fixed — the desktop app's appearance submenu opens
+
+Choosing **appearance** in the desktop app's menu highlighted the row and
+showed nothing: the submenu was drawn inside the menu panel and clipped by
+its edge. It now opens beside the menu like any other submenu.
+
+### fixed — revoking a token now cuts the agent off
+
+**revoke token** on a machine, and **revoke** on the agent tokens page,
+deleted the token but changed nothing on the machine for up to an hour: the
+agent kept syncing on its one-hour access token, and the dashboard kept
+showing it online with live metrics. The server now also queues an `unpair`
+command, and an agent on this release acts on it within a minute: it confirms
+with the server that its token is gone, leaves the site, drops its
+credentials, ends any swoop session and the hoot process, and goes offline,
+and the owlette app on the machine offers **join site**. A machine sharing the hostname whose own
+token survived ignores the command. An agent that is offline at the time
+leaves the site the moment the server refuses its next refresh. Agents on
+4.1.7 or earlier still only wipe their token store at that refresh.
+
+### fixed — removing a machine from the dashboard now sticks
+
+**remove machine** on an online machine deleted its records and token, but
+the agent was never told: it kept writing on its one-hour access token and
+each heartbeat put the machine straight back on the dashboard, online with
+live metrics. An agent on this release notices within seconds that its config
+was deleted along with the machine, stops writing, leaves the site, drops its
+credentials, ends hoot, and deletes the row once more in case a heartbeat had
+already put it back; the owlette app on the machine offers **join site**. The
+dialog and docs now say what happens, and that pairing again from the app is
+enough. An agent on 4.1.7 or earlier still writes the machine back and stops
+only when its access token expires, within the hour; remove it again then.
+(#326)
+
+### fixed — a generated pairing phrase works on macOS and Linux
+
+**add machine → generate code** showed only the Windows `/ADD=` command and
+told macOS and Linux to pair from the app, so a phrase generated for an
+unattended install had no use there; the pairing preseed is the only way
+those platforms can spend one. The tab now also shows the preseed, ready to
+copy, with `"server": "dev"` when the code was generated on dev.owlette.app:
+save it as `config/pairing.json` in the data root before installing the
+package. Fixes #322.
+
+### added — pair with dev.owlette.app from the app
+
+The app's **join a site** dialog could only pair a new machine with
+owlette.app; reaching dev.owlette.app took the `/SERVER=dev` installer flag
+on Windows or a pairing preseed on macOS and Linux. Now clicking the "join a
+site" title five times switches the pairing to dev: the `dev` badge appears
+and a dev phrase is requested; a click on the badge goes back to owlette.app.
+Nothing in the dialog advertises it, so customers see no choice. The flag and
+the preseed stay for unattended installs. Fixes #321.
+
+### fixed — swoop connects from strict networks through the relay
+
+A swoop session from a phone hotspot or another strict network failed with
+"even the relay could not get through" although a relay was set up: the
+machine's side never used it, so a viewer whose router allows no inbound path
+had nothing to connect to. From agent 4.1.8 the machine takes a relayed
+address of its own on the TURN server and offers it to the viewer, so a viewer
+behind any router reaches it; the browser's own relay is still tried when
+nothing has connected after three seconds, so a network that allows only TCP
+gets through too. The machine's network has to allow UDP out to the relay on
+port 3478. When no path comes up, the viewer now says which end never reached
+the relay instead of blaming the viewer's network, and the machine's swoop log
+says whether it gathered a relay candidate and why not. Fixes #328.
+
+### added — backup codes download as a file
+
+The backup codes screen at the end of two-factor setup has a **download
+codes** button next to **copy all codes**. It saves the ten codes, and the
+account they belong to, as `owlette-backup-codes.txt`, so a sheet that is
+shown only once no longer has to survive on the clipboard.
+
+### changed — agent installers download from download.tridant.io
+
+Agent installers are moving from Firebase Storage to
+`https://download.tridant.io/owlette/`, with permanent links that never
+change. A firewall or proxy that allows hosts by name must allow
+`download.tridant.io` on port 443, or machines cannot update. Versions
+published before the move keep their old links. A published installer is
+never replaced: uploading the same version again is refused, so a fix gets a
+new version number. Every version that becomes latest is also listed in
+tridant id's owlette release log, and a deleted or rolled-back version is
+pulled from it; `/admin/installers` shows each version's status there and can
+retry a failed one.
+
+### fixed — the swoop viewer says why it cannot start, and has a way back
+
+Opening swoop on a site where it is turned off showed a "connecting" spinner
+that never stopped, with the reason in small text at the bottom and no clear
+way out. The viewer now stops and says why in the middle of the screen. When
+swoop is off for the site, site admins get a link to the site's settings and
+members are told to ask a site owner or admin. A back-to-dashboard arrow
+starts the session bar in every state, and an ended or failed session also
+offers a back to dashboard button.
+
+### fixed — a frozen swoop picture recovers on its own
+
+A swoop picture could stop on one frame while the session stayed up, with
+the machine still sending, until the page was reloaded. The viewer now
+notices within a few seconds, says "picture stalled — reconnecting" and
+starts a new session in the same tab, without asking for the second factor.
+It does this at most twice in ten minutes; after that the session stays up,
+says the picture froze, and offers reconnect. When the browser's HEVC
+decoder was the cause, that tab switches to h264.
+The codec choice in the quality menu now takes effect: choosing one
+reconnects with it.
+
+### fixed — reloading swoop keeps control without the second factor
+
+Reloading the page during a swoop session no longer asks for your passkey or
+code again once the 12-hour window has passed. A tab that held control keeps
+it across a reload. A new tab still asks, and ending the session or a kill on
+the machine closes it as before.
+
+### changed — the docs cover Windows, macOS and Linux
+
+The docs and READMEs are up to date. A new platform support page says what
+each OS can and cannot do. The swoop page says which machines can host a
+session: Windows with an NVIDIA GPU, a Mac with the owlette app running, and
+not Linux yet. The agent pages cover launchd and systemd, paths, logs and
+uninstall on each OS. The API reference, the OpenAPI spec and the CLI pages
+match the routes and commands as they are.
+
+### fixed — hoot's conversation groups open as you left them
+
+hoot's conversation list no longer opens with every group expanded and then
+folds the ones you had collapsed. The list waits for your saved groups, which
+takes a moment, and appears with them already as you left them.
+
+### changed — hoot's conversation list
+
+- Conversations that were never categorized sit in their own unsorted group,
+  last, instead of inside general. They are the ones "categorize N unsorted"
+  sorts, and general is a category of its own.
+- The groups fade in one after another as the page opens, like the rest of
+  the app's pages.
+- With the sidebar collapsed, the chat sits the same distance from both edges
+  of the page.
+
+### changed — pages fade in, top to bottom
+
+Every page now fades in one row after another as it opens: the header, each
+section, then the rows of its lists and tables, about a second for the whole
+page. Nothing moves; it is opacity only. A row that arrives after the page has
+opened fades in straight away instead of waiting its turn. The admin pages do
+the same while their sidebar stays put. People who ask their system for reduced
+motion get the page without the fade.
+
+### changed — small interface polish
+
+- The breadcrumb's separators are straight rules instead of slashes.
+- A machine card's metric rows line up with the centre of their collapse
+  chevron, as the displays already did.
+- hoot's conversation list sits on a darker surface, so the conversation itself
+  comes forward.
+- On a phone, the sign-in page's "don't have an account? sign up" sits on its
+  own line instead of wrapping into "forgot password?".
+
+### fixed — hoot's model changes without the key
+
+Choosing a different model in account settings no longer means typing the API
+key again: with a key already saved and the key field left empty, the button
+reads save model and keeps the stored key.
+
+### added — the swoop bar on the left or right
+
+The session bar can run down the left or right edge instead of along the top,
+from its new bar position button, or sit on auto, the default, which puts it
+wherever the picture comes out bigger in your window and moves it when you
+resize. A 16:9
+picture in a 16:9 window has empty space at its sides, so a side bar gives the
+picture back the height a top bar takes. The machine's name runs vertically and
+the buttons stack at the bottom. The latency stats open beside a side bar, next
+to their button. Phones keep the bar on top. The choice is kept in your browser,
+and a side bar is on its side from the first frame.
+
+### added — tooltips on the swoop bar
+
+Every button in the swoop bar says what it does when you hover it, including
+one that is greyed out, such as quality before the session connects.
+
+### changed — the quality menu says which settings are limits
+
+The quality menu's footnote now names bandwidth, resolution and frame rate as
+upper limits the machine lowers when the connection needs it.
+
+## [4.1.7] - 2026-10-07
+
+### changed — swoop's machine log says why a picture stalls
+
+Every ten seconds of a swoop session, the machine's swoop log now also counts
+the keyframes it sent and the ones viewers asked for, the frames it had to
+hold back, and its slowest moment, so a frozen picture can be traced to the
+machine or to the viewer. It warns when a viewer's picture stops updating while
+frames keep going out, says when it comes back, and notes each time the screen
+capture restarts or the display changes size or refresh rate. The frame rate it
+logs is no longer overstated, and on a display faster than 60 Hz swoop sends at
+most 60 frames a second, which is what its bitrate is set for.
+
+### changed — updated components
+
+The owlette app moves to Tauri 2.12, and the agent and the swoop streamer take
+the latest minor and patch releases of their libraries, including the Claude
+agent SDK behind hoot, now 0.2.159, the newest release with a Windows build.
+
+## [4.1.6] - 2026-10-04
+
+### changed — swoop does not open the machine you are on
+
+Opening swoop on the computer you are sitting at showed a picture of the
+picture, and your clicks landed on the viewer itself. The machine now sees a
+session that comes from itself and ends it with "you're on this machine", and
+from then on that browser shows swoop greyed out for that machine.
+
+## [4.1.5] - 2026-10-04
+
+### fixed — win + l locks a Windows machine from swoop
+
+**win + l** in the special keys menu now locks the machine. Windows ignores a
+lock shortcut that a program types, so the menu item did nothing; the machine
+now locks itself when the shortcut comes through. Pressing win+l on your own
+keyboard still locks your own computer.
+
+## [4.1.4] - 2026-10-04
+
+### fixed — swoop through UAC prompts on Windows
+
+A UAC prompt during a swoop session could leave the mouse and keyboard dead,
+either on the prompt or on the desktop after it closed, until the next lock or
+prompt. The prompt runs on Windows' secure desktop, and the host followed it
+with two watchers on one thread that undid each other. The picture could also
+freeze for ten seconds and end the session when the prompt opened. Now you see
+the prompt and answer it from the viewer, including typing an administrator's
+name and password.
+
+### added — ctrl + alt + del from the viewer
+
+**ctrl + alt + del** in the special keys menu brings up the Windows security
+screen on the machine, for sign-in and UAC prompts that ask for it. It did
+nothing before. The service raises it, at most once every two seconds.
+
+## [4.1.3] - 2026-10-03
+
+### added — swoop from another network
+
+A swoop session now connects across the internet through most home and office
+routers. The machine asks a public STUN server for the address its router shows
+the world and offers it to the viewer beside its local one, as the viewer
+already did. Before, a machine offered only its local address, so a viewer on
+another network saw "connecting" and nothing else. When both ends sit behind
+strict routers, as on many mobile networks, a relay is still needed, and none is
+set up on dev yet.
+
+### changed — swoop says when it cannot connect
+
+After 20 seconds without a path the viewer says "can't reach this machine from
+your network", and whether a relay was there to try, instead of "connecting"
+for as long as the tab is open. It keeps trying, and the picture appears if a
+path comes up later.
+
+### changed — the macOS app icon follows light and dark
+
+On macOS 26 the app's icon follows the Mac's icon style: the day eye on a light
+tile in the default style, the night eye on a dark tile in the dark style. Older
+macOS shows the day icon.
+
+## [4.1.2] - 2026-10-03
+
+### added — light mode
+
+owlette now has a light theme, on every page of the dashboard, the docs, the API
+reference and the sign-in screens, and in the desktop app. It follows your
+computer's setting until you choose: pick light, dark or system under account
+settings → preferences → appearance, and the choice follows you to every browser
+you sign in on. Dark stays the default wherever there is no signal. By day the
+console is the same room in daylight: cool paper, navy ink, one deeper signal
+cyan, and a warm lamp glow under the header. The desktop app has its own
+appearance setting in its menu, and it now follows the computer's appearance
+by default, so on a computer set to light it opens light for the first time;
+it was always dark before.
+
+### fixed — keep screens awake on Windows
+
+On Windows, 4.1.1's service held nothing. Windows refuses a display request
+from a service, and the service asked for the display first, so it never asked
+for sleep either. The service now asks for system sleep only, and the owlette
+app keeps the display on in the signed-in session, as it already did in 4.1.1.
+A signed-in machine stayed awake on 4.1.1 through the app alone; a machine with
+nobody signed in is now kept out of sleep too. The dashboard reported the
+refusal as `PowerSetRequest: [WinError 50]` in the machine's `displayAwake`.
+
+## [4.1.1] - 2026-10-03
+
+### added — keep screens awake
+
+Every site now keeps its machines' screens awake, on Windows, macOS and Linux.
+It is on by default, so a site that never touches the setting keeps its screens
+on around the clock. A site owner or admin turns it off in manage sites, in the
+site's edit panel. The switch acts at once: online machines follow within
+seconds, and an offline machine picks it up when it reconnects. Turning it off
+releases every hold, and the machine goes back to its own power and lock
+settings.
+
+Each machine holds it in two parts. The agent's service holds display and
+system sleep, which works with nobody signed in: a power request on Windows,
+power assertions on macOS, and a systemd inhibitor on Linux. The owlette app
+holds the signed-in session's blanking and lock: on Windows it keeps the display
+required and switches the session's screensaver off, then puts back the user's
+own setting when it lets go; on macOS it holds a display assertion and keeps the
+user active; on Linux it holds the GNOME session's idle inhibit. Each part lets
+go when the switch goes off or its process ends.
+
+The machine record carries `displayAwake` (what the site wants, what the
+service holds, what the session holds, and why a wanted hold is not held) and
+`capabilities.keepAwake: 1`. Manage sites marks a machine `awake` while it
+holds. The setting lives at `sites/{siteId}/settings/display`, behind
+`GET` and `PATCH /api/sites/{siteId}/display-settings`, which take a signed-in
+session and refuse API keys.
+
+### changed — the swoop switch moved
+
+A site's swoop switch moved from its machines panel to its edit panel, beside
+keep screens awake. Both switches act at once, outside the panel's save.
+
+### added — who is in a swoop session
+
+The machine menu shows how many people are in a machine's swoop session, on its
+swoop row and on the menu's button, whenever anyone is. A new admin page,
+swoop, lists the live sessions across your sites, with the people in each and
+whether they control or watch, and ends a session with a click. Site admins and
+up see it, for their own sites only.
+
+### fixed — the swoop keyboard menu
+
+Its legend appears only where a key is converted between your system and the
+machine's, and the note about the Windows key says what to do about it.
+
+### fixed — the macOS app window
+
+The window now has the macOS 26 corner radius. 4.1.0 said it did, but the SDK
+link alone changed nothing: macOS draws the large radius only on a window with a
+toolbar, so the window carries an empty one. The traffic lights sit on the
+wordmark's line.
+
+### fixed — the owlette app's notifications
+
+On Linux, notifications carry the app's icon, and their name no longer reads
+`(deleted)` after an update. On every system, the app no longer says the
+service stopped while that service is updating itself; a Linux package takes
+about a minute to install, and every update raised the alert. The app that runs
+during an update is the old one, so the 4.1.0 app still raises it once, on the
+way to 4.1.1.
+
+### fixed — stopping the service on Linux
+
+The first `systemctl stop owlette-agent` after the owlette app started was
+undone a quarter second later: the app started the service again, which
+cancelled the stop. The app now starts the service only when it finds it
+stopped at launch, never after it has seen it running.
+
+### fixed — the agent
+
+Batch writes go through Firestore's `:commit`, which the agent's token may use.
+`:batchWrite` answered 403, so every batch fell back to one request per
+document, 1,754 of them for a Linux machine's package list. A machine without an
+NVIDIA driver no longer logs a GPU temperature warning every pass; the read
+backs off for five minutes, as the GPU list already did. The app reads its
+start-on-login setting every 30 seconds instead of every second, which on macOS
+and Linux was a process a second.
+
+### fixed — the dashboard
+
+The list view's metric cells show again, and keyboard focus is quiet again,
+with no strong or inset ring.
+
+### docs
+
+Pairing a Mac or Linux machine that nobody stands in front of, with the pairing
+preseed, and running owlette on Ubuntu Server without a desktop.
+
+## [4.1.0] - 2026-10-02
+
+### added — a Mac can host a swoop session
+
+A Mac on Apple silicon with macOS 15 or later can now host swoop. The streamer
+captures a display through ScreenCaptureKit at its native pixel size, encodes it
+with VideoToolbox (H.264 or HEVC in hardware, with Apple's software H.264 on a
+Mac without H.264 hardware), and takes the viewer's keyboard, mouse, double
+clicks, drags and wheel through CoreGraphics. The cursor overlay is drawn from
+the Mac's own cursor, and where the streamer cannot read the cursor's shape the
+pointer stays in the picture instead. System audio rides the same Opus track and
+mute as on Windows, and swoop never creates or switches an audio device. Every
+H.264 stream a Mac sends declares zero frame reordering, rewritten where the
+encoder leaves it out, so the browser's decoder never holds a frame back. A Mac
+resolves a viewer's `.local` candidates and restarts ICE when its network
+interfaces change, and the streamer's `probe` lists the Mac's displays and GPU.
+
+A session wakes the Mac's display and keeps it lit while it captures. macOS
+shows its screen recording indicator in the menu bar meanwhile, and stopping the
+capture from that indicator ends the session cleanly, as a kill, instead of
+restarting it over the person at the Mac. Somebody must be logged in: macOS
+does not let swoop reach the login window.
+
+A Mac offers swoop (`capabilities.swoop: 1`) once the streamer is installed and
+the owlette app reports a fresh Screen Recording grant, which takes effect when
+the app is reopened after the grant. The app asks for Screen Recording when it
+starts, as before; Accessibility, which control needs, is asked only from the
+app's notice; and the first session raises macOS's Local Network prompt, in
+owlette's name. Windows is unchanged, and a Linux machine still offers no swoop.
+
+### added — the swoop clipboard on a Mac
+
+The clipboard syncs with a Mac as it does with Windows: text and images both
+ways, up to 256 KB of text and 15 MB for an image. An image copied on the Mac
+as a TIFF reaches the viewer as a PNG, and copied files are not synced. The
+clipboard from the Mac reaches the viewer only where macOS lets owlette read it
+without asking, with owlette set to always allow under Privacy & Security →
+Paste from Other Apps, because any other read raises a paste alert at the Mac
+and swoop never raises a dialog there. Each session reads that setting once,
+when it starts. macOS lists an app under that setting only after the app has
+raised the paste alert once, which owlette never does, so on a Mac that does not
+list owlette the clipboard from the Mac stays off. macOS before 15.4 has neither
+the setting nor the alert, and syncs both ways. A paste from the viewer reaches
+the Mac whatever the setting.
+
+### added — the macOS app reports its Accessibility grant
+
+The app now checks its Accessibility grant beside Screen Recording and shows a
+notice when it is off. The notice's button asks macOS for the grant and opens
+the right pane in System Settings; nothing asks without that click. The app
+notices a grant or a revocation while it runs, and the notice clears within
+seconds of the grant, with no relaunch. Swoop needs the grant to control a Mac,
+and can show the screen without it. The app also declares why it uses the local
+network.
+
+### changed — the swoop keyboard follows the machine you control
+
+From a PC, ctrl now acts as cmd on a Mac, so ctrl + c copies there. The
+keyboard menu's "keys match" setting turns that off. A Mac viewing a Windows
+machine keeps cmd acting as ctrl. The keyboard menu lists the machine's own shortcuts: cmd chords
+on a Mac, and no ctrl + alt + del on a Mac or on Linux. The Print Screen and
+Pause keys, which a Mac has no key for, are dropped there.
+
+### changed — how swoop starts on macOS and Linux
+
+The swoop streamer now builds on macOS and Linux and is tested there in every
+build, and its session loop runs on per-platform seams; Windows sessions run as
+before. On macOS and Linux the agent runs as root with no display of its own,
+so it asks the desktop app to start the streamer, through a checked `launch`
+job: the app starts only its own streamer, with allow-listed arguments and its
+socket and log paths pinned to owlette's data folder, as its own child, which is
+what gives the streamer the app's Screen Recording and Accessibility grants. The
+session bundle rides a unix socket the agent listens on, as the streamer's stdin
+and stdout, rather than a file the app would read, so it never touches disk, and
+the agent accepts the connection only from the logged-in user. When the app is
+not running, the agent logs the refusal `desktop_not_running` and starts
+nothing. The macOS installer carries the streamer inside owlette.app, signed and
+notarized with it, and the build fails if it is missing, the wrong version or
+signed by another team. A new `selfcheck` verb reports a Mac's Screen Recording,
+Accessibility and local network state without raising a prompt, and the
+streamer's log follows `OWLETTE_DATA_ROOT`.
+
+### changed — a Mac streams at its full size, at 60 fps
+
+The streamer no longer waits on each encode: VideoToolbox hands frames to the
+session from its own callback, with low-latency rate control off, which holds
+60 fps at 3420x2214 where the earlier build managed 48. A Mac is captured at
+its native pixel size again, and a settle keyframe a second after the last big
+move keeps a fast window drag from smearing. `auto` now starts any source above
+2.5 megapixels, a 4K-class display or a 1440p screen, at 80 Mbps, and the
+bandwidth menu goes to 100 Mbps. The governor no longer cuts the rate for one
+or two dropped frames in a report window, and the host logs its rate every ten
+seconds and on every cut.
+
+### changed — the swoop keyboard menu
+
+The menu names its two modifier settings, "shortcuts match" (ctrl acts as cmd
+on a Mac; the default) and "keys match" (ctrl is control), shows what each of
+your modifier keys does on the machine under the setting you chose, and outside
+fullscreen offers to hold the Windows key or cmd for your next keystroke. After
+it sends a key the keyboard goes back to the picture, so that held key takes
+your next key.
+
+### changed — the swoop quality menu is two levels
+
+One row per setting (bandwidth, resolution, frame rate, codec), each showing
+what is set, with the options beside it. "on reconnect" sits in the codec
+submenu.
+
+### fixed — the swoop clipboard
+
+A paste no longer pushes your clipboard to the machine when the machine already
+holds it, so a copy made on a Mac is pasted as copied. The session bar says
+when the machine does not share its clipboard, and when your browser held back
+a copy from the machine; the docs explain the browser's clipboard question. On
+a Mac, the owlette app says when clipboard sharing is off and takes you to the
+setting.
+
+### changed — the swoop tab and the machine menu
+
+The tab is titled `swoop - <machine>`. In the dashboard's machine menu, swoop
+wears the brand colour.
+
+### fixed — a streamer whose app has quit ends its session (macOS and Linux)
+
+The streamer is the desktop app's child and types under the app's Accessibility
+grant. When the app quit, the picture went on with a dead keyboard. The session
+now ends, and the page starts its next one under the app that comes back.
+
+### changed — the macOS app
+
+Its menu bar item starts at the right end of the menu bar, clear of the notch,
+on first run. Its menu shows the machine's name as the dashboard does, without
+`.local`. The app is built against the macOS 26 SDK, so on macOS 26 its window
+has the system's corner radius.
+
+### changed — the product no longer calls itself Windows only
+
+The landing page, the FAQ, the page titles and the facts the AI surfaces read
+now say Windows, macOS and Linux.
+
+### security
+
+`@fastify/busboy` 3.2.2 (GHSA-xjh9-v7x6-24jw, a denial of service through an
+oversized multipart boundary), a dependency of firebase-admin in the web app.
+
+## [4.0.6] - 2026-09-28
+
+### fixed — a Mac is no longer refused its swoop token
+
+macOS names a machine `Name.local`, and the API's machine id rule allows only
+letters, digits, `_` and `-`, so a Mac paired under that name had every swoop
+token request refused. A Mac now takes its id without the `.local` suffix the
+first time it pairs. A Mac already paired as `Name.local` keeps its id, because
+its token is bound to it; re-pair it to move to the short one. Hosting a swoop
+session on macOS and Linux still waits on the streamer for those platforms.
+
+### fixed — a process that exits cleanly is no longer a crash
+
+The agent only checked whether a managed process was still alive, so a process
+that finished and exited normally was booked as a crash: an error event, an
+alert, a crash screenshot, a hoot investigation and a relaunch attempt. An app
+that exits on a schedule used up its relaunch limit and raised a restart pending
+on a machine where nothing had crashed, and so did somebody closing an app that
+kept coming back. The agent now reads the exit code. Exit code 0 is never a
+crash: it is logged as `process_exited` and the process is relaunched without
+spending its relaunch budget. After an exit 0 within a minute of launch the
+relaunch waits a minute, so a program that quits straight away is not started
+again every five seconds. A non-zero exit code is still a crash, and the code
+now appears in the event. The exit of a process the agent re-adopted after an
+update or a service restart is read as well.
+
+### fixed — pasting from your computer into a swoop session works
+
+A paste into the machine never arrived. The page read your clipboard through a
+browser permission it asked for on the first paste, gave that prompt a second
+and a half, and stopped trying after a refusal; in fullscreen the prompt could
+not be seen at all. ctrl+v now hands the page your clipboard the way a paste
+into any web page does, with nothing to allow, and the page sends it to the
+machine before the keystroke that pastes it.
+
+### fixed — an image pasted into the machine is the one that pastes
+
+The machine decoded a pasted image into a bitmap before it put anything on its
+clipboard, and on a large image the ctrl+v behind it got there first and pasted
+whatever was copied before. The image now goes on at once, and the bitmap that
+apps like Paint read is made when one of them asks for it.
+
+## [4.0.5] - 2026-09-27
+
+### fixed — swoop shows your own pointer over the bars around the picture
+
+Over the dark bars between the toolbar and a picture that does not fill the
+window, the page hid your pointer and pinned the machine's to the picture's
+edge, so it looked stuck while your mouse moved on unseen; a click or a scroll
+there reached the machine at that edge. Now your own pointer shows over the
+bars and nothing is sent from them. A drag that starts on the picture and runs
+off it still carries on, held at the edge.
+
+### changed — swoop copies and pastes images both ways, up to 15 MB
+
+An image copied on either side of a session now pastes on the other at
+screenshot sizes. The limit rose from 2 MB to 15 MB, and a bitmap copied on the
+machine, such as a Print Screen or a copy from most Windows apps, is sent as a
+compressed PNG instead of at its raw size, so a 4K screenshot is a few megabytes
+rather than over the limit. An image pasted into the machine now also reaches
+apps that paste only bitmaps, such as Paint.
+
+A large image is sent at the pace the connection can carry, so it never holds up
+the picture or the session's own messages, and the paste reaches the machine
+only after the image has left the browser. The machine needs an agent from this
+release or later for images over 2 MB.
+
+## [4.0.4] - 2026-09-26
+
+### fixed — a swoop session stays up for as long as its tab is open
+
+A network hiccup no longer ends a session. The signalling room used to tell the
+machine a viewer had left whenever the viewer's signalling socket closed, which
+the page does to refresh its token before every connection recovery after the
+first minute, and the machine then dropped a picture that was still flowing. The
+room now leaves that to the machine's own view of the connection, and does not
+announce a re-dialling viewer twice.
+
+A reconnect no longer kills itself. The page used to end the old session on
+every automatic reconnect, and that end reached the machine as a kill for
+whatever was running, which was usually the new session; the page now ends a
+session on the server only when the operator does, the room's kill reaches only
+the session it names, and the polled kill is sent only when the room could not
+deliver one.
+
+The page now stops only for the operator's end, an admin's kill, another tab or
+device taking the machine, or a policy refusal from the API. A lapsed sign-in, a
+machine that is briefly offline, a 403 from in front of the app, or a failed
+token mint during a re-dial now reconnect on the backoff ladder instead of
+ending for good. A reconnect keeps control without a new passkey, because the
+tab's continuity token no longer depends on the old session's viewer list; an
+admin's kill on the machine still voids it.
+
+There is no 12-hour cap any more: the lease route no longer refuses a long
+session, the machine is sent a cap no session reaches, and the daily sweep
+closes a session record only once its lease has lapsed.
+
+### fixed — swoop holds on through a lost network and survives an agent update
+
+The machine now holds a viewer for a minute after its connection drops, pausing
+its picture and asking the browser to restart the connection, where it used to
+drop the viewer after 15 to 25 seconds; the page no longer abandons a session
+just because its connection is down, so a short drop picks up on the same
+session, and it gives up on a silent machine only while it can actually reach
+it.
+An agent update or restart now sends viewers back to reconnect instead of ending
+their session for good. The update to this version itself still ends one,
+because the old agent does the stopping.
+
+The agent's swoop kill ends only the session it names, a late request for an
+earlier session no longer replaces the live one, a packet the machine cannot
+parse no longer ends a viewer, and the agent logs the streamer's real reason for
+exiting instead of "normal".
+
+## [4.0.3] - 2026-09-26
+
+### changed — the macOS menubar icon blends in
+
+The menubar shows a template glyph that macOS tints to match the bar (the owl's
+eye when the service is up and connected, a closed eye while the cloud is
+unreachable); only the error state keeps the red orb. Windows keeps its
+coloured icons.
+
+### fixed — the tray menu names the machine on macOS and Linux
+
+It read "hostname: unknown" because a launchd or systemd child carries no
+`HOSTNAME` in its environment and macOS has no `/etc/hostname`; the tray now
+asks the kernel, the same call the agent makes, so the menu and the machine
+card agree.
+
+### fixed — the swoop doorbell stops reconnecting every few minutes
+
+Its refresh margin was written for long-lived tokens, so the 300-second
+doorbell token was due for refresh the moment it arrived and the socket was
+torn down and re-dialled on every connect. A short token now refreshes at
+65–80 % of its life.
+
+## [4.0.2] - 2026-09-26
+
+### fixed — a Mac reports its GPU
+
+The agent reads the Apple GPU from the IORegistry (name, utilisation, memory
+in use out of the unified pool), so the card and list show it instead of N/A.
+
+### fixed — a Mac or Linux machine no longer shows half its RAM
+
+The dashboard now reads the total the agent reports instead of recovering it
+from used ÷ percent, a sum that only holds on Windows; a 16 GB MacBook Air
+read as 7.7 GB. The agent also reports "used" the way its own percent is
+built (total minus available), so the bar and the figure agree.
+
+## [4.0.1] - 2026-09-26
+
+### fixed — the macOS installer always puts the app in /Applications
+
+The package no longer lets macOS relocate the app onto another copy of the
+bundle it knows about (a build tree, an old download), which left the login
+item pointing at nothing. The Windows build no longer deletes the macOS and
+Linux build scripts, and the upload script retries once when the API answers
+with an empty body.
+
+## [4.0.0] - 2026-09-25
+
+Owlette 4 runs on three platforms. One release ships the Windows exe, the Apple
+silicon pkg and the Ubuntu deb under one version and one `latest` pointer;
+downloads pick the visitor's platform; the fleet update sends each machine the
+installer for its own platform; and swoop, the remote-control session, ships
+with it. Everything below landed on the way.
+
+### changed — the fleet update sends each machine the installer for its own platform
+
+The update picks the file by the machine's os and architecture (an agent that
+reports neither is windows x64); a machine whose platform the version has no
+file for is skipped and named in the result, with the reason. One version can
+carry the windows exe, the apple silicon pkg and the linux deb.
+
+### fixed — a swoop session that lost its host reconnects instead of waiting forever
+
+The page gives the machine 20 seconds to answer; a machine that stays silent
+(a streamer the agent refused to start, a host mid-restart) ends the attempt
+with the reason on screen and the reconnect ladder carries on. The ladder now
+only resets after a session has held for five minutes, and the agent no longer
+counts a clean exit against its spawn ceiling, so a host that comes up for a
+minute and drops cannot lock the machine out of swoop. The session record and
+audit trail keep the page's own reason for ending a session (`viewerReason`).
+
+### added — the macOS app says when Screen Recording is off
+
+A notice in the window names the consequence (no remote screenshots, no swoop
+picture) and opens the Screen Recording setting; the grant takes effect on
+the next launch.
+
+### changed — the machines API reports each machine's OS
+
+`GET /api/sites/{siteId}/machines` and the machine detail carry `osFamily`
+(`windows`, `macos` or `linux`), `arch` and `osVersion` as the agent
+heartbeats them; null for an agent that predates the fields.
+
+### added — a Linux package, installed and verified on the kiosk VM
+
+`agent/build/linux/build.sh` produces one `Owlette-Installer-v<version>.deb`:
+the service runtime with its own Python 3.11 under `/opt/owlette`, the systemd
+unit, the desktop app with the user unit that starts it for every login, and
+the polkit rule that lets the owlette group control the service, with the
+app's own library dependencies declared so the agent's single-file self-update
+resolves. An upgrade restarts a running desktop app onto the new binary, and
+the python-build-standalone tarball the build fetches is checked against a
+pinned sha256 on every run. Installed on the Ubuntu 24.04 kiosk VM: the
+service came up from the new runtime and heartbeated as the new version, the
+app started for the seat, a notification went through the service, the seat
+user restarted the service without sudo, and the upgrade to the next build
+went through in one `apt-get install`.
+
+### added — a macOS installer package (unsigned build path)
+
+`agent/build/macos/build.sh` produces one `.pkg` for Apple silicon on macOS 15
+and up: the service runtime (a standalone Python 3.11 with the agent's
+dependencies) under `/Library/Application Support/Owlette/runtime`, the
+LaunchDaemon and LaunchAgent that run the service and the app, and the app in
+`/Applications`. The scripts stop what is running, lay out the data tree with
+the same modes the service expects, load both jobs and hand a pairing preseed
+to the pairing flow in the background. Signing and notarisation are flags
+that wait on the Apple team id.
+
+### added — the desktop app answers the daemon's capture and notification jobs on macOS and Linux
+
+Off Windows the service has no display, so it drops a job file into the data
+tree and the app carries it out where the user is: a screenshot on macOS on the
+app's own Screen Recording grant (a typed refusal until that grant exists), a
+notification on both, and a typed refusal for anything else. On macOS the app
+also tells the service every minute whether it holds Screen Recording, asking
+for it once per launch.
+
+### changed — on macOS the app shows a Dock icon only while its window is open
+
+A menubar app the rest of the time.
+
+### changed — the desktop app uses macOS's own window buttons
+
+On macOS the window keeps the native traffic lights at top left and draws no
+Windows-style minimise, maximise and close controls of its own; the title row
+leaves them room.
+
+### changed — one passkey check covers a machine for 12 hours, not 10
+
+Taking control still needs a second factor, but one check now covers that
+machine for a working day, reconnects and new tabs included. The same tab keeps
+it for as long as it lives regardless. Ending a session from elsewhere still
+revokes the window at once.
+
+### changed — the swoop latency overlay reads cleanly and names the codec
+
+The box is wider so no label wraps, the numbers line up, and the stages say
+what they measure: "decode" is the decoder's own time, "wait for paint" is a
+decoded frame waiting for the next paint (0 to one refresh on a 60 Hz display,
+which is the jitter that used to read as decode), "paint → display" is the
+refresh after that. A "codec" row shows what the picture is arriving in.
+
+### changed — a swoop tab keeps its passkey for as long as it lives
+
+Coming back to a session after hours landed on the passkey screen: a reconnect
+mints a new session, and control needed a fresh ceremony once the 10-minute
+window had passed. A control grant now carries a continuity token the tab keeps
+in memory only; its next mint presents it instead of a passkey, and the server
+honours it for the same user on the same machine, once, unless the previous
+session was killed, ended deliberately or revoked. A new tab asks as before.
+
+### changed — a clean swoop session bar, and the screen stays awake
+
+The bar shows the machine's name and nothing else while things are fine:
+"connected" and the wifi icon are gone, the stage carries the connecting
+spinner, and a badge appears only for disconnected, reconnecting, poor
+connection or view only. Fullscreen, end session and reconnect are icons with
+tooltips. The page holds a screen wake lock for the life of a session and takes
+it again whenever the tab comes back, so a display does not sleep under a live
+picture.
+
+## [3.3.15] - 2026-09-24
+
+### fixed — the swoop cursor was blocky
+
+The host shrank any pointer above 32 px to the css-cursor ceiling and the page
+stretched it back, nearest-neighbour. The wire now carries the shape at full
+detail up to the 64 px message cap, and the overlay is drawn smoothly.
+
+## [3.3.14] - 2026-09-24
+
+### fixed — the swoop cursor was drawn at half size, and twice during a title-bar drag
+
+A pointer bigger than 32 px (pointer size 2, or 200% scaling) was shrunk for
+the wire and drawn at the shrunk size. The host now says by how much it shrank a
+shape and the page draws it back at true size, as an overlay. In the windowed
+view the page also hides the local pointer whenever the machine hides its own
+(Windows paints the cursor into the picture during a title-bar drag) and
+whenever an overlay stands in for it, so there is one cursor, never two. The
+fullscreen letterbox is black rather than the theme's blue.
+
+## [3.3.13] - 2026-09-24
+
+### fixed — a swoop session froze for good when the transport closed a channel
+
+The streamer's outbound channel queue stopped at the first record whose channel
+was not open, so once the transport had closed one channel under the browser
+(B4A: `swoop-feedback`, with a pong queued for it) every later cursor and meta
+record was dropped behind it and the picture, the cursor and the stats froze
+while the session stayed "live". A record for a closed channel is now dropped,
+a record for a channel that has not opened yet steps aside, and neither holds
+up the others. The overflow warning that flooded the log at sixty a second is
+now logged once and then every five hundredth, with the count, and the feature
+outbox's refusal count is logged when it moves rather than every status tick.
+
+The page's feedback loop now notices a host that answered pings and then went
+silent for eight seconds and reconnects the session with fresh channels — the
+browser owns the channels, so nothing short of a new peer brings one back.
+
+## [3.3.12] - 2026-09-24
+
+### fixed — swoop audio was refused for the whole session
+
+The streamer packetised one queued audio frame per poll while audio arrived
+at a hundred a second, so the queue filled within a second and every frame
+after it was refused. Each poll round now packetises what is queued first.
+
+### changed — a swoop session survives the host losing its signalling socket
+
+The streamer exited the moment its room socket closed, ending a live session
+that no longer needed the room. With a viewer connected it now keeps the
+session, asks the service for a fresh token and redials.
+
+### changed — the viewer page keeps a session up
+
+The page redials the room and restarts the link for as long as it takes, and
+starts a new session after an end that was not a decision. It presents every
+renewed lease to the host, so sessions no longer end at five and a half
+minutes; a doubled answer no longer ends one either. The machine's own cursor
+is drawn in fullscreen, at the picture's scale.
+
+## [3.3.11] - 2026-09-24
+
+### fixed — swoop connects from a host that has a VPN up
+
+The streamer offered the one address on its internet route, which with a
+VPN connected is the tunnel's, unreachable from the LAN. It now offers the
+address that actually routes to the viewer.
+
+## [3.3.10] - 2026-09-23
+
+### changed — the swoop streamer's diagnostic log covers the connection itself
+
+With the agent's log level at debug, the streamer now records how each
+viewer's connection was negotiated, so a session that never shows a picture
+leaves a trace of why.
+
+## [3.3.9] - 2026-09-23
+
+### fixed — swoop keeps its picture clean and its bitrate up
+
+The streamer was cutting its own bitrate every time it held a frame back,
+and again when the viewer noticed the gap, so a 50 mbps session ran at a
+fraction of that and every held frame smeared until the next keyframe. It
+no longer cuts on its own doing, allows a short burst on a screen change,
+and a keyframe no longer costs the frames behind it.
+
+### fixed — swoop audio no longer drops most of its frames
+
+Only the first audio frame per tick was reaching the viewer; all of them do
+now.
+
+### added — a keyboard menu in the swoop toolbar
+
+Ctrl+Alt+Del, the Windows key, Alt+Tab and the other shortcuts your browser
+keeps for itself can be sent from a menu beside the settings. The keyboard
+lock notice is gone; the fullscreen button explains what it captures.
+
+### added — reconnect from an ended or failed swoop session
+
+The toolbar offers reconnect in place of end session once a session has
+ended or failed.
+
+### changed — the swoop streamer follows the agent's logging level
+
+The separate `swoop.logLevel` key that 3.3.8 introduced is gone; setting the
+agent's `logging.level` to `debug` turns the streamer's counters on too.
+
+## [3.3.8] - 2026-09-23
+
+### fixed — a swoop session no longer ends at the five-minute mark
+
+The host's signaling credential lives five minutes, and the streamer had no
+way to renew it, so every session froze at that point with no message. The
+agent now renews it ahead of time and the session carries on for as long
+as its cap allows.
+
+### fixed — a swoop session survives a network path it cannot use
+
+A viewer's browser offers every address its machine has, VPN and virtual
+adapters included. One the host could not reach used to end the whole
+session; it is now skipped, and connecting is faster for it.
+
+### changed — swoop's firewall rule and policy follow the site switch
+
+Turning swoop on for a site now creates the host's inbound firewall rule
+and the secure-attention policy on each machine; turning it off removes
+them, and uninstalling the agent removes them along with swoop's logs.
+
+### changed — the machine list's OS line sits under the hostname
+
+In list view the operating system now starts under the hostname's first
+letter, and when the column is narrow it abbreviates rather than hiding
+behind a hover: "Win 11 Pro 23H2" then "Win 11 Pro", "Ubuntu 24.04.5" then
+"Ubuntu 24.04" then "Ubuntu 24". The full name stays in the tooltip.
+
+### added — a diagnostic log level for the swoop streamer
+
+Setting `swoop.logLevel` to `debug` in the agent's config turns on the
+streamer's per-frame counters for a support investigation.
+
+## [3.3.7] - 2026-09-23
+
+### security — a hardening fix for the install folder's permission repair
+
+Details follow after the disclosure window.
+
+### changed — the agent catches up with the dashboard
+
+This is the first installer to carry the agent's half of the 3.3.6 entries:
+machines report their operating system, and the swoop streamer ships
+switched off.
+
+### fixed — docs search puts the page named for your query first
+
+Searching the docs for a word that is a page's title, such as "roost", now lists
+that page first. It used to lose to pages that repeat the word in short code
+samples, and could fall off the end of the list altogether.
+
 ## [3.3.6] - 2026-09-21
 
 ### security — the install folder is no longer writable by every local account

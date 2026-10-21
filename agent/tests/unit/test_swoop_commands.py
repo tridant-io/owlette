@@ -45,7 +45,7 @@ class _ManagerSpec:
     def ensure_streamer(self, sid):
         raise NotImplementedError
 
-    def kill(self, reason):
+    def kill(self, reason, sid=None):
         raise NotImplementedError
 
     def on_session_change(self):
@@ -130,10 +130,12 @@ def test_kill_with_sid_calls_kill_once_with_a_reason_naming_the_sid(manager):
         envelope('swoop_kill', sid='sid-abc'), 'cmd-1', _Service(manager)
     )
     assert len(manager.method_calls) == 1
-    (name, args, _kwargs), = manager.method_calls
+    (name, args, kwargs), = manager.method_calls
     assert name == 'kill'
     reason, = args
     assert 'swoop_kill' in reason and 'sid-abc' in reason
+    # the manager ends that session and no other.
+    assert kwargs == {'sid': 'sid-abc'}
     assert not result.startswith('Error:')
 
 
@@ -141,10 +143,11 @@ def test_kill_without_sid_still_calls_kill_once(manager):
     """an absent sid means 'kill whatever is running', not a refusal."""
     result = _handle_swoop_kill(envelope('swoop_kill'), 'cmd-1', _Service(manager))
     assert len(manager.method_calls) == 1
-    (name, args, _kwargs), = manager.method_calls
+    (name, args, kwargs), = manager.method_calls
     assert name == 'kill'
     reason, = args
     assert 'swoop_kill' in reason and 'sid=' not in reason
+    assert kwargs == {'sid': None}
     assert not result.startswith('Error:')
 
 

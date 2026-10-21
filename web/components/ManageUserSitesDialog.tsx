@@ -204,7 +204,7 @@ export function ManageUserSitesDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="border-border bg-card text-foreground sm:max-w-2xl">
+        <DialogContent className="border-border text-foreground sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-foreground">manage site access</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -273,10 +273,10 @@ export function ManageUserSitesDialog({
                         </div>
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="ghost-destructive"
                           onClick={() => handleRemoveSiteClick(site.id, site.name)}
                           disabled={removingFrom === site.id}
-                          className="text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                          className="cursor-pointer"
                         >
                           {removingFrom === site.id ? (
                             <Loader2 className="h-4 w-4 animate-spin" />
@@ -293,30 +293,30 @@ export function ManageUserSitesDialog({
               {/* Orphaned/Invalid Site References */}
               {orphanedSiteIds.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-semibold text-red-400 mb-3">
+                  <h3 className="text-sm font-semibold text-danger mb-3">
                     invalid site references ({orphanedSiteIds.length})
                   </h3>
                   <div className="space-y-2">
-                    <div className="text-xs text-muted-foreground mb-2 p-2 bg-red-950/20 border border-red-900 rounded">
+                    <div className="text-xs text-muted-foreground mb-2 p-2 bg-danger-surface border border-danger-border rounded">
                       these site IDs are in the user&apos;s access list but the sites no longer exist or are inaccessible. remove them to fix the site count.
                     </div>
                     {orphanedSiteIds.map((siteId) => (
                       <div
                         key={siteId}
-                        className="flex items-center justify-between p-3 bg-red-950/30 rounded-lg border border-red-900"
+                        className="flex items-center justify-between p-3 bg-danger-surface rounded-lg border border-danger-border"
                       >
                         <div className="flex-1">
-                          <p className="text-red-300 font-medium">invalid/orphaned site</p>
-                          <p className="text-xs text-red-400 font-mono">{siteId}</p>
+                          <p className="text-danger font-medium">invalid/orphaned site</p>
+                          <p className="text-xs text-danger font-mono">{siteId}</p>
                         </div>
                         {/* Straight to the removal: the site document is gone, so
                             there is nothing to look talons up on. */}
                         <Button
                           size="sm"
-                          variant="ghost"
+                          variant="ghost-destructive"
                           onClick={() => removeSite(siteId)}
                           disabled={removingFrom === siteId}
-                          className="text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                          className="cursor-pointer"
                         >
                           {removingFrom === siteId ? (
                             <Loader2 className="h-4 w-4 animate-spin" />

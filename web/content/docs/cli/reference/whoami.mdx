@@ -1,9 +1,9 @@
 ---
 title: "whoami"
-description: "whoami prints the server-resolved identity for the active profile — user id, email, the api key's scopes + environment, and the local config context the cli used to make the request. acts on the cli's own state (no site / machine targeting). tier: [ready]."
+description: "whoami asks the server who the active profile's token belongs to — user ID, email, the key's scopes and environment — and prints the local context the CLI used to make the request. no site or machine targeting."
 ---
 
-[`auth status`](/docs/cli/reference/auth#auth-status) is an alias of `whoami` and prints byte-identical output via the same shared `runWhoami` runner; pick whichever name reads better in your script.
+[`auth status`](/docs/cli/reference/auth#status) is an alias of `whoami`: both run the same code and print the same output, so use whichever name reads better in a script.
 
 ---
 
@@ -13,12 +13,12 @@ description: "whoami prints the server-resolved identity for the active profile 
 owlette whoami [--json]
 ```
 
-no verb-specific flags. inherits `--profile` and `--json` from the global set.
+no verb-specific flags. the global `--profile` and `--api-url` pick the profile and host.
 
 ### examples
 
 ```bash
-# human-readable summary — one key/value pair per line
+# one key/value pair per line
 owlette whoami
 # user id     u_abc...
 # email       you@example.com
@@ -31,12 +31,11 @@ owlette whoami
 ```
 
 ```bash
-# json envelope — pipe to jq for scripting
-owlette whoami --json | jq '.whoami.userId'
+owlette whoami --json | jq -r '.whoami.userId'
 ```
 
 ```bash
-# inspect a specific profile without exporting OWLETTE_PROFILE
+# check another profile without exporting OWLETTE_PROFILE
 owlette --profile dev whoami
 ```
 
@@ -52,18 +51,16 @@ eight aligned key/value lines on stdout:
 
 | field | source | meaning |
 |---|---|---|
-| `user id` | api response | firebase uid the api resolved the token to |
-| `email` | api response | account email, or `(unknown)` if the key is not tied to a user record |
-| `scopes` | api response | `<resource>:<id>=<perms>` summary, or `(legacy key — full access, no scope list)` for pre-scope keys, or `(session auth — no api key)` if the request used a session cookie |
-| `environment` | local config first, then api response | `live` \| `test` \| `(unset)` |
-| `apiUrl` | local config | resolved api host (flag → env → profile → built-in) |
-| `profile` | local config | active profile name |
-| `configPath` | local config | absolute path to the toml the cli read, or `(no config file)` |
-| `credential` | local credential store | `env`, `keychain`, `token-file <path>`, `config.toml (legacy)`, or `(none)` |
+| `user id` | API | the user ID the token resolves to |
+| `email` | API | the account email, or `(unknown)` |
+| `scopes` | API | `<resource>:<id>=<perms>` per scope, comma-separated, permissions joined by a pipe; `(legacy key — full access, no scope list)` for pre-scope keys; `(session auth — no api key)` when no API key was used; `(none)` for an empty list |
+| `environment` | local first, then API | `live`, `test`, or `(unset)` |
+| `apiUrl` | local | the resolved API host |
+| `profile` | local | the active profile name |
+| `configPath` | local | the `config.toml` the CLI read, or `(no config file)` |
+| `credential` | local | where the token came from: `env`, `keychain`, `token-file <path>`, `config.toml (legacy)`, or `(none)` |
 
-### json mode (`--json`)
-
-emits the historical envelope `auth status` has always produced:
+### JSON mode (`--json`)
 
 ```json
 {
@@ -73,26 +70,25 @@ emits the historical envelope `auth status` has always produced:
   "credentialPath": "/home/you/.config/owlette/credentials.json",
   "credentialSource": "token-file",
   "environment": "live",
-  "whoami": { /* raw GET /api/whoami response — userId, email, key, rateLimit, quota, primarySiteId */ }
+  "whoami": { "userId": "u_abc...", "email": "you@example.com", "role": "admin", "key": { }, "rateLimit": { }, "quota": { }, "primarySiteId": "site-1" }
 }
 ```
 
-> note: `whoami` predates the `{ ok, data }` wrapper introduced for new commands. its envelope is the raw shape above for backward compatibility — see [overview](/docs/cli/overview#json-output-shapes) for the full envelope policy.
+`whoami` is the raw `GET /api/whoami` body: `userId`, `email`, `role`, `key` (`keyId`, `name`, `keyPrefix`, `scopes`, `environment`, `expiresAt`, `lastUsedAt`, `isLegacy`, or `null` for session auth), `rateLimit`, `quota` and `primarySiteId`. `credentialPath` is the `credentials.json` path when the profile's stored credential was read from that file, otherwise `null`. there is no `{ ok, data }` wrapper — see [JSON output shapes](/docs/cli/overview#json-output-shapes).
 
 ---
 
 ## exit codes
 
 - `0` — success
-- `1` — network failure or non-2xx response from `GET /api/whoami` (e.g. `401 token_expired`)
-- `2` — no token configured for the active profile (run `owlette auth login` first)
+- `1` — network failure or a non-2xx response from `GET /api/whoami` (for example `401 token_expired`)
+- `2` — no token configured: set `OWLETTE_TOKEN` or run `owlette auth login`
 
 ---
 
 ## notes
 
-- **scope**: user (no site / machine targeting — asks about the cli's own credential)
-- **tier**: `[ready]`
-- **alias**: [`auth status`](/docs/cli/reference/auth#auth-status) — same code path, byte-identical stdout/stderr
-- **token source**: precedence is `OWLETTE_TOKEN` env var -> OS keychain/token-file credential store -> legacy active profile `token` field in `config.toml`. `--profile <name>` picks the profile; the bare command uses `default`
-- **related**: [`auth login`](/docs/cli/reference/auth#auth-login) to mint + store the token this command introspects, [`key list`](/docs/cli/reference/key) for the server-side view of every key on your account
+- **scope**: the CLI's own credential; no site or machine
+- **alias**: [`auth status`](/docs/cli/reference/auth#status) — same code path, same output
+- **token source**: `OWLETTE_TOKEN`, then the keychain or `credentials.json` entry for the active profile, then a legacy `token` in `config.toml`
+- **related**: [`auth login`](/docs/cli/reference/auth#login) to store a token, [`key list`](/docs/cli/reference/key#list) for the server-side view of your keys

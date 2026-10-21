@@ -6,6 +6,7 @@ import {
   type DocumentData,
 } from 'firebase-admin/firestore';
 import type { ChatShareDoc } from '@/lib/hoot/shareStore.server';
+import type { InstallerPlatform } from '@/lib/installerPlatform';
 import {
   SHARE_TOKEN_PATTERN,
   type SharedMessage,
@@ -479,6 +480,7 @@ export async function clearSystemPreset(presetId = 'e2e-system-preset'): Promise
 
 export async function seedInstallerLatest(
   downloadUrl = 'https://example.test/downloads/owlette-e2e.exe',
+  files?: Partial<Record<InstallerPlatform, { download_url: string }>>,
 ): Promise<void> {
   const db = getAdminDb();
   const version = 'e2e-latest';
@@ -492,6 +494,7 @@ export async function seedInstallerLatest(
     uploaded_by: 'e2e-public-static',
     release_date: Timestamp.fromMillis(uploadedAt),
     deletedAt: null,
+    ...(files ? { files } : {}),
   };
   await db.collection('installer_metadata').doc('data').collection('versions').doc(version).set(data);
   await db.collection('installer_metadata').doc('latest').set({

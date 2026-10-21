@@ -191,7 +191,7 @@ class ConnectionState(Enum):
     CONNECTED = auto()         # Fully operational
     RECONNECTING = auto()      # Lost connection, attempting recovery
     BACKOFF = auto()           # Waiting before next reconnect attempt
-    FATAL_ERROR = auto()       # Unrecoverable error (e.g., machine removed from site)
+    FATAL_ERROR = auto()       # Reserved; nothing enters it. Removal is FirebaseClient._on_removed_from_site
 
 
 @dataclass

@@ -29,9 +29,31 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => mockDbFactory(),
+  getAdminDb: () => ({
+    ...mockDbFactory(),
+    // the verified-network write reads then writes on the same doc mocks, and
+    // its writes land, or fail, at commit
+    runTransaction: async (fn: (tx: unknown) => unknown) => {
+      const writes: unknown[] = [];
+      const result = await fn({
+        get: (ref: MockTxRef) => ref.get(),
+        set: (ref: MockTxRef, ...a: unknown[]) => {
+          writes.push(ref.set(...a));
+        },
+      });
+      await Promise.all(writes);
+      return result;
+    },
+  }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
+}));
+
+const mockSendEmail = jest.fn(async (..._a: unknown[]) => ({ error: null }));
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
@@ -81,7 +103,13 @@ jest.mock('@/lib/apiAuth.server', () => {
  * is the real one — a stub would prove nothing about which satisfier counts —
  * and only the cookie plumbing around it is replaced.
  */
-const mockLogin: { userId: string; expiresAt: number; mfaSatisfiedBy?: string } = {
+const mockLogin: {
+  userId: string;
+  expiresAt: number;
+  mfaSatisfiedBy?: string;
+  mfaCompletedAt?: number;
+  mfaNetwork?: string;
+} = {
   userId: '',
   expiresAt: 0,
 };
@@ -115,6 +143,7 @@ jest.mock('@/lib/swoop/signal.server', () => ({
 }));
 
 jest.mock('@/lib/swoop/turn.server', () => ({
+  ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
@@ -124,6 +153,8 @@ import {
   DELETE,
 } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route';
 import { stepUpMachineBinding } from '@/lib/swoop/policy.server';
+import { mintContinuity } from '@/lib/swoop/continuity.server';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 
 const SITE = 'site-a';
 const MACHINE = 'machine-1';
@@ -157,13 +188,60 @@ function routeContext(sessionId?: string) {
 /**
  * Sign in, and say how this login session came to be MFA-verified.
  * `device-trust` is the 30-day cookie: verified, `mfaCompletedAt = now`, and no
- * ceremony behind any of it.
+ * ceremony behind any of it. A ceremony sign-in happened an hour ago unless a
+ * test says otherwise, so it is too old to stand in for the step-up.
  */
-function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust'): void {
+function signIn(userId: string, satisfiedBy?: 'challenge' | 'device-trust', signedInAgoMs?: number): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
   mockLogin.userId = userId;
   mockLogin.expiresAt = Date.now() + 86_400_000;
   mockLogin.mfaSatisfiedBy = satisfiedBy ?? 'challenge';
+  mockLogin.mfaCompletedAt =
+    Date.now() - (signedInAgoMs ?? (satisfiedBy === 'device-trust' ? 0 : 3_600_000));
+  delete mockLogin.mfaNetwork;
+}
+
+/** the swoop commands this run queued, whatever the route that wrote them. */
+function queuedCommands(type: string): Array<Record<string, unknown>> {
+  return mocks.set.mock.calls
+    .flatMap(([payload]) => Object.entries(payload as Record<string, unknown>))
+    .filter(([key]) => key.startsWith('cmd_'))
+    .map(([, command]) => command as Record<string, unknown>)
+    .filter((command) => command.type === type);
+}
+
+const PREVIOUS_SID = 'sid0000000000000000000000000009';
+
+/**
+ * this tab's last control session, ended for a transient reason and written as
+ * the store leaves an ended record: no viewer rows. returns the token the tab holds.
+ */
+function stageContinuedSession(): { token: string } {
+  const continuity = mintContinuity(PREVIOUS_SID);
+  staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${PREVIOUS_SID}`, {
+    sid: PREVIOUS_SID,
+    state: 'ended',
+    createdBy: `user:${ADMIN}`,
+    startedAt: Date.now() - 3_600_000,
+    viewers: [],
+    endReason: 'lease_expired',
+    continuityHash: continuity.hash,
+  });
+  return { token: continuity.token };
+}
+
+function continuityRequest(token: string) {
+  return createMockRequest(url(), {
+    method: 'POST',
+    body: { control: true, fp: FP, continuity: token },
+  });
+}
+
+/** whether any write this run marked a continuity token spent. */
+function continuitySpent(): boolean {
+  return mocks.set.mock.calls.some(
+    ([payload]) => typeof (payload as Record<string, unknown>).continuityUsedAt === 'number',
+  );
 }
 
 /** A ceremony this user already ran, `openedAt` ms ago, for one machine. */
@@ -318,6 +396,34 @@ describe('POST swoop/sessions', () => {
     expect(mockRing).not.toHaveBeenCalled();
   });
 
+  it('reads the request body exactly once and never through a clone', async () => {
+    // production saw "could not read request body" now and then: the route
+    // peeked at `control` on a clone and the handler read the original again,
+    // two reads of one streamed body. a request that refuses to be cloned and
+    // counts its reads is the contract.
+    openWindow(ADMIN);
+    const request = createMockRequest(url(), {
+      method: 'POST',
+      body: { control: true, fp: FP, clientCaps: { codecs: ['h264'] } },
+    });
+    let reads = 0;
+    const text = request.text.bind(request);
+    request.text = async () => {
+      reads += 1;
+      return text();
+    };
+    request.clone = () => {
+      throw new Error('cloned');
+    };
+
+    const res = await POST(request, routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect(reads).toBe(1);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+  });
+
   it('creates a control session, rings the sid alone and returns k but never K_session', async () => {
     openWindow(ADMIN);
 
@@ -374,6 +480,44 @@ describe('POST swoop/sessions', () => {
     );
 
     expect(res.status).toBe(201);
+  });
+
+  it('offers stun only when turn is not configured', async () => {
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).iceServers).toEqual(STUN_ONLY);
+  });
+
+  it('passes the minted ice servers through unchanged when turn is configured', async () => {
+    const minted = [
+      { urls: ['stun:stun.cloudflare.com:3478'] },
+      {
+        urls: ['turn:turn.cloudflare.com:3478?transport=udp'],
+        username: 'turn-user',
+        credential: 'turn-credential',
+      },
+    ];
+    jest.mocked(mintTurnCredentials).mockResolvedValueOnce({
+      ok: true,
+      iceServers: minted,
+      username: 'turn-user',
+      expiresAt: Date.now() + 60_000,
+    });
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).iceServers).toEqual(minted);
+    expect(mintTurnCredentials).toHaveBeenCalledWith({ siteId: SITE });
   });
 
   it('opens the window from a live proof and grants control in the same request', async () => {
@@ -520,7 +664,7 @@ describe('POST swoop/sessions', () => {
 
   /**
    * And the way back: one ceremony is recorded on the session that ran it, so
-   * that operator's own reloads cost nothing for the rest of the 10 minutes.
+   * that operator's own reloads cost nothing for the rest of the 7 days.
    */
   it('covers a device-trust session reloads once it has run the ceremony itself', async () => {
     signIn(ADMIN, 'device-trust');
@@ -549,6 +693,59 @@ describe('POST swoop/sessions', () => {
     expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
   });
 
+  // the tab's own reconnect after a lost path: the record it names ended as the
+  // store leaves it, with no viewer row, and this login ran no ceremony of its own.
+  it('carries control to the next session from a continuity token, with no proof', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+
+    const res = await POST(continuityRequest(continuity.token), routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(continuitySpent()).toBe(true);
+  });
+
+  // a kill closes only the records still open, and this one had already ended for
+  // a transient reason: the kill's own timestamp is what has to reach it.
+  it('refuses a continuity token from a session a kill came after', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
+      revokedAt: Date.now(),
+    });
+
+    const res = await POST(continuityRequest(continuity.token), routeContext());
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(continuitySpent()).toBe(false);
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'continuity_killed' }),
+    );
+  });
+
+  // the page retries a machine that reads offline with the same token, so it may
+  // only be spent by the request that actually creates the next session.
+  it('spends a continuity token only on the mint that creates the session', async () => {
+    signIn(ADMIN, 'device-trust');
+    const continuity = stageContinuedSession();
+    staged.set(`sites/${SITE}/machines/${MACHINE}`, { online: false });
+
+    const offline = await POST(continuityRequest(continuity.token), routeContext());
+    expect(offline.status).toBe(409);
+    expect(continuitySpent()).toBe(false);
+
+    staged.set(`sites/${SITE}/machines/${MACHINE}`, { online: true });
+    const retry = await POST(continuityRequest(continuity.token), routeContext());
+    expect(retry.status).toBe(201);
+    expect(continuitySpent()).toBe(true);
+  });
+
   it('refuses a control session on a window a kill has closed', async () => {
     openWindow(ADMIN);
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
@@ -566,6 +763,138 @@ describe('POST swoop/sessions', () => {
   });
 });
 
+/**
+ * owner, 2026-10-10: a second factor passed at sign-in must not be asked for
+ * again two minutes later. A ceremony this sign-in ran under five minutes ago
+ * opens the window for the machine asked for, on the record.
+ */
+describe('POST swoop/sessions — a second factor passed at sign-in', () => {
+  const controlRequest = () =>
+    POST(createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }), routeContext());
+
+  /** the window writes this run made, told apart from other writes by `openedBy`. */
+  const windowWrites = () =>
+    (mocks.set.mock.calls as [Record<string, unknown>][])
+      .map(([payload]) => payload)
+      .filter((payload) => payload.openedBy !== undefined);
+
+  const openedRows = () =>
+    (writeAuditEntryBlocking.mock.calls as [string, { metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'step_up_opened')
+      .map(([, entry]) => entry);
+
+  it('takes control with no proof, opening the window from the ceremony and recording why', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(windowWrites()).toEqual([
+      expect.objectContaining({ openedAt: mockLogin.mfaCompletedAt, openedBy: 'fresh_sign_in' }),
+    ]);
+    expect(openedRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        capability: 'MACHINE_REMOTE_CONTROL',
+        target: { kind: 'machine', id: MACHINE, machineId: MACHINE },
+        metadata: { event: 'step_up_opened', reason: 'fresh_sign_in' },
+      }),
+    ]);
+    // the row is written before the window, so no window opens unrecorded
+    const rowCall = writeAuditEntryBlocking.mock.calls.findIndex(
+      (call) => (call[1] as { metadata?: { event?: string } }).metadata?.event === 'step_up_opened',
+    );
+    const windowCall = mocks.set.mock.calls.findIndex(
+      ([payload]) => (payload as Record<string, unknown>).openedBy === 'fresh_sign_in',
+    );
+    expect(writeAuditEntryBlocking.mock.invocationCallOrder[rowCall]).toBeLessThan(
+      mocks.set.mock.invocationCallOrder[windowCall],
+    );
+  });
+
+  it('reuses that window on a later create, after the five minutes', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    expect((await controlRequest()).status).toBe(201);
+    // `mocks.set` does not feed `mocks.get`, so the window it wrote is staged
+    const [written] = windowWrites();
+    const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+    staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, written);
+    mocks.set.mockClear();
+    writeAuditEntryBlocking.mockClear();
+
+    mockLogin.mfaCompletedAt = Date.now() - 6 * 60_000;
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('still asks a device-trust sign-in, however recent', async () => {
+    signIn(ADMIN, 'device-trust', 0);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('still asks once the ceremony is six minutes old', async () => {
+    signIn(ADMIN, 'challenge', 6 * 60_000);
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+  });
+
+  it('still asks after a kill that came after the ceremony', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_step_up_revocations/current`, {
+      revokedAt: Date.now() - 60_000,
+    });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+  });
+
+  it('opens no window for a request refused for another reason', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    staged.set(`sites/${SITE}/settings/swoop`, { enabled: false });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('swoop_disabled');
+    expect(windowWrites()).toEqual([]);
+    expect(openedRows()).toEqual([]);
+  });
+
+  it('opens no window it cannot record, and asks for the step-up instead', async () => {
+    signIn(ADMIN, 'challenge', 2 * 60_000);
+    writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
+      const entry = args[1] as { metadata?: { event?: string } } | undefined;
+      if (entry?.metadata?.event === 'step_up_opened') throw new Error('firestore down');
+      return undefined;
+    });
+
+    const { status, body } = await parseResponse(await controlRequest());
+
+    expect(status).toBe(401);
+    expect(body.code).toBe('step_up_required');
+    expect(windowWrites()).toEqual([]);
+  });
+});
+
 describe('GET / DELETE swoop/sessions/{sid}', () => {
   beforeEach(() => {
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
@@ -573,7 +902,6 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       state: 'live',
       createdBy: `user:${ADMIN}`,
       startedAt: Date.now(),
-      absoluteExpiresAt: Date.now() + 3_600_000,
       viewers: [],
     });
   });
@@ -605,6 +933,52 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
   });
 
+  // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+  // running, whatever sid it names, so a queued one lands on the session the page
+  // reconnected into.
+  it('queues no polled kill when the room broadcast landed', async () => {
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([]);
+  });
+
+  it('falls back to one polled kill when the room broadcast failed', async () => {
+    mockKill.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([expect.objectContaining({ sid: SID })]);
+  });
+
+  it('falls back to one polled kill when the room broadcast threw', async () => {
+    mockKill.mockRejectedValue(new Error('network down'));
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([expect.objectContaining({ sid: SID })]);
+  });
+
+  it('refuses a viewerReason the page never reports', async () => {
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { viewerReason: 'host_exit' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(400);
+  });
+
   it('refuses an endReason only the host may record', async () => {
     const res = await DELETE(
       createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'lease_expired' } }),
@@ -629,10 +1003,18 @@ describe('swoop audit trail', () => {
     metadata?: Record<string, unknown>;
   }
 
-  /** Swoop's own rows, told apart from the wrapper's by `metadata.event`. */
+  /**
+   * Swoop's own rows, told apart from the wrapper's by `metadata.event`. The
+   * network check rides on every control request and has its own suite below.
+   */
   const rowsFrom = (mock: jest.Mock): AuditRow[] =>
     (mock.mock.calls as [string, AuditRow][])
-      .filter(([site, entry]) => site === SITE && typeof entry.metadata?.event === 'string')
+      .filter(
+        ([site, entry]) =>
+          site === SITE &&
+          typeof entry.metadata?.event === 'string' &&
+          entry.metadata.event !== 'step_up_network_check',
+      )
       .map(([, entry]) => entry);
 
   const denyRows = () => rowsFrom(writeAuditEntry);
@@ -742,6 +1124,36 @@ describe('swoop audit trail', () => {
     expect(mockRing).not.toHaveBeenCalled();
   });
 
+  it('records the page\'s own reason beside the caller endReason', async () => {
+    const startedAt = Date.now() - 5_000;
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
+      sid: SID,
+      state: 'live',
+      createdBy: `user:${ADMIN}`,
+      startedAt,
+      viewers: [],
+    });
+
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), {
+        method: 'DELETE',
+        body: { endReason: 'closed', viewerReason: 'peer_failed' },
+      }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(200);
+    expect(allowRows()).toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          event: 'session_ended',
+          endReason: 'closed',
+          viewerReason: 'peer_failed',
+        }),
+      }),
+    ]);
+  });
+
   it('records the end of a session with its reason and duration', async () => {
     const startedAt = Date.now() - 5_000;
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
@@ -749,7 +1161,6 @@ describe('swoop audit trail', () => {
       state: 'live',
       createdBy: `user:${ADMIN}`,
       startedAt,
-      absoluteExpiresAt: startedAt + 3_600_000,
       viewers: [],
     });
 
@@ -769,5 +1180,278 @@ describe('swoop audit trail', () => {
         }),
       }),
     ]);
+  });
+});
+
+describe('POST swoop/sessions — network binding', () => {
+  const EDGE = 'edge-secret-for-tests';
+  const HOME = '64500';
+  const AWAY = '64501';
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** a control request as the edge forwards it from `asn`, or with no edge headers at all. */
+  const controlFrom = (asn: string | null, extra: Record<string, unknown> = {}) =>
+    POST(
+      createMockRequest(url(), {
+        method: 'POST',
+        body: { control: true, fp: FP, ...extra },
+        headers: asn
+          ? { 'x-owlette-edge': EDGE, 'x-owlette-asn': asn, 'cf-connecting-ip': '203.0.113.9' }
+          : {},
+      }),
+      routeContext(),
+    );
+
+  /** a network this user passed a second factor on, `agoMs` ago. */
+  function verifiedNetwork(userId: string, asn: string, agoMs = 0): void {
+    staged.set(`users/${userId}/verified_networks/asn:${asn}`, {
+      firstSeenAt: Date.now() - agoMs,
+      lastVerifiedAt: Date.now() - agoMs,
+      asn,
+      label: `AS${asn}`,
+    });
+  }
+
+  const networkRows = () =>
+    (writeAuditEntry.mock.calls as [string, { outcome: string; denyReason?: string; metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'step_up_network_check')
+      .map(([, entry]) => entry);
+
+  const payloads = () => (mocks.set.mock.calls as [Record<string, unknown>][]).map(([payload]) => payload);
+  const networkWrites = () => payloads().filter((payload) => payload.lastVerifiedAt !== undefined);
+  const windowWrites = () => payloads().filter((payload) => payload.openedBy !== undefined);
+
+  /** `mocks.set` does not feed `mocks.get`, so what a ceremony wrote is staged by hand. */
+  function stageCeremonyWrites(asn: string): void {
+    const [window] = windowWrites();
+    const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+    staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, window);
+    const [network] = networkWrites();
+    if (network) staged.set(`users/${ADMIN}/verified_networks/asn:${asn}`, network);
+    mocks.set.mockClear();
+    writeAuditEntry.mockClear();
+    mockVerifyMfaProof.mockClear();
+  }
+
+  beforeEach(() => {
+    process.env.EDGE_SHARED_SECRET = EDGE;
+  });
+  afterEach(() => {
+    delete process.env.EDGE_SHARED_SECRET;
+    delete process.env.SWOOP_NETWORK_BINDING;
+  });
+
+  describe('log, the default', () => {
+    it('decides as before on an unverified network, and records the check', async () => {
+      openWindow(ADMIN);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(201);
+      expect((body.data as Record<string, unknown>).ctl).toBe(true);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          outcome: 'allow',
+          metadata: {
+            event: 'step_up_network_check',
+            mode: 'log',
+            key: `asn:${HOME}`,
+            prefix: '203.0.113.0/24',
+            viaEdge: true,
+            match: false,
+            windowNetwork: null,
+          },
+        }),
+      ]);
+    });
+
+    it('records a verified network as a match, beside the network the window opened on', async () => {
+      openWindow(ADMIN);
+      const binding = stepUpMachineBinding({ userId: ADMIN, siteId: SITE, machineId: MACHINE });
+      staged.set(`users/${ADMIN}/swoop_step_up/${binding}`, {
+        ...staged.get(`users/${ADMIN}/swoop_step_up/${binding}`),
+        network: { key: `asn:${AWAY}`, prefix: '198.51.100.0/24', asn: AWAY },
+      });
+      verifiedNetwork(ADMIN, HOME);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ match: true, windowNetwork: `asn:${AWAY}` }),
+        }),
+      ]);
+    });
+
+    it('records an unknown network when the edge did not vouch for the request', async () => {
+      openWindow(ADMIN);
+
+      expect((await controlFrom(null)).status).toBe(201);
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          metadata: expect.objectContaining({ key: 'unknown', viaEdge: false, match: false }),
+        }),
+      ]);
+    });
+
+    it('verifies the network a ceremony passed on and records it on the window, sending no notice', async () => {
+      const { status } = await parseResponse(await controlFrom(HOME, { mfaProof: { code: '123456' } }));
+
+      expect(status).toBe(201);
+      expect(networkWrites()).toEqual([
+        { firstSeenAt: expect.any(Number), lastVerifiedAt: expect.any(Number), asn: HOME, label: `AS${HOME}` },
+      ]);
+      expect(windowWrites()).toEqual([
+        expect.objectContaining({
+          openedBy: 'ceremony',
+          network: { key: `asn:${HOME}`, prefix: '203.0.113.0/24', asn: HOME },
+        }),
+      ]);
+      expect(mockSendEmail).not.toHaveBeenCalled();
+    });
+
+    it('records nothing for a watch request', async () => {
+      const res = await POST(
+        createMockRequest(url(), {
+          method: 'POST',
+          body: { control: false, fp: FP },
+          headers: { 'x-owlette-edge': EDGE, 'x-owlette-asn': HOME },
+        }),
+        routeContext(),
+      );
+
+      expect(res.status).toBe(201);
+      expect(networkRows()).toEqual([]);
+    });
+  });
+
+  it('off records nothing and checks nothing', async () => {
+    process.env.SWOOP_NETWORK_BINDING = 'off';
+
+    expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+    expect(networkRows()).toEqual([]);
+    expect(networkWrites()).toEqual([]);
+    expect(windowWrites()).toEqual([expect.not.objectContaining({ network: expect.anything() })]);
+  });
+
+  describe('enforce', () => {
+    beforeEach(() => {
+      process.env.SWOOP_NETWORK_BINDING = 'enforce';
+    });
+
+    it('asks for the step-up on a network the user never verified, open window or not', async () => {
+      openWindow(ADMIN);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(401);
+      expect(body.code).toBe('step_up_required');
+      expect(networkRows()).toEqual([
+        expect.objectContaining({
+          outcome: 'allow',
+          metadata: expect.objectContaining({ mode: 'enforce', match: false }),
+        }),
+      ]);
+    });
+
+    it('takes control on an open window from a verified network', async () => {
+      openWindow(ADMIN);
+      verifiedNetwork(ADMIN, HOME, DAY_MS);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(networkRows()).toEqual([expect.objectContaining({ metadata: expect.objectContaining({ match: true }) })]);
+    });
+
+    it('lets a verification lapse after 7 days with no ceremony on that network', async () => {
+      openWindow(ADMIN);
+      verifiedNetwork(ADMIN, HOME, 8 * DAY_MS);
+
+      expect((await controlFrom(HOME)).status).toBe(401);
+    });
+
+    it('verifies the network a ceremony passed on, so the next create there takes control with no proof', async () => {
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+      stageCeremonyWrites(HOME);
+
+      const { status, body } = await parseResponse(await controlFrom(HOME));
+
+      expect(status).toBe(201);
+      expect((body.data as Record<string, unknown>).ctl).toBe(true);
+      expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+
+      // and another network still asks, the same window notwithstanding
+      expect((await controlFrom(AWAY)).status).toBe(401);
+    });
+
+    it('never matches an unknown network, even right after a ceremony on it', async () => {
+      expect((await controlFrom(null, { mfaProof: { code: '123456' } })).status).toBe(201);
+      expect(networkWrites()).toEqual([]);
+      stageCeremonyWrites(HOME);
+      staged.set(`users/${ADMIN}/verified_networks/unknown`, { lastVerifiedAt: Date.now() });
+
+      const { status, body } = await parseResponse(await controlFrom(null));
+
+      expect(status).toBe(401);
+      expect(body.code).toBe('step_up_required');
+    });
+
+    it('lets the sign-in ceremony stand in only on the network it ran on', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+      mockLogin.mfaNetwork = `asn:${HOME}`;
+      verifiedNetwork(ADMIN, HOME);
+
+      expect((await controlFrom(AWAY)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+
+      expect((await controlFrom(HOME)).status).toBe(201);
+      expect(windowWrites()).toEqual([
+        expect.objectContaining({
+          openedBy: 'fresh_sign_in',
+          network: expect.objectContaining({ key: `asn:${HOME}` }),
+        }),
+      ]);
+    });
+
+    it('never lets the sign-in ceremony stand in from an unknown network', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+      mockLogin.mfaNetwork = 'unknown';
+
+      expect((await controlFrom(null)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+    });
+
+    it('never lets a sign-in with no recorded network stand in', async () => {
+      signIn(ADMIN, 'challenge', 2 * 60_000);
+
+      expect((await controlFrom(HOME)).status).toBe(401);
+      expect(windowWrites()).toEqual([]);
+    });
+
+    it('emails the user once, the first time a ceremony verifies a network', async () => {
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+
+      expect(mockSendEmail).toHaveBeenCalledTimes(1);
+      const [message] = mockSendEmail.mock.calls[0] as [{ to: string; subject: string; html: string }];
+      expect(message.to).toBe(`${ADMIN}@example.test`);
+      expect(message.subject).toBe('new network verified for swoop control');
+      expect(message.html).toContain(`AS${HOME}`);
+      expect(message.html).toContain(MACHINE);
+
+      // the entry exists now: a later ceremony on it refreshes it and sends nothing
+      const [network] = networkWrites();
+      staged.set(`users/${ADMIN}/verified_networks/asn:${HOME}`, network);
+      mocks.set.mockClear();
+      expect((await controlFrom(HOME, { mfaProof: { code: '654321' } })).status).toBe(201);
+      expect(networkWrites()).toEqual([{ lastVerifiedAt: expect.any(Number), asn: HOME, label: `AS${HOME}` }]);
+      expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('takes control even when the network cannot be recorded', async () => {
+      mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+        if (payload.lastVerifiedAt !== undefined) throw new Error('firestore down');
+      });
+
+      expect((await controlFrom(HOME, { mfaProof: { code: '123456' } })).status).toBe(201);
+      expect(mockSendEmail).not.toHaveBeenCalled();
+    });
   });
 });

@@ -9,6 +9,7 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => listen
 const {
   OWLETTE_FILES,
   SERVICE_STATUS_STALE_SECONDS,
+  appearanceTheme,
   isServiceDown,
   onOwletteFileChanged,
   onOwletteFileChangedFor,
@@ -16,9 +17,13 @@ const {
   owletteDataRoot,
   readOwletteJson,
   serverFromArgs,
+  serviceRestart,
   serviceStart,
   serviceStatus,
   serviceStop,
+  onResolvedAppearance,
+  resolvedAppearance,
+  setAppearanceTheme,
   setSidebarWidth,
   sidebarWidth,
   terminatePid,
@@ -102,16 +107,19 @@ describe('service commands', () => {
     await serviceStatus()
     await serviceStart(false)
     await serviceStop()
+    await serviceRestart()
 
     expect(invoke.mock.calls.map(([command]) => command)).toEqual([
       'service_status',
       'service_start',
       'service_stop',
+      'service_restart',
     ])
     // Start carries the elevation gate; the others take no arguments.
     expect(invoke.mock.calls[0][1]).toBeUndefined()
     expect(invoke.mock.calls[1][1]).toEqual({ allowElevation: false })
     expect(invoke.mock.calls[2][1]).toBeUndefined()
+    expect(invoke.mock.calls[3][1]).toBeUndefined()
   })
 
   it('treats a stale status file as the service being down', () => {
@@ -179,6 +187,22 @@ describe('layout memory', () => {
     await expect(setSidebarWidth(9000)).resolves.toBe(400)
     expect(invoke).toHaveBeenCalledWith('set_sidebar_width', { width: 9000 })
   })
+
+  it('reads and writes the appearance through the host', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(appearanceTheme()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('appearance_theme')
+
+    invoke.mockResolvedValue('dark')
+    await expect(setAppearanceTheme('dark')).resolves.toBe('dark')
+    expect(invoke).toHaveBeenCalledWith('set_appearance_theme', { theme: 'dark' })
+  })
+
+  it('asks the host which theme to draw', async () => {
+    invoke.mockResolvedValue('light')
+    await expect(resolvedAppearance()).resolves.toBe('light')
+    expect(invoke).toHaveBeenCalledWith('resolved_appearance')
+  })
 })
 
 describe('event subscriptions', () => {
@@ -187,6 +211,15 @@ describe('event subscriptions', () => {
     path: 'C:\\ProgramData\\Owlette\\config\\config.json',
     at: 1_700_000_000_000,
   }
+
+  it('hands over the theme the host resolved', async () => {
+    const handler = vi.fn()
+    await onResolvedAppearance(handler)
+
+    expect(listen).toHaveBeenCalledWith('appearance-resolved', expect.any(Function))
+    emit('light')
+    expect(handler).toHaveBeenCalledWith('light')
+  })
 
   it('unwraps the payload of a file-changed event', async () => {
     const handler = vi.fn()

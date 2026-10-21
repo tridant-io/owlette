@@ -1,10 +1,10 @@
 ---
 title: "hoot (ai chat)"
-description: "hoot is the dashboard chat surface for diagnosing and managing machines with an LLM. It supports Anthropic and OpenAI providers, targets any set of machines in a site — one, several, or all of them — and routes tool calls through the safest available execution path for the current target."
-keywords: ["ai assistant", "copilot", "chatbot", "ask ai"]
+description: "hoot is the dashboard's chat for diagnosing and managing machines with an LLM. it runs on your own Anthropic or OpenAI key, talks to one, several or all of a site's machines, and routes every tool call through the safest path for the target."
+keywords: ["ai assistant", "copilot", "chatbot", "ask ai", "llm", "claude", "openai", "conversation history", "chat categories", "unsorted", "change model", "advisor"]
 ---
 
-For the current tool inventory, parameters, tiers, and execution-mode notes, see the [hoot tools reference](/docs/reference/hoot-tools).
+for the tool inventory, parameters, tiers and which tools work on which platform, see the [hoot tools reference](/docs/reference/hoot-tools).
 
 ![hoot chat panel](/docs-screens/cortex-chat.png)
 
@@ -12,15 +12,15 @@ For the current tool inventory, parameters, tiers, and execution-mode notes, see
 
 ## overview
 
-hoot tools are grouped by risk:
+hoot's tools are grouped by risk:
 
 | tier | type | approval |
 |------|------|----------|
-| **Tier 1** | Read-only diagnostics and site context | Auto-approved |
-| **Tier 2** | Process and machine management with validated parameters | Auto-approved |
-| **Tier 3** | Privileged shell, file, deployment, reboot, and shutdown actions | In-chat approval (default-on, per-site) |
+| **tier 1** | read-only diagnostics and site context | auto-approved |
+| **tier 2** | process and machine management with validated parameters | auto-approved |
+| **tier 3** | privileged shell, file, deployment, reboot and shutdown actions | in-chat approval (on by default, per site) |
 
-The available tier depends on the caller. Site admins and superadmins can use the full tool set. Members are limited to read-only tools. Chat API keys are also capped to read-only tools even if the key owner is an admin.
+what you can use depends on who you are. site admins, owners and superadmins get the full tool set. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin.
 
 ---
 
@@ -28,20 +28,33 @@ The available tier depends on the caller. Site admins and superadmins can use th
 
 ### your key
 
-There is exactly one place an LLM key lives: your own account settings. Every hoot feature — chat, talons, visual checks, autonomous investigations — resolves a key belonging to a specific person.
+there is exactly one place an LLM key lives: your own account settings. every hoot feature — chat, talons, visual checks, autonomous investigations — resolves a key that belongs to a specific person.
 
-1. Open the dashboard account menu.
-2. Select **account settings**.
-3. Open the **hoot** section.
-4. Choose **Anthropic (Claude)** or **OpenAI**.
-5. Select a model.
-6. Paste the provider API key and save it.
+1. open the dashboard account menu.
+2. select **account settings**.
+3. open the **hoot** section.
+4. choose **Anthropic (Claude)** or **OpenAI** as the provider.
+5. pick a model.
+6. paste the provider's API key and click **save key**.
 
-The key is encrypted server-side and stored under your user settings at `users/{uid}/settings/llm`. The raw key is not returned to the browser after it is saved.
+the key is encrypted server-side and stored under your user settings at `users/{uid}/settings/llm`. it is never returned to the browser after it is saved.
+
+**changing the model later** does not need the key again: leave the key field empty, pick the model, and the button reads **save model** — it keeps the stored key. changing the provider does need that provider's key. see [account settings → hoot](/docs/dashboard/account-settings#hoot).
+
+### models
+
+| provider | default | the list |
+|---|---|---|
+| Anthropic | Claude Sonnet 5 | read live from Anthropic with your saved key; before a key is saved, a built-in list from Claude Sonnet 5 and Opus 5 back to the Claude 4 models |
+| OpenAI | GPT-4.1 | read live from OpenAI with your saved key; before a key is saved, GPT-4.1 (and its mini and nano), GPT-4o, GPT-4o mini, o3 and o4 mini |
+
+**the advisor.** on Anthropic, when your model is Claude Sonnet 5, Sonnet 4.6, Haiku 4.5, or Opus 4.6, 4.7 or 4.8, hoot can consult Claude Opus 5 partway through a reply when the model judges a problem needs it. the chat shows *consulting Claude Opus 5…* while it does. it is capped at one consultation per model call and two per reply, and each is billed at Opus 5 rates to your own key. OpenAI models and other Claude models get no advisor.
+
+small background jobs — titling and categorizing conversations — use the provider's cheapest model on your key: Claude Haiku 4.5 or GPT-4.1 nano.
 
 ### which key an unattended run spends
 
-Nobody is in the chat when a talon fires at 3am, so each unattended feature names the person whose key it is spending:
+nobody is in the chat when a talon fires at 3am, so each unattended feature names the person whose key it spends:
 
 | unattended work | key it resolves |
 |---|---|
@@ -49,165 +62,202 @@ Nobody is in the chat when a talon fires at 3am, so each unattended feature name
 | a talon's visual check | the talon's **creator** (`createdBy`) |
 | autonomous hoot | the **site owner** |
 
-A talon's creator is re-checked on every run, not trusted from the day it was written. If the creator has left the site, had their account deleted, or removed their key, the talon is switched off immediately with the reason recorded on the talon and on the run that found out — it does not keep failing silently.
+a talon's creator is re-checked on every run, not trusted from the day it was written. if the creator has left the site, had their account deleted, or removed their key, the talon is switched off at once with the reason recorded on the talon and on the run that found out — it does not keep failing silently.
 
-<Callout type="warning" title="Changed in 3.0.0 — the site-level key is gone">
-  The site-level key scope (`sites/{siteId}/settings/llm`) and its admin endpoint (`/api/settings/site-llm-key`) have been **removed**. Nothing in the dashboard could ever create a site key, which made every AI talon un-runnable; the scope is gone rather than given a UI. Any `sites/{siteId}/settings/llm` document created through the old API is no longer read by anything and can be deleted. Save a key in **account settings → hoot** instead.
+<Callout type="warning" title="changed in 3.0.0 — the site-level key is gone">
+  the site-level key scope (`sites/{siteId}/settings/llm`) and its admin endpoint (`/api/settings/site-llm-key`) have been **removed**. nothing in the dashboard could ever create a site key, which made every AI talon un-runnable; the scope is gone rather than given a UI. any `sites/{siteId}/settings/llm` document created through the old API is no longer read by anything and can be deleted. save a key in **account settings → hoot** instead.
 </Callout>
 
 ---
 
 ## using hoot
 
-1. Open **hoot** from the dashboard header.
-2. Tick the machines the conversation should talk to in the **hoot target** picker at the top of the chat.
-3. Type a request in natural language.
+1. open **hoot** from the dashboard header.
+2. tick the machines the conversation should talk to in the target picker at the top of the chat.
+3. type a request in plain language.
 
-A chat talks to a *set* of machines. With one machine ticked, hoot reports and acts on that machine. With several, tool calls fan out to each of them and hoot aggregates the per-machine results, tagged by machine.
+a chat talks to a *set* of machines. with one machine ticked, hoot reports and acts on that machine. with several, tool calls fan out to each of them and hoot aggregates the per-machine results, tagged by machine.
 
 ### choosing machines
 
-The target picker is a checkbox menu over the site's machines, with an **all machines** row at the top.
+the target picker is a checkbox menu over the site's machines, with an **all machines** row at the top.
 
-- **all machines** is dynamic, not a shortcut for ticking every box: a machine added to the site later joins the target on its own. Unticking one machine spells the rest out; ticking the last missing one collapses back to **all machines**.
-- The menu stays open while you tick, so a set takes one visit. The trigger shows the target — `all machines`, `kiosk-01`, `kiosk-01, kiosk-02`, or `kiosk-01, kiosk-02 +3` — and, in brackets, how many of those machines are online.
-- Each row carries its status as text: *offline*, *hoot off*, or both.
+- **all machines** is dynamic, not a shortcut for ticking every box: a machine added to the site later joins the target on its own. unticking one machine spells the rest out; ticking the last missing one collapses back to **all machines**.
+- the menu stays open while you tick, so a set takes one visit. the trigger shows the target — `all machines`, `kiosk-01`, `kiosk-01, kiosk-02`, or `kiosk-01, kiosk-02 +3` — and, in brackets, how many of those machines are online.
+- each row carries its status as text: *offline*, *hoot off*, or both.
 
-**Changing the ticks continues the conversation.** The chat keeps its id and its full history, and the next turn goes to whatever is ticked when you send it — so a chat can follow a problem from one machine to its neighbours. Changing the **site** still starts a new conversation: a chat belongs to one site.
+**changing the ticks continues the conversation.** the chat keeps its ID and its full history, and the next turn goes to whatever is ticked when you send it — so a chat can follow a problem from one machine to its neighbours. changing the **site** starts a new conversation: a chat belongs to one site.
 
-The selection is stored on the conversation and remembered per site across your devices, so reopening an old chat restores the machines it was talking to. If a saved target cannot be read, hoot asks you to *pick machines for this chat* and refuses to send until you do — it never falls back to every machine.
+the selection is stored on the conversation and remembered per site across your devices, so reopening an old chat restores the machines it was talking to. if a saved target cannot be read, hoot asks you to *pick machines for this chat* and refuses to send until you do — it never falls back to every machine.
 
-A follow-up that hoot schedules for later fires on the machines **that turn** was targeting, re-validated when it comes due — not on whatever the chat is pointed at by then. See [`schedule_followup`](/docs/reference/hoot-tools#schedule_followup).
+a follow-up that hoot schedules for later fires on the machines **that turn** was targeting, re-validated when it comes due — not on whatever the chat is pointed at by then. see [`schedule_followup`](/docs/reference/hoot-tools#schedule_followup).
 
 ### machines that can't take the turn
 
-A ticked machine that is offline, or that has hoot switched off, is **skipped**: the turn runs on the rest, and the model is told which machines were left out so it can say so. The header warns before you send — for example *2 of 5 machines will be skipped — offline or hoot off*.
+a ticked machine that is offline, or that has hoot switched off, is **skipped**: the turn runs on the rest, and the model is told which machines were left out so it can say so. the header warns before you send — for example *2 of 5 machines will be skipped — offline or hoot off*.
 
-If nothing is left to run on, the send is refused rather than half-delivered: *no machines are currently online in this site*, or, when the hoot toggle is the whole reason, *hoot is disabled on …*.
+if nothing is left to run on, the send is refused rather than half-delivered: *no machines are currently online in this site*, or, when the hoot toggle is the whole reason, *hoot is disabled on …*.
 
 ### narrowing one turn with `@`
 
-Typing `@` in the composer opens a machine list; picking one inserts `@kiosk-01` and a chip reads **this turn → kiosk-01**. A mention narrows *that turn only* — the chat's ticks are untouched and the next message goes back to them. Several mentions target their union, and a machine that is not ticked can still be named for one turn.
+typing `@` in the composer opens a machine list; picking one inserts `@kiosk-01` and a chip reads **this turn → kiosk-01**. a mention narrows *that turn only* — the chat's ticks are untouched and the next message goes back to them. several mentions target their union, and a machine that is not ticked can still be named for one turn.
 
-Mentions are deliberately conservative, so ordinary prose and pasted shell are never read as targeting: `@` counts only at the start of the text or after whitespace or `(`, the name has to match a machine in the site and end at a boundary, and inline code spans and fenced blocks are skipped — PowerShell `@(...)`, `@splatting` and an email address are text. Anything that does not resolve stays plain text.
+mentions are deliberately conservative, so ordinary prose and pasted shell are never read as targeting: `@` counts only at the start of the text or after whitespace or `(`, the name has to match a machine in the site and end at a boundary, and inline code spans and fenced blocks are skipped — PowerShell `@(...)`, `@splatting` and an email address are text. anything that does not resolve stays plain text.
 
-A machine you *named* is never quietly skipped: if it is offline or has hoot off, the send is refused instead.
+a machine you *named* is never quietly skipped: if it is offline or has hoot off, the send is refused instead.
 
-Mentions come from the dashboard composer. The public conversations API, the SDK, the CLI and chat-scoped API keys get no narrowing — `@text` there is plain text.
+mentions come from the dashboard composer. the public conversations API, the SDK, the CLI and chat-scoped API keys get no narrowing — `@text` there is plain text.
+
+### Mac and Linux machines
+
+hoot works on every platform, but 13 of its tools — the Windows Update, registry, power plan, scheduled task and PowerShell tools among them — exist only on Windows. on a Mac or Linux machine they come back as `unsupported_on_platform`, and hoot reaches for what does work there: the system log, `systemctl` or `launchctl`, and the POSIX command allow-list. screenshots need the owlette app with Screen Recording on a Mac, and are not available on Linux. with nobody signed in — a login screen, or a server with no desktop — hoot still works, because its tools run in the agent's service; only the tools the owlette app carries out — `show_notification`, and `capture_screenshot` on a Mac — need someone's session. see [platforms](/docs/reference/hoot-tools#platforms).
 
 ### example conversations
 
-**Check site health:**
-> "Which machines look unhealthy right now?"
+**check site health:**
+> "which machines look unhealthy right now?"
 >
-> hoot can read site logs and fan out diagnostics across online machines, then summarize differences by machine.
+> hoot can read site logs and fan out diagnostics across online machines, then summarize the differences by machine.
 
-**Manage one process:**
-> "Restart TouchDesigner on this machine."
+**manage one process:**
+> "restart TouchDesigner on this machine."
 >
 > hoot calls the process-management tool for the selected machine and reports the result.
 
-**Update process configuration:**
-> "Fix the TouchDesigner executable path to C:\Program Files\Derivative\TouchDesigner.2025\bin\TouchDesigner.exe."
+**update process configuration:**
+> "fix the TouchDesigner executable path to C:\Program Files\Derivative\TouchDesigner.2025\bin\TouchDesigner.exe."
 >
-> hoot can update configured process fields, add a new process, or delete a process through the same validated server actions used by the dashboard.
+> hoot can update configured process fields, add a new process, or delete one through the same validated server actions the dashboard uses.
 
-**Diagnose a display issue:**
-> "Why is the output frozen?"
+**diagnose a display issue:**
+> "why is the output frozen?"
 >
-> hoot can inspect process state, logs, GPU usage, and screenshots before suggesting or taking an action.
+> hoot can inspect process state, logs, GPU usage and screenshots before suggesting or taking an action.
 
-**Run a privileged command:**
-> "Check the detailed network configuration."
+**run a privileged command:**
+> "check the detailed network configuration."
 >
-> hoot asks for confirmation before running a privileged shell or PowerShell command.
+> hoot asks for confirmation before running a privileged shell command.
+
+---
+
+## the conversation list
+
+the column beside the chat lists your conversations on the selected site, plus the site's autonomous investigations, newest first. more load as you scroll.
+
+**new hoot** at the top starts a conversation. it sits above every group until its first message gives it a title.
+
+### groups
+
+after its first reply, a conversation is titled and put in a category automatically: **performance**, **crashes**, **network**, **display**, **processes**, **system info**, **configuration** or **general**. the list groups conversations by category, each group with its count:
+
+- groups holding the most recent conversations come first, then **general**, then **unsorted** last.
+- **unsorted** holds conversations that were never categorized — older ones, or ones whose categorizing failed. it is a group of its own, not part of general, because general is a category hoot assigns.
+- **categorize N unsorted**, at the foot of the list, sorts them in one go. it titles and categorizes from what each conversation already says, with the cheapest model on your key.
+
+click a group's heading to collapse or expand it. the button beside **new hoot** collapses or expands every group at once. a collapsed group that holds the open conversation marks its heading with a dot. which groups you collapsed is remembered per device and restored when the list opens.
+
+### search
+
+the search button turns the header into a search field. while you type, the list drops its groups and shows every loaded conversation whose title matches.
+
+### rows
+
+each row shows the title, with an **auto** badge on an autonomous investigation. hover a row to **rename** or **delete** it.
+
+### resizing and hiding the list
+
+- drag the list's edge to resize it, from 200 to 560 pixels; double-click the edge to reset it to 300. with the edge focused, the arrow keys resize it (hold shift for bigger steps), and home and end jump to the limits.
+- **hide sidebar** / **show sidebar** in the chat header collapses the list entirely.
+
+the width and whether the list is open are remembered per device, like the collapsed groups. on a phone the list opens as a sheet from the left instead, and is closed each time you come back.
 
 ---
 
 ## turn controls & reliability
 
-A hoot turn — the model's reasoning plus any tool calls it makes — runs on the server, decoupled from your browser connection. A turn keeps running, and its results still land in the chat, even if your connection drops, you close the tab, or you reload the page mid-turn. When you come back, the dashboard reattaches to the in-flight turn and streams it live from where it left off. Long-running tools (for example `sfc /scannow`, DISM, or a multi-minute script) survive the same interruptions.
+a hoot turn — the model's reasoning plus any tool calls it makes — runs on the server, decoupled from your browser connection. a turn keeps running, and its results still land in the chat, if your connection drops, you close the tab, or you reload the page mid-turn. when you come back, the dashboard reattaches to the turn in flight and streams it live from where it left off. long-running tools (for example `sfc /scannow`, DISM, or a multi-minute script) survive the same interruptions.
 
-- **stop a turn** — the stop control halts the whole turn server-side, not just your local view. The model loop stops and no further tool calls are made.
-- **cancel a running tool** — while a tool call is executing, its card shows a **cancel** control. Cancelling terminates the work on the machine — for the shell tools (`run_command`, `run_powershell`, `execute_script`) this kills the process tree within a few seconds — and the tool card resolves to "cancelled by user". When a turn targets more than one machine, a single cancel targets every machine the call fanned out to.
-- **interrupted tool calls self-heal** — if a tool's result is lost mid-stream, hoot repairs it into an honest error (or recovers it from the machine's completed-command record) so the conversation always continues. Sending a new message while a tool is still running no longer breaks the chat.
+- **stop a turn** — the stop control halts the whole turn server-side, not just your local view. the model loop stops and no further tool calls are made.
+- **cancel a running tool** — while a tool call is executing, its card shows a **cancel** control. cancelling ends the work on the machine — for the shell tools (`run_command`, `run_powershell`, `execute_script`) it kills the process tree within a few seconds — and the card resolves to "cancelled by user". when a turn targets more than one machine, one cancel reaches every machine the call fanned out to.
+- **interrupted tool calls self-heal** — if a tool's result is lost mid-stream, hoot repairs it into an honest error (or recovers it from the machine's completed-command record), so the conversation always continues. sending a new message while a tool is still running does not break the chat.
 
 ## approving privileged (tier-3) actions
 
-Tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site **approval** setting, controlled by the shield toggle in the hoot header (site admins only):
+tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site **approval** setting, the shield toggle in the hoot header (site admins only):
 
-- **approval required** (the default) — privileged tool calls pause in the chat for an explicit approve/deny before they run.
-- **approval off** — privileged tool calls run immediately with no prompt. Disabling the gate weakens safety, so the toggle asks for confirmation first. It also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
+- **approval required** (the default) — privileged tool calls pause in the chat for an explicit approve or deny before they run.
+- **approval off** — privileged tool calls run at once, with no prompt. turning the gate off weakens safety, so the toggle asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
 
-The setting is stored per site at `sites/{siteId}/settings/cortex.requireTier3Approval`.
+the setting is stored per site at `sites/{siteId}/settings/cortex.requireTier3Approval`.
 
 ### an approval belongs to the turn that asked for it
 
-An approval card says what **that turn** resolved to, and approving runs the call on exactly those machines — not on whatever the picker shows when you come back to the chat. Ticking more machines in the meantime never widens an approval that is already waiting.
+an approval card says what **that turn** resolved to, and approving runs the call on exactly those machines — not on whatever the picker shows when you come back to the chat. ticking more machines in the meantime never widens an approval that is already waiting.
 
-A turn aimed at chosen machines names them (*on kiosk-01 and kiosk-02*, or *on 7 machines: …* past a handful). A turn aimed at **all machines** says so instead — *on every machine in this site (7 reachable)* — because a chosen seven and a whole site otherwise read identically on the one prompt where the difference matters. The count is the machines the turn can actually reach: offline machines and machines with hoot off are already excluded.
+a turn aimed at chosen machines names them (*on kiosk-01 and kiosk-02*, or *on 7 machines: …* past a handful). a turn aimed at **all machines** says so instead — *on every machine in this site (7 reachable)* — because a chosen seven and a whole site otherwise read the same on the one prompt where the difference matters. the count is the machines the turn can actually reach: offline machines and machines with hoot off are already excluded.
 
-If another turn has run in the conversation since the approval was requested — a scheduled follow-up firing, or a message sent from another device — the approval no longer matches the turn it belongs to, and it is refused: *that approval expired — another turn ran in this chat. ask again.* Nothing is queued on any machine and the approval is not spent; the conversation reloads and the request can be made again.
+if another turn has run in the conversation since the approval was requested — a scheduled follow-up firing, or a message sent from another device — the approval no longer matches the turn it belongs to, and it is refused: *that approval expired — another turn ran in this chat. ask again.* nothing is queued on any machine and the approval is not spent; the conversation reloads and the request can be made again.
 
-The bound machines are re-checked when you answer. One that went offline, or had hoot switched off while the card waited, is dropped from the call. If none of them is reachable, the approval is left unanswered rather than consumed, so it can still be approved once a machine comes back.
+the bound machines are re-checked when you answer. one that went offline, or had hoot switched off while the card waited, is dropped from the call. if none of them is reachable, the approval is left unanswered rather than consumed, so it can still be approved once a machine comes back.
 
 ---
 
 ## sharing a conversation
 
-A conversation you started can be published as a read-only web page. The **share conversation** control in the chat header opens a dialog that previews the finished page, then creates a link to it at `/share/{token}`.
+a conversation you started can be published as a read-only web page. the **share conversation** control in the chat header opens a dialog that previews the finished page, then creates a link to it at `/share/{token}`.
 
-A share is a **snapshot**, not a live view. It is frozen at the moment the link is created, so messages you send afterwards never appear in a link that already exists — to publish more of a conversation, create a new link.
+a share is a **snapshot**, not a live view. it is frozen when the link is created, so messages you send afterwards never appear in a link that already exists — to publish more of a conversation, create a new link. a conversation can be shared once it has messages and nothing is running.
 
 ### what a reader sees
 
-Published:
+published:
 
 - your messages and hoot's replies, as text
 - the conversation title, and the machines the chat targeted — one name, a list such as *kiosk-01, kiosk-02 +3*, or *All Machines* for a site-wide chat
 - each tool call, collapsed to the tool's name and how it ended — *completed*, *failed*, *denied*, or *not completed*
 
-Never published:
+never published:
 
 - what a tool was asked and what it answered — hostnames, paths, log lines, command output, file contents
 - image attachments and screenshots
 - system messages, the model's reasoning, and every other internal part of a turn
 
 <Callout type="warning" title="the preview is the page">
-  hoot's replies are published exactly as written, so a machine name, a file path, or a log line the model quoted **in its answer** goes out with the share. The dialog renders the finished page before anything is created — read it, then create the link.
+  hoot's replies are published exactly as written, so a machine name, a file path, or a log line the model quoted **in its answer** goes out with the share. the dialog renders the finished page before anything is created — read it, then create the link.
 </Callout>
 
 ### links, expiry, and revoking
 
-Anyone holding the link can read the page — there is no sign-in. Treat the link itself as the secret: it is unguessable and is never listed anywhere, but nothing beyond the link gates the page. The page is marked `noindex`, so search engines do not list it.
+anyone holding the link can read the page — there is no sign-in. treat the link itself as the secret: it is unguessable and never listed anywhere, but nothing beyond the link gates the page. the page is marked `noindex`, so search engines do not list it.
 
-A link expires **30 days** after it is created by default. The dialog also offers **7 days**, **90 days**, and **never (until revoked)**.
+a link expires **30 days** after it is created by default. the dialog also offers **7 days**, **90 days**, and **never (until revoked)**.
 
-Every link you have created for a conversation is listed in the same dialog under **active links**, each with a **revoke** control. Revoking takes effect immediately and cannot be undone: the page starts reporting that the conversation is not available, and sharing again means creating a new link. An expired link behaves identically, and a reader cannot tell a revoked link from an expired one or from a link that never existed.
+every link you have created for a conversation is listed in the same dialog under **active links**, each with a **revoke** control. revoking takes effect at once and cannot be undone: the page starts reporting that the conversation is not available, and sharing again means creating a new link. an expired link behaves the same, and a reader cannot tell a revoked link from an expired one or from one that never existed.
 
-**Autonomous conversations cannot be shared.** A share is published by the person who started the conversation, and an autonomous investigation has no author — the **share conversation** control does not appear on those chats.
+**autonomous conversations cannot be shared.** a share is published by the person who started the conversation, and an autonomous investigation has no author, so the **share conversation** control does not appear on those chats.
 
 ---
 
 ## tool tiers
 
-Tier 1 tools read machine or site state, such as system info, logs, process lists, disk usage, GPU state, agent health, and site deployment presets.
+tier-1 tools read machine or site state: system info, logs, process lists, disk usage, GPU state, agent health, and site deployment presets.
 
-Tier 2 tools perform bounded management actions with validated parameters, such as restarting configured processes, adding/editing/deleting process config, capturing screenshots, managing selected Windows services or update settings, and changing safe machine configuration.
+tier-2 tools perform bounded management actions with validated parameters: restarting configured processes, adding, editing and deleting process config, capturing screenshots, managing services or Windows Update settings, and changing safe machine configuration.
 
-Tier 3 tools can make broader changes, such as shell execution, file writes, deployment orchestration, reboots, and shutdowns. These are governed by the per-site tier-3 approval setting (on by default): when it is on, they pause for an explicit approve/deny in the hoot UI before running. See [approving privileged (tier-3) actions](#approving-privileged-tier-3-actions).
+tier-3 tools can make broader changes: shell execution, file writes, deployment orchestration, reboots and shutdowns. these are governed by the per-site tier-3 approval setting (on by default): while it is on, they pause for an explicit approve or deny before running. see [approving privileged (tier-3) actions](#approving-privileged-tier-3-actions).
 
-See the [hoot tools reference](/docs/reference/hoot-tools) for the current tool list and parameter schemas.
+the [hoot tools reference](/docs/reference/hoot-tools) has the current tool list and parameter schemas.
 
 ---
 
 ## how it works
 
-Every dashboard chat runs the same way. `POST /api/hoot` carries the chat's target as `target.machineIds` — an explicit list, or `null` for the dynamic **all machines** — and the web server resolves it **once**, before the turn starts: the ids have to belong to this site, and machines that are offline or have hoot off drop out. The turn is then handed that resolved list and can only ever narrow it, never widen it. Which execution path it takes depends on how many machines are left.
+every dashboard chat runs the same way. `POST /api/hoot` carries the chat's target as `target.machineIds` — an explicit list, or `null` for the dynamic **all machines** — and the web server resolves it **once**, before the turn starts: the IDs have to belong to this site, and machines that are offline or have hoot off drop out. the turn is then handed that resolved list and can only ever narrow it, never widen it. which execution path it takes depends on how many machines are left.
 
 ### one machine
 
-When a turn effectively targets a single machine — one machine ticked, one `@mention`, or **all machines** on a site that has exactly one — hoot runs the single-machine path: that machine's configured processes go into the prompt, tool output is reported unwrapped, and the machine's hoot power toggle is in the header. The turn runs detached from your browser connection, so it survives disconnects and reloads:
+when a turn effectively targets one machine — one machine ticked, one `@mention`, or **all machines** on a site that has exactly one — hoot runs the single-machine path: that machine's configured processes go into the prompt, tool output is reported unwrapped, and the machine's hoot power toggle is in the header. the turn runs detached from your browser connection, so it survives disconnects and reloads:
 
 ```text
 dashboard chat
@@ -221,11 +271,11 @@ dashboard chat
   -> web server feeds results back to the model and streams the answer to the chat
 ```
 
-Members always use this path with a read-only tool tier cap.
+members always use this path, capped at read-only tools.
 
 ### several machines (fan-out)
 
-When more than one machine survives resolution, the web server fans tool calls out to each of them and aggregates the per-machine results:
+when more than one machine survives resolution, the web server fans tool calls out to each of them and aggregates the per-machine results:
 
 ```text
 dashboard chat
@@ -237,11 +287,11 @@ dashboard chat
   -> per-machine results are aggregated for hoot
 ```
 
-Server-side tools such as site logs, system presets, deployment orchestration, and process config changes run in the web server instead of routing through a single agent. Process create/update/delete tools call the existing validated process actions directly; the agent applies the resulting config through its normal Firestore listener.
+server-side tools such as site logs, system presets, deployment orchestration and process config changes run in the web server instead of going through an agent. the process create, update and delete tools call the same validated process actions as the dashboard; the agent applies the resulting config through its normal Firestore listener.
 
 ### local hoot (public conversations API only)
 
-There is a third path, where the model loop and tools run on the agent itself, closer to the machine, for lower latency — at the cost of the approval gate and the tier caps, which the web server cannot enforce inside the agent. It is reached only through the [public conversations API](/docs/api/hoot), for a single-machine conversation, when the caller is a site admin, the site's tier-3 approval gate is **off**, and local hoot is healthy on that machine:
+there is a third path, where the model loop and tools run on the agent itself, closer to the machine, for lower latency — at the cost of the approval gate and the tier caps, which the web server cannot enforce inside the agent. it is reached only through the [public conversations API](/docs/api/hoot), for a single-machine conversation, when the caller is a site admin, the site's tier-3 approval gate is **off**, and local hoot is healthy on that machine. on macOS and Linux local hoot runs as the signed-in user, so it needs someone signed in at the machine.
 
 ```text
 POST /api/hoot/conversations/{conversationId}
@@ -251,13 +301,13 @@ POST /api/hoot/conversations/{conversationId}
   -> the caller streams those updates back
 ```
 
-The dashboard chat never takes this path — it always runs server-side, so the approval gate and the tier caps hold.
+the dashboard chat never takes this path — it always runs server-side, so the approval gate and the tier caps hold.
 
 ---
 
 ## autonomous mode
 
-Autonomous hoot can investigate process crashes or process-start failures without a human starting a chat. It is triggered by the agent alert path, authenticated with `CORTEX_INTERNAL_SECRET`, and runs against one affected machine.
+autonomous hoot can investigate a process crash or a failed process start without anyone starting a chat. the agent's alert triggers it, it is authenticated with `CORTEX_INTERNAL_SECRET`, and it runs against the one affected machine.
 
 ### flow
 
@@ -273,51 +323,51 @@ agent alert
   -> escalate by email when unresolved, offline, or disabled
 ```
 
-Autonomous conversations appear in the hoot sidebar with an **auto** badge. Event records are stored at `sites/{siteId}/cortex-events/` with status, summary, tool-call actions, timestamps, and outcomes.
+autonomous conversations appear in the [conversation list](#the-conversation-list) with an **auto** badge. event records are stored at `sites/{siteId}/cortex-events/` with status, summary, tool-call actions, timestamps and outcomes.
 
 ### directive
 
-Every autonomous investigation is guided by a directive. The default mission is to keep configured processes running and machines operational, investigate crashes through logs and process status, restart when appropriate, and escalate if repeated restart attempts fail.
+every autonomous investigation is guided by a directive. the default mission is to keep configured processes running and machines operational: check agent and system logs when a process crashes, restart it, and escalate to site admins if a restart fails twice.
 
-Custom directives can be set in Firestore at `sites/{siteId}/settings/cortex` in the `directive` field.
+a custom directive can be set in Firestore at `sites/{siteId}/settings/cortex`, in the `directive` field.
 
 ### enabling autonomous mode
 
-1. Set `CORTEX_INTERNAL_SECRET` in the web runtime environment.
-2. Make sure the **site owner** has saved an LLM key in their account settings — that is the key autonomous investigations run on.
-3. Set `sites/{siteId}/settings/cortex.autonomousEnabled` to `true`.
+1. set `CORTEX_INTERNAL_SECRET` in the web runtime environment.
+2. make sure the **site owner** has saved an LLM key in their account settings — autonomous investigations run on that key.
+3. set `sites/{siteId}/settings/cortex.autonomousEnabled` to `true`.
 
 ### configuration options
 
 | setting | default | description |
 |---------|---------|-------------|
-| `autonomousEnabled` | `false` | Master switch for autonomous investigations |
-| `directive` | Default directive | Site-specific mission text for autonomous hoot |
-| `maxTier` | `2` | Maximum tool tier for autonomous investigations |
-| `cooldownMinutes` | `15` | Deduplication window for the same machine and process |
-| `escalationEmail` | `true` | Sends escalation email when hoot cannot resolve the issue |
+| `autonomousEnabled` | `false` | master switch for autonomous investigations |
+| `directive` | default directive | site-specific mission text for autonomous hoot |
+| `maxTier` | `2` | highest tool tier an investigation may use |
+| `cooldownMinutes` | `15` | deduplication window for the same machine and process |
+| `escalationEmail` | `true` | sends an escalation email when hoot cannot resolve the issue |
 
 ### guardrails
 
-- Autonomous mode is opt-in per site.
-- Events are deduplicated by machine and process for the configured cooldown window.
-- Duplicate nonces are rejected.
-- Each site can run only a limited number of active autonomous sessions at once.
-- Each investigation has a fixed step limit.
-- The default tier cap prevents shell commands unless the site explicitly raises `maxTier`.
-- The per-machine hoot toggle blocks tool execution for that machine on every path: single-machine chats, multi-machine fan-out, scheduled follow-ups, talons, autonomous investigations, and the public conversations API.
-- Offline machines escalate instead of consuming LLM calls.
+- autonomous mode is opt-in per site.
+- events are deduplicated by machine and process for the cooldown window.
+- duplicate nonces are rejected.
+- a site runs at most three autonomous investigations at once.
+- each investigation is limited to 15 steps.
+- the default tier cap rules out shell commands unless the site raises `maxTier`.
+- the per-machine hoot toggle blocks tool execution for that machine on every path: single-machine chats, multi-machine fan-out, scheduled follow-ups, talons, autonomous investigations, and the public conversations API.
+- offline machines escalate instead of spending LLM calls.
 
 ---
 
 ## security
 
 - LLM keys are encrypted at rest and resolved only on the server.
-- Every key belongs to one person. Chat spends the signed-in user's key; a talon spends its creator's, re-checked against site access on every run; autonomous mode spends the site owner's.
-- Tier 3 tools are governed by the per-site approval setting (on by default): when on, they require an explicit in-chat approve/deny before running.
-- An approval is bound to the turn that requested it and runs only on that turn's machines. An approval that a later turn has made stale is refused, never re-aimed at a target nobody reviewed.
-- The machines a turn may reach are resolved on the server from ids that must belong to the verified site; a request can only narrow that set, never widen it, and an unreadable stored target sends nothing at all.
-- Server-side hoot checks site access before every chat request, and sending, stopping, or cancelling a turn verifies the caller owns the target conversation.
-- Members and chat-scoped API keys are capped to read-only tools, and a follow-up they schedule fires under the same cap.
-- Agent-routed tool calls are delivered through Firestore command documents and return through completed-command records. Server-side tools run in the web process and write their own records or config changes.
-- The autonomous endpoint uses `x-cortex-secret` and is not a public user-session endpoint.
+- every key belongs to one person. chat spends the signed-in user's key; a talon spends its creator's, re-checked against site access on every run; autonomous mode spends the site owner's.
+- tier-3 tools are governed by the per-site approval setting (on by default): while it is on, they need an explicit in-chat approve or deny before running.
+- an approval is bound to the turn that requested it and runs only on that turn's machines. an approval a later turn has made stale is refused, never re-aimed at a target nobody reviewed.
+- the machines a turn may reach are resolved on the server from IDs that must belong to the verified site; a request can only narrow that set, never widen it, and an unreadable stored target sends nothing at all.
+- server-side hoot checks site access before every chat request, and sending, stopping or cancelling a turn verifies the caller owns the conversation.
+- members and chat-scoped API keys are capped at read-only tools, and a follow-up they schedule fires under the same cap.
+- agent-routed tool calls are delivered through Firestore command documents and return through completed-command records. server-side tools run in the web process and write their own records or config changes.
+- the autonomous endpoint takes `x-cortex-secret` and is not a public user-session endpoint.

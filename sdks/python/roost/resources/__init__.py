@@ -10,7 +10,7 @@ from roost.resources.account import (
 from roost.resources.chat import Chat, ConversationSummary
 from roost.resources.chunks import Chunks
 from roost.resources.deployments import Deployments
-from roost.resources.installer import Installer, InstallerVersion
+from roost.resources.installer import Installer, InstallerFile, InstallerVersion
 from roost.resources.installer_deployments import (
     InstallerDeploymentDetail,
     InstallerDeploymentSummary,
@@ -68,6 +68,7 @@ __all__ = [
     "InstallerDeploymentSummary",
     "InstallerDeploymentTarget",
     "InstallerDeployments",
+    "InstallerFile",
     "InstallerVersion",
     "Keys",
     "MachineDeployment",

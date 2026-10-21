@@ -15,6 +15,8 @@
  * distinct on the wire (PROTOCOL.md §5).
  */
 
+import type { MachineOsFamily } from '@/lib/machineOs';
+
 /** scancodes by code, for every code the host can inject directly. */
 const SCANCODES: Readonly<Record<string, number>> = Object.freeze({
   AltLeft: 56, AltRight: 56, ArrowDown: 80, ArrowLeft: 75, ArrowRight: 77, ArrowUp: 72,
@@ -105,28 +107,49 @@ export const KEYMAP: Readonly<Record<string, KeyMapping>> = Object.freeze(
 export const EXTENDED_CODES: ReadonlySet<string> = new Set(EXTENDED);
 
 /**
- * what cmd does on a mac client. `'ctrl'` is the editing-shortcut mapping most
- * users want (cmd+c copies on the host); `'win'` passes cmd through as the
- * windows key. the conversion happens here, in the browser, before the message
+ * what the viewer's shortcut key does on the host. `'swap'`, the default, moves
+ * it to where the host keeps its own, so cmd+c from a mac copies on a windows
+ * host and ctrl+c from a pc copies on a mac one; `'passthrough'` sends every key
+ * as pressed. the conversion happens here, in the browser, before the message
  * is sent — PROTOCOL.md §5: the host never guesses.
  */
-export type CmdMapping = 'ctrl' | 'win';
+export type ModifierMapping = 'swap' | 'passthrough';
+
+/** what `'swap'` converts for one host and viewer. */
+export type ModifierSwap = 'cmd-to-ctrl' | 'ctrl-to-cmd';
+
+/** a viewer on a mac keeps its shortcuts on cmd; every other keeps them on ctrl. */
+export function isMacViewer(userAgent?: string): boolean {
+  const ua = userAgent ?? (typeof navigator === 'undefined' ? '' : navigator.userAgent);
+  return /mac|iphone|ipad/i.test(ua);
+}
 
 /**
- * mac clients default to the ctrl mapping because cmd is where their editing
- * shortcuts live; everywhere else meta is a real windows key and passes through.
- * the toolbar can override either way.
+ * the conversion `'swap'` makes, or null where the viewer and the host keep
+ * their shortcuts on the same key and there is nothing to map. a linux host
+ * keeps them on ctrl, as windows does.
  */
-export function defaultCmdMapping(userAgent?: string): CmdMapping {
-  const ua = userAgent ?? (typeof navigator === 'undefined' ? '' : navigator.userAgent);
-  return /mac|iphone|ipad/i.test(ua) ? 'ctrl' : 'win';
+export function modifierSwap(host: MachineOsFamily, viewerIsMac: boolean): ModifierSwap | null {
+  if (host === 'macos') return viewerIsMac ? null : 'ctrl-to-cmd';
+  return viewerIsMac ? 'cmd-to-ctrl' : null;
 }
 
 /** the code we actually put on the wire for `code`. */
-export function applyCmdMapping(code: string, mapping: CmdMapping): string {
-  if (mapping !== 'ctrl') return code;
-  if (code === 'MetaLeft') return 'ControlLeft';
-  if (code === 'MetaRight') return 'ControlRight';
+export function applyModifierMapping(
+  code: string,
+  host: MachineOsFamily,
+  viewerIsMac: boolean,
+  mapping: ModifierMapping,
+): string {
+  if (mapping !== 'swap') return code;
+  const swap = modifierSwap(host, viewerIsMac);
+  if (swap === 'cmd-to-ctrl') {
+    if (code === 'MetaLeft') return 'ControlLeft';
+    if (code === 'MetaRight') return 'ControlRight';
+  } else if (swap === 'ctrl-to-cmd') {
+    if (code === 'ControlLeft') return 'MetaLeft';
+    if (code === 'ControlRight') return 'MetaRight';
+  }
   return code;
 }
 

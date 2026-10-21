@@ -16,10 +16,15 @@ import { toast } from '@/lib/toast';
 import { MfaFactorsSection } from '@/components/MfaFactorsSection';
 import { getBrowserTimezone } from '@/lib/timeUtils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
+import { AppearanceControl } from '@/components/AppearanceControl';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
+import { FormError } from '@/components/ui/form-error';
+import { useFieldError } from '@/hooks/useFieldError';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
 import { useScrollFade } from '@/hooks/useScrollFade';
+import { useHeightTransition } from '@/hooks/useHeightTransition';
 import { AVAILABLE_MODELS, preselectedModel } from '@/lib/llmModels';
 
 type SettingsSection = 'profile' | 'preferences' | 'alerts' | 'hoot' | 'security' | 'api' | 'danger';
@@ -42,10 +47,13 @@ interface AccountSettingsDialogProps {
 
 export function AccountSettingsDialog({ open, onOpenChange, initialSection }: AccountSettingsDialogProps) {
   // The section dissolves under the dialog header rather than being cut by it.
-  const bodyRef = useScrollFade<HTMLDivElement>();
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useScrollFade<HTMLDivElement>(scrollerRef);
 
   const { user, userPreferences, updateUserProfile, updateUserPhoto, updatePassword, updateUserPreferences, deleteAccount } = useAuth();
   const [activeSection, setActiveSection] = useState<SettingsSection>(initialSection || 'profile');
+  // sections differ in length: the dialog eases to each one's height instead of cutting
+  const boxRef = useHeightTransition<HTMLDivElement>(activeSection, scrollerRef);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -65,7 +73,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [apiKeyAlerts, setApiKeyAlerts] = useState(true);
   const [alertCcEmails, setAlertCcEmails] = useState<string[]>([]);
   const [newCcEmail, setNewCcEmail] = useState('');
-  const [ccEmailError, setCcEmailError] = useState('');
+  const { error: ccEmailError, fail: failCcEmail, clear: clearCcEmail, fieldProps: ccEmailFieldProps } = useFieldError('settings-cc-email-error');
   const [loading, setLoading] = useState(false);
 
   const [showPasswordSection, setShowPasswordSection] = useState(false);
@@ -75,7 +83,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState('');
+  const { error: passwordError, fail: failPassword, clear: clearPassword, fieldProps: passwordFieldProps } = useFieldError('settings-password-error');
 
   const [llmProvider, setLlmProvider] = useState<'anthropic' | 'openai'>('anthropic');
   const [llmApiKey, setLlmApiKey] = useState('');
@@ -85,6 +93,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   const [showLlmKey, setShowLlmKey] = useState(false);
   const [llmModels, setLlmModels] = useState<{ id: string; name: string }[]>([]);
   const [llmModelsLoading, setLlmModelsLoading] = useState(false);
+  // what the server holds, so a model change alone can be saved without the key
+  const [llmSaved, setLlmSaved] = useState<{ provider: string; model: string | null } | null>(null);
 
 
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -137,7 +147,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setApiKeyAlerts(userPreferences.apiKeyAlerts);
       setAlertCcEmails(userPreferences.alertCcEmails || []);
       setNewCcEmail('');
-      setCcEmailError('');
+      clearCcEmail();
 
       fetch('/api/settings/llm-key')
         .then((res) => res.json())
@@ -146,6 +156,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
           if (data.provider) setLlmProvider(data.provider);
           if (data.model) setLlmModel(data.model);
           if (data.configured) {
+            setLlmSaved({ provider: data.provider || 'anthropic', model: data.model || null });
             fetchLlmModels(data.provider || 'anthropic');
           }
         })
@@ -161,11 +172,11 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
       setProcessAlerts(true);
       setAlertCcEmails([]);
       setNewCcEmail('');
-      setCcEmailError('');
+      clearCcEmail();
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setPasswordError('');
+      clearPassword();
       setShowPasswordSection(false);
       setShowDeleteConfirm(false);
       setDeletePassword('');
@@ -176,6 +187,42 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, user?.displayName, userPreferences.temperatureUnit, userPreferences.timezone, userPreferences.timeFormat, userPreferences.timeDisplayMode, userPreferences.healthAlerts, userPreferences.processAlerts, JSON.stringify(userPreferences.alertCcEmails)]);
 
+  const llmModelList = llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider];
+  const llmChosenModel = llmModel || preselectedModel(llmProvider, llmModelList);
+  // the stored key stays where it is for a model change; a new provider needs its own key
+  const llmModelOnly =
+    !llmApiKey &&
+    llmSaved !== null &&
+    llmSaved.provider === llmProvider &&
+    llmChosenModel !== (llmSaved.model ?? preselectedModel(llmProvider, llmModelList));
+
+  const saveLlm = async () => {
+    const keyTyped = Boolean(llmApiKey);
+    setLlmSaving(true);
+    try {
+      const res = await fetch('/api/settings/llm-key', {
+        method: keyTyped ? 'POST' : 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          keyTyped ? { provider: llmProvider, apiKey: llmApiKey, model: llmChosenModel } : { model: llmChosenModel },
+        ),
+      });
+      if (res.ok) {
+        setLlmConfigured(true);
+        setLlmSaved({ provider: llmProvider, model: llmChosenModel });
+        setLlmApiKey('');
+        toast.success(keyTyped ? 'API key saved' : 'Model saved');
+        if (keyTyped) fetchLlmModels(llmProvider);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error || (keyTyped ? 'Failed to save API key' : 'Failed to save model'));
+      }
+    } catch (e) {
+      toast.error(`Failed to save: ${e instanceof Error ? e.message : 'Unknown error'}`);
+    }
+    setLlmSaving(false);
+  };
+
   const handleOpenChange = (isOpen: boolean) => {
     onOpenChange(isOpen);
   };
@@ -184,42 +231,39 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
     const email = newCcEmail.trim().toLowerCase();
     if (!email) return;
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setCcEmailError('please enter a valid email address');
-      return;
+      return failCcEmail('settings-cc-email', 'please enter a valid email address');
     }
     if (email === user?.email?.toLowerCase()) {
-      setCcEmailError('this is already your primary alert email');
-      return;
+      return failCcEmail('settings-cc-email', 'this is already your primary alert email');
     }
     if (alertCcEmails.includes(email)) {
-      setCcEmailError('this email is already added');
-      return;
+      return failCcEmail('settings-cc-email', 'this email is already added');
     }
     if (alertCcEmails.length >= 5) {
-      setCcEmailError('maximum of 5 CC addresses');
-      return;
+      return failCcEmail('settings-cc-email', 'maximum of 5 CC addresses');
     }
     setAlertCcEmails(prev => [...prev, email]);
     setNewCcEmail('');
-    setCcEmailError('');
+    clearCcEmail();
   };
 
   const validatePassword = (): boolean => {
-    setPasswordError('');
+    clearPassword();
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setPasswordError('All password fields are required');
+      const empty = !currentPassword ? 'currentPassword' : !newPassword ? 'newPassword' : 'confirmPassword';
+      failPassword(empty, 'fill in all three password fields');
       return false;
     }
     if (newPassword.length < 6) {
-      setPasswordError('New password must be at least 6 characters');
+      failPassword('newPassword', 'new password must be at least 6 characters');
       return false;
     }
     if (newPassword !== confirmPassword) {
-      setPasswordError('New passwords do not match');
+      failPassword('confirmPassword', 'new passwords do not match');
       return false;
     }
     if (newPassword === currentPassword) {
-      setPasswordError('New password must be different from current password');
+      failPassword('newPassword', 'new password must be different from your current password');
       return false;
     }
     return true;
@@ -269,7 +313,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
   const handleSave = async () => {
     setLoading(true);
-    setPasswordError('');
+    clearPassword();
     try {
       if (firstName || lastName) {
         await updateUserProfile(firstName, lastName);
@@ -322,23 +366,28 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white sm:max-w-4xl p-0 gap-0 max-h-[90dvh]">
+      <DialogContent className="border-border text-foreground sm:max-w-4xl p-0 gap-0 max-h-[90dvh]">
         <VisuallyHidden>
           <DialogTitle>account settings</DialogTitle>
         </VisuallyHidden>
-        <div className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 max-h-[85dvh]">
+        {/* min-w-0: DialogContent is a grid, and its auto column grows to the widest
+            child's min-content, which on a phone is the whole tab bar */}
+        <div ref={boxRef} className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 min-w-0 max-h-[85dvh]">
           {/* Mobile: horizontal scrollable tabs */}
-          <nav className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 gap-1 flex-shrink-0">
+          {/* mr-10 leaves the dialog's close button its own slot at the end of the row */}
+          <nav aria-label="settings sections" className="sm:hidden flex overflow-x-auto border-b border-border bg-card/50 p-1.5 mr-10 gap-1 flex-shrink-0">
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
+                type="button"
+                aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs whitespace-nowrap transition-colors cursor-pointer flex-shrink-0 ${
                   activeSection === id
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent text-accent-foreground'
                     : id === 'danger'
-                      ? 'text-red-400 hover:bg-red-950/30'
-                      : 'text-muted-foreground hover:bg-accent/50 hover:text-white'
+                      ? 'text-danger hover:bg-danger-surface'
+                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
                 }`}
               >
                 <Icon className="h-3.5 w-3.5 flex-shrink-0" />
@@ -348,20 +397,22 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
           </nav>
 
           {/* Desktop: vertical sidebar */}
-          <nav className="hidden sm:flex w-48 border-r border-border bg-card/50 p-2 flex-col gap-0.5 flex-shrink-0">
+          <nav aria-label="settings sections" className="hidden sm:flex w-48 border-r border-border bg-card/50 p-2 flex-col gap-0.5 flex-shrink-0">
             <div className="px-3 py-2.5 mb-1">
-              <h2 className="text-sm font-semibold text-white">settings</h2>
+              <h2 className="text-sm font-semibold text-foreground">settings</h2>
             </div>
             {SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
+                type="button"
+                aria-current={activeSection === id ? 'true' : undefined}
                 onClick={() => setActiveSection(id)}
                 className={`flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors cursor-pointer ${
                   activeSection === id
-                    ? 'bg-accent text-white'
+                    ? 'bg-accent text-accent-foreground'
                     : id === 'danger'
-                      ? 'text-red-400 hover:bg-red-950/30'
-                      : 'text-muted-foreground hover:bg-accent/50 hover:text-white'
+                      ? 'text-danger hover:bg-danger-surface'
+                      : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground'
                 }`}
               >
                 <Icon className="h-4 w-4 flex-shrink-0" />
@@ -372,12 +423,13 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
           {/* Content */}
           <div className="flex-1 flex flex-col min-w-0 min-h-0">
-            <div ref={bodyRef} className="flex-1 overflow-y-auto p-4 sm:p-6">
+            {/* keyed so each section fades in and opens at its top */}
+            <div key={activeSection} ref={bodyRef} className="flex-1 overflow-y-auto [[data-resizing]_&]:overflow-y-hidden p-4 sm:p-6 motion-safe:animate-in fade-in-0">
               {/* ─── Profile ─── */}
               {activeSection === 'profile' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white">profile</h3>
+                    <h3 className="text-base font-medium text-foreground">profile</h3>
                     <p className="text-xs text-muted-foreground mt-1">your personal information</p>
                   </div>
 
@@ -386,6 +438,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       <UserAvatar user={user} size="lg" />
                       {photoUploading && (
                         <div className="absolute inset-0 flex items-center justify-center rounded-full bg-black/50">
+                          {/* eslint-disable-next-line no-restricted-syntax -- a white spinner on the black photo scrim, in either theme */}
                           <Loader2 className="h-5 w-5 text-white animate-spin" />
                         </div>
                       )}
@@ -415,7 +468,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             size="sm"
                             onClick={handlePhotoRemove}
                             disabled={photoUploading || loading}
-                            className="text-muted-foreground hover:text-red-400"
+                            className="text-muted-foreground hover:text-destructive"
                           >
                             remove
                           </Button>
@@ -427,34 +480,35 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="settings-firstName" className="text-white">first name</Label>
+                      <Label htmlFor="settings-firstName" className="text-foreground">first name</Label>
                       <Input
                         id="settings-firstName"
                         type="text"
                         placeholder="first name"
                         value={firstName}
                         onChange={(e) => setFirstName(e.target.value)}
-                        className="border-border bg-background text-white"
+                        className="border-border bg-background text-foreground"
                         disabled={loading}
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="settings-lastName" className="text-white">last name</Label>
+                      <Label htmlFor="settings-lastName" className="text-foreground">last name</Label>
                       <Input
                         id="settings-lastName"
                         type="text"
                         placeholder="last name"
                         value={lastName}
                         onChange={(e) => setLastName(e.target.value)}
-                        className="border-border bg-background text-white"
+                        className="border-border bg-background text-foreground"
                         disabled={loading}
                       />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-white">email</Label>
+                    <Label htmlFor="settings-email" className="text-foreground">email</Label>
                     <Input
+                      id="settings-email"
                       type="email"
                       value={user?.email || ''}
                       className="border-border bg-background text-muted-foreground"
@@ -470,16 +524,23 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'preferences' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white">preferences</h3>
+                    <h3 className="text-base font-medium text-foreground">preferences</h3>
                     <p className="text-xs text-muted-foreground mt-1">dashboard display settings</p>
                   </div>
 
+                  <AppearanceControl />
+
                   <div className="space-y-2">
-                    <Label className="text-white">display times in</Label>
-                    <p className="text-xs text-muted-foreground">
+                    <p id="settings-time-display-label" className="text-sm leading-none font-medium text-foreground">display times in</p>
+                    <p id="settings-time-display-help" className="text-xs text-muted-foreground">
                       controls how heartbeats, activity logs, and other absolute timestamps render across the dashboard. schedule editors are unaffected — they follow the site&apos;s schedule clock setting (each machine&apos;s own clock unless the site opted into site time), not this preference.
                     </p>
-                    <div className="space-y-2 mt-1">
+                    <div
+                      role="radiogroup"
+                      aria-labelledby="settings-time-display-label"
+                      aria-describedby="settings-time-display-help"
+                      className="space-y-2 mt-1"
+                    >
                       {([
                         { value: 'machine', label: "each machine's local timezone", help: 'every machine renders its own heartbeats and timestamps in its own local clock. best when monitoring kiosks across multiple timezones.' },
                         { value: 'user', label: 'my timezone', help: 'all machines render in your selected timezone (below). best when you want a single shared reference frame.' },
@@ -496,10 +557,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             checked={timeDisplayMode === opt.value}
                             onChange={() => setTimeDisplayMode(opt.value)}
                             disabled={loading}
-                            className="mt-0.5 cursor-pointer accent-cyan-500"
+                            className="mt-0.5 cursor-pointer accent-accent-cyan"
                           />
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm text-white">{opt.label}</div>
+                            <div className="text-sm text-foreground">{opt.label}</div>
                             <div className="text-xs text-muted-foreground mt-0.5">{opt.help}</div>
                           </div>
                         </label>
@@ -508,7 +569,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="timezone" className="text-white">
+                    <Label htmlFor="timezone" className="text-foreground">
                       your timezone
                       {timeDisplayMode !== 'user' && (
                         <span className="ml-2 text-xs text-muted-foreground font-normal">(only used when display mode is &quot;my timezone&quot;)</span>
@@ -519,21 +580,21 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       value={timezone}
                       onValueChange={(value: string) => setTimezone(value)}
                       disabled={loading || timeDisplayMode !== 'user'}
-                      className="border-border bg-background text-white hover:bg-secondary w-72 disabled:opacity-50"
+                      className="border-border bg-background text-foreground hover:bg-secondary w-72 disabled:opacity-50"
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="temperatureUnit" className="text-white">temperature unit</Label>
+                    <Label htmlFor="temperatureUnit" className="text-foreground">temperature unit</Label>
                     <Select
                       value={temperatureUnit}
                       onValueChange={(value: 'C' | 'F') => setTemperatureUnit(value)}
                       disabled={loading}
                     >
-                      <SelectTrigger id="temperatureUnit" className="border-border bg-background text-white hover:bg-secondary w-48">
+                      <SelectTrigger id="temperatureUnit" className="border-border bg-background text-foreground hover:bg-secondary w-48">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="border-border bg-secondary text-white">
+                      <SelectContent className="border-border dark:bg-secondary text-foreground">
                         <SelectItem value="C" className="cursor-pointer hover:bg-muted">Celsius (°C)</SelectItem>
                         <SelectItem value="F" className="cursor-pointer hover:bg-muted">Fahrenheit (°F)</SelectItem>
                       </SelectContent>
@@ -541,16 +602,16 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="timeFormat" className="text-white">time format</Label>
+                    <Label htmlFor="timeFormat" className="text-foreground">time format</Label>
                     <Select
                       value={timeFormat}
                       onValueChange={(value: '12h' | '24h') => setTimeFormat(value)}
                       disabled={loading}
                     >
-                      <SelectTrigger id="timeFormat" className="border-border bg-background text-white hover:bg-secondary w-48">
+                      <SelectTrigger id="timeFormat" className="border-border bg-background text-foreground hover:bg-secondary w-48">
                         <SelectValue />
                       </SelectTrigger>
-                      <SelectContent className="border-border bg-secondary text-white">
+                      <SelectContent className="border-border dark:bg-secondary text-foreground">
                         <SelectItem value="12h" className="cursor-pointer hover:bg-muted">12-hour (AM/PM)</SelectItem>
                         <SelectItem value="24h" className="cursor-pointer hover:bg-muted">24-hour</SelectItem>
                       </SelectContent>
@@ -563,13 +624,13 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'alerts' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white">alerts</h3>
+                    <h3 className="text-base font-medium text-foreground">alerts</h3>
                     <p className="text-xs text-muted-foreground mt-1">configure email alerts for machine and process events</p>
                   </div>
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="healthAlerts" className="text-white">machine offline alerts</Label>
+                      <Label htmlFor="healthAlerts" className="text-foreground">machine offline alerts</Label>
                       <p className="text-xs text-muted-foreground">receive email alerts when machines go offline</p>
                     </div>
                     <Switch
@@ -582,7 +643,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="processAlerts" className="text-white">process crash alerts</Label>
+                      <Label htmlFor="processAlerts" className="text-foreground">process crash alerts</Label>
                       <p className="text-xs text-muted-foreground">receive email alerts when monitored processes crash or fail to start</p>
                     </div>
                     <Switch
@@ -595,7 +656,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="thresholdAlerts" className="text-white">threshold alerts</Label>
+                      <Label htmlFor="thresholdAlerts" className="text-foreground">threshold alerts</Label>
                       <p className="text-xs text-muted-foreground">receive email alerts when health metrics (CPU, GPU temp, disk, etc.) exceed configured thresholds</p>
                     </div>
                     <Switch
@@ -608,7 +669,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="hootAlerts" className="text-white">hoot escalation alerts</Label>
+                      <Label htmlFor="hootAlerts" className="text-foreground">hoot escalation alerts</Label>
                       <p className="text-xs text-muted-foreground">receive email alerts when automated diagnostics can&apos;t resolve an issue</p>
                     </div>
                     <Switch
@@ -621,7 +682,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="displayAlerts" className="text-white">display events</Label>
+                      <Label htmlFor="displayAlerts" className="text-foreground">display events</Label>
                       <p className="text-xs text-muted-foreground">receive email alerts when monitors are removed, layouts drift, or display apply fails</p>
                     </div>
                     <Switch
@@ -634,7 +695,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="talonAlerts" className="text-white">talon alerts</Label>
+                      <Label htmlFor="talonAlerts" className="text-foreground">talon alerts</Label>
                       <p className="text-xs text-muted-foreground">emails when a talon fires or fails</p>
                     </div>
                     <Switch
@@ -647,7 +708,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-0.5">
-                      <Label htmlFor="apiKeyAlerts" className="text-white">api key expiry</Label>
+                      <Label htmlFor="apiKeyAlerts" className="text-foreground">api key expiry</Label>
                       <p className="text-xs text-muted-foreground">emails before an api key expires</p>
                     </div>
                     <Switch
@@ -660,24 +721,25 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                     <div className="space-y-0.5">
-                      <Label className="text-white">alert email</Label>
+                      <p className="text-sm leading-none font-medium text-foreground">alert email</p>
                       <p className="text-xs text-muted-foreground">
-                        alerts are sent to <span className="text-white font-medium">{user?.email}</span>
+                        alerts are sent to <span className="text-foreground font-medium">{user?.email}</span>
                       </p>
                     </div>
 
                     <div className="space-y-2">
-                      <Label className="text-white text-xs">additional CC recipients</Label>
+                      <Label htmlFor="settings-cc-email" className="text-foreground text-xs">additional CC recipients</Label>
                       {alertCcEmails.length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                           {alertCcEmails.map((email) => (
-                            <span key={email} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/30 text-xs text-white">
+                            <span key={email} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary dark:bg-accent/30 text-xs text-foreground">
                               {email}
                               <button
                                 type="button"
                                 onClick={() => setAlertCcEmails(prev => prev.filter(e => e !== email))}
                                 disabled={loading}
-                                className="cursor-pointer text-muted-foreground hover:text-white"
+                                aria-label={`remove ${email}`}
+                                className="cursor-pointer text-muted-foreground hover:text-foreground"
                               >
                                 <X className="h-3 w-3" />
                               </button>
@@ -687,33 +749,29 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       )}
                       <div className="flex gap-2">
                         <Input
+                          id="settings-cc-email"
                           type="email"
                           placeholder="colleague@example.com"
                           value={newCcEmail}
-                          onChange={(e) => { setNewCcEmail(e.target.value); setCcEmailError(''); }}
-                          className="border-border bg-background text-white flex-1"
+                          onChange={(e) => { setNewCcEmail(e.target.value); clearCcEmail(); }}
+                          className="border-border bg-background text-foreground flex-1"
                           disabled={loading}
                           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCcEmail(); } }}
+                          {...ccEmailFieldProps('settings-cc-email')}
                         />
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={handleAddCcEmail}
-                              disabled={loading || !newCcEmail.trim()}
-                              className="border-border text-white hover:bg-secondary"
-                            >
-                              <Plus className="h-3.5 w-3.5" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>add email</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <IconButton
+                          label="add email"
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={handleAddCcEmail}
+                          disabled={loading || !newCcEmail.trim()}
+                          className="border-border text-foreground hover:bg-secondary"
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </IconButton>
                       </div>
-                      {ccEmailError && <p className="text-xs text-red-400">{ccEmailError}</p>}
+                      <FormError message={ccEmailError?.message} id="settings-cc-email-error" />
                       <p className="text-[11px] text-muted-foreground">these addresses will be CC&apos;d on all alert emails. max 5.</p>
                     </div>
                   </div>
@@ -721,17 +779,17 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   {userPreferences.mutedMachines.length > 0 && (
                     <div className="rounded-md border border-border bg-card/50 p-4 space-y-3">
                       <div className="space-y-0.5">
-                        <Label className="text-white flex items-center gap-1.5">
+                        <p className="text-sm leading-none font-medium text-foreground flex items-center gap-1.5">
                           <BellOff className="h-3.5 w-3.5" />
                           muted machines
-                        </Label>
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           alerts are silenced for these machines. unmute from the machine&apos;s context menu on the dashboard.
                         </p>
                       </div>
                       <div className="flex flex-wrap gap-1.5">
                         {userPreferences.mutedMachines.map((machineId) => (
-                          <span key={machineId} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-accent/30 text-xs text-white">
+                          <span key={machineId} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-secondary dark:bg-accent/30 text-xs text-foreground">
                             {machineId}
                             <button
                               type="button"
@@ -740,7 +798,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 updateUserPreferences({ mutedMachines }, { silent: true });
                               }}
                               disabled={loading}
-                              className="cursor-pointer text-muted-foreground hover:text-white"
+                              aria-label={`unmute ${machineId}`}
+                              className="cursor-pointer text-muted-foreground hover:text-foreground"
                             >
                               <X className="h-3 w-3" />
                             </button>
@@ -756,10 +815,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'hoot' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white flex items-center gap-2">
+                    <h3 className="text-base font-medium text-foreground flex items-center gap-2">
                       hoot
                       {llmConfigured && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-900/30 text-green-400 flex items-center gap-1 font-normal">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-success-surface text-success flex items-center gap-1 font-normal">
                           <Check className="h-3 w-3" /> connected
                         </span>
                       )}
@@ -772,7 +831,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="space-y-4 rounded-md border border-border bg-card/50 p-4">
                     <div className="space-y-2">
-                      <Label htmlFor="llmProvider" className="text-white">provider</Label>
+                      <Label htmlFor="llmProvider" className="text-foreground">provider</Label>
                       <Select
                         value={llmProvider}
                         onValueChange={(value: 'anthropic' | 'openai') => {
@@ -783,10 +842,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         }}
                         disabled={llmSaving}
                       >
-                        <SelectTrigger id="llmProvider" className="border-border bg-background text-white hover:bg-secondary w-64">
+                        <SelectTrigger id="llmProvider" className="border-border bg-background text-foreground hover:bg-secondary w-64">
                           <SelectValue />
                         </SelectTrigger>
-                        <SelectContent className="border-border bg-secondary text-white">
+                        <SelectContent className="border-border dark:bg-secondary text-foreground">
                           <SelectItem value="anthropic" className="cursor-pointer hover:bg-muted">Anthropic (Claude)</SelectItem>
                           <SelectItem value="openai" className="cursor-pointer hover:bg-muted">OpenAI</SelectItem>
                         </SelectContent>
@@ -794,39 +853,33 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="llmModel" className="text-white">model</Label>
-                      {(() => {
-                        const models = llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider];
-                        const defaultModel = preselectedModel(llmProvider, models);
-                        return (
-                          <Select
-                            value={llmModel || defaultModel}
-                            onValueChange={setLlmModel}
-                            disabled={llmSaving || llmModelsLoading}
-                          >
-                            <SelectTrigger id="llmModel" className="border-border bg-background text-white hover:bg-secondary w-64">
-                              {llmModelsLoading ? (
-                                <span className="flex items-center gap-2 text-muted-foreground">
-                                  <Loader2 className="h-3 w-3 animate-spin" /> loading models…
-                                </span>
-                              ) : (
-                                <SelectValue />
-                              )}
-                            </SelectTrigger>
-                            <SelectContent className="border-border bg-secondary text-white max-h-64">
-                              {models.map((m) => (
-                                <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
-                                  {m.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        );
-                      })()}
+                      <Label htmlFor="llmModel" className="text-foreground">model</Label>
+                      <Select
+                        value={llmChosenModel}
+                        onValueChange={setLlmModel}
+                        disabled={llmSaving || llmModelsLoading}
+                      >
+                        <SelectTrigger id="llmModel" className="border-border bg-background text-foreground hover:bg-secondary w-64">
+                          {llmModelsLoading ? (
+                            <span className="flex items-center gap-2 text-muted-foreground">
+                              <Loader2 className="h-3 w-3 animate-spin" /> loading models…
+                            </span>
+                          ) : (
+                            <SelectValue />
+                          )}
+                        </SelectTrigger>
+                        <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
+                          {llmModelList.map((m) => (
+                            <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
+                              {m.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
 
                     <div className="space-y-2">
-                      <Label htmlFor="llmApiKey" className="text-white flex items-center gap-2">
+                      <Label htmlFor="llmApiKey" className="text-foreground flex items-center gap-2">
                         <Key className="h-3.5 w-3.5" />
                         api key
                       </Label>
@@ -837,7 +890,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                           placeholder={llmConfigured ? '••••••••••••••••••••••••' : llmProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
                           value={llmApiKey}
                           onChange={(e) => setLlmApiKey(e.target.value)}
-                          className="border-border bg-background pr-10 text-white"
+                          className="border-border bg-background pr-10 text-foreground"
                           disabled={llmSaving}
                         />
                         <Tooltip>
@@ -845,7 +898,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             <button
                               type="button"
                               onClick={() => setShowLlmKey(!showLlmKey)}
-                              className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
+                              aria-label={showLlmKey ? 'hide key' : 'show key'}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
                             >
                               {showLlmKey ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
                             </button>
@@ -864,37 +918,17 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       <Button
                         type="button"
                         size="sm"
-                        onClick={async () => {
-                          if (!llmApiKey) return;
-                          setLlmSaving(true);
-                          try {
-                            const res = await fetch('/api/settings/llm-key', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({
-                                provider: llmProvider,
-                                apiKey: llmApiKey,
-                                model: llmModel || preselectedModel(llmProvider, llmModels.length > 0 ? llmModels : AVAILABLE_MODELS[llmProvider]),
-                              }),
-                            });
-                            if (res.ok) {
-                              setLlmConfigured(true);
-                              setLlmApiKey('');
-                              toast.success('API key saved');
-                              fetchLlmModels(llmProvider);
-                            } else {
-                              const err = await res.json().catch(() => ({}));
-                              toast.error(err.error || 'Failed to save API key');
-                            }
-                          } catch (e) {
-                            toast.error(`Failed to save API key: ${e instanceof Error ? e.message : 'Unknown error'}`);
-                          }
-                          setLlmSaving(false);
-                        }}
-                        disabled={!llmApiKey || llmSaving}
-                        className="cursor-pointer text-gray-900 h-8"
+                        onClick={saveLlm}
+                        disabled={llmSaving || (!llmApiKey && !llmModelOnly)}
+                        className="cursor-pointer h-8"
                       >
-                        {llmSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : 'save key'}
+                        {llmSaving ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : llmApiKey || !llmConfigured ? (
+                          'save key'
+                        ) : (
+                          'save model'
+                        )}
                       </Button>
                       {llmConfigured && (
                         <Button
@@ -906,6 +940,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             try {
                               await fetch('/api/settings/llm-key', { method: 'DELETE' });
                               setLlmConfigured(false);
+                              setLlmSaved(null);
                               setLlmApiKey('');
                               toast.success('API key removed');
                             } catch {
@@ -914,7 +949,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                             setLlmSaving(false);
                           }}
                           disabled={llmSaving}
-                          className="cursor-pointer border-border text-red-400 hover:bg-muted h-8"
+                          className="cursor-pointer border-border text-destructive hover:bg-muted h-8"
                         >
                           remove key
                         </Button>
@@ -928,7 +963,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'security' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white">security</h3>
+                    <h3 className="text-base font-medium text-foreground">security</h3>
                     <p className="text-xs text-muted-foreground mt-1">authentication and access control</p>
                   </div>
 
@@ -945,14 +980,14 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
-                      <Label className="text-white">change password</Label>
+                      <p className="text-sm leading-none font-medium text-foreground">change password</p>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         onClick={() => {
                           setShowPasswordSection(!showPasswordSection);
-                          setPasswordError('');
+                          clearPassword();
                           if (showPasswordSection) {
                             setCurrentPassword('');
                             setNewPassword('');
@@ -969,7 +1004,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     {showPasswordSection && (
                       <div className="space-y-3 rounded-md border border-border bg-card/50 p-4">
                         <div className="space-y-2">
-                          <Label htmlFor="currentPassword" className="text-white">current password</Label>
+                          <Label htmlFor="currentPassword" className="text-foreground">current password</Label>
                           <div className="relative">
                             <Input
                               id="currentPassword"
@@ -977,7 +1012,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="enter current password"
                               value={currentPassword}
                               onChange={(e) => setCurrentPassword(e.target.value)}
-                              className="border-border bg-background pr-10 text-white"
+                              {...passwordFieldProps('currentPassword')}
+                              className="border-border bg-background pr-10 text-foreground"
                               disabled={loading}
                             />
                             <Tooltip>
@@ -985,7 +1021,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
+                                  aria-label={showCurrentPassword ? 'hide password' : 'show password'}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
                                   disabled={loading}
                                 >
                                   {showCurrentPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
@@ -999,7 +1036,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="newPassword" className="text-white">new password</Label>
+                          <Label htmlFor="newPassword" className="text-foreground">new password</Label>
                           <div className="relative">
                             <Input
                               id="newPassword"
@@ -1007,7 +1044,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="enter new password"
                               value={newPassword}
                               onChange={(e) => setNewPassword(e.target.value)}
-                              className="border-border bg-background pr-10 text-white"
+                              {...passwordFieldProps('newPassword')}
+                              className="border-border bg-background pr-10 text-foreground"
                               disabled={loading}
                             />
                             <Tooltip>
@@ -1015,7 +1053,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowNewPassword(!showNewPassword)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
+                                  aria-label={showNewPassword ? 'hide password' : 'show password'}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
                                   disabled={loading}
                                 >
                                   {showNewPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
@@ -1030,7 +1069,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         </div>
 
                         <div className="space-y-2">
-                          <Label htmlFor="confirmPassword" className="text-white">confirm new password</Label>
+                          <Label htmlFor="confirmPassword" className="text-foreground">confirm new password</Label>
                           <div className="relative">
                             <Input
                               id="confirmPassword"
@@ -1038,7 +1077,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                               placeholder="confirm new password"
                               value={confirmPassword}
                               onChange={(e) => setConfirmPassword(e.target.value)}
-                              className="border-border bg-background pr-10 text-white"
+                              {...passwordFieldProps('confirmPassword')}
+                              className="border-border bg-background pr-10 text-foreground"
                               disabled={loading}
                             />
                             <Tooltip>
@@ -1046,7 +1086,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                                 <button
                                   type="button"
                                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-white"
+                                  aria-label={showConfirmPassword ? 'hide password' : 'show password'}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
                                   disabled={loading}
                                 >
                                   {showConfirmPassword ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
@@ -1059,11 +1100,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                           </div>
                         </div>
 
-                        {passwordError && (
-                          <div className="rounded-md bg-red-900/20 border border-red-800 p-3">
-                            <p className="text-sm text-red-400">{passwordError}</p>
-                          </div>
-                        )}
+                        <FormError message={passwordError?.message} id="settings-password-error" />
                       </div>
                     )}
                   </div>
@@ -1074,7 +1111,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'api' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-white">api keys</h3>
+                    <h3 className="text-base font-medium text-foreground">api keys</h3>
                     <p className="text-xs text-muted-foreground mt-1">
                       scoped tokens for programmatic access to the owlette api
                     </p>
@@ -1090,12 +1127,10 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   {/* Usage example */}
                   <div className="rounded-md border border-border bg-card/50 p-4 space-y-2">
                     <p className="text-xs text-muted-foreground font-medium">usage</p>
-                    <code className="block text-[11px] bg-background rounded px-3 py-2 text-muted-foreground font-mono whitespace-pre-wrap">
-                      {`curl "https://owlette.app/api/sites/SITE_ID/machines?api_key=owk_..."`}
+                    {/* wrap-anywhere: the url has no spaces to wrap at, and a phone is narrower than it */}
+                    <code className="block text-[11px] bg-background rounded px-3 py-2 text-muted-foreground font-mono whitespace-pre-wrap wrap-anywhere">
+                      {`curl -H "x-api-key: owk_..." "https://owlette.app/api/sites/SITE_ID/machines"`}
                     </code>
-                    <p className="text-[11px] text-muted-foreground">
-                      or pass as header: <code className="font-mono">x-api-key: owk_...</code>
-                    </p>
                   </div>
                 </div>
               )}
@@ -1104,15 +1139,15 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'danger' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-red-400">danger zone</h3>
+                    <h3 className="text-base font-medium text-danger">danger zone</h3>
                     <p className="text-xs text-muted-foreground mt-1">irreversible account actions</p>
                   </div>
 
-                  <div className="space-y-3 rounded-md border border-red-800 bg-red-900/10 p-4">
+                  <div className="space-y-3 rounded-md border border-danger-border bg-danger-surface p-4">
                     <div className="flex items-start gap-3">
-                      <AlertTriangle className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
+                      <AlertTriangle className="h-5 w-5 text-danger mt-0.5 flex-shrink-0" />
                       <div className="flex-1 space-y-2">
-                        <Label className="text-red-400 font-semibold">delete account</Label>
+                        <p className="text-sm leading-none font-semibold text-danger">delete account</p>
                         <p className="text-sm text-muted-foreground">
                           permanently delete your account and all associated data. this action cannot be undone.
                         </p>
@@ -1120,8 +1155,9 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                     </div>
                     <Button
                       type="button"
+                      variant="destructive"
                       onClick={() => setShowDeleteConfirm(true)}
-                      className="w-full cursor-pointer bg-red-600 hover:bg-red-700 text-white"
+                      className="w-full cursor-pointer"
                       disabled={loading || deleting}
                     >
                       delete account
@@ -1144,7 +1180,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                 </Button>
                 <Button
                   onClick={handleSave}
-                  className="cursor-pointer text-gray-900"
+                  className="cursor-pointer"
                   disabled={loading}
                 >
                   {loading ? 'saving...' : 'save changes'}
@@ -1156,9 +1192,9 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
 
         {/* Delete Confirmation Dialog */}
         <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-          <DialogContent className="border-border bg-secondary text-white">
+          <DialogContent className="border-border text-foreground">
             <DialogHeader>
-              <DialogTitle className="text-red-400 flex items-center gap-2">
+              <DialogTitle className="text-danger flex items-center gap-2">
                 <AlertTriangle className="h-5 w-5" />
                 delete account
               </DialogTitle>
@@ -1167,8 +1203,8 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
-              <div className="rounded-md bg-red-900/20 border border-red-800 p-4">
-                <p className="text-sm text-red-300 font-semibold mb-2">warning:</p>
+              <div className="rounded-md bg-danger-surface border border-danger-border p-4">
+                <p className="text-sm text-danger font-semibold mb-2">warning:</p>
                 <ul className="text-sm text-muted-foreground space-y-1 list-disc list-inside">
                   <li>all your sites and machines will be permanently deleted</li>
                   <li>all deployments and logs will be removed</li>
@@ -1177,7 +1213,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                 </ul>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="deletePassword" className="text-white">
+                <Label htmlFor="deletePassword" className="text-foreground">
                   enter your password to confirm
                 </Label>
                 <Input
@@ -1186,7 +1222,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                   placeholder="your password"
                   value={deletePassword}
                   onChange={(e) => setDeletePassword(e.target.value)}
-                  className="border-border bg-background text-white"
+                  className="border-border bg-background text-foreground"
                   disabled={deleting}
                   autoFocus
                 />
@@ -1205,8 +1241,9 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                 cancel
               </Button>
               <Button
+                variant="destructive"
                 onClick={handleDeleteAccount}
-                className="cursor-pointer bg-red-600 hover:bg-red-700 text-white"
+                className="cursor-pointer"
                 disabled={deleting || !deletePassword}
               >
                 {deleting ? 'deleting...' : 'delete my account'}

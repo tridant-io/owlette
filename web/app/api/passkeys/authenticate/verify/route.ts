@@ -19,6 +19,7 @@ import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { getAdminAuth } from '@/lib/firebase-admin';
 import { createSession } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { ApiAuthError, assertActiveUser } from '@/lib/apiAuth.server';
 import {
@@ -120,7 +121,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // the authenticator checked the human — the basis for one ceremony counting
     // as two factors. `'passkey-uv'` is hardcoded on purpose: it is server-side
     // only and must never be derived from the request.
-    await createSession(userId, 7, 'passkey-uv');
+    await createSession(userId, 7, 'passkey-uv', undefined, await signInCeremonyNetwork(request, userId));
 
     const adminAuth = getAdminAuth();
     const customToken = await adminAuth.createCustomToken(userId);

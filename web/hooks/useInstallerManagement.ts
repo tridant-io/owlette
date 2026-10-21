@@ -4,6 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import { handleError } from '@/lib/errorHandler';
 import { useAuth } from '@/contexts/AuthContext';
 import type { FirestoreTs } from '@/hooks/useFirestore';
+import {
+  normalizeInstallerFiles,
+  platformFromExtension,
+  type InstallerFiles,
+} from '@/lib/installerPlatform';
+import type { TridantReleaseState, TridantSync } from '@/lib/tridantRelease.server';
 
 export interface InstallerVersion {
   id: string;
@@ -15,9 +21,13 @@ export interface InstallerVersion {
   release_notes?: string;
   uploaded_by: string;
   is_latest?: boolean;
+  files: InstallerFiles;
+  /** tridant id registration; null before the version is ever synced */
+  tridant: TridantReleaseState | null;
 }
 
-interface InstallerVersionApi {
+// a type alias, not an interface, so the record is assignable to the normaliser's Record<string, unknown>
+type InstallerVersionApi = {
   version?: string;
   download_url?: string | null;
   file_size?: number | null;
@@ -26,7 +36,9 @@ interface InstallerVersionApi {
   checksum_sha256?: string | null;
   release_notes?: string | null;
   uploaded_by?: string | null;
-}
+  files?: unknown;
+  tridant?: TridantReleaseState | null;
+};
 
 /**
  * useInstallerManagement Hook
@@ -96,10 +108,14 @@ export function useInstallerManagement() {
       if (!user) {
         throw new Error('You must be logged in to upload');
       }
+      const platform = platformFromExtension(file.name);
+      if (!platform) {
+        throw new Error('Installer must be a .exe, .pkg or .deb file');
+      }
 
       try {
         const checksum = await sha256File(file);
-        const idempotencyKey = createIdempotencyKey(`installer-upload-${version}`);
+        const idempotencyKey = createIdempotencyKey(`installer-upload-${version}-${platform}`);
         const uploadInit = await fetch('/api/installer/upload', {
           method: 'POST',
           headers: {
@@ -109,6 +125,7 @@ export function useInstallerManagement() {
           body: JSON.stringify({
             version,
             fileName: file.name,
+            platform,
             contentType: file.type || 'application/octet-stream',
             releaseNotes,
             setAsLatest,
@@ -180,6 +197,29 @@ export function useInstallerManagement() {
     [refreshInstallerState],
   );
 
+  const registerVersion = useCallback(
+    async (version: string): Promise<TridantSync> => {
+      try {
+        const response = await fetch(`/api/installer/${encodeURIComponent(version)}/register`, {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'Idempotency-Key': createIdempotencyKey(`installer-register-${version}`),
+          },
+          body: JSON.stringify({}),
+        });
+        if (!response.ok) throw new Error(await readApiError(response, 'Failed to register with tridant id'));
+        const body = (await response.json()) as { tridant: TridantSync };
+        await refreshInstallerState();
+        return body.tridant;
+      } catch (err) {
+        console.error('Error registering version:', err);
+        throw new Error(handleError(err));
+      }
+    },
+    [refreshInstallerState],
+  );
+
   const getCleanupCandidates = useCallback(
     (retentionDays: number = 30): InstallerVersion[] => {
       if (!latestVersion) return [];
@@ -244,6 +284,7 @@ export function useInstallerManagement() {
     uploadVersion,
     setAsLatest,
     deleteVersion,
+    registerVersion,
     getCleanupCandidates,
     cleanupVersions,
   };
@@ -260,6 +301,8 @@ function normalizeVersion(raw: InstallerVersionApi): InstallerVersion {
     checksum_sha256: raw.checksum_sha256 ?? '',
     release_notes: raw.release_notes ?? undefined,
     uploaded_by: raw.uploaded_by ?? '',
+    files: normalizeInstallerFiles(raw),
+    tridant: raw.tridant ?? null,
   };
 }
 

@@ -7,27 +7,24 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type LaunchMode, type ScheduleBlock } from '@/hooks/useFirestore';
 import { DEFAULT_SCHEDULE } from '@/lib/scheduleDefaults';
 import { scheduleClockLabel } from '@/lib/scheduleClockCopy';
+import { launchCopy } from '@/lib/launchCopy';
 import { useSchedulePresets } from '@/hooks/useSchedulePresets';
 import { useDeployments } from '@/hooks/useDeployments';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
-import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useAgentAlertToasts, type ExeMissingToastAlert } from '@/hooks/useAgentAlertToasts';
+import { PageCascade } from '@/components/PageCascade';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from '@/lib/toast';
-import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Copy, Trash2, Download, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
-import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
+import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Trash2, Monitor, Cog, Settings2, RotateCw, Loader2, CheckCircle2, Clock } from 'lucide-react';
 import { Table, TableBody } from '@/components/ui/table';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
-import { ScreenshotDialog } from '@/components/ScreenshotDialog';
-import { LiveViewModal } from '@/components/LiveViewModal';
 import { PageHeader } from '@/components/PageHeader';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 // Imported from the lightweight module, not @/components/charts' barrel, which would
@@ -45,10 +42,15 @@ import { nextDuplicateName } from '@/lib/processNaming';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
+import { usePlan } from '@/hooks/usePlan';
+import { useSitePlan } from '@/hooks/useSitePlan';
+import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { LoadingWord } from '@/components/LoadingWord';
 import { FallingFeather } from '@/components/FallingFeather';
 import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
+import { useSwoopSettings } from '@/hooks/useSwoopSettings';
+import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -61,8 +63,43 @@ const DisplayLayoutPanel = dynamic(
   () => import('@/components/charts/DisplayLayoutPanel').then((m) => ({ default: m.DisplayLayoutPanel })),
   { ssr: false, loading: () => null },
 );
+// Closed until asked for, so they stay out of the dashboard's first bundle.
+const AccountSettingsDialog = dynamic(
+  () => import('@/components/AccountSettingsDialog').then((m) => ({ default: m.AccountSettingsDialog })),
+  { ssr: false, loading: () => null },
+);
+const ManageSitesDialog = dynamic(
+  () => import('@/components/ManageSitesDialog').then((m) => ({ default: m.ManageSitesDialog })),
+  { ssr: false, loading: () => null },
+);
+const CreateSiteDialog = dynamic(
+  () => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })),
+  { ssr: false, loading: () => null },
+);
+const ScreenshotDialog = dynamic(
+  () => import('@/components/ScreenshotDialog').then((m) => ({ default: m.ScreenshotDialog })),
+  { ssr: false, loading: () => null },
+);
+const LiveViewModal = dynamic(
+  () => import('@/components/LiveViewModal').then((m) => ({ default: m.LiveViewModal })),
+  { ssr: false, loading: () => null },
+);
 
 type ViewType = 'card' | 'list';
+
+/**
+ * A callback whose identity never changes but which always runs the latest
+ * render's function, so the memoized machine cards and rows can take it
+ * without re-rendering on every heartbeat. Event handlers only: it sees the
+ * function as of the last commit.
+ */
+function useStableCallback<A extends unknown[], R>(fn: (...args: A) => R): (...args: A) => R {
+  const ref = useRef(fn);
+  useLayoutEffect(() => {
+    ref.current = fn;
+  });
+  return useCallback((...args: A) => ref.current(...args), []);
+}
 
 interface DetailPanelState {
   machineId: string;
@@ -78,12 +115,12 @@ export default function DashboardPage() {
   const router = useRouter();
   const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
   const { sites, loading: sitesLoading, createSite, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
-  const { version, downloadUrl } = useInstallerVersion();
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [viewType, setViewType] = useState<ViewType>('card');
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -483,9 +520,13 @@ export default function DashboardPage() {
     }
   };
 
+  // the launch target is an .exe, an .app or a binary depending on the machine
+  const launchCopyOf = (machineId: string) => launchCopy(machines.find((m) => m.machineId === machineId)?.osFamily);
+
   const handleSetLaunchMode = async (machineId: string, processId: string, processName: string, mode: 'off' | 'always' | 'scheduled', exePath: string, schedules?: ScheduleBlock[] | null, schedulePresetId?: string | null, successMessage?: string) => {
     if (mode !== 'off' && (!exePath || exePath.trim() === '')) {
-      toast.error(`cannot enable launch mode for "${processName}": executable path is not set. please edit the process and set a valid executable path.`);
+      const { label } = launchCopyOf(machineId);
+      toast.error(`cannot enable launch mode for "${processName}": ${label} is not set. please edit the process and set a valid ${label}.`);
       return;
     }
 
@@ -582,7 +623,7 @@ export default function DashboardPage() {
     });
   };
 
-  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath);
+  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf);
 
   const handleSaveProcess = async () => {
     if (!editProcessForm.name || !editProcessForm.name.trim()) {
@@ -591,7 +632,7 @@ export default function DashboardPage() {
     }
 
     if (!editProcessForm.exe_path || !editProcessForm.exe_path.trim()) {
-      toast.error('executable path is required');
+      toast.error(`${launchCopyOf(editingMachineId).label} is required`);
       return;
     }
 
@@ -694,6 +735,19 @@ export default function DashboardPage() {
   // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
+      // `?settings=<siteId>`, the swoop viewer's way back to the switch: that site,
+      // with its editor open for an admin. read once, then dropped from the url.
+      const settingsFor = new URLSearchParams(window.location.search).get('settings');
+      if (settingsFor) window.history.replaceState(null, '', window.location.pathname);
+      if (settingsFor && sites.some(s => s.id === settingsFor)) {
+        setCurrentSiteId(settingsFor);
+        updateLastSite(settingsFor);
+        if (isSiteAdmin(settingsFor)) {
+          setManageEditSiteId(settingsFor);
+          setManageDialogOpen(true);
+        }
+        return;
+      }
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');
       if (savedSite && sites.find(s => s.id === savedSite)) {
         setCurrentSiteId(savedSite);
@@ -701,7 +755,7 @@ export default function DashboardPage() {
         setCurrentSiteId(sites[0].id);
       }
     }
-  }, [sites, sitesLoading, currentSiteId, lastSiteId]);
+  }, [sites, sitesLoading, currentSiteId, lastSiteId, updateLastSite, isSiteAdmin]);
 
   const handleSiteChange = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -738,9 +792,22 @@ export default function DashboardPage() {
     );
   };
 
+  const openSwoopApp = (machineId: string) => openInViewerApp(currentSiteId, machineId);
+
+  // The panel opens above the machine list, so on a phone a tap on any card but
+  // the first would open it off-screen.
+  const revealDetailPanel = () => {
+    const panel = slideContentRef.current;
+    if (!panel || !window.matchMedia('(max-width: 767px)').matches) return;
+    if (panel.getBoundingClientRect().top >= 0) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    panel.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' });
+  };
+
   // A click SWAPS the panel selection (overwrites this machine's graphTabs) rather than
   // merging, so clicking cells behaves like switching tabs, not accumulating them.
   const handleMetricClick = (machineId: string, metric: MetricType) => {
+    revealDetailPanel();
     // 'display' is a panel route, not a chart tab — writing it would persist entries
     // deserializeTabs drops on read.
     if (metric === 'display') {
@@ -792,6 +859,93 @@ export default function DashboardPage() {
     ).catch(() => { /* fire-and-forget */ });
   };
 
+  const openScreenshot = (machineId: string) => {
+    const m = machines.find((machine) => machine.machineId === machineId);
+    setScreenshotTarget({ machineId, machineName: machineId, isOnline: m?.online ?? false });
+    setScreenshotDialogOpen(true);
+  };
+
+  const openLiveView = (machineId: string) => {
+    setLiveViewTarget({ machineId, machineName: machineId });
+    setLiveViewOpen(true);
+  };
+
+  // Stable for the memoized cards and rows: see useStableCallback.
+  const onEditProcess = useStableCallback(openEditProcessDialog);
+  const onDuplicateProcess = useStableCallback(handleDuplicateProcess);
+  const onCreateProcess = useStableCallback(openCreateProcessDialog);
+  const onKillProcess = useStableCallback(handleKillProcess);
+  const onRestartProcess = useStableCallback(handleRestartProcess);
+  const onSetLaunchMode = useStableCallback(handleSetLaunchMode);
+  const onConfigureSchedule = useStableCallback(handleConfigureSchedule);
+  const onRemoveMachine = useStableCallback(openRemoveMachineDialog);
+  const onMetricClick = useStableCallback(handleMetricClick);
+  const onRestartMachine = useStableCallback(restartMachine);
+  const onShutdownMachine = useStableCallback(shutdownMachine);
+  const onCancelRestart = useStableCallback(cancelRestart);
+  const onDismissRestartPending = useStableCallback(dismissRestartPending);
+  const onScreenshot = useStableCallback(openScreenshot);
+  const onLiveView = useStableCallback(openLiveView);
+  const onSwoop = useStableCallback(openSwoop);
+  const onSwoopApp = useStableCallback(openSwoopApp);
+  const onSiteSettings = useStableCallback(() => {
+    setManageEditSiteId(currentSiteId);
+    setManageDialogOpen(true);
+  });
+  const swoopSettings = useSwoopSettings(currentSiteId);
+  // not while loading: the hook reads off until the snapshot lands.
+  const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
+  // The online flag is read when the dialog opens, not when the row was bound.
+  const onRemoveMachineById = useStableCallback((machineId: string) => {
+    const machine = machines.find((m) => m.machineId === machineId);
+    openRemoveMachineDialog(machineId, machineId, machine?.online ?? false);
+  });
+
+  const temperaturePrefs = useMemo(
+    () => ({ temperatureUnit: userPreferences.temperatureUnit }),
+    [userPreferences.temperatureUnit],
+  );
+
+  // MachineRow takes callbacks already bound to its machine. One set per
+  // machine, rebuilt only when the set of machines changes, so a heartbeat
+  // re-renders only the row it changed.
+  const machineIdsKey = machines.map((m) => m.machineId).join('\n');
+  const rowHandlers = useMemo(() => new Map(machineIdsKey.split('\n').map((id) => [id, {
+    onToggleExpanded: () => toggleMachineExpanded(id),
+    onEditProcess: (process: Process) => onEditProcess(id, process),
+    onDuplicateProcess: (process: Process) => onDuplicateProcess(id, process),
+    onCreateProcess: () => onCreateProcess(id),
+    onKillProcess: (processId: string, processName: string) => onKillProcess(id, processId, processName),
+    onRestartProcess: (processId: string, processName: string) => onRestartProcess(id, processId, processName),
+    onSetLaunchMode: (processId: string, processName: string, mode: LaunchMode, exePath: string, schedules?: ScheduleBlock[] | null) =>
+      onSetLaunchMode(id, processId, processName, mode, exePath, schedules),
+    onConfigureSchedule: (process: Process) => onConfigureSchedule(id, process),
+    onRemoveMachine: () => onRemoveMachineById(id),
+    onMetricClick: (metric: MetricType) => onMetricClick(id, metric),
+    onRestart: () => onRestartMachine(id),
+    onShutdown: () => onShutdownMachine(id),
+    onCancelRestart: () => onCancelRestart(id),
+    onScreenshot: () => onScreenshot(id),
+    onLiveView: () => onLiveView(id),
+    onSwoop: () => onSwoop(id),
+    onSwoopApp: () => onSwoopApp(id),
+  }])), [
+    machineIdsKey, toggleMachineExpanded, onEditProcess, onDuplicateProcess, onCreateProcess,
+    onKillProcess, onRestartProcess, onSetLaunchMode, onConfigureSchedule, onRemoveMachineById,
+    onMetricClick, onRestartMachine, onShutdownMachine, onCancelRestart, onScreenshot, onLiveView, onSwoop,
+    onSwoopApp,
+  ]);
+
+  // sites the viewer doesn't own get no plan treatment here: their owner's
+  // plan applies, which this browser can't read, and the server gates every
+  // action on it regardless.
+  const sitePlan = useSitePlan(
+    currentSiteId,
+    sites.find((s) => s.id === currentSiteId)?.owner,
+    machinesLoading ? null : machineIdsKey,
+  );
+  const { plan } = usePlan();
+
   useEffect(() => {
     if (!loading && !user) {
       router.push('/');
@@ -824,16 +978,21 @@ export default function DashboardPage() {
   }, 0);
 
   const currentSite = sites.find(s => s.id === currentSiteId);
+  const editLaunchCopy = launchCopyOf(editingMachineId);
 
   return (
-    <div className="relative min-h-screen pb-24 animate-in fade-in duration-300">
+    <PageCascade className="relative min-h-screen pb-24">
       {/* Header */}
       <PageHeader
         currentPage="dashboard"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={onSiteSettings}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -842,6 +1001,7 @@ export default function DashboardPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         machineCount={machines.length}
@@ -879,7 +1039,7 @@ export default function DashboardPage() {
       <main className="relative z-10 mx-auto max-w-screen-2xl p-3 md:p-4">
         <div className="mt-3 md:mt-2 mb-6 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div className="flex-1 min-w-0">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-1 truncate">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground mb-1 truncate">
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -893,7 +1053,7 @@ export default function DashboardPage() {
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            </h2>
+            </h1>
             <p className="text-sm md:text-base text-muted-foreground">
               {randomJoke.toLowerCase()}
             </p>
@@ -905,12 +1065,12 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
             {/* Machines / Online ratio */}
             <div className="flex items-center gap-2.5">
-              <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-emerald-500/10 text-emerald-400' : 'bg-muted text-muted-foreground'}`}>
+              <div className={`rounded-md p-1.5 ${onlineMachines > 0 ? 'bg-success-surface text-success' : 'bg-muted text-muted-foreground'}`}>
                 <Monitor className="h-4 w-4" />
               </div>
               <div>
                 <div className="flex items-baseline gap-0.5 tabular-nums">
-                  <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-emerald-400' : 'text-foreground'}`}>{onlineMachines}</span>
+                  <span className={`text-xl font-bold ${onlineMachines > 0 ? 'text-success' : 'text-foreground'}`}>{onlineMachines}</span>
                   <span className="text-xs text-muted-foreground">/ {machines.length}</span>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-tight">online</p>
@@ -963,6 +1123,7 @@ export default function DashboardPage() {
                   machineName={heldDetailPanel.machineName}
                   siteId={currentSiteId}
                   capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
+                  controlLocked={sitePlan.controlLocked}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (
@@ -1010,9 +1171,15 @@ export default function DashboardPage() {
                 the segmented view toggle drop under the heading at narrow
                 widths instead of squeezing the row past the viewport. */}
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-lg md:text-xl font-bold text-foreground">machines</h3>
+              <h2 className="text-lg md:text-xl font-bold text-foreground">machines</h2>
 
               <div className="flex items-center gap-2">
+                {/* with plans on, deployments can be outside the plan, and the
+                    deployments page was the only way to update; every plan may
+                    update, so the dashboard offers it too. */}
+                {plan?.enforced && isSiteAdmin(currentSiteId) && (
+                  <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
+                )}
                 {/* Add Machine Button */}
                 <AddMachineButton
                   currentSiteId={currentSiteId}
@@ -1021,53 +1188,37 @@ export default function DashboardPage() {
 
                 {/* Expand/Collapse All + View Toggle */}
                 <div className="flex items-center gap-1 rounded-lg bg-card-sunken p-1 select-none">
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={toggleAllExpanded}
-                        className="cursor-pointer text-muted-foreground"
-                      >
-                        {allExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{allExpanded ? 'collapse all' : 'expand all'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label={allExpanded ? 'collapse all' : 'expand all'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={toggleAllExpanded}
+                    className="cursor-pointer text-muted-foreground"
+                  >
+                    {allExpanded ? <ChevronsDownUp className="h-4 w-4" /> : <ChevronsUpDown className="h-4 w-4" />}
+                  </IconButton>
                   <div className="h-4 w-px bg-border" />
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewChange('card')}
-                        className={`cursor-pointer ${viewType === 'card' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                      >
-                        <LayoutGrid className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>card view</p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewChange('list')}
-                        data-testid="view-toggle-list"
-                        className={`cursor-pointer ${viewType === 'list' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
-                      >
-                        <List className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>list view</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label="card view"
+                    aria-pressed={viewType === 'card'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleViewChange('card')}
+                    className={`cursor-pointer ${viewType === 'card' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
+                  >
+                    <LayoutGrid className="h-4 w-4" />
+                  </IconButton>
+                  <IconButton
+                    label="list view"
+                    aria-pressed={viewType === 'list'}
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => handleViewChange('list')}
+                    data-testid="view-toggle-list"
+                    className={`cursor-pointer ${viewType === 'list' ? 'bg-secondary text-accent-cyan' : 'text-muted-foreground'}`}
+                  >
+                    <List className="h-4 w-4" />
+                  </IconButton>
                 </div>
               </div>
             </div>
@@ -1087,29 +1238,26 @@ export default function DashboardPage() {
                   currentSiteId={currentSiteId}
                   siteTimezone={currentSite?.timezone}
                   siteTimeFormat={userPreferences.timeFormat || '12h'}
-                  onEditProcess={openEditProcessDialog}
-                  onDuplicateProcess={handleDuplicateProcess}
-                  onCreateProcess={openCreateProcessDialog}
-                  onKillProcess={handleKillProcess}
-                  onRestartProcess={handleRestartProcess}
-                  onSetLaunchMode={handleSetLaunchMode}
-                  onConfigureSchedule={handleConfigureSchedule}
-                  onRemoveMachine={openRemoveMachineDialog}
-                  onMetricClick={handleMetricClick}
-                  onRestart={restartMachine}
-                  onShutdown={shutdownMachine}
-                  onCancelRestart={cancelRestart}
-                  onDismissRestartPending={dismissRestartPending}
-                  onScreenshot={(machineId) => {
-                    const m = machines.find(m => m.machineId === machineId);
-                    setScreenshotTarget({ machineId, machineName: machineId, isOnline: m?.online ?? false });
-                    setScreenshotDialogOpen(true);
-                  }}
-                  onLiveView={(machineId) => {
-                    setLiveViewTarget({ machineId, machineName: machineId });
-                    setLiveViewOpen(true);
-                  }}
-                  onSwoop={openSwoop}
+                  onEditProcess={onEditProcess}
+                  onDuplicateProcess={onDuplicateProcess}
+                  onCreateProcess={onCreateProcess}
+                  onKillProcess={onKillProcess}
+                  onRestartProcess={onRestartProcess}
+                  onSetLaunchMode={onSetLaunchMode}
+                  onConfigureSchedule={onConfigureSchedule}
+                  onRemoveMachine={onRemoveMachine}
+                  onMetricClick={onMetricClick}
+                  onRestart={onRestartMachine}
+                  onShutdown={onShutdownMachine}
+                  onCancelRestart={onCancelRestart}
+                  onDismissRestartPending={onDismissRestartPending}
+                  onScreenshot={onScreenshot}
+                  onLiveView={onLiveView}
+                  onSwoop={onSwoop}
+                  onSwoopApp={onSwoopApp}
+                  swoopOff={swoopOff}
+                  onSiteSettings={onSiteSettings}
+                  sitePlan={sitePlan}
                 />
               </div>
             )}
@@ -1119,7 +1267,7 @@ export default function DashboardPage() {
               /* overflow-x-auto (not hidden) gives the fixed-layout table's own scroller
                  somewhere to go instead of clipping; overflow-y-hidden keeps the rounded
                  corners clipping the first/last rows. */
-              <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden animate-in fade-in duration-300">
+              <div className="rounded-xl border border-border/60 bg-card-sunken overflow-x-auto overflow-y-hidden">
                 <Table style={{ contain: 'layout', tableLayout: 'fixed' }}>
                   <MachineTableHeader
                     deviceUnion={deviceUnion}
@@ -1131,6 +1279,7 @@ export default function DashboardPage() {
                     {machines.map((machine) => (
                       <MachineRow
                         key={machine.machineId}
+                        {...rowHandlers.get(machine.machineId)!}
                         machine={machine}
                         schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
                         listPref={listPref}
@@ -1138,32 +1287,13 @@ export default function DashboardPage() {
                         currentSiteId={currentSiteId}
                         siteTimezone={currentSite?.timezone || 'UTC'}
                         siteTimeFormat={userPreferences.timeFormat || '12h'}
-                        userPreferences={userPreferences}
+                        userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
-                        onToggleExpanded={() => toggleMachineExpanded(machine.machineId)}
-                        onEditProcess={(process) => openEditProcessDialog(machine.machineId, process)}
-                        onDuplicateProcess={(process) => handleDuplicateProcess(machine.machineId, process)}
-                        onCreateProcess={() => openCreateProcessDialog(machine.machineId)}
-                        onKillProcess={(processId, processName) => handleKillProcess(machine.machineId, processId, processName)}
-                        onRestartProcess={(processId, processName) => handleRestartProcess(machine.machineId, processId, processName)}
-                        onSetLaunchMode={(processId, processName, mode, exePath, schedules) =>
-                          handleSetLaunchMode(machine.machineId, processId, processName, mode, exePath, schedules)
-                        }
-                        onConfigureSchedule={(process) => handleConfigureSchedule(machine.machineId, process)}
-                        onRemoveMachine={() => openRemoveMachineDialog(machine.machineId, machine.machineId, machine.online)}
-                        onMetricClick={(metricType) => handleMetricClick(machine.machineId, metricType)}
-                        onRestart={() => restartMachine(machine.machineId)}
-                        onShutdown={() => shutdownMachine(machine.machineId)}
-                        onCancelRestart={() => cancelRestart(machine.machineId)}
-                        onScreenshot={() => {
-                          setScreenshotTarget({ machineId: machine.machineId, machineName: machine.machineId, isOnline: machine.online });
-                          setScreenshotDialogOpen(true);
-                        }}
-                        onLiveView={() => {
-                          setLiveViewTarget({ machineId: machine.machineId, machineName: machine.machineId });
-                          setLiveViewOpen(true);
-                        }}
-                        onSwoop={() => openSwoop(machine.machineId)}
+                        swoopOff={swoopOff}
+                        onSiteSettings={onSiteSettings}
+                        planLimit={sitePlan.machineLimitFor(machine.machineId)}
+                        controlLocked={sitePlan.controlLocked}
+                        swoopLocked={sitePlan.swoopLocked}
                       />
                     ))}
                   </TableBody>
@@ -1205,7 +1335,7 @@ export default function DashboardPage() {
                   </p>
                   <Button
                     onClick={() => setCreateDialogOpen(true)}
-                    className="text-gray-900 font-semibold px-6 py-3 cursor-pointer"
+                    className="font-semibold px-6 py-3 cursor-pointer"
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     create your first site
@@ -1222,58 +1352,7 @@ export default function DashboardPage() {
                   download and run the installer <strong className="text-foreground">on the machine you want to add</strong> (not necessarily this one).
                   use the copy link option if connecting via remote desktop tools like Parsec, TeamViewer, or RDP.
                 </p>
-                <div className="flex gap-2">
-                  <Button
-                    onClick={() => {
-                      if (!downloadUrl) {
-                        toast.error('download unavailable', {
-                          description: 'installer download URL is not available.',
-                        });
-                        return;
-                      }
-                      try {
-                        window.open(downloadUrl, '_blank');
-                        toast.success('download started', {
-                          description: `downloading owlette v${version}`,
-                        });
-                      } catch {
-                        toast.error('download failed', {
-                          description: 'failed to start download. please try again.',
-                        });
-                      }
-                    }}
-                    disabled={!downloadUrl}
-                    className="flex-1 text-gray-900 cursor-pointer"
-                  >
-                    <Download className="h-4 w-4 mr-2" />
-                    <span>download {version && `v${version}`}</span>
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      if (!downloadUrl) {
-                        toast.error('copy failed', {
-                          description: 'download URL is not available.',
-                        });
-                        return;
-                      }
-                      try {
-                        navigator.clipboard.writeText(downloadUrl);
-                        toast.success('link copied', {
-                          description: 'download link copied to clipboard',
-                        });
-                      } catch {
-                        toast.error('copy failed', {
-                          description: 'failed to copy link. please try again.',
-                        });
-                      }
-                    }}
-                    disabled={!downloadUrl}
-                    className="flex-1 text-gray-900 cursor-pointer"
-                  >
-                    <Copy className="h-4 w-4 mr-2" />
-                    <span>copy link</span>
-                  </Button>
-                </div>
+                <DownloadButton variant="card" />
               </div>
               <div className="rounded-lg border border-border bg-card-sunken p-4">
                 <h3 className="font-semibold text-foreground">step 2: run the installer</h3>
@@ -1288,8 +1367,8 @@ export default function DashboardPage() {
                 </p>
 
                 {emptyStateAuthorize.success ? (
-                  <div className="mt-3 flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-foreground">
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
+                  <div className="mt-3 flex items-center gap-2 rounded-md border border-success-border bg-success-surface px-3 py-2 text-sm text-foreground">
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-success/80" />
                     machine authorized — it will appear above within seconds.
                   </div>
                 ) : (
@@ -1310,7 +1389,7 @@ export default function DashboardPage() {
                       <Button
                         onClick={() => emptyStateAuthorize.authorize()}
                         disabled={!emptyStateAuthorize.phrase.trim() || emptyStateAuthorize.isAuthorizing}
-                        className="shrink-0 text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
                         data-testid="getting-started-authorize"
                       >
                         {emptyStateAuthorize.isAuthorizing ? (
@@ -1348,7 +1427,7 @@ export default function DashboardPage() {
 
       {/* Process Dialog (Create/Edit) */}
       <Dialog open={processDialogOpen} onOpenChange={setProcessDialogOpen}>
-        <DialogContent className="border-border bg-muted text-foreground sm:max-w-3xl">
+        <DialogContent className="border-border text-foreground sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle className="text-foreground">
               {processDialogMode === 'create' ? 'add process' : 'edit process'}
@@ -1378,20 +1457,21 @@ export default function DashboardPage() {
             {/* Launch Mode — positioned prominently after name */}
             <div className="space-y-2">
               <Label className="text-foreground text-sm">launch mode</Label>
-              <div className="flex items-stretch rounded-lg overflow-hidden border border-border">
+              <div role="group" aria-label="launch mode" className="flex items-stretch rounded-lg overflow-hidden border border-border">
                 {(['off', 'always', 'scheduled'] as const).map((mode) => {
                   const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
                   const isActive = editProcessForm.launch_mode === mode;
                   const colors = {
                     off: isActive ? 'bg-muted text-foreground' : '',
-                    always: isActive ? 'bg-emerald-600 text-white' : '',
-                    scheduled: isActive ? 'bg-blue-600 text-white' : '',
+                    always: isActive ? 'bg-success-solid text-success-solid-foreground' : '',
+                    scheduled: isActive ? 'bg-info-solid text-info-solid-foreground' : '',
                   };
 
                   return (
                     <button
                       key={mode}
                       type="button"
+                      aria-pressed={isActive}
                       onClick={() => setEditProcessForm({ ...editProcessForm, launch_mode: mode, autolaunch: mode !== 'off' })}
                       className={`flex-1 px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${colors[mode]} ${!isActive ? 'bg-card text-muted-foreground hover:bg-muted/50' : ''}`}
                     >
@@ -1405,7 +1485,7 @@ export default function DashboardPage() {
                     in `scheduled` the section below is pinned open, so the gear
                     reads as the marker for a section that is already showing.
                     It never selects a mode — only the segments do that. */}
-                <span className={`w-px ${editProcessForm.launch_mode === 'scheduled' ? 'bg-blue-400/50' : 'bg-border'}`} />
+                <span className={`w-px ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid-foreground/30' : 'bg-border'}`} />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -1414,7 +1494,7 @@ export default function DashboardPage() {
                       aria-expanded={scheduleSectionVisible}
                       data-testid="process-dialog-configure-schedule"
                       onClick={() => setScheduleSectionOpen((open) => !open)}
-                      className={`px-2 transition-colors cursor-pointer flex items-center ${editProcessForm.launch_mode === 'scheduled' ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
+                      className={`px-2 transition-colors cursor-pointer flex items-center ${editProcessForm.launch_mode === 'scheduled' ? 'bg-info-solid text-info-solid-foreground hover:brightness-125' : 'bg-card text-muted-foreground hover:bg-muted/50'}`}
                     >
                       <Settings2 className="h-3.5 w-3.5" />
                     </button>
@@ -1428,13 +1508,13 @@ export default function DashboardPage() {
 
             {/* Executable Path */}
             <div className="space-y-2">
-              <Label htmlFor="edit-exe-path" className="text-foreground">executable path</Label>
+              <Label htmlFor="edit-exe-path" className="text-foreground">{editLaunchCopy.label}</Label>
               <Input
                 id="edit-exe-path"
                 value={editProcessForm.exe_path}
                 onChange={(e) => setEditProcessForm({ ...editProcessForm, exe_path: e.target.value })}
                 className="border-border bg-card text-foreground"
-                placeholder="C:/Program Files/..."
+                placeholder={editLaunchCopy.placeholder}
               />
             </div>
 
@@ -1462,7 +1542,9 @@ export default function DashboardPage() {
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-4">
+            {/* priority and visibility apply on windows only; a mac or linux agent ignores both */}
+            {editLaunchCopy.launchOptions && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Priority */}
               <div className="space-y-2">
                 <Label htmlFor="edit-priority" className="text-foreground">task priority</Label>
@@ -1499,12 +1581,10 @@ export default function DashboardPage() {
                   </SelectContent>
                 </Select>
               </div>
-
-              {/* Empty space for alignment */}
-              <div></div>
             </div>
+            )}
 
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Time Delay */}
               <div className="space-y-2">
                 <Label htmlFor="edit-time-delay" className="text-foreground">launch delay (sec)</Label>
@@ -1546,11 +1626,11 @@ export default function DashboardPage() {
                 by the gear in `off` / `always on`. Edits here are saved with the
                 rest of the form and never move the launch mode. */}
             {scheduleSectionVisible && (
-              <div className="space-y-3 rounded-lg border border-blue-600/30 bg-blue-500/5 p-3" data-testid="process-dialog-schedule-section">
+              <div className="space-y-3 rounded-lg border border-info-border bg-info-surface p-3" data-testid="process-dialog-schedule-section">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Clock className="h-3.5 w-3.5 text-blue-400" />
-                    <span className="text-xs font-medium text-blue-400">schedule configuration</span>
+                    <Clock className="h-3.5 w-3.5 text-info" />
+                    <span className="text-xs font-medium text-info">schedule configuration</span>
                   </div>
                   {/* `scheduleClockLabel` is the single source for this string — the
                       clock only belongs to the site once it has opted in. (This used
@@ -1580,13 +1660,13 @@ export default function DashboardPage() {
           </div>
           <DialogFooter className="flex items-center">
             {processDialogMode === 'edit' && (
-              <Button
-                variant="ghost"
+              <IconButton
+                label="delete process"
+                variant="ghost-destructive"
                 onClick={() => setDeleteConfirmOpen(true)}
-                className="text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
               >
                 <Trash2 className="h-4 w-4" />
-              </Button>
+              </IconButton>
             )}
             <div className="flex gap-2 ml-auto">
               <Button
@@ -1598,7 +1678,7 @@ export default function DashboardPage() {
               </Button>
               <Button
                 onClick={handleSaveProcess}
-                className="text-gray-900 cursor-pointer"
+                className="cursor-pointer"
               >
                 {processDialogMode === 'create' ? 'create process' : 'save changes'}
               </Button>
@@ -1609,7 +1689,7 @@ export default function DashboardPage() {
 
       {/* Delete Process Confirmation Dialog */}
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <DialogContent className="border-border bg-muted text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle className="text-foreground">delete process</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -1626,7 +1706,8 @@ export default function DashboardPage() {
             </Button>
             <Button
               onClick={handleDeleteProcess}
-              className="bg-red-600 hover:bg-red-700 text-foreground cursor-pointer"
+              variant="destructive"
+              className="cursor-pointer"
             >
               delete process
             </Button>
@@ -1774,6 +1855,6 @@ export default function DashboardPage() {
           onStopLiveView={stopLiveView}
         />
       )}
-    </div>
+    </PageCascade>
   );
 }

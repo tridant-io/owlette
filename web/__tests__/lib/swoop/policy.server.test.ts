@@ -9,15 +9,17 @@
  * answering every `doc()` with the same stub.
  */
 const mockDocs = new Map<string, Record<string, unknown>>();
+const mockReads: string[] = [];
 const mockWrites: Array<{ path: string; data: Record<string, unknown> }> = [];
 const mockReadMfaFactors = jest.fn();
+const mockGetEntitlements = jest.fn();
 
 jest.mock('@/lib/firebase-admin', () => {
   const doc = (path: string) => ({
-    get: async () => ({
-      exists: mockDocs.has(path),
-      data: () => mockDocs.get(path),
-    }),
+    get: async () => {
+      mockReads.push(path);
+      return { exists: mockDocs.has(path), data: () => mockDocs.get(path) };
+    },
     set: async (data: Record<string, unknown>) => {
       mockWrites.push({ path, data });
       mockDocs.set(path, data);
@@ -37,17 +39,23 @@ jest.mock('@/lib/mfaFactors.server', () => ({
   deriveMfaEnrolled: (inv: { totp: boolean; passkeys: number }) => inv.totp || inv.passkeys > 0,
 }));
 
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 import type { Actor } from '@/lib/capabilities';
 import {
-  SWOOP_SESSION_CAP_SECONDS,
+  SWOOP_FRESH_CEREMONY_MS,
   SWOOP_SETTINGS_DEFAULTS,
   SWOOP_STEP_UP_WINDOW_MS,
   SwoopPolicyError,
   evaluateLeaseRenewal,
   evaluateSwoopAccess,
+  freshCeremonyCovers,
   hasOpenStepUpWindow,
   loadSwoopSettings,
   openStepUpWindow,
+  openStepUpWindowFromCeremony,
   parseSwoopSettings,
   revokeStepUpWindows,
   stepUpMachineBinding,
@@ -79,6 +87,7 @@ function access(over: Partial<Parameters<typeof evaluateSwoopAccess>[0]>) {
 beforeEach(() => {
   jest.clearAllMocks();
   mockDocs.clear();
+  mockReads.length = 0;
   mockWrites.length = 0;
   mockReadMfaFactors.mockResolvedValue({ totp: true, passkeys: 0 });
 });
@@ -106,6 +115,72 @@ describe('parseSwoopSettings', () => {
   it('reads the site settings document', async () => {
     mockDocs.set(`sites/${SITE}/settings/swoop`, { enabled: true });
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+  });
+});
+
+describe('loadSwoopSettings and the payer plan', () => {
+  const SETTINGS_PATH = `sites/${SITE}/settings/swoop`;
+  const PLAN_ENV = {
+    PLAN_ENFORCEMENT: 'on',
+    TRIDANT_API_URL: 'https://tridant.example.invalid',
+    TRIDANT_LICENSE_KEY: 'test-license-key',
+  };
+
+  /** a core payer has control but not swoop; pro has both. */
+  function payerSwoop(value: '0' | '1') {
+    mockGetEntitlements.mockResolvedValue({
+      ok: true,
+      resolved: true,
+      standing: 'active',
+      inGoodStanding: true,
+      ent: { 'owlette.control': '1', 'owlette.swoop': value },
+      epoch: 1,
+    });
+  }
+
+  beforeEach(() => {
+    Object.assign(process.env, PLAN_ENV);
+    mockDocs.set(`sites/${SITE}`, { owner: 'payer-1' });
+    mockDocs.set(SETTINGS_PATH, { enabled: true, excludedMachineIds: [MACHINE], indicator: 'tray' });
+  });
+
+  afterEach(() => {
+    for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
+  });
+
+  it('reports swoop off for a core payer, and keeps the stored switch', async () => {
+    payerSwoop('0');
+
+    expect(await loadSwoopSettings(SITE)).toEqual({
+      enabled: false,
+      excludedMachineIds: [MACHINE],
+      membersMayWatch: true,
+      indicator: 'tray',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+    expect(mockWrites).toEqual([]);
+    expect(mockDocs.get(SETTINGS_PATH)).toMatchObject({ enabled: true });
+  });
+
+  it('leaves swoop on for a pro payer', async () => {
+    payerSwoop('1');
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+  });
+
+  it('looks no plan up for a site that has swoop off', async () => {
+    mockDocs.set(SETTINGS_PATH, { enabled: false });
+
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: false });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockReads).toEqual([SETTINGS_PATH]);
+  });
+
+  it('reads nothing past the settings with enforcement off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+
+    expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockReads).toEqual([SETTINGS_PATH]);
   });
 });
 
@@ -198,66 +273,50 @@ describe('evaluateSwoopAccess', () => {
 });
 
 describe('evaluateLeaseRenewal', () => {
-  const started = 1_000_000;
+  function renewal(over: Partial<Parameters<typeof evaluateLeaseRenewal>[0]>) {
+    return evaluateLeaseRenewal({
+      actor: member,
+      siteId: SITE,
+      machineId: MACHINE,
+      intent: 'view',
+      viaApiKey: false,
+      settings: ON,
+      ...over,
+    });
+  }
 
   it('renews while the authorization still holds', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toEqual({ ok: true, ctl: false });
+    expect(renewal({})).toEqual({ ok: true, ctl: false });
   });
 
-  it('refuses past the 12 hour absolute cap', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + SWOOP_SESSION_CAP_SECONDS * 1000,
-      }),
-    ).toMatchObject({ code: 'session_cap_reached' });
+  // the window is held open for a renewal: a ceremony every five minutes is how
+  // operators end up switching the feature off.
+  it('renews a control viewer without running step-up again', () => {
+    expect(renewal({ actor: admin, intent: 'control' })).toEqual({ ok: true, ctl: true });
   });
 
   it('refuses a renewal once membership is gone', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: outsider,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: ON,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toMatchObject({ code: 'capability_missing' });
+    expect(renewal({ actor: outsider })).toMatchObject({ code: 'capability_missing' });
+  });
+
+  it('refuses a control renewal once the control capability is gone', () => {
+    expect(renewal({ intent: 'control' })).toMatchObject({ code: 'capability_missing' });
   });
 
   it('refuses a renewal once the site turns swoop off', () => {
-    expect(
-      evaluateLeaseRenewal({
-        actor: member,
-        siteId: SITE,
-        machineId: MACHINE,
-        intent: 'view',
-        viaApiKey: false,
-        settings: SWOOP_SETTINGS_DEFAULTS,
-        startedAt: started,
-        nowMs: started + 60_000,
-      }),
-    ).toMatchObject({ code: 'swoop_disabled' });
+    expect(renewal({ settings: SWOOP_SETTINGS_DEFAULTS })).toMatchObject({ code: 'swoop_disabled' });
+  });
+
+  it('refuses a renewal once the machine is excluded', () => {
+    expect(renewal({ settings: { ...ON, excludedMachineIds: [MACHINE] } })).toMatchObject({
+      code: 'machine_excluded',
+    });
+  });
+
+  it('refuses a member once the site stops members watching', () => {
+    expect(renewal({ settings: { ...ON, membersMayWatch: false } })).toMatchObject({
+      code: 'members_may_not_watch',
+    });
   });
 });
 
@@ -292,7 +351,7 @@ describe('step-up window', () => {
     expect(binding).not.toContain(MACHINE);
   });
 
-  it('opens for 10 minutes from the ceremony, on the (user, machine) document', async () => {
+  it('opens for 7 days from the ceremony, on the (user, machine) document', async () => {
     const expiresAt = await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(expiresAt).toBe(NOW + SWOOP_STEP_UP_WINDOW_MS);
@@ -344,7 +403,7 @@ describe('step-up window', () => {
    * The bug this keying exists to fix: a page reload ends the swoop session and
    * starts a new one, and the ceremony must not run again for each.
    */
-  it('lets a reconnect inside the 10 minutes through without a second ceremony', async () => {
+  it('lets a reconnect inside the 7 days through without a second ceremony', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
     mockWrites.length = 0;
 
@@ -353,11 +412,11 @@ describe('step-up window', () => {
     expect(
       await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS - 1 }),
     ).toBe(true);
-    // Reading a window never writes one: reuse cannot slide the 10 minutes on.
+    // Reading a window never writes one: reuse cannot slide the 7 days on.
     expect(mockWrites).toHaveLength(0);
   });
 
-  it('refuses a reconnect after the 10 minutes have run out', async () => {
+  it('refuses a reconnect after the 7 days have run out', async () => {
     await openStepUpWindow({ ...target, proof, nowMs: NOW });
 
     expect(await readWindow({ nowMs: NOW + SWOOP_STEP_UP_WINDOW_MS })).toBe(
@@ -368,7 +427,7 @@ describe('step-up window', () => {
     ).toBe(false);
   });
 
-  it('caps a stored expiry at 10 minutes from the ceremony, whatever the document says', async () => {
+  it('caps a stored expiry at 7 days from the ceremony, whatever the document says', async () => {
     mockDocs.set(windowPath(target), {
       openedAt: NOW,
       expiresAt: NOW + 30 * 24 * 60 * 60 * 1000,
@@ -462,5 +521,94 @@ describe('step-up window', () => {
       await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: false, nowMs: NOW + 1_000 }),
     ).toBe(false);
     expect(mockReadMfaFactors).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * owner, 2026-10-10: a second factor passed at sign-in must not be asked for
+ * again two minutes later. the sign-in's own ceremony stands in for the step-up
+ * for five minutes, read beside the satisfier and never on its own.
+ */
+describe('fresh sign-in ceremony', () => {
+  const NOW = 1_700_000_000_000;
+  const target = { userId: 'uid-1', siteId: SITE, machineId: MACHINE };
+  const windowPath = `users/uid-1/swoop_step_up/${stepUpMachineBinding(target)}`;
+  const fresh = { sessionPassedCeremony: true, ceremonyAt: NOW - 2 * 60_000 };
+
+  it('covers a ceremony this session ran in the last five minutes', async () => {
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(true);
+    expect(
+      await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW - SWOOP_FRESH_CEREMONY_MS, nowMs: NOW }),
+    ).toBe(true);
+  });
+
+  it('does not cover one older than five minutes, and reads nothing to say so', async () => {
+    expect(
+      await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW - 6 * 60_000, nowMs: NOW }),
+    ).toBe(false);
+    expect(mockReadMfaFactors).not.toHaveBeenCalled();
+  });
+
+  // a device-trust birth stamps `mfaCompletedAt = now` having run no ceremony
+  it('does not cover a session that ran no ceremony, however recent its timestamp', async () => {
+    expect(
+      await freshCeremonyCovers({ ...target, sessionPassedCeremony: false, ceremonyAt: NOW, nowMs: NOW }),
+    ).toBe(false);
+  });
+
+  it('does not cover a missing or future timestamp', async () => {
+    expect(await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: undefined, nowMs: NOW })).toBe(false);
+    expect(await freshCeremonyCovers({ ...target, ...fresh, ceremonyAt: NOW + 1_000, nowMs: NOW })).toBe(false);
+  });
+
+  it('does not cover an account with no factor left', async () => {
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(false);
+  });
+
+  it('does not reopen a machine a kill closed after the ceremony, and does after a kill before it', async () => {
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW - 60_000 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(false);
+
+    await revokeStepUpWindows({ siteId: SITE, machineId: MACHINE, nowMs: NOW - 3 * 60_000 });
+    expect(await freshCeremonyCovers({ ...target, ...fresh, nowMs: NOW })).toBe(true);
+  });
+
+  it('opens a window resting on the ceremony: 7 days from it, marked fresh_sign_in', async () => {
+    const expiresAt = await openStepUpWindowFromCeremony({ ...target, ...fresh, nowMs: NOW });
+
+    expect(expiresAt).toBe(fresh.ceremonyAt + SWOOP_STEP_UP_WINDOW_MS);
+    expect(mockWrites).toEqual([
+      {
+        path: windowPath,
+        data: expect.objectContaining({ openedAt: fresh.ceremonyAt, expiresAt, openedBy: 'fresh_sign_in' }),
+      },
+    ]);
+    // afterwards it is any other window, read back by a ceremony-backed session
+    expect(await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: true, nowMs: NOW + 60 * 60_000 })).toBe(
+      true,
+    );
+    expect(
+      await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: true, nowMs: expiresAt }),
+    ).toBe(false);
+  });
+
+  it('marks a window a step-up opened as the ceremony', async () => {
+    await openStepUpWindow({ ...target, proof: { ok: true, factorUsed: 'totp' }, nowMs: NOW });
+    expect(mockWrites[0].data).toEqual(expect.objectContaining({ openedBy: 'ceremony', factorUsed: 'totp' }));
+  });
+
+  it('refuses to open from a stale, ceremony-less or factor-less sign-in', async () => {
+    await expect(
+      openStepUpWindowFromCeremony({ ...target, ...fresh, ceremonyAt: NOW - 6 * 60_000, nowMs: NOW }),
+    ).rejects.toThrow(/fresh_ceremony_invalid/);
+    await expect(
+      openStepUpWindowFromCeremony({ ...target, ...fresh, sessionPassedCeremony: false, nowMs: NOW }),
+    ).rejects.toThrow(/fresh_ceremony_invalid/);
+    mockReadMfaFactors.mockResolvedValue({ totp: false, passkeys: 0 });
+    await expect(openStepUpWindowFromCeremony({ ...target, ...fresh, nowMs: NOW })).rejects.toThrow(
+      /no_mfa_factors/,
+    );
+    expect(mockWrites).toHaveLength(0);
   });
 });

@@ -11,8 +11,7 @@
  * neither one failing withholds a session the caller is entitled to.
  */
 
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   problem,
@@ -22,36 +21,45 @@ import {
   ProblemType,
 } from '@/lib/apiErrors';
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
-import { ApiAuthError, assertActiveUser } from '@/lib/apiAuth.server';
+import { ApiAuthError } from '@/lib/apiAuth.server';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import {
-  mfaProofErrorResponse,
-  parseMfaProof,
-  verifyMfaProof,
-} from '@/lib/mfaProof.server';
-import {
-  getSessionFromRequest,
-  markSessionMfaCeremony,
-  sessionPassedMfaCeremony,
-} from '@/lib/sessionManager.server';
-import {
   evaluateSwoopAccess,
   hasEnrolledFactor,
-  hasOpenStepUpWindow,
-  openStepUpWindow,
+  stepUpRevokedAt,
+  stepUpWindowState,
   SWOOP_LEASE_SECONDS,
-  SWOOP_SESSION_CAP_SECONDS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
+import {
+  controlNetwork,
+  networkAdmitsFreshCeremony,
+  networkAdmitsWindow,
+} from '@/lib/swoop/networks.server';
+import {
+  openStepUpFromFreshCeremony,
+  openStepUpFromProof,
+  requestSignInCeremony,
+} from '@/lib/swoop/stepUp.server';
 import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
-import { mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop/turn.server';
+import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 import { ringDoorbell } from '@/lib/swoop/signal.server';
-import { createSwoopSession, upsertSwoopViewer } from '@/lib/swoop/sessionStore.server';
+import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
+import {
+  createSwoopSession,
+  getSwoopSession,
+  markSwoopContinuityUsed,
+  upsertSwoopViewer,
+} from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
-import { recordSwoopDenied, recordSwoopSessionStarted } from '@/lib/swoop/audit.server';
+import {
+  recordSwoopDenied,
+  recordSwoopNetworkCheck,
+  recordSwoopSessionStarted,
+} from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -67,111 +75,12 @@ interface SessionBody {
   fp?: unknown;
   clientCaps?: unknown;
   mfaProof?: unknown;
+  /** the continuity token of this tab's previous control session, in place of a proof. */
+  continuity?: unknown;
 }
-
-/** P2P first (plan.md D13); relays are added only when a mint succeeds. */
-const STUN_ONLY: SwoopIceServer[] = [{ urls: ['stun:stun.cloudflare.com:3478'] }];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** `reason` is the audit code for the refusal, never the ceremony's detail. */
-type StepUpResult =
-  | { ok: true }
-  | { ok: false; response: NextResponse; reason: string };
-
-/**
- * Run a live second-factor ceremony, open the 10-minute window for this
- * (user, machine) pair, and record on the login session that it has now itself
- * proved a second factor — which is what lets this operator's reloads reuse the
- * window for the rest of those 10 minutes.
- *
- * A timestamp can never stand in for any of it: a session born from the 30-day
- * device-trust cookie carries `mfaCompletedAt = now` with no ceremony behind it
- * (`lib/sessionManager.server.ts`, the `deviceTrusted` arm of
- * `resolveMfaOnSessionCreate`).
- */
-async function openStepUpFromProof(args: {
-  userId: string;
-  siteId: string;
-  machineId: string;
-  proof: unknown;
-}): Promise<StepUpResult> {
-  const parsed = parseMfaProof(args.proof);
-  if (!parsed.ok) {
-    return { ok: false, reason: 'proof_malformed', response: mfaProofErrorResponse(parsed) };
-  }
-
-  // An account with no enrolled factor cannot have produced a live proof, so a
-  // proof that "verifies" for one means the ceremony was bypassed. Refused
-  // before the verification rather than after it.
-  if (!(await hasEnrolledFactor(args.userId))) {
-    return {
-      ok: false,
-      reason: 'no_enrolled_factor',
-      response: problem({
-        type: ProblemType.Unauthorized,
-        title: 'step-up required',
-        status: 401,
-        detail:
-          'enroll a passkey or an authenticator app before taking control of a machine. signing in with google or a password is not a second factor.',
-        code: 'step_up_required',
-      }),
-    };
-  }
-
-  const userData = await assertActiveUser(args.userId);
-  const outcome = await verifyMfaProof(args.userId, parsed.proof, userData);
-  if (!outcome.ok) {
-    return { ok: false, reason: 'proof_rejected', response: mfaProofErrorResponse(outcome) };
-  }
-
-  await openStepUpWindow({
-    userId: args.userId,
-    siteId: args.siteId,
-    machineId: args.machineId,
-    proof: outcome,
-  });
-
-  // Best effort, and deliberately after the window: the ceremony has already
-  // happened and this request is already authorised, so a cookie that cannot be
-  // written costs the operator a prompt on their next reload and nothing more.
-  // Refusing control here would refuse someone who just proved a second factor.
-  try {
-    await markSessionMfaCeremony(args.userId);
-  } catch (err) {
-    logger.warn('[swoop/sessions] could not record the ceremony on the login session', {
-      context: 'swoop/sessions',
-      data: {
-        siteId: args.siteId,
-        machineId: args.machineId,
-        err: err instanceof Error ? err.message : String(err),
-      },
-    });
-  }
-  return { ok: true };
-}
-
-/**
- * Did the LOGIN session behind this request pass a live ceremony of its own?
- *
- * Read off the server's encrypted, signed session cookie — the browser has no
- * field it can set to claim this — and only when that cookie names the caller
- * and is still live, so a request authenticated by an ID token rides on no
- * cookie it did not earn. Anything short of that reads as "no ceremony".
- */
-async function requestPassedMfaCeremony(
-  request: NextRequest,
-  userId: string,
-): Promise<boolean> {
-  const login = await getSessionFromRequest(request);
-  return (
-    login.userId === userId &&
-    typeof login.expiresAt === 'number' &&
-    login.expiresAt > Date.now() &&
-    sessionPassedMfaCeremony(login)
-  );
 }
 
 const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { params }) => {
@@ -218,21 +127,86 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // Only control reads the window, and a watch request never opens, extends,
     // touches one or even reads the login session — the two intents share no
     // state at all.
-    const stepUpOpen =
-      intent === 'control'
-        ? await hasOpenStepUpWindow({
-            userId,
-            siteId,
-            machineId,
-            sessionPassedCeremony: await requestPassedMfaCeremony(request, userId),
-          })
-        : false;
+    const ceremony = intent === 'control' ? await requestSignInCeremony(request, userId) : null;
+    const binding = ceremony ? await controlNetwork(request, userId) : null;
+    const stepUpWindow = ceremony
+      ? await stepUpWindowState({
+          userId,
+          siteId,
+          machineId,
+          sessionPassedCeremony: ceremony.sessionPassedCeremony,
+        })
+      : null;
+    // An open window counts only from a network this user verified, once the
+    // binding is enforced; until then the check is only recorded.
+    if (binding?.network && binding.mode !== 'off') {
+      recordSwoopNetworkCheck({
+        ...auditBase,
+        mode: binding.mode,
+        network: binding.network,
+        match: binding.verified,
+        windowNetwork: stepUpWindow?.network ?? null,
+      });
+    }
+    const stepUpOpen = stepUpWindow?.open === true && binding !== null && networkAdmitsWindow(binding);
 
     let decision = evaluateSwoopAccess({ ...gate, stepUpOpen });
+    // A second factor this sign-in passed minutes ago is the step-up for this
+    // machine: it opens the window, on the record, and the decision is taken
+    // again. Asked only when the window is the one thing refusing control.
+    if (
+      !decision.ok &&
+      decision.code === 'step_up_required' &&
+      ceremony &&
+      binding &&
+      networkAdmitsFreshCeremony(binding, ceremony.ceremonyNetwork) &&
+      (await openStepUpFromFreshCeremony({ ...auditBase, userId, ceremony, network: binding.network }))
+    ) {
+      decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
+    }
+    // A tab that held control keeps it for its own life: the continuity token
+    // of its last control session stands in for the ceremony, once, for the
+    // same user on the same machine, unless that session was killed, closed
+    // or revoked, or a kill on the machine came after it started. A last
+    // factor removed since still closes the door.
+    let inheritedFrom: string | null = null;
+    if (
+      !decision.ok &&
+      decision.code === 'step_up_required' &&
+      body.continuity !== undefined &&
+      (await hasEnrolledFactor(userId))
+    ) {
+      const presented = parseContinuity(body.continuity);
+      const verdict = presented
+        ? continuityInherits({
+            record: await getSwoopSession(siteId, machineId, presented.sid),
+            userId,
+            hash: presented.hash,
+            revokedAt: await stepUpRevokedAt(siteId, machineId),
+          })
+        : null;
+      if (presented && verdict?.ok) {
+        inheritedFrom = presented.sid;
+        decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
+      } else {
+        recordSwoopDenied({
+          ...auditBase,
+          event: 'step_up_failed',
+          denyReason: verdict && !verdict.ok ? `continuity_${verdict.reason}` : 'continuity_malformed',
+          ctl: true,
+        });
+      }
+    }
     // The one refusal the caller can answer inside this same request: a live
     // ceremony opens the window and the decision is taken again.
     if (!decision.ok && decision.code === 'step_up_required' && body.mfaProof !== undefined) {
-      const opened = await openStepUpFromProof({ userId, siteId, machineId, proof: body.mfaProof });
+      const opened = await openStepUpFromProof({
+        userId,
+        siteId,
+        machineId,
+        proof: body.mfaProof,
+        network: binding?.network ?? null,
+      });
       if (!opened.ok) {
         recordSwoopDenied({
           ...auditBase,
@@ -305,13 +279,26 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       });
     }
 
+    // Only a control session carries continuity: a watch session has no
+    // ceremony to carry, and a token for it would inherit nothing.
+    const continuity = decision.ctl ? mintContinuity(sid) : null;
+    if (inheritedFrom) {
+      // spent here and no earlier: a machine that read offline or an audit that
+      // could not be written refused the request, and the page retries it with
+      // the same token.
+      await markSwoopContinuityUsed(siteId, machineId, inheritedFrom, Date.now());
+      logger.info('[swoop/sessions] step-up inherited from the tab\'s previous session', {
+        context: 'swoop/sessions',
+        data: { siteId, machineId, sid, from: inheritedFrom },
+      });
+    }
     await createSwoopSession({
       siteId,
       machineId,
       sid,
       createdBy: `user:${userId}`,
       startedAt,
-      absoluteExpiresAt: startedAt + SWOOP_SESSION_CAP_SECONDS * 1000,
+      ...(continuity ? { continuityHash: continuity.hash } : {}),
     });
     await upsertSwoopViewer({
       siteId,
@@ -386,6 +373,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
             // token is spent once at connect, the lease is what keeps the
             // session alive (PROTOCOL.md §10).
             expiresAt: leaseExpiresAt,
+            ...(continuity ? { continuity: continuity.token } : {}),
           },
         },
         { status: 201 },
@@ -433,16 +421,33 @@ export async function POST(
   request: NextRequest,
   routeContext: { params: Promise<SwoopRouteParams> },
 ): Promise<NextResponse> {
-  // Peek on a CLONE so the chosen handler still gets an unconsumed body.
-  // Anything that is not an explicit `control: true` takes the watch bar, and
-  // the core handler re-derives the intent from the body it parses itself.
-  let control = false;
+  // One read of the body. Peeking on a clone and letting the handler read the
+  // original again is two reads of one streamed body, which failed now and
+  // then in production ("could not read request body", 2026-09-23). The bytes
+  // are read here once and handed on in a fresh request; anything that is not
+  // an explicit `control: true` takes the watch bar, and the core handler
+  // re-derives the intent from the body it parses itself.
+  let raw: string | null = null;
   try {
-    const peek = (await request.clone().json()) as { control?: unknown };
-    control = peek?.control === true;
+    raw = await request.text();
   } catch {
-    // An unparseable body is a watch request as far as the bar goes; the core
-    // handler emits the validation error.
+    // Unreadable here is unreadable there: let the handler report it.
   }
-  return (control ? controlHandler : viewHandler)(request, routeContext);
+  let control = false;
+  if (raw !== null) {
+    try {
+      control = (JSON.parse(raw) as { control?: unknown })?.control === true;
+    } catch {
+      // An unparseable body is a watch request as far as the bar goes; the
+      // core handler emits the validation error.
+    }
+  }
+  const handler = control ? controlHandler : viewHandler;
+  if (raw === null) return handler(request, routeContext);
+  const replay = new NextRequest(request.url, {
+    method: request.method,
+    headers: request.headers,
+    body: raw,
+  });
+  return handler(replay, routeContext);
 }

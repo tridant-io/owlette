@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { ProcessEntryDraft } from '@/lib/dropClassifier'
 import { describeKind, type DropCard } from '@/lib/dropQueue'
+import { launchCopy } from '@/lib/launchCopy'
 import { pickExecutable } from '@/lib/pickers'
 
 interface DropConfirmProps {
@@ -49,17 +50,19 @@ export function DropConfirm({
   onSkip,
 }: DropConfirmProps) {
   const needsExe = card?.needsInput.includes('exe_path') ?? false
+  const exePath = card?.entry.exe_path
+  const copy = launchCopy()
 
   const browse = useCallback(async () => {
     try {
-      const picked = await pickExecutable(card?.entry.exe_path)
+      const picked = await pickExecutable(exePath)
       if (picked !== null) onChange({ exe_path: picked })
     } catch (cause) {
       toast.error('could not open the file picker', {
         description: cause instanceof Error ? cause.message : String(cause),
       })
     }
-  }, [card?.entry.exe_path, onChange])
+  }, [exePath, onChange])
 
   return (
     <Dialog open={card !== null} onOpenChange={(open) => !open && onSkip()}>
@@ -97,14 +100,14 @@ export function DropConfirm({
               {needsExe ? (
                 <>
                   <Label htmlFor="drop-exe" className="justify-end text-muted-foreground">
-                    exe
+                    {copy.label}
                   </Label>
                   <div className="flex min-w-0 items-center gap-2">
                     <Button
                       size="icon"
                       variant="outline"
                       onClick={() => void browse()}
-                      aria-label="browse for an executable"
+                      aria-label={copy.browseAria}
                     >
                       <FileSearch />
                     </Button>
@@ -119,7 +122,7 @@ export function DropConfirm({
                 </>
               ) : (
                 <>
-                  <DerivedLabel>exe</DerivedLabel>
+                  <DerivedLabel>{copy.label}</DerivedLabel>
                   <Derived value={card.entry.exe_path} />
                 </>
               )}

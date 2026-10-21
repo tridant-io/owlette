@@ -70,5 +70,16 @@ describe('/api/openapi', () => {
       .toContain('chat=<siteId>:write');
     expect(findOperation(spec, 'post', '/api/installer/upload')?.['x-required-scopes'])
       .toContain('installer=*:write');
+
+    expect(findOperation(spec, 'get', '/api/admin/issues')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'patch', '/api/admin/issues/{id}')?.['x-required-scopes'])
+      .toEqual(['issue=*:write']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}/logs')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
+    expect(findOperation(spec, 'get', '/api/admin/issues/{id}/files/{n}')?.['x-required-scopes'])
+      .toEqual(['issue=*:read']);
   });
 });

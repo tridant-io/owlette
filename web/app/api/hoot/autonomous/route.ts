@@ -33,6 +33,7 @@ import { escalate } from '@/lib/hoot-escalation.server';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
 import { hootInternalSecret } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { requireEntitlement } from '@/lib/plan.server';
 
 const MAX_STEPS = 15;
 const MAX_CONCURRENT_SESSIONS = 3;
@@ -179,6 +180,11 @@ export async function POST(request: NextRequest) {
 
     if (!settings.autonomousEnabled) {
       return NextResponse.json({ accepted: false, reason: 'autonomous_disabled' });
+    }
+
+    if (await requireEntitlement(siteId, 'owlette.hoot')) {
+      console.log(`[hoot/autonomous] Skipped ${sanitizeForLog(machineId)}:${sanitizeForLog(processName)}: the site's plan does not include owlette.hoot`);
+      return NextResponse.json({ accepted: false, reason: 'plan_required' });
     }
 
     // Dedup on machine+process within the cooldown window, and on nonce when

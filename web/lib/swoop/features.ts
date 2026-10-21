@@ -27,6 +27,7 @@ import type { SwoopPeer } from '@/lib/swoop/peer';
 import type { SwoopChannel } from '@/lib/swoop/protocol';
 import type { SwoopPresenter } from '@/lib/swoop/video/presenter';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
+import type { InboundVideoStats } from '@/lib/swoop/video/stall';
 
 import { attachInputCapture, type InputCapture } from '@/lib/swoop/input';
 import { createSwoopFeedback, type SwoopFeedback } from '@/lib/swoop/feedback';
@@ -35,6 +36,8 @@ import { attach as attachClipboard } from '@/lib/swoop/clipboard';
 import { attach as attachAudio } from '@/lib/swoop/audio';
 import { attach as attachDisplays } from '@/lib/swoop/displays';
 import { attach as attachPresence } from '@/lib/swoop/presence';
+import { attach as attachCursor } from '@/lib/swoop/cursor';
+import { attach as attachWakeLock } from '@/lib/swoop/wakeLock';
 
 /** what `attach` hands back: undo everything it did, idempotently. */
 export type SwoopDetach = () => void;
@@ -83,6 +86,8 @@ export interface SwoopSession {
   contentRect(): DOMRect;
   readonly peer: SwoopPeer;
   readonly presenter: SwoopPresenter;
+  /** the video receiver's inbound-rtp counters (`video/receiver.ts`), or null before a track. */
+  inboundStats(): Promise<InboundVideoStats | null>;
   /**
    * send on one of the five channels; false when that channel is not open.
    * every viewer→host payload in the protocol is json text — `swoop-meta` is
@@ -97,8 +102,17 @@ export interface SwoopSession {
   renewLease(): Promise<SwoopLease>;
   /** when the lease currently held lapses. */
   leaseExpiresAt(): number;
-  /** end the session: tears down the peer and the page's state. */
-  end(reason: string): void;
+  /**
+   * end the session: tears down the peer and the page's state. `message` is
+   * what the page shows as the reason.
+   */
+  end(reason: string, message?: string): void;
+  /**
+   * a new session to the same machine in place of this one, now: how a choice
+   * only an offer carries (the codec) takes effect. nothing ends server-side,
+   * so the tab's continuity carries control over without a second factor.
+   */
+  restart(): void;
 }
 
 export interface SwoopFeature {
@@ -165,6 +179,14 @@ const feedbackFeature: SwoopFeature = {
         const box = session.contentRect();
         return { widthCss: box.width, heightCss: box.height };
       },
+      // the host stopped answering on a channel that had been working, over a
+      // path that is up. an ice restart would not help — the channels are
+      // what died, and only a new peer gets new ones — so this is the
+      // transient end the hook reconnects from, with the retry ladder it
+      // already has. a path that is down is the peer's to restart instead.
+      onSilence: () => session.end('peer_failed'),
+      linkUp: () => session.peer.linkUp(),
+      framesDecoded: async () => (await session.inboundStats())?.framesDecoded ?? null,
     });
     const offFrame = session.onFrame((observation) => feedback.observeFrame(observation));
     const offMessage = session.onChannelMessage('swoop-feedback', (data) =>
@@ -195,4 +217,6 @@ export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'audio', attach: attachAudio },
   { name: 'displays', attach: attachDisplays },
   { name: 'presence', attach: attachPresence },
+  { name: 'cursor', attach: attachCursor },
+  { name: 'wake-lock', attach: attachWakeLock },
 ];

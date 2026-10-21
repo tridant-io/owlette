@@ -21,13 +21,16 @@ import { RefreshCw, AlertCircle, AlertTriangle, CheckCircle2, Loader2, X } from 
 import { useOwletteUpdates } from '@/hooks/useOwletteUpdates';
 import { Machine } from '@/hooks/useFirestore';
 import { toast } from '@/lib/toast';
+import { cn } from '@/lib/utils';
 
 interface UpdateOwletteButtonProps {
   siteId: string;
   machines: Machine[];
+  /** below sm, only the icon and the count, so a phone's one-row heading keeps its room. */
+  compact?: boolean;
 }
 
-export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonProps) {
+export function UpdateOwletteButton({ siteId, machines, compact }: UpdateOwletteButtonProps) {
   const {
     outdatedMachines,
     latestVersion,
@@ -99,15 +102,25 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
     setIsUpdating(true);
 
     try {
-      await updateMachines(siteId, targetMachines);
+      const skippedByPlatform = await updateMachines(siteId, targetMachines);
+      const sent = targetMachines.length - skippedByPlatform.length;
+      const skipNotes = [
+        ...(skipped > 0 ? [`${skipped} machine(s) skipped — offline or already updating`] : []),
+        ...skippedByPlatform.map(s => `skipped ${s.machineId}: ${s.reason}`),
+      ];
+
+      if (sent === 0) {
+        toast.error('No updates sent', { description: skipNotes.join('. '), duration: 8000 });
+        return;
+      }
 
       toast.success(
-        `Update initiated for ${targetMachines.length} machine(s)`,
+        `Update initiated for ${sent} machine(s)`,
         {
-          description: skipped > 0
-            ? `${skipped} machine(s) skipped — offline or already updating. the rest will restart automatically after updating.`
+          description: skipNotes.length > 0
+            ? `${skipNotes.join('. ')}. the rest will restart automatically after updating.`
             : 'The owlette service will restart automatically after updating',
-          duration: 5000,
+          duration: skipNotes.length > 0 ? 8000 : 5000,
         }
       );
 
@@ -132,26 +145,30 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
   }
 
   const inProgressCount = updatingMachines.size;
+  const label = inProgressCount > 0 ? 'updating owlette' : 'update owlette';
+  const spaced = compact ? 'sm:ml-2' : 'ml-2';
+  const wide = compact ? 'hidden sm:inline-flex' : undefined;
 
   return (
     <>
       <Button
         onClick={handleOpenDialog}
         variant="outline"
-        className="border-orange-600 text-orange-600 hover:bg-orange-50 dark:hover:bg-orange-950 cursor-pointer"
+        aria-label={compact ? `${label}${latestVersion ? ` to v${latestVersion}` : ''}` : undefined}
+        className="border-accent-warm text-accent-warm hover:bg-accent-warm/10 hover:text-accent-warm-hover cursor-pointer"
       >
-        <RefreshCw className={`h-4 w-4 mr-2 ${inProgressCount > 0 ? 'animate-spin' : ''}`} />
-        {inProgressCount > 0 ? 'updating owlette' : 'update owlette'}
+        <RefreshCw className={cn('h-4 w-4', compact ? 'sm:mr-2' : 'mr-2', inProgressCount > 0 && 'animate-spin')} />
+        <span className={wide}>{label}</span>
         {latestVersion && (
-          <span className="ml-2 text-xs">to v{latestVersion}</span>
+          <span className={cn('ml-2 text-xs', wide)}>to v{latestVersion}</span>
         )}
         {selectableMachineIds.length > 0 && (
-          <Badge className="ml-2 bg-orange-600 text-white">
+          <Badge className={cn(spaced, 'bg-accent-warm text-background')}>
             {selectableMachineIds.length}
           </Badge>
         )}
         {inProgressCount > 0 && (
-          <Badge className="ml-2 bg-accent-cyan text-gray-900">
+          <Badge className={cn('ml-2', wide)}>
             in progress: {inProgressCount}
           </Badge>
         )}
@@ -223,7 +240,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                       key={machine.machineId}
                       className={`flex items-center gap-4 p-4 ${
                         isSelectable
-                          ? 'hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer'
+                          ? 'hover:bg-muted cursor-pointer'
                           : 'cursor-not-allowed opacity-75'
                       }`}
                     >
@@ -238,7 +255,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                             {machine.machineId}
                           </span>
                         </div>
-                        <div className="text-sm text-gray-500 dark:text-gray-400">
+                        <div className="text-sm text-muted-foreground">
                           current: {machine.agent_version ? `v${machine.agent_version}` : '< v2.0.8'} → latest: v{latestVersion}
                         </div>
                         {!machine.online && (
@@ -258,7 +275,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+                              className="h-8 px-2 text-xs hover:bg-accent"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -284,7 +301,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                               type="button"
                               variant="ghost"
                               size="sm"
-                              className="h-8 px-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700"
+                              className="h-8 px-2 text-xs hover:bg-accent"
                               onClick={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -301,7 +318,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
                           </>
                         )}
                         {machine.online ? (
-                          <Badge className="bg-green-100 text-green-800 border-green-200 px-3 py-1">
+                          <Badge className="bg-success-surface text-success border-success-border px-3 py-1">
                             online
                           </Badge>
                         ) : (
@@ -331,7 +348,7 @@ export function UpdateOwletteButton({ siteId, machines }: UpdateOwletteButtonPro
               type="button"
               onClick={handleUpdate}
               disabled={isUpdating || selectedMachines.size === 0}
-              className="bg-orange-600 hover:bg-orange-700 text-white"
+              className="bg-accent-warm text-background"
             >
               {isUpdating ? (
                 <>
