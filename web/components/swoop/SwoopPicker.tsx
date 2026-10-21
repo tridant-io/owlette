@@ -17,6 +17,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AppWindow, ArrowLeft, Loader2, Monitor } from 'lucide-react';
 import { SwoopLockup } from '@/components/swoop/SwoopLockup';
+import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
@@ -141,10 +142,12 @@ export function SwoopPicker() {
           data-testid="swoop-picker-header-row"
           className={cn('flex h-12 items-center justify-between gap-3 px-4', !inApp && 'mx-auto max-w-6xl')}
         >
-          <div className="flex min-w-0 items-center gap-1.5">
-            <OwletteEyeIcon size={24} className="translate-y-[1px]" />
-            <SwoopLockup className="translate-y-[1px]" />
-          </div>
+          <SwoopVersionTooltip>
+            <div data-testid="swoop-picker-mark" className="flex min-w-0 items-center gap-1.5">
+              <OwletteEyeIcon size={24} className="translate-y-[1px]" />
+              <SwoopLockup className="translate-y-[1px]" />
+            </div>
+          </SwoopVersionTooltip>
           {!inApp && (
             <Button asChild variant="ghost" size="sm">
               <Link href="/dashboard" data-testid="swoop-picker-dashboard-link">

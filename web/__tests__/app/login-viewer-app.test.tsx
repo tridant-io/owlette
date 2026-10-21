@@ -15,8 +15,10 @@
  */
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server.node';
 
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 import type { InAppBrowserState } from '@/hooks/useInAppBrowser';
 import { AppLinkError } from '@/lib/appLink';
@@ -25,6 +27,7 @@ let viewerApp = true;
 jest.mock('@/lib/swoop/viewerApp', () => ({
   isViewerApp: () => viewerApp,
   viewerAppPlatform: () => (viewerApp ? 'windows' : null),
+  viewerAppVersion: () => (viewerApp ? '4.1.8' : null),
 }));
 
 const mockStartAppLink = jest.fn();
@@ -103,7 +106,10 @@ afterEach(() => {
 const advance = (ms: number) => act(() => jest.advanceTimersByTimeAsync(ms));
 
 async function renderPage() {
-  const view = render(<LoginPage />);
+  // the root layout's provider, without its delay
+  const view = render(<LoginPage />, {
+    wrapper: ({ children }) => <TooltipProvider delayDuration={0}>{children}</TooltipProvider>,
+  });
   // the webauthn autofill probe resolves on a microtask.
   await act(async () => {});
   return view;
@@ -116,6 +122,13 @@ async function startBrowserSignIn() {
 }
 
 describe('/login inside owlette swoop', () => {
+  it('names the installed owlette swoop on its lockup, on hover', async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    await renderPage();
+    await user.hover(screen.getByTestId('swoop-login-mark'));
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('owlette swoop v4.1.8');
+  });
+
   it('offers one browser button and hides google and passkey', async () => {
     await renderPage();
 
@@ -329,8 +342,10 @@ describe("/login in the server's html", () => {
   // which the server has none of, is set to say the opposite
   const serve = (platform: 'windows' | null) =>
     renderToString(
-      <ViewerAppProvider platform={platform} nativeKeys={false}>
-        <LoginPage />
+      <ViewerAppProvider platform={platform} nativeKeys={false} version={platform ? '4.1.8' : null}>
+        <TooltipProvider>
+          <LoginPage />
+        </TooltipProvider>
       </ViewerAppProvider>,
     );
 

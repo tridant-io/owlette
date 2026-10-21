@@ -154,7 +154,9 @@ test("the online card's corner button hands the machine to owlette swoop, signed
 test.describe('inside owlette swoop', () => {
   test.use({ userAgent: `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0` });
 
-  test('the picker is home: no way back to the dashboard, no corner button', async ({ page }) => {
+  test('the picker is home: no way back to the dashboard, no corner button, and its mark names the release', async ({
+    page,
+  }) => {
     await page.goto('/login?redirect=%2Fswoop');
     await fillLogin(page, viewer, { inApp: true });
     await expect(page).toHaveURL(/\/swoop$/, { timeout: 20_000 });
@@ -171,6 +173,10 @@ test.describe('inside owlette swoop', () => {
     expect(html).toContain('data-testid="swoop-picker"');
     expect(html).toContain('data-tauri-drag-region');
     expect(html).not.toContain('swoop-picker-dashboard-link');
+
+    // the release the app's ua token names, on the mark in the title bar
+    await page.getByTestId('swoop-picker-mark').hover();
+    await expect(page.getByRole('tooltip')).toHaveText('owlette swoop v0.0.0');
   });
 
   test('a card opens the session in this window; a refusal stays put, and the bar leads back to the picker', async ({

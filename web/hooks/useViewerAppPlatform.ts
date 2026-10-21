@@ -2,7 +2,12 @@
 
 import { useSyncExternalStore } from 'react';
 import { useViewerAppContext } from '@/contexts/ViewerAppContext';
-import { viewerAppHasNativeKeys, viewerAppPlatform, type ViewerAppPlatform } from '@/lib/swoop/viewerApp';
+import {
+  viewerAppHasNativeKeys,
+  viewerAppPlatform,
+  viewerAppVersion,
+  type ViewerAppPlatform,
+} from '@/lib/swoop/viewerApp';
 
 const noSubscribe = () => () => {};
 
@@ -27,5 +32,15 @@ export function useViewerAppNativeKeys(): boolean {
     noSubscribe,
     () => (app ? app.nativeKeys : viewerAppHasNativeKeys()),
     () => (app ? app.nativeKeys : false),
+  );
+}
+
+/** the owlette swoop release the page is in; null in a browser. */
+export function useViewerAppVersion(): string | null {
+  const app = useViewerAppContext();
+  return useSyncExternalStore(
+    noSubscribe,
+    () => (app ? app.version : viewerAppVersion()),
+    () => (app ? app.version : null),
   );
 }

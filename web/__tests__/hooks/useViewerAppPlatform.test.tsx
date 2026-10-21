@@ -14,7 +14,7 @@ import { act, render, screen } from '@testing-library/react';
 import { hydrateRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server.node';
 import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
-import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { useViewerAppNativeKeys, useViewerAppPlatform, useViewerAppVersion } from '@/hooks/useViewerAppPlatform';
 
 const CHROME = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/141.0.0.0 Safari/537.36';
 const APP_KEYS = `${CHROME} owlette-swoop-viewer/4.1.8 (keys)`;
@@ -22,7 +22,10 @@ const APP_KEYS = `${CHROME} owlette-swoop-viewer/4.1.8 (keys)`;
 function Probe() {
   const platform = useViewerAppPlatform();
   const nativeKeys = useViewerAppNativeKeys();
-  return <span data-testid="probe">{`${platform ?? 'browser'} ${nativeKeys ? 'keys' : 'no keys'}`}</span>;
+  const version = useViewerAppVersion();
+  return (
+    <span data-testid="probe">{`${platform ?? 'browser'} ${nativeKeys ? 'keys' : 'no keys'} ${version ?? 'no version'}`}</span>
+  );
 }
 
 /** hydrates the server's html for the tree, as a page load does: the text served, the text after, and the commits. */
@@ -48,34 +51,34 @@ afterEach(() => {
 describe('inside the provider', () => {
   it("the server's html is already the app's", () => {
     const html = renderToString(
-      <ViewerAppProvider platform="mac" nativeKeys>
+      <ViewerAppProvider platform="mac" nativeKeys version="4.1.8">
         <Probe />
       </ViewerAppProvider>,
     );
-    expect(html).toContain('mac keys');
+    expect(html).toContain('mac keys 4.1.8');
   });
 
   it('hydrates to the same answer in one render, so nothing flashes', async () => {
     jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_KEYS);
     const result = await hydrate(
-      <ViewerAppProvider platform="windows" nativeKeys>
+      <ViewerAppProvider platform="windows" nativeKeys version="4.1.8">
         <Probe />
       </ViewerAppProvider>,
     );
-    expect(result.served).toBe('windows keys');
-    expect(result.text).toBe('windows keys');
+    expect(result.served).toBe('windows keys 4.1.8');
+    expect(result.text).toBe('windows keys 4.1.8');
     expect(result.commits).toBe(1);
     expect(result.onRecoverableError).not.toHaveBeenCalled();
   });
 
   it("a browser's request stays the browser's page", async () => {
     const result = await hydrate(
-      <ViewerAppProvider platform={null} nativeKeys={false}>
+      <ViewerAppProvider platform={null} nativeKeys={false} version={null}>
         <Probe />
       </ViewerAppProvider>,
     );
-    expect(result.served).toBe('browser no keys');
-    expect(result.text).toBe('browser no keys');
+    expect(result.served).toBe('browser no keys no version');
+    expect(result.text).toBe('browser no keys no version');
     expect(result.commits).toBe(1);
   });
 });
@@ -84,14 +87,14 @@ describe('outside the provider', () => {
   it('the server knows no app and navigator corrects it after hydration', async () => {
     jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_KEYS);
     const result = await hydrate(<Probe />);
-    expect(result.served).toBe('browser no keys');
-    expect(result.text).toBe('windows keys');
+    expect(result.served).toBe('browser no keys no version');
+    expect(result.text).toBe('windows keys 4.1.8');
     expect(result.commits).toBe(2);
   });
 
   it('a client render reads navigator', () => {
     jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_KEYS);
     render(<Probe />);
-    expect(screen.getByTestId('probe')).toHaveTextContent('windows keys');
+    expect(screen.getByTestId('probe')).toHaveTextContent('windows keys 4.1.8');
   });
 });

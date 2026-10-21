@@ -12,7 +12,7 @@ import SentryInit from "@/components/SentryInit";
 import { SecurityVersionBanner } from "@/components/SecurityVersionBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BAR_POSITION_BOOT_SCRIPT } from '@/lib/swoop/barPosition';
-import { viewerAppHasNativeKeys, viewerAppPlatform } from '@/lib/swoop/viewerApp';
+import { viewerAppHasNativeKeys, viewerAppPlatform, viewerAppVersion } from '@/lib/swoop/viewerApp';
 import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 
 const geist = Geist({
@@ -155,7 +155,11 @@ export default async function RootLayout({
         <ThemeProvider nonce={nonce}>
           <SentryInit />
           <SecurityVersionBanner />
-          <ViewerAppProvider platform={viewerAppPlatform(userAgent)} nativeKeys={viewerAppHasNativeKeys(userAgent)}>
+          <ViewerAppProvider
+            platform={viewerAppPlatform(userAgent)}
+            nativeKeys={viewerAppHasNativeKeys(userAgent)}
+            version={viewerAppVersion(userAgent)}
+          >
             <ErrorBoundary>
               <LazyAuthProvider>
                 <TooltipProvider delayDuration={300}>
