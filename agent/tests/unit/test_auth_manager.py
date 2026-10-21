@@ -244,6 +244,8 @@ class TestRefusedRefresh:
         # token, which used to be the pre-fix dead state: paired, no credential
         reasons = []
         storage.get_refresh_token.return_value = None
+        # clear_tokens unlinks the store, so a cleared store is one that is gone
+        storage.is_cleared.return_value = True
         am = AuthManager(
             api_base="https://owlette.app/api",
             machine_id="TEST-MACHINE",
@@ -257,6 +259,29 @@ class TestRefusedRefresh:
 
         assert not post.called
         assert reasons == ["no refresh token left in storage"]
+
+    def test_a_store_that_reads_empty_but_is_still_there_is_not_a_revoke(self, storage):
+        # a store held open by a scanner, caught mid-replace or damaged reads as
+        # no token; unpairing on that takes a site visit to undo, so it is a
+        # failed refresh, retried like any other
+        reasons = []
+        storage.get_refresh_token.return_value = None
+        storage.is_cleared.return_value = False
+        am = AuthManager(
+            api_base="https://owlette.app/api",
+            machine_id="TEST-MACHINE",
+            storage=storage,
+            on_revoked=reasons.append,
+        )
+
+        with patch("requests.post") as post:
+            with pytest.raises(TokenRefreshError) as raised:
+                am.refresh_now()
+
+        assert not isinstance(raised.value, TokenRevokedError)
+        assert not post.called
+        assert reasons == []
+        storage.clear_tokens.assert_not_called()
 
     def test_without_a_hook_a_refused_refresh_only_clears_the_store(self, auth_manager, storage):
         # the pairing flows and the hoot CLI build an AuthManager with no hook

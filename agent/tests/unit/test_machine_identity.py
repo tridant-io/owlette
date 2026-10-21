@@ -584,3 +584,42 @@ def test_the_token_file_is_written_owner_only_off_windows(data_root, machine_bin
 def test_the_token_file_refuses_a_symlink_on_posix():
     """A symlink planted at the path must not redirect the write."""
     assert secure_storage._TOKEN_FILE_FLAGS & os.O_NOFOLLOW
+
+
+# a refresh that finds no token unpairs the machine only when the store is gone,
+# so only a store that is gone may read as cleared, on every platform
+def test_a_store_never_written_reads_as_cleared(data_root, machine_binding):
+    assert secure_storage.SecureStorage(data_root).is_cleared() is True
+
+
+def test_a_saved_store_is_not_cleared_until_it_is(data_root, machine_binding):
+    storage = secure_storage.SecureStorage(data_root)
+    assert storage.save_refresh_token('refresh-abc') is True
+    assert storage.is_cleared() is False
+
+    assert storage.clear_tokens() is True
+    assert storage.is_cleared() is True
+
+
+def test_a_damaged_store_reads_empty_but_is_not_cleared(data_root, machine_binding):
+    (data_root / secure_storage.TOKEN_FILE_NAME).write_bytes(b'not a token store')
+    storage = secure_storage.SecureStorage(data_root)
+
+    assert storage.get_refresh_token() is None
+    assert storage.is_cleared() is False
+
+
+def test_a_store_that_cannot_be_read_is_not_cleared(data_root, machine_binding, monkeypatch):
+    storage = secure_storage.SecureStorage(data_root)
+    assert storage.save_refresh_token('refresh-abc') is True
+    # what _read_file answers for a file another process holds open
+    monkeypatch.setattr(storage, '_read_file', lambda path: b'')
+
+    assert storage.get_refresh_token() is None
+    assert storage.is_cleared() is False
+
+
+def test_a_retained_copy_alone_is_not_cleared(data_root, machine_binding):
+    (data_root / RETAINED_NAME).write_bytes(b'pre-migration copy')
+
+    assert secure_storage.SecureStorage(data_root).is_cleared() is False
