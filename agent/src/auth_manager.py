@@ -412,12 +412,16 @@ class AuthManager:
 
             refresh_token = self.storage.get_refresh_token()
             if not refresh_token:
-                # a store that emptied mid-run was cleared by another holder of
-                # the credential (hoot, on its own refused refresh): the same
-                # revoke, so the same exit
                 if self._on_revoked is not None:
-                    self._on_revoked("no refresh token left in storage")
-                    raise TokenRevokedError("No refresh token found in storage")
+                    # a store that is gone was cleared by another holder of the
+                    # credential (hoot, on its own refused refresh): the same
+                    # revoke, so the same exit. one still on disk that read as
+                    # empty (held open, mid-replace, damaged) is a failed
+                    # refresh: unpairing on it would take a site visit to undo
+                    if self.storage.is_cleared():
+                        self._on_revoked("no refresh token left in storage")
+                        raise TokenRevokedError("No refresh token found in storage")
+                    logger.warning("Token store is on disk but read as empty; retrying, not unpairing")
                 raise TokenRefreshError("No refresh token found in storage")
 
             url = f"{self.api_base}/agent/auth/refresh"
