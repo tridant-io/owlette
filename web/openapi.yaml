@@ -5028,6 +5028,18 @@ paths:
         (default 100); over it is `413` with `code: over_quota` and
         `quota: { max_targets, requested }`. Field validation failures are
         `400 validation_failed` with an `errors` map keyed by body field.
+
+        **Active hours (breaking for daytime scripts).** On Windows, an agent
+        with the active-hours guard refuses `install_software` while the
+        machine is inside its Windows active hours (08:00–17:00 when nobody set
+        them), so a daytime deployment that used to install now fails on those
+        targets unless the body carries `active_hours_override: { reason }`. A
+        refused target ends `failed` with an `error` that starts
+        `Error: active_hours:`, e.g. `Error: active_hours: inside active hours
+        08:00–17:00 (machine time); they end at 17:00`; retry it with an
+        override or after the window. The override goes onto every queued
+        command as `activeHoursOverride: { reason, approvedBy }`, with the
+        caller as `approvedBy`. A malformed override is `400`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -5075,6 +5087,8 @@ paths:
                   type: array
                   items: { type: string }
                   minItems: 1
+                active_hours_override:
+                  $ref: '#/components/schemas/ActiveHoursOverrideRequest'
       responses:
         '201':
           description: Deployment queued.
@@ -5262,6 +5276,11 @@ paths:
         `POST .../deployments/checksum` does. `409 no_failed_targets` when
         nothing matches. Requires `DEPLOYMENT_MANAGE`; API keys need
         `site=<siteId>:write`.
+
+        A target refused inside its active hours is `failed` with an `error`
+        that starts `Error: active_hours:`. Retrying it inside the window needs
+        `active_hours_override: { reason }` in this body: the create call's
+        override does not carry over. A malformed override is `400`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -5280,6 +5299,8 @@ paths:
                   minItems: 1
                   items: { type: string, minLength: 1 }
                   description: Retry only these machines' failed targets. Omit to retry every failed target.
+                active_hours_override:
+                  $ref: '#/components/schemas/ActiveHoursOverrideRequest'
       responses:
         '200':
           description: Retry queued.
@@ -6792,6 +6813,24 @@ paths:
         `cancel_mcp_tool` needs the site owner's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
         `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
+
+        **Active hours (breaking for daytime scripts).** On Windows, an agent
+        with the active-hours guard (`capabilities.activeHoursGuard` on the
+        machine doc) refuses `reboot_machine` and `shutdown_machine` while the
+        machine is inside its Windows active hours, on the machine's own clock.
+        Windows always has active hours (08:00–17:00 when nobody set them), so
+        a daytime reboot or shutdown that used to go through is now refused
+        unless it carries `params.active_hours_override: { reason }`. The
+        refusal is not an HTTP error: the command is queued (`202`) and then
+        ends `failed`, with an `error` that starts `Error: active_hours:`, e.g.
+        `Error: active_hours: inside active hours 08:00–17:00 (machine time);
+        they end at 17:00`. The server writes the override onto the command as
+        `activeHoursOverride: { reason, approvedBy }`, with the caller
+        (`user:<uid>` or `apiKey:<keyId>`) as `approvedBy`, and the agent logs
+        `active_hours_override` to the site log. Instead of overriding,
+        `reboot_machine` can take `params.when: after_active_hours` to restart
+        when active hours end. macOS, Linux and agents without the guard ignore
+        both fields, so there `after_active_hours` restarts at once.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6813,7 +6852,13 @@ paths:
                   type: object
                   description: |
                     Per-type parameters. `reboot_machine` /
-                    `shutdown_machine` accept `delay_seconds` (>=0).
+                    `shutdown_machine` accept `delay_seconds` (>=0) and
+                    `active_hours_override`; `reboot_machine` also accepts
+                    `when`. A malformed override (missing, blank or over-long
+                    `reason`, or any other key), an override on another type,
+                    a `when` other than `now` / `after_active_hours`, `when` on
+                    `shutdown_machine`, or an override together with
+                    `when: after_active_hours` is `400`.
                     `capture_screenshot` accepts `monitor` ('all' |
                     'primary' | non-negative integer). Process commands
                     require `process_name` or `process_id`; `set_launch_mode`
@@ -6828,6 +6873,13 @@ paths:
                     accept their command-specific allowlisted fields.
                   properties:
                     delay_seconds: { type: integer, minimum: 0 }
+                    when:
+                      type: string
+                      enum: [now, after_active_hours]
+                      default: now
+                      description: "`reboot_machine` only. `after_active_hours` restarts when the machine's active hours end, or now when it is outside them."
+                    active_hours_override:
+                      $ref: '#/components/schemas/ActiveHoursOverrideRequest'
                     monitor:
                       oneOf:
                         - type: string
@@ -6946,15 +6998,23 @@ paths:
                         type: string
                         enum: [pending, in_progress, completed, failed]
                       result:
-                        type: object
-                        description: |
-                          Present when status=completed. For
-                          capture_screenshot commands, includes
-                          `screenshot_url` (1-hour signed) +
-                          `expires_at`.
-                        properties:
-                          screenshot_url: { type: string, format: uri }
-                          expires_at: { type: string, format: date-time }
+                        description: Present when status=completed and the agent answered with something.
+                        oneOf:
+                          - type: object
+                            description: |
+                              For capture_screenshot commands, includes
+                              `screenshot_url` (1-hour signed) +
+                              `expires_at`.
+                            properties:
+                              screenshot_url: { type: string, format: uri }
+                              expires_at: { type: string, format: date-time }
+                          - type: string
+                            description: |
+                              reboot_machine, shutdown_machine and
+                              cancel_reboot answer with a sentence, e.g.
+                              `Reboot deferred until 17:00 (machine time)`
+                              or
+                              `Reboot scheduled in 60 seconds (not inside active hours)`.
                       error:
                         type: string
                         description: Present when status=failed.
@@ -11944,6 +12004,25 @@ components:
           type: integer
           minimum: 0
 
+    ActiveHoursOverrideRequest:
+      type: object
+      nullable: true
+      required: [reason]
+      additionalProperties: false
+      description: |
+        A person's approval to act inside the machine's active hours. The
+        server writes it onto the command as `activeHoursOverride: { reason,
+        approvedBy }`, with the caller (`user:<uid>` or `apiKey:<keyId>`) as
+        `approvedBy`; the agent logs `active_hours_override` to the site log.
+        Null or absent means no override.
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Why this can't wait for active hours to end. Trimmed.
+          example: venue closed today
+
     HealthResponse:
       type: object
       required: [ok, origin, commit, checked_at, latency_ms]
@@ -13394,6 +13473,38 @@ components:
             session: { type: boolean, nullable: true, description: "The desktop app's hold (idle lock, screensaver; on Windows the display). Null without a fresh report." }
             how: { type: string, nullable: true, description: What holds the service's half, only while held. }
             reason: { type: string, nullable: true, description: "Why a wanted hold is not fully held, e.g. `no_display`." }
+        capabilities:
+          description: |
+            Feature flags the agent reports on its heartbeat, computed
+            from what is installed on the machine. `1` means available.
+            Absent or null on an agent too old to report them.
+            `activeHoursGuard: 1` marks a Windows agent that refuses
+            `reboot_machine`, `shutdown_machine` and deployments inside its
+            `activeHours` unless the command carries an override.
+          type: object
+          nullable: true
+          additionalProperties: true
+        activeHours:
+          type: object
+          nullable: true
+          description: |
+            List route only. The machine's Windows active hours as the agent
+            reads them (policy, then MDM, then the user's setting, then Windows'
+            8–17 default), in whole hours on the machine's clock: `start`
+            inclusive, `end` exclusive, wrapping past midnight when `start` is
+            the later hour. Null off Windows and on agents that predate it.
+          required: [start, end, source]
+          properties:
+            start: { type: integer, minimum: 0, maximum: 23 }
+            end: { type: integer, minimum: 0, maximum: 23 }
+            source: { type: string, enum: [policy, mdm, user, default] }
+        machineTimezone:
+          type: string
+          nullable: true
+          example: Europe/Berlin
+          description: |
+            List route only. The machine's IANA timezone, the clock
+            `activeHours` is read on. Null when the agent could not name it.
         currentRoosts:
           type: array
           description: List route only.
@@ -13428,14 +13539,6 @@ components:
               items:
                 type: object
                 additionalProperties: true
-            capabilities:
-              description: |
-                Feature flags the agent reports on its heartbeat, computed
-                from what is installed on the machine. `1` means available.
-                Absent or null on an agent too old to report them.
-              type: object
-              nullable: true
-              additionalProperties: true
             swoopViewers:
               description: |
                 live swoop viewers, mirrored by the server from the session

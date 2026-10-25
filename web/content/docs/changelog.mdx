@@ -7,6 +7,35 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### added — owlette won't reboot, shut down or deploy to a Windows machine inside its active hours
+
+On Windows, the agent now refuses a reboot, a shutdown or a deployment while
+the machine is inside its active hours, the hours Windows holds its own update
+restarts back (08:00–17:00 unless someone set others). The dashboard asks
+first: cancel, restart when active hours end, or restart now with a reason,
+which is logged with your name. A held restart shows as an amber "restart at"
+pill, and a crash loop inside active hours waits for them to end. hoot checks
+active hours and talons before it acts. To stop Windows restarting a machine on
+its own it now limits update restarts to outside active hours
+(`limit_auto_restart`), or turns automatic installs off (`disable_auto_install`)
+when you want no update restarts at all. `set_restart_deadline` is gone: it
+never worked.
+
+**Breaking for API and CLI scripts.** Windows always has active hours, so a
+daytime script that reboots, shuts down or deploys is now refused: the command
+ends `failed` with `Error: active_hours: …`. Send
+`active_hours_override: { reason }` to act anyway, or for a reboot
+`when: "after_active_hours"` to restart once they end. A deployment retry needs
+its own override. `owlette machine reboot` and `shutdown` and `owlette deploy
+create` and `retry` take `--override-active-hours --reason`, and `reboot` takes
+`--after-active-hours`. `reboot` and `shutdown` now wait for the agent's answer
+and exit 1 on a refusal, and their `--json` prints the final command status
+(`commandId`, `status`, `createdAt`, `updatedAt`, `result` or `error`) instead
+of `{commandId, status}`.
+
+A machine is protected once it runs this release. Older agents ignore active
+hours and the override.
+
 ### fixed — owlette swoop's traffic lights sit centred on its bar on a Mac
 
 The close, minimize and full-screen buttons sat where macOS puts them for its

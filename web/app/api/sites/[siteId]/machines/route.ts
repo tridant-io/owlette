@@ -83,6 +83,13 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         // ({ wanted, held, session, how, reason }), mirrored on each change;
         // absent on an agent that predates it.
         displayAwake: data.displayAwake ?? null,
+        // what the dashboard needs to tell whether the agent would refuse a
+        // restart now: the heartbeat's capability map (activeHoursGuard), its
+        // windows active hours ({ start, end, source }) and the machine's own
+        // zone, which the window is read on.
+        capabilities: data.capabilities ?? null,
+        activeHours: data.activeHours ?? null,
+        machineTimezone: data.machine_timezone_iana ?? null,
         currentRoosts: roostsByMachine.get(d.id) ?? [],
       };
     });

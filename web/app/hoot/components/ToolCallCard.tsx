@@ -103,6 +103,11 @@ export function ToolCallCard({
   const approvalTarget = approvalTargetMachineIds?.length
     ? formatApprovalTargets(approvalTargetMachineIds, approvalTargetDynamic)
     : approvalTargetLabel;
+  // Approving this lets the call act inside the machine's active hours, so the
+  // banner says so up front rather than leaving it in the collapsed input.
+  const overrideReason = args.override_active_hours === true
+    ? (typeof args.reason === 'string' && args.reason.trim()) || 'no reason given'
+    : null;
 
   // Prefer the uploaded Firebase URL; fall back to inline base64 if upload failed.
   let screenshotSrc: string | null = null;
@@ -197,6 +202,11 @@ export function ToolCallCard({
             hoot wants to run the privileged <span className="font-mono">{toolName}</span> tool
             {approvalTarget ? <> on <span className="font-medium">{approvalTarget}</span></> : null}. approve to continue, or expand to inspect the input.
           </p>
+          {overrideReason !== null && (
+            <p className="text-xs text-foreground break-words">
+              <span className="font-medium text-warning">override active hours:</span> {overrideReason}
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <Button
               type="button"

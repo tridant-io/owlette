@@ -3,7 +3,7 @@
  * with controls. Always used on mobile; toggleable with list view on desktop.
  */
 
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -20,6 +20,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
+import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
 import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
@@ -27,6 +28,12 @@ import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
+import {
+  activeHoursGuardOf,
+  insideActiveHoursNow,
+  type PowerCommandOptions,
+  type PowerCommandSent,
+} from '@/lib/activeHours';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
@@ -73,8 +80,8 @@ interface MachineCardViewProps {
   onConfigureSchedule?: (machineId: string, process: Process) => void;
   onRemoveMachine: (machineId: string, machineName: string, isOnline: boolean) => void;
   onMetricClick?: (machineId: string, metricType: MetricType) => void;
-  onRestart?: (machineId: string) => Promise<void>;
-  onShutdown?: (machineId: string) => Promise<void>;
+  onRestart?: (machineId: string, options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  onShutdown?: (machineId: string, options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onCancelRestart?: (machineId: string) => Promise<void>;
   onDismissRestartPending?: (machineId: string) => Promise<void>;
   onScreenshot?: (machineId: string) => void;
@@ -184,6 +191,23 @@ const MachineCard = memo(function MachineCard({
   const isMuted = fullPrefs.mutedMachines.includes(machineId);
   const openMetric = onMetricClick ? (metric: MetricType) => onMetricClick(machineId, metric) : undefined;
   const planLocked = planLimit != null;
+  const activeHoursGuard = activeHoursGuardOf(machine);
+  const power = usePowerCommand(currentSiteId);
+  const [approveOpen, setApproveOpen] = useState(false);
+
+  // approving the banner is a restart: inside active hours it asks the same
+  // question the context menu's restart does, outside it restarts at once
+  const approveRestart = async (options: PowerCommandOptions) => {
+    if (!onRestart) return;
+    const queued = await power.send({
+      machineId,
+      machineName: machineId,
+      action: 'restart',
+      options,
+      run: (opts) => onRestart(machineId, opts),
+    });
+    if (queued) setApproveOpen(false);
+  };
 
   const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
@@ -374,6 +398,8 @@ const MachineCard = memo(function MachineCard({
               shuttingDown={machine.shuttingDown}
               rebootScheduledAt={machine.rebootScheduledAt}
               shutdownScheduledAt={machine.shutdownScheduledAt}
+              rebootDeferredUntil={machine.rebootDeferredUntil}
+              machineTimezone={machine.machineTimezone}
               isSiteAdmin={isSiteAdmin}
               onCancel={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
             />
@@ -404,10 +430,12 @@ const MachineCard = memo(function MachineCard({
                 isOnline={machine.online}
                 rebooting={machine.rebooting}
                 shuttingDown={machine.shuttingDown}
+                rebootDeferredUntil={machine.rebootDeferredUntil}
                 isSiteAdmin={isSiteAdmin}
                 onRemoveMachine={() => onRemoveMachine(machineId, machineId, machine.online)}
-                onRestart={onRestart ? () => onRestart(machineId) : undefined}
-                onShutdown={onShutdown ? () => onShutdown(machineId) : undefined}
+                onRestart={onRestart ? (options) => onRestart(machineId, options) : undefined}
+                onShutdown={onShutdown ? (options) => onShutdown(machineId, options) : undefined}
+                activeHoursGuard={activeHoursGuard}
                 onCancelRestart={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
                 onScreenshot={onScreenshot ? () => onScreenshot(machineId) : undefined}
                 onLiveView={onLiveView ? () => onLiveView(machineId) : undefined}
@@ -467,16 +495,13 @@ const MachineCard = memo(function MachineCard({
                     size="sm"
                     data-testid="reboot-pending-approve"
                     className="h-7 px-2.5 text-xs bg-warning-solid text-warning-solid-foreground hover:text-warning-solid-foreground cursor-pointer"
-                    onClick={async (e) => {
+                    disabled={power.sending}
+                    onClick={(e) => {
                       e.stopPropagation();
-                      if (!onRestart) return;
-                      try {
-                        await onRestart(machineId);
-                        toast.success('restart approved');
-                      } catch (error: unknown) {
-                        toast.error('could not send the restart command', {
-                          description: error instanceof Error ? error.message : 'unknown error',
-                        });
+                      if (activeHoursGuard && insideActiveHoursNow(activeHoursGuard) !== false) {
+                        setApproveOpen(true);
+                      } else {
+                        void approveRestart({});
                       }
                     }}
                   >
@@ -512,6 +537,16 @@ const MachineCard = memo(function MachineCard({
           </div>
         </div>
       )}
+      {/* outside the banner: it stays mounted to hear the agent's answer after the banner goes */}
+      <MachinePowerConfirm
+        action="restart"
+        open={approveOpen}
+        onOpenChange={setApproveOpen}
+        machineName={machineId}
+        guard={activeHoursGuard}
+        sending={power.sending}
+        onConfirm={(options) => void approveRestart(options)}
+      />
 
       {!planLocked && machine.metrics && (
         <Collapsible open={statsExpanded} onOpenChange={onToggleStats}>

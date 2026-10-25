@@ -49,7 +49,7 @@ each talon's card shows its trigger, outputs and last run; expand it for **recen
 
 ## templates
 
-six built-in templates ship with every site: **morning wall check**, **crash triage**, **weekly health report**, **exe went missing**, **wall check after restart**, and **update guard**. update guard re-asserts the Windows Update install window and the suppression of the full-screen setup screens (privacy experience, welcome experience, "let's finish setting up your device", Edge first run) every Sunday morning, so an update never hijacks the exhibit — it is Windows only, since both tools it uses refuse on a Mac or Linux machine.
+six built-in templates ship with every site: **morning wall check**, **crash triage**, **weekly health report**, **exe went missing**, **wall check after restart**, and **update guard**. update guard re-asserts the Windows Update install window, active hours with no restart deadline (07:00–23:00 where Windows' default was in force, through `limit_auto_restart`), and the suppression of the full-screen setup screens (privacy experience, welcome experience, "let's finish setting up your device", Edge first run) every Sunday morning, so an update never hijacks the exhibit — it is Windows only, since both tools it uses refuse on a Mac or Linux machine.
 
 **save as template** keeps a talon's trigger, condition, outputs and cooldown as a custom template for the site. templates ship **un-armed**: the ones that need to change machine state tell you to turn on *let hoot act* after you add them.
 

@@ -187,6 +187,14 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
     ],
   },
   {
+    group: 'active hours',
+    options: [
+      { value: 'active_hours_refused', label: 'refused inside active hours' },
+      { value: 'active_hours_override', label: 'active hours overridden' },
+      { value: 'reboot_deferred', label: 'restart held until active hours end' },
+    ],
+  },
+  {
     group: 'displays',
     options: [
       { value: 'display_monitor_added', label: 'monitor added' },

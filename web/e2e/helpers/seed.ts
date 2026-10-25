@@ -358,6 +358,34 @@ export interface SeedMachineOptions {
         processName?: string;
         reason?: string;
       };
+  /**
+   * `activeHours` as the agent heartbeats it, on the machine's clock (UTC
+   * here). {@link activeHoursAroundNow} gives a window that holds, or misses,
+   * the hour the spec runs in.
+   */
+  activeHours?: { start: number; end: number; source?: 'policy' | 'mdm' | 'user' | 'default' };
+  /**
+   * Writes `capabilities.activeHoursGuard: 1`: a windows agent that refuses
+   * restarts, shutdowns and deployments inside `activeHours`. Without it the
+   * dashboard treats the machine as an agent that guards nothing.
+   */
+  activeHoursGuard?: boolean;
+  /**
+   * Unix seconds a restart waits for active hours to end: `rebootDeferredUntil`
+   * with `rebootSource: 'deferred'`, as the agent writes them.
+   */
+  rebootDeferredUntil?: number;
+}
+
+/**
+ * A window two hours wide that holds the current UTC hour (`inside`) or sits
+ * clear of it, for {@link SeedMachineOptions.activeHours}. Seeded machines run
+ * on UTC, and two hours keep a spec from straddling the window's edge.
+ */
+export function activeHoursAroundNow(inside: boolean): { start: number; end: number; source: 'policy' } {
+  const hour = new Date().getUTCHours();
+  const start = inside ? hour : (hour + 2) % 24;
+  return { start, end: (start + 2) % 24, source: 'policy' };
 }
 
 /**
@@ -421,6 +449,13 @@ export async function seedMachine(
       }
     : {};
 
+  const activeHoursExtras = {
+    ...(opts.activeHours ? { activeHours: { source: 'policy', ...opts.activeHours } } : {}),
+    ...(typeof opts.rebootDeferredUntil === 'number'
+      ? { rebootDeferredUntil: opts.rebootDeferredUntil, rebootSource: 'deferred' }
+      : {}),
+  };
+
   // Status doc for useMachines. Empty `metrics` keeps the card minimal — the
   // display-panel test needs no sparkline data.
   await db
@@ -435,13 +470,17 @@ export async function seedMachine(
       machine_timezone_iana: 'UTC',
       // Without the capability handshake the recall button stays disabled on an
       // "agent too old" tooltip, breaking every recall spec.
-      capabilities: { displayRemoteApply: 1 },
+      capabilities: {
+        displayRemoteApply: 1,
+        ...(opts.activeHoursGuard ? { activeHoursGuard: 1 } : {}),
+      },
       metrics: {
         schemaVersion: 2,
         timestamp: new Date(),
       },
       ...rebootingExtras,
       ...rebootPendingExtras,
+      ...activeHoursExtras,
     });
 
   // Offset positions so DisplayCanvas has something non-trivial to render.

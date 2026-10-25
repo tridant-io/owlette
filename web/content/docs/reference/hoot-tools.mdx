@@ -1,7 +1,7 @@
 ---
 title: "hoot tools reference"
 description: "every tool hoot can call — all 52 in web/lib/mcp-tools.ts — with its tier, parameters, how it executes, and which ones are Windows only."
-keywords: ["mcp tools", "ai tools", "tool list", "tool permissions", "approval tiers", "windows only tools", "unsupported_on_platform", "mac tools", "linux tools"]
+keywords: ["mcp tools", "ai tools", "tool list", "tool permissions", "approval tiers", "windows only tools", "unsupported_on_platform", "mac tools", "linux tools", "active hours", "windows update", "stop windows restarting", "automatic updates", "update restart", "restart deadline", "override"]
 ---
 
 hoot offers the model the same 52 tools on every machine. the tier decides whether a call needs your approval; the machine's agent decides whether it can run there. for how chats use these tools, see [hoot](/docs/dashboard/hoot).
@@ -12,13 +12,28 @@ hoot offers the model the same 52 tools on every machine. the tier decides wheth
 
 | tier | type | approval | count |
 |------|------|----------|-------|
-| **1** | read-only | auto-approved | 16 |
-| **2** | process and machine management | auto-approved | 25 |
+| **1** | read-only | auto-approved | 17 |
+| **2** | process and machine management | auto-approved | 24 |
 | **3** | privileged | in-chat approval while the site's approval gate is on (the default) | 11 |
 
 members and chat-scoped API keys are capped at tier 1. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
 
 > **server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) run in the Next.js server process and never go through the agent's command queue. talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine.
+
+### overriding active hours
+
+on Windows the agent refuses a reboot, a shutdown or a deployment while the machine is inside its active hours (see [agent commands](/docs/reference/agent-commands#active-hours)). four tools take an `override_active_hours` flag with a `reason`: `reboot_machine`, `shutdown_machine`, `deploy_software`, and `manage_windows_update` for `set_active_hours` and `limit_auto_restart`. a call that sets it always waits for an approval card, whatever its tier and even on a site that turned the approval gate off, and the card shows *override active hours:* with the reason. once approved, the command carries `activeHoursOverride: { reason, approvedBy: "user:<uid>" }`.
+
+the override works only in a dashboard chat a person drives, on one machine. a turn nobody is there to approve, so a scheduled follow-up, a talon's hoot output, the public conversations API and autonomous hoot, is never offered the flag or its `reason`. otherwise the call queues nothing and the model gets an error:
+
+| error | when |
+|-------|------|
+| `active_hours_override_needs_person` | nobody is there to approve it, and the model sent the flag anyway |
+| `active_hours_override_needs_single_machine` | the turn targets more than one machine |
+| `active_hours_override_needs_reason` | `reason` is missing, blank or over 500 characters |
+| `active_hours_override_not_approved` | the call that came back is not the one the card showed |
+
+without the flag, `reboot_machine` with `when: "after_active_hours"` is open to every caller.
 
 ---
 
@@ -81,6 +96,7 @@ web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts
 | `check_pending_reboot` | 1 | Firestore `mcp_tool_call` | not exposed | differs |
 | `schedule_followup` | 1 | server-side | not exposed | n/a (server) |
 | `cancel_followup` | 1 | server-side | not exposed | n/a (server) |
+| `list_talons` | 1 | server-side | not exposed | n/a (server) |
 | `restart_process` | 2 | legacy command-mapped | yes, IPC | yes |
 | `kill_process` | 2 | legacy command-mapped | yes, IPC | yes |
 | `start_process` | 2 | legacy command-mapped | yes, IPC | yes |
@@ -104,7 +120,6 @@ web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts
 | `manage_windows_feature` | 2 | Firestore `mcp_tool_call` | not exposed | Windows only |
 | `show_notification` | 2 | Firestore `mcp_tool_call` | not exposed | differs |
 | `create_talon` | 2 | server-side | not exposed | n/a (server) |
-| `list_talons` | 2 | server-side | not exposed | n/a (server) |
 | `set_talon_enabled` | 2 | server-side | not exposed | n/a (server) |
 | `run_command` | 3 | Firestore `mcp_tool_call` | yes, direct | differs; `user_session` Windows only |
 | `run_powershell` | 3 | Firestore `mcp_tool_call` | yes, direct | Windows only |
@@ -268,7 +283,9 @@ the software deployment presets a site admin manages: installer URLs, silent ins
 
 ### check_pending_reboot
 
-whether the machine is waiting on a reboot, and what is asking for it. on Windows the reasons come from Windows Update, Component Based Servicing, pending file rename operations and the SCCM client; on macOS from an OS update prepared or a security response staged; on Linux from `/run/reboot-required`, which a package upgrade writes. only something already installed or prepared counts — an update that is merely available is not a pending reboot.
+whether the machine is waiting on a reboot, and what is asking for it. on Windows the reasons come from Windows Update, Component Based Servicing and the SCCM client; on macOS from an OS update prepared or a security response staged; on Linux from `/run/reboot-required`, which a package upgrade writes. only something already installed or prepared counts — an update that is merely available is not a pending reboot.
+
+file renames queued for the next boot (`PendingFileRenameOperations`) are reported apart, as `file_renames`, and do not make `pending` true: installers and drivers leave them for weeks with nothing from Windows Update waiting.
 
 read-only, for incident investigations, after a suspected update, or when a machine is behaving unusually. the agent also raises a site-level alert the first time it detects a pending reboot (once, tracked with a flag file).
 
@@ -276,7 +293,7 @@ read-only, for incident investigations, after a suspected update, or when a mach
 |-----------|------|----------|-------------|
 | _(none)_ | | | |
 
-**returns**: `pending` (bool), `reasons` (array), `last_update_installed`, `next_scheduled_update`. off Windows, `next_scheduled_update` is always null, and on Linux so is `last_update_installed`.
+**returns**: `pending` (bool), `reasons` (array), `file_renames` (bool), `last_update_installed`, `next_scheduled_update`. on Windows 10, `next_scheduled_update` is the next run of the `UpdateOrchestrator\Reboot` task, when it has one; Windows 11 has no such task, so there it is `{ task: null, next_run: null, note: "unknown on this build" }`. off Windows, `file_renames` is always false and `next_scheduled_update` always null, and on Linux so is `last_update_installed`.
 
 ---
 
@@ -321,9 +338,23 @@ ownership is enforced inside the store transaction (the Admin SDK bypasses `fire
 
 ---
 
+### list_talons
+
+the talons on this site, ordered by name. hoot calls it before `set_talon_enabled` to get a talon ID, before `create_talon` so an existing talon is not duplicated, and before a disruptive action, to say whether a talon will act on the machine soon. **server-side**.
+
+| parameter | type | required | description |
+|-----------|------|----------|-------------|
+| _(none)_ | | | |
+
+**returns**: `count`, plus per talon `talon_id`, `name`, `enabled`, `trigger` (the normalized object, not a prose summary, so the exact metric, interval or event values are available for follow-up calls), `outputs` (types only), `last_run_status`, `last_run_at`, `next_run_at`.
+
+tier 1, since it only reads: every site member can already read the site's talons on the [talons](/docs/dashboard/talons) page, so a member's chat, a chat-scoped API key and unattended hoot can call it too. the two talon tools that write stay tier 2.
+
+---
+
 ## tier 2: process and machine management tools
 
-these run immediately, without confirmation. the owlette process controls (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. the process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated actions as the dashboard, and the talon tools (`create_talon`, `list_talons`, `set_talon_enabled`) run server-side through the same store as the talon editor. the rest are purpose-built, with validated parameters and a narrower blast radius than a raw shell script.
+these run immediately, without confirmation, unless a call overrides active hours. the owlette process controls (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. the process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated actions as the dashboard, and the talon tools (`create_talon`, `set_talon_enabled`) run server-side through the same store as the talon editor. the rest are purpose-built, with validated parameters and a narrower blast radius than a raw shell script.
 
 ### restart_process
 
@@ -492,17 +523,40 @@ on macOS (`launchctl`) and Linux (`systemctl`) the name stays the same and the t
 
 ### manage_windows_update
 
-**Windows only.** pause, resume or schedule Windows Update. pause before live events; `set_active_hours` blocks auto-reboot during quiet hours; `set_scheduled_install` sets exact install timing; `set_feature_deferral` / `set_quality_deferral` delay rollouts. Windows Update is the biggest threat to unattended 24/7 installations.
+**Windows only.** read and change how Windows Update installs updates and restarts the machine. Windows Update is the biggest threat to unattended 24/7 installations.
+
+active hours hold Windows' own update restarts back only until an update deadline passes, and owlette refuses reboots, shutdowns and deployments inside them. to stop Windows restarting a machine on its own, hoot uses `limit_auto_restart`: updates keep installing, and Windows restarts for them only outside active hours, so a nightly restart can still happen. `disable_auto_install` is for an operator who wants no update restarts at all: nothing installs on its own, so security updates wait for a person.
+
+owlette never sets `NoAutoRebootWithLoggedOnUsers`. Microsoft lists it under legacy policies on Windows 11, field reports say it is ignored there, and while it is on, Windows ignores active hours set by policy. `get_status` warns when something else set it.
+
+| action | what it does |
+|--------|--------------|
+| `get_status` | reads everything that decides whether and when Windows restarts for updates. see the returns below |
+| `pause` | pauses updates for `pause_days` (1-35), writing the six pause values the Settings pause button writes, in UTC. `status` is `paused` only once Windows reports quality and feature updates both paused, else `written_not_confirmed`. when group policy turns pausing off or already pauses updates, nothing is written: `not_written`, with the reason |
+| `resume` | removes the six pause values: `resumed`, or `cleared_not_confirmed` while Windows still reports updates paused |
+| `set_active_hours` | sets active hours by group policy, the one place Windows reads them over the person's choice in Settings and its own adjusting. after it, nobody can change them in Settings on the machine, and a domain group policy that sets the same values puts its own back at its next refresh |
+| `limit_auto_restart` | sets active hours the same way (`start_hour` and `end_hour`, or neither to keep the current ones), then removes the restart deadlines under the policy key, and owlette's old `AU\AutoRestartDeadlinePeriodInDays`. reports what it removed and any deadline that remains, such as one MDM sets |
+| `disable_auto_install` | sets `AU\NoAutoUpdate=0` and `AU\AUOptions=3` and removes `ScheduledInstall*`: Windows downloads updates and waits for someone to install them, so nothing installs or restarts for an update on its own |
+| `enable_auto_install` | removes `AUOptions`, `NoAutoUpdate` and `ScheduledInstall*`, so Windows' own automatic updates come back |
+| `set_scheduled_install` | turns on scheduled install (`AUOptions=4`, `NoAutoUpdate=0`) at `day_of_week` and `hour`: updates install then, and Windows restarts the machine to finish them |
+| `set_feature_deferral` / `set_quality_deferral` | delay feature or quality updates by `days`. written to the policy key, where Windows reads them; earlier agents wrote them under `AU`, where they did nothing |
+
+`set_restart_deadline` is gone. it wrote where Windows never reads, and a deadline can only ever force a restart.
+
+**setting active hours.** `set_active_hours` and `limit_auto_restart` take hours 0-23, a start different from the end, and a window of at most 18 hours from the start, or the `ActiveHoursMaxRange` policy or MDM sets. active hours that MDM sets are refused: change them there. while the machine is inside its active hours, new ones that would put it outside them are refused with the `active_hours` error unless the call carries an approved [override](#overriding-active-hours), so unattended hoot cannot shrink the window and then reboot. both answer with the window as Windows now reads it, notes and warnings. a call that needed the override also answers `override_used: true` and `previous_active_hours`, and the agent logs it to the site's logs as *active hours overridden*, with who approved it and why.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| `action` | string | **yes** | `get_status`, `pause`, `resume`, `set_active_hours`, `set_scheduled_install`, `set_restart_deadline`, `set_feature_deferral`, `set_quality_deferral` |
+| `action` | string | **yes** | `get_status`, `pause`, `resume`, `set_active_hours`, `limit_auto_restart`, `disable_auto_install`, `enable_auto_install`, `set_scheduled_install`, `set_feature_deferral`, `set_quality_deferral` |
 | `pause_days` | number | for `pause` | days to pause (1-35) |
-| `start_hour` / `end_hour` | number | for `set_active_hours` | hours (0-23) |
+| `start_hour` / `end_hour` | number | for `set_active_hours`; optional for `limit_auto_restart` | the hours active hours start and end (0-23). an end of `17` means until 17:00 |
 | `day_of_week` | number | for `set_scheduled_install` | `0` = every day, `1`-`7` = Sun–Sat |
 | `hour` | number | for `set_scheduled_install` | hour of day (0-23) |
-| `deadline_days` | number | for `set_restart_deadline` | days before a forced reboot (2-14) |
 | `days` | number | for deferral actions | feature (0-365) or quality (0-30) deferral days |
+| `override_active_hours` | boolean | no | for `set_active_hours` and `limit_auto_restart`: allow new hours that leave the machine outside its active hours now. needs approval |
+| `reason` | string | with `override_active_hours` | the operator's reason, 500 characters or fewer |
+
+**`get_status` returns**: `active_hours` (`{ start, end, source }`), `inside_active_hours_now` and `machine_local_time`; `automatic_updates` (`AUOptions`, `NoAutoUpdate`, `ScheduledInstall*`, `NoAutoRebootWithLoggedOnUsers`, `AlwaysAutoRebootAtScheduledTime`); `restart_deadlines`, each with where it is set and whether it still forces a restart, which a deadline does once it passes, active hours or not; `mdm_conflict` (`MDMWinsOverGP`, `IgnoreWindowsUpdateGroupPolicies`); `pause`, Windows' own pause state with the pause end and any policy pause; `update_restart_pending`, from the `RebootRequired` key and the update agent's own answer, apart from `file_renames_pending`; and `warnings`, naming anything that can still force a restart or keep Windows from honouring owlette's values. the older keys are still there: `active_hours_start`, `active_hours_end`, `scheduled_install_day`, `scheduled_install_time`, `auto_restart_deadline_days`, `feature_update_deferral_days`, `quality_update_deferral_days`.
 
 ---
 
@@ -572,6 +626,8 @@ on macOS (`launchctl`) and Linux (`systemctl`) the name stays the same and the t
 ### registry_operation
 
 **Windows only.** read, write or delete Windows registry values. restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services and others); the SAM, SECURITY and Cryptography hives are blocked.
+
+it never writes or deletes the values active hours come from, in any letter case: `ActiveHoursStart`, `ActiveHoursEnd`, `SetActiveHours`, `ActiveHoursMaxRange` and `SetActiveHoursMaxRange` under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`, and `ActiveHoursStart`, `ActiveHoursEnd`, `SmartActiveHoursState` and `IsActiveHoursEnabled` under `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`. the error points to `manage_windows_update` `set_active_hours` or `limit_auto_restart` instead, which won't move the machine out of its active hours without an approved [override](#overriding-active-hours). reading them still works, and the MDM keys are outside the allowlist.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -691,20 +747,6 @@ create a talon on this site — a saved automation of trigger, optional conditio
 **returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
 
 unattended hoot cannot call this tool. authoring a talon is standing fleet policy that outlives the incident, so `create_talon` is left out of the autonomous investigator's tool list regardless of tier.
-
----
-
-### list_talons
-
-the talons on this site, ordered by name. hoot calls it before `set_talon_enabled` to get a talon ID, and before `create_talon` so an existing talon is not duplicated.
-
-| parameter | type | required | description |
-|-----------|------|----------|-------------|
-| _(none)_ | | | |
-
-**returns**: `count`, plus per talon `talon_id`, `name`, `enabled`, `trigger` (the normalized object, not a prose summary, so the exact metric, interval or event values are available for follow-up calls), `outputs` (types only), `last_run_status`, `last_run_at`, `next_run_at`.
-
-read-only, so unlike the two writing talon tools this one stays available to unattended hoot.
 
 ---
 
@@ -839,6 +881,8 @@ deploy and install software on the machine through the full deployment pipeline:
 
 **requires confirmation before it runs.** hoot summarizes the deployment plan (software, version, install path, parallel install, processes to close) and waits for explicit approval.
 
+**active hours.** on Windows the agent refuses the install while the machine is inside its active hours, before it closes anything, and the [deployments](/docs/dashboard/deployments) page shows the refusal on that target. hoot says so before it deploys. `override_active_hours` installs anyway, on one machine, after approval (see [overriding active hours](#overriding-active-hours)).
+
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
 | `software_name` | string | **yes** | software name, e.g. `TouchDesigner`, `Unreal Engine` |
@@ -850,6 +894,8 @@ deploy and install software on the machine through the full deployment pipeline:
 | `close_processes` | array | no | process names to end before installing, e.g. `["TouchDesigner.exe"]` |
 | `parallel_install` | boolean | no | install alongside existing versions (on by default for TouchDesigner) |
 | `timeout_minutes` | number | no | max installation time in minutes (default: 40) |
+| `override_active_hours` | boolean | no | install now even though the machine is inside its active hours. needs approval |
+| `reason` | string | with `override_active_hours` | the operator's reason, 500 characters or fewer |
 
 **TouchDesigner specifics:** the download URL is built from the version number. `parallel_install` is switched on automatically so the installer cannot remove existing builds. use the full installer, not the WebInstaller.
 
@@ -862,27 +908,32 @@ deploy and install software on the machine through the full deployment pipeline:
 
 ### reboot_machine
 
-reboot the machine after a one-minute countdown, cancellable from the dashboard or with `cancel_reboot` until it fires. the countdown is a minute on every platform, because macOS and Linux schedule a shutdown in whole minutes; the tool's own description still tells the model 30 seconds.
+reboot the machine after a one-minute countdown, cancellable from the dashboard or with `cancel_reboot` until it fires. the countdown is a minute on every platform, because macOS and Linux schedule a shutdown in whole minutes.
+
+on Windows the agent refuses it while the machine is inside its active hours. `when: "after_active_hours"` holds the reboot until they end instead, needs no approval beyond the tool's own, and is what hoot is told to prefer; outside active hours, and on macOS and Linux, it reboots now. see [a held reboot](/docs/reference/agent-commands#a-held-reboot).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| _(none)_ | | | |
+| `when` | string | no | `now` (default) or `after_active_hours` |
+| `override_active_hours` | boolean | no | reboot now even though the machine is inside its active hours. needs approval, on one machine |
+| `reason` | string | with `override_active_hours` | the operator's reason, 500 characters or fewer |
 
 ---
 
 ### shutdown_machine
 
-shut the machine down after a one-minute countdown. the machine does **not** restart on its own.
+shut the machine down after a one-minute countdown. the machine does **not** restart on its own. on Windows the agent refuses it while the machine is inside its active hours, and a shutdown cannot be held until they end.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
-| _(none)_ | | | |
+| `override_active_hours` | boolean | no | shut down now even though the machine is inside its active hours. needs approval, on one machine |
+| `reason` | string | with `override_active_hours` | the operator's reason, 500 characters or fewer |
 
 ---
 
 ### cancel_reboot
 
-cancel a pending reboot or shutdown. it has to arrive before the countdown runs out.
+cancel a pending reboot or shutdown: one in its countdown, which it has to reach before the countdown runs out, or a reboot held until active hours end.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -900,6 +951,11 @@ LLM decides to call a tool
   +-- tier 3: pause for in-chat approval (when the per-site approval gate is on)
   |     +-- user approves: continue to the tool-name execution path
   |     +-- user denies: return "denied by user"
+  |
+  +-- override_active_hours set, any tier, gate on or off
+  |     +-- no person in the turn, several machines, or no reason: error, nothing queued
+  |     +-- otherwise pause for approval; the approved call carries
+  |         activeHoursOverride { reason, approvedBy } to the agent
   |
   +-- server-side tools
   |     +-- get_site_logs / get_system_presets query Firestore on the web server
@@ -933,7 +989,7 @@ the turn runs server-side, **detached from the browser connection**: it keeps ru
 tier-2 tools carry per-tool blocklists so hoot cannot cause its own outage:
 
 - `manage_process`: critical processes cannot be killed. on Windows that is lsass, winlogon, csrss, services, dwm, svchost and the other session processes, plus owlette's own service, host and Python processes. on macOS and Linux it is `init`, `systemd`, `systemd-logind`, `systemd-journald`, `dbus-daemon`, `sshd`, `launchd`, `loginwindow`, `WindowServer`, `SystemUIServer`, and owlette's own `owlette-desktop`, `owlette-host`, `python` and `python3`
-- `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted
+- `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted, and the active hours values can't be written or deleted
 - `manage_windows_feature`: core Windows features owlette depends on (NetFx4, WMI-\*, PowerShell\*) cannot be removed
 - `create_talon`: `command` outputs are site-admin only, and webhook URLs that resolve to private, loopback or link-local addresses are rejected
 

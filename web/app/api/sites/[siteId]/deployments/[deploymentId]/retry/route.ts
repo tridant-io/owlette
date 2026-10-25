@@ -24,6 +24,8 @@ import {
   computeInstallerChecksum,
   InstallerChecksumError,
 } from '@/lib/actions/computeInstallerChecksum.server';
+import { resolveActiveHoursOverride } from '@/lib/actions/executeMachineCommand.server';
+import { siteAuditActor } from '@/lib/actions/auditActor.server';
 import type { DeploymentTarget } from '@/hooks/useDeployments';
 
 type RouteParams = { siteId: string; deploymentId: string };
@@ -47,7 +49,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
-    const body = (parsed.body ?? {}) as { machines?: unknown };
+    const body = (parsed.body ?? {}) as { machines?: unknown; active_hours_override?: unknown };
 
     // Optional filter for the dashboard's per-row retry; omitted → all failed.
     let machineFilter: Set<string> | null = null;
@@ -64,6 +66,15 @@ export const POST = authorizedSiteHandler<RouteParams>({
       machineFilter = new Set(body.machines as string[]);
     }
 
+    // a retry needs its own approval; the original call's override does not carry over.
+    const actor = siteAuditActor(ctx);
+    const override = resolveActiveHoursOverride(body.active_hours_override, actor);
+    if (!override.ok) {
+      return problemValidation(`active_hours_override: ${override.error}`, {
+        'body.active_hours_override': [override.error],
+      });
+    }
+    const activeHoursOverride = override.override;
 
     return withIdempotency(
       request,
@@ -180,6 +191,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             if (sha256) commandData.sha256_checksum = sha256;
             if (verifyPath) commandData.verify_path = verifyPath;
             if (parallelInstall) commandData.parallel_install = true;
+            if (activeHoursOverride) commandData.activeHoursOverride = activeHoursOverride;
 
             await pendingRef.set({ [commandId]: commandData }, { merge: true });
           }),
@@ -217,9 +229,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
         emitMutation({
           kind: 'deployment_mutated',
           siteId,
-          actor: ctx.auth.keyContext
-            ? `apiKey:${ctx.auth.keyContext.keyId}`
-            : `user:${ctx.actor.userId}`,
+          actor,
           targetId: deploymentId,
           attributes: {
             endpoint: `/api/sites/${siteId}/deployments/${deploymentId}/retry`,
@@ -228,6 +238,9 @@ export const POST = authorizedSiteHandler<RouteParams>({
             retried_count: failed.length,
             machine_ids: failed.map((t) => t.machineId),
             correlationId: ctx.correlationId,
+            ...(activeHoursOverride
+              ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
+              : {}),
           },
         });
 

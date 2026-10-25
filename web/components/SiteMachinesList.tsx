@@ -3,19 +3,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, Monitor, RotateCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { formatRelativeTime } from '@/lib/timeUtils';
+import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
+import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 
 interface SiteMachine {
   id: string;
@@ -25,6 +19,11 @@ interface SiteMachine {
   agentVersion: string | null;
   /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */
   displayAwake?: { held?: boolean } | null;
+  /** what tells whether the agent would refuse a restart inside active hours; null where it reports none. */
+  osFamily?: string | null;
+  capabilities?: { activeHoursGuard?: number } | null;
+  activeHours?: unknown;
+  machineTimezone?: string | null;
 }
 
 interface SiteMachinesListProps {
@@ -44,10 +43,12 @@ interface SiteMachinesListProps {
 export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProps) {
   const [machines, setMachines] = useState<SiteMachine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
-  const [isRestarting, setIsRestarting] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
+  const power = usePowerCommand(siteId);
 
   const fetchMachines = useCallback(async () => {
     setError(null);
@@ -66,30 +67,33 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
     void fetchMachines();
   }, [fetchMachines]);
 
-  const handleConfirmRestart = async () => {
+  const handleConfirmRestart = async (options: PowerCommandOptions) => {
     if (!restartTarget) return;
-    setIsRestarting(true);
-    try {
-      // UI says "restart"; the wire verb deliberately stays "reboot".
-      const response = await fetch(
-        `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(restartTarget.id)}/commands`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': `machine-restart-${siteId}-${restartTarget.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const target = restartTarget;
+    const queued = await power.send({
+      machineId: target.id,
+      machineName: target.name,
+      action: 'restart',
+      options,
+      run: async (opts) => {
+        // UI says "restart"; the wire verb deliberately stays "reboot".
+        const response = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(target.id)}/commands`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Idempotency-Key': `machine-restart-${siteId}-${target.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            },
+            body: JSON.stringify({ type: 'reboot_machine', params: powerCommandParams('restart', opts) }),
           },
-          body: JSON.stringify({ type: 'reboot_machine', params: { delay_seconds: 30 } }),
-        },
-      );
-      if (!response.ok) throw new Error(`restart failed (${response.status})`);
-      toast.success(`"${restartTarget.name}" will restart in ~30 seconds`);
-      setRestartTarget(null);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'failed to send restart');
-    } finally {
-      setIsRestarting(false);
-    }
+        );
+        if (!response.ok) throw new Error(`restart failed (${response.status})`);
+        const body = (await response.json()) as { data: { commandId: string } };
+        return { commandId: body.data.commandId };
+      },
+    });
+    if (queued) setRestartOpen(false);
   };
 
   const handleConfirmRemove = async () => {
@@ -176,7 +180,10 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setRestartTarget(m)}
+                    onClick={() => {
+                      setRestartTarget(m);
+                      setRestartOpen(true);
+                    }}
                     disabled={!m.online}
                     aria-label={`restart ${m.name}`}
                     className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-accent-cyan cursor-pointer disabled:cursor-not-allowed"
@@ -209,37 +216,15 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         ))}
       </ul>
 
-      {/* Restart confirmation */}
-      <Dialog open={restartTarget !== null} onOpenChange={(o) => !o && setRestartTarget(null)}>
-        <DialogContent className="border-border text-foreground">
-          <DialogHeader>
-            <DialogTitle className="text-foreground">restart machine</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              restart <span className="font-mono text-foreground">{restartTarget?.name}</span>? it will
-              restart in about 30 seconds and every process on it will be interrupted. the agent
-              reconnects automatically.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setRestartTarget(null)}
-              disabled={isRestarting}
-              className="bg-secondary border border-border cursor-pointer"
-            >
-              cancel
-            </Button>
-            <Button
-              onClick={handleConfirmRestart}
-              disabled={isRestarting}
-              className="cursor-pointer"
-            >
-              <RotateCw className="h-4 w-4 mr-1" />
-              {isRestarting ? 'sending…' : 'restart'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MachinePowerConfirm
+        action="restart"
+        open={restartOpen}
+        onOpenChange={setRestartOpen}
+        machineName={restartTarget?.name ?? ''}
+        guard={restartTarget ? activeHoursGuardOf(restartTarget) : null}
+        sending={power.sending}
+        onConfirm={(options) => void handleConfirmRestart(options)}
+      />
 
       {/* Remove confirmation — the shared dialog the dashboard uses. Active-
           deployment data isn't loaded in this panel, so that pre-check is

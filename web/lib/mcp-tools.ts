@@ -3,7 +3,8 @@
  * the chat UI (for tool-call cards).
  *
  * Tier 1 read-only and tier 2 process management are auto-approved; tier 3 is
- * privileged and requires in-chat user confirmation.
+ * privileged and requires in-chat user confirmation, as does any call that
+ * overrides active hours.
  */
 
 export type ToolTier = 1 | 2 | 3;
@@ -23,6 +24,38 @@ export interface McpToolDefinition {
     }>;
     required?: string[];
   };
+}
+
+/**
+ * The active-hours override pair. A call that sets it waits for a person's
+ * approval in a dashboard chat (hoot-utils.server.ts); a turn no person drives,
+ * autonomous hoot included, is never offered it.
+ */
+export const ACTIVE_HOURS_OVERRIDE_PARAMS = ['override_active_hours', 'reason'] as const;
+
+function activeHoursOverrideFields(override: string): McpToolDefinition['parameters']['properties'] {
+  return {
+    override_active_hours: {
+      type: 'boolean',
+      description: `${override} Set it only when the operator explicitly asked for that and gave a reason. The call then waits for their approval in this chat, and works on one machine at a time.`,
+    },
+    reason: {
+      type: 'string',
+      description: "Required with override_active_hours: the operator's reason, 500 characters or fewer. The machine logs it with who approved it.",
+    },
+  };
+}
+
+export function takesActiveHoursOverride(def: McpToolDefinition): boolean {
+  return 'override_active_hours' in def.parameters.properties;
+}
+
+/** The definition without the override pair, for callers no person approves. */
+export function withoutActiveHoursOverride(def: McpToolDefinition): McpToolDefinition {
+  if (!takesActiveHoursOverride(def)) return def;
+  const properties = { ...def.parameters.properties };
+  for (const name of ACTIVE_HOURS_OVERRIDE_PARAMS) delete properties[name];
+  return { ...def, parameters: { ...def.parameters, properties } };
 }
 
 // Tier 1: Read-Only Tools
@@ -220,7 +253,7 @@ const tier1Tools: McpToolDefinition[] = [
   },
   {
     name: 'check_pending_reboot',
-    description: 'Diagnostic: detect whether a system reboot is currently pending (from Windows Update, Component Based Servicing, pending file rename ops, or SCCM client). Read-only. Returns pending (bool), reasons (array), last update install time, and next scheduled update run time if available. Use during incident investigations, after a suspected update, or when the machine is behaving unusually.',
+    description: 'Diagnostic: detect whether a system reboot is currently pending (from Windows Update, Component Based Servicing, or SCCM client). Read-only. Returns pending (bool), reasons (array), file_renames (bool), last update install time, and next scheduled update run time if available. file_renames means file renames are queued for the next boot; installers and drivers leave those for weeks, so they do not count as pending and are not a Windows Update restart. Use during incident investigations, after a suspected update, or when the machine is behaving unusually.',
     tier: 1,
     parameters: {
       type: 'object',
@@ -269,6 +302,16 @@ const tier1Tools: McpToolDefinition[] = [
         },
       },
       required: ['followup_id'],
+    },
+  },
+  // Read-only: any site member can already read the site's talons.
+  {
+    name: 'list_talons',
+    description: 'List the talons on this site: id, name, whether it is enabled, its trigger, its output types, and how its last run went. Call this before set_talon_enabled to get the talon id, and before create_talon so you do not duplicate a talon that already exists.',
+    tier: 1,
+    parameters: {
+      type: 'object',
+      properties: {},
     },
   },
 ];
@@ -651,14 +694,25 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_update',
-    description: 'Pause, resume, or schedule Windows Update. Use pause before live events, set_active_hours to define quiet hours during which auto-reboot is blocked, set_scheduled_install to define exactly when updates install, and set_feature_deferral / set_quality_deferral to delay update rollouts. Windows Update is the #1 threat to unattended 24/7 installations.',
+    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts.",
     tier: 2,
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['get_status', 'pause', 'resume', 'set_active_hours', 'set_scheduled_install', 'set_restart_deadline', 'set_feature_deferral', 'set_quality_deferral'],
+          enum: [
+            'get_status',
+            'pause',
+            'resume',
+            'set_active_hours',
+            'limit_auto_restart',
+            'disable_auto_install',
+            'enable_auto_install',
+            'set_scheduled_install',
+            'set_feature_deferral',
+            'set_quality_deferral',
+          ],
           description: 'The Windows Update operation to perform.',
         },
         pause_days: {
@@ -667,11 +721,11 @@ const tier2Tools: McpToolDefinition[] = [
         },
         start_hour: {
           type: 'number',
-          description: 'For set_active_hours: active hours start hour (0-23).',
+          description: 'For set_active_hours, or optionally limit_auto_restart (default: the current active hours): the hour active hours start (0-23).',
         },
         end_hour: {
           type: 'number',
-          description: 'For set_active_hours: active hours end hour (0-23).',
+          description: 'For set_active_hours, or optionally limit_auto_restart: the hour active hours end (0-23); 17 means until 17:00. At most 18 hours after start_hour.',
         },
         day_of_week: {
           type: 'number',
@@ -679,16 +733,15 @@ const tier2Tools: McpToolDefinition[] = [
         },
         hour: {
           type: 'number',
-          description: 'For set_scheduled_install: hour of day to install (0-23).',
-        },
-        deadline_days: {
-          type: 'number',
-          description: 'For set_restart_deadline: days Windows waits before force-rebooting (2-14).',
+          description: 'For set_scheduled_install: hour of day to install (0-23). Windows restarts the machine then to finish.',
         },
         days: {
           type: 'number',
           description: 'For set_feature_deferral (0-365) or set_quality_deferral (0-30): deferral days.',
         },
+        ...activeHoursOverrideFields(
+          'For set_active_hours or limit_auto_restart: allow new active hours that leave the machine outside them right now, which is refused without it.',
+        ),
       },
       required: ['action'],
     },
@@ -827,7 +880,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'registry_operation',
-    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. Use this for structured registry edits instead of execute_script + reg.exe.',
+    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. It refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe.',
     tier: 2,
     parameters: {
       type: 'object',
@@ -1057,15 +1110,6 @@ LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewe
     },
   },
   {
-    name: 'list_talons',
-    description: 'List the talons on this site: id, name, whether it is enabled, its trigger, its output types, and how its last run went. Call this before set_talon_enabled to get the talon id, and before create_talon so you do not duplicate a talon that already exists.',
-    tier: 2,
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
     name: 'set_talon_enabled',
     description: 'Arm or disarm an existing talon. Enabling re-arms its schedule from now, so a talon that sat disabled for a while does not fire the moment it comes back. Disabling leaves the talon in place — it does not delete it. Get talon_id from list_talons; never guess it.',
     tier: 2,
@@ -1230,6 +1274,9 @@ WORKFLOW:
 3. Present a clear summary of the deployment plan and ASK "Should I proceed?" — wait for explicit confirmation.
 4. Only after the user confirms, call this tool. It returns immediately with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
 
+ACTIVE HOURS:
+- On Windows, owlette refuses a deployment while the machine is inside its active hours, and the Deployments page shows the refusal. Tell the user before you deploy during them.
+
 TOUCHDESIGNER SPECIFICS:
 - Provide the version number (e.g. "2025.32280") and the download URL is resolved automatically via https://download.derivative.ca/TouchDesigner.{version}.exe
 - ALWAYS use the FULL installer URL (not WebInstaller) — web installers require network access during install and may fail in restricted environments.
@@ -1297,31 +1344,41 @@ WHEN TO ASK THE USER:
           description: 'Maximum installation time in minutes (default: 40).',
           default: 40,
         },
+        ...activeHoursOverrideFields('Install now even though the machine is inside its active hours.'),
       },
       required: ['software_name'],
     },
   },
   {
     name: 'reboot_machine',
-    description: 'Reboot the remote machine. Schedules a reboot with a 30-second delay so running processes can be saved. Can be cancelled within the countdown window.',
+    description: 'Reboot the remote machine after a 60-second countdown, so running processes can be saved; cancel_reboot stops it. On Windows, owlette refuses a reboot while the machine is inside its active hours: when: after_active_hours restarts it as soon as they end instead.',
     tier: 3,
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        when: {
+          type: 'string',
+          enum: ['now', 'after_active_hours'],
+          description: "now (default): restart after the countdown. after_active_hours: wait until the machine's active hours end, then restart; outside active hours it restarts now. cancel_reboot cancels a waiting restart too.",
+        },
+        ...activeHoursOverrideFields('Restart now even though the machine is inside its active hours.'),
+      },
     },
   },
   {
     name: 'shutdown_machine',
-    description: 'Shut down the remote machine. Schedules a shutdown with a 30-second delay. The machine will NOT automatically restart.',
+    description: 'Shut down the remote machine after a 60-second countdown; cancel_reboot stops it. The machine will NOT automatically restart. On Windows, owlette refuses a shutdown while the machine is inside its active hours.',
     tier: 3,
     parameters: {
       type: 'object',
-      properties: {},
+      properties: {
+        ...activeHoursOverrideFields('Shut down now even though the machine is inside its active hours.'),
+      },
     },
   },
   {
     name: 'cancel_reboot',
-    description: 'Cancel a pending reboot or shutdown on the remote machine. Must be called within the 30-second countdown window.',
+    description: 'Cancel a pending reboot or shutdown on the remote machine: one in its 60-second countdown, or a reboot waiting for active hours to end.',
     tier: 3,
     parameters: {
       type: 'object',

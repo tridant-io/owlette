@@ -72,6 +72,10 @@ _Avoid_: setup, update package
 What a user files to reach owlette support, from the desktop app's menu or the dashboard's help menu ("submit issue"). One filed from the desktop app carries system info and the last lines of the service log. It is stored in `bug_reports` through `/api/bug-report`, names kept from before the rename.
 _Avoid_: bug report, feedback, ticket
 
+**Active hours**:
+The hours, on the machine's own clock, during which Windows holds back its own update restarts and the agent refuses reboots, shutdowns and deployments unless a person overrides. The agent reads them from policy, then MDM, then the user's setting, then Windows' default 8–17. Windows only.
+_Avoid_: quiet hours, show hours, maintenance window, business hours
+
 ### Pairing and access
 
 **Pairing**:

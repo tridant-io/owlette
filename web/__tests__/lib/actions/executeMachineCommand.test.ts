@@ -34,6 +34,8 @@ import {
   executeMachineCommand,
   ExecuteMachineCommandError,
   ALLOWED_COMMAND_TYPES,
+  parseActiveHoursOverride,
+  resolveActiveHoursOverride,
   type ExecuteMachineCommandContext,
 } from '@/lib/actions/executeMachineCommand.server';
 import { emitMutation } from '@/lib/auditLogClient';
@@ -409,6 +411,47 @@ describe('executeMachineCommand — command write shape', () => {
     expect(entry.delay_seconds).toBe(5);
   });
 
+  // only the server grants an active-hours override, from a typed option; a
+  // caller's payload can never carry one onto the command.
+  const OVERRIDE_NAMES = ['activeHoursOverride', 'active_hours_override', 'override_active_hours', 'override_reason'];
+  const overrideBag = () => ({
+    activeHoursOverride: { reason: 'show is over', approvedBy: 'user:attacker' },
+    active_hours_override: { reason: 'show is over' },
+    override_active_hours: true,
+    override_reason: 'show is over',
+  });
+
+  it('strips every active-hours override name from the payload', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: { ...overrideBag(), delay_seconds: 5, when: 'after_active_hours' } },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    expect(entry.delay_seconds).toBe(5);
+    // deferral is not privileged, so it is not reserved.
+    expect(entry.when).toBe('after_active_hours');
+  });
+
+  it('strips every active-hours override name from mcp_tool_call tool_params', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      {
+        type: 'mcp_tool_call',
+        payload: {
+          tool_name: 'manage_windows_update',
+          tool_params: { ...overrideBag(), action: 'set_active_hours', start_hour: 9 },
+        },
+      },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    expect(entry.tool_params).toEqual({ action: 'set_active_hours', start_hour: 9 });
+  });
+
   it('stamps auditCorrelationId when ctx.correlationId is set', async () => {
     const fake = buildFakeDb();
     await executeMachineCommand(
@@ -607,6 +650,171 @@ describe('executeMachineCommand — audit emission', () => {
       ),
     ).rejects.toThrow(ExecuteMachineCommandError);
     expect(mockedEmit).not.toHaveBeenCalled();
+  });
+});
+
+// active-hours override (active-hours-guard task 2.3)
+
+describe('executeMachineCommand — active-hours override', () => {
+  function entryOf(fake: FakeDb): Record<string, unknown> {
+    return Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+  }
+
+  it('writes the trimmed reason with approvedBy = the user actor, and audits it', async () => {
+    const fake = buildFakeDb();
+    const result = await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: '  show is over  ' } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({
+      reason: 'show is over',
+      approvedBy: 'user:user_42',
+    });
+    expect(mockedEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: result.commandId,
+        attributes: expect.objectContaining({
+          activeHoursOverride: true,
+          activeHoursOverrideReason: 'show is over',
+        }),
+      }),
+    );
+  });
+
+  it('uses the apiKey actor as approvedBy', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor({ auditActor: 'apiKey:key_test_1' }),
+      { type: 'shutdown_machine', payload: {}, activeHoursOverride: { reason: 'maintenance' } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({
+      reason: 'maintenance',
+      approvedBy: 'apiKey:key_test_1',
+    });
+  });
+
+  it('the typed override wins over one smuggled in the payload', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      {
+        type: 'reboot_machine',
+        payload: { activeHoursOverride: { reason: 'x', approvedBy: 'user:attacker' } },
+        activeHoursOverride: { reason: 'mine' },
+      },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({ reason: 'mine', approvedBy: 'user:user_42' });
+  });
+
+  it.each(['system:hoot', 'system:talon', ''])(
+    'refuses an override from the %p actor and writes nothing',
+    async (auditActor) => {
+      const fake = buildFakeDb();
+      await expect(
+        executeMachineCommand(
+          ctxFor({ auditActor }),
+          { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: 'show is over' } },
+          { db: fake.db },
+        ),
+      ).rejects.toMatchObject({ status: 400, code: 'active_hours_override_not_allowed' });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['an empty reason', { reason: '' }],
+    ['a blank reason', { reason: '   ' }],
+    ['an over-long reason', { reason: 'x'.repeat(501) }],
+    ['a non-string reason', { reason: 42 }],
+    ['an unknown key', { reason: 'ok', approvedBy: 'user:attacker' }],
+  ])('rejects %s with 400 and writes nothing', async (_label, override) => {
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(
+        ctxFor(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { type: 'reboot_machine', payload: {}, activeHoursOverride: override as any },
+        { db: fake.db },
+      ),
+    ).rejects.toMatchObject({ status: 400, code: 'validation_failed' });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('accepts a 500-character reason', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: 'x'.repeat(500) } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect((entryOf(fake).activeHoursOverride as { reason: string }).reason).toHaveLength(500);
+  });
+
+  it('without an override the envelope and the audit carry none', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor({ auditActor: 'system:hoot' }),
+      { type: 'reboot_machine', payload: {} },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake)).not.toHaveProperty('activeHoursOverride');
+    const attributes = mockedEmit.mock.calls[0][0].attributes;
+    expect(attributes).not.toHaveProperty('activeHoursOverride');
+    expect(attributes).not.toHaveProperty('activeHoursOverrideReason');
+  });
+});
+
+describe('parseActiveHoursOverride', () => {
+  it('treats undefined and null as no override', () => {
+    expect(parseActiveHoursOverride(undefined)).toEqual({ ok: true });
+    expect(parseActiveHoursOverride(null)).toEqual({ ok: true });
+  });
+
+  it('trims the reason', () => {
+    expect(parseActiveHoursOverride({ reason: ' late show ' })).toEqual({
+      ok: true,
+      override: { reason: 'late show' },
+    });
+  });
+
+  it.each([true, 'reason', 1, ['reason']])('rejects the non-object %p', (value) => {
+    expect(parseActiveHoursOverride(value)).toMatchObject({ ok: false });
+  });
+});
+
+describe('resolveActiveHoursOverride', () => {
+  it('stamps the approving person on the trimmed reason', () => {
+    expect(resolveActiveHoursOverride({ reason: ' late show ' }, 'user:u1')).toEqual({
+      ok: true,
+      override: { reason: 'late show', approvedBy: 'user:u1' },
+    });
+    expect(resolveActiveHoursOverride({ reason: 'late show' }, 'apiKey:k1')).toEqual({
+      ok: true,
+      override: { reason: 'late show', approvedBy: 'apiKey:k1' },
+    });
+  });
+
+  it.each(['system:hoot', 'system:talon', 'user:', ''])('refuses an override from the %p actor', (actor) => {
+    expect(resolveActiveHoursOverride({ reason: 'late show' }, actor)).toMatchObject({
+      ok: false,
+      code: 'active_hours_override_not_allowed',
+    });
+  });
+
+  it('needs no person when there is no override', () => {
+    expect(resolveActiveHoursOverride(undefined, 'system:hoot')).toEqual({ ok: true });
+    expect(resolveActiveHoursOverride(null, 'system:hoot')).toEqual({ ok: true });
+  });
+
+  it('reports a malformed override as a validation error, whoever sent it', () => {
+    expect(resolveActiveHoursOverride({ reason: '  ' }, 'system:hoot')).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
   });
 });
 

@@ -1,7 +1,7 @@
 ---
 title: "activity logs"
 description: "the logs page is a site's timeline of agent, process, command, deployment, restart, display, talon and swoop events: filter and search it, expand a row for detail, clear it, or read it over the API."
-keywords: ["history", "audit trail", "event log", "who did what", "what happened", "crash history", "reboot history", "clear logs", "delete logs", "search logs", "retention", "how long are logs kept", "event feed"]
+keywords: ["history", "audit trail", "event log", "who did what", "what happened", "crash history", "reboot history", "clear logs", "delete logs", "search logs", "retention", "how long are logs kept", "event feed", "active hours", "override reason", "reboot refused"]
 ---
 
 open **logs** in the dashboard navigation, or go to `/logs`. it shows the current site's events, newest first. every member of the site can read it; clearing it needs a site owner or admin.
@@ -110,7 +110,7 @@ see [deployments](/docs/dashboard/deployments).
 
 | action | filter label | level | when |
 |---|---|---|---|
-| `scheduled_reboot_announced` | scheduled restart announced | warning | a scheduled restart's countdown started |
+| `scheduled_reboot_announced` | scheduled restart announced | warning | a scheduled restart's countdown started, or a restart held for active hours began its countdown (the details end `(deferred)`) |
 | `scheduled_reboot_success` | scheduled restart completed | info | the machine came back and the agent matched it to the attempt |
 | `scheduled_reboot_failed` | scheduled restart failed | error | the OS refused it, or the attempt was interrupted |
 | `scheduled_reboot_missed` | scheduled restart missed | warning | it was noticed more than five minutes late and skipped |
@@ -119,6 +119,18 @@ see [deployments](/docs/dashboard/deployments).
 | `unexpected_reboot` | unexpected restart | warning | the machine booted with no shutdown signal before it. Windows only: on macOS and Linux such a boot is not reported |
 
 the scheduled outcomes are explained in [restart schedules](/docs/dashboard/restart-schedules#what-shows-up-in-the-logs).
+
+### active hours
+
+Windows machines only. the row's user is whoever approved the override, or else whoever queued the command; a refused install names nobody, since deployments carry no `queuedBy`. rows also carry `queuedBy` and the `window`, and a command's rows its `commandType`.
+
+| action | filter label | level | when |
+|---|---|---|---|
+| `active_hours_refused` | refused inside active hours | info | the agent refused a restart, a shutdown or an install inside the machine's active hours, or held a crash loop's restart |
+| `active_hours_override` | active hours overridden | warning | a person's override let one through. the details and `reason` carry their reason, `approvedBy` who approved it |
+| `reboot_deferred` | restart held until active hours end | info | a restart is waiting for active hours to end; `deferredUntil` is when it fires |
+
+see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours).
 
 ### displays
 

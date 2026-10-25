@@ -82,6 +82,7 @@ the rules that keep this predictable:
 - **five minutes late is too late.** if the agent only notices a due entry more than five minutes after the instant — it was offline, mid-deploy, restarting — it does not fire. it records the entry as done for the day and logs `scheduled_reboot_missed`.
 - **a failed restart is never retried.** if the OS refuses the restart, or an attempt is found half-finished after a crash, it is logged as failed and marked done for the day.
 - **an offline machine still restarts.** reaching us is a visibility step, not permission. if the announce fails, the restart goes ahead anyway.
+- **active hours do not hold it.** on Windows the agent refuses other restarts inside the machine's active hours, but a schedule is a time a person chose, so it fires anyway. see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours).
 
 ---
 

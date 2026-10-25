@@ -15,19 +15,31 @@ import logging
 import os
 import re
 import subprocess
+import sys
 import time
 import winreg
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import psutil
 
+import active_hours
 import mcp_tools
+import osadapter
 import shared_utils
+from osadapter.win import MDM_UPDATE_KEY, WU_POLICY_KEY, WU_UX_KEY, hklm_values, mdm_conflict
 
 logger = logging.getLogger(__name__)
 
-# The UpdateOrchestrator task Windows uses to schedule its own reboot.
+# the UpdateOrchestrator task windows 10 uses to schedule its own reboot;
+# windows 11 has no task by this name
 _REBOOT_TASK = r'\Microsoft\Windows\UpdateOrchestrator\Reboot'
+
+# where windows update keeps the rest of its settings and state, under HKLM;
+# the active-hours keys are the osadapter arm's, which reads the window
+_WU_AU_KEY = WU_POLICY_KEY + r'\AU'
+_WU_UPS_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UpdatePolicy\Settings'
+_WU_REBOOT_REQUIRED_KEY = r'SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+_SESSION_MANAGER_KEY = r'SYSTEM\CurrentControlSet\Control\Session Manager'
 
 # EventLogEntryType, which ConvertTo-Json serialises as the enum's integer, in
 # the level names get_event_logs takes as a parameter and the POSIX arm reports.
@@ -266,6 +278,31 @@ _FORBIDDEN_REGISTRY_PREFIXES = (
 )
 
 
+# the HKLM values active hours are read from, the longest window allowed, and
+# the two that let windows rewrite or drop the user's window, by key, in
+# lowercase. manage_windows_update will not move the machine out of its active
+# hours without a person's override; a raw write here would, and a reboot
+# would then pass owlette's guard with nobody approving it.
+_ACTIVE_HOURS_VALUES = {
+    WU_POLICY_KEY.lower(): frozenset({
+        'activehoursstart', 'activehoursend', 'setactivehours',
+        'activehoursmaxrange', 'setactivehoursmaxrange',
+    }),
+    WU_UX_KEY.lower(): frozenset({
+        'activehoursstart', 'activehoursend', 'smartactivehoursstate', 'isactivehoursenabled',
+    }),
+}
+
+
+def _changes_active_hours(hive, key_path, value_name):
+    """Whether writing or deleting this value would change the machine's active hours."""
+    if hive != 'HKLM' or not isinstance(value_name, str):
+        return False
+    # the registry ignores case, and a doubled or trailing backslash opens the same key
+    key = '\\'.join(part for part in key_path.lower().split('\\') if part)
+    return value_name.lower() in _ACTIVE_HOURS_VALUES.get(key, ())
+
+
 def _validate_registry_path(hive, key_path):
     """Validate a registry hive+key_path against allowlist/blocklist.
 
@@ -491,29 +528,42 @@ def get_service_status(params, config):
         return {'error': f'Failed to query service {service_name}: {e}'}
 
 
+def _windows_build():
+    return sys.getwindowsversion().build
+
+
 def check_pending_reboot(params, config):
-    """Tier 1: Detect whether a system reboot is pending (read-only)."""
+    """Tier 1: Detect whether a system reboot is pending (read-only).
+
+    Only a restart something is waiting on counts: Windows Update's, the
+    servicing stack's or the SCCM client's. File renames queued for the next
+    boot are reported apart, as `file_renames`: installers and drivers leave
+    them for weeks with nothing from Windows Update waiting.
+    """
     reasons = []
 
-    if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'):
+    if _key_exists(winreg.HKEY_LOCAL_MACHINE, _WU_REBOOT_REQUIRED_KEY):
         reasons.append('windows_update')
     if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'):
         reasons.append('cbs')
-    if _value_exists(winreg.HKEY_LOCAL_MACHINE, r'SYSTEM\CurrentControlSet\Control\Session Manager', 'PendingFileRenameOperations'):
-        reasons.append('pending_file_rename')
     if _key_exists(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Updates\UpdateExeVolatile'):
         reasons.append('sccm_client')
 
-    # Query scheduled update tasks for next-run time
-    next_scheduled = None
-    rc, out, _ = mcp_tools.run_capture(
-        ['schtasks.exe', '/Query', '/TN', _REBOOT_TASK, '/FO', 'LIST', '/V'], 10,
-    )
-    if rc == 0:
-        for line in out.splitlines():
-            if line.strip().startswith('Next Run Time:'):
-                next_scheduled = line.split(':', 1)[1].strip()
-                break
+    # windows 11 keeps no reboot task, and no other known place carries the
+    # time windows means to restart
+    if _windows_build() >= 22000:
+        next_scheduled = {'task': None, 'next_run': None, 'note': 'unknown on this build'}
+    else:
+        next_scheduled = None
+        rc, out, _ = mcp_tools.run_capture(
+            ['schtasks.exe', '/Query', '/TN', _REBOOT_TASK, '/FO', 'LIST', '/V'], 10,
+        )
+        if rc == 0:
+            for line in out.splitlines():
+                if line.strip().startswith('Next Run Time:'):
+                    next_run = line.split(':', 1)[1].strip()
+                    next_scheduled = {'task': _REBOOT_TASK, 'next_run': next_run}
+                    break
 
     # Last update installed time (HotFixID from last Get-HotFix)
     last_update = None
@@ -527,8 +577,9 @@ def check_pending_reboot(params, config):
     return {
         'pending': bool(reasons),
         'reasons': reasons,
+        'file_renames': _value_exists(winreg.HKEY_LOCAL_MACHINE, _SESSION_MANAGER_KEY, 'PendingFileRenameOperations'),
         'last_update_installed': last_update,
-        'next_scheduled_update': {'task': _REBOOT_TASK, 'next_run': next_scheduled} if next_scheduled else None,
+        'next_scheduled_update': next_scheduled,
     }
 
 
@@ -730,24 +781,253 @@ def configure_gpu_tdr(params, config):
         return {'error': f'Registry write failed: {e}'}
 
 
-def manage_windows_update(params, config):
-    """Pause/resume/schedule Windows Update via registry policy keys."""
+# the restart-deadline values windows reads from the policy key, by name: the
+# windows 10 auto-restart deadline and the compliance deadlines after it
+_DEADLINE_PREFIXES = (
+    'SetAutoRestartDeadline', 'AutoRestartDeadlinePeriodInDays',
+    'SetComplianceDeadline', 'ConfigureDeadline',
+)
+
+# the six pause values under UX that the settings pause button writes, all
+# UTC text: when the pause began, and when it ends
+_UX_PAUSE_STARTS = (
+    'PauseUpdatesStartTime', 'PauseFeatureUpdatesStartTime', 'PauseQualityUpdatesStartTime',
+)
+_UX_PAUSE_ENDS = (
+    'PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime',
+)
+
+_POLICY_WINDOW_NOTES = (
+    'active hours are set by policy now, so nobody can change them in settings on the machine',
+    'a domain group policy that sets these values puts its own back at its next refresh',
+)
+
+
+def _hklm_values_by_prefix(path, prefixes):
+    """The values under HKLM\\`path` whose names start with one of `prefixes`."""
+    found = {}
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as k:
+            i = 0
+            while True:
+                try:
+                    name, value, _ = winreg.EnumValue(k, i)
+                except OSError:
+                    break
+                i += 1
+                # policymanager keeps <name>_ProviderSet and <name>_WinningProvider
+                # beside each value it sets, and no policy name has an underscore
+                if name.startswith(prefixes) and '_' not in name:
+                    found[name] = value
+    except OSError:
+        pass
+    return found
+
+
+def _delete_values(path, names):
+    """Delete each named value under HKLM\\`path`; the ones that were there."""
+    removed = []
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as k:
+            for name in names:
+                try:
+                    winreg.DeleteValue(k, name)
+                    removed.append(name)
+                except FileNotFoundError:
+                    pass
+    except FileNotFoundError:
+        pass
+    return removed
+
+
+def _restart_deadlines():
+    """Every restart-deadline value on the machine, and whether it still forces
+    a restart, which a deadline does once it passes, active hours or not.
+
+    Under the policy key a deadline counts only while its Set* value turns it
+    on; MDM sets the deadline alone. The NoAutoReboot values hold restarts off
+    until the deadline rather than force one, and owlette's old write under AU
+    sits where Windows never reads it.
+    """
+    policy = _hklm_values_by_prefix(WU_POLICY_KEY, _DEADLINE_PREFIXES)
+    legacy_on = policy.get('SetAutoRestartDeadline') == 1
+    compliance_on = any(value == 1 for name, value in policy.items()
+                        if name.startswith('SetComplianceDeadline'))
+    found = [
+        {'where': 'policy', 'name': name, 'value': value,
+         'forces_restart': (legacy_on if 'AutoRestartDeadline' in name else compliance_on)
+         and 'NoAutoReboot' not in name}
+        for name, value in policy.items()
+    ]
+    old = hklm_values(_WU_AU_KEY, 'AutoRestartDeadlinePeriodInDays')['AutoRestartDeadlinePeriodInDays']
+    if old is not None:
+        found.append({'where': 'policy_au', 'name': 'AutoRestartDeadlinePeriodInDays',
+                      'value': old, 'forces_restart': False})
+    mdm = _hklm_values_by_prefix(MDM_UPDATE_KEY, ('AutoRestartDeadlinePeriodInDays', 'ConfigureDeadline'))
+    found += [
+        {'where': 'mdm', 'name': name, 'value': value, 'forces_restart': 'NoAutoReboot' not in name}
+        for name, value in mdm.items()
+    ]
+    return found
+
+
+def _restart_warnings():
+    """What on this machine can still force a restart, or keep Windows from
+    honouring the policy owlette writes."""
+    au = hklm_values(_WU_AU_KEY, 'NoAutoRebootWithLoggedOnUsers', 'AlwaysAutoRebootAtScheduledTime')
+    warnings = []
+    if au['NoAutoRebootWithLoggedOnUsers'] == 1:
+        warnings.append(
+            'NoAutoRebootWithLoggedOnUsers is set: windows ignores the policy active hours while '
+            'it is on, and on windows 11 it is a legacy policy reported to be ignored; owlette '
+            'never sets it')
+    if au['AlwaysAutoRebootAtScheduledTime'] == 1:
+        warnings.append(
+            'AlwaysAutoRebootAtScheduledTime is set: on windows 10 it restarts the machine after '
+            'a scheduled install, even with someone signed in')
+    forcing = [d['name'] for d in _restart_deadlines() if d['forces_restart']]
+    if forcing:
+        warnings.append(
+            f"a restart deadline is set ({', '.join(forcing)}): once it passes, windows restarts "
+            'even inside active hours')
+    if 1 in mdm_conflict().values():
+        warnings.append(
+            'mdm wins over group policy on this machine, so windows may ignore the policy '
+            'values owlette writes')
+    return warnings
+
+
+def _pause_state():
+    """Windows' own pause state (0 not paused, 1 paused, 2 resumed by itself),
+    the end Settings' pause values name, and any policy that decides instead."""
+    state = hklm_values(_WU_UPS_KEY, 'PausedQualityStatus', 'PausedFeatureStatus',
+                         'PausedQualityDate', 'PausedFeatureDate')
+    state.update(hklm_values(WU_UX_KEY, 'PauseUpdatesExpiryTime'))
+    state.update(hklm_values(WU_POLICY_KEY, 'SetDisablePauseUXAccess'))
+    policy_pause = _hklm_values_by_prefix(WU_POLICY_KEY, ('PauseQualityUpdates', 'PauseFeatureUpdates'))
+    state['policy_pause'] = {name: value for name, value in policy_pause.items() if value}
+    return state
+
+
+def _pause_blocker(state):
+    """Why a pause owlette writes would not count here, or None."""
+    if state['SetDisablePauseUXAccess'] == 1:
+        return 'group policy turns pausing off on this machine (SetDisablePauseUXAccess=1)'
+    if state['policy_pause']:
+        named = ', '.join(f'{name}={value}' for name, value in state['policy_pause'].items())
+        return f'group policy already pauses updates here ({named}); owlette leaves that pause to it'
+    return None
+
+
+def _update_restart_pending():
+    """Whether Windows Update has a restart waiting: its RebootRequired key and
+    the update agent's own answer, None when the agent could not be asked."""
+    rc, out, _ = _run_powershell_script(
+        '(New-Object -ComObject Microsoft.Update.SystemInfo).RebootRequired',
+        timeout=15, bypass=False,
+    )
+    wua = {'True': True, 'False': False}.get(out.strip()) if rc == 0 else None
+    flag = _key_exists(winreg.HKEY_LOCAL_MACHINE, _WU_REBOOT_REQUIRED_KEY)
+    return {'pending': flag or wua is True, 'reboot_required_key': flag, 'wua_reboot_required': wua}
+
+
+def _update_status():
+    """Everything that decides whether and when Windows restarts for updates."""
+    now, window = datetime.now(), osadapter.active_hours()
+    automatic = hklm_values(_WU_AU_KEY, 'AUOptions', 'NoAutoUpdate',
+                             'NoAutoRebootWithLoggedOnUsers', 'AlwaysAutoRebootAtScheduledTime')
+    automatic.update(_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',)))
+    policy = hklm_values(WU_POLICY_KEY, 'AutoRestartDeadlinePeriodInDays',
+                          'DeferFeatureUpdatesPeriodInDays', 'DeferQualityUpdatesPeriodInDays')
+    return {
+        'active_hours_start': window['start'],
+        'active_hours_end': window['end'],
+        'scheduled_install_day': automatic.get('ScheduledInstallDay'),
+        'scheduled_install_time': automatic.get('ScheduledInstallTime'),
+        'auto_restart_deadline_days': policy['AutoRestartDeadlinePeriodInDays'],
+        'feature_update_deferral_days': policy['DeferFeatureUpdatesPeriodInDays'],
+        'quality_update_deferral_days': policy['DeferQualityUpdatesPeriodInDays'],
+        'active_hours': window,
+        'inside_active_hours_now': active_hours.is_inside(window, now),
+        'machine_local_time': now.astimezone().isoformat(timespec='minutes'),
+        'automatic_updates': automatic,
+        'restart_deadlines': _restart_deadlines(),
+        'mdm_conflict': mdm_conflict(),
+        'pause': _pause_state(),
+        'update_restart_pending': _update_restart_pending(),
+        'file_renames_pending': _value_exists(
+            winreg.HKEY_LOCAL_MACHINE, _SESSION_MANAGER_KEY, 'PendingFileRenameOperations'),
+        'warnings': _restart_warnings(),
+    }
+
+
+def _longest_active_hours():
+    """The longest active hours Windows allows here: the policy's maximum when
+    it turns one on, else MDM's, else 18 hours."""
+    policy = hklm_values(WU_POLICY_KEY, 'SetActiveHoursMaxRange', 'ActiveHoursMaxRange')
+    mdm = hklm_values(MDM_UPDATE_KEY, 'ActiveHoursMaxRange')['ActiveHoursMaxRange']
+    for longest in (policy['ActiveHoursMaxRange'] if policy['SetActiveHoursMaxRange'] == 1 else None, mdm):
+        if isinstance(longest, int) and 8 <= longest <= 18:
+            return longest
+    return 18
+
+
+def _write_policy_window(start, end, override):
+    """Write active hours as group policy, the one place Windows reads them
+    over both the user's choice in Settings and its own adjusting: the error
+    that stopped it, or once written the fields the result adds.
+
+    While the machine is inside its active hours, a window that would leave it
+    outside them needs a person's approved override: an unattended caller could
+    otherwise shrink the window and then reboot. A write that took the override
+    adds `override_used` and the window it moved the machine out of, which the
+    service logs to the site with who approved it and why.
+    """
+    if not (0 <= start <= 23 and 0 <= end <= 23):
+        return {'error': 'start_hour and end_hour must be 0-23'}
+    if start == end:
+        return {'error': 'start_hour and end_hour must differ: windows has no empty or 24-hour active hours'}
+    mdm = hklm_values(MDM_UPDATE_KEY, 'ActiveHoursStart', 'ActiveHoursEnd')
+    if mdm['ActiveHoursStart'] is not None or mdm['ActiveHoursEnd'] is not None:
+        return {'error': 'active hours on this machine are managed by MDM; change them there'}
+    longest, length = _longest_active_hours(), (end - start) % 24
+    if length > longest:
+        return {'error': f'active hours can be at most {longest} hours long here; '
+                         f'{start:02d}:00–{end:02d}:00 is {length}'}
+
+    now, current = datetime.now(), osadapter.active_hours()
+    added = {}
+    if active_hours.is_inside(current, now) and not active_hours.is_inside({'start': start, 'end': end}, now):
+        if not active_hours.is_valid_override(override):
+            return {'error': (
+                f'active_hours: inside active hours {active_hours.describe(current)} (machine time); '
+                f'they end at {active_hours.window_end(current, now):%H:%M} — changing the window '
+                'now needs an override'
+            )}
+        added = {'override_used': True, 'previous_active_hours': current}
+
+    with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
+        winreg.SetValueEx(k, 'ActiveHoursStart', 0, winreg.REG_DWORD, start)
+        winreg.SetValueEx(k, 'ActiveHoursEnd', 0, winreg.REG_DWORD, end)
+        # last, so windows never reads the policy switched on with half a window
+        winreg.SetValueEx(k, 'SetActiveHours', 0, winreg.REG_DWORD, 1)
+    return added
+
+
+def manage_windows_update(params, config, active_hours_override=None):
+    """Windows Update through its registry policy: status, pause, active hours,
+    automatic installs and restarts, deferrals.
+
+    `active_hours_override` is the command's server-set override, a person's
+    approval to move the machine out of its active hours while it is inside
+    them; set_active_hours and limit_auto_restart read it.
+    """
     action = (params.get('action') or '').lower()
     logger.info(f"[MCP-AUDIT] manage_windows_update: action={action}")
 
-    POLICY_KEY = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU'
-    UX_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
-
     if action == 'get_status':
-        return {
-            'active_hours_start': _read_dword(winreg.HKEY_LOCAL_MACHINE, UX_KEY, 'ActiveHoursStart'),
-            'active_hours_end': _read_dword(winreg.HKEY_LOCAL_MACHINE, UX_KEY, 'ActiveHoursEnd'),
-            'scheduled_install_day': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'ScheduledInstallDay'),
-            'scheduled_install_time': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'ScheduledInstallTime'),
-            'auto_restart_deadline_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'AutoRestartDeadlinePeriodInDays'),
-            'feature_update_deferral_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'DeferFeatureUpdatesPeriodInDays'),
-            'quality_update_deferral_days': _read_dword(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY, 'DeferQualityUpdatesPeriodInDays'),
-        }
+        return _update_status()
 
     if action == 'pause':
         try:
@@ -756,42 +1036,125 @@ def manage_windows_update(params, config):
                 return {'error': 'pause_days must be 1-35'}
         except (TypeError, ValueError):
             return {'error': 'pause_days must be an integer'}
-        from datetime import datetime, timedelta, timezone
-        pause_until = (datetime.now(timezone.utc) + timedelta(days=pause_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                winreg.SetValueEx(k, 'PauseUpdatesExpiryTime', 0, winreg.REG_SZ, pause_until)
-            return {'status': 'paused', 'pause_until': pause_until, 'pause_days': pause_days}
+            state = _pause_state()
+            blocker = _pause_blocker(state)
+            if blocker:
+                return {'status': 'not_written', 'reason': blocker, 'pause': state}
+            now = datetime.now(timezone.utc)
+            begins = now.strftime('%Y-%m-%dT%H:%M:%SZ')
+            pause_until = (now + timedelta(days=pause_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_UX_KEY) as k:
+                for name in _UX_PAUSE_STARTS:
+                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, begins)
+                for name in _UX_PAUSE_ENDS:
+                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, pause_until)
+            state = _pause_state()
+            result = {'pause_until': pause_until, 'pause_days': pause_days, 'pause': state}
+            if state['PausedQualityStatus'] == 1 and state['PausedFeatureStatus'] == 1:
+                return {'status': 'paused', **result}
+            return {
+                'status': 'written_not_confirmed', **result,
+                'note': 'written, not yet confirmed by windows: PausedQualityStatus and '
+                        'PausedFeatureStatus do not read 1 yet',
+            }
         except Exception as e:
             return {'error': f'pause failed: {e}'}
 
     if action == 'resume':
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                try:
-                    winreg.DeleteValue(k, 'PauseUpdatesExpiryTime')
-                except FileNotFoundError:
-                    pass
-            return {'status': 'resumed'}
+            removed = _delete_values(WU_UX_KEY, _UX_PAUSE_STARTS + _UX_PAUSE_ENDS)
+            state = _pause_state()
+            if 1 in (state['PausedQualityStatus'], state['PausedFeatureStatus']):
+                return {'status': 'cleared_not_confirmed', 'removed': removed, 'pause': state,
+                        'note': 'pause values removed; windows still reports updates paused'}
+            return {'status': 'resumed', 'removed': removed, 'pause': state}
         except Exception as e:
             return {'error': f'resume failed: {e}'}
 
     if action == 'set_active_hours':
         try:
-            start = int(params.get('start_hour'))
-            end = int(params.get('end_hour'))
-            if not (0 <= start <= 23) or not (0 <= end <= 23):
-                return {'error': 'start_hour and end_hour must be 0-23'}
+            start, end = int(params.get('start_hour')), int(params.get('end_hour'))
         except (TypeError, ValueError):
             return {'error': 'start_hour and end_hour required as integers'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, UX_KEY) as k:
-                winreg.SetValueEx(k, 'ActiveHoursStart', 0, winreg.REG_DWORD, start)
-                winreg.SetValueEx(k, 'ActiveHoursEnd', 0, winreg.REG_DWORD, end)
-                winreg.SetValueEx(k, 'IsActiveHoursEnabled', 0, winreg.REG_DWORD, 1)
-            return {'status': 'ok', 'active_hours': {'start': start, 'end': end}}
+            written = _write_policy_window(start, end, active_hours_override)
+            if 'error' in written:
+                return written
+            return {
+                'status': 'ok',
+                'active_hours': osadapter.active_hours(),
+                **written,
+                'notes': list(_POLICY_WINDOW_NOTES),
+                'warnings': _restart_warnings(),
+            }
         except Exception as e:
             return {'error': f'set_active_hours failed: {e}'}
+
+    if action == 'limit_auto_restart':
+        start, end = params.get('start_hour'), params.get('end_hour')
+        if start is None and end is None:
+            current = osadapter.active_hours()
+            start, end = current['start'], current['end']
+        try:
+            start, end = int(start), int(end)
+        except (TypeError, ValueError):
+            return {'error': 'give start_hour and end_hour as integers, or neither to keep the current active hours'}
+        try:
+            written = _write_policy_window(start, end, active_hours_override)
+            if 'error' in written:
+                return written
+            deadlines = _hklm_values_by_prefix(WU_POLICY_KEY, _DEADLINE_PREFIXES)
+            removed = [f'WindowsUpdate\\{name}'
+                       for name in _delete_values(WU_POLICY_KEY, list(deadlines))]
+            removed += [f'WindowsUpdate\\AU\\{name}'
+                        for name in _delete_values(_WU_AU_KEY, ['AutoRestartDeadlinePeriodInDays'])]
+            window = osadapter.active_hours()
+            return {
+                'status': 'ok',
+                'active_hours': window,
+                **written,
+                'removed_deadlines': removed,
+                'remaining_deadlines': _restart_deadlines(),
+                'notes': [
+                    f'windows restarts for updates only outside active hours '
+                    f'({active_hours.describe(window)}, machine time), so a restart can still happen then',
+                    *_POLICY_WINDOW_NOTES,
+                ],
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'limit_auto_restart failed: {e}'}
+
+    if action == 'disable_auto_install':
+        try:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, _WU_AU_KEY) as k:
+                winreg.SetValueEx(k, 'NoAutoUpdate', 0, winreg.REG_DWORD, 0)
+                winreg.SetValueEx(k, 'AUOptions', 0, winreg.REG_DWORD, 3)  # download, then notify
+            removed = _delete_values(_WU_AU_KEY, list(_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',))))
+            return {
+                'status': 'ok',
+                'automatic_updates': hklm_values(_WU_AU_KEY, 'AUOptions', 'NoAutoUpdate'),
+                'removed': removed,
+                'note': 'windows now downloads updates and waits: nothing installs or restarts for an '
+                        'update on its own, so security updates wait until someone installs them',
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'disable_auto_install failed: {e}'}
+
+    if action == 'enable_auto_install':
+        try:
+            names = ['AUOptions', 'NoAutoUpdate', *_hklm_values_by_prefix(_WU_AU_KEY, ('ScheduledInstall',))]
+            return {
+                'status': 'ok',
+                'removed': _delete_values(_WU_AU_KEY, names),
+                'note': "windows' own automatic updates are back: updates install on their own and "
+                        'windows restarts for them outside active hours',
+                'warnings': _restart_warnings(),
+            }
+        except Exception as e:
+            return {'error': f'enable_auto_install failed: {e}'}
 
     if action == 'set_scheduled_install':
         try:
@@ -802,7 +1165,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'day_of_week and hour required as integers'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, _WU_AU_KEY) as k:
                 winreg.SetValueEx(k, 'AUOptions', 0, winreg.REG_DWORD, 4)  # scheduled install
                 winreg.SetValueEx(k, 'ScheduledInstallDay', 0, winreg.REG_DWORD, day)
                 winreg.SetValueEx(k, 'ScheduledInstallTime', 0, winreg.REG_DWORD, hour)
@@ -810,20 +1173,6 @@ def manage_windows_update(params, config):
             return {'status': 'ok', 'day_of_week': day, 'hour': hour}
         except Exception as e:
             return {'error': f'set_scheduled_install failed: {e}'}
-
-    if action == 'set_restart_deadline':
-        try:
-            days = int(params.get('deadline_days', 7))
-            if not (2 <= days <= 14):
-                return {'error': 'deadline_days must be 2-14'}
-        except (TypeError, ValueError):
-            return {'error': 'deadline_days must be an integer'}
-        try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
-                winreg.SetValueEx(k, 'AutoRestartDeadlinePeriodInDays', 0, winreg.REG_DWORD, days)
-            return {'status': 'ok', 'deadline_days': days}
-        except Exception as e:
-            return {'error': f'set_restart_deadline failed: {e}'}
 
     if action == 'set_feature_deferral':
         try:
@@ -833,7 +1182,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'days must be an integer'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
                 winreg.SetValueEx(k, 'DeferFeatureUpdates', 0, winreg.REG_DWORD, 1 if days > 0 else 0)
                 winreg.SetValueEx(k, 'DeferFeatureUpdatesPeriodInDays', 0, winreg.REG_DWORD, days)
             return {'status': 'ok', 'feature_deferral_days': days}
@@ -848,7 +1197,7 @@ def manage_windows_update(params, config):
         except (TypeError, ValueError):
             return {'error': 'days must be an integer'}
         try:
-            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, POLICY_KEY) as k:
+            with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_POLICY_KEY) as k:
                 winreg.SetValueEx(k, 'DeferQualityUpdates', 0, winreg.REG_DWORD, 1 if days > 0 else 0)
                 winreg.SetValueEx(k, 'DeferQualityUpdatesPeriodInDays', 0, winreg.REG_DWORD, days)
             return {'status': 'ok', 'quality_deferral_days': days}
@@ -1326,6 +1675,12 @@ def registry_operation(params, config):
     ok, err = _validate_registry_path(hive, key_path)
     if not ok:
         return {'error': err}
+    if action in ('write', 'delete') and _changes_active_hours(hive, key_path, value_name):
+        return {'error': (
+            f"{value_name} is part of this machine's active hours, which owlette checks before "
+            'a reboot, shutdown or deployment: change them with manage_windows_update '
+            'set_active_hours or limit_auto_restart'
+        )}
 
     hive_const = winreg.HKEY_LOCAL_MACHINE if hive == 'HKLM' else winreg.HKEY_CURRENT_USER
 

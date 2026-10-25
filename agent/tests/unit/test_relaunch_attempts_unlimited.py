@@ -29,6 +29,15 @@ import pytest
 PROC = {'id': 'proc-1', 'name': 'TouchDesigner'}
 
 
+@pytest.fixture(autouse=True)
+def _no_active_hours(monkeypatch):
+    """The budget's rules, not the active-hours hold (test_active_hours_guard):
+    on Windows the registry's window would otherwise decide, by the time of
+    day, whether an exhausted budget opens the restart prompt."""
+    import owlette_service
+    monkeypatch.setattr(owlette_service.osadapter, 'active_hours', lambda: None)
+
+
 def _make_service(attempts_so_far):
     from owlette_service import OwletteService
 

@@ -82,7 +82,7 @@ removed.
 | `owlette.keys`    | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
 | `owlette.webhooks` | `subscribe`, `list`, `get`, `update`, `remove`, `rotateSecret`, `probe`, `deliveries`, `delivery`, `retryDelivery` |
 | `owlette.sites`   | `list`, `get`                                                      |
-| `owlette.machines` | `list`, `get`, `deployments`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
+| `owlette.machines` | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
 | `owlette.installerDeployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete` |
 | `owlette.installer` | `list`, `latest`, `upload`, `setLatest`, `delete`                |
 | `owlette.processes(siteId, machineId)` | `list`, `create`, `update`, `start`, `stop`, `restart`, `kill`, `schedule`, `delete` |
@@ -93,6 +93,27 @@ removed.
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
+
+## active hours
+
+```ts
+await owlette.machines.reboot('site-1', 'm-1', { afterActiveHours: true });
+await owlette.machines.shutdown('site-1', 'm-1', {
+  activeHoursOverride: { reason: 'replacing the projector' },
+});
+await owlette.installerDeployments.retry('site-1', 'deploy-1', {
+  activeHoursOverride: { reason: 'venue closed today' },
+});
+```
+
+A Windows agent with `capabilities.activeHoursGuard` refuses a reboot,
+shutdown or install inside the machine's active hours. The command is still
+queued; `getCommand()` then reports `failed` (a deployment target ends
+`failed`) with an `error` that starts `Error: active_hours:`.
+`afterActiveHours` restarts once they end; `activeHoursOverride` acts now and
+logs the reason. `installerDeployments.create()` and `retry()` take the same
+override, and a retry needs its own. Older agents, macOS and Linux ignore both
+and act at once.
 
 ## push progress
 

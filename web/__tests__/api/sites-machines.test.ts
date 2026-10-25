@@ -365,6 +365,35 @@ describe('GET /api/sites/{siteId}/machines', () => {
       },
     ]);
   });
+
+  // the manage-sites machine list asks before restarting inside active hours,
+  // which it can only do with the window, the guard and the machine's clock.
+  it('carries active hours, the agent capabilities and the machine timezone', async () => {
+    seedSite();
+    authedKey([siteScope('read')]);
+    seedMachine('mach-a', {
+      name: 'Alpha',
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machine_timezone_iana: 'Europe/Berlin',
+    });
+    seedMachine('mach-b', { name: 'Beta' });
+
+    const res = await listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.machines[0]).toMatchObject({
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machineTimezone: 'Europe/Berlin',
+    });
+    // null, never absent, for an agent that reports none of them
+    expect(body.machines[1]).toMatchObject({ activeHours: null, capabilities: null, machineTimezone: null });
+  });
 });
 
 describe('GET /api/sites/{siteId}/machines/{machineId}', () => {

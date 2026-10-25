@@ -647,6 +647,39 @@ describe('owlette.installerDeployments', () => {
     expect(body.name).toBe('rollout');
     expect(body.close_processes).toEqual(['TouchDesigner.exe']);
     expect(body.suppress_projects).toEqual(['show-a']);
+    expect(body).not.toHaveProperty('active_hours_override');
+  });
+
+  it('create sends activeHoursOverride as active_hours_override', async () => {
+    const { owlette, calls } = makeOwlette([
+      { status: 201, body: { deploymentId: 'deploy-1', siteId: 'site-1', status: 'in_progress', targets: [] } },
+    ]);
+    await owlette.installerDeployments.create('site-1', {
+      name: 'rollout',
+      installer_url: 'https://example.com/x.exe',
+      installer_name: 'x.exe',
+      silent_flags: '/SILENT',
+      machines: ['m-1'],
+      activeHoursOverride: { reason: 'venue closed today' },
+    });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.active_hours_override).toEqual({ reason: 'venue closed today' });
+    expect(body).not.toHaveProperty('activeHoursOverride');
+  });
+
+  it('retry → POST /retry with an empty body, or the override when given', async () => {
+    const { owlette, calls } = makeOwlette([
+      { status: 200, body: { deploymentId: 'deploy-1', siteId: 'site-1', status: 'in_progress', retried: 1 } },
+    ]);
+    await owlette.installerDeployments.retry('site-1', 'deploy-1');
+    await owlette.installerDeployments.retry('site-1', 'deploy-1', {
+      activeHoursOverride: { reason: 'venue closed today' },
+    });
+    expect(calls[0]!.url).toBe('https://dev.test/api/sites/site-1/deployments/deploy-1/retry');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({});
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({
+      active_hours_override: { reason: 'venue closed today' },
+    });
   });
 
   it('cancel → POST /cancel surfaces OwletteApiError on 409', async () => {
@@ -1256,6 +1289,48 @@ describe('owlette.machines (extended)', () => {
       'https://dev.test/api/sites/site-1/machines/m-1/commands/cmd_abc',
     );
     expect(result.status).toBe('completed');
+  });
+
+  const queued = { status: 202, body: { ok: true, data: { commandId: 'cmd_abc', status: 'pending' } } };
+
+  it('reboot → POST reboot_machine with no params by default', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    const result = await owlette.machines.reboot('site-1', 'm-1');
+    expect(calls[0]!.url).toBe('https://dev.test/api/sites/site-1/machines/m-1/commands');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ type: 'reboot_machine' });
+    expect(result.commandId).toBe('cmd_abc');
+  });
+
+  it('reboot → afterActiveHours sends when: after_active_hours', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.reboot('site-1', 'm-1', { afterActiveHours: true });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'reboot_machine',
+      params: { when: 'after_active_hours' },
+    });
+  });
+
+  it('reboot → activeHoursOverride sends active_hours_override and honours idempotencyKey', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.reboot('site-1', 'm-1', {
+      activeHoursOverride: { reason: 'hotfix for the show' },
+      idempotencyKey: 'reboot-key',
+    });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'reboot_machine',
+      params: { active_hours_override: { reason: 'hotfix for the show' } },
+    });
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toBe('reboot-key');
+  });
+
+  it('shutdown → POST shutdown_machine with active_hours_override', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.shutdown('site-1', 'm-1', { activeHoursOverride: { reason: 'power work' } });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'shutdown_machine',
+      params: { active_hours_override: { reason: 'power work' } },
+    });
   });
 
   it('captureScreenshot → dispatch + poll + fetch signed URL', async () => {

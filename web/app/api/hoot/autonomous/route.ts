@@ -15,7 +15,12 @@ import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
 import { createModel, buildAutonomousSystemPrompt } from '@/lib/llm';
-import { getToolsByTier, EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
+import {
+  getToolsByTier,
+  withoutActiveHoursOverride,
+  EXISTING_COMMAND_MAPPINGS,
+  type McpToolDefinition,
+} from '@/lib/mcp-tools';
 import {
   resolveLlmConfig,
   resolveSiteKeyOwner,
@@ -30,6 +35,7 @@ import {
   dispatchExistingCommandAsSystem,
 } from '@/lib/hoot/dispatch.server';
 import { escalate } from '@/lib/hoot-escalation.server';
+import { getMachineTimezone } from '@/lib/adminUtils.server';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
 import { hootInternalSecret } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
@@ -127,7 +133,9 @@ function buildAutonomousTools(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools[toolName] = tool<any, any, any>({
       description: def.description,
-      inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
+      // nobody approves an unattended call, so it is never offered an
+      // active-hours override; `when: after_active_hours` stays.
+      inputSchema: jsonSchema(withoutActiveHoursOverride(def).parameters as Record<string, unknown>),
       execute: async (params) => {
         if (SERVER_SIDE_TOOLS.has(toolName)) {
           return executeServerSideTool(
@@ -364,6 +372,7 @@ async function runAutonomousInvestigation(
     // No shared site key exists and a machine-triggered run has no author, so
     // it spends the SITE OWNER's key — the one uid durable for the site's life.
     const llmConfig = await resolveLlmConfig(db, await resolveSiteKeyOwner(db, siteId));
+    const machineTimeZone = await getMachineTimezone(siteId, machineId);
 
     const maxTier = settings.maxTier ?? 2;
     const toolDefs = getToolsByTier(maxTier as 1 | 2 | 3);
@@ -378,7 +387,8 @@ async function runAutonomousInvestigation(
     const systemPrompt = buildAutonomousSystemPrompt(
       machineName,
       settings.directive || '',
-      eventContext
+      eventContext,
+      machineTimeZone,
     );
 
     const model = createModel(llmConfig);

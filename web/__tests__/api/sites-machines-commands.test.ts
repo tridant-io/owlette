@@ -282,6 +282,132 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     expect(body.data.status).toBe('pending');
   });
 
+  describe('active hours (active-hours-guard task 2.3)', () => {
+    function post(idem: string, body: Record<string, unknown>) {
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        { method: 'POST', headers: { 'Idempotency-Key': idem }, body },
+      );
+      return commandsPOST(req, { params: Promise.resolve({ siteId: SITE, machineId: MACHINE }) });
+    }
+
+    function mergeCallCount(): number {
+      return mocks.set.mock.calls.filter(
+        (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+      ).length;
+    }
+
+    it.each(['reboot_machine', 'shutdown_machine'])(
+      '202 %s with an override writes it from the session actor, never from params',
+      async (type) => {
+        queueIdemAndMachine({ online: true });
+        const res = await post(`idem-ah-${type}`, {
+          type,
+          params: { delay_seconds: 0, active_hours_override: { reason: '  show is over  ' } },
+        });
+        expect(res.status).toBe(202);
+        const cmd = lastMergedCommand();
+        expect(cmd.activeHoursOverride).toEqual({ reason: 'show is over', approvedBy: 'user:user-1' });
+        expect(cmd).not.toHaveProperty('active_hours_override');
+        expect(mockedEmit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            kind: 'machine_command_dispatched',
+            attributes: expect.objectContaining({
+              commandType: type,
+              activeHoursOverride: true,
+              activeHoursOverrideReason: 'show is over',
+            }),
+          }),
+        );
+      },
+    );
+
+    it('202 an api key override is approved by the key', async () => {
+      mockResolveAuth.mockResolvedValue(
+        authedKey([{ resource: 'machine', id: MACHINE, permissions: ['write'] }]),
+      );
+      queueIdemAndMachine({ online: true });
+      const res = await post('idem-ah-key', {
+        type: 'reboot_machine',
+        params: { active_hours_override: { reason: 'patch tuesday' } },
+      });
+      expect(res.status).toBe(202);
+      expect(lastMergedCommand().activeHoursOverride).toEqual({
+        reason: 'patch tuesday',
+        approvedBy: 'apiKey:key-test',
+      });
+    });
+
+    it('202 without an override the command carries none', async () => {
+      queueIdemAndMachine({ online: true });
+      const res = await post('idem-ah-none', { type: 'reboot_machine', params: { active_hours_override: null } });
+      expect(res.status).toBe(202);
+      expect(lastMergedCommand()).not.toHaveProperty('activeHoursOverride');
+    });
+
+    it.each(['now', 'after_active_hours'])('202 reboot_machine forwards when: %s', async (when) => {
+      queueIdemAndMachine({ online: true });
+      const res = await post(`idem-ah-when-${when}`, { type: 'reboot_machine', params: { when } });
+      expect(res.status).toBe(202);
+      expect(lastMergedCommand().when).toBe(when);
+    });
+
+    it.each([
+      ['a missing reason', {}],
+      ['an empty reason', { reason: '' }],
+      ['a blank reason', { reason: '   ' }],
+      ['an over-long reason', { reason: 'x'.repeat(501) }],
+      ['a non-string reason', { reason: 7 }],
+      ['an unknown key', { reason: 'ok', approvedBy: 'user:someone-else' }],
+      ['a boolean', true],
+      ['a string', 'show is over'],
+      ['an array', ['show is over']],
+    ])('400 rejects an override with %s and queues nothing', async (_label, override) => {
+      queueIdemOnly();
+      const res = await post(`idem-ah-bad-${_label}`, {
+        type: 'reboot_machine',
+        params: { active_hours_override: override },
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe('validation_failed');
+      expect(body.errors).toHaveProperty(['body.params.active_hours_override']);
+      expect(mergeCallCount()).toBe(0);
+    });
+
+    it('400 rejects an override on a type the guard does not cover', async () => {
+      queueIdemOnly();
+      const res = await post('idem-ah-other-type', {
+        type: 'restart_process',
+        params: { process_name: 'TouchDesigner.exe', active_hours_override: { reason: 'show is over' } },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).errors).toHaveProperty(['body.params.active_hours_override']);
+      expect(mergeCallCount()).toBe(0);
+    });
+
+    it.each([
+      ['an unknown value on reboot_machine', 'reboot_machine', 'later'],
+      ['any value on shutdown_machine', 'shutdown_machine', 'after_active_hours'],
+    ])('400 rejects when with %s', async (_label, type, when) => {
+      queueIdemOnly();
+      const res = await post(`idem-ah-when-bad-${type}`, { type, params: { when } });
+      expect(res.status).toBe(400);
+      expect((await res.json()).errors).toHaveProperty(['body.params.when']);
+      expect(mergeCallCount()).toBe(0);
+    });
+
+    it('400 rejects an override combined with when: after_active_hours', async () => {
+      queueIdemOnly();
+      const res = await post('idem-ah-both', {
+        type: 'reboot_machine',
+        params: { when: 'after_active_hours', active_hours_override: { reason: 'show is over' } },
+      });
+      expect(res.status).toBe(400);
+      expect(mergeCallCount()).toBe(0);
+    });
+  });
+
   it('202 happy path: capture_screenshot accepts monitor: "all"', async () => {
     queueIdemAndMachine({ online: true });
     const req = createMockRequest(
@@ -1092,6 +1218,38 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}', ()
     const body = await res.json();
     expect(body.data.result.screenshot_url).toMatch(/^https:\/\/signed\.example\/read-/);
     expect(fakeBucket.file).toHaveBeenLastCalledWith(storagePath);
+  });
+
+  it.each([
+    ['reboot_machine', 'Reboot deferred until 17:00 (machine time)'],
+    ['shutdown_machine', 'Shutdown scheduled in 60 seconds'],
+    ['cancel_reboot', 'Reboot/shutdown cancelled'],
+  ])('200 completed %s surfaces the agent\'s plain-string result', async (type, result) => {
+    queueGetSnapshots(null, { [CID]: { type, status: 'completed', result } });
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands/${CID}`,
+    );
+    const res = await commandStatusGET(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE, commandId: CID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe('completed');
+    expect(body.data.result).toBe(result);
+    expect(body.data.error).toBeUndefined();
+  });
+
+  it('200 completed with an empty-string result carries no result', async () => {
+    queueGetSnapshots(null, { [CID]: { type: 'reboot_machine', status: 'completed', result: '' } });
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands/${CID}`,
+    );
+    const res = await commandStatusGET(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE, commandId: CID }),
+    });
+    const body = await res.json();
+    expect(body.data.status).toBe('completed');
+    expect(body.data.result).toBeUndefined();
   });
 
   it('200 failed shape surfaces error string', async () => {

@@ -135,6 +135,8 @@ when a non-zero limit is reached, the agent stops trying to restart the process 
 3. if the countdown reaches 0:00 untouched, the machine restarts automatically
 4. the relaunch counter resets when the prompt opens, when an operator starts or restarts the process, when launch mode is switched from `off` back to `always` or `scheduled`, and when an admin dismisses the reboot banner from the dashboard — a successful auto-restart does not reset it
 
+**Windows, inside active hours** — no prompt opens. the agent logs `active_hours_refused` and holds the restart until the machine's active hours end, then restarts it with the usual one-minute countdown; the dashboard shows an amber **restart at** pill meanwhile. an admin can still restart now from the banner, with a reason, or dismiss it, which drops the held restart. see [a held reboot](/docs/reference/agent-commands#a-held-reboot).
+
 **macOS and Linux** — there is no on-screen prompt, and the machine never restarts on its own. the process stays down, and the agent stops relaunching anything, until an admin approves the restart or dismisses the banner on the dashboard. if the flag could not reach the dashboard because the machine was offline, the agent waits out the prompt's window and escalates again once it is connected.
 
 <Callout type="idea" title={"crash alerts"}>

@@ -1,7 +1,7 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
@@ -69,7 +69,8 @@ firestore/
 |   `-- account_deletion/operation
 |-- chats/{chatId}                                 rules
 |   |-- stream/current                             rules
-|   `-- approvals/{toolCallId}
+|   |-- approvals/{toolCallId}
+|   `-- activeHoursOverrides/{toolCallId}
 |-- cortex-followups/{followupId}                  rules
 |-- chat_shares/{token}
 |-- chat_conversations/{conversationId}
@@ -214,13 +215,15 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `machine_timezone` | string | legacy Windows timezone label. |
 | `machine_timezone_iana` | string | IANA timezone. |
 | `health` | map | `{ status, error_code, error_message, last_checked_at, last_error_at }`, written by the agent when its health changes. the health-check cron adds `staleSince` and `lastCronAlertAt`. |
-| `capabilities` | map | numbers, `0` or `1`, written on every heartbeat as dotted paths: `swoop` (the streamer is installed and this machine can stream — every Windows machine, a Mac whose app reported Screen Recording granted, never Linux), `displayRemoteApply` (reported as `1` on every platform, though display apply works on Windows only), `keepAwake` (the agent follows the site's keep screens awake switch). the dashboard gates on `=== 1`. |
+| `capabilities` | map | numbers, `0` or `1`, written on every heartbeat as dotted paths: `swoop` (the streamer is installed and this machine can stream — every Windows machine, a Mac whose app reported Screen Recording granted, never Linux), `displayRemoteApply` (reported as `1` on every platform, though display apply works on Windows only), `keepAwake` (the agent follows the site's keep screens awake switch), `activeHoursGuard` (Windows only: the agent refuses reboots, shutdowns and deployments inside `activeHours` without an override, and honours `when: after_active_hours`). the dashboard gates on `=== 1`. |
+| `activeHours` | map | `{ start, end, source }`, written on every heartbeat by a Windows agent with `capabilities.activeHoursGuard`: the active hours it enforces, in whole hours on the machine's clock, `start` inside the window and `end` not, wrapping past midnight when `start` is later. `source` is `policy`, `mdm`, `user` or `default` (Windows' 8–17). deleted off Windows and when the agent cannot read them, since it then holds nothing back. see [active hours](/docs/reference/agent-commands#active-hours). |
 | `displayAwake` | map | `{ wanted, held, session, how, reason }`: what keep screens awake holds, written by the agent on each change. `wanted` is the site's `settings/display.keepAwake` as the agent last read it, `held` the service's own hold (system sleep, and on macOS the display), `session` the owlette app's (idle lock and screensaver, and on Windows the display; `null` without a fresh report from it), `how` the mechanism, and `reason` why a wanted hold is not fully held (`no_display` when nobody is signed in). missing on agents without `capabilities.keepAwake`. |
 | `cortexEnabled` | boolean | per-machine hoot kill switch. missing means enabled. |
 | `cortexStatus` | map | `{ online, lastHeartbeat, status, error }`, written only by the agent's local hoot process. `status` is `idle`, `thinking`, `tool_call`, `error` or `offline`. |
 | `rebooting`, `shuttingDown` | boolean | power-operation flags. |
 | `rebootScheduledAt`, `shutdownScheduledAt` | number | unix seconds: when the OS will actually restart or power off. the dashboard's countdown runs to it. |
-| `rebootSource`, `rebootCancellable`, `rebootEntryId` | string, boolean, string | written with the flags: `scheduled` or `manual`, whether a cancel can still land, and the schedule entry that fired. the health-check cron clears `rebootCancellable`. |
+| `rebootSource`, `rebootCancellable`, `rebootEntryId` | string, boolean, string | written with the flags: `scheduled`, `manual` or `deferred` (a held reboot firing once active hours end), whether a cancel can still land, and the schedule entry that fired. the health-check cron clears `rebootCancellable`. |
+| `rebootDeferredUntil` | number | unix seconds: when a reboot the agent is holding until active hours end will fire. cleared when it fires or is cancelled. the dashboard shows it as **restart at HH:MM** in machine time. see [a held reboot](/docs/reference/agent-commands#a-held-reboot). |
 | `rebootPending` | map | `{ active, processName, reason, timestamp }`: relaunch attempts ran out. see [restart pending](/docs/dashboard/machine-monitoring#restart-pending). |
 | `rebootState` | map | last fired schedule entry plus the current reboot attempt. |
 | `lastScreenshot` | map or null | `{ url, timestamp, sizeKB }`, the latest screenshot. |
@@ -266,6 +269,8 @@ the command queue: two singleton documents under `sites/{siteId}/machines/{machi
 ```
 
 the server writes pending commands with `writeCommandFanOut()`. the agent listens to `commands/pending`, writes a `running` marker, runs the command, writes the result to `commands/completed` under the same ID, and deletes the field from `commands/pending`.
+
+a pending `reboot_machine`, `shutdown_machine` or `install_software` may carry `activeHoursOverride: { reason, approvedBy }`, a person's approval to act inside the machine's active hours, with `approvedBy` `user:<uid>` or `apiKey:<keyId>`. only the server writes it, and it drops the field from any params a client or a model supplied. a `reboot_machine` may also carry `when: "after_active_hours"`. see [agent commands](/docs/reference/agent-commands#active-hours).
 
 | field (completed) | type | notes |
 | --- | --- | --- |
@@ -549,6 +554,8 @@ the turn in flight. **access**: readable by whoever can read the chat; writes ar
 | `error` | string | on failure. |
 
 this record binds an approval to the turn that requested it: a resume whose message ID or tool-call IDs no longer match is refused as `approval_stale` rather than re-aimed at some other set of machines. each approved call also claims `chats/{chatId}/approvals/{toolCallId}` (server only, `{ turnId, claimedAt, expiresAt }`), so an approval is spent once.
+
+a tool call that overrides active hours is recorded when its approval card is raised, at `chats/{chatId}/activeHoursOverrides/{toolCallId}` (server only, `{ toolName, inputHash, expiresAt }`): a hash of the whole call as the card showed it. the resumed turn honours the override only when the call that comes back hashes the same. see [overriding active hours](/docs/reference/hoot-tools#overriding-active-hours).
 
 ### `cortex-followups/{followupId}`
 

@@ -6,6 +6,8 @@ import {
   getToolByName,
   toAISDKTools,
   requiresConfirmation,
+  takesActiveHoursOverride,
+  withoutActiveHoursOverride,
   EXISTING_COMMAND_MAPPINGS,
   type McpToolDefinition,
 } from '@/lib/mcp-tools';
@@ -31,6 +33,8 @@ const EXPECTED_TIER1 = [
   // Scheduled follow-ups — server-side chat records, no machine involved.
   'schedule_followup',
   'cancel_followup',
+  // Members already read talons through the rules and the talons page.
+  'list_talons',
 ] as const;
 
 const EXPECTED_TIER2 = [
@@ -60,7 +64,6 @@ const EXPECTED_TIER2 = [
   'show_notification',
   // Talons (wave 3) — site-level automations, executed server-side.
   'create_talon',
-  'list_talons',
   'set_talon_enabled',
 ] as const;
 
@@ -426,5 +429,85 @@ describe('mcp-tools: process CRUD schemas', () => {
     for (const field of Object.keys(add.parameters.properties)) {
       expect(update.parameters.properties[field]).toEqual(add.parameters.properties[field]);
     }
+  });
+});
+
+// Active hours: the agent refuses reboots, shutdowns and deployments inside
+// them unless a person approved an override. hoot-utils forces that approval
+// for any call that sets the pair; these are the schemas it keys off.
+
+describe('mcp-tools: active-hours schemas', () => {
+  const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
+
+  it('exactly the disruptive tools take the override and its reason', () => {
+    expect(allTools.filter(takesActiveHoursOverride).map((t) => t.name).sort()).toEqual(
+      [...OVERRIDE_TOOLS].sort(),
+    );
+    for (const name of OVERRIDE_TOOLS) {
+      const { properties, required } = getToolByName(name)!.parameters;
+      expect(properties.override_active_hours.type).toBe('boolean');
+      expect(properties.reason.type).toBe('string');
+      expect(properties.reason.description).toMatch(/500/);
+      expect(required ?? []).not.toContain('override_active_hours');
+      expect(required ?? []).not.toContain('reason');
+    }
+  });
+
+  it('reboot_machine can wait for active hours to end; shutdown_machine cannot', () => {
+    const when = getToolByName('reboot_machine')!.parameters.properties.when;
+    expect(when.type).toBe('string');
+    expect(when.enum).toEqual(['now', 'after_active_hours']);
+    expect(getToolByName('shutdown_machine')!.parameters.properties).not.toHaveProperty('when');
+  });
+
+  it('manage_windows_update offers the restart actions and no longer sets a restart deadline', () => {
+    const tool = getToolByName('manage_windows_update')!;
+    expect(tool.parameters.properties.action.enum).toEqual(
+      expect.arrayContaining([
+        'get_status',
+        'set_active_hours',
+        'limit_auto_restart',
+        'disable_auto_install',
+        'enable_auto_install',
+        'set_scheduled_install',
+      ]),
+    );
+    expect(tool.parameters.properties.action.enum).not.toContain('set_restart_deadline');
+    expect(tool.parameters.properties).not.toHaveProperty('deadline_days');
+  });
+
+  it('manage_windows_update says what each restart action really does', () => {
+    const description = getToolByName('manage_windows_update')!.description;
+    // set_scheduled_install turns on install-and-restart, not just an install time.
+    expect(description).toMatch(/set_scheduled_install[^.]*restarts/);
+    expect(description).toMatch(/limit_auto_restart[^.]*only outside active hours/);
+    expect(description).toMatch(/nightly restart can still happen/);
+    expect(description).toMatch(/disable_auto_install[^.]*security updates[^.]*wait/);
+    // active hours hold Windows' restarts only until a deadline passes.
+    expect(description).toMatch(/until an update deadline passes/);
+    expect(description).toMatch(/owlette refuses reboots, shutdowns and deployments inside them/);
+    expect(description).not.toMatch(/quiet hours/i);
+  });
+
+  it('the countdown the tools quote is the agent`s 60 seconds', () => {
+    for (const name of ['reboot_machine', 'shutdown_machine', 'cancel_reboot']) {
+      const description = getToolByName(name)!.description;
+      expect(description).toMatch(/60-second/);
+      expect(description).not.toMatch(/30-second/);
+    }
+  });
+
+  it('withoutActiveHoursOverride drops the pair and keeps everything else', () => {
+    const reboot = getToolByName('reboot_machine')!;
+    const stripped = withoutActiveHoursOverride(reboot);
+
+    expect(Object.keys(stripped.parameters.properties)).toEqual(['when']);
+    expect(stripped.name).toBe('reboot_machine');
+    expect(stripped.tier).toBe(reboot.tier);
+    // The registry entry itself is untouched.
+    expect(reboot.parameters.properties).toHaveProperty('override_active_hours');
+    // A tool without the pair comes back as it was.
+    const info = getToolByName('get_system_info')!;
+    expect(withoutActiveHoursOverride(info)).toBe(info);
   });
 });

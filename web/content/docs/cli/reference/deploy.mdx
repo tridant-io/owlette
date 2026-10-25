@@ -25,7 +25,7 @@ every verb takes `--site <siteId>`. every mutation sends an `Idempotency-Key` (d
 creates a deployment and queues an install command on each machine in `--machines`.
 
 ```bash
-owlette deploy create --site <siteId> --name <name> --installer-url <url> --installer-name <name> --silent-flags <flags> --machines <csv> [--verify-path <path>] [--sha256 <hex>] [--close-processes <csv>] [--suppress-projects <csv>] [--parallel] [--idempotency-key <key>] [--json]
+owlette deploy create --site <siteId> --name <name> --installer-url <url> --installer-name <name> --silent-flags <flags> --machines <csv> [--verify-path <path>] [--sha256 <hex>] [--close-processes <csv>] [--suppress-projects <csv>] [--parallel] [--override-active-hours --reason <text>] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
@@ -41,9 +41,11 @@ owlette deploy create --site <siteId> --name <name> --installer-url <url> --inst
 | `--close-processes <csv>` | string | no | process exe names agents close before installing |
 | `--suppress-projects <csv>` | string | no | project names or paths agents suppress before installing |
 | `--parallel` | boolean | no | install on all targets at once (default: one at a time) |
+| `--override-active-hours` | boolean | no | install inside the machines' [active hours](/docs/reference/agent-commands#active-hours) anyway. needs `--reason` |
+| `--reason <text>` | string | with `--override-active-hours` | why, 500 characters or fewer. the server writes it onto every install with your key as the approver, and the agent logs it |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
 
-an empty `--machines`, or a `--close-processes` / `--suppress-projects` that is present but empty, fails before a request is sent. a site may target at most `sites/{siteId}.deployQuota` machines per deployment (default 100); more returns `413 over_quota`, and the CLI prints the `max_targets` and `requested` counts.
+an empty `--machines`, or a `--close-processes` / `--suppress-projects` that is present but empty, fails before a request is sent, and so do `--override-active-hours` without `--reason` and `--reason` without it. a site may target at most `sites/{siteId}.deployQuota` machines per deployment (default 100); more returns `413 over_quota`, and the CLI prints the `max_targets` and `requested` counts.
 
 human mode prints `owlette: deployment <id> created on <siteId> — status <status>, <n> target(s)`. `--json` prints the raw response: `deploymentId`, `siteId`, `status` and `targets`.
 
@@ -128,12 +130,14 @@ backing: `GET /api/sites/{siteId}/deployments/{deploymentId}`.
 re-queues every target whose status is `failed`. other targets are left alone.
 
 ```bash
-owlette deploy retry <deploymentId> --site <siteId> [--idempotency-key <key>] [--json]
+owlette deploy retry <deploymentId> --site <siteId> [--override-active-hours --reason <text>] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
 | `--site <siteId>` | string | yes | site that owns the deployment |
+| `--override-active-hours` | boolean | no | install inside the machines' [active hours](/docs/reference/agent-commands#active-hours) anyway. needs `--reason`. the deployment's own override does not carry over to a retry |
+| `--reason <text>` | string | with `--override-active-hours` | why, 500 characters or fewer, as for `create` |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
 
 `--json` prints `deploymentId`, `siteId`, `status`, `retried` and `machine_ids`.
@@ -142,6 +146,10 @@ owlette deploy retry <deploymentId> --site <siteId> [--idempotency-key <key>] [-
 
 ```bash
 owlette deploy retry dep_abc123 --site site-1
+```
+
+```bash
+owlette deploy retry dep_abc123 --site site-1 --override-active-hours --reason "venue closed today"
 ```
 
 backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/retry`.
@@ -238,7 +246,7 @@ backing: `DELETE /api/sites/{siteId}/deployments/{deploymentId}`.
 
 - `0` — success, including a declined prompt (`cancel aborted`, `uninstall aborted`, `delete aborted`)
 - `1` — network failure, a non-2xx response (`413 over_quota`, `403 scope_insufficient`, `409 deployment_in_flight`, `idempotency_key_mismatch`), or a missing required flag
-- `2` — an empty `--machines`, an empty `--close-processes` or `--suppress-projects`, a `--limit` that is not a positive integer, `cancel`/`uninstall`/`delete` without `--yes` when stdin is not a tty, or no token configured
+- `2` — an empty `--machines`, an empty `--close-processes` or `--suppress-projects`, `--override-active-hours` without `--reason` or `--reason` without it, a `--limit` that is not a positive integer, `cancel`/`uninstall`/`delete` without `--yes` when stdin is not a tty, or no token configured
 
 ---
 
@@ -247,4 +255,5 @@ backing: `DELETE /api/sites/{siteId}/deployments/{deploymentId}`.
 - **scope**: site-scoped. `list` and `get` need `site=<id>:read`; `create`, `retry`, `cancel` and `delete` need `site=<id>:write`; `uninstall` needs `write` and `admin`
 - **JSON**: raw objects with no `{ ok, data }` wrapper
 - **idempotency**: a retry with the same key replays the cached response instead of queueing the installs twice — see [idempotency](/docs/api/idempotency)
+- **active hours**: a Windows agent with the active-hours guard refuses an install while the machine is inside its active hours, so a daytime `create` or `retry` fails on those targets with `Error: active_hours: …`. retry after the window, or pass `--override-active-hours --reason <text>`, which covers every machine in that request. see [deployments](/docs/dashboard/deployments#inside-active-hours)
 - **related**: [`roost deploy`](/docs/cli/reference/roost#deploy) for roost versions, [`installer`](/docs/cli/reference/installer) for owlette's own agent installers, [`machine`](/docs/cli/reference/machine) for the target machine IDs

@@ -96,7 +96,7 @@ every top-level noun is a resource class hung off the client. every method is `a
 | `client.keys`        | session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke`                         |
 | `client.webhooks`    | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `deliveries`, `delivery`, `retry_delivery`, `probe` |
 | `client.sites`       | `list`, `get`                                                                                      |
-| `client.machines`    | `list`, `get`, `deployments`, `dispatch_command`, `get_command`, `capture_screenshot`              |
+| `client.machines`    | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatch_command`, `get_command`, `capture_screenshot` |
 | `client.processes(site_id, machine_id)` | `list`, `get`, `create`, `update`, `delete`, `start`, `stop`, `kill`, `schedule` |
 | `client.chat`        | `new`, `list`, `send`, `rename`, `delete`                                                          |
 | `client.members(site_id)` | `list`, `add`, `set_role`, `remove`, `transfer_ownership`                                     |
@@ -366,11 +366,17 @@ history = await client.quotas.history("site-1", period="30d")   # dict: {siteId,
 ### machine commands
 
 ```python
-# queue a command — returns {"commandId": ..., "status": ...}
-queued = await client.machines.dispatch_command(
-    "site-1", "machine-a7f3", "reboot_machine", {"delay_seconds": 60},
+# reboot or shut down — returns {"commandId": ..., "status": ...}
+queued = await client.machines.reboot("site-1", "machine-a7f3", after_active_hours=True)
+await client.machines.shutdown(
+    "site-1", "machine-a7f3", active_hours_override={"reason": "replacing the projector"},
 )
 status = await client.machines.get_command("site-1", "machine-a7f3", queued["commandId"])
+
+# or queue any of the three types yourself
+await client.machines.dispatch_command(
+    "site-1", "machine-a7f3", "reboot_machine", {"delay_seconds": 60},
+)
 
 # dispatch + poll + download in one call — returns the PNG bytes
 png = await client.machines.capture_screenshot(
@@ -382,6 +388,8 @@ png = await client.machines.capture_screenshot(
 ```
 
 `dispatch_command()` is typed to `reboot_machine`, `shutdown_machine`, and `capture_screenshot`. `capture_screenshot()` raises `TimeoutError` when the agent never reports back and `RuntimeError` when it reports a failure. a completed screenshot's `screenshot_url` is a fresh signed URL on every `get_command()` read — don't cache it.
+
+`reboot()` takes the keyword arguments `after_active_hours`, `active_hours_override` (an `ActiveHoursOverride`, `{"reason": ...}`) and `idempotency_key`; `shutdown()` takes the last two. a Windows agent with `capabilities.activeHoursGuard` refuses a reboot or shutdown inside the machine's [active hours](/docs/reference/agent-commands#active-hours), and Windows always has them, so a daytime script needs one of the two. the command is still queued: `get_command()` then reports `failed`, with an `error` that starts `Error: active_hours:`. `after_active_hours` restarts once active hours end, or now when the machine is outside them; `active_hours_override` acts now, and the agent logs the reason with your key as the approver. not both: the API answers `400`. an older agent, macOS and Linux ignore both and act at once.
 
 ### processes
 
@@ -484,8 +492,12 @@ created = await client.installer_deployments.create(
     machines=["machine-a7f3"],
 )
 detail = await client.installer_deployments.get("site-1", created["deploymentId"])
-await client.installer_deployments.retry("site-1", created["deploymentId"])
+await client.installer_deployments.retry(
+    "site-1", created["deploymentId"], active_hours_override={"reason": "venue closed today"},
+)
 ```
+
+`create()` and `retry()` take an optional `active_hours_override` keyword argument (an `ActiveHoursOverride`, `{"reason": ...}`). a Windows agent with `capabilities.activeHoursGuard` refuses an install inside the machine's [active hours](/docs/reference/agent-commands#active-hours): that target ends `failed` with an `error` that starts `Error: active_hours:`. with the override the server writes the reason onto every install the call queues, with your key as the approver. a retry needs its own; the deployment's does not carry over.
 
 `upload()` reads the whole file, computes its SHA-256, requests a signed URL, PUTs the bytes, and finalizes; the platform comes from the file extension unless you pass `platform` (`windows_x64`, `macos_arm64`, `linux_x64`).
 

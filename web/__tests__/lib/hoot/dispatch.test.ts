@@ -154,6 +154,16 @@ const MACHINE_ID = 'machine-1';
 const CHAT_ID = 'auto_chat_42';
 const EVENT_ID = 'evt_99';
 
+// an unattended investigation can never override active hours: whatever the
+// model passes, none of these names reaches the agent.
+const OVERRIDE_NAMES = ['activeHoursOverride', 'active_hours_override', 'override_active_hours', 'override_reason'];
+const overrideBag = () => ({
+  activeHoursOverride: { reason: 'show is over', approvedBy: 'user:attacker' },
+  active_hours_override: { reason: 'show is over' },
+  override_active_hours: true,
+  override_reason: 'show is over',
+});
+
 beforeEach(() => {
   invokeAsSystemSpy.mockClear();
 });
@@ -247,6 +257,24 @@ describe('dispatchToolCallAsSystem', () => {
     const written = pendingSet.payload as Record<string, Record<string, unknown>>;
     const cmdId = Object.keys(written)[0];
     expect(written[cmdId].tool_params).toEqual({ name_filter: 'chrome', limit: 10 });
+  });
+
+  it('never carries an active-hours override from the model onto the command', async () => {
+    const { db, sets } = buildFakeDb({
+      completedResults: new Proxy({}, {
+        get: () => ({ status: 'success', result: {} }),
+      }) as Record<string, Record<string, unknown>>,
+    });
+    await dispatchToolCallAsSystem(
+      { db, siteId: SITE_ID, machineId: MACHINE_ID, chatId: CHAT_ID, eventId: EVENT_ID },
+      'manage_windows_update',
+      { ...overrideBag(), action: 'set_active_hours', start_hour: 9 },
+    );
+    const pendingSet = sets.find((s) => s.path[s.path.length - 1] === 'pending')!;
+    const written = pendingSet.payload as Record<string, Record<string, unknown>>;
+    const entry = written[Object.keys(written)[0]];
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    expect(entry.tool_params).toEqual({ action: 'set_active_hours', start_hour: 9 });
   });
 
   it('returns an `error` envelope when the agent reports failure', async () => {
@@ -438,6 +466,26 @@ describe('dispatchExistingCommandAsSystem', () => {
     expect(written[cmdId].schedules).toEqual([
       { days: ['mon'], ranges: [{ start: '09:00', stop: '17:00' }] },
     ]);
+  });
+
+  it('never carries an active-hours override from the model onto a reboot', async () => {
+    const { db, sets } = buildFakeDb({
+      completedResults: new Proxy({}, {
+        get: () => ({ status: 'success', result: 'rebooting' }),
+      }) as Record<string, Record<string, unknown>>,
+    });
+
+    await dispatchExistingCommandAsSystem(
+      { db, siteId: SITE_ID, machineId: MACHINE_ID, chatId: CHAT_ID, eventId: EVENT_ID },
+      'reboot_machine',
+      { ...overrideBag(), when: 'after_active_hours' },
+    );
+
+    const pendingSet = sets.find((s) => s.path[s.path.length - 1] === 'pending')!;
+    const written = pendingSet.payload as Record<string, Record<string, unknown>>;
+    const entry = written[Object.keys(written)[0]];
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
   });
 
   it('skips a running marker and returns the later terminal result', async () => {

@@ -45,6 +45,71 @@ async def test_dispatch_command_unwraps_envelope_and_emits_idempotency() -> None
     assert req.headers["Idempotency-Key"].startswith("py-sdk-")
 
 
+def _queued(captured: list[httpx.Request]) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            202, json={"ok": True, "data": {"commandId": "cmd_1", "status": "pending"}}
+        )
+
+    return _transport(handler)
+
+
+@pytest.mark.asyncio
+async def test_reboot_sends_no_params_by_default() -> None:
+    captured: list[httpx.Request] = []
+    async with Roost(token="owk_live_x", transport=_queued(captured)) as client:
+        out = await client.machines.reboot("s1", "m1")
+
+    assert out == {"commandId": "cmd_1", "status": "pending"}
+    assert captured[0].url.path == "/api/sites/s1/machines/m1/commands"
+    assert json.loads(captured[0].content) == {"type": "reboot_machine", "params": {}}
+
+
+@pytest.mark.asyncio
+async def test_reboot_after_active_hours_sends_when() -> None:
+    captured: list[httpx.Request] = []
+    async with Roost(token="owk_live_x", transport=_queued(captured)) as client:
+        await client.machines.reboot("s1", "m1", after_active_hours=True)
+
+    assert json.loads(captured[0].content) == {
+        "type": "reboot_machine",
+        "params": {"when": "after_active_hours"},
+    }
+
+
+@pytest.mark.asyncio
+async def test_reboot_override_sends_reason_and_idempotency_key() -> None:
+    captured: list[httpx.Request] = []
+    async with Roost(token="owk_live_x", transport=_queued(captured)) as client:
+        await client.machines.reboot(
+            "s1",
+            "m1",
+            active_hours_override={"reason": "hotfix for the show"},
+            idempotency_key="reboot-key",
+        )
+
+    assert json.loads(captured[0].content) == {
+        "type": "reboot_machine",
+        "params": {"active_hours_override": {"reason": "hotfix for the show"}},
+    }
+    assert captured[0].headers["Idempotency-Key"] == "reboot-key"
+
+
+@pytest.mark.asyncio
+async def test_shutdown_override_sends_shutdown_machine() -> None:
+    captured: list[httpx.Request] = []
+    async with Roost(token="owk_live_x", transport=_queued(captured)) as client:
+        await client.machines.shutdown(
+            "s1", "m1", active_hours_override={"reason": "power work"}
+        )
+
+    assert json.loads(captured[0].content) == {
+        "type": "shutdown_machine",
+        "params": {"active_hours_override": {"reason": "power work"}},
+    }
+
+
 @pytest.mark.asyncio
 async def test_get_command_unwraps_envelope() -> None:
     def handler(_request: httpx.Request) -> httpx.Response:

@@ -21,6 +21,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from roost.resources.machines import ActiveHoursOverride
+
 if TYPE_CHECKING:
     from roost.client import RoostClient
 
@@ -177,8 +179,16 @@ class InstallerDeployments:
         close_processes: Sequence[str] | None = None,
         suppress_projects: Sequence[str] | None = None,
         parallel_install: bool = False,
+        active_hours_override: ActiveHoursOverride | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        """Create a deployment and queue ``install_software`` on each machine.
+
+        A Windows agent with ``capabilities.activeHoursGuard`` fails a target
+        inside the machine's active hours with an ``error`` starting
+        ``Error: active_hours:``. ``active_hours_override`` installs anyway; the
+        server writes it onto every install with your key as the approver.
+        """
         body: dict[str, Any] = {
             "name": name,
             "installer_name": installer_name,
@@ -196,6 +206,8 @@ class InstallerDeployments:
             body["suppress_projects"] = list(suppress_projects)
         if parallel_install:
             body["parallel_install"] = True
+        if active_hours_override is not None:
+            body["active_hours_override"] = {"reason": active_hours_override["reason"]}
 
         resp = await self._client.request(
             f"/api/sites/{site_id}/deployments",
@@ -225,12 +237,21 @@ class InstallerDeployments:
         site_id: str,
         deployment_id: str,
         *,
+        active_hours_override: ActiveHoursOverride | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        """Re-queue the failed targets.
+
+        ``active_hours_override`` works as for ``create``; the deployment's own
+        override does not carry over to a retry.
+        """
+        body: dict[str, Any] = {}
+        if active_hours_override is not None:
+            body["active_hours_override"] = {"reason": active_hours_override["reason"]}
         resp = await self._client.request(
             f"/api/sites/{site_id}/deployments/{deployment_id}/retry",
             method="POST",
-            body={},
+            body=body,
             idempotency_key=idempotency_key,
         )
         return resp.data if isinstance(resp.data, dict) else {}

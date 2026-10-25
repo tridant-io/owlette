@@ -15,6 +15,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Plus, CheckCircle2, XCircle, Clock, Loader2, Trash2, X, MoreVertical, RefreshCw, Package, PlayCircle, Archive, ChevronDown } from 'lucide-react';
 import DeploymentDialog from '@/components/DeploymentDialog';
+import {
+  ActiveHoursDeployConfirm,
+  machinesInActiveHours,
+  type MachineInActiveHours,
+} from '@/components/ActiveHoursDeployConfirm';
 import UninstallDialog from '@/components/UninstallDialog';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
@@ -27,6 +32,7 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { useUninstall } from '@/hooks/useUninstall';
+import { describeCommandError } from '@/lib/activeHours';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
 
@@ -89,6 +95,11 @@ function getStatusBadge(status: string, error?: string) {
   return badge;
 }
 
+/** the in-flight key of a retry: the deployment id (bulk) or `${deploymentId}:${machineId}` (per-row). */
+function retryKey(deployment: Deployment, machineIds?: string[]): string {
+  return machineIds?.length === 1 ? `${deployment.id}:${machineIds[0]}` : deployment.id;
+}
+
 const DeploymentRow = React.memo(function DeploymentRow({
   deployment,
   isSelected,
@@ -120,7 +131,9 @@ const DeploymentRow = React.memo(function DeploymentRow({
   timeFormat: '12h' | '24h';
 }) {
   const failedTargets = deployment.targets.filter((t: DeploymentTarget) => t.status === 'failed' && t.error);
-  const errorMessages = failedTargets.map((t: DeploymentTarget) => `${t.machineId}: ${t.error}`).join('\n');
+  const errorMessages = failedTargets
+    .map((t: DeploymentTarget) => `${t.machineId}: ${describeCommandError(t.error ?? '')}`)
+    .join('\n');
   const bulkRetrying = retrying.has(deployment.id);
 
   return (
@@ -302,7 +315,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                     </div>
                     {/* inline, not tooltip-only: the reason is what the operator needs to act on */}
                     {target.error && (
-                      <p className="px-3 pb-2 text-xs text-destructive whitespace-pre-wrap break-words select-text">{target.error}</p>
+                      <p className="px-3 pb-2 text-xs text-destructive whitespace-pre-wrap break-words select-text">{describeCommandError(target.error)}</p>
                     )}
                   </div>
                 ))}
@@ -398,18 +411,23 @@ export default function DeploymentsPage() {
   // the installer to self-heal a legacy deployment's missing checksum, which is slow.
   const [retrying, setRetrying] = useState<ReadonlySet<string>>(new Set());
 
-  const runRetry = useCallback(async (deployment: Deployment, machineIds?: string[]) => {
-    const key = machineIds?.length === 1
-      ? `${deployment.id}:${machineIds[0]}`
-      : deployment.id;
+  /** true once the retry is queued. */
+  const runRetry = useCallback(async (
+    deployment: Deployment,
+    machineIds?: string[],
+    override?: { reason: string },
+  ): Promise<boolean> => {
+    const key = retryKey(deployment, machineIds);
     setRetrying((prev) => new Set(prev).add(key));
     try {
-      const retried = await retryDeploymentRef.current(deployment.id, machineIds);
+      const retried = await retryDeploymentRef.current(deployment.id, machineIds, override ? { override } : undefined);
       toast.success(`retrying deployment for ${retried} machine(s)`);
+      return true;
     } catch (error: unknown) {
       console.error('Failed to retry deployment:', error);
       const message = error instanceof Error ? error.message : String(error);
       toast.error(message || 'failed to retry deployment');
+      return false;
     } finally {
       setRetrying((prev) => {
         const next = new Set(prev);
@@ -419,17 +437,48 @@ export default function DeploymentsPage() {
     }
   }, []);
 
+  // a ref, not a dep: the machines array changes on every heartbeat, which
+  // would recreate the retry handlers and defeat DeploymentRow's memo
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+
+  // a retry needs its own override; kept on close so the list doesn't empty as it fades
+  const [retryConfirm, setRetryConfirm] = useState<{
+    open: boolean;
+    deployment: Deployment;
+    machineIds?: string[];
+    machines: MachineInActiveHours[];
+  } | null>(null);
+
+  const retryOrAsk = useCallback(async (deployment: Deployment, machineIds?: string[]) => {
+    const retriedIds = machineIds
+      ?? deployment.targets.filter((t: DeploymentTarget) => t.status === 'failed').map((t) => t.machineId);
+    const inActiveHours = machinesInActiveHours(machinesRef.current, retriedIds);
+    if (inActiveHours.length > 0) {
+      setRetryConfirm({ open: true, deployment, machineIds, machines: inActiveHours });
+      return;
+    }
+    await runRetry(deployment, machineIds);
+  }, [runRetry]);
+
   const handleRetryDeployment = useCallback(async (deployment: Deployment) => {
     if (!deployment.targets.some((t: DeploymentTarget) => t.status === 'failed')) {
       toast.error('no failed targets to retry');
       return;
     }
-    await runRetry(deployment);
-  }, [runRetry]);
+    await retryOrAsk(deployment);
+  }, [retryOrAsk]);
 
   const handleRetryTarget = useCallback(async (deployment: Deployment, machineId: string) => {
-    await runRetry(deployment, [machineId]);
-  }, [runRetry]);
+    await retryOrAsk(deployment, [machineId]);
+  }, [retryOrAsk]);
+
+  const closeRetryConfirm = () => setRetryConfirm((prev) => prev && { ...prev, open: false });
+
+  const handleRetryOverride = async (override: { reason: string }) => {
+    if (!retryConfirm) return;
+    if (await runRetry(retryConfirm.deployment, retryConfirm.machineIds, override)) closeRetryConfirm();
+  };
 
   const handleSiteChange = (siteId: string) => {
     selectSite(siteId);
@@ -557,6 +606,17 @@ export default function DeploymentsPage() {
           onConfirm={handleDeleteDeployment}
           variant="destructive"
         />
+
+        {retryConfirm && (
+          <ActiveHoursDeployConfirm
+            action="retry"
+            open={retryConfirm.open}
+            machines={retryConfirm.machines}
+            onCancel={closeRetryConfirm}
+            sending={retrying.has(retryKey(retryConfirm.deployment, retryConfirm.machineIds))}
+            onConfirm={handleRetryOverride}
+          />
+        )}
 
         {(() => {
           // A site-less account has a settled, knowable answer — zero — so

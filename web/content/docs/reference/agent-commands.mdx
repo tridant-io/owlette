@@ -1,7 +1,7 @@
 ---
 title: "agent commands reference"
 description: "every command the agent takes from its Firestore queue: what queues it, its fields, what the agent does on Windows, macOS and Linux, and how the result is recorded."
-keywords: ["command queue", "remote command", "machine command", "command history", "command stuck pending", "command never ran", "job queue", "remote reboot", "remote restart", "api command", "mac commands", "linux commands", "error prefix"]
+keywords: ["command queue", "remote command", "machine command", "command history", "command stuck pending", "command never ran", "job queue", "remote reboot", "remote restart", "api command", "mac commands", "linux commands", "error prefix", "active hours", "reboot refused", "daytime reboot", "restart after hours", "override"]
 ---
 
 the agent takes its work from two Firestore documents per machine. this page lists every command type it accepts, what queues it, what it does on each platform, and how its result is recorded. for the operator's view, see [remote commands](/docs/agent/remote-commands); for everything else that differs by platform, see [platform support](/docs/reference/platform-support).
@@ -31,6 +31,7 @@ besides `type`, `status: "pending"` and the command's own fields, an entry carri
 | `siteId`, `machineId`, `queuedBy` | the public endpoint and the swoop writer | `queuedBy` is `user:<uid>`, `apiKey:<keyId>` or `system:<name>` |
 | `timeout_seconds` | the public endpoint, on every command | see [queuing through the API](#queuing-through-the-api) |
 | `queued_at` | roost writers, in place of `timestamp` | |
+| `activeHoursOverride` | the server, only for a call a person approved | `{ reason, approvedBy }`: lets a reboot, shutdown or install run inside active hours. see [active hours](#active-hours) |
 
 ---
 
@@ -48,6 +49,27 @@ the agent refuses a second command of the same type for the same process within 
 
 exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types and `site_settings_refresh`. `cancel_mcp_tool` never reaches the check.
 
+### active hours
+
+on Windows the agent refuses `reboot_machine`, `shutdown_machine` and `install_software` while the machine is inside its active hours: the hours, on the machine's own clock, in which Windows holds its own update restarts back. it reads them the way Windows does: the group policy window when `SetActiveHours` is on, then MDM's, then the user's setting, then Windows' default of 8 to 17. MDM goes first when `MDMWinsOverGP` or `IgnoreWindowsUpdateGroupPolicies` is set. the start hour is inside the window and the end hour is not, so 8 to 17 means 08:00 to 17:00; a start later than the end wraps past midnight. a window the agent cannot read holds nothing back, and the service log says why.
+
+the refusal is a failed command:
+
+```
+Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00
+```
+
+an install is refused before it closes any process. each refusal logs `active_hours_refused` to the site log, and it counts toward the rate limit above like any other run, so a retry with an override straight after a refusal waits 5 seconds.
+
+two ways through:
+
+- **an override.** a command carrying `activeHoursOverride: { reason, approvedBy }`, with neither blank and a reason of 500 characters or fewer, runs inside active hours and logs `active_hours_override` with the reason and who approved it. only the server writes the field, and only for a call a person approved: the dashboard's confirm, an API call that sends `active_hours_override` (see [queuing through the API](#queuing-through-the-api)), a deployment created or retried with one, or a hoot call approved in a single-machine dashboard chat. every server path that builds a command first drops `activeHoursOverride`, `active_hours_override`, `override_active_hours` and `override_reason` from whatever a client or a model supplied.
+- **waiting.** `reboot_machine` with `when: "after_active_hours"` needs no override: it holds the reboot until active hours end. see [a held reboot](#a-held-reboot).
+
+not guarded: a rollout's `sync_pull`, which restarts nothing; a fleet update's `update_owlette`, which reboots no machine; and the weekly [restart schedule](/docs/dashboard/restart-schedules), whose time a person chose.
+
+the agent writes the window it enforces to the machine document as `activeHours: { start, end, source }`, with `source` `policy`, `mdm`, `user` or `default`, and reports `capabilities.activeHoursGuard: 1`. macOS and Linux have no active hours. an older Windows agent reports neither and ignores the window, the override and `when`: a machine is protected only once it runs a release with the guard.
+
 ### completed, failed or cancelled
 
 a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. two exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel, and `cancel_mcp_tool` writes its target `cancelled` itself.
@@ -56,7 +78,7 @@ these come back `completed` although the command did not do its job, so check `r
 
 - `Unknown command type: <type>`. this is also what a router-handled type returns when its handler module failed to load at service start (see [where the handlers live](#where-the-handlers-live))
 - `Process <name> not found in configuration`, from every process command
-- `Reboot failed: …`, `Shutdown failed: …`, and `Cancel timed out (the OS cancel hung)` from `cancel_reboot`
+- `Cancel timed out (the OS cancel hung)` from `cancel_reboot`. a reboot or shutdown the OS refuses is failed, as `Error: reboot failed: …` or `Error: shutdown failed: …`
 - `Error starting live view: …`, `Failed to dismiss reboot pending: …`, `Failed to refresh software inventory: …`
 - `Cancellation failed: …` from `cancel_uninstall`
 - `Update already in progress (started …)` from `update_owlette`
@@ -134,12 +156,21 @@ every process command finds the configured process by ID or by name.
 
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
-| `reboot_machine` | none read. the public endpoint forwards `delay_seconds`, which the agent ignores | sets `rebooting`, `rebootScheduledAt`, `rebootSource: "manual"` and `rebootCancellable` on the machine document, then asks the OS to reboot in 60 seconds: `shutdown /r /t 60` | `shutdown -r +1` (`/sbin/shutdown` on macOS). the OS counts in whole minutes, rounded up and never below one, so the countdown is a minute here too |
-| `shutdown_machine` | none read | the same, powering off: `shutdown /s /t 60`, with `shuttingDown` and `shutdownScheduledAt` | `shutdown -h +1` |
-| `cancel_reboot` | none | aborts the countdown with `shutdown /a`, clears the local reboot state and the machine document's flags, and stops a scheduled reboot that was under way from firing again that day | Linux: `shutdown -c`, reported as cancelled only when a shutdown was scheduled. macOS: the agent ends the pending `shutdown` process, since BSD `shutdown` has no cancel flag |
-| `dismiss_reboot_pending` | `process_name` | clears `rebootPending` and resets the named process's relaunch counter | same |
+| `reboot_machine` | `when`: `now` (the default) or `after_active_hours`; `activeHoursOverride`. the public endpoint also forwards `delay_seconds`, which the agent ignores | refused inside [active hours](#active-hours) without an override. otherwise sets `rebooting`, `rebootScheduledAt`, `rebootSource: "manual"` and `rebootCancellable` on the machine document, then asks the OS to reboot in 60 seconds: `shutdown /r /t 60`. with `when: "after_active_hours"` it reboots now when the machine is outside active hours (`Reboot scheduled in 60 seconds (not inside active hours)`), and inside them holds the reboot until they end (`Reboot deferred until 17:00 (machine time)`) | `shutdown -r +1` (`/sbin/shutdown` on macOS). the OS counts in whole minutes, rounded up and never below one, so the countdown is a minute here too. there are no active hours, so `after_active_hours` reboots now |
+| `shutdown_machine` | `activeHoursOverride` | refused inside active hours without an override. otherwise the same as a reboot, powering off: `shutdown /s /t 60`, with `shuttingDown` and `shutdownScheduledAt`. a shutdown cannot be held | `shutdown -h +1` |
+| `cancel_reboot` | none | aborts the countdown with `shutdown /a`, clears the local reboot state and the machine document's flags, drops a held reboot and its `rebootDeferredUntil`, and stops a scheduled reboot that was under way from firing again that day | Linux: `shutdown -c`, reported as cancelled only when a shutdown was scheduled. macOS: the agent ends the pending `shutdown` process, since BSD `shutdown` has no cancel flag |
+| `dismiss_reboot_pending` | `process_name` | clears `rebootPending`, drops a reboot a crash loop held for active hours (one a person asked for stays), and resets the named process's relaunch counter | same |
 
-the dashboard's confirm dialogs and hoot's tool descriptions still say 30 seconds; the agent's countdown is 60 on every platform.
+the countdown is 60 seconds on every platform, and the dashboard's confirm dialogs and hoot's tool descriptions say so.
+
+### a held reboot
+
+the agent keeps at most one held reboot, in its local `reboot_state.json`, so it survives a service restart; a second replaces the first. it sets `rebootDeferredUntil` (unix seconds) on the machine document and logs `reboot_deferred`.
+
+- on its 30-second reboot check after that instant, the agent fires the reboot the way a [restart schedule](/docs/dashboard/restart-schedules#how-a-restart-actually-fires) fires one, announced as `rebootSource: "deferred"` with the one-minute countdown, and clears `rebootDeferredUntil`
+- if the machine is inside active hours again by then, because the window moved or the service was down through its end, the reboot is held to the next end
+- `cancel_reboot` drops it. so does a boot since it was asked for, found at the next service start: that boot did what it waited for
+- a crash loop inside active hours holds its reboot the same way, queued by `system:crash_loop`, instead of opening the restart prompt. see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits)
 
 ---
 
@@ -170,7 +201,7 @@ every agent reports `capabilities.displayRemoteApply: 1`, whatever its platform,
 
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
-| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects` | closes `close_processes` and locks `suppress_projects`, downloads, refuses the file without a checksum or on a mismatch, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. fails when there is no console session | not supported: the agent closes the named processes, downloads and verifies, then fails with `No interactive user session available for installation…` |
+| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects`; `activeHoursOverride` | refused inside [active hours](#active-hours) without an override, before anything is closed. otherwise closes `close_processes` and locks `suppress_projects`, downloads, refuses the file without a checksum or on a mismatch, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. fails when there is no console session | not supported: the agent closes the named processes, downloads and verifies, then fails with `No interactive user session available for installation…` |
 | `cancel_installation` | `installer_name`, `deployment_id` | kills the installer's process tree and deletes the download | nothing to cancel |
 | `uninstall_software` | `software_name`, `uninstall_command`, `silent_flags`, `installer_type`, `verify_paths`, `timeout_seconds` (default 1200), `deployment_id` | runs the uninstaller with silent flags, detected from `installer_type` when absent, then checks `verify_paths` and the registry. writers also send `close_processes`, which the agent does not read | macOS: only an application bundle (`installer_type: "app"`) that the software inventory lists at that moment; the agent quits what runs from it, then removes the bundle. Linux: fails |
 | `cancel_uninstall` | `software_name` | kills the uninstaller tracked as `uninstall_<software_name>` | macOS has nothing long-running to cancel; Linux never starts one |
@@ -250,12 +281,13 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 - **capability**: `capture_screenshot`, `start_live_view` and `stop_live_view` need `MACHINE_VIEW`, which site members hold. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
 - **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`
 - **`timeout_seconds`** (default 60, max 600) is stamped into every payload. only `restart_process` reads it at the agent, capped at 30, so an API restart waits the full 30 seconds for a graceful exit unless the body sends less. a `timeout_seconds` inside `params` is dropped
+- **active hours**: Windows always has active hours, 8 to 17 when nobody set any, so a daytime script's reboot or shutdown is refused by a guarded agent unless it sends `active_hours_override`. the request still answers `202`; the command then ends `failed` with the [active-hours refusal](#active-hours). to wait instead, send a reboot with `when: "after_active_hours"`
 
 the route copies only these `params` into the command:
 
 | type | params copied |
 |------|---------------|
-| `reboot_machine`, `shutdown_machine` | `delay_seconds`, a non-negative integer. the agent ignores it |
+| `reboot_machine`, `shutdown_machine` | `delay_seconds`, a non-negative integer, which the agent ignores. `active_hours_override`: exactly `{ reason }`, 1 to 500 characters once trimmed, written onto the command as `activeHoursOverride` with the caller (`user:<uid>` or `apiKey:<keyId>`) as `approvedBy`. `reboot_machine` also takes `when`, `now` or `after_active_hours`. a malformed override, an override on any other type, `when` on a shutdown, or an override with `when: "after_active_hours"` is `400` |
 | `capture_screenshot` | `monitor`: `"all"`, `"primary"` or a non-negative integer |
 | `start_live_view` | `interval`, `duration`, integers of at least 1 |
 | `stop_live_view`, `cancel_reboot`, `enumerate_display_modes`, `test_display_apply` | none |
@@ -264,11 +296,11 @@ the route copies only these `params` into the command:
 | `set_launch_mode` | `process_name` and `mode`, both required; `schedules`, an array; `schedulePresetId`, which the agent does not read |
 | `apply_display_topology` | `layout`, an object, and `applyId`, both required |
 | `ack_display_topology` | `applyId`, required |
-| `mcp_tool_call` | `tool_name`, required; `tool_params`, an object; `chat_id` |
+| `mcp_tool_call` | `tool_name`, required; `tool_params`, an object, minus the override names; `chat_id`. no override is accepted |
 | `cancel_mcp_tool` | `target_command_id`, required |
 | `update_owlette` | `installer_url`, `checksum_sha256`, `target_version`, `deployment_id`. the route requires none of them; the agent refuses without the first two |
 
-poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}`, with the machine's `read` scope or site membership. it answers `pending`, `in_progress` (a running marker or a progress record), `completed` or `failed`; a `cancelled` command reads as `failed`. `error` appears only on a failed command, and `result` only when the agent's result was an object, which today means `capture_screenshot`; there the route adds a fresh one-hour `screenshot_url`.
+poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}`, with the machine's `read` scope or site membership. it answers `pending`, `in_progress` (a running marker or a progress record), `completed` or `failed`; a `cancelled` command reads as `failed`. `error` appears only on a failed command, and `result` only when the agent answered with something: an object for `capture_screenshot`, where the route adds a fresh one-hour `screenshot_url`, or a sentence for `reboot_machine`, `shutdown_machine` and `cancel_reboot`, such as `Reboot deferred until 17:00 (machine time)`.
 
 the process routes, `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/start` (and `stop`, `kill`, `restart`), check the process exists (`404 process_not_found` otherwise) and queue the command with `process_id`, `processId` and `process_name`. they need `MACHINE_EXEC_COMMAND`, take an `Idempotency-Key` without requiring one, and send no `timeout_seconds`, so a restart there uses the agent's 5-second default.
 

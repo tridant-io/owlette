@@ -65,6 +65,13 @@ jest.mock('@/lib/authorizedHandler.server', () => ({
 const mockResolveAuth = jest.fn();
 const mockAssertSite = jest.fn();
 const mockComputeChecksum = jest.fn();
+const mockSiteAuditActor = jest.fn();
+
+// the site wrapper only ever hands a route a user or an api key; this lets a
+// test put a `system:` actor behind a route to prove the route still checks it.
+jest.mock('@/lib/actions/auditActor.server', () => ({
+  siteAuditActor: (...a: unknown[]) => mockSiteAuditActor(...a),
+}));
 
 // Retry self-heals checksum-less legacy deployments by streaming + hashing the
 // installer; mocked so tests never hit the network. requireActual preserves
@@ -128,6 +135,9 @@ beforeEach(() => {
   mocks.userDocs.clear();
   mockResolveAuth.mockResolvedValue(authedSession());
   mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockSiteAuditActor.mockImplementation(
+    jest.requireActual('@/lib/actions/auditActor.server').siteAuditActor,
+  );
   mocks.set.mockResolvedValue(undefined);
   mocks.update.mockResolvedValue(undefined);
   mocks.del.mockResolvedValue(undefined);
@@ -273,6 +283,45 @@ describe('POST /api/sites/{siteId}/deployments', () => {
         attributes: expect.objectContaining({ verb: 'create', target_count: 2 }),
       }),
     );
+  });
+
+  it('201 an active_hours_override flows to every install_software command', async () => {
+    mocks.get.mockResolvedValue(docSnapshot(SITE, {}));
+    const req = createMockRequest(`http://localhost/api/sites/${SITE}/deployments`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'idem-create-override' },
+      body: { ...validCreateBody, active_hours_override: { reason: 'venue closed today' } },
+    });
+    const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
+    expect(res.status).toBe(201);
+    const mergeCalls = mocks.set.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    );
+    expect(mergeCalls).toHaveLength(2);
+    for (const call of mergeCalls) {
+      const cmd = call[0][Object.keys(call[0])[0]];
+      expect(cmd.activeHoursOverride).toEqual({
+        reason: 'venue closed today',
+        approvedBy: 'user:user-1',
+      });
+      expect(cmd).not.toHaveProperty('active_hours_override');
+    }
+  });
+
+  it('400 when active_hours_override is malformed, nothing written', async () => {
+    mocks.get.mockResolvedValue(docSnapshot(SITE, {}));
+    const req = createMockRequest(`http://localhost/api/sites/${SITE}/deployments`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'idem-create-bad-override' },
+      body: { ...validCreateBody, active_hours_override: { reason: '   ' } },
+    });
+    const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).errors).toHaveProperty(['body.active_hours_override']);
+    const mergeCalls = mocks.set.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    );
+    expect(mergeCalls).toHaveLength(0);
   });
 
   it('400 when Idempotency-Key is missing', async () => {
@@ -717,6 +766,126 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(m1.error).toBe('a');
     const m2 = updatePayload.targets.find((t: { machineId: string }) => t.machineId === 'm2');
     expect(m2.status).toBe('pending');
+  });
+
+  it('200 — an active_hours_override flows to every re-queued install and is audited', async () => {
+    queueIdempotencyMiss();
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(DEPLOYMENT, {
+        installer_name: 'vlc.exe',
+        installer_url: 'https://example.com/vlc.exe',
+        silent_flags: '/S',
+        sha256_checksum: 'ab'.repeat(32),
+        targets: [
+          { machineId: 'm1', status: 'failed', error: 'Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00' },
+          { machineId: 'm2', status: 'failed' },
+        ],
+        status: 'failed',
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-retry-override'),
+        body: { active_hours_override: { reason: '  venue closed today ' } },
+      },
+    );
+    const res = await retryPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(200);
+    const mergeCalls = mocks.set.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    );
+    expect(mergeCalls).toHaveLength(2);
+    for (const call of mergeCalls) {
+      const cmd = call[0][Object.keys(call[0])[0]];
+      expect(cmd.activeHoursOverride).toEqual({
+        reason: 'venue closed today',
+        approvedBy: 'user:user-1',
+      });
+    }
+    expect(mockedEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributes: expect.objectContaining({
+          verb: 'retry',
+          activeHoursOverride: true,
+          activeHoursOverrideReason: 'venue closed today',
+        }),
+      }),
+    );
+  });
+
+  it('a retry without an override carries none', async () => {
+    queueIdempotencyMiss();
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(DEPLOYMENT, {
+        installer_name: 'vlc.exe',
+        installer_url: 'https://example.com/vlc.exe',
+        silent_flags: '/S',
+        sha256_checksum: 'ab'.repeat(32),
+        targets: [{ machineId: 'm1', status: 'failed' }],
+        status: 'failed',
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`,
+      { method: 'POST', headers: idempotencyHeaders('idem-retry-no-override'), body: {} },
+    );
+    const res = await retryPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(200);
+    const mergeCalls = mocks.set.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    );
+    expect(mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]]).not.toHaveProperty('activeHoursOverride');
+    expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('activeHoursOverride');
+  });
+
+  it.each([
+    ['an empty reason', { reason: '' }],
+    ['an over-long reason', { reason: 'x'.repeat(501) }],
+    ['an unknown key', { reason: 'ok', approvedBy: 'user:attacker' }],
+    ['a boolean', true],
+  ])('400 when active_hours_override has %s, nothing read or written', async (_label, override) => {
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders(`idem-retry-bad-override-${_label}`),
+        body: { active_hours_override: override },
+      },
+    );
+    const res = await retryPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).errors).toHaveProperty(['body.active_hours_override']);
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('400 when a system actor carries an override, nothing read or written', async () => {
+    mockSiteAuditActor.mockReturnValue('system:talon');
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-retry-system-override'),
+        body: { active_hours_override: { reason: 'venue closed today' } },
+      },
+    );
+    const res = await retryPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.errors['body.active_hours_override'][0]).toContain('needs a person');
+    expect(mocks.get).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('400 when machines filter is malformed', async () => {

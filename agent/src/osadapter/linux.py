@@ -166,6 +166,11 @@ def pending_reboot() -> dict:
     return mcp_tools.check_pending_reboot({}, None)
 
 
+def active_hours() -> dict | None:
+    """None: active hours are Windows' own, and Linux keeps no such window."""
+    return None
+
+
 def reboot(delay: int, message: str | None = None) -> None:
     """Reboot in `delay` seconds; cancellable with cancel_reboot() until it fires."""
     _issue_shutdown('-r', delay, message)

@@ -198,6 +198,64 @@ def pending_reboot() -> dict:
     return mcp_tools.check_pending_reboot({}, None)
 
 
+# where windows keeps each active-hours window, under HKLM, read here and by
+# tools_windows, which manages windows update through the same keys. group
+# policy goes before mdm unless mdm is set to win: the mdm nodes name the policy
+# key as the one that blocks them, and MDMWinsOverGP defaults to 0.
+WU_POLICY_KEY = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+MDM_UPDATE_KEY = r'SOFTWARE\Microsoft\PolicyManager\current\device\Update'
+_MDM_CONFLICT_KEY = r'SOFTWARE\Microsoft\PolicyManager\current\device\ControlPolicyConflict'
+WU_UX_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+
+
+def active_hours() -> dict | None:
+    """The window Windows holds its own restarts off in, and who set it.
+
+    Group policy, then MDM, then the user's choice in Settings, then Windows'
+    default of 8 to 17; MDM goes first when it is set to win over group
+    policy. A source whose window is incomplete, outside 0-23 or empty is
+    passed over. The user's window is read without `IsActiveHoursEnabled`:
+    the value is undocumented and usually absent, and Windows keeps active
+    hours either way.
+    """
+    policy = hklm_values(WU_POLICY_KEY, 'SetActiveHours', 'ActiveHoursStart', 'ActiveHoursEnd')
+    # the policy window counts only once SetActiveHours turns it on
+    ranked = [('policy', policy if policy['SetActiveHours'] == 1 else {}),
+              ('mdm', hklm_values(MDM_UPDATE_KEY, 'ActiveHoursStart', 'ActiveHoursEnd'))]
+    if 1 in mdm_conflict().values():
+        ranked.reverse()
+    ranked.append(('user', hklm_values(WU_UX_KEY, 'ActiveHoursStart', 'ActiveHoursEnd')))
+
+    for source, window in ranked:
+        start, end = window.get('ActiveHoursStart'), window.get('ActiveHoursEnd')
+        if _is_hour(start) and _is_hour(end) and start != end:
+            return {'start': start, 'end': end, 'source': source}
+    return {'start': 8, 'end': 17, 'source': 'default'}
+
+
+def mdm_conflict() -> dict:
+    """The two switches that put MDM over every group-policy value, active
+    hours included: MDMWinsOverGP and IgnoreWindowsUpdateGroupPolicies."""
+    return {**hklm_values(_MDM_CONFLICT_KEY, 'MDMWinsOverGP'),
+            **hklm_values(MDM_UPDATE_KEY, 'IgnoreWindowsUpdateGroupPolicies')}
+
+
+def hklm_values(path: str, *names: str) -> dict:
+    """Each named value under HKLM\\`path`, None for one that is absent, and
+    for all of them when the key is absent or cannot be opened."""
+    found = dict.fromkeys(names)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+            for name in names:
+                try:
+                    found[name] = winreg.QueryValueEx(key, name)[0]
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return found
+
+
 def reboot(delay: int, message: str | None = None) -> None:
     """Reboot in `delay` seconds; cancellable with cancel_reboot() until it fires."""
     _issue_shutdown('/r', delay, message)
@@ -308,6 +366,11 @@ def _machine_guid() -> str:
     except OSError as e:
         logger.warning(f"Failed to read MachineGuid from the registry: {e}")
     return str(uuid.getnode())
+
+
+def _is_hour(value) -> bool:
+    """A DWORD naming an hour of the day."""
+    return isinstance(value, int) and 0 <= value <= 23
 
 
 def _issue_shutdown(flag: str, delay: int, message: str | None) -> None:

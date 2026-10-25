@@ -280,7 +280,7 @@ def _show_notification(params, config):
 _CANCELLABLE_TOOLS = frozenset({'execute_script', 'run_powershell', 'run_command'})
 
 
-def execute_tool(tool_name, tool_params, config=None, command_id=None):
+def execute_tool(tool_name, tool_params, config=None, command_id=None, active_hours_override=None):
     """
     Dispatch a tool call to the appropriate handler.
 
@@ -291,6 +291,9 @@ def execute_tool(tool_name, tool_params, config=None, command_id=None):
         command_id: Optional originating Firestore command id — lets the
             shell-spawning tools (execute_script, run_powershell, run_command)
             register their subprocess for cancellation
+        active_hours_override: Optional server-set `activeHoursOverride` from
+            the command, a person's approval to act inside active hours; only
+            manage_windows_update takes it
 
     Returns:
         Dict with tool result or error
@@ -327,10 +330,13 @@ def execute_tool(tool_name, tool_params, config=None, command_id=None):
         return {'error': f'Unknown tool: {tool_name}'}
 
     try:
-        # Cancellable handlers take (params, config, command_id); all others
-        # take (params, config).
+        # Cancellable handlers take (params, config, command_id),
+        # manage_windows_update (params, config, active_hours_override), and
+        # all others (params, config).
         if tool_name in _CANCELLABLE_TOOLS:
             return handler(tool_params, config, command_id=command_id)
+        if tool_name == 'manage_windows_update':
+            return handler(tool_params, config, active_hours_override=active_hours_override)
         return handler(tool_params, config)
     except Exception as e:
         logger.error(f"Tool '{tool_name}' failed: {e}")
