@@ -1,5 +1,5 @@
 # Active-hours guard — Tasks
-**Progress**: 1/18 complete
+**Progress**: 15/18 complete
 
 Work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-active-hours-wt` (branch `feat/active-hours-guard`). Never edit the shared `Owlette` checkout; other sessions work on `dev` there. Read `plan.md` and `context.md` first. Line numbers are from origin/dev 58b08d23.
 
@@ -52,7 +52,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 1: reader, server strip, terms
 
-- [ ] **Task 1.1: Agent active-hours reader and maths**
+- [x] **Task 1.1: Agent active-hours reader and maths**
   - Files:
     - `agent/src/osadapter/__init__.py`, `agent/src/osadapter/win.py`, `agent/src/osadapter/linux.py`, `agent/src/osadapter/darwin.py`
     - `agent/src/active_hours.py` (new)
@@ -77,7 +77,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: the agent suite is green; the contract test asserts 22 operations; the new tests cover wrap, boundaries, precedence and DST.
   - Depends on: Task 0.2
 
-- [ ] **Task 1.2: Strip the override names at every server funnel**
+- [x] **Task 1.2: Strip the override names at every server funnel**
   - Files:
     - `web/lib/actions/executeMachineCommand.server.ts`
     - `web/lib/hoot-utils.server.ts`
@@ -94,7 +94,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     - **Tests:** for each funnel, a call carrying each reserved name, including a nested `activeHoursOverride` object, produces a command without it.
   - Done when: jest is green and the new tests fail on origin/dev and pass here. Ships in the same PR as 2.1, never after it.
 
-- [ ] **Task 1.3: Glossary entry and ADR**
+- [x] **Task 1.3: Glossary entry and ADR**
   - Files: `GLOSSARY.md`, `docs/adr/0013-agent-refuses-disruptive-commands-inside-active-hours.md` (new)
   - Do:
     - **GLOSSARY:** add **Active hours** under "On the machine": the hours, on the machine's own clock, during which Windows holds back its own update restarts and the agent refuses reboots, shutdowns and deployments unless a person overrides. Read from policy, then MDM, then the user setting, then Windows' default 8–17. Windows only. _Avoid_: quiet hours, show hours, maintenance window, business hours.
@@ -109,7 +109,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 2: guard, tools, routes, hoot wiring
 
-- [ ] **Task 2.1: Agent guard, override log, heartbeat, Error prefix fix**
+- [x] **Task 2.1: Agent guard, override log, heartbeat, Error prefix fix**
   - Files:
     - `agent/src/owlette_service.py`, `agent/src/firebase_client.py`
     - `agent/tests/unit/test_service_shutdown.py`, `agent/tests/unit/test_active_hours_guard.py` (new)
@@ -138,7 +138,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     - the heartbeat fields.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.2: manage_windows_update: honest status, outside-hours restarts, no-auto-install, safe set_active_hours**
+- [x] **Task 2.2: manage_windows_update: honest status, outside-hours restarts, no-auto-install, safe set_active_hours**
   - Files:
     - `agent/src/tools_windows.py` (`manage_windows_update` `:733-858`, `check_pending_reboot` `~:480-535`, `_REBOOT_TASK` `:30`)
     - `agent/src/mcp_tools.py` (`execute_tool`)
@@ -181,7 +181,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: pytest is green with fake winreg asserting each action's writes and deletes, the refusal case, the MDM refusal, the validation errors, the pause read-back, and the `Defer*` key fix; the template test passes.
   - Depends on: Task 0.2, Task 1.1
 
-- [ ] **Task 2.3: Routes accept the override and deferral; audit; openapi; log labels**
+- [x] **Task 2.3: Routes accept the override and deferral; audit; openapi; log labels**
   - Files:
     - `web/app/api/sites/[siteId]/machines/[machineId]/commands/route.ts`
     - `web/lib/actions/executeMachineCommand.server.ts`
@@ -202,7 +202,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: jest is green, `web/scripts/validate-openapi.ts` passes, and eslint and tsc are clean on the touched files.
   - Depends on: Task 1.2
 
-- [ ] **Task 2.4: hoot tools: override through approval only, deferral, honest descriptions, list_talons tier 1**
+- [x] **Task 2.4: hoot tools: override through approval only, deferral, honest descriptions, list_talons tier 1**
   - Files:
     - `web/lib/mcp-tools.ts`, `web/lib/hoot-utils.server.ts`, `web/lib/hoot/turnRunner.server.ts`
     - `web/app/api/hoot/autonomous/route.ts`
@@ -242,7 +242,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 3: deferral, prompt, dashboard
 
-- [ ] **Task 3.1: Agent deferred reboot and crash-loop deferral**
+- [x] **Task 3.1: Agent deferred reboot and crash-loop deferral**
   - Files:
     - `agent/src/owlette_service.py`, `agent/src/reboot_state.py`
     - `agent/tests/unit/test_deferred_reboot.py` (new)
@@ -270,7 +270,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     - the lifecycle stub list updated.
   - Depends on: Task 2.1
 
-- [ ] **Task 3.2: hoot checks first; machine local time in the prompt**
+- [x] **Task 3.2: hoot checks first; machine local time in the prompt**
   - Files:
     - `web/lib/llm.ts`, `web/lib/hoot/turnRunner.server.ts`, `web/lib/hoot-utils.server.ts`, `web/lib/hootStream.server.ts`
     - `web/app/api/hoot/autonomous/route.ts`
@@ -297,7 +297,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: jest is green, prompt tests assert the rule and the time line, and eslint and tsc are clean.
   - Depends on: Task 2.4
 
-- [ ] **Task 3.3: Dashboard reboot and shutdown flow**
+- [x] **Task 3.3: Dashboard reboot and shutdown flow**
   - Files:
     - `web/hooks/useFirestore.ts`, `web/hooks/useCommandResult.ts`
     - `web/components/MachineContextMenu.tsx`
@@ -331,7 +331,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 4: pill, CLI and SDKs, deployments page
 
-- [ ] **Task 4.1: Status pill deferred state**
+- [x] **Task 4.1: Status pill deferred state**
   - Files: `web/components/MachineStatusPill.tsx`, `web/__tests__/components/MachineStatusPill.theme.test.tsx`, `web/e2e/specs/time-travel/reboot-deferred.spec.ts` (new)
   - Do:
     - `rebootDeferredUntil` shows "restart at HH:MM" (machine time) with a cancel that sends `cancel_reboot`.
@@ -340,7 +340,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: jest and the time-travel e2e are green, and there are light and dark screenshots.
   - Depends on: Task 3.1, Task 3.3
 
-- [ ] **Task 4.2: CLI and SDK flags**
+- [x] **Task 4.2: CLI and SDK flags**
   - Files:
     - `cli/src/commands/machine.ts` (`:289-295`, `:453-470`)
     - `sdks/node/src/resources/machines.ts`, `sdks/python/roost/resources/machines.py`
@@ -351,7 +351,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Done when: the CLI and SDK test suites are green.
   - Depends on: Task 2.3
 
-- [ ] **Task 4.3: Deployments page override**
+- [x] **Task 4.3: Deployments page override**
   - Files: `web/app/deployments/page.tsx` and its create/confirm component (find it), the deployments e2e spec under `web/e2e/specs`, jest for the component
   - Do:
     - When any chosen Windows machine reports it is inside its active hours, the confirm lists those machines and offers "deploy anyway" with a required reason, sent as `active_hours_override`.
@@ -362,7 +362,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 5: docs
 
-- [ ] **Task 5.1: Docs and changelogs**
+- [x] **Task 5.1: Docs and changelogs**
   - Files:
     - `web/content/docs/reference/agent-commands.mdx` (`:137-142`, `:258`)
     - `web/content/docs/reference/hoot-tools.mdx` (`:107`, `:117`, `:863`)
@@ -418,3 +418,105 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 ## Log
 ### 2026-10-25
 - Plan created after three research passes (agent, web dispatch, hoot) and the owner's decisions of 2026-10-24/25. Task 0.1 waits on the owner's inputs for Jeff's machine.
+- Wave 1 done (1.1, 1.2, 1.3). Build check: agent suite 2519 passed / 487 skipped; web tsc clean.
+  - 1.2 put the shared constant `ACTIVE_HOURS_OVERRIDE_KEYS` and `stripActiveHoursOverride()` in `executeMachineCommand.server.ts`. It also strips the names from `tool_params` there (covers autonomous and API-key `mcp_tool_call`). `dispatch.server.ts` is unchanged (it goes through `executeMachineCommand`). Its tests live in `__tests__/lib/hoot/dispatch.test.ts`. `reason` and `when` are not reserved.
+  - 1.1: `window_end` converts through `.timestamp()` (PEP 495), not `compute_scheduled_instant`'s naive `.astimezone()`, because the latter mis-handles DST gaps.
+    - Callers pass `datetime.now()` (naive) or a zone with DST rules, never a fixed-offset `.astimezone()`.
+    - The reader has no 18 h max check; 2.2 reads `ActiveHoursMaxRange` itself.
+    - This box reads `{start: 8, end: 2, source: user}`.
+  - Follow-up outside this plan: `shared_utils.compute_scheduled_instant` (weekly reboot schedule) has the same DST-gap behaviour.
+- Wave 2 done (2.1, 2.2, 2.3, 2.4). Build check: agent 2620 passed / 487 skipped; web jest 429 suites, 8225 passed; tsc clean.
+  - **2.1:**
+    - Override validator `_is_active_hours_override` lives in `owlette_service.py`. 2.2 has a duplicate `_override_valid` in `tools_windows.py`; merge both into `active_hours.py` at 6.1.
+    - A crash loop inside the window keeps `reboot_pending`, opens no prompt, and arms the same 300 s timed gate (not indefinite).
+    - It pinned `osadapter.active_hours` in `test_relaunch_attempts_unlimited.py` (otherwise time-of-day dependent on Windows).
+    - Existing behaviour, noted only:
+      - A refused reboot still counts against the 5 s `reboot_machine` rate limit.
+      - A reboot whose OS call raises leaves `_shutting_down` and the flags set.
+  - **2.2:**
+    - `manage_windows_update(params, config, active_hours_override=None)`.
+    - `check_pending_reboot` has a new `file_renames` key (also in `tools_posix.py`, the contract key set and `test_tool_surface_split.py`). A PFRO-only machine no longer raises the `reboot_pending` alert.
+    - On Win11, `next_scheduled_update` is `{task: None, next_run: None, note}`.
+    - WUA is read via PowerShell COM (15 s timeout).
+    - The `limit_auto_restart` default window for the update-guard template is 7–23.
+  - **2.3:**
+    - `executeMachineCommand` takes `input.activeHoursOverride: {reason}`. Helpers `parseActiveHoursOverride()` and `canApproveActiveHoursOverride()` are there too.
+    - 400s for: an override on other types, `when` on shutdown, override + `after_active_hours` together, and malformed values.
+    - Deployment retry needs its own override.
+    - `install_software` commands have no `queuedBy`.
+    - Old and non-Windows agents ignore `when` and reboot at once, so offer deferral only with `capabilities.activeHoursGuard`.
+  - **2.4:**
+    - The override is bound to the approved call. `needsApproval` writes `chats/{chatId}/activeHoursOverrides/{toolCallId}` `{toolName, inputHash, expiresAt}`, and `execute` honours the override only on a matching hash. No rules match, so clients are denied by default (checked).
+    - `needsApproval` is a function for every tool.
+    - Turn sources `chat`, `mention` and `resume` allow overrides.
+    - `list_talons` is now reachable from member chats, API keys and the public conversations API.
+    - `ActiveHoursOverride` type duplicates 2.3's shape; fold them at 6.1.
+    - The `check_pending_reboot` description in `mcp-tools.ts` still calls file renames a Windows Update restart (fix in 3.2).
+- Wave 3 done (3.1, 3.2, 3.3). Build check: agent 2642 passed / 487 skipped; web jest 433 suites, 8337 passed; tsc clean.
+  - **3.1:**
+    - The fire runs on a `deferred-reboot` daemon thread.
+    - A boot since the request drops the deferral; dismiss drops only a crash-loop one; a new request replaces the old.
+    - New log action `reboot_deferred`; the orchestrator added its logs-page label.
+    - Result strings: `Reboot deferred until HH:MM (machine time)` and `Reboot scheduled in 60 seconds (not inside active hours)`.
+    - Existing, not fixed:
+      - A cancel during the 5 s pre-roll doesn't stop the fire.
+      - The weekly path doesn't check `_shutting_down`.
+  - **3.2:**
+    - RULE #4 in the dashboard and public prompts; item 9 in the autonomous prompt, without the override.
+    - Machine or site local time in the time context.
+    - The `check_pending_reboot` description is fixed.
+    - About 190 words of extra prompt per turn.
+  - **3.3:**
+    - Shared `web/lib/activeHours.ts`, plus `web/components/MachinePowerConfirm.tsx` with `usePowerCommand`, used by the context menu, the card's approve button and `SiteMachinesList`.
+    - `useCommandOutcome` settles on failed too.
+    - Any failure reverts the countdown. `delay_seconds` is 60.
+    - The machines list route projects `capabilities`, `activeHours` and `machineTimezone`.
+    - It also edited `MachineListView.tsx` and `dashboard/page.tsx` to forward options.
+    - Screenshots: see context.md, Execution notes.
+  - **For 6.1:** merge the duplicates: the override validators (`owlette_service`/`tools_windows`), the `ActiveHoursOverride` types (hoot-utils/executeMachineCommand) and the reason max (`activeHours.ts`/`executeMachineCommand`).
+  - **For 5.1:** `agent-commands.mdx:142` and `machine-monitoring.mdx:168` still say 30 seconds; `hoot-tools.mdx:271,279,499,504` are stale.
+- Wave 4 done (4.1, 4.2, 4.3). Build check: agent 2642; web jest 434 suites, 8360 passed; web tsc clean; CLI 356 passed, tsc clean; Node SDK 88 passed; Python SDK 87 passed (scratch venv with its declared deps).
+  - `web/tsconfig.json` include lines added by the e2e builds (`.next-e2e-41`/`-43`) were restored. Re-check before every commit.
+  - **4.1:**
+    - An amber "restart at HH:MM" pill (machine time), no pulse, no row dim, with a cancel.
+    - A `compact` prop for the list cell. `machineClockAt()` in `activeHours.ts`.
+    - Fixed a stuck cancel spinner that affected the countdown too.
+  - **4.2:**
+    - CLI `reboot --after-active-hours | --override-active-hours --reason`; `shutdown` gets the override pair. Reboot and shutdown poll the outcome and print refusals (exit 1).
+    - `--after-active-hours` refuses on unguarded Windows agents.
+    - The SDKs gain `machines.reboot` / `machines.shutdown`.
+  - **4.3:**
+    - `ActiveHoursDeployConfirm` for deploy and both retry paths.
+    - `useDeployments` sends `active_hours_override`.
+  - **For 6.1 (fix):**
+    - The command status route drops string results, so the API, CLI and SDKs can't see "Reboot deferred until …". Return them.
+    - `MachineContextMenu` offers "restart", not "cancel restart", during a held deferral.
+    - The deployments target row shows the raw `Error: active_hours: …`; use `parseActiveHoursRefusal`.
+    - Merge the duplicates listed under wave 3.
+  - **Owner follow-ups, not in scope:**
+    - The CLI and SDK deployment create and retry have no `active_hours_override`.
+    - CLI eslint is broken repo-wide (`typescript-eslint` isn't declared in `cli/package.json`).
+    - The agent ignores `delay_seconds`.
+- Wave 5 done (5.1): 20 docs pages, `agent/README.md`, and the Unreleased entry in both changelogs (checked against the code).
+- Fix-ups from the wave notes, done before 6.1:
+  - The command status route returns string results; the CLI shows the agent's answer; SDK types are `object | string`.
+  - The context menu offers "cancel restart" while a restart is held.
+  - Deployments show `describeCommandError()` text.
+  - Duplicates merged: `active_hours.is_valid_override`, one `ActiveHoursOverride` type, one `OVERRIDE_REASON_MAX`, plus a third copy found in hoot-utils.
+  - openapi `result` is now oneOf object|string. Docs synced: agent-commands, cli machine, sdk-node, deployments, machine-monitoring.
+  - The `mcp-tools` override description covers `limit_auto_restart`. ADR 0013's local-hoot wording is fixed.
+  - Suites: agent 2655, web 8371, CLI 359, Node SDK 88. e2e for the edited specs has not run yet (6.1 runs the full suite).
+  - Existing, noted only: a cancelled command's reason sits in `result`, but the route returns only `error` for cancelled.
+- 6.1 `/verify` (2026-10-25), two reviewers.
+  - **Standards:** no rule violations.
+    - Medium: the `registry_operation` way around the window check. Fixed: it refuses the active-hours values.
+    - Low: the ADR's local-hoot wording. Fixed: the rule is now in `agent/CLAUDE.md`.
+    - DRY: one registry reader in `osadapter/win.py`; `resolveActiveHoursOverride()` used three times (the retry now checks the actor); `OverrideReasonField`; unattended hoot schemas strip the override.
+  - **Spec:** met, plus these fixes:
+    - tool-path overrides are site-logged (`override_used`);
+    - CLI and SDK deployment override flags;
+    - a hootStream test;
+    - the changelog notes the CLI `--json` shape.
+  - Decision 5 is read as hoot-only (see context.md).
+  - Suites: agent 2691, web 8384, CLI 367, Node SDK 90, Python SDK 88; tsc and eslint clean.
+  - Committed 738ec598 (local). Still to do in 6.1: rebase onto origin/dev (#428, #429 with next 16.4.3), `npm ci`, `/preflight` with the full e2e.

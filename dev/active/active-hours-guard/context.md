@@ -43,7 +43,7 @@
    - a dashboard hoot call that went through the approval card, which is forced for overrides even when the site toggle is off.
 
    Never: autonomous hoot, talons, follow-ups, the public conversations API, local hoot.
-4. **Single machine only** for hoot overrides (owner, 2026-10-25).
+4. **Single machine only** for hoot overrides (owner, 2026-10-25). The owner was asked about hoot chats ("can one approval cover a hoot chat aimed at several machines?"), so this doesn't cover the deploy page. A deployment's override, given by a person in the dashboard or by an API key, covers every target in that request, and the confirm says so.
 5. **Scope is reboot, shutdown and deployments.**
    - Rollouts are excluded: `sync_pull` restarts nothing (`sync_commands.py:177-514`), and a refusal counts toward the >25% canary abort (`functions/src/lib/fanoutLogic.ts:107-131`).
    - Fleet updates are excluded: no machine reboot, and the old agent runs the update into the first guarded release (ADR 0006).
@@ -198,6 +198,33 @@ Sources:
 - Community, not docs:
   - [qa-25h2] https://learn.microsoft.com/en-in/answers/questions/5916635/windows-11-25h2-forces-automatic-reboot-during-act
   - [qa-pause] https://learn.microsoft.com/en-us/answers/questions/1287073/pausing-windows-update-using-powershell
+
+## Release coordination
+
+- The owner confirmed on 2026-10-25 that 4.1.21 waits for this branch. owlette-1b cuts it from dev only after this guard is verified and merged; message owlette-1b when it lands.
+- Rebase onto dev before the PR. owlette-1b's `fix/swoop-mac-traffic-lights` (#428, merged as b84c17ab) and owlette-ac's `fix/security-deps-2026-10-24` (#429) each add Unreleased changelog entries.
+- #429 bumps next to 16.4.3 (App Router caching changes), @sentry/nextjs and zod, removes @tailwindcss/typography, updates `smol-toml` in the root lockfile, and moves Pillow to 13.0.0 and setuptools to 84.1.0.
+  - After rebasing onto it, run `npm ci` again in the worktree root and in `web/`.
+  - This branch changes no package.json or lockfile; confirm before the commit.
+  - Run the full e2e suite on the merged tree (`/preflight`), not just this branch's specs.
+
+## Execution notes
+
+- **3.1 fire path:** the deferred reboot fires on its own `deferred-reboot` daemon thread, single-flight like the roost scrub, called after `_check_scheduled_reboot` on the reboot tick.
+  - The scheduled-fire path sleeps, so it can't run on the main loop. The slow lane queues behind installs, so it can't run there either.
+  - It writes no `attempt`, so the watchdog is unaffected.
+  - A boot since `requestedAt` drops it at startup. Dismiss drops only a crash-loop deferral.
+- **3.3 screenshots** (reviewed by the orchestrator; for the owner's visual review), in `C:\Users\admin\AppData\Local\Temp\claude\c--Users-admin-Documents-Git-restored-Owlette\f4f5e5a8-1d59-4070-b11a-bc271161fa7f\scratchpad\evidence\3.3\`:
+  - States: `restart-choice`, `restart-choice-reason`, `shutdown-choice`, `restart-plain`, `refusal-toast`.
+  - Each comes in `-desktop`/`-phone` and `-dark`/`-light` versions, as `.png`.
+- **4.1 screenshots** in the same `evidence\4.1\` folder (the amber "restart at" pill):
+  - `deferred-card-*` and `deferred-list-*`, each with a `-closeup` version;
+  - `-hover` versions showing the cancel swap.
+- **4.3 screenshots** in `evidence\4.3\`, one per state: `deploy-confirm`, `deploy-confirm-reason`, `retry-confirm-reason`, `target-refusal`.
+- **6.1 review** (2026-10-25):
+  - **Standards:** no rule violations. Medium: the window-shrink check could be bypassed with tier-2 `registry_operation`; that's being fixed. Low: the ADR's local-hoot wording; plus DRY items.
+  - **Spec:** met, except tool-path overrides weren't site-logged, CLI and SDK deployments had no override, there was no conversations-API test, and the CLI `--json` shape change wasn't in the changelog. All are being fixed. Jeff's cause (0.1) and real-machine proof (7.1) are still owed.
+  - Accepted, not changed: crash-loop deferral and re-hold make one flag write and one `log_event` call on the main loop per escalation, like the existing `set_reboot_pending` there.
 
 ## Proof
 
