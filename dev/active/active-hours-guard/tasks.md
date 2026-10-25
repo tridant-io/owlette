@@ -1,5 +1,5 @@
 # Active-hours guard — Tasks
-**Progress**: 16/18 complete
+**Progress**: 17/18 complete
 
 Work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-active-hours-wt` (branch `feat/active-hours-guard`). Never edit the shared `Owlette` checkout; other sessions work on `dev` there. Read `plan.md` and `context.md` first. Line numbers are from origin/dev 58b08d23.
 
@@ -393,7 +393,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 7: proof where the owner looks
 
-- [ ] **Task 7.1: Prove it on a dev Windows machine**
+- [x] **Task 7.1: Prove it on a dev Windows machine**
   - Files: `dev/active/active-hours-guard/context.md` (section "Proof")
   - Do: ask the owner first: this reboots a dev machine. Copy `agent/src` to the dev box (deploy hook, or `-DevGrant`; see `.claude/CLAUDE.md` "Agent Dev Testing Workflow"), restart the service in the documented order, and run the web branch locally or on a preview. Then:
     1. Set active hours to include now. The dashboard reboot shows the window. Restart now without a reason is impossible; with a reason it reboots, and the site log has `active_hours_override` with the reason.
@@ -530,3 +530,10 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
       - `installers.spec.ts:325` is the known local-only failure.
       - `heartbeat-recovery.spec.ts:22` failed under full-suite load (45 machines, card off screen) and passed 3/3 alone.
   - Agent 2691 after the rebase.
+- PR #431 merged into dev (2fbe117c) after green CI (full e2e 21m51s; unit suites on macOS, Ubuntu and Windows). The post-merge dev e2e is green.
+- 7.1 done on TEC-A4D (see context.md "Proof"): refusal, override, deferral firing at the window end, Windows Update tools, the hoot chat, cleanup.
+- Two follow-ups from 7.1, on branch `fix/held-reboot-wording`, before 4.1.21:
+  - the held-reboot notice and log actions read like the weekly schedule;
+  - `pause`/`get_status` trust Windows' lagging pause status.
+- The owner's hoot UI asks (thread-line progress animation, focus "ask anything" on new hoot, eased auto-scroll) are on `feat/hoot-thinking-line` in worktree `Owlette-hoot-progress-wt`.
+- Still open: 0.1 (Jeff's details); 7.2 (after 4.1.21). owlette-1b cuts 4.1.21 after the follow-up merges.
