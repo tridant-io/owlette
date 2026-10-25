@@ -377,7 +377,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     - deferral;
     - the refusal code;
     - the new machine fields and command fields;
-    - `disable_auto_restart`;
+    - `limit_auto_restart`, `disable_auto_install` / `enable_auto_install`, and the removal of `set_restart_deadline`;
     - the breaking change for daytime API reboots and deployments;
     - "old agents are unprotected".
   - Done when: every listed page matches the shipped behaviour and both changelogs have the entry.
