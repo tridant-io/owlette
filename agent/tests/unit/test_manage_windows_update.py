@@ -264,8 +264,9 @@ def test_status_reports_pause_mdm_conflict_and_pending_restarts(registry, ran, u
 
     status = update('get_status')
 
-    assert status['pause']['PausedQualityStatus'] == 1
-    assert status['pause']['PausedFeatureStatus'] == 0
+    assert status['pause']['windows_status']['PausedQualityStatus'] == 1
+    assert status['pause']['windows_status']['PausedFeatureStatus'] == 0
+    assert status['pause']['windows_status']['PausedQualityDate'] == '2026-10-20T10:00:00Z'
     assert status['mdm_conflict'] == {'MDMWinsOverGP': 1, 'IgnoreWindowsUpdateGroupPolicies': None}
     assert any('mdm' in w for w in status['warnings'])
     # file renames are not a windows update restart
@@ -273,6 +274,66 @@ def test_status_reports_pause_mdm_conflict_and_pending_restarts(registry, ran, u
         'pending': False, 'reboot_required_key': False, 'wua_reboot_required': False,
     }
     assert status['file_renames_pending'] is True
+
+
+def ux_pause(ends):
+    """The six UX pause values Settings writes, ending at `ends`."""
+    return {name: (ends if name.endswith(('ExpiryTime', 'EndTime')) else '2026-10-20T10:00:00Z')
+            for name in UX_PAUSE_VALUES}
+
+
+# pause ends after NOW and before it, whatever the machine's timezone
+AHEAD, PAST = '2026-10-28T03:00:00Z', '2026-10-19T03:00:00Z'
+
+
+@pytest.mark.parametrize('ux, windows, paused', [
+    # the live resume: the six values gone, windows still on 1 for minutes
+    ({}, {'PausedQualityStatus': 1, 'PausedFeatureStatus': 1,
+          'PausedQualityDate': '2026-10-25T18:00:00Z', 'PausedFeatureDate': '2026-10-25T18:00:00Z'},
+     False),
+    # the live pause: written, windows not on 1 yet
+    (ux_pause(AHEAD), {'PausedQualityStatus': 0, 'PausedFeatureStatus': 0}, True),
+], ids=['resumed-windows-lags', 'paused-windows-lags'])
+def test_status_says_the_pause_in_force_while_windows_lags(registry, update, ux, windows, paused):
+    registry.set(UX, **ux)
+    registry.set(UPS, **windows)
+
+    pause = update('get_status')['pause']
+
+    assert pause['paused'] is paused
+    assert pause['windows_confirmed'] is False
+    assert pause['windows_status']['PausedQualityStatus'] == windows['PausedQualityStatus']
+    assert 'lags' in pause['note'] and 'next update check' in pause['note']
+
+
+@pytest.mark.parametrize('ux, windows, paused', [
+    (ux_pause(AHEAD), {'PausedQualityStatus': 1, 'PausedFeatureStatus': 1}, True),
+    ({}, {}, False),
+    # ended on its own; windows says 2, resumed by itself
+    (ux_pause(PAST), {'PausedQualityStatus': 2, 'PausedFeatureStatus': 2}, False),
+    # settings writes all six, so fewer is no pause
+    ({'PauseUpdatesExpiryTime': AHEAD}, {}, False),
+], ids=['paused', 'never-paused', 'ended', 'partial'])
+def test_status_reads_the_pause_from_the_six_values(registry, update, ux, windows, paused):
+    registry.set(UX, **ux)
+    registry.set(UPS, **windows)
+
+    pause = update('get_status')['pause']
+
+    assert pause['paused'] is paused
+    assert pause['windows_confirmed'] is True
+    assert 'note' not in pause
+
+
+def test_status_names_a_policy_pause_rather_than_a_lag(registry, update):
+    registry.set(P, PauseQualityUpdatesStartTime='2026-10-20')
+    registry.set(UPS, PausedQualityStatus=1, PausedFeatureStatus=0)
+
+    pause = update('get_status')['pause']
+
+    assert pause['paused'] is False
+    assert pause['policy_pause'] == {'PauseQualityUpdatesStartTime': '2026-10-20'}
+    assert pause['note'].startswith('group policy already pauses updates here')
 
 
 @pytest.mark.parametrize('key, wua, pending', [
@@ -570,7 +631,9 @@ def test_enable_auto_install_hands_installs_back_to_windows(registry, update):
 # ─── pause / resume ─────────────────────────────────────────────────────────
 
 
-def test_pause_writes_all_six_values_and_waits_for_windows_to_confirm(registry, update):
+def test_pause_writes_all_six_values_and_is_paused_before_windows_catches_up(registry, update):
+    """The six values pause updates at once; Windows' own status follows only
+    at its next update check, a minute or more later on a real machine."""
     result = update('pause', pause_days=7)
 
     start = NOW.astimezone(timezone.utc)
@@ -582,21 +645,59 @@ def test_pause_writes_all_six_values_and_waits_for_windows_to_confirm(registry, 
         'PauseQualityUpdatesStartTime': (begins, 1), 'PauseQualityUpdatesEndTime': (ends, 1),
     }
     assert all(re.fullmatch(r'\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ', v) for v in (begins, ends))
-    assert result['status'] == 'written_not_confirmed'
-    assert result['note'].startswith('written, not yet confirmed by windows')
+    assert result['status'] == 'paused'
+    assert result['windows_confirmed'] is False
+    assert 'next update check' in result['note'] and 'few minutes' in result['note']
+    assert result['paused'] is True
     assert result['pause_until'] == ends
 
 
-def test_pause_is_reported_paused_only_once_windows_says_so(registry, update):
+def test_pause_is_paused_while_windows_still_reads_not_paused(registry, update):
+    # as seen live: both kinds still read 0 right after the write
+    registry.set(UPS, PausedQualityStatus=0, PausedFeatureStatus=0)
+
+    result = update('pause', pause_days=7)
+
+    assert result['status'] == 'paused'
+    assert result['paused'] is True
+    assert result['windows_confirmed'] is False
+    assert result['windows_status']['PausedQualityStatus'] == 0
+    assert result['windows_status']['PausedFeatureStatus'] == 0
+    assert 'lags' in result['note'] and 'next update check' in result['note']
+
+
+def test_pause_says_when_windows_confirms_it(registry, update):
     registry.set(UPS, PausedQualityStatus=1, PausedFeatureStatus=1)
 
-    assert update('pause', pause_days=7)['status'] == 'paused'
+    result = update('pause', pause_days=7)
+
+    assert result['status'] == 'paused'
+    assert result['windows_confirmed'] is True
+    assert 'note' not in result
 
 
-def test_pause_of_one_kind_alone_is_not_confirmed(registry, update):
+def test_pause_of_one_kind_alone_is_not_windows_confirmed(registry, update):
     registry.set(UPS, PausedQualityStatus=1, PausedFeatureStatus=0)
 
-    assert update('pause', pause_days=7)['status'] == 'written_not_confirmed'
+    result = update('pause', pause_days=7)
+
+    assert result['status'] == 'paused'
+    assert result['windows_confirmed'] is False
+
+
+def test_pause_values_that_do_not_read_back_are_not_a_pause(registry, update):
+    write = registry.module.SetValueEx
+
+    def drop_one(handle, name, reserved, kind, value):
+        if name != 'PauseQualityUpdatesEndTime':
+            write(handle, name, reserved, kind, value)
+
+    registry.module.SetValueEx = drop_one
+
+    result = update('pause', pause_days=7)
+
+    assert result['status'] == 'written_not_read_back'
+    assert 'read back' in result['note']
 
 
 @pytest.mark.parametrize('policy, said', [
@@ -629,15 +730,41 @@ def test_resume_removes_all_six_values(registry, update):
     assert sorted(registry.deletes(UX)) == sorted(UX_PAUSE_VALUES)
     assert registry.values(UX) == {'ActiveHoursStart': 8, 'ActiveHoursEnd': 2}
     assert result['status'] == 'resumed'
+    assert result['windows_confirmed'] is True
+    assert 'note' not in result
 
 
-def test_resume_says_so_while_windows_still_reports_paused(registry, update):
-    registry.set(UX, PauseUpdatesExpiryTime='2026-10-28T03:00:00Z')
+def test_resume_is_resumed_while_windows_still_reports_paused(registry, update):
+    registry.set(UX, **ux_pause(AHEAD))
     registry.set(UPS, PausedQualityStatus=1, PausedFeatureStatus=1)
 
     result = update('resume')
 
-    assert result['status'] == 'cleared_not_confirmed'
+    assert result['status'] == 'resumed'
+    assert result['windows_confirmed'] is False
+    assert 'next update check' in result['note']
+    assert result['paused'] is False
+
+
+def test_resume_names_a_policy_pause_it_leaves_in_place(registry, update):
+    registry.set(P, PauseFeatureUpdates=1)
+    registry.set(UPS, PausedQualityStatus=0, PausedFeatureStatus=1)
+
+    result = update('resume')
+
+    assert result['status'] == 'resumed'
+    assert result['windows_confirmed'] is False
+    assert result['note'].startswith('group policy already pauses updates here')
+
+
+def test_pause_values_still_there_after_resume_are_not_resumed(registry, update):
+    registry.set(UX, **ux_pause(AHEAD))
+    registry.module.DeleteValue = lambda handle, name: None
+
+    result = update('resume')
+
+    assert result['status'] == 'values_remain'
+    assert result['paused'] is True
 
 
 # ─── deferrals and the removed deadline action ──────────────────────────────

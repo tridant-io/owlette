@@ -167,7 +167,7 @@ the countdown is 60 seconds on every platform, and the dashboard's confirm dialo
 
 the agent keeps at most one held reboot, in its local `reboot_state.json`, so it survives a service restart; a second replaces the first. it sets `rebootDeferredUntil` (unix seconds) on the machine document and logs `reboot_deferred`.
 
-- on its 30-second reboot check after that instant, the agent fires the reboot the way a [restart schedule](/docs/dashboard/restart-schedules#how-a-restart-actually-fires) fires one, announced as `rebootSource: "deferred"` with the one-minute countdown, and clears `rebootDeferredUntil`
+- on its 30-second reboot check after that instant, the agent fires the reboot the way a [restart schedule](/docs/dashboard/restart-schedules#how-a-restart-actually-fires) fires one, announced as `rebootSource: "deferred"` with the one-minute countdown, and clears `rebootDeferredUntil`. it says it was held, not scheduled: Windows' shutdown notice reads *owlette: restart held until active hours ended — cancellable from dashboard*, and the site log has `deferred_reboot_announced`, or `deferred_reboot_failed` if the OS refuses it
 - if the machine is inside active hours again by then, because the window moved or the service was down through its end, the reboot is held to the next end
 - `cancel_reboot` drops it. so does a boot since it was asked for, found at the next service start: that boot did what it waited for
 - a crash loop inside active hours holds its reboot the same way, queued by `system:crash_loop`, instead of opening the restart prompt. see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits)

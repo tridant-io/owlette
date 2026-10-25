@@ -797,6 +797,13 @@ _UX_PAUSE_ENDS = (
     'PauseUpdatesExpiryTime', 'PauseFeatureUpdatesEndTime', 'PauseQualityUpdatesEndTime',
 )
 
+# the six values pause updates at once; PausedQualityStatus and
+# PausedFeatureStatus follow a minute or more later
+_PAUSE_LAG_NOTE = (
+    "windows' own pause status (windows_status) lags: it updates at its next "
+    'update check, usually within a few minutes'
+)
+
 _POLICY_WINDOW_NOTES = (
     'active hours are set by policy now, so nobody can change them in settings on the machine',
     'a domain group policy that sets these values puts its own back at its next refresh',
@@ -898,15 +905,42 @@ def _restart_warnings():
     return warnings
 
 
+def _ux_pause_values():
+    """The six UX pause values, None for one that is absent."""
+    return hklm_values(WU_UX_KEY, *_UX_PAUSE_STARTS, *_UX_PAUSE_ENDS)
+
+
+def _ux_pause_in_force(ux):
+    """Whether the six UX pause values pause updates now: all six set, and
+    the end still ahead."""
+    if None in ux.values():
+        return False
+    try:
+        ends = datetime.fromisoformat(ux['PauseUpdatesExpiryTime'].replace('Z', '+00:00'))
+        return ends > datetime.now(timezone.utc)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
 def _pause_state():
-    """Windows' own pause state (0 not paused, 1 paused, 2 resumed by itself),
-    the end Settings' pause values name, and any policy that decides instead."""
-    state = hklm_values(_WU_UPS_KEY, 'PausedQualityStatus', 'PausedFeatureStatus',
-                         'PausedQualityDate', 'PausedFeatureDate')
-    state.update(hklm_values(WU_UX_KEY, 'PauseUpdatesExpiryTime'))
+    """The Settings pause in force, which the six UX values decide; Windows'
+    own status beside it (0 not paused, 1 paused, 2 resumed by itself), which
+    catches up only at its next update check, whether it agrees yet and a
+    note while it does not; and any policy that decides instead."""
+    ux = _ux_pause_values()
+    state = {
+        'paused': _ux_pause_in_force(ux),
+        'pause_values': ux,
+        'windows_status': hklm_values(_WU_UPS_KEY, 'PausedQualityStatus', 'PausedFeatureStatus',
+                                      'PausedQualityDate', 'PausedFeatureDate'),
+    }
     state.update(hklm_values(WU_POLICY_KEY, 'SetDisablePauseUXAccess'))
     policy_pause = _hklm_values_by_prefix(WU_POLICY_KEY, ('PauseQualityUpdates', 'PauseFeatureUpdates'))
     state['policy_pause'] = {name: value for name, value in policy_pause.items() if value}
+    state['windows_confirmed'] = _windows_confirms(state, state['paused'])
+    if not state['windows_confirmed']:
+        # a policy pause shows in windows' status with no ux values behind it
+        state['note'] = _pause_blocker(state) or _PAUSE_LAG_NOTE
     return state
 
 
@@ -918,6 +952,14 @@ def _pause_blocker(state):
         named = ', '.join(f'{name}={value}' for name, value in state['policy_pause'].items())
         return f'group policy already pauses updates here ({named}); owlette leaves that pause to it'
     return None
+
+
+def _windows_confirms(state, paused):
+    """Whether Windows' own status says updates are paused, both kinds, or
+    not paused, neither kind, as `paused` asks."""
+    status = state['windows_status']
+    flags = (status['PausedQualityStatus'], status['PausedFeatureStatus'])
+    return flags == (1, 1) if paused else 1 not in flags
 
 
 def _update_restart_pending():
@@ -1040,24 +1082,21 @@ def manage_windows_update(params, config, active_hours_override=None):
             state = _pause_state()
             blocker = _pause_blocker(state)
             if blocker:
-                return {'status': 'not_written', 'reason': blocker, 'pause': state}
+                return {'status': 'not_written', 'reason': blocker, **state}
             now = datetime.now(timezone.utc)
             begins = now.strftime('%Y-%m-%dT%H:%M:%SZ')
             pause_until = (now + timedelta(days=pause_days)).strftime('%Y-%m-%dT%H:%M:%SZ')
+            written = {**dict.fromkeys(_UX_PAUSE_STARTS, begins),
+                       **dict.fromkeys(_UX_PAUSE_ENDS, pause_until)}
             with _open_or_create(winreg.HKEY_LOCAL_MACHINE, WU_UX_KEY) as k:
-                for name in _UX_PAUSE_STARTS:
-                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, begins)
-                for name in _UX_PAUSE_ENDS:
-                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, pause_until)
+                for name, value in written.items():
+                    winreg.SetValueEx(k, name, 0, winreg.REG_SZ, value)
             state = _pause_state()
-            result = {'pause_until': pause_until, 'pause_days': pause_days, 'pause': state}
-            if state['PausedQualityStatus'] == 1 and state['PausedFeatureStatus'] == 1:
-                return {'status': 'paused', **result}
-            return {
-                'status': 'written_not_confirmed', **result,
-                'note': 'written, not yet confirmed by windows: PausedQualityStatus and '
-                        'PausedFeatureStatus do not read 1 yet',
-            }
+            result = {'pause_until': pause_until, 'pause_days': pause_days, **state}
+            if state['pause_values'] != written:
+                return {'status': 'written_not_read_back', **result,
+                        'note': 'written, but the pause values do not read back as written'}
+            return {'status': 'paused', **result}
         except Exception as e:
             return {'error': f'pause failed: {e}'}
 
@@ -1065,10 +1104,11 @@ def manage_windows_update(params, config, active_hours_override=None):
         try:
             removed = _delete_values(WU_UX_KEY, _UX_PAUSE_STARTS + _UX_PAUSE_ENDS)
             state = _pause_state()
-            if 1 in (state['PausedQualityStatus'], state['PausedFeatureStatus']):
-                return {'status': 'cleared_not_confirmed', 'removed': removed, 'pause': state,
-                        'note': 'pause values removed; windows still reports updates paused'}
-            return {'status': 'resumed', 'removed': removed, 'pause': state}
+            result = {'removed': removed, **state}
+            if any(value is not None for value in state['pause_values'].values()):
+                return {'status': 'values_remain', **result,
+                        'note': 'removed, but pause values are still there'}
+            return {'status': 'resumed', **result}
         except Exception as e:
             return {'error': f'resume failed: {e}'}
 

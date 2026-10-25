@@ -228,7 +228,47 @@ Sources:
 
 ## Proof
 
-_(task 7.1)_
+Task 7.1, 2026-10-25. Machine: TEC-A4D (the owner's dev box, site `default_site`).
+- **Setup:**
+  - Installed agent 4.1.18; the merged branch's `agent/src` was mirrored over it, after `-DevGrant`. A backup is in the scratchpad (`agent-src-backup-4.1.18`).
+  - dev.owlette.app serves 2fbe117c (PR #431). The post-merge dev e2e run is green: actions/runs/40222079651.
+- **Heartbeat:** `activeHours {start: 8, end: 2, source: user}`, `machineTimezone America/Los_Angeles`, `capabilities.activeHoursGuard: 1`.
+- **Refusal (11:54):**
+  - A plain `reboot_machine` through the API ended `failed` with `Error: active_hours: inside active hours 08:00–02:00 (machine time); they end at 02:00`.
+  - `shutdown /a` found nothing scheduled.
+  - The site log has `active_hours_refused` with `userId apiKey:62d4f957…`.
+- **Override (11:54):**
+  - `reboot_machine` with `active_hours_override {reason}` completed with "Reboot scheduled in 60 seconds".
+  - The site log has `active_hours_override` with the API key as approver and the reason.
+  - `cancel_reboot` 8 s later answered "Reboot/shutdown cancelled"; nothing was left pending.
+- **Deferral:**
+  - `manage_windows_update set_active_hours 8→12` (through `mcp_tool_call`) answered `{source: policy}` plus notes.
+  - `reboot_machine when=after_active_hours` answered "Reboot deferred until 12:00 (machine time)" and logged `reboot_deferred`.
+  - At 12:01:21 the agent announced the deferred fire (`scheduled_reboot_announced … (deferred)`). The owner cancelled from the dashboard at 12:01:42; no restart happened.
+  - **Bug found:** the deferred fire reuses the scheduled-reboot path, so Windows showed "Owlette scheduled reboot — cancellable from dashboard" (`owlette_service.py:7611`). The log action also reads as a scheduled restart. The owner took it for a weekly-schedule fire. Fix before 4.1.21: its own OS comment and log actions.
+  - My log-polling watcher saw the announce about 2 minutes late. Never rely on it as the cancel backstop; use a local `shutdown /a` loop around the fire time.
+- **Agent tools through the API:** `limit_auto_restart 7–23` wrote P `ActiveHoursStart 7` / `ActiveHoursEnd 0x17` / `SetActiveHours 1`. `disable_auto_install` wrote AU `AUOptions 3`, `NoAutoUpdate 0`; `enable_auto_install` removed both. `pause` wrote all six UX values.
+  - Settings showed "updates paused until 10/26", so the UX write pauses.
+  - `UPS\Paused*Status` flipped to 1 about a minute later and stayed 1 for minutes after `resume`. So the tool's `written_not_confirmed` / `cleared_not_confirmed` under-report, and `get_status` made hoot say "paused" after a resume. Fixed in `fix/held-reboot-wording`.
+  - The first `get_status` took more than 40 s (cold WUA query).
+- **hoot chat, owner-driven on dev.owlette.app, single machine TEC-A4D:**
+  - "stop windows from restarting this machine on its own":
+    - called `get_status` and `list_talons` first;
+    - reported inside active hours, no talon touching reboots, no pending restart;
+    - applied `limit_auto_restart` with the 7–23 already set;
+    - said a restart can still happen outside those hours;
+    - offered `disable_auto_install` with the security trade-off.
+  - "i want no update restarts at all": checked first, explained the trade-off, asked to confirm; after "yes", applied `disable_auto_install` (AU `AUOptions 3` read back) and confirmed with `get_status`.
+  - "turn automatic installs back on": `enable_auto_install`; AU empty after.
+  - Slips: it twice said updates were paused (the stale UPS status, now fixed), and it described `AUOptions 3` as "notify for download".
+- **Cleanup (owner's elevated click):**
+  - The three P active-hours values were deleted (P now holds only the empty AU subkey) and `-RemoveDevGrant` ran.
+  - The agent reports `{start: 8, end: 2, source: user}` again.
+  - The box keeps running the branch's agent source over the 4.1.18 install until 4.1.21 installs.
+- **Not run:**
+  - the crash-loop deferral (optional; unit-tested);
+  - the elevated `schtasks` read (no restart pending);
+  - the "adjust automatically" toggle check (no longer needed: the policy write beats it).
 
 ## Next steps
 

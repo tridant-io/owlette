@@ -37,6 +37,7 @@ TUESDAY_0900 = datetime.datetime(2026, 10, 27, 9, 0)
 MONDAY_END = int(MONDAY_1700.timestamp())
 ASKED = int(MONDAY_1030.timestamp())
 BOOTED_BEFORE = int(datetime.datetime(2026, 10, 26, 7, 0).timestamp())
+HELD_NOTICE = 'owlette: restart held until active hours ended — cancellable from dashboard'
 
 
 @pytest.fixture(autouse=True)
@@ -69,11 +70,13 @@ def machine(monkeypatch):
 
 @pytest.fixture
 def os_verbs(monkeypatch):
-    """The reboots the OS was asked for, with the thread that asked."""
-    issued = SimpleNamespace(reboot=[], threads=[], cancels=0)
+    """The reboots the OS was asked for, with the notice and the thread that
+    asked."""
+    issued = SimpleNamespace(reboot=[], notices=[], threads=[], cancels=0)
 
     def reboot(delay, message=None):
         issued.reboot.append(delay)
+        issued.notices.append(message)
         issued.threads.append(threading.current_thread().name)
 
     def cancel_reboot():
@@ -250,7 +253,10 @@ def test_it_fires_when_active_hours_end(machine, os_verbs, booted):
         'rebootEntryId': None,
         'rebootDeferredUntil': None,
     }]
-    assert client.actions() == ['scheduled_reboot_announced']
+    # its own notice and log action: in the schedule's words it read as a
+    # weekly restart on a machine with none
+    assert os_verbs.notices == [HELD_NOTICE]
+    assert client.actions() == ['deferred_reboot_announced']
     assert client.logged[0]['details'].endswith('(deferred)')
 
     tick(service)
@@ -275,6 +281,26 @@ def test_a_failed_fire_is_not_retried(machine, os_verbs, monkeypatch):
     assert reboot_state.read_state()['lastFiredByEntry'] == {}
     assert client.flags[-1] == {'rebooting': False, 'rebootScheduledAt': None,
                                 'rebootCancellable': False}
+    assert client.actions()[-1] == 'deferred_reboot_failed'
+
+
+def test_a_scheduled_fire_keeps_the_schedules_words(machine, os_verbs, monkeypatch):
+    machine(WORKDAY, MONDAY_1700)
+    client = RecordingClient()
+    service = make_service(client)
+    due = MONDAY_1700.astimezone()
+
+    service._fire_scheduled_reboot(reboot_state.read_state(), 'entry-12345678', due)
+
+    assert os_verbs.notices == ['Owlette scheduled reboot — cancellable from dashboard']
+    assert client.actions() == ['scheduled_reboot_announced']
+
+    def refuse(delay, message=None):
+        raise OSError('shutdown refused')
+
+    monkeypatch.setattr(owlette_service.osadapter, 'reboot', refuse)
+    service._fire_scheduled_reboot(reboot_state.read_state(), 'entry-12345678', due)
+
     assert client.actions()[-1] == 'scheduled_reboot_failed'
 
 
