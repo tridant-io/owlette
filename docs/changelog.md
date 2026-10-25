@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.21] - 2026-10-25
+
 ### changed — owlette swoop wears its own eye, and its name in plain words
 
 owlette and owlette swoop showed the same logo in different places, so the two
