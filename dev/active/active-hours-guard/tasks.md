@@ -1,5 +1,5 @@
 # Active-hours guard — Tasks
-**Progress**: 15/18 complete
+**Progress**: 16/18 complete
 
 Work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-active-hours-wt` (branch `feat/active-hours-guard`). Never edit the shared `Owlette` checkout; other sessions work on `dev` there. Read `plan.md` and `context.md` first. Line numbers are from origin/dev 58b08d23.
 
@@ -385,7 +385,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
 
 ## Wave 6: checks
 
-- [ ] **Task 6.1: /verify and /preflight**
+- [x] **Task 6.1: /verify and /preflight**
   - Files: none (fixes go back to the owning task's files)
   - Do: run `/verify` (standards and spec reviewers on the branch diff against `plan.md`) and `/preflight`: security alerts, lint, typecheck, jest, rules tests, local e2e. Run the full agent suite. Fix every red.
   - Done when: all green, reviewer findings resolved or answered in context.md.
@@ -520,3 +520,13 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Decision 5 is read as hoot-only (see context.md).
   - Suites: agent 2691, web 8384, CLI 367, Node SDK 90, Python SDK 88; tsc and eslint clean.
   - Committed 738ec598 (local). Still to do in 6.1: rebase onto origin/dev (#428, #429 with next 16.4.3), `npm ci`, `/preflight` with the full e2e.
+- 6.1 done.
+  - Rebased onto origin/dev 9a1c69a7 (#428, #429). Both changelog conflicts kept every entry, ours first, with 0 markers.
+  - `npm install` synced the root and web deps (next 16.4.3); the lockfiles are unchanged.
+  - **/preflight:**
+    - Security CLEAR. 139 warnings, including code-scanning waivers that expired 2026-10-12 (existing; the owner's).
+    - Lint: 0 errors, 5 existing warnings in untouched lines. tsc clean. Unit 8399 passed. Rules skipped (untouched).
+    - Full e2e on shifted ports: 570 passed, 2 failed.
+      - `installers.spec.ts:325` is the known local-only failure.
+      - `heartbeat-recovery.spec.ts:22` failed under full-suite load (45 machines, card off screen) and passed 3/3 alone.
+  - Agent 2691 after the rebase.
