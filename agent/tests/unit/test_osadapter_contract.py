@@ -61,7 +61,7 @@ as_root = pytest.mark.skipif(
 SPAWN_UID = 1000
 
 # The operations the shared POSIX arm answers — everything either POSIX
-# platform does the same way, the two GUI jobs included. The remaining nine are
+# platform does the same way, the two GUI jobs included. The remaining ten are
 # the per-OS arms' own.
 POSIX_OPERATIONS = (
     'capture_screen', 'console_user', 'data_root', 'desktop_process_name',
@@ -70,7 +70,7 @@ POSIX_OPERATIONS = (
 )
 
 PENDING_REBOOT_KEYS = {
-    'pending', 'reasons', 'last_update_installed', 'next_scheduled_update',
+    'pending', 'reasons', 'file_renames', 'last_update_installed', 'next_scheduled_update',
 }
 
 
@@ -144,8 +144,8 @@ def _documented(name):
 class TestSurface:
     """The operation list itself."""
 
-    def test_the_surface_is_twenty_one_operations(self):
-        assert len(osadapter.OPERATIONS) == 21
+    def test_the_surface_is_twenty_two_operations(self):
+        assert len(osadapter.OPERATIONS) == 22
 
     def test_every_operation_is_implemented(self, adapter):
         missing = [
@@ -230,6 +230,15 @@ class TestBehaviour:
         result = adapter.pending_reboot()
         assert isinstance(result['pending'], bool)
         assert isinstance(result['reasons'], list)
+
+    def test_active_hours_is_a_window_or_nothing(self, adapter):
+        window = adapter.active_hours()
+        assert window is None or (
+            set(window) == {'start', 'end', 'source'}
+            and window['start'] in range(24) and window['end'] in range(24)
+            and window['start'] != window['end']
+            and window['source'] in ('policy', 'mdm', 'user', 'default')
+        )
 
     def test_machine_identity_is_stable_and_keyed(self, adapter):
         machine_id = adapter.stable_machine_id()
@@ -480,6 +489,130 @@ class TestWindows:
         assert 'import mss' in code and 'PIL' not in code
         assert "'screenshot.png'" in code
         assert '2 if 2 > 0' in code
+
+
+# where windows keeps each active-hours window, spelled out rather than read off
+# the arm, so a reader pointed at the wrong key fails here: owlette's old
+# restart-deadline write went under the wrong key and did nothing.
+_WU_POLICY = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+_MDM_UPDATE = r'SOFTWARE\Microsoft\PolicyManager\current\device\Update'
+_MDM_CONFLICT = r'SOFTWARE\Microsoft\PolicyManager\current\device\ControlPolicyConflict'
+_WU_UX = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+
+_POLICY_WINDOW = {'SetActiveHours': 1, 'ActiveHoursStart': 6, 'ActiveHoursEnd': 22}
+_MDM_WINDOW = {'ActiveHoursStart': 7, 'ActiveHoursEnd': 19}
+_USER_WINDOW = {'ActiveHoursStart': 8, 'ActiveHoursEnd': 2}
+
+
+@pytest.fixture
+def read_window(win, monkeypatch):
+    """The Windows arm's active hours, read off a registry holding exactly
+    the keys a test names."""
+    def read(keys):
+        monkeypatch.setattr(win, 'winreg', _fake_winreg(keys))
+        return win.active_hours()
+    return read
+
+
+@pytest.mark.windows
+class TestWindowsActiveHours:
+    """Group policy, then MDM, then the user's Settings choice, then Windows'
+    default 8-17 — with MDM first when it is set to win over group policy."""
+
+    def test_a_machine_nobody_configured_has_the_windows_default(self, read_window):
+        assert read_window({}) == {'start': 8, 'end': 17, 'source': 'default'}
+
+    def test_the_users_window_counts_without_an_enabled_flag(self, read_window):
+        """The dev box as measured: the two hours and no IsActiveHoursEnabled,
+        which is undocumented — Windows keeps active hours all the same."""
+        assert read_window({_WU_UX: _USER_WINDOW}) == {
+            'start': 8, 'end': 2, 'source': 'user',
+        }
+
+    def test_mdm_beats_the_user(self, read_window):
+        assert read_window({_MDM_UPDATE: _MDM_WINDOW, _WU_UX: _USER_WINDOW}) == {
+            'start': 7, 'end': 19, 'source': 'mdm',
+        }
+
+    def test_group_policy_beats_mdm_and_the_user(self, read_window):
+        assert read_window({
+            _WU_POLICY: _POLICY_WINDOW, _MDM_UPDATE: _MDM_WINDOW, _WU_UX: _USER_WINDOW,
+        }) == {'start': 6, 'end': 22, 'source': 'policy'}
+
+    @pytest.mark.parametrize('switch', [{}, {'SetActiveHours': 0}])
+    def test_a_policy_window_not_switched_on_is_passed_over(self, read_window, switch):
+        policy = {'ActiveHoursStart': 6, 'ActiveHoursEnd': 22, **switch}
+
+        assert read_window({_WU_POLICY: policy, _WU_UX: _USER_WINDOW})['source'] == 'user'
+
+    @pytest.mark.parametrize('path, flag', [
+        (_MDM_CONFLICT, 'MDMWinsOverGP'),
+        (_MDM_UPDATE, 'IgnoreWindowsUpdateGroupPolicies'),
+    ])
+    def test_mdm_set_to_win_beats_group_policy(self, read_window, path, flag):
+        keys = {_WU_POLICY: _POLICY_WINDOW, _MDM_UPDATE: dict(_MDM_WINDOW), _WU_UX: _USER_WINDOW}
+        keys.setdefault(path, {})[flag] = 1
+
+        assert read_window(keys) == {'start': 7, 'end': 19, 'source': 'mdm'}
+
+    def test_mdm_set_to_win_without_a_window_leaves_group_policy_in_force(self, read_window):
+        assert read_window({
+            _WU_POLICY: _POLICY_WINDOW, _MDM_CONFLICT: {'MDMWinsOverGP': 1},
+            _WU_UX: _USER_WINDOW,
+        })['source'] == 'policy'
+
+    @pytest.mark.parametrize('hours', [
+        {'ActiveHoursStart': 9},
+        {'ActiveHoursEnd': 17},
+        {'ActiveHoursStart': 9, 'ActiveHoursEnd': 24},
+        {'ActiveHoursStart': 0xFFFFFFFF, 'ActiveHoursEnd': 17},
+        {'ActiveHoursStart': 9, 'ActiveHoursEnd': 9},
+        {'ActiveHoursStart': '9', 'ActiveHoursEnd': '17'},
+    ], ids=['no-end', 'no-start', 'end-24', 'start-wrapped', 'empty', 'strings'])
+    def test_a_window_that_is_incomplete_out_of_range_or_empty_is_passed_over(
+            self, read_window, hours):
+        """At every rung: a bad policy window falls to MDM, a bad MDM one to
+        the user's, and a bad user one to the default."""
+        assert read_window({
+            _WU_POLICY: {'SetActiveHours': 1, **hours}, _MDM_UPDATE: _MDM_WINDOW,
+        })['source'] == 'mdm'
+        assert read_window({_MDM_UPDATE: hours, _WU_UX: _USER_WINDOW})['source'] == 'user'
+        assert read_window({_WU_UX: hours})['source'] == 'default'
+
+
+class _FakeRegistryKey:
+    """An open HKLM key holding exactly the values a machine publishes."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+
+def _fake_winreg(keys):
+    """A stand-in for the `winreg` the Windows arm reads, the way
+    test_shared_utils fakes it, over several keys: `keys` maps an HKLM path
+    to its values. An absent key or value raises FileNotFoundError, exactly
+    as the real module does."""
+    module = SimpleNamespace(HKEY_LOCAL_MACHINE=object())
+
+    def open_key(root, sub_key):
+        if root is not module.HKEY_LOCAL_MACHINE or sub_key not in keys:
+            raise FileNotFoundError(2, 'The system cannot find the file specified')
+        return _FakeRegistryKey(keys[sub_key])
+
+    def query_value_ex(key, name):
+        if name not in key.values:
+            raise FileNotFoundError(2, 'The system cannot find the file specified')
+        return key.values[name], 4  # REG_DWORD
+
+    module.OpenKey = open_key
+    module.QueryValueEx = query_value_ex
+    return module
 
 
 class _FakeService:
@@ -1800,6 +1933,9 @@ class TestLinux:
     def test_pending_reboot_carries_the_windows_probe_keys(self, linux):
         assert set(linux.pending_reboot()) == PENDING_REBOOT_KEYS
 
+    def test_active_hours_are_windows_own(self, linux):
+        assert linux.active_hours() is None
+
 
 @darwin_only
 class TestDarwin:
@@ -2700,6 +2836,9 @@ class TestDarwin:
         monkeypatch.setattr(mcp_tools, 'check_pending_reboot', lambda params, config: probed)
 
         assert darwin.pending_reboot() is probed
+
+    def test_active_hours_are_windows_own(self, darwin):
+        assert darwin.active_hours() is None
 
     def test_a_fresh_report_of_no_grant_refuses_the_capture(
             self, darwin, posix, monkeypatch, relocated):

@@ -279,6 +279,67 @@ test.describe('hoot conversations and controls', () => {
     await expect(approvalCard.getByRole('button', { name: /^deny$/i })).toBeVisible();
   });
 
+  test('an approval that overrides active hours shows its reason without expanding', async ({ page }) => {
+    // Its own chat, written and removed here: the shared fixture's approval card
+    // is a plain tier-3 call, and the other specs read it as one.
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-override-${TEST_USERS.admin.uid}`);
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Early restart',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [
+        {
+          id: 'm-override-user-1',
+          role: 'user',
+          parts: [{ type: 'text', text: 'restart it now, the show ended early' }],
+        },
+        {
+          id: 'm-override-assistant-1',
+          role: 'assistant',
+          metadata: {
+            hoot: {
+              turnId: 'e2e-cortex-override-turn-1',
+              machineIds: [HOOT_FIXTURE_MACHINE_ID],
+              via: 'chat',
+              skipped: { offline: [], disabled: [] },
+            },
+          },
+          parts: [
+            {
+              type: 'tool-reboot_machine',
+              toolCallId: 'tool-override-1',
+              state: 'approval-requested',
+              approval: { id: 'approval-override-1' },
+              input: { override_active_hours: true, reason: 'the show ended early' },
+            },
+          ],
+        },
+      ],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+
+      const approvalCard = page
+        .locator('div.rounded-lg.border.overflow-hidden')
+        .filter({ hasText: 'hoot wants to run the privileged' })
+        .first();
+      await expect(approvalCard).toContainText('override active hours: the show ended early');
+      // Still collapsed: the input block mounts only once the card is expanded.
+      await expect(approvalCard.getByText('input', { exact: true })).toHaveCount(0);
+      await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
+    } finally {
+      await chat.delete();
+    }
+  });
+
   test('with the sidebar collapsed, the chat sits the same distance from both page edges', async ({ page }) => {
     const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
     await prefs.set({ cortexSidebarOpen: false }, { merge: true });

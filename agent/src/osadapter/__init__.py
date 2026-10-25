@@ -79,6 +79,14 @@ class OSAdapter(Protocol):
     def pending_reboot(self) -> dict:
         """Whether the OS is waiting on a reboot, and what is asking for it."""
 
+    def active_hours(self) -> dict | None:
+        """The hours the OS holds its own restarts off: `{start, end, source}`.
+
+        Whole hours on the machine's clock, the start inclusive and the end
+        exclusive, wrapping past midnight when the start is the later one;
+        None on a platform that keeps no such window.
+        """
+
     def reboot(self, delay: int, message: str | None = None) -> None:
         """Reboot in `delay` seconds; cancellable until it fires."""
 

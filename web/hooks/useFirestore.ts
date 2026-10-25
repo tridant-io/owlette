@@ -16,6 +16,14 @@ import {
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
 import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
+import {
+  parseActiveHours,
+  POWER_COUNTDOWN_SECONDS,
+  powerCommandParams,
+  type ActiveHours,
+  type PowerCommandOptions,
+  type PowerCommandSent,
+} from '@/lib/activeHours';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -292,7 +300,11 @@ export interface Machine {
     swoop?: number;
     displayRemoteApply?: number;
     keepAwake?: number;
+    /** windows agents that refuse restarts, shutdowns and deployments inside `activeHours`. */
+    activeHoursGuard?: number;
   };
+  /** the machine's windows active hours as the agent reads them; absent off windows and on older agents. */
+  activeHours?: ActiveHours;
   /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
   swoopViewers?: number;
   /**
@@ -316,6 +328,7 @@ export interface Machine {
   shuttingDown?: boolean;
   rebootScheduledAt?: number;    // Unix seconds — countdown anchor (matches lastHeartbeat convention)
   shutdownScheduledAt?: number;
+  rebootDeferredUntil?: number;  // Unix seconds — a restart waiting for active hours to end
   rebootPending?: {
     active: boolean;
     processName: string | null;
@@ -1400,6 +1413,8 @@ export function useMachines(siteId: string) {
           const restartScheduledAt = restartScheduledAtParsed > 0 ? restartScheduledAtParsed : undefined;
           const shutdownScheduledAtParsed = parseFirestoreSeconds(data.shutdownScheduledAt);
           const shutdownScheduledAt = shutdownScheduledAtParsed > 0 ? shutdownScheduledAtParsed : undefined;
+          const rebootDeferredUntilParsed = parseFirestoreSeconds(data.rebootDeferredUntil);
+          const rebootDeferredUntil = rebootDeferredUntilParsed > 0 ? rebootDeferredUntilParsed : undefined;
 
           const now = Math.floor(Date.now() / 1000);
           const isOnline = isMachineOnline(data.online, lastHeartbeat, now);
@@ -1425,12 +1440,14 @@ export function useMachines(siteId: string) {
               // the server's `isHootEnabled` (hoot-utils.server.ts)
               cortexEnabled: data.cortexEnabled !== false,
               capabilities: data.capabilities,
+              activeHours: parseActiveHours(data.activeHours),
               swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
               displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
               rebootScheduledAt: restartScheduledAt,
               shutdownScheduledAt,
+              rebootDeferredUntil,
               rebootSchedule: restartScheduleOverridesRef.current[machineId],
               displayBreakerTripped: displayBreakerTrippedOverridesRef.current[machineId] === true,
               rebootState: data.rebootState,
@@ -1818,35 +1835,52 @@ export function useMachines(siteId: string) {
     return response.data.commandId;
   };
 
-  const restartMachine = async (machineId: string) => {
-    if (!db || !siteId) throw new Error('Firebase not configured');
-    // optimistic countdown while the API queues the command
-    const targetRestart = Math.floor(Date.now() / 1000) + 30;
-    // 'reboot_machine' is the agent's wire verb — keep it.
-    await sendMachineCommand(machineId, 'reboot_machine', { delay_seconds: 30 });
+  /**
+   * Draws the countdown before the agent writes its own, and returns a way to
+   * take it back: a refused command never reaches the OS, and the agent writes
+   * nothing to the machine doc to clear it. Only this exact countdown goes, so
+   * one the agent wrote in the meantime stays.
+   */
+  const drawCountdown = (
+    machineId: string,
+    field: 'rebootScheduledAt' | 'shutdownScheduledAt',
+    target: number,
+  ): (() => void) => {
     setMachines(prevMachines =>
       prevMachines.map(machine =>
-        machine.machineId === machineId ? {
-          ...machine,
-          rebootScheduledAt: targetRestart,
-        } : machine
+        machine.machineId === machineId ? { ...machine, [field]: target } : machine
+      )
+    );
+    return () => setMachines(prevMachines =>
+      prevMachines.map(machine =>
+        machine.machineId === machineId && machine[field] === target
+          ? { ...machine, [field]: undefined }
+          : machine
       )
     );
   };
 
-  const shutdownMachine = async (machineId: string) => {
+  const restartMachine = async (
+    machineId: string,
+    options: PowerCommandOptions = {},
+  ): Promise<PowerCommandSent> => {
     if (!db || !siteId) throw new Error('Firebase not configured');
-    // optimistic countdown while the API queues the command
-    const targetShutdown = Math.floor(Date.now() / 1000) + 30;
-    await sendMachineCommand(machineId, 'shutdown_machine', { delay_seconds: 30 });
-    setMachines(prevMachines =>
-      prevMachines.map(machine =>
-        machine.machineId === machineId ? {
-          ...machine,
-          shutdownScheduledAt: targetShutdown,
-        } : machine
-      )
-    );
+    const targetRestart = Math.floor(Date.now() / 1000) + POWER_COUNTDOWN_SECONDS;
+    // 'reboot_machine' is the agent's wire verb — keep it.
+    const commandId = await sendMachineCommand(machineId, 'reboot_machine', powerCommandParams('restart', options));
+    // a deferred restart has no countdown until the agent says when the window ends
+    if (options.when === 'after_active_hours') return { commandId };
+    return { commandId, revertCountdown: drawCountdown(machineId, 'rebootScheduledAt', targetRestart) };
+  };
+
+  const shutdownMachine = async (
+    machineId: string,
+    options: PowerCommandOptions = {},
+  ): Promise<PowerCommandSent> => {
+    if (!db || !siteId) throw new Error('Firebase not configured');
+    const targetShutdown = Math.floor(Date.now() / 1000) + POWER_COUNTDOWN_SECONDS;
+    const commandId = await sendMachineCommand(machineId, 'shutdown_machine', powerCommandParams('shutdown', options));
+    return { commandId, revertCountdown: drawCountdown(machineId, 'shutdownScheduledAt', targetShutdown) };
   };
 
   const cancelRestart = async (machineId: string) => {

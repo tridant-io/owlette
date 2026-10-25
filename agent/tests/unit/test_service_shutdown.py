@@ -90,6 +90,7 @@ class FakeFirebaseClient:
 
     def __init__(self, fail_log=False, fail_stop=False):
         self.events = []
+        self.logged = []
         self.flags = []
         self.stop_calls = []
         self.calls = []  # ordered method names — the shutdown sequence matters
@@ -102,11 +103,13 @@ class FakeFirebaseClient:
         self.calls.append('enter_shutdown_mode')
         self.shutdown_timeouts.append(timeout_seconds)
 
-    def log_event(self, action, level, details=None):
+    def log_event(self, action, level, details=None, user_id=None, extra_fields=None):
         self.calls.append('log_event')
         if self._fail_log:
             raise RuntimeError('firestore unreachable')
         self.events.append(action)
+        self.logged.append({'action': action, 'level': level, 'user_id': user_id,
+                            'extra_fields': extra_fields})
 
     def set_machine_flags(self, flags):
         self.calls.append('set_machine_flags')
@@ -516,6 +519,13 @@ class TestManualCountdown:
     second command.
     """
 
+    @pytest.fixture(autouse=True)
+    def no_active_hours(self, monkeypatch):
+        # the countdown, not the active-hours guard (test_active_hours_guard):
+        # on Windows the registry's window would otherwise decide, by the time
+        # of day, whether these verbs run at all.
+        monkeypatch.setattr(owlette_service.osadapter, 'active_hours', lambda: None)
+
     @pytest.mark.parametrize('handler,operation,flag,copy', [
         ('_handle_reboot_machine', 'reboot',
          'rebootScheduledAt', 'Reboot scheduled in'),
@@ -545,6 +555,54 @@ class TestManualCountdown:
         # The pill runs off the flag rather than the copy, so it carries the
         # same delay; 30 was what both used to announce.
         assert client.flags[-1][flag] - before == pytest.approx(countdown, abs=2)
+
+    @pytest.mark.parametrize('handler,operation', [
+        ('_handle_reboot_machine', 'reboot'),
+        ('_handle_shutdown_machine', 'shutdown'),
+    ])
+    def test_an_override_inside_active_hours_keeps_the_same_countdown(
+            self, handler, operation, monkeypatch):
+        # the override lets the verb through and changes nothing about when
+        # the machine goes; who approved it is on the record.
+        hour = time.localtime().tm_hour
+        monkeypatch.setattr(
+            owlette_service.osadapter, 'active_hours',
+            lambda: {'start': hour, 'end': (hour + 2) % 24, 'source': 'policy'})
+        issued = []
+        monkeypatch.setattr(
+            owlette_service.osadapter, operation,
+            lambda delay, message=None: issued.append(delay))
+        monkeypatch.setattr(
+            owlette_service.session_state, 'set_intent', lambda intent: None)
+        monkeypatch.setattr(sys, 'platform', 'win32')
+        client = FakeFirebaseClient()
+
+        getattr(make_service(client), handler)({
+            'activeHoursOverride': {'reason': 'swap the projector', 'approvedBy': 'user:u1'},
+        })
+
+        assert issued == [owlette_service.REBOOT_OS_COUNTDOWN_SECONDS]
+        override = client.logged[0]
+        assert override['action'] == 'active_hours_override'
+        assert override['user_id'] == 'user:u1'
+        assert override['extra_fields']['reason'] == 'swap the projector'
+
+    @pytest.mark.parametrize('handler,operation,copy', [
+        ('_handle_reboot_machine', 'reboot', 'Error: reboot failed: the OS refused'),
+        ('_handle_shutdown_machine', 'shutdown', 'Error: shutdown failed: the OS refused'),
+    ])
+    def test_a_refused_os_call_is_recorded_as_failed(
+            self, handler, operation, copy, monkeypatch):
+        # finish_command records a command as failed only on the Error:
+        # prefix, so the bare "Reboot failed: ..." these returned read as done.
+        def refuse(delay, message=None):
+            raise RuntimeError('the OS refused')
+
+        monkeypatch.setattr(owlette_service.osadapter, operation, refuse)
+        monkeypatch.setattr(
+            owlette_service.session_state, 'set_intent', lambda intent: None)
+
+        assert getattr(make_service(FakeFirebaseClient()), handler)({}) == copy
 
 
 # the tray's connection badge

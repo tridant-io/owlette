@@ -1,7 +1,7 @@
 ---
 title: "remote commands"
 description: "the agent listens for commands from the web dashboard via Firestore. commands are written as entries in a pending command map, executed by the agent, and mirrored into a completed command map as progress, completion, failure, or cancellation records."
-keywords: ["command queue", "pending commands", "reboot", "shutdown", "restart process", "kill process", "screenshot", "install software"]
+keywords: ["command queue", "pending commands", "reboot", "shutdown", "restart process", "kill process", "screenshot", "install software", "active hours", "reboot refused", "restart after hours"]
 ---
 
 ---
@@ -70,7 +70,7 @@ for `restart_process`, `timeout_seconds` is the graceful-terminate window before
 
 | command | description | data payload |
 |---------|-------------|--------------|
-| `install_software` | download, checksum, and install software | `{installer_url, sha256_checksum, installer_name?, silent_flags?, verify_path?, timeout_seconds?, deployment_id?, parallel_install?, close_processes?, suppress_projects?}` |
+| `install_software` | download, checksum, and install software. refused inside active hours on Windows, see [active hours](#active-hours) | `{installer_url, sha256_checksum, installer_name?, silent_flags?, verify_path?, timeout_seconds?, deployment_id?, parallel_install?, close_processes?, suppress_projects?, activeHoursOverride?}` |
 | `cancel_installation` | cancel an in-progress installer process | `{installer_name}` |
 | `uninstall_software` | run a software uninstaller | `{software_name, uninstall_command, silent_flags?, installer_type?, verify_paths?, timeout_seconds?, deployment_id?}` |
 | `cancel_uninstall` | cancel an in-progress uninstall process | `{software_name}` |
@@ -94,10 +94,10 @@ the legacy v1 ZIP commands (`distribute_project`, `cancel_distribution`) were re
 
 | command | description | data payload |
 |---------|-------------|--------------|
-| `reboot_machine` | reboot the machine after a 60-second OS countdown | `{}` |
-| `shutdown_machine` | shut the machine down after a 60-second OS countdown | `{}` |
-| `cancel_reboot` | abort a pending reboot or shutdown countdown | `{}` |
-| `dismiss_reboot_pending` | clear the dashboard's reboot-pending state | `{process_name?}` |
+| `reboot_machine` | reboot the machine after a 60-second OS countdown, or once active hours end | `{when?, activeHoursOverride?}` |
+| `shutdown_machine` | shut the machine down after a 60-second OS countdown | `{activeHoursOverride?}` |
+| `cancel_reboot` | abort a pending reboot or shutdown countdown, or a reboot held until active hours end | `{}` |
+| `dismiss_reboot_pending` | clear the dashboard's reboot-pending state, and a reboot a crash loop held until active hours end | `{process_name?}` |
 | `update_owlette` | self-update the agent with the installer for its platform | `{installer_url, checksum_sha256, target_version?, deployment_id?}` |
 
 the agent does not provide a remote self-uninstall command. remote software removal uses `uninstall_software` for third-party applications.
@@ -291,6 +291,22 @@ manual reboot and shutdown commands do not accept configurable countdown fields.
 | Linux | `shutdown -r +1 "owlette remote reboot requested"` | `shutdown -h +1 "owlette remote shutdown requested"` | `shutdown -c` |
 
 macOS and Linux count in whole minutes, so a delay is rounded up and never rests below one minute — which is what keeps a scheduled reboot cancellable. `cancel_reboot` aborts the pending countdown and clears the dashboard flags when Firestore is available.
+
+a reboot or shutdown the OS refuses is recorded as failed: `Error: reboot failed: …` or `Error: shutdown failed: …`.
+
+### active hours
+
+on Windows the agent refuses `reboot_machine`, `shutdown_machine` and `install_software` while the machine is inside its active hours, the hours Windows holds its own update restarts back, read on the machine's clock. Windows always has them: 08:00–17:00 when nobody set any. the command is recorded as failed:
+
+```
+Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00
+```
+
+- **`activeHoursOverride: { reason, approvedBy }`** lets the command run inside active hours, and the agent logs `active_hours_override` with both. only the server writes it, for a call a person approved: the dashboard's confirm, an API call with `active_hours_override`, or an approved hoot call in a single-machine chat. unattended hoot, talons and follow-ups cannot
+- **`when: "after_active_hours"`** on `reboot_machine` holds the reboot until active hours end, sets the machine's `rebootDeferredUntil`, and fires it then with the usual countdown. outside active hours it reboots now. `cancel_reboot` drops it
+- an install is refused before it closes any process
+
+rollouts, fleet updates and the weekly restart schedule are not held. macOS and Linux have no active hours, and an agent from before the guard ignores both fields, so a machine is protected only once it runs a release with the guard (`capabilities.activeHoursGuard: 1`). the full rules are in [agent commands](/docs/reference/agent-commands#active-hours).
 
 ### self-update
 

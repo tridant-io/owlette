@@ -46,7 +46,7 @@ for the agent itself — every log file on every platform, running it in the for
 ## processes not auto-restarting
 
 1. verify `launch_mode` is `always`, or `scheduled` with the current time inside a configured schedule window
-2. check whether the `relaunch_attempts` limit was reached. on Windows the reboot prompt should appear; on macOS and Linux the dashboard shows the restart pending and nothing relaunches until an admin approves or dismisses it
+2. check whether the `relaunch_attempts` limit was reached. on Windows the reboot prompt should appear, except inside active hours, where the restart waits for them to end; on macOS and Linux the dashboard shows the restart pending and nothing relaunches until an admin approves or dismisses it
 3. verify `exe_path` exists on the machine — a missing executable shows as **failed** (`LAUNCH_FAILED`) once the entry has launched before, or `STOPPED` if it never has, and the agent logs the failed launch and raises an `exe_missing` alert. `INACTIVE` means the launch mode is `off`
 4. on macOS and Linux, check that someone is signed in at the machine's screen — managed processes launch into the signed-in user's session, and with nobody signed in the agent waits
 5. check the agent's logs for launch errors, and that the service is running and its main loop is executing (look for periodic log entries)

@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type LaunchMode, type ScheduleBlock } from '@/hooks/useFirestore';
+import type { PowerCommandOptions } from '@/lib/activeHours';
 import { DEFAULT_SCHEDULE } from '@/lib/scheduleDefaults';
 import { scheduleClockLabel } from '@/lib/scheduleClockCopy';
 import { launchCopy } from '@/lib/launchCopy';
@@ -922,8 +923,8 @@ export default function DashboardPage() {
     onConfigureSchedule: (process: Process) => onConfigureSchedule(id, process),
     onRemoveMachine: () => onRemoveMachineById(id),
     onMetricClick: (metric: MetricType) => onMetricClick(id, metric),
-    onRestart: () => onRestartMachine(id),
-    onShutdown: () => onShutdownMachine(id),
+    onRestart: (options?: PowerCommandOptions) => onRestartMachine(id, options),
+    onShutdown: (options?: PowerCommandOptions) => onShutdownMachine(id, options),
     onCancelRestart: () => onCancelRestart(id),
     onScreenshot: () => onScreenshot(id),
     onLiveView: () => onLiveView(id),

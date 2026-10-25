@@ -15,6 +15,7 @@
 import { getAdminDb } from '@/lib/firebase-admin';
 import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
+import { OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import type { Actor } from '@/lib/capabilities';
 import { PLAN_REQUIRED_DETAIL, requireEntitlement, type PlanFlag } from '@/lib/plan.server';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -70,6 +71,12 @@ export interface ExecuteMachineCommandInput {
    * `RESERVED_PAYLOAD_KEYS`) are overwritten with canonical values.
    */
   payload: Record<string, unknown>;
+  /**
+   * a person's approval to act inside the machine's active hours, written onto
+   * the envelope as `activeHoursOverride: { reason, approvedBy: ctx.auditActor }`;
+   * refused for any actor but `user:` and `apiKey:`.
+   */
+  activeHoursOverride?: { reason: string };
 }
 
 export interface ExecuteMachineCommandResult {
@@ -107,7 +114,83 @@ export class ExecuteMachineCommandError extends Error {
   }
 }
 
-/** Dropped from `input.payload` so a caller can't spoof queuedBy/status/lifecycle. */
+/**
+ * the agent honours an active-hours override only as the server set it, from a
+ * typed option, so every param bag that becomes a command (a client body, a
+ * model's tool input) drops these names first.
+ */
+export const ACTIVE_HOURS_OVERRIDE_KEYS: readonly string[] = [
+  'activeHoursOverride',
+  'active_hours_override',
+  'override_active_hours',
+  'override_reason',
+];
+
+const ACTIVE_HOURS_OVERRIDE_KEY_SET: ReadonlySet<string> = new Set<string>(ACTIVE_HOURS_OVERRIDE_KEYS);
+
+export function stripActiveHoursOverride(params: Record<string, unknown>): Record<string, unknown> {
+  return omitKeys(params, ACTIVE_HOURS_OVERRIDE_KEY_SET);
+}
+
+/** the envelope field the agent honours, set only by the server. */
+export interface ActiveHoursOverride {
+  reason: string;
+  /** the approving actor, `user:<uid>` or `apiKey:<keyId>`. */
+  approvedBy: string;
+}
+
+export type ParsedActiveHoursOverride =
+  | { ok: true; override?: { reason: string } }
+  | { ok: false; error: string };
+
+/**
+ * parse a caller's `active_hours_override` field: exactly `{ reason }`, the
+ * reason trimmed to 1-500 characters. undefined or null means no override.
+ */
+export function parseActiveHoursOverride(value: unknown): ParsedActiveHoursOverride {
+  if (value === undefined || value === null) return { ok: true };
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    return { ok: false, error: 'must be an object { reason }' };
+  }
+  const unknownKeys = Object.keys(value).filter((key) => key !== 'reason');
+  if (unknownKeys.length > 0) {
+    return { ok: false, error: `unknown field(s): ${unknownKeys.join(', ')}` };
+  }
+  const reason = (value as { reason?: unknown }).reason;
+  const trimmed = typeof reason === 'string' ? reason.trim() : '';
+  if (trimmed.length === 0) {
+    return { ok: false, error: 'reason is required and must be a non-empty string' };
+  }
+  if (trimmed.length > OVERRIDE_REASON_MAX) {
+    return { ok: false, error: `reason must be at most ${OVERRIDE_REASON_MAX} characters` };
+  }
+  return { ok: true, override: { reason: trimmed } };
+}
+
+export type ResolvedActiveHoursOverride =
+  | { ok: true; override?: ActiveHoursOverride }
+  | { ok: false; code: 'validation_failed' | 'active_hours_override_not_allowed'; error: string };
+
+/**
+ * a caller's `active_hours_override` as the envelope value, `approvedBy` the
+ * actor. only a person approves one: a dashboard user or an api key's owner,
+ * never `system:`. undefined or null means no override.
+ */
+export function resolveActiveHoursOverride(value: unknown, actor: string): ResolvedActiveHoursOverride {
+  const parsed = parseActiveHoursOverride(value);
+  if (!parsed.ok) return { ok: false, code: 'validation_failed', error: parsed.error };
+  if (!parsed.override) return { ok: true };
+  if (!/^(user|apiKey):./.test(actor)) {
+    return {
+      ok: false,
+      code: 'active_hours_override_not_allowed',
+      error: 'an active-hours override needs a person: only user: and apiKey: actors may carry one',
+    };
+  }
+  return { ok: true, override: { ...parsed.override, approvedBy: actor } };
+}
+
+/** Dropped from `input.payload` so a caller can't spoof queuedBy/status/lifecycle or an override. */
 const RESERVED_PAYLOAD_KEYS: ReadonlySet<string> = new Set<string>([
   'type',
   'status',
@@ -118,13 +201,24 @@ const RESERVED_PAYLOAD_KEYS: ReadonlySet<string> = new Set<string>([
   'createdAt',
   'expiresAt',
   'auditCorrelationId',
+  ...ACTIVE_HOURS_OVERRIDE_KEYS,
 ]);
 
-function stripReservedKeys(payload: Record<string, unknown>): Record<string, unknown> {
+function omitKeys(params: Record<string, unknown>, keys: ReadonlySet<string>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload)) {
-    if (RESERVED_PAYLOAD_KEYS.has(key)) continue;
+  for (const [key, value] of Object.entries(params)) {
+    if (keys.has(key)) continue;
     out[key] = value;
+  }
+  return out;
+}
+
+function stripReservedKeys(payload: Record<string, unknown>): Record<string, unknown> {
+  const out = omitKeys(payload, RESERVED_PAYLOAD_KEYS);
+  // mcp_tool_call nests the caller's tool input one level down.
+  const toolParams = out.tool_params;
+  if (toolParams !== null && typeof toolParams === 'object' && !Array.isArray(toolParams)) {
+    out.tool_params = stripActiveHoursOverride(toolParams as Record<string, unknown>);
   }
   return out;
 }
@@ -179,6 +273,15 @@ export async function executeMachineCommand(
       'field `payload` must be an object',
     );
   }
+  const resolvedOverride = resolveActiveHoursOverride(input.activeHoursOverride, ctx.auditActor);
+  if (!resolvedOverride.ok) {
+    throw new ExecuteMachineCommandError(
+      400,
+      resolvedOverride.code,
+      `activeHoursOverride: ${resolvedOverride.error}`,
+    );
+  }
+  const activeHoursOverride = resolvedOverride.override;
   if (!PLAN_FREE_COMMAND_TYPES.has(cmdType)) {
     const planKey = commandPlanKey(cmdType);
     if (await requireEntitlement(ctx.siteId, planKey)) {
@@ -232,6 +335,7 @@ export async function executeMachineCommand(
     {
       type: cmdType,
       ...safePayload,
+      ...(activeHoursOverride ? { activeHoursOverride } : {}),
       siteId,
       machineId,
       timestamp: FieldValue.serverTimestamp(),
@@ -253,6 +357,9 @@ export async function executeMachineCommand(
       endpoint: `/api/sites/${siteId}/machines/${machineId}/commands`,
       method: 'POST',
       machineId,
+      ...(activeHoursOverride
+        ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
+        : {}),
     },
   });
 

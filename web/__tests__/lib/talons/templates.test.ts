@@ -88,6 +88,18 @@ describe('BUILT_IN_TALON_PRESETS', () => {
     },
   );
 
+  it('update guard holds restarts to outside active hours and never sets a deadline', () => {
+    // set_restart_deadline is gone: it wrote where windows never reads, and a deadline only
+    // ever forces a restart, inside active hours once it passes.
+    const guard = BUILT_IN_TALON_PRESETS.find((def) => def.id === 'builtin-update-guard');
+    const directive = (guard?.template.outputs ?? [])
+      .map((output) => (output.type === 'cortex' ? output.directive : ''))
+      .join(' ');
+
+    expect(directive).toContain('limit_auto_restart');
+    expect(directive).not.toMatch(/set_restart_deadline|day restart deadline/);
+  });
+
   it.each(BUILT_IN_TALON_PRESETS)(
     'preset "$name" validates exactly as strictly as it claims',
     (def: TalonTemplateDefinition) => {

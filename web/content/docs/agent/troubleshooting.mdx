@@ -205,7 +205,7 @@ if pairing fails, check `pairing_debug.log` in the data root's `logs/` folder: i
 **common causes**:
 
 - **executable not found**: the launch fails, `process_launch_failed` is logged, and an `exe_missing` alert may be sent.
-- **relaunch limit reached**: on Windows the reboot prompt should have appeared. on macOS and Linux there is no on-screen prompt: the dashboard shows the restart pending, and the process stays down until an admin approves or dismisses it — see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
+- **relaunch limit reached**: on Windows the reboot prompt should have appeared, unless the machine was inside its active hours, where the restart waits for them to end. on macOS and Linux there is no on-screen prompt: the dashboard shows the restart pending, and the process stays down until an admin approves or dismisses it — see [relaunch limits](/docs/agent/process-monitoring#relaunch-limits).
 - **nobody signed in**: a managed process is launched into the signed-in user's session on every platform. on macOS and Linux, `service.log` says `nobody is signed in at a graphical session`.
 - **permission error**: the service, or on macOS and Linux the signed-in user, may not have access to the executable path.
 - **user-session launch issues (Windows)**: managed launches use `CreateProcessAsUser` and `process_launcher.py`; check `service.log` for service or session token errors.

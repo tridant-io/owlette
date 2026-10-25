@@ -384,6 +384,7 @@ describe('startTurn — happy path', () => {
       skipped: { offline: [], disabled: [] },
       processes: [],
       narrowedByMention: false,
+      localTime: { scope: 'machine', timeZone: undefined },
     });
   });
 
@@ -1213,6 +1214,140 @@ describe('startTurn — narrowing the resolved set at turn start', () => {
     });
     // The stored selection is untouched by the narrowing.
     expect(store[CHAT_PATH]).toMatchObject({ targetType: 'site', targetMachineIds: null });
+  });
+});
+
+describe('startTurn — the local clock in the prompt', () => {
+  it("gives a single-machine turn that machine's zone, off the listing it already read", async () => {
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([{ id: MACHINE_ID, timezone: 'America/New_York' }]),
+    );
+    // the site's zone is not the machine's, and must not stand in for it.
+    store[`sites/${SITE_ID}`] = { timezone: 'Asia/Tokyo' };
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'single',
+        localTime: { scope: 'machine', timeZone: 'America/New_York' },
+      }),
+    );
+  });
+
+  it.each([
+    ['site-wide', () => siteParams()],
+    [
+      'subset',
+      () =>
+        baseParams({
+          resolved: resolvedOn(['machine-1', 'machine-2']),
+          turnTarget: { machineIds: ['machine-1', 'machine-2'], fanOut: true, source: 'chat' },
+          chatTarget: { machineIds: ['machine-1', 'machine-2'] },
+        }),
+    ],
+  ])("gives a %s fan-out the site's zone: it has no one machine's clock", async (_label, params) => {
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([{ id: 'machine-1', timezone: 'America/New_York' }]),
+    );
+    store[`sites/${SITE_ID}`] = { timezone: 'Asia/Tokyo' };
+
+    await collectChunks(startTurn(fakeDb, params()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ localTime: { scope: 'site', timeZone: 'Asia/Tokyo' } }),
+    );
+  });
+
+  it('reads an unset site zone as utc, as talon schedules do', async () => {
+    await collectChunks(startTurn(fakeDb, siteParams()));
+    await flushAsync();
+
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ localTime: { scope: 'site', timeZone: 'UTC' } }),
+    );
+  });
+});
+
+describe('startTurn — who can approve an active-hours override', () => {
+  const toolOptions = () => (hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7];
+
+  it.each([
+    ['a message the person sent', 'chat'],
+    ['a message a mention narrowed', 'mention'],
+    ['the person answering an approval', 'resume'],
+  ] as const)('lets the tools ask for one on %s', async (_label, source) => {
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({ turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source } }),
+      ),
+    );
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ allowActiveHoursOverride: true });
+  });
+
+  it.each(['followup', 'talon'] as const)(
+    'never on a %s turn: nobody is at the dashboard when it fires',
+    async (source) => {
+      await collectChunks(
+        startTurn(
+          fakeDb,
+          baseParams({
+            source,
+            chatTarget: undefined,
+            turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source },
+          }),
+        ),
+      );
+      await flushAsync();
+
+      expect(toolOptions()).toMatchObject({ allowActiveHoursOverride: false });
+    },
+  );
+
+  it('names the calls this turn resumes, so their override is checked against the record', async () => {
+    // A resumed call's input comes back from the browser; the tools may only
+    // honour an override the server recorded when it asked for this approval.
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await collectChunks(
+        startTurn(
+          fakeDb,
+          baseParams({
+            messages: [
+              userMsg('u1', 'restart it now, the show is over'),
+              assistantMsg('a1', [
+                {
+                  type: 'tool-get_metrics',
+                  toolCallId: 'call_resumed',
+                  state: 'approval-responded',
+                  input: {},
+                  approval: { id: 'approval_1', approved: true },
+                },
+              ]),
+            ],
+            chatTarget: undefined,
+            turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source: 'resume' },
+          }),
+        ),
+      );
+      await flushAsync();
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(toolOptions()).toMatchObject({ resumedToolCallIds: ['call_resumed'] });
+  });
+
+  it('a turn a person sent resumes nothing', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ resumedToolCallIds: [] });
   });
 });
 

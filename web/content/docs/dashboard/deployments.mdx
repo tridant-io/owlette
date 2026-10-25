@@ -1,7 +1,7 @@
 ---
 title: "deployments"
 description: "install Windows software on one machine or many from the deploy page. owlette pins the installer's SHA-256, sends every machine an install, and tracks each one to completed, failed or cancelled, with retry, cancel and uninstall."
-keywords: ["install software", "push installer", "remote install", "silent install", "msi", "exe", "software rollout", "checksum", "sha256 mismatch", "deployment stuck", "retry install", "uninstall", "deployment template", "mac", "linux", "kiosk software update"]
+keywords: ["install software", "push installer", "remote install", "silent install", "msi", "exe", "software rollout", "checksum", "sha256 mismatch", "deployment stuck", "retry install", "uninstall", "deployment template", "mac", "linux", "kiosk software update", "active hours", "install refused", "deploy anyway", "daytime install"]
 ---
 
 the **deploy** page (`/deployments`) installs software across a site's machines. each deployment is one record with one target per machine, and every target is tracked from queued to installed.
@@ -57,6 +57,12 @@ the dialog computes it for you. once the URL stops changing, owlette's server do
 - **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says
 
 a warning lists everything that will be closed before you deploy.
+
+### inside active hours
+
+on Windows the agent refuses an install while the machine is inside its **active hours**, the hours, on the machine's own clock, in which Windows holds its own update restarts back: 08:00–17:00 when nobody set any. it refuses before it closes any process, and the target fails with `refused: inside active hours 08:00–17:00 (machine time), they end at 17:00` on its line. any other failure shows there as the agent wrote it. see [agent commands](/docs/reference/agent-commands#active-hours).
+
+when any machine you chose is inside its active hours, **deploy to N machines** asks first: **deploy inside active hours?** lists those machines with their hours (**may be inside** for a machine that reports no timezone) and offers **cancel** or **deploy anyway**, which needs a **reason**. the reason goes on every install in the deployment, and each machine logs `active_hours_override` with it and your name. only Windows machines whose agent enforces active hours (`capabilities.activeHoursGuard`) are listed; an older agent installs at once.
 
 ---
 
@@ -128,6 +134,8 @@ a deployment created before checksums were pinned has none. a retry then downloa
 
 a retry sends the installer, flags, checksum, verify path and parallel setting again, but not the processes to close. close them yourself first, or start a new deployment.
 
+a retry does not carry the deployment's active-hours reason over: it asks its own. when a machine it retries is inside its active hours, **retry inside active hours?** lists those machines and needs a reason for **retry anyway**.
+
 ---
 
 ## cancelling
@@ -177,6 +185,10 @@ the API deletes only a record that is `completed`, `failed`, `partial`, `cancell
 - a signed or time-limited URL may have expired by the time a machine downloads it
 - test the URL in a browser on the machine's network: the machine downloads it itself, not through owlette's server
 
+### refused inside active hours
+
+the target's line starts `refused: inside active hours`; over the API its `error` starts `Error: active_hours:`. nothing was closed or installed. retry it once the machine's active hours end, or retry now with a reason. a script on the API sends `active_hours_override: { "reason": "…" }` on the create or the retry; a daytime one is refused on every guarded Windows target without it.
+
 ### checksum verification failed
 
 the file the machine downloaded is not the one that was hashed. a URL that always points at the latest build changes under a saved checksum; use a versioned URL, or update the template so it is hashed again.
@@ -206,4 +218,4 @@ wait until every target has finished, or cancel what can be cancelled. deleting 
 
 - **trust the source.** the agent runs installers with SYSTEM rights. deploy only installers you trust, and try new ones on one machine first
 - **agent updates** are not deployments: **update owlette**, beside **new deployment**, updates the agent itself. see [self-update](/docs/agent/self-update#from-the-dashboard)
-- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` (with an optional `machines` list), `…/cancel` and `…/uninstall` act on it; `DELETE …/{deploymentId}` removes the record. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI
+- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` (with an optional `machines` list), `…/cancel` and `…/uninstall` act on it; `DELETE …/{deploymentId}` removes the record. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. create and retry take `active_hours_override: { "reason" }`, which the server writes onto every install it queues, with you as `approvedBy`. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI, where `--override-active-hours --reason <text>` sends the override

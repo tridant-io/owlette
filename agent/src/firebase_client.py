@@ -18,6 +18,7 @@ import hashlib
 from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 
+import osadapter
 import shared_utils
 import hardware_profile
 import config_sync
@@ -1478,6 +1479,21 @@ class FirebaseClient:
 
         return profile
 
+    def _active_hours_field(self):
+        """The machine document's activeHours: `{start, end, source}`, or a
+        delete where the machine has none.
+
+        A read that fails deletes it too and never fails the heartbeat: the
+        guard holds nothing back on that same failure, so the dashboard must
+        not show a window the agent is not enforcing.
+        """
+        try:
+            window = osadapter.active_hours()
+        except Exception as e:
+            self.logger.debug(f"active hours read failed: {e}")
+            return DELETE_FIELD
+        return window if window else DELETE_FIELD
+
     def _upload_metrics(self, metrics: Dict[str, Any]) -> bool:
         """Upload system metrics to Firestore.
 
@@ -1555,6 +1571,10 @@ class FirebaseClient:
                 # This agent follows the site's keep screens awake switch and
                 # mirrors displayAwake; an older one does neither.
                 'capabilities.keepAwake': 1,
+                # this agent refuses reboots, shutdowns and deployments inside
+                # activeHours unless a person overrode it; an older one doesn't
+                **({'capabilities.activeHoursGuard': 1} if sys.platform == 'win32' else {}),
+                'activeHours': self._active_hours_field(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,

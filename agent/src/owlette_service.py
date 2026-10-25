@@ -10,6 +10,7 @@ if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
 import osadapter
+import active_hours
 import shared_utils
 import acl_hardening
 import installer_utils
@@ -201,6 +202,29 @@ REBOOT_OS_COUNTDOWN_SECONDS = 60
 # A boot found within this window after a scheduled instant counts as
 # fulfilling that entry (retroactive lastFiredByEntry stamp).
 REBOOT_SUCCESS_DETECTION_WINDOW_SECONDS = 60 * 60
+# who queued the reboot a crash loop asks for, in the logs and on the deferral
+_CRASH_LOOP_QUEUED_BY = 'system:crash_loop'
+
+
+def _inside_active_hours():
+    """`(window, now)` while this Windows machine is inside its active hours,
+    else None.
+
+    `now` is the machine's naive local clock, the one the window is kept on.
+    Off Windows there are no active hours. A window that cannot be read holds
+    nothing back: what it would have held goes ahead as it did before the
+    guard, and the service log says why.
+    """
+    if sys.platform != 'win32':
+        return None
+    try:
+        window = osadapter.active_hours()
+        now = datetime.datetime.now()
+        if window and active_hours.is_inside(window, now):
+            return window, now
+    except Exception as e:
+        logging.warning(f"Active hours could not be read, holding nothing back: {e}")
+    return None
 
 
 def _display_error_result(result):
@@ -1220,6 +1244,8 @@ class OwletteService:
         # corrections can't trigger false retries.
         self._reboot_attempt_started_monotonic = None
         self._reboot_schedule_counter = 0  # Check reboot schedule every REBOOT_CHECK_ITERATIONS
+        # Single-flight handle for the off-loop fire of a deferred reboot.
+        self._deferred_reboot_thread = None
         # Cached hash suppresses no-op ticks; _cached_display_profile is diffed by
         # edidHash to categorise each real change (add/remove/swap/drift/
         # mosaic_disabled/sync_lost).
@@ -4289,7 +4315,13 @@ class OwletteService:
                     # every tick forever. The escalation lands on the same
                     # terminal state the prompt leaves behind: reboot pending on
                     # the dashboard, no further relaunch until the gate expires.
-                    escalated = sys.platform != 'win32' or self.launch_desktop_app_as_user(
+                    # inside active hours no prompt opens, so nothing counts
+                    # down: the reboot is deferred to the window's end, the
+                    # gate times out as the prompt's would, and the
+                    # dashboard's approve can still restart now with an
+                    # override.
+                    held = _inside_active_hours()
+                    escalated = held is not None or sys.platform != 'win32' or self.launch_desktop_app_as_user(
                         shared_utils.DESKTOP_RESTART_PROMPT_ARG
                     )
                     if escalated:
@@ -4307,10 +4339,28 @@ class OwletteService:
                         self._restart_prompt_until = (
                             float('inf') if indefinite
                             else time.monotonic() + RESTART_PROMPT_ACTIVE_SECONDS)
-                        self.log_and_notify(
-                            process,
-                            f'Terminated {process_name} {relaunches_to_attempt} times. System reboot imminent'
-                        )
+                        if held is None:
+                            self.log_and_notify(
+                                process,
+                                f'Terminated {process_name} {relaunches_to_attempt} times. System reboot imminent'
+                            )
+                        else:
+                            window, now = held
+                            span = active_hours.describe(window)
+                            if self.firebase_client and self.firebase_client.is_connected():
+                                self.firebase_client.log_event(
+                                    action='active_hours_refused',
+                                    level='info',
+                                    process_name=process_name,
+                                    details=f'crash-loop reboot held inside active hours {span} (machine time)',
+                                    extra_fields={'queuedBy': _CRASH_LOOP_QUEUED_BY, 'window': window},
+                                )
+                            end = self._defer_reboot(window, now, _CRASH_LOOP_QUEUED_BY)
+                            self.log_and_notify(
+                                process,
+                                f'Terminated {process_name} {relaunches_to_attempt} times. '
+                                f'Reboot deferred until {end:%H:%M}: inside active hours {span} (machine time)'
+                            )
                         del self.relaunch_attempts[process_name]
                         return True
                     else:
@@ -5898,6 +5948,12 @@ class OwletteService:
                 if not installer_url:
                     return "Error: No installer URL provided"
 
+                # before close_processes: a refused deployment must not have
+                # stopped anything on its way to the refusal
+                refusal = self._active_hours_block(cmd_data)
+                if refusal:
+                    return refusal
+
                 # Auto-derive verify_path from /DIR flag if not explicitly provided
                 if not verify_path and silent_flags:
                     dir_match = re.search(r'/DIR="([^"]+)"', silent_flags, re.IGNORECASE)
@@ -6236,7 +6292,18 @@ class OwletteService:
                 config = shared_utils.read_config()
                 # command_id lets execute_script register its subprocess so
                 # cancel_mcp_tool can reach it.
-                result = mcp_tools.execute_tool(tool_name, tool_params, config, command_id=cmd_id)
+                result = mcp_tools.execute_tool(
+                    tool_name, tool_params, config, command_id=cmd_id,
+                    active_hours_override=cmd_data.get('activeHoursOverride'))
+
+                # set_active_hours and limit_auto_restart say when moving the
+                # machine out of its active hours took the person's override
+                if (tool_name == 'manage_windows_update' and isinstance(result, dict)
+                        and result.get('override_used') is True):
+                    self._log_active_hours_override(
+                        f"manage_windows_update:{(tool_params.get('action') or '').lower()}",
+                        cmd_data['activeHoursOverride'], result['previous_active_hours'],
+                        cmd_data.get('queuedBy'))
 
                 self._log_cortex_tool(tool_name, tool_params, result)
 
@@ -7334,6 +7401,87 @@ class OwletteService:
         except Exception as e:
             logging.error(f"Scheduled reboot check failed: {e}", exc_info=True)
 
+    def _defer_reboot(self, window, now, queued_by, requested_at=None):
+        """Hold a reboot until the active hours it was asked inside have ended.
+
+        There is one deferral at most: a second replaces the first. It lives
+        in reboot_state beside the scheduler's attempt and never as one,
+        because an attempt holds the connection watchdog off and a deferral
+        can wait for hours. Returns the instant it fires, on the machine's
+        clock.
+        """
+        end = active_hours.window_end(window, now)
+        at = int(end.timestamp())
+        state = reboot_state.read_state()
+        state['deferredReboot'] = {
+            'at': at,
+            'queuedBy': queued_by,
+            'requestedAt': (requested_at if requested_at is not None
+                            else int(datetime.datetime.now(datetime.timezone.utc).timestamp())),
+        }
+        reboot_state.write_state(state)
+
+        span = active_hours.describe(window)
+        logging.info(f"Reboot deferred until {end:%H:%M}: inside active hours {span} (machine time)")
+        if self.firebase_client:
+            try:
+                self.firebase_client.set_machine_flags({'rebootDeferredUntil': at})
+            except Exception as e:
+                logging.warning(f"Failed to announce the deferred reboot (it still fires): {e}")
+            self.firebase_client.log_event(
+                action='reboot_deferred',
+                level='info',
+                details=f'reboot deferred until {end:%H:%M} (machine time): inside active hours {span}',
+                user_id=queued_by,
+                extra_fields={'queuedBy': queued_by, 'window': window, 'deferredUntil': at},
+            )
+        return end
+
+    def _check_deferred_reboot(self):
+        """Fire the deferred reboot once the active hours it waits for end.
+
+        Runs on the reboot-check tick after the schedule, whether or not one
+        is set. Inside the window again (it moved, or the service was down
+        through its end), the reboot is held to the next end. A countdown
+        already running is left alone: the boot it ends in fulfils this one
+        (_resume_deferred_reboot), and a cancel of it drops this one too.
+        """
+        try:
+            state = reboot_state.read_state()
+            deferred = state.get('deferredReboot')
+            if not deferred:
+                return
+            if datetime.datetime.now(datetime.timezone.utc).timestamp() < deferred['at']:
+                return
+            if self._shutting_down or (
+                    self._deferred_reboot_thread is not None
+                    and self._deferred_reboot_thread.is_alive()):
+                return
+
+            held = _inside_active_hours()
+            if held is not None:
+                window, now = held
+                self._defer_reboot(window, now, deferred.get('queuedBy'),
+                                   requested_at=deferred['requestedAt'])
+                return
+
+            state['deferredReboot'] = None
+            reboot_state.write_state(state)
+            due = datetime.datetime.fromtimestamp(deferred['at']).astimezone()
+
+            # off the main loop: the announce retries and the pre-roll sleep
+            def _fire():
+                try:
+                    self._fire_scheduled_reboot(state, None, due)
+                except Exception as e:
+                    logging.error(f"Deferred reboot fire failed: {e}", exc_info=True)
+
+            self._deferred_reboot_thread = threading.Thread(
+                target=_fire, daemon=True, name='deferred-reboot')
+            self._deferred_reboot_thread.start()
+        except Exception as e:
+            logging.error(f"Deferred reboot check failed: {e}", exc_info=True)
+
     def _fire_scheduled_reboot(self, state, entry_id, scheduled_instant):
         """Fire a scheduled reboot using the announce-then-execute pattern.
 
@@ -7365,7 +7513,15 @@ class OwletteService:
         flaky wifi would silently stop rebooting on schedule.
 
         NO RETRIES on the OS shutdown itself anywhere in this code path.
+
+        A deferred reboot (_check_deferred_reboot) fires through here with no
+        entry, announced as rebootSource 'deferred', on its own thread. It
+        keeps no attempt and stamps no entry: its record is dropped before
+        the fire, and an attempt nothing clears (no schedule to run the stale
+        check, no boot) would hold the connection watchdog off for good.
         """
+        source = 'scheduled' if entry_id else 'deferred'
+        label = f'entry {entry_id[:8]}' if entry_id else source
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         target_reboot_at = now_utc + datetime.timedelta(
             seconds=REBOOT_ANNOUNCE_PREROLL_SECONDS + REBOOT_OS_COUNTDOWN_SECONDS
@@ -7377,21 +7533,22 @@ class OwletteService:
         today_date_iso = self._today_iso_in_local_tz()
 
         logging.info(
-            f"Scheduled reboot firing for entry {entry_id} "
-            f"(scheduled for {scheduled_instant.isoformat()}, "
+            f"{source.capitalize()} reboot firing ({label}, "
+            f"scheduled for {scheduled_instant.isoformat()}, "
             f"target reboot at {target_reboot_at_iso})"
         )
 
-        # 1. Persist local attempt FIRST — durable record before any network I/O.
-        state['attempt'] = {
-            'entryId': entry_id,
-            'scheduledFor': scheduled_instant.isoformat(),
-            'targetRebootAt': target_reboot_at_iso,
-            'lastAttemptAt': now_utc.isoformat(),
-            'status': 'pending',
-        }
-        reboot_state.write_state(state)
-        self._reboot_attempt_started_monotonic = time.monotonic()
+        if entry_id:
+            # 1. Persist local attempt FIRST — durable record before any network I/O.
+            state['attempt'] = {
+                'entryId': entry_id,
+                'scheduledFor': scheduled_instant.isoformat(),
+                'targetRebootAt': target_reboot_at_iso,
+                'lastAttemptAt': now_utc.isoformat(),
+                'status': 'pending',
+            }
+            reboot_state.write_state(state)
+            self._reboot_attempt_started_monotonic = time.monotonic()
 
         # Owlette-initiated, so the next startup classifier stays silent.
         try:
@@ -7406,10 +7563,13 @@ class OwletteService:
             announce_payload = {
                 'rebootScheduledAt': target_reboot_at_unix,
                 'rebooting': True,
-                'rebootSource': 'scheduled',
+                'rebootSource': source,
                 'rebootCancellable': True,
                 'rebootEntryId': entry_id,
             }
+            if not entry_id:
+                # the countdown takes over from the hold in one listener tick
+                announce_payload['rebootDeferredUntil'] = None
             for announce_attempt in range(1, 4):
                 try:
                     self.firebase_client.set_machine_flags(announce_payload)
@@ -7417,7 +7577,7 @@ class OwletteService:
                     self.firebase_client.log_event(
                         action='scheduled_reboot_announced',
                         level='warning',
-                        details=f'target {target_reboot_at_iso} (entry {entry_id[:8]})'
+                        details=f'target {target_reboot_at_iso} ({label})'
                     )
                     announced = True
                     logging.info(f"Reboot announce succeeded on attempt {announce_attempt}/3")
@@ -7430,8 +7590,8 @@ class OwletteService:
 
             if not announced:
                 logging.warning(
-                    f"Reboot announce to Firestore FAILED after 3 attempts for entry "
-                    f"{entry_id} — proceeding with reboot anyway (local state is source "
+                    f"Reboot announce to Firestore FAILED after 3 attempts ({label}) "
+                    f"— proceeding with reboot anyway (local state is source "
                     f"of truth; dashboard will not show countdown until next reconnect)"
                 )
 
@@ -7451,16 +7611,17 @@ class OwletteService:
                 'Owlette scheduled reboot — cancellable from dashboard',
             )
             logging.info(
-                f"Scheduled reboot command issued ({REBOOT_OS_COUNTDOWN_SECONDS}s OS countdown)"
+                f"{source.capitalize()} reboot command issued ({REBOOT_OS_COUNTDOWN_SECONDS}s OS countdown)"
             )
         except Exception as e:
             # 6. OS shutdown failed. Clear state, clear flags, never retry.
             logging.error(f"Failed to issue shutdown command: {e}")
             self._shutting_down = False
-            self._reboot_attempt_started_monotonic = None
-            state['attempt'] = None
-            state.setdefault('lastFiredByEntry', {})[entry_id] = today_date_iso
-            reboot_state.write_state(state)
+            if entry_id:
+                self._reboot_attempt_started_monotonic = None
+                state['attempt'] = None
+                state.setdefault('lastFiredByEntry', {})[entry_id] = today_date_iso
+                reboot_state.write_state(state)
             if self.firebase_client:
                 try:
                     self.firebase_client.set_machine_flags({
@@ -7472,7 +7633,7 @@ class OwletteService:
                     self.firebase_client.log_event(
                         action='scheduled_reboot_failed',
                         level='error',
-                        details=f'shutdown command failed: {e} (entry {entry_id[:8]})'
+                        details=f'shutdown command failed: {e} ({label})'
                     )
                 except Exception as inner:
                     logging.debug(f"Failed to clear flags after shutdown failure: {inner}")
@@ -7804,9 +7965,112 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Reboot success detection failed: {e}")
 
-    def _handle_reboot_machine(self, command_data):
-        """Handle remote reboot command."""
+    def _resume_deferred_reboot(self):
+        """Announce again, after the startup flag clear, a deferred reboot
+        this service still owes.
+
+        One the machine has booted since it was asked for is dropped instead:
+        that boot did what it waited for, whatever caused it (a restart now
+        that someone approved, the weekly schedule, Windows itself), and
+        firing it at the window's end would restart the machine twice.
+        """
         try:
+            state = reboot_state.read_state()
+            deferred = state.get('deferredReboot')
+            if not deferred:
+                return
+            if psutil.boot_time() > deferred['requestedAt']:
+                logging.info("Deferred reboot fulfilled by a boot since it was asked for — dropping it")
+                state['deferredReboot'] = None
+                reboot_state.write_state(state)
+                return
+            logging.info(f"Deferred reboot still held, until {deferred['at']} (unix)")
+            if self.firebase_client and self.firebase_client.is_connected():
+                self.firebase_client.set_machine_flags({'rebootDeferredUntil': deferred['at']})
+        except Exception as e:
+            logging.warning(f"Failed to resume the deferred reboot: {e}")
+
+    def _active_hours_block(self, command_data):
+        """The refusal for a reboot, shutdown or deployment while this machine
+        is inside its active hours, or None to go ahead.
+
+        Inside the window only an override the server wrote for a person's
+        approved call lets one through, and it is logged with who approved it
+        and why before it proceeds.
+        """
+        inside = _inside_active_hours()
+        if inside is None:
+            return None
+        window, now = inside
+        span = active_hours.describe(window)
+        command_type = command_data.get('type')
+        queued_by = command_data.get('queuedBy')
+        override = command_data.get('activeHoursOverride')
+
+        if not active_hours.is_valid_override(override):
+            refusal = (
+                f"Error: active_hours: inside active hours {span} (machine time); "
+                f"they end at {active_hours.window_end(window, now):%H:%M}")
+            logging.info(f"Refused {command_type}: {refusal}")
+            if self.firebase_client:
+                self.firebase_client.log_event(
+                    action='active_hours_refused',
+                    level='info',
+                    details=f'{command_type} refused inside active hours {span} (machine time)',
+                    user_id=queued_by,
+                    extra_fields={
+                        'commandType': command_type,
+                        'queuedBy': queued_by,
+                        'window': window,
+                    },
+                )
+            return refusal
+
+        self._log_active_hours_override(command_type, override, window, queued_by)
+        return None
+
+    def _log_active_hours_override(self, command_type, override, window, queued_by):
+        """Log a person's override of `window`, with who approved it and why,
+        here and to the site's logs."""
+        span = active_hours.describe(window)
+        reason, approved_by = override['reason'], override['approvedBy']
+        logging.warning(
+            f"{command_type} inside active hours {span}, overridden by {approved_by}: {reason}")
+        if self.firebase_client:
+            self.firebase_client.log_event(
+                action='active_hours_override',
+                level='warning',
+                details=f'{command_type} inside active hours {span} (machine time): {reason}',
+                user_id=approved_by,
+                extra_fields={
+                    'commandType': command_type,
+                    'reason': reason,
+                    'approvedBy': approved_by,
+                    'queuedBy': queued_by,
+                    'window': window,
+                },
+            )
+
+    def _handle_reboot_machine(self, command_data):
+        """Handle remote reboot command.
+
+        `when: 'after_active_hours'` asks for the restart once active hours
+        end: inside them it is deferred to their end, outside them it goes
+        now. Deferring needs no override, so any caller may ask for it.
+        """
+        try:
+            deferring = command_data.get('when') == 'after_active_hours'
+            if deferring:
+                held = _inside_active_hours()
+                if held is not None:
+                    window, now = held
+                    end = self._defer_reboot(window, now, command_data.get('queuedBy'))
+                    return f"Reboot deferred until {end:%H:%M} (machine time)"
+            else:
+                refusal = self._active_hours_block(command_data)
+                if refusal:
+                    return refusal
+
             self.firebase_client.log_event(
                 action='command_executed',
                 level='warning',
@@ -7847,13 +8111,18 @@ class OwletteService:
             osadapter.reboot(
                 REBOOT_OS_COUNTDOWN_SECONDS, 'owlette remote reboot requested')
 
-            return f"Reboot scheduled in {REBOOT_OS_COUNTDOWN_SECONDS} seconds"
+            scheduled = f"Reboot scheduled in {REBOOT_OS_COUNTDOWN_SECONDS} seconds"
+            return f"{scheduled} (not inside active hours)" if deferring else scheduled
         except Exception as e:
-            return f"Reboot failed: {str(e)}"
+            return f"Error: reboot failed: {str(e)}"
 
     def _handle_shutdown_machine(self, command_data):
         """Handle remote shutdown command."""
         try:
+            refusal = self._active_hours_block(command_data)
+            if refusal:
+                return refusal
+
             self.firebase_client.log_event(
                 action='command_executed',
                 level='warning',
@@ -7888,7 +8157,7 @@ class OwletteService:
 
             return f"Shutdown scheduled in {REBOOT_OS_COUNTDOWN_SECONDS} seconds"
         except Exception as e:
-            return f"Shutdown failed: {str(e)}"
+            return f"Error: shutdown failed: {str(e)}"
 
     def _handle_cancel_reboot(self, command_data):
         """Cancel a pending reboot/shutdown.
@@ -7896,7 +8165,8 @@ class OwletteService:
         Aborts the OS-level shutdown through the adapter, clears all in-flight
         reboot state both locally and in Firestore, and — critically — stamps
         lastFiredByEntry for any in-progress scheduled-reboot attempt so the
-        same entry cannot re-fire today on the next scheduler tick.
+        same entry cannot re-fire today on the next scheduler tick. A reboot
+        deferred until active hours end is dropped too.
         """
         try:
             os_cancel_ok = osadapter.cancel_reboot()
@@ -7914,6 +8184,7 @@ class OwletteService:
                     today_date_iso = self._today_iso_in_local_tz()
                     state.setdefault('lastFiredByEntry', {})[entry_id] = today_date_iso
                 state['attempt'] = None
+                state['deferredReboot'] = None
                 reboot_state.write_state(state)
                 if self.firebase_client:
                     try:
@@ -7931,6 +8202,7 @@ class OwletteService:
                         'rebootScheduledAt': None,
                         'shutdownScheduledAt': None,
                         'rebootCancellable': False,
+                        'rebootDeferredUntil': None,
                     })
                     self.firebase_client.log_event(
                         action='command_executed',
@@ -7959,6 +8231,18 @@ class OwletteService:
             process_name = command_data.get('process_name')
 
             self.firebase_client.clear_reboot_pending()
+
+            # the crash-loop reboot deferred to the end of active hours goes
+            # with the pending reboot it stood for; a person's deferral stays
+            state = reboot_state.read_state()
+            deferred = state.get('deferredReboot')
+            if deferred and deferred.get('queuedBy') == _CRASH_LOOP_QUEUED_BY:
+                state['deferredReboot'] = None
+                reboot_state.write_state(state)
+                try:
+                    self.firebase_client.set_machine_flags({'rebootDeferredUntil': None})
+                except Exception as e:
+                    logging.warning(f"Failed to clear the deferred reboot flag on dismiss: {e}")
 
             # Reset relaunch counter for the affected process so it gets fresh attempts
             if process_name and process_name in self.relaunch_attempts:
@@ -9455,11 +9739,14 @@ class OwletteService:
                     'rebootCancellable': False,
                     'rebootSource': None,
                     'rebootEntryId': None,
+                    'rebootDeferredUntil': None,
                 })
                 self.firebase_client.clear_reboot_pending()
                 logging.info("Cleared stale reboot/shutdown flags on startup")
             except Exception as e:
                 logging.warning(f"Failed to clear stale flags on startup: {e}")
+
+        self._resume_deferred_reboot()
 
         self._detect_reboot_success_on_startup()
 
@@ -9608,6 +9895,11 @@ class OwletteService:
                 if self._reboot_schedule_counter >= REBOOT_CHECK_ITERATIONS:
                     self._reboot_schedule_counter = 0
                     self._check_scheduled_reboot()
+                    # after the schedule: an entry that fires on this tick has
+                    # set _shutting_down by now, so a deferred reboot due at
+                    # the same moment waits on its countdown instead of
+                    # racing it
+                    self._check_deferred_reboot()
 
                 # Logs real topology changes only; the Firestore upload rides the
                 # firebase_client metrics loop, not this path.

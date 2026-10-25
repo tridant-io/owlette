@@ -19,6 +19,7 @@ from roost.resources.installer_deployments import (
 )
 from roost.resources.keys import ApiKeyRecord, ApiKeyScope, Keys
 from roost.resources.machines import (
+    ActiveHoursOverride,
     CommandStatus,
     CommandType,
     MachineDeployment,
@@ -50,6 +51,7 @@ __all__ = [
     "Account",
     "AccountApiKeys",
     "AccountKeyContext",
+    "ActiveHoursOverride",
     "AddRole",
     "ApiKeyRecord",
     "ApiKeyScope",

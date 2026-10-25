@@ -1,7 +1,7 @@
 ---
 title: "machine"
-description: "manage machines from the CLI: list them, inspect health and per-roost deployment state, and queue reboot, shutdown and screenshot commands. it works the same for Windows, macOS and Linux machines. every verb is site-scoped and requires --site. six verbs are tier A, ready against the public API today; live-view is a tier C stub that points at owlette swoop."
-keywords: ["reboot", "restart a machine", "shutdown", "screenshot", "machine list", "machine status", "remote desktop"]
+description: "manage machines from the CLI: list them, inspect health and per-roost deployment state, and send reboot, shutdown and screenshot commands. it works the same for Windows, macOS and Linux machines. every verb is site-scoped and requires --site. six verbs are tier A, ready against the public API today; live-view is a tier C stub that points at owlette swoop."
+keywords: ["reboot", "restart a machine", "shutdown", "screenshot", "machine list", "machine status", "remote desktop", "active hours", "reboot refused", "restart after hours", "override active hours"]
 ---
 
 cross-reference: `owlette machine deployments` shows the per-roost intended-versus-reported state from the **machine's** side. `owlette roost get` shows the same data from the **roost's** side: one source of truth, two lenses.
@@ -75,45 +75,66 @@ owlette machine deployments m_abc123 --site site-1 --json | jq '.deployments[] |
 
 ## reboot
 
-queue a `reboot_machine` command on the machine. every request carries an `Idempotency-Key`, generated unless you pass one, so retrying after a network blip is safe.
+reboot the machine and wait for the agent to accept or refuse it. the CLI posts a `reboot_machine` command, then polls its state every 1.5 seconds for up to 60 seconds, printing a dot per poll. every request carries an `Idempotency-Key`, generated unless you pass one, so retrying after a network blip is safe.
 
-**synopsis**: `owlette machine reboot <machineId> --site <siteId> [--delay-seconds <n>] [--idempotency-key <key>]`
+on Windows the agent refuses a reboot while the machine is inside its [active hours](/docs/reference/agent-commands#active-hours), 08:00–17:00 when nobody set any. pass `--after-active-hours` to restart when they end, or `--override-active-hours --reason <text>` to restart now.
+
+**synopsis**: `owlette machine reboot <machineId> --site <siteId> [--after-active-hours | --override-active-hours --reason <text>] [--delay-seconds <n>] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
 | `--site <siteId>` | yes | site ID that owns the machine |
+| `--after-active-hours` | no | restart once the machine's active hours end, or now if it is outside them. the CLI reads the machine first: a Windows agent without the active-hours guard would ignore the flag and restart at once, so the CLI stops with an error instead. macOS and Linux have no active hours and restart now |
+| `--override-active-hours` | no | restart inside active hours anyway. needs `--reason`, and does not go with `--after-active-hours` |
+| `--reason <text>` | with `--override-active-hours` | why, 500 characters or fewer. the agent writes it to the site log with your key as the approver |
 | `--delay-seconds <n>` | no | non-negative number of seconds the agent waits before firing (default 0; a fraction is rounded down) |
 | `--idempotency-key <key>` | no | the `Idempotency-Key` to send. reuse the one a failed run printed to retry it safely |
 
-prints `owlette: reboot queued for machine <id> (commandId=<id>)`. `--json` prints the queued command.
+after the dots it prints one of:
+
+- `owlette: reboot accepted by machine <id> (commandId=<id>): <the agent's answer>`, such as `Reboot deferred until 17:00 (machine time)`. when the agent sends no answer the line stops at the command id; with `--after-active-hours` it then adds that it restarts when its active hours end, or now if it is outside them
+- a refusal, on stderr: `owlette: reboot refused by machine <id>: inside active hours 08:00–17:00 (machine time); they end at 17:00`, with a hint naming both flags. exit 1
+- any other failure the agent reports: `owlette: reboot failed on machine <id>: <error>`. exit 1
+- `owlette: reboot queued for machine <id> (commandId=<id>); no answer from the agent after 60s`, when the agent has not answered. exit 0
+- the queued line, after a note on stderr, when the key cannot read the outcome, which needs `machine=<id>:read`. exit 0
+
+`--json` prints no dots, and prints the command's final state, `{ "commandId", "status", "createdAt", "updatedAt" }` with `result` (the agent's answer) when it completed and `error` on a failure, exiting 1 when `status` is `failed`. without a final state it prints the queued command, `{ "commandId", "status" }`.
 
 ```bash
 owlette machine reboot m_abc123 --site site-1
-owlette machine reboot m_abc123 --site site-1 --delay-seconds 60 --json
+owlette machine reboot m_abc123 --site site-1 --after-active-hours
+owlette machine reboot m_abc123 --site site-1 --override-active-hours --reason "venue closed today" --json
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/machines/{machineId}/commands` with `{ "type": "reboot_machine" }`
+**backing endpoints**:
+- `GET /api/sites/{siteId}/machines/{machineId}`, with `--after-active-hours` only
+- `POST /api/sites/{siteId}/machines/{machineId}/commands` with `{ "type": "reboot_machine" }`, plus `when: "after_active_hours"` or `active_hours_override: { "reason" }` in `params`
+- `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` (polled until terminal)
 
 ---
 
 ## shutdown
 
-queue a `shutdown_machine` command on the machine, with the same idempotency and delay behaviour as `reboot`.
+shut the machine down and wait for the agent to accept or refuse it, with the same idempotency, delay, polling and output as `reboot`. a shutdown inside active hours cannot wait for them to end, so there is no `--after-active-hours`.
 
-**synopsis**: `owlette machine shutdown <machineId> --site <siteId> [--delay-seconds <n>] [--idempotency-key <key>]`
+**synopsis**: `owlette machine shutdown <machineId> --site <siteId> [--override-active-hours --reason <text>] [--delay-seconds <n>] [--idempotency-key <key>]`
 
 | flag | required | purpose |
 |---|---|---|
 | `--site <siteId>` | yes | site ID that owns the machine |
+| `--override-active-hours` | no | shut down inside active hours anyway. needs `--reason` |
+| `--reason <text>` | with `--override-active-hours` | why, 500 characters or fewer, written to the site log |
 | `--delay-seconds <n>` | no | non-negative number of seconds the agent waits before firing (default 0) |
 | `--idempotency-key <key>` | no | the `Idempotency-Key` to send |
 
 ```bash
 owlette machine shutdown m_abc123 --site site-1
-owlette machine shutdown m_abc123 --site site-1 --delay-seconds 30
+owlette machine shutdown m_abc123 --site site-1 --override-active-hours --reason "replacing the projector"
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/machines/{machineId}/commands` with `{ "type": "shutdown_machine" }`
+**backing endpoints**:
+- `POST /api/sites/{siteId}/machines/{machineId}/commands` with `{ "type": "shutdown_machine" }`
+- `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}` (polled until terminal)
 
 ---
 
@@ -178,8 +199,8 @@ owlette --json machine live-view m_abc123 --site site-1
 ## exit codes
 
 - `0`: success
-- `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, or a missing `--site` (a usage error)
-- `2`: usage error: no token configured, a bad `--monitor` value, or a negative `--delay-seconds`
+- `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, the agent refusing a reboot or shutdown inside active hours, `--after-active-hours` on an agent without the active-hours guard, or a missing `--site` (a usage error)
+- `2`: usage error: no token configured, a bad `--monitor` value, a negative `--delay-seconds`, `--override-active-hours` without `--reason`, `--reason` without it, or it together with `--after-active-hours`
 - `3`: stub (`machine live-view` only)
 
 API errors print their problem code, with a hint for `machine_offline`, `unsupported_command_type` and `scope_insufficient`.
@@ -188,7 +209,8 @@ API errors print their problem code, with a hint for `machine_offline`, `unsuppo
 
 ## notes
 
-- **scope**: site-scoped. the mutating verbs need an API key with `machine=<id>:write` (or `machine=*:write`); `screenshot` needs `machine=<id>:read` as well. permissions are exact: `write` does not imply `read`
+- **scope**: site-scoped. the mutating verbs need an API key with `machine=<id>:write` (or `machine=*:write`); `screenshot` needs `machine=<id>:read` as well. `reboot` and `shutdown` read their outcome, and `--after-active-hours` the machine, with `read` too; without it they warn on stderr and still send the command. permissions are exact: `write` does not imply `read`
+- **active hours**: Windows always has active hours, so a daytime `reboot` or `shutdown` from a script is refused by a guarded agent unless it passes `--override-active-hours --reason`, or `--after-active-hours` for a reboot. an agent from before the guard reboots or shuts down at once, whatever you pass
 - **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`; C stub for `live-view`
 - **idempotency**: every mutation sends an `Idempotency-Key`, so retrying a failed `reboot`, `shutdown` or `screenshot` will not fire it twice. a request that never got a confirmed response prints its key and the flag to retry with
 - **screenshot TTL**: the agent's signed URL expires shortly after capture; the CLI downloads it at once, so you never handle the expiry

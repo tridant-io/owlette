@@ -11,20 +11,29 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useMachines, Process } from '@/hooks/useFirestore';
-import { DeploymentTemplate, Deployment } from '@/hooks/useDeployments';
+import { DeploymentTemplate, Deployment, type DeploymentRequestOptions } from '@/hooks/useDeployments';
 import { Badge } from '@/components/ui/badge';
 import { useSystemPresets } from '@/hooks/useSystemPresets';
 import { useInstallerChecksum, SHA256_HEX_RE } from '@/hooks/useInstallerChecksum';
 import InstallerChecksumStatus from '@/components/InstallerChecksumStatus';
 import { SelectGroup, SelectLabel } from '@/components/ui/select';
 import { IconButton } from '@/components/ui/icon-button';
+import {
+  ActiveHoursDeployConfirm,
+  machinesInActiveHours,
+  type MachineInActiveHours,
+} from '@/components/ActiveHoursDeployConfirm';
 
 interface DeploymentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   siteId: string;
   templates: DeploymentTemplate[];
-  onCreateDeployment: (deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>, machineIds: string[]) => Promise<string>;
+  onCreateDeployment: (
+    deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>,
+    machineIds: string[],
+    options?: DeploymentRequestOptions,
+  ) => Promise<string>;
   onCreateTemplate: (template: Omit<DeploymentTemplate, 'id' | 'createdAt'>) => Promise<string>;
   onUpdateTemplate: (templateId: string, template: Partial<Omit<DeploymentTemplate, 'id' | 'createdAt'>>) => Promise<void>;
   onDeleteTemplate: (templateId: string) => Promise<void>;
@@ -61,6 +70,10 @@ export default function DeploymentDialog({
   const [additionalProcesses, setAdditionalProcesses] = useState('');
   const [parallelInstall, setParallelInstall] = useState(false);
   const [editingName, setEditingName] = useState(false);
+  // the chosen machines inside active hours; kept on close so the list doesn't empty as it fades
+  const [activeHoursConfirm, setActiveHoursConfirm] = useState<{ open: boolean; machines: MachineInActiveHours[] }>(
+    { open: false, machines: [] },
+  );
 
   // sha256 — agents refuse to run an installer without it. Computed server-side
   // from the URL; manual entry covers hosts the web server can't reach.
@@ -111,6 +124,7 @@ export default function DeploymentDialog({
       setAdditionalProcesses('');
       setParallelInstall(false);
       setEditingName(false);
+      setActiveHoursConfirm({ open: false, machines: [] });
       resetChecksum();
     }
   }, [open, resetChecksum]);
@@ -291,9 +305,6 @@ export default function DeploymentDialog({
   };
 
   const handleDeploy = async () => {
-    // Auto-derive deployment name if not set
-    const effectiveName = deploymentName.trim() || getSelectedLabel() || installerName || 'Deployment';
-
     if (!installerName.trim()) {
       toast.error('Please provide an installer URL');
       return;
@@ -326,6 +337,20 @@ export default function DeploymentDialog({
       });
       return;
     }
+
+    // a guarded agent refuses the install inside active hours, so ask for the override first
+    const inActiveHours = machinesInActiveHours(machines, selectedMachines);
+    if (inActiveHours.length > 0) {
+      setActiveHoursConfirm({ open: true, machines: inActiveHours });
+      return;
+    }
+
+    await submitDeployment();
+  };
+
+  const submitDeployment = async (override?: { reason: string }) => {
+    // Auto-derive deployment name if not set
+    const effectiveName = deploymentName.trim() || getSelectedLabel() || installerName || 'Deployment';
 
     setDeploying(true);
 
@@ -369,7 +394,8 @@ export default function DeploymentDialog({
 
       await onCreateDeployment(
         deploymentData,
-        Array.from(selectedMachines)
+        Array.from(selectedMachines),
+        override ? { override } : undefined,
       );
 
       toast.success(`Deployment started! Installing on ${selectedMachines.size} machine${selectedMachines.size > 1 ? 's' : ''}`);
@@ -386,6 +412,7 @@ export default function DeploymentDialog({
       setSelectedProjectIds(new Set());
       setAdditionalProcesses('');
       setShowCloseProcesses(false);
+      setActiveHoursConfirm((prev) => ({ ...prev, open: false }));
       resetChecksum();
 
       onOpenChange(false);
@@ -807,6 +834,15 @@ export default function DeploymentDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+
+      <ActiveHoursDeployConfirm
+        action="deploy"
+        open={activeHoursConfirm.open}
+        machines={activeHoursConfirm.machines}
+        onCancel={() => setActiveHoursConfirm((prev) => ({ ...prev, open: false }))}
+        sending={deploying}
+        onConfirm={(override) => submitDeployment(override)}
+      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>

@@ -146,6 +146,73 @@ describe('createDeployment', () => {
     );
   });
 
+  describe('active-hours override (active-hours-guard task 2.3)', () => {
+    function installCommands(sets: RecordedSet[]): Record<string, unknown>[] {
+      return sets
+        .filter((set) => set.path[set.path.length - 1] === 'pending')
+        .map((set) => Object.values(set.payload)[0] as Record<string, unknown>);
+    }
+
+    it('flows to every install_software command with approvedBy = the actor, and is audited', async () => {
+      const { db, sets } = buildFakeDb({ 'sites/site_a': {} });
+      const result = await createDeployment(
+        { ...validInput, active_hours_override: { reason: '  venue closed today  ' } },
+        { ...ctx, db },
+      );
+      expect(result.ok).toBe(true);
+      const commands = installCommands(sets);
+      expect(commands).toHaveLength(2);
+      for (const command of commands) {
+        expect(command.activeHoursOverride).toEqual({
+          reason: 'venue closed today',
+          approvedBy: 'user:user_1',
+        });
+      }
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            verb: 'create',
+            activeHoursOverride: true,
+            activeHoursOverrideReason: 'venue closed today',
+          }),
+        }),
+      );
+    });
+
+    it('without one the commands carry none', async () => {
+      const { db, sets } = buildFakeDb({ 'sites/site_a': {} });
+      await createDeployment(validInput, { ...ctx, db });
+      for (const command of installCommands(sets)) {
+        expect(command).not.toHaveProperty('activeHoursOverride');
+      }
+    });
+
+    it.each([
+      ['an empty reason', { reason: '' }],
+      ['an over-long reason', { reason: 'x'.repeat(501) }],
+      ['an unknown key', { reason: 'ok', approvedBy: 'user:attacker' }],
+    ])('rejects %s and writes nothing', async (_label, override) => {
+      const { db, sets } = buildFakeDb({ 'sites/site_a': {} });
+      const result = await createDeployment(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { ...validInput, active_hours_override: override as any },
+        { ...ctx, db },
+      );
+      expect(result).toMatchObject({ ok: false, code: 'invalid_active_hours_override' });
+      expect(sets).toHaveLength(0);
+    });
+
+    it('refuses an override from a system actor and writes nothing', async () => {
+      const { db, sets } = buildFakeDb({ 'sites/site_a': {} });
+      const result = await createDeployment(
+        { ...validInput, active_hours_override: { reason: 'show is over' } },
+        { ...ctx, actorIdentifier: 'system:hoot', db },
+      );
+      expect(result).toMatchObject({ ok: false, code: 'invalid_active_hours_override' });
+      expect(sets).toHaveLength(0);
+    });
+  });
+
   it('enforces per-site deployQuota', async () => {
     const { db } = buildFakeDb({ 'sites/site_a': { deployQuota: 1 } });
     const result = await createDeployment(validInput, { ...ctx, db });

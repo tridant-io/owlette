@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
+import { activeHoursGuardOf, type PowerCommandOptions, type PowerCommandSent } from '@/lib/activeHours';
 import { formatStorageRange } from '@/lib/storageUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
 import { formatHeartbeatTime, formatMachineLocalClock, formatTimezoneShortName, getDisplayTimezone } from '@/lib/timeUtils';
@@ -254,8 +255,8 @@ interface MachineRowProps {
   onConfigureSchedule?: (process: Process) => void;
   onRemoveMachine: () => void;
   onMetricClick?: (metricType: MetricType) => void;
-  onRestart?: () => Promise<void>;
-  onShutdown?: () => Promise<void>;
+  onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
@@ -521,6 +522,9 @@ export const MachineRow = memo(function MachineRow({
             shuttingDown={machine.shuttingDown}
             rebootScheduledAt={machine.rebootScheduledAt}
             shutdownScheduledAt={machine.shutdownScheduledAt}
+            rebootDeferredUntil={machine.rebootDeferredUntil}
+            machineTimezone={machine.machineTimezone}
+            compact
             isSiteAdmin={isSiteAdmin}
             onCancel={onCancelRestart}
           />
@@ -755,10 +759,12 @@ export const MachineRow = memo(function MachineRow({
               isOnline={machine.online}
               rebooting={machine.rebooting}
               shuttingDown={machine.shuttingDown}
+              rebootDeferredUntil={machine.rebootDeferredUntil}
               isSiteAdmin={isSiteAdmin}
               onRemoveMachine={onRemoveMachine}
               onRestart={onRestart}
               onShutdown={onShutdown}
+              activeHoursGuard={activeHoursGuardOf(machine)}
               onCancelRestart={onCancelRestart}
               onScreenshot={onScreenshot}
               onLiveView={onLiveView}

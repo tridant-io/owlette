@@ -82,7 +82,7 @@ process supervision works on every platform: launch, crash detection, relaunch, 
 - **the path.** the dashboard asks for an **executable path** on Windows, an **app path** on macOS (an `.app` bundle, which is opened the way Finder opens it), and a **program path** on Linux.
 - **priority and visibility** are Windows settings. the process dialog hides them for a Mac or Linux machine, and the agent ignores them there.
 - **hang detection** is Windows only. Windows checks whether a process's window still responds and marks it `STALLED`, then restarts it; on macOS and Linux a process that hangs without exiting is not detected.
-- **when relaunch attempts run out**, a Windows machine opens a restart prompt on its own screen that reboots the machine after two minutes. macOS and Linux have no prompt and do not reboot on their own: the machine shows **restart pending** on the dashboard until someone approves or dismisses it.
+- **when relaunch attempts run out**, a Windows machine opens a restart prompt on its own screen that reboots the machine after two minutes, or inside its active hours holds the reboot until they end. macOS and Linux have no prompt and do not reboot on their own: the machine shows **restart pending** on the dashboard until someone approves or dismisses it.
 
 see [process management](/docs/dashboard/process-management#on-macos-and-linux).
 
@@ -115,6 +115,8 @@ a threshold [alert rule](/docs/dashboard/admin/email-alerts#threshold-alert-rule
 ## restarts
 
 restart, shutdown and cancel work on all three, from the dashboard, from hoot and from [restart schedules](/docs/dashboard/restart-schedules). the countdown is one minute on every platform. Windows cancels with `shutdown /a`, Linux with `shutdown -c`, and macOS by ending the scheduled `shutdown`.
+
+**active hours** are Windows only. there the agent refuses a restart, a shutdown or a deployment inside the machine's active hours unless a person overrides it, and can hold a restart until they end ([active hours](/docs/reference/agent-commands#active-hours)). macOS and Linux have none: a restart asked to wait for them goes now.
 
 **pending reboot** detection, which raises a site alert and answers hoot's `check_pending_reboot`, reads Windows Update and servicing state on Windows, a prepared OS update or staged security response on macOS, and `/run/reboot-required` on Linux.
 

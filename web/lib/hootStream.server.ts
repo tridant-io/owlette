@@ -22,6 +22,8 @@ import { SITE_TARGET_ID } from '@/lib/hoot/target';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
+import { getMachineTimezone } from '@/lib/adminUtils.server';
+import { getSiteTimezone } from '@/lib/talons/store.server';
 import {
   resolveLlmConfig,
   verifyUserSiteAccess,
@@ -420,10 +422,11 @@ async function runServerSideLLM(
   maxToolTier: ToolTier,
   userRole: string | null,
 ): Promise<Response> {
-  const [llmConfig, processes, requireTier3Approval] = await Promise.all([
+  const [llmConfig, processes, requireTier3Approval, machineTimeZone] = await Promise.all([
     resolveLlmConfig(db, userId),
     fetchProcessSummaries(db, siteId, machineId),
     getHootRequireTier3Approval(db, siteId),
+    getMachineTimezone(siteId, machineId),
   ]);
 
   const toolDefs = conversationsToolDefs(maxToolTier);
@@ -442,7 +445,10 @@ async function runServerSideLLM(
 
   const result = streamText({
     model,
-    system: buildSystemPrompt(machineName || machineId, false, processes),
+    system: buildSystemPrompt(machineName || machineId, false, processes, {
+      scope: 'machine',
+      timeZone: machineTimeZone,
+    }),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),
@@ -480,9 +486,10 @@ async function runSiteWideMode(
   dispatchMachines: string[],
   userRole: string | null,
 ): Promise<Response> {
-  const [llmConfig, requireTier3Approval] = await Promise.all([
+  const [llmConfig, requireTier3Approval, siteTimeZone] = await Promise.all([
     resolveLlmConfig(db, userId),
     getHootRequireTier3Approval(db, siteId),
+    getSiteTimezone(db, siteId),
   ]);
   const toolDefs = conversationsToolDefs(maxToolTier);
   const executableTools = buildExecutableTools(
@@ -500,7 +507,7 @@ async function runSiteWideMode(
 
   const result = streamText({
     model,
-    system: buildSystemPrompt('', true),
+    system: buildSystemPrompt('', true, undefined, { scope: 'site', timeZone: siteTimeZone }),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),

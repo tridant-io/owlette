@@ -89,7 +89,7 @@ every top-level noun is a resource class hung off the client.
 | `owlette.keys`         | session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke`                      |
 | `owlette.webhooks`     | `subscribe`, `list`, `get`, `update`, `remove`, `rotateSecret`, `probe`, `deliveries`, `delivery`, `retryDelivery` |
 | `owlette.sites`        | `list`, `get`                                                                                   |
-| `owlette.machines`     | `list`, `get`, `deployments`, `dispatchCommand`, `getCommand`, `captureScreenshot`              |
+| `owlette.machines`     | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
 | `owlette.processes(siteId, machineId)` | `list`, `get`, `create`, `update`, `delete`, `start`, `stop`, `restart`, `kill`, `schedule` |
 | `owlette.chat`         | `new`, `list`, `send`, `rename`, `delete`                                                       |
 | `owlette.members(siteId)` | `list`, `add`, `setRole`, `remove`, `transferOwnership`                                      |
@@ -346,11 +346,17 @@ const history = await owlette.quotas.history('site-1', '30d');  // '7d' | '14d' 
 ### machine commands
 
 ```ts
-// queue a command — returns { commandId, status }
-const queued = await owlette.machines.dispatchCommand(
+// reboot or shut down — returns { commandId, status }
+const queued = await owlette.machines.reboot('site-1', 'machine-a7f3', { afterActiveHours: true });
+await owlette.machines.shutdown('site-1', 'machine-a7f3', {
+  activeHoursOverride: { reason: 'replacing the projector' },
+});
+const status = await owlette.machines.getCommand('site-1', 'machine-a7f3', queued.commandId);
+
+// or queue any of the three types yourself
+await owlette.machines.dispatchCommand(
   'site-1', 'machine-a7f3', 'reboot_machine', { delay_seconds: 60 },
 );
-const status = await owlette.machines.getCommand('site-1', 'machine-a7f3', queued.commandId);
 
 // dispatch + poll + download in one call
 const shot = await owlette.machines.captureScreenshot('site-1', 'machine-a7f3', {
@@ -360,7 +366,9 @@ const shot = await owlette.machines.captureScreenshot('site-1', 'machine-a7f3', 
 });
 ```
 
-`dispatchCommand()` is typed to `reboot_machine`, `shutdown_machine`, and `capture_screenshot`, and takes `{ idempotencyKey, timeoutSeconds }` as its last argument. a completed screenshot's `screenshot_url` is a fresh signed URL on every `getCommand()` read — don't cache it. `captureScreenshot()` throws a plain `Error` if the command fails or does not finish in time.
+`dispatchCommand()` is typed to `reboot_machine`, `shutdown_machine`, and `capture_screenshot`, and takes `{ idempotencyKey, timeoutSeconds }` as its last argument. `getCommand().result` is an object or a string: an object for a screenshot, whose `screenshot_url` is a fresh signed URL on every `getCommand()` read — don't cache it — and a string for `reboot_machine`, `shutdown_machine` and `cancel_reboot`, the agent's answer, such as `Reboot deferred until 17:00 (machine time)`. `captureScreenshot()` throws a plain `Error` if the command fails or does not finish in time.
+
+`reboot()` takes `{ afterActiveHours, activeHoursOverride, idempotencyKey }` and `shutdown()` takes `{ activeHoursOverride, idempotencyKey }`. a Windows agent with `capabilities.activeHoursGuard` refuses a reboot or shutdown inside the machine's [active hours](/docs/reference/agent-commands#active-hours), and Windows always has them, so a daytime script needs one of the two. the command is still queued: `getCommand()` then reports `failed`, with an `error` that starts `Error: active_hours:`. `afterActiveHours` restarts once active hours end, or now when the machine is outside them; `activeHoursOverride` acts now, and the agent logs the reason with your key as the approver. not both: the API answers `400`. an older agent, macOS and Linux ignore both and act at once.
 
 ### processes
 
@@ -465,8 +473,12 @@ const created = await owlette.installerDeployments.create('site-1', {
   machines: ['machine-a7f3'],
 });
 const detail = await owlette.installerDeployments.get('site-1', created.deploymentId);
-await owlette.installerDeployments.retry('site-1', created.deploymentId);
+await owlette.installerDeployments.retry('site-1', created.deploymentId, {
+  activeHoursOverride: { reason: 'venue closed today' },
+});
 ```
+
+`create()` and `retry()` take an optional `activeHoursOverride: { reason }`, sent as `active_hours_override`. a Windows agent with `capabilities.activeHoursGuard` refuses an install inside the machine's [active hours](/docs/reference/agent-commands#active-hours): that target ends `failed` with an `error` that starts `Error: active_hours:`. with the override the server writes the reason onto every install the call queues, with your key as the approver. a retry needs its own; the deployment's does not carry over.
 
 `upload()` runs the three-step flow — request a signed URL, PUT the file, finalize with the client-computed SHA-256 — and the platform comes from the file extension unless you pass `platform` (`windows_x64`, `macos_arm64`, `linux_x64`).
 

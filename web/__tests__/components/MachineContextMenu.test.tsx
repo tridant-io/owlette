@@ -21,6 +21,7 @@ import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { markThisMachine } from '@/lib/swoop/thisMachine';
+import type { ActiveHoursGuard, PowerCommandOptions, PowerCommandSent } from '@/lib/activeHours';
 
 // jsdom ships no ResizeObserver; Radix's dropdown positioning constructs one.
 global.ResizeObserver = class {
@@ -57,6 +58,8 @@ async function openMenu(props: {
   isOnline?: boolean;
   isSiteAdmin?: boolean;
   rebooting?: boolean;
+  rebootDeferredUntil?: number;
+  onCancelRestart?: () => Promise<void>;
   swoopCapable?: boolean;
   swoopViewers?: number;
   onSwoop?: () => void;
@@ -68,6 +71,9 @@ async function openMenu(props: {
   swoopLocked?: boolean;
   swoopOff?: boolean;
   onSiteSettings?: () => void;
+  activeHoursGuard?: ActiveHoursGuard | null;
+  onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
 }) {
   const user = userEvent.setup();
   render(
@@ -350,5 +356,109 @@ describe('MachineContextMenu — plan', () => {
     expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-screenshot')).toBeInTheDocument();
     expect(screen.getByTestId('machine-context-menu-view-displays')).toBeInTheDocument();
+  });
+});
+
+// the agent's guard refuses inside the window unless a person overrides, so the
+// confirm asks first; a machine whose agent guards nothing keeps today's dialog.
+describe('MachineContextMenu — restart and shutdown inside active hours', () => {
+  const hour = new Date().getUTCHours();
+  const INSIDE: ActiveHoursGuard = {
+    window: { start: hour, end: (hour + 2) % 24, source: 'policy' },
+    timezone: 'UTC',
+  };
+
+  it('asks for a choice on a guarded machine inside its window, and sends the reason with the restart', async () => {
+    const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const user = await openMenu({ isSiteAdmin: true, activeHoursGuard: INSIDE, onRestart });
+
+    await user.click(screen.getByTestId('machine-context-menu-reboot'));
+    const dialog = await screen.findByRole('dialog', { name: 'restart kiosk-1?' });
+    expect(screen.getByTestId('active-hours-notice')).toHaveTextContent('inside active hours');
+    expect(dialog).toContainElement(screen.getByRole('button', { name: 'restart when active hours end' }));
+
+    await user.type(screen.getByLabelText('reason'), 'venue closed');
+    await user.click(screen.getByRole('button', { name: 'restart now' }));
+
+    expect(onRestart).toHaveBeenCalledWith({ override: { reason: 'venue closed' } });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('defers a restart when asked to', async () => {
+    const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const user = await openMenu({ isSiteAdmin: true, activeHoursGuard: INSIDE, onRestart });
+
+    await user.click(screen.getByTestId('machine-context-menu-reboot'));
+    await user.click(await screen.findByRole('button', { name: 'restart when active hours end' }));
+
+    expect(onRestart).toHaveBeenCalledWith({ when: 'after_active_hours' });
+  });
+
+  it('keeps today\'s confirm where the agent guards nothing', async () => {
+    const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const user = await openMenu({ isSiteAdmin: true, activeHoursGuard: null, onRestart });
+
+    await user.click(screen.getByTestId('machine-context-menu-reboot'));
+    const dialog = await screen.findByRole('dialog', { name: 'restart kiosk-1?' });
+    expect(dialog).toHaveTextContent('60 seconds');
+    expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'restart' }));
+    expect(onRestart).toHaveBeenCalledWith({});
+  });
+
+  it('offers a shutdown inside the window only with a reason, never deferred', async () => {
+    const onShutdown = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const user = await openMenu({ isSiteAdmin: true, activeHoursGuard: INSIDE, onShutdown });
+
+    await user.click(screen.getByTestId('machine-context-menu-shutdown'));
+    await screen.findByRole('dialog', { name: 'shutdown kiosk-1?' });
+    expect(screen.queryByRole('button', { name: /when active hours end/ })).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('reason'), 'power work');
+    await user.click(screen.getByRole('button', { name: 'shut down now' }));
+    expect(onShutdown).toHaveBeenCalledWith({ override: { reason: 'power work' } });
+  });
+});
+
+// a restart the agent holds until active hours end is neither under way nor
+// gone: the menu cancels it the way the pill does, and still restarts now.
+describe('MachineContextMenu — a restart held until active hours end', () => {
+  const HELD = Math.floor(Date.now() / 1000) + 3 * 3600;
+
+  it('offers cancel restart, through the same cancel as a countdown', async () => {
+    const onCancelRestart = jest.fn().mockResolvedValue(undefined);
+    const user = await openMenu({ isSiteAdmin: true, rebootDeferredUntil: HELD, onCancelRestart });
+
+    await user.click(screen.getByTestId('machine-context-menu-cancel-reboot'));
+
+    expect(onCancelRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps restart and shutdown, and restart opens the usual confirm', async () => {
+    const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const user = await openMenu({ isSiteAdmin: true, rebootDeferredUntil: HELD, onRestart });
+
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent).slice(0, 4)).toEqual([
+      'cancel restart',
+      'restart machine',
+      '',
+      'shutdown machine',
+    ]);
+    await user.click(screen.getByTestId('machine-context-menu-reboot'));
+    await screen.findByRole('dialog', { name: 'restart kiosk-1?' });
+  });
+
+  it('still offers the cancel without control, which every plan may', async () => {
+    await openMenu({ controlLocked: true, isSiteAdmin: true, rebootDeferredUntil: HELD });
+
+    expect(screen.getByTestId('machine-context-menu-cancel-reboot')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-control-upgrade')).toBeInTheDocument();
+  });
+
+  it('says nothing about it on an offline machine, as the pill', async () => {
+    await openMenu({ isOnline: false, isSiteAdmin: true, rebootDeferredUntil: HELD });
+
+    expect(screen.queryByTestId('machine-context-menu-cancel-reboot')).not.toBeInTheDocument();
   });
 });

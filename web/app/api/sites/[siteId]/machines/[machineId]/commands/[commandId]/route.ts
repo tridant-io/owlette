@@ -94,8 +94,11 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     // Mint a fresh signed read url every poll — the doc stores only the storage
     // path, so urls always carry a current expiry.
-    let result: Record<string, unknown> | undefined;
-    if (lookup.status === 'completed') {
+    let result: Record<string, unknown> | string | undefined;
+    if (lookup.status === 'completed' && typeof cmd.result === 'string') {
+      // reboot, shutdown and cancel answer with a sentence, not an object
+      result = cmd.result;
+    } else if (lookup.status === 'completed') {
       const baseResult = (cmd.result && typeof cmd.result === 'object'
         ? (cmd.result as Record<string, unknown>)
         : {}) as Record<string, unknown>;
@@ -130,7 +133,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       data: {
         commandId,
         status: lookup.status,
-        ...(result && Object.keys(result).length > 0 ? { result } : {}),
+        ...(result && (typeof result === 'string' || Object.keys(result).length > 0) ? { result } : {}),
         ...(errorOut ? { error: errorOut } : {}),
         createdAt: timestampToIso(cmd.timestamp ?? cmd.createdAt) ?? null,
         updatedAt: timestampToIso(cmd.updatedAt ?? cmd.completedAt) ?? null,

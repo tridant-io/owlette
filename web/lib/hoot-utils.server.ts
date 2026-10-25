@@ -3,18 +3,30 @@
  * Server-side only — never import this from a client component.
  */
 
+import { createHash } from 'crypto';
 import { tool, jsonSchema } from 'ai';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { resolveSiteAccess, type MembershipRole } from '@/lib/sitePolicy.server';
 import {
+  ACTIVE_HOURS_OVERRIDE_PARAMS,
   EXISTING_COMMAND_MAPPINGS,
+  takesActiveHoursOverride,
+  withoutActiveHoursOverride,
   type McpToolDefinition,
   type ToolTier,
 } from '@/lib/mcp-tools';
+import { canonicalJson } from '@/lib/auditLogVerify';
+import { sanitizeForLog } from '@/lib/logSanitize';
 import type { LlmConfig } from '@/lib/llm';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
 import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
+import {
+  ACTIVE_HOURS_OVERRIDE_KEYS,
+  stripActiveHoursOverride,
+  type ActiveHoursOverride,
+} from '@/lib/actions/executeMachineCommand.server';
+import { OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
 import { Capability, hasCapability, type Actor, type Role, type SystemActorName } from '@/lib/capabilities';
 import { timestampToIso } from '@/lib/firestoreTime.server';
@@ -88,11 +100,17 @@ export interface AgentCommandHooks {
   abortSignal?: AbortSignal;
 }
 
+/** Envelope fields only the server sets; never read from a model's params. */
+export interface CommandEnvelopeOptions {
+  activeHoursOverride?: ActiveHoursOverride;
+}
+
 const RESERVED_EXISTING_COMMAND_KEYS: ReadonlySet<string> = new Set<string>([
   'type',
   'process_name',
   'timestamp',
   'status',
+  ...ACTIVE_HOURS_OVERRIDE_KEYS,
 ]);
 
 function stripReservedExistingCommandKeys(params: Record<string, unknown>): Record<string, unknown> {
@@ -136,6 +154,21 @@ export interface BuildExecutableToolsOptions {
   /** Tier-3 in-chat approval gate; defaults true. Off means tier-3 auto-runs on
    *  the server-side and site-wide paths too, not just local Hoot. */
   requireTier3Approval?: boolean;
+  /**
+   * A person drives this turn from a dashboard chat (a message they sent, or
+   * their answer to an approval), so a call that sets `override_active_hours`
+   * can go to their approval card. Off by default: follow-ups, talons and the
+   * conversations API are not offered the override, and refuse a call that
+   * sets it anyway before anything is queued.
+   */
+  allowActiveHoursOverride?: boolean;
+  /**
+   * The tool calls this turn resumes after a person answered their approval.
+   * ai 7 re-runs `needsApproval` on them with the input the browser sent back,
+   * so their override is checked against what was recorded at asking time and
+   * never recorded anew.
+   */
+  resumedToolCallIds?: readonly string[];
   /** Per-tool-call dispatch hooks; site-wide fan-out fires onCommandQueued once
    *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire these. */
   toolCallbacks?: {
@@ -511,6 +544,8 @@ export interface SiteMachineSummary {
   online: boolean;
   /** `cortexEnabled !== false` — absent means on, mirroring {@link isHootEnabled}. */
   hootEnabled: boolean;
+  /** `machine_timezone_iana` as the agent wrote it, unchecked; absent before agent 2.6.1. */
+  timezone?: string;
 }
 
 /**
@@ -537,6 +572,7 @@ export async function listSiteMachines(
       id: doc.id,
       online: !!data.online,
       hootEnabled: data.cortexEnabled !== false,
+      timezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
     };
   });
 }
@@ -692,7 +728,8 @@ export async function executeToolOnAgent(
   toolName: string,
   toolParams: Record<string, unknown>,
   chatId: string,
-  opts?: AgentCommandHooks
+  opts?: AgentCommandHooks,
+  envelope: CommandEnvelopeOptions = {},
 ): Promise<unknown> {
   const commandId = `mcp_${Date.now()}_${toolName}`;
 
@@ -716,11 +753,12 @@ export async function executeToolOnAgent(
       [commandId]: {
         type: 'mcp_tool_call',
         tool_name: toolName,
-        tool_params: toolParams,
+        tool_params: stripActiveHoursOverride(toolParams),
         chat_id: chatId,
         timestamp: Date.now(),
         status: 'pending',
         timeout_seconds: toolTimeout / 1000,
+        ...(envelope.activeHoursOverride ? { activeHoursOverride: envelope.activeHoursOverride } : {}),
       },
     },
     { merge: true }
@@ -810,7 +848,8 @@ export async function executeExistingCommand(
   commandType: string,
   processName: string,
   extraParams: Record<string, unknown> = {},
-  opts?: AgentCommandHooks
+  opts?: AgentCommandHooks,
+  envelope: CommandEnvelopeOptions = {},
 ): Promise<unknown> {
   const commandId = `${commandType}_${Date.now()}`;
   const safeExtraParams = stripReservedExistingCommandKeys(extraParams);
@@ -831,6 +870,7 @@ export async function executeExistingCommand(
         process_name: processName,
         timestamp: Date.now(),
         status: 'pending',
+        ...(envelope.activeHoursOverride ? { activeHoursOverride: envelope.activeHoursOverride } : {}),
       },
     },
     { merge: true }
@@ -994,7 +1034,8 @@ async function executeDeploySoftware(
   db: FirebaseFirestore.Firestore,
   siteId: string,
   machineIds: string[],
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  envelope: CommandEnvelopeOptions,
 ): Promise<unknown> {
   const softwareName = params.software_name as string;
   const version = params.version as string | undefined;
@@ -1165,6 +1206,9 @@ async function executeDeploySoftware(
     }
     if (parallelInstall) {
       commandData.parallel_install = true;
+    }
+    if (envelope.activeHoursOverride) {
+      commandData.activeHoursOverride = envelope.activeHoursOverride;
     }
 
     await pendingRef.set({ [commandId]: commandData }, { merge: true });
@@ -1806,6 +1850,7 @@ export async function executeServerSideTool(
   toolName: string,
   params: Record<string, unknown>,
   options: BuildExecutableToolsOptions,
+  envelope: CommandEnvelopeOptions = {},
 ): Promise<unknown> {
   switch (toolName) {
     case 'get_site_logs':
@@ -1813,7 +1858,7 @@ export async function executeServerSideTool(
     case 'get_system_presets':
       return executeGetSystemPresets(db, params);
     case 'deploy_software':
-      return executeDeploySoftware(db, siteId, machineIds, params);
+      return executeDeploySoftware(db, siteId, machineIds, params, envelope);
     case 'update_process':
       return executeUpdateProcessTool(db, siteId, machineIds, params, options);
     case 'add_process':
@@ -1833,6 +1878,133 @@ export async function executeServerSideTool(
     default:
       return { error: `Unknown server-side tool: ${toolName}` };
   }
+}
+
+/** Like the approval ledger's: far beyond any approval a person still answers. */
+const OVERRIDE_REQUEST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+function hasActiveHoursOverride(input: unknown): boolean {
+  return isRecord(input) && input.override_active_hours === true;
+}
+
+function activeHoursOverrideReason(input: Record<string, unknown>): string | null {
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  return reason && reason.length <= OVERRIDE_REASON_MAX ? reason : null;
+}
+
+function overrideRefusal(error: string, detail: string, status: number): ProcessToolResult {
+  return { ok: false, error, detail, status };
+}
+
+/** A person drives this turn from a dashboard chat, so an override can go to their approval card. */
+function personCanApproveOverride(options: BuildExecutableToolsOptions): boolean {
+  return options.allowActiveHoursOverride === true && !options.systemActor && !!options.userId;
+}
+
+/**
+ * Why this turn can't carry the override its call asks for. Such a call gets
+ * no approval card: it runs at once, queues nothing, and the model reads why.
+ */
+function activeHoursOverrideRefusal(
+  input: Record<string, unknown>,
+  options: BuildExecutableToolsOptions,
+  siteMode: boolean,
+): ProcessToolResult | null {
+  if (!personCanApproveOverride(options)) {
+    return overrideRefusal(
+      'active_hours_override_needs_person',
+      'an active-hours override needs a person to approve it in a dashboard chat, and this turn has none. leave override_active_hours off.',
+      403,
+    );
+  }
+  if (siteMode) {
+    return overrideRefusal(
+      'active_hours_override_needs_single_machine',
+      'an active-hours override works on one machine at a time. ask for it in a chat aimed at that machine.',
+      400,
+    );
+  }
+  if (activeHoursOverrideReason(input) === null) {
+    return overrideRefusal(
+      'active_hours_override_needs_reason',
+      `override_active_hours needs a reason: ask the operator why this can't wait, then pass it as reason (${OVERRIDE_REASON_MAX} characters or fewer).`,
+      400,
+    );
+  }
+  return null;
+}
+
+/**
+ * Where the server records an override it asked a person to approve. ai 7
+ * resumes an approved call on the input the browser sends back, so this record
+ * is how the resumed turn knows the card showed this exact call. No rules match
+ * the subcollection, so clients are default-denied.
+ */
+function overrideRequestRef(
+  db: FirebaseFirestore.Firestore,
+  chatId: string,
+  toolCallId: string,
+): FirebaseFirestore.DocumentReference {
+  return db.collection('chats').doc(chatId).collection('activeHoursOverrides').doc(toolCallId);
+}
+
+/** The whole call: a resumed input that differs in any field is not the one approved. */
+function overrideRequestHash(toolName: string, input: Record<string, unknown>): string {
+  return createHash('sha256').update(canonicalJson({ toolName, input })).digest('hex');
+}
+
+function withoutOverrideParams(params: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...params };
+  for (const name of ACTIVE_HOURS_OVERRIDE_PARAMS) delete out[name];
+  return out;
+}
+
+type OverrideGrant =
+  | { ok: true; input: Record<string, unknown>; envelope: CommandEnvelopeOptions }
+  | { ok: false; result: ProcessToolResult };
+
+/**
+ * Consume the override pair from a call's input. The override reaches the
+ * command only when the record written as approval was asked matches this
+ * exact call.
+ */
+async function grantActiveHoursOverride(
+  db: FirebaseFirestore.Firestore,
+  chatId: string,
+  toolName: string,
+  params: Record<string, unknown>,
+  toolCallId: string | undefined,
+  options: BuildExecutableToolsOptions,
+  siteMode: boolean,
+): Promise<OverrideGrant> {
+  const input = withoutOverrideParams(params);
+  if (!hasActiveHoursOverride(params)) return { ok: true, input, envelope: {} };
+
+  const refusal = activeHoursOverrideRefusal(params, options, siteMode);
+  if (refusal) return { ok: false, result: refusal };
+
+  const request = toolCallId ? await overrideRequestRef(db, chatId, toolCallId).get() : null;
+  if (!request?.exists || request.data()?.inputHash !== overrideRequestHash(toolName, params)) {
+    return {
+      ok: false,
+      result: overrideRefusal(
+        'active_hours_override_not_approved',
+        "this call's active-hours override is not the one the operator approved, so nothing was sent. call the tool again to ask them.",
+        403,
+      ),
+    };
+  }
+
+  return {
+    ok: true,
+    input,
+    envelope: {
+      activeHoursOverride: {
+        reason: activeHoursOverrideReason(params)!,
+        approvedBy: `user:${options.userId}`,
+      },
+    },
+  };
 }
 
 /**
@@ -1860,20 +2032,52 @@ export function buildExecutableTools(
     chatMachineId: options.chatMachineId ?? (siteMode ? SITE_TARGET_ID : machineId),
   };
 
+  const resumedToolCallIds = new Set(options.resumedToolCallIds ?? []);
+
+  // A turn nobody can approve is never offered the override pair, so a model
+  // can't ask for one there; execute still refuses one sent anyway.
+  const offerOverride = personCanApproveOverride(options);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = {};
 
   for (const def of toolDefs) {
     const toolName = def.name;
+    const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
+    const takesOverride = takesActiveHoursOverride(def);
+    const offered = offerOverride ? def : withoutActiveHoursOverride(def);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolConfig: any = {
       description: def.description,
-      inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
+      inputSchema: jsonSchema(offered.parameters as Record<string, unknown>),
       // Tier-3 pauses for in-chat approval: the AI SDK emits
       // `tool-approval-request` instead of calling `execute`. Chat-only —
       // autonomous Hoot uses buildAutonomousTools (no human to approve).
-      needsApproval: def.tier >= 3 && options.requireTier3Approval !== false,
+      // An override asks a person whatever the tier or the site toggle, and is
+      // recorded as asked so the resumed turn can check it.
+      needsApproval: async (input: unknown, approvalOptions?: { toolCallId?: string }) => {
+        if (!takesOverride || !hasActiveHoursOverride(input)) return tierGate;
+        if (activeHoursOverrideRefusal(input as Record<string, unknown>, options, siteMode)) return false;
+        const toolCallId = approvalOptions?.toolCallId;
+        if (!toolCallId) return false;
+        if (resumedToolCallIds.has(toolCallId)) return true;
+        try {
+          await overrideRequestRef(db, chatId, toolCallId).set({
+            toolName,
+            inputHash: overrideRequestHash(toolName, input as Record<string, unknown>),
+            expiresAt: new Date(Date.now() + OVERRIDE_REQUEST_TTL_MS),
+          });
+          return true;
+        } catch (error) {
+          // no card the resumed turn could honour: execute runs now and refuses.
+          console.error(
+            `[hoot] could not record the active-hours override for tool call ${sanitizeForLog(toolCallId)}:`,
+            error,
+          );
+          return false;
+        }
+      },
       execute: async (params: unknown, execOptions?: { toolCallId?: string }) => {
         // Bridge per-turn toolCallbacks into per-dispatch hooks: the SDK passes
         // { toolCallId } as execute's 2nd arg; pair it with commandId + machineId.
@@ -1888,6 +2092,18 @@ export function buildExecutableTools(
               }
             : undefined;
 
+        let toolParams = params as Record<string, unknown>;
+        let envelope: CommandEnvelopeOptions = {};
+        if (takesOverride) {
+          // refuses any override in a fan-out, so the fan-out below never needs an envelope.
+          const grant = await grantActiveHoursOverride(
+            db, chatId, toolName, toolParams, execOptions?.toolCallId, options, siteMode,
+          );
+          if (!grant.ok) return grant.result;
+          toolParams = grant.input;
+          envelope = grant.envelope;
+        }
+
         // Run on the web server: no agent relay, so toolCallbacks never fire.
         if (SERVER_SIDE_TOOLS.has(toolName)) {
           const targetMachineIds = siteMode ? onlineMachines : [machineId];
@@ -1896,8 +2112,9 @@ export function buildExecutableTools(
             siteId,
             targetMachineIds,
             toolName,
-            params as Record<string, unknown>,
+            toolParams,
             serverSideOptions,
+            envelope,
           );
         }
 
@@ -1907,12 +2124,11 @@ export function buildExecutableTools(
               try {
                 const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
                 if (existingCmd) {
-                  const toolParams = params as Record<string, unknown>;
                   const processName = toolParams.process_name as string;
                   const result = await executeExistingCommand(db, siteId, mid, existingCmd, processName, toolParams, hooksFor(mid));
                   return { machine: mid, ...result as Record<string, unknown> };
                 }
-                const result = await executeToolOnAgent(db, siteId, mid, toolName, params as Record<string, unknown>, chatId, hooksFor(mid));
+                const result = await executeToolOnAgent(db, siteId, mid, toolName, toolParams, chatId, hooksFor(mid));
                 return { machine: mid, ...(typeof result === 'object' && result !== null ? result as Record<string, unknown> : { result }) };
               } catch (err) {
                 return { machine: mid, error: err instanceof Error ? err.message : 'Unknown error' };
@@ -1924,12 +2140,11 @@ export function buildExecutableTools(
 
         const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
         if (existingCmd) {
-          const toolParams = params as Record<string, unknown>;
           const processName = toolParams.process_name as string;
-          return executeExistingCommand(db, siteId, machineId, existingCmd, processName, toolParams, hooksFor(machineId));
+          return executeExistingCommand(db, siteId, machineId, existingCmd, processName, toolParams, hooksFor(machineId), envelope);
         }
 
-        return executeToolOnAgent(db, siteId, machineId, toolName, params as Record<string, unknown>, chatId, hooksFor(machineId));
+        return executeToolOnAgent(db, siteId, machineId, toolName, toolParams, chatId, hooksFor(machineId), envelope);
       },
     };
 

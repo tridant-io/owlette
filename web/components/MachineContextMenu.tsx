@@ -25,9 +25,11 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
+import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 import type { RestartSchedule } from '@/hooks/useFirestore';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
+import type { ActiveHoursGuard, PowerAction, PowerCommandOptions, PowerCommandSent } from '@/lib/activeHours';
 
 interface MachineContextMenuProps {
   machineId: string;
@@ -40,6 +42,11 @@ interface MachineContextMenuProps {
   rebooting?: boolean;
   shuttingDown?: boolean;
   /**
+   * Unix seconds of a restart the agent holds until active hours end. The menu
+   * offers to cancel it, and keeps restart for a person who wants it now.
+   */
+  rebootDeferredUntil?: number;
+  /**
    * Site-scoped admin gate. When false the menu hides every write action
    * (restart/shutdown/cancel, revoke token, remove machine) and keeps only the
    * user-scoped + read-only items. Contract:
@@ -47,8 +54,14 @@ interface MachineContextMenuProps {
    */
   isSiteAdmin?: boolean;
   onRemoveMachine: () => void;
-  onRestart?: () => Promise<void>;
-  onShutdown?: () => Promise<void>;
+  onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  /**
+   * The active hours this machine's agent enforces (`activeHoursGuardOf`).
+   * Inside them the restart and shutdown confirms ask for a reason or, for a
+   * restart, offer to wait; unset keeps the plain confirms.
+   */
+  activeHoursGuard?: ActiveHoursGuard | null;
   onCancelRestart?: () => Promise<void>;
   onScreenshot?: () => void;
   onLiveView?: () => void;
@@ -130,10 +143,12 @@ export function MachineContextMenu({
   isOnline,
   rebooting,
   shuttingDown,
+  rebootDeferredUntil,
   isSiteAdmin,
   onRemoveMachine,
   onRestart,
   onShutdown,
+  activeHoursGuard,
   onCancelRestart,
   onScreenshot,
   onLiveView,
@@ -156,6 +171,7 @@ export function MachineContextMenu({
   const [revokingScope, setRevokingScope] = useState<'latest' | 'all' | null>(null);
   const [isSendingCommand, setIsSendingCommand] = useState(false);
   const [showRestartScheduleDialog, setShowRestartScheduleDialog] = useState(false);
+  const power = usePowerCommand(siteId);
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
   const watching = isOnline && swoopCapable && !swoopOff ? (swoopViewers ?? 0) : 0;
@@ -236,38 +252,14 @@ export function MachineContextMenu({
     }
   };
 
-  const handleRestart = async () => {
-    if (!onRestart) return;
-    setIsSendingCommand(true);
-    try {
-      await onRestart();
-      toast.success(`Restart command sent to ${machineName}`, {
-        description: 'Restart starting. Click the countdown to cancel.',
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Failed to send restart command', { description: message });
-    } finally {
-      setIsSendingCommand(false);
-      setShowRestartDialog(false);
-    }
-  };
-
-  const handleShutdown = async () => {
-    if (!onShutdown) return;
-    setIsSendingCommand(true);
-    try {
-      await onShutdown();
-      toast.success(`Shutdown command sent to ${machineName}`, {
-        description: 'Shutdown starting. Click the countdown to cancel.',
-      });
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error('Failed to send shutdown command', { description: message });
-    } finally {
-      setIsSendingCommand(false);
-      setShowShutdownDialog(false);
-    }
+  const handlePower = async (action: PowerAction, options: PowerCommandOptions) => {
+    const run = action === 'restart' ? onRestart : onShutdown;
+    if (!run) return;
+    const queued = await power.send({ machineId, machineName, action, options, run });
+    // a rejected send keeps the dialog, and any reason typed into it
+    if (!queued) return;
+    if (action === 'restart') setShowRestartDialog(false);
+    else setShowShutdownDialog(false);
   };
 
   const handleCancelRestart = async () => {
@@ -283,6 +275,22 @@ export function MachineContextMenu({
       setIsSendingCommand(false);
     }
   };
+
+  const restartHeld = !!rebootDeferredUntil;
+  const cancelRestartItem = (
+    <DropdownMenuItem
+      onClick={(e) => {
+        e.stopPropagation();
+        handleCancelRestart();
+      }}
+      disabled={isSendingCommand}
+      data-testid="machine-context-menu-cancel-reboot"
+      className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
+    >
+      <XCircle className="mr-2 h-4 w-4" />
+      cancel restart
+    </DropdownMenuItem>
+  );
 
   return (
     <>
@@ -325,18 +333,7 @@ export function MachineContextMenu({
           {isOnline && isSiteAdmin && !planLocked && (
             <>
               {rebooting ? (
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancelRestart();
-                  }}
-                  disabled={isSendingCommand}
-                  data-testid="machine-context-menu-cancel-reboot"
-                  className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
-                >
-                  <XCircle className="mr-2 h-4 w-4" />
-                  cancel restart
-                </DropdownMenuItem>
+                cancelRestartItem
               ) : shuttingDown ? (
                 <DropdownMenuItem
                   onClick={(e) => {
@@ -352,6 +349,7 @@ export function MachineContextMenu({
                 </DropdownMenuItem>
               ) : controlLocked ? (
                 <>
+                  {restartHeld && cancelRestartItem}
                   <UpgradeMenuItem
                     icon={RotateCcw}
                     label="remote control"
@@ -362,6 +360,7 @@ export function MachineContextMenu({
                 </>
               ) : (
                 <>
+                  {restartHeld && cancelRestartItem}
                   {/* a split row: restart now, or schedule restarts. each half lights
                       on its own, with a hairline between, so it reads as two buttons */}
                   <div className="flex items-stretch gap-1">
@@ -640,63 +639,25 @@ export function MachineContextMenu({
         </DialogContent>
       </Dialog>
 
-      {/* Restart Confirmation Dialog */}
-      <Dialog open={showRestartDialog} onOpenChange={setShowRestartDialog}>
-        <DialogContent className="border-border">
-          <DialogHeader>
-            <DialogTitle>restart {machineName}?</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              this will restart the machine in 30 seconds. all running processes will be interrupted.
-              you&apos;ll have 30 seconds to cancel from the dashboard.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setShowRestartDialog(false)}
-              className="bg-secondary border border-border cursor-pointer"
-            >
-              cancel
-            </Button>
-            <Button
-              onClick={handleRestart}
-              disabled={isSendingCommand}
-              variant="destructive"
-            >
-              {isSendingCommand ? 'sending...' : 'restart'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MachinePowerConfirm
+        action="restart"
+        open={showRestartDialog}
+        onOpenChange={setShowRestartDialog}
+        machineName={machineName}
+        guard={activeHoursGuard}
+        sending={power.sending}
+        onConfirm={(options) => void handlePower('restart', options)}
+      />
 
-      {/* Shutdown Confirmation Dialog */}
-      <Dialog open={showShutdownDialog} onOpenChange={setShowShutdownDialog}>
-        <DialogContent className="border-border">
-          <DialogHeader>
-            <DialogTitle>shutdown {machineName}?</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              this will shut down the machine in 30 seconds. the machine will not automatically restart.
-              you&apos;ll have 30 seconds to cancel from the dashboard.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setShowShutdownDialog(false)}
-              className="bg-secondary border border-border cursor-pointer"
-            >
-              cancel
-            </Button>
-            <Button
-              onClick={handleShutdown}
-              disabled={isSendingCommand}
-              variant="destructive"
-            >
-              {isSendingCommand ? 'sending...' : 'shutdown'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MachinePowerConfirm
+        action="shutdown"
+        open={showShutdownDialog}
+        onOpenChange={setShowShutdownDialog}
+        machineName={machineName}
+        guard={activeHoursGuard}
+        sending={power.sending}
+        onConfirm={(options) => void handlePower('shutdown', options)}
+      />
 
       {/* Restart Schedule Dialog */}
       <RestartScheduleDialog

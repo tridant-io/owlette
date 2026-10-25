@@ -249,7 +249,7 @@ Inside `src/`, by area:
 - **roost**: `sync_commands.py`, `sync_version.py`, `sync_downloader.py`, `sync_assembler.py`, `sync_state.py`, `sync_scrub.py`, `destination_allowlist.py`, `roost_kill_switch.py`
 - **swoop**: `swoop_manager.py`, `swoop_commands.py`, `swoop_doorbell.py`, `swoop_capability.py`, `swoop_spawn.py`, `swoop_spawn_posix.py`
 - **hoot**: `mcp_tools.py`, `tools_windows.py`, `tools_posix.py`, `owlette_cortex.py`, `cortex_firestore.py`, `cortex_tools.py`, `cortex_cli_fetch.py`
-- **machine**: `hardware_profile.py`, `temp_sensors.py`, `owlette_scout.py`, `display_manager.py`, `nvapi_display.py`, `keep_awake.py`, `reboot_state.py`, `session_state.py`, `watchdog_state.py`, `health_probe.py`, `acl_hardening.py`, `registry_utils.py`
+- **machine**: `hardware_profile.py`, `temp_sensors.py`, `owlette_scout.py`, `display_manager.py`, `nvapi_display.py`, `keep_awake.py`, `reboot_state.py`, `active_hours.py` (whether now is inside Windows active hours and when they end, for the reboot, shutdown and deployment guard), `session_state.py`, `watchdog_state.py`, `health_probe.py`, `acl_hardening.py`, `registry_utils.py`
 
 ## More documentation
 

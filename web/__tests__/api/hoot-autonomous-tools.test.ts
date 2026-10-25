@@ -47,9 +47,17 @@ jest.mock('firebase-admin/firestore', () => ({
 
 /* hoot collaborators */
 
+const mockBuildAutonomousSystemPrompt = jest.fn((..._args: unknown[]) => 'system prompt');
+
 jest.mock('@/lib/llm', () => ({
   createModel: jest.fn(() => ({ id: 'test-model' })),
-  buildAutonomousSystemPrompt: jest.fn(() => 'system prompt'),
+  buildAutonomousSystemPrompt: (...args: unknown[]) => mockBuildAutonomousSystemPrompt(...args),
+}));
+
+const mockGetMachineTimezone = jest.fn();
+
+jest.mock('@/lib/adminUtils.server', () => ({
+  getMachineTimezone: (...args: unknown[]) => mockGetMachineTimezone(...args),
 }));
 
 const mockExecuteServerSideTool = jest.fn();
@@ -401,6 +409,68 @@ describe('autonomous tool set exclusions', () => {
 
     expect(Object.keys(tools)).not.toContain('create_talon');
     expect(Object.keys(tools).length).toBeGreaterThan(0);
+  });
+});
+
+describe('autonomous and active hours', () => {
+  const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
+
+  it("builds the prompt with the machine's timezone, so it can tell its local time", async () => {
+    mockGetMachineTimezone.mockResolvedValue('America/New_York');
+    await buildTools();
+
+    expect(mockGetMachineTimezone).toHaveBeenCalledWith(SITE, MACHINE);
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
+      'Lobby PC',
+      '',
+      expect.stringContaining('TouchDesigner'),
+      'America/New_York',
+    );
+  });
+
+  /** Each tool's schema as the investigator's model is offered it. */
+  async function offeredProperties(): Promise<Record<string, Record<string, unknown>>> {
+    // Tier 3, so the reboot, shutdown and deploy tools are on offer at all.
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = (await buildTools()) as unknown as Record<
+      string,
+      { inputSchema: { properties: Record<string, unknown> } }
+    >;
+    return Object.fromEntries(
+      OVERRIDE_TOOLS.map((name) => [name, tools[name].inputSchema.properties]),
+    );
+  }
+
+  it('offers no active-hours override: nobody is there to approve one', async () => {
+    const offered = await offeredProperties();
+
+    for (const name of OVERRIDE_TOOLS) {
+      expect(offered[name]).not.toHaveProperty('override_active_hours');
+      expect(offered[name]).not.toHaveProperty('reason');
+    }
+  });
+
+  it('still offers a reboot that waits for active hours to end', async () => {
+    const offered = await offeredProperties();
+
+    expect(offered.reboot_machine).toHaveProperty('when');
+  });
+
+  it('runs a deployment with no envelope option, so it can never carry an override', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    await tools.deploy_software.execute({ software_name: 'Player', override_active_hours: true, reason: 'now' });
+
+    // The system actor and nothing else: no command envelope argument at all.
+    expect(mockExecuteServerSideTool).toHaveBeenCalledWith(
+      mockDb,
+      SITE,
+      [MACHINE],
+      'deploy_software',
+      expect.any(Object),
+      { systemActor: 'cortex_autonomous' },
+    );
   });
 });
 

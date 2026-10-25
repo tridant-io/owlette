@@ -78,7 +78,7 @@ removed.
 | `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
 | `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe` |
 | `roost.sites`     | `list`, `get`                                                           |
-| `roost.machines`  | `list`, `get`, `deployments`, `dispatch_command`, `get_command`, `capture_screenshot` |
+| `roost.machines`  | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatch_command`, `get_command`, `capture_screenshot` |
 | `roost.quotas`    | `current`, `history`                                                    |
 
 Roost, version, deployment, and chunk-referrer paginated lists expose
@@ -112,6 +112,27 @@ await client.account.api_keys.revoke(created["keyId"])
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
+
+## active hours
+
+```python
+await client.machines.reboot("site-1", "m-1", after_active_hours=True)
+await client.machines.shutdown(
+    "site-1", "m-1", active_hours_override={"reason": "replacing the projector"}
+)
+await client.installer_deployments.retry(
+    "site-1", "deploy-1", active_hours_override={"reason": "venue closed today"}
+)
+```
+
+A Windows agent with `capabilities.activeHoursGuard` refuses a reboot,
+shutdown or install inside the machine's active hours. The command is still
+queued; `get_command()` then reports `failed` (a deployment target ends
+`failed`) with an `error` that starts `Error: active_hours:`.
+`after_active_hours` restarts once they end; `active_hours_override` acts now
+and logs the reason. `installer_deployments.create()` and `retry()` take the
+same override, and a retry needs its own. Older agents, macOS and Linux ignore
+both and act at once.
 
 ## push progress
 
