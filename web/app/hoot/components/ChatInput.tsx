@@ -71,6 +71,12 @@ interface ChatInputProps {
    * stands in rather than the picker's "no machines".
    */
   targetLabel?: string;
+  /**
+   * bump to put the caret in the field. a change, never the mount: opening or
+   * switching a chat leaves focus where it was, so a phone's keyboard only pops
+   * when someone asked for a fresh chat.
+   */
+  focusRequest?: number;
 }
 
 export function ChatInput({
@@ -85,8 +91,10 @@ export function ChatInput({
   mentionOptions = NO_MENTION_OPTIONS,
   sendDisabled = false,
   targetLabel,
+  focusRequest = 0,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const handledFocusRequest = useRef(focusRequest);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [caret, setCaret] = useState(0);
   const [composing, setComposing] = useState(false);
@@ -118,6 +126,12 @@ export function ChatInput({
     textarea.style.height = '40px';
     textarea.style.height = `${Math.max(40, Math.min(textarea.scrollHeight, 200))}px`;
   }, [input]);
+
+  useEffect(() => {
+    if (focusRequest === handledFocusRequest.current) return;
+    handledFocusRequest.current = focusRequest;
+    textareaRef.current?.focus();
+  }, [focusRequest]);
 
   const canSend =
     (input.trim() || pendingImages.some((i) => !i.uploading)) && !isLoading && !sendDisabled;

@@ -340,6 +340,165 @@ test.describe('hoot conversations and controls', () => {
     }
   });
 
+  test('the line beside a reply in flight flows, and goes solid once the turn ends', async ({ page }) => {
+    // a turn the runner is still writing, as a reload finds it: the stream doc
+    // says running and carries the reply so far.
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-live-${TEST_USERS.admin.uid}`);
+    const stream = chat.collection('stream').doc('current');
+    const ask = { id: 'm-live-user-1', role: 'user', parts: [{ type: 'text', text: 'why is the render node slow?' }] };
+    const reply = {
+      id: 'm-live-assistant-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'checking the render node now' }],
+    };
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Render node',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [ask],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    await stream.set({
+      status: 'running',
+      turnId: 'e2e-live-turn-1',
+      updatedAt: FieldValue.serverTimestamp(),
+      message: reply,
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+      await expect(page.getByText('checking the render node now')).toBeVisible();
+
+      const line = page.getByTestId('hoot-thread-line');
+      // the keyframe itself, so a class that lost its css fails here too
+      const flow = () => line.evaluate((el) => getComputedStyle(el, '::after').animationName);
+      await expect(line).toHaveClass(/animate-hoot-thread/);
+      expect(await flow()).toBe('hoot-thread');
+
+      // reduced motion keeps the line marked and still
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      expect(await flow()).toBe('none');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+      // the runner persists the reply and marks the turn done
+      await chat.update({ messages: [ask, reply] });
+      await stream.set({ status: 'complete', turnId: 'e2e-live-turn-1', updatedAt: FieldValue.serverTimestamp() });
+      await expect(line).not.toHaveClass(/animate-hoot-thread/);
+      expect(await flow()).toBe('none');
+    } finally {
+      await stream.delete();
+      await chat.delete();
+    }
+  });
+
+  test('a growing reply is followed down from the bottom, and a reader who scrolled up stays put', async ({ page }) => {
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-follow-${TEST_USERS.admin.uid}`);
+    const stream = chat.collection('stream').doc('current');
+    const ask = { id: 'm-follow-user-1', role: 'user', parts: [{ type: 'text', text: 'walk me through last night’s render' }] };
+    const step = (n: number) =>
+      `step ${n}: the gpu clock dropped to idle while the scene loaded textures from the network share, ` +
+      'so the frame took longer than the ones either side of it.';
+    // the runner rewrites the reply so far into the stream doc as it grows
+    const writeReply = (steps: number) =>
+      stream.set({
+        status: 'running',
+        turnId: 'e2e-follow-turn-1',
+        updatedAt: FieldValue.serverTimestamp(),
+        message: {
+          id: 'm-follow-assistant-1',
+          role: 'assistant',
+          parts: [{ type: 'text', text: Array.from({ length: steps }, (_, i) => step(i + 1)).join('\n\n') }],
+        },
+      });
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Render walkthrough',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [ask],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    await writeReply(10);
+
+    try {
+      // a short window, so the reply runs well past it
+      await page.setViewportSize({ width: 1280, height: 600 });
+      await page.goto(`/hoot/${chat.id}`);
+      await expect(page.getByText(/^step 10:/)).toBeAttached();
+      const transcript = page.getByTestId('hoot-transcript');
+      const fromBottom = () => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+      const top = () => transcript.evaluate((el) => el.scrollTop);
+
+      // at the bottom: the reply is followed down as it grows
+      await expect.poll(fromBottom).toBeLessThan(2);
+      const heightBefore = await transcript.evaluate((el) => el.scrollHeight);
+      await writeReply(12);
+      await expect(page.getByText(/^step 12:/)).toBeAttached();
+      expect(await transcript.evaluate((el) => el.scrollHeight)).toBeGreaterThan(heightBefore);
+      await expect.poll(fromBottom).toBeLessThan(2);
+
+      // scrolled up past 100px: the next growth leaves the reader where they were
+      await transcript.hover();
+      await page.mouse.wheel(0, -400);
+      await expect.poll(fromBottom).toBeGreaterThan(100);
+      // the wheel's own smooth scroll settles first
+      let readerAt = await top();
+      await expect
+        .poll(async () => {
+          const settled = (await top()) === readerAt;
+          readerAt = await top();
+          return settled;
+        })
+        .toBe(true);
+      await writeReply(14);
+      await expect(page.getByText(/^step 14:/)).toBeAttached();
+      // longer than a glide, so one that started would have moved by now
+      await page.waitForTimeout(600);
+      expect(await top()).toBe(readerAt);
+    } finally {
+      await stream.delete();
+      await chat.delete();
+    }
+  });
+
+  test('"new hoot" puts the caret in the message box, and opening a chat does not', async ({ page }) => {
+    await page.goto('/hoot');
+    await page.getByText('Deployment triage').click();
+    await expect(page).toHaveURL(new RegExp(`/hoot/${LEGACY_CHAT_ID}$`));
+    const composer = page.getByLabel('chat message');
+    await expect(composer).toBeVisible();
+    await expect(composer).not.toBeFocused();
+
+    await page.getByRole('button', { name: 'new hoot', exact: true }).click();
+    await expect(page).toHaveURL(/\/hoot$/);
+    await expect(composer).toBeFocused();
+    await page.keyboard.type('is the render node up?');
+    await expect(composer).toHaveValue('is the render node up?');
+  });
+
+  test('on a phone, "new hoot" in the conversations sheet hands the caret to the message box', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/hoot');
+    await page.getByRole('button', { name: 'conversations', exact: true }).click();
+    const sheet = page.getByRole('dialog', { name: 'conversations' });
+    await sheet.getByRole('button', { name: 'new hoot', exact: true }).click();
+
+    // the sheet's close must not hand focus back to the button that opened it
+    await expect(sheet).toBeHidden();
+    await expect(page.getByLabel('chat message')).toBeFocused();
+  });
+
   test('with the sidebar collapsed, the chat sits the same distance from both page edges', async ({ page }) => {
     const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
     await prefs.set({ cortexSidebarOpen: false }, { merge: true });

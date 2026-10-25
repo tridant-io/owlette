@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — hoot's thread line shows it's working
+
+While hoot works on a reply, the thin line beside it now carries a soft light
+down its length, over and over, and goes solid once the reply is done, stopped
+or failed; under reduced motion it holds a brighter tone instead. As a reply
+grows, the chat glides down after it in a fifth of a second rather than
+jumping, and leaves you where you are once you scroll up. "new hoot" puts the
+cursor in the message box, so you can start typing.
+
 ## [4.1.21] - 2026-10-25
 
 ### changed — owlette swoop wears its own eye, and its name in plain words

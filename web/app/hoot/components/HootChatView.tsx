@@ -636,6 +636,14 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     sidebarScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [chat, initialChatId, router]);
 
+  // "new hoot" alone hands the composer the caret: the person asked for a fresh
+  // chat to type into. a site change starts one too, and leaves focus alone.
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+  const handleNewHootClick = useCallback(() => {
+    handleNewChat();
+    setComposerFocusRequest((n) => n + 1);
+  }, [handleNewChat]);
+
   const handleConversationClick = useCallback((conversationId: string) => {
     // Mobile: picking a conversation means the user is done with the list.
     setMobileConversationsOpen(false);
@@ -883,7 +891,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               /* Search mode: compact new chat + expanded input */
               <>
                 <Button
-                  onClick={() => handleNewChat()}
+                  onClick={handleNewHootClick}
                   variant="ghost"
                   size="icon"
                   aria-label="new hoot"
@@ -922,7 +930,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               /* Default: new conversation button + section toggle + search icon */
               <>
                 <Button
-                  onClick={() => handleNewChat()}
+                  onClick={handleNewHootClick}
                   variant="ghost"
                   size="sm"
                   className="flex-1 min-w-0 h-8 justify-start text-foreground"
@@ -1208,6 +1216,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
               cancelPendingCommandIds={cancelPendingCommandIds}
               turnStale={chat.turnStale}
               turnRunning={chat.turnRunning}
+              stopRequested={chat.stopRequested}
               turnErrored={Boolean(chat.error)}
             />
           )}
@@ -1313,6 +1322,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                    there is no target to name, so the field never reads "ask no
                    machines anything". */
                 targetLabel={sendDisabled ? undefined : formatTargetLabel(target.machineIds)}
+                focusRequest={composerFocusRequest}
               />
             </UpgradeGate>
           )}

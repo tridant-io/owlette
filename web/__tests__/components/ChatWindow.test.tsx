@@ -23,9 +23,13 @@
  *
  * And the empty chat's suggestions, which fill the composer, so they go when the
  * plan leaves hoot out and there is no composer.
+ *
+ * And hoot's thread line, which flows beside the reply in flight and nowhere
+ * else, and the glide that follows a growing reply down until the reader takes
+ * the scroll back.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { UIMessage } from 'ai';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -679,6 +683,173 @@ describe('ChatWindow — a pasted image', () => {
     await user.click(screen.getByRole('button', { name: 'close image' }));
 
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('ChatWindow — the thread line', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const DONE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+  const ASK_AGAIN = msg('u2', 'user', [{ type: 'text', text: 'what is pinning it?' }]);
+  const PARTIAL = msg('a2', 'assistant', [{ type: 'text', text: 'checking the' }]);
+  const THREAD = [ASK, DONE, ASK_AGAIN, PARTIAL];
+
+  const lines = () => screen.getAllByTestId('hoot-thread-line');
+  const flowing = (line: HTMLElement) => line.classList.contains('animate-hoot-thread');
+
+  function rerenderChat(view: ReturnType<typeof renderChat>, props: Partial<React.ComponentProps<typeof ChatWindow>>) {
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={THREAD} isLoading={false} {...props} />
+      </TooltipProvider>,
+    );
+  }
+
+  it('flows beside the reply in flight, and the finished one above stays solid', () => {
+    renderChat({ isLoading: true, messages: THREAD });
+
+    expect(lines().map(flowing)).toEqual([false, true]);
+  });
+
+  it('goes solid once the turn ends', () => {
+    const view = renderChat({ isLoading: true, messages: THREAD });
+
+    rerenderChat(view, {});
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('flows after a reload while the turn runs on, and not once it went stale', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, turnStale: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid the moment stop is pressed on a reply this tab streams', () => {
+    // stop posts to the server before it aborts the sdk's stream, so isLoading
+    // holds for that round trip
+    const view = renderChat({ isLoading: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { isLoading: true, stopRequested: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid the moment stop is pressed, while the stream doc still says running', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, stopRequested: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid when the turn fails, before the stream doc says so', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, turnErrored: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+});
+
+describe('ChatWindow — following the reply down', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const PARTIAL = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu' }]);
+  const MORE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+  const originalMatchMedia = window.matchMedia;
+  let transcriptPx = 1000;
+
+  // a 400px view over the transcript: 600px of travel to the bottom at first
+  beforeEach(() => {
+    jest.useFakeTimers();
+    transcriptPx = 1000;
+    window.matchMedia = ((query: string) => ({ matches: false, media: query })) as unknown as typeof window.matchMedia;
+    jest.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => transcriptPx);
+    jest.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 400);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+    window.matchMedia = originalMatchMedia;
+  });
+
+  /** a reply streaming, with the view already caught up to its bottom */
+  function streamOn() {
+    const view = render(
+      <TooltipProvider>
+        <ChatWindow messages={[ASK, PARTIAL]} isLoading />
+      </TooltipProvider>,
+    );
+    const scroller = screen.getByTestId('hoot-transcript');
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(600);
+    // jsdom fires no scroll event for a write; a browser does, and the glide's
+    // own lands as one the reader did not make
+    fireEvent.scroll(scroller);
+    return { view, scroller };
+  }
+
+  /** the reply grows to `px` of transcript, and the chat re-renders with it */
+  function grow(view: ReturnType<typeof render>, px: number) {
+    transcriptPx = px;
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={[ASK, MORE]} isLoading />
+      </TooltipProvider>,
+    );
+  }
+
+  /** the reader drags the view to `top`, as a touch or the scrollbar does */
+  function readerScrollsTo(scroller: HTMLElement, top: number) {
+    scroller.scrollTop = top;
+    fireEvent.scroll(scroller);
+  }
+
+  it('glides to the new bottom as the reply grows, rather than cutting to it', () => {
+    const { view, scroller } = streamOn();
+
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(64));
+    expect(scroller.scrollTop).toBeGreaterThan(600);
+    expect(scroller.scrollTop).toBeLessThan(900);
+
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(900);
+  });
+
+  it('lets go the moment the reader wheels up, and leaves them there as the reply grows', () => {
+    const { view, scroller } = streamOn();
+
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(64));
+    const heldAt = scroller.scrollTop;
+    fireEvent.wheel(scroller, { deltaY: -100 });
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(heldAt);
+
+    grow(view, 1600);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(heldAt);
+  });
+
+  it('leaves a reader who scrolled up where they are, and follows again once they are back down', () => {
+    const { view, scroller } = streamOn();
+
+    readerScrollsTo(scroller, 300);
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(300);
+
+    readerScrollsTo(scroller, 900);
+    grow(view, 1600);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(1200);
   });
 });
 
