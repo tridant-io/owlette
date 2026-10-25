@@ -24,9 +24,10 @@ import type { InAppBrowserState } from '@/hooks/useInAppBrowser';
 import { AppLinkError } from '@/lib/appLink';
 
 let viewerApp = true;
+let platform: 'windows' | 'mac' = 'windows';
 jest.mock('@/lib/swoop/viewerApp', () => ({
   isViewerApp: () => viewerApp,
-  viewerAppPlatform: () => (viewerApp ? 'windows' : null),
+  viewerAppPlatform: () => (viewerApp ? platform : null),
   viewerAppVersion: () => (viewerApp ? '4.1.8' : null),
 }));
 
@@ -82,6 +83,7 @@ let openSpy: jest.SpyInstance;
 beforeEach(() => {
   jest.useFakeTimers();
   viewerApp = true;
+  platform = 'windows';
   search = '';
   // the browser case's conditional passkey ceremony asks for options first; leave it pending.
   fetchMock.mockReset().mockReturnValue(new Promise(() => {}));
@@ -144,6 +146,18 @@ describe('/login inside owlette swoop', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'owlette swoop' })).toBeInTheDocument();
     expect(screen.queryByText('keep your installation running')).not.toBeInTheDocument();
+    // owlette swoop's own small eye, not owlette's full one
+    expect(document.querySelector('img[src*="owlette-swoop-icon.png"]')).toBeInTheDocument();
+  });
+
+  it('on a mac keeps the name for screen readers only: the menu bar already shows it', async () => {
+    platform = 'mac';
+    await renderPage();
+
+    const heading = screen.getByRole('heading', { level: 1, name: 'owlette swoop' });
+    expect(heading.firstElementChild).toHaveClass('sr-only');
+    expect(screen.queryByTestId('swoop-login-mark')).toBeNull();
+    expect(document.querySelector('img[src*="owlette-swoop-icon.png"]')).toBeInTheDocument();
   });
 
   it('keeps the email form and forgot-password behind a link until it is clicked', async () => {

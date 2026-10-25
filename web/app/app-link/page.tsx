@@ -5,10 +5,13 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { Button } from '@/components/ui/button';
 import { completeAppLinkSignIn, exchangeAppLink, safeNextPath } from '@/lib/appLink';
 
 const TITLE = 'signing in owlette swoop';
+// owlette swoop's own small eye: this page only ever opens inside the app
+const MARK = <SwoopLogo size={80} />;
 
 /**
  * `/app-link?code=&next=` — where owlette swoop lands from a deep link carrying a code the signed-in
@@ -47,11 +50,11 @@ function AppLinkInner() {
   }, [loading, user, code, next, router]);
 
   if (!failed) {
-    return <AuthShell brandTitle={TITLE} loading />;
+    return <AuthShell brandMark={MARK} brandTitle={TITLE} loading />;
   }
 
   return (
-    <AuthShell brandTitle={TITLE} brandDescription="owlette swoop needs you to sign in again">
+    <AuthShell brandMark={MARK} brandTitle={TITLE} brandDescription="owlette swoop needs you to sign in again">
       <p role="alert" className="text-sm text-foreground">
         that sign-in link is no longer valid
       </p>
@@ -64,7 +67,7 @@ function AppLinkInner() {
 
 export default function AppLinkPage() {
   return (
-    <Suspense fallback={<AuthShell brandTitle={TITLE} loading />}>
+    <Suspense fallback={<AuthShell brandMark={MARK} brandTitle={TITLE} loading />}>
       <AppLinkInner />
     </Suspense>
   );

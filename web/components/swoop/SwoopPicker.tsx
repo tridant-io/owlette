@@ -16,12 +16,11 @@ import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { AppWindow, ArrowLeft, Loader2, Monitor } from 'lucide-react';
-import { SwoopLockup } from '@/components/swoop/SwoopLockup';
+import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
-import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { LoadingWord } from '@/components/LoadingWord';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -56,7 +55,7 @@ export function SwoopPicker() {
   const [filter, setFilter] = useState('');
   const { machines, loading: machinesLoading } = useMachines(siteId);
   const { settings: swoop, loading: swoopLoading } = useSwoopSettings(siteId);
-  // the app's home has no dashboard to go back to, and its header is the window's title bar.
+  // the app's home has no dashboard to go back to, and its top bar is the window's title bar.
   const platform = useViewerAppPlatform();
   const inApp = platform !== null;
   const router = useRouter();
@@ -127,38 +126,75 @@ export function SwoopPicker() {
     );
   }
 
+  const siteControls = sites.length > 0 && (
+    <>
+      <Select value={siteId} onValueChange={handleSiteChange}>
+        <SelectTrigger data-testid="swoop-picker-site" aria-label="site" className="min-w-0 max-w-full">
+          <SelectValue placeholder="choose a site" />
+        </SelectTrigger>
+        <SelectContent>
+          {sites.map((site) => (
+            <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {machines.length > FILTER_MIN && (
+        <Input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filter machines…"
+          aria-label="filter machines"
+          className="h-9 min-w-0 flex-1 basis-40"
+        />
+      )}
+    </>
+  );
+
   return (
     <div data-testid="swoop-picker" className="flex min-h-screen flex-col bg-background">
-      <header
-        {...(inApp ? dragRegion : {})}
-        // a title bar stays put while a long list scrolls
-        // in the app the header wears the session bar's tone, so moving between the two is a
-        // change of content, not a jump of colour
-        className={cn('relative bg-background shadow-[inset_0_-1px_0_0_var(--border)]', inApp && 'sticky top-0 z-30 bg-card')}
-        style={platform === 'mac' ? { paddingLeft: TRAFFIC_LIGHTS_INSET_PX } : undefined}
-      >
-        {/* a title bar keeps its mark in the corner, like the desktop app's; a web page centres it */}
+      {platform === 'mac' ? (
+        // the menu bar already names the app, so a mac window has no header: the site row is
+        // its top bar, beside the traffic lights, and the surface that drags the window. it
+        // wears the page's tone, not the session bar's: a bar of card colour would be a header
         <div
-          data-testid="swoop-picker-header-row"
-          className={cn('flex h-12 items-center justify-between gap-3 px-4', !inApp && 'mx-auto max-w-6xl')}
+          {...dragRegion}
+          data-testid="swoop-picker-top"
+          className="sticky top-0 z-30 flex h-12 shrink-0 items-center gap-2 bg-background pr-4"
+          style={{ paddingLeft: TRAFFIC_LIGHTS_INSET_PX }}
         >
-          <SwoopVersionTooltip>
-            <div data-testid="swoop-picker-mark" className="flex min-w-0 items-center gap-1.5">
-              <OwletteEyeIcon size={24} className="translate-y-[1px]" />
-              <SwoopLockup className="translate-y-[1px]" />
-            </div>
-          </SwoopVersionTooltip>
-          {!inApp && (
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/dashboard" data-testid="swoop-picker-dashboard-link">
-                <ArrowLeft />
-                dashboard
-              </Link>
-            </Button>
-          )}
+          {siteControls}
         </div>
-        <SwoopWindowControls className="absolute inset-y-0 right-0" />
-      </header>
+      ) : (
+        <header
+          {...(inApp ? dragRegion : {})}
+          // a title bar stays put while a long list scrolls
+          // in the app the header wears the session bar's tone, so moving between the two is a
+          // change of content, not a jump of colour
+          className={cn('relative bg-background shadow-[inset_0_-1px_0_0_var(--border)]', inApp && 'sticky top-0 z-30 bg-card')}
+        >
+          {/* a title bar keeps its mark in the corner, like the desktop app's; a web page centres it */}
+          <div
+            data-testid="swoop-picker-header-row"
+            className={cn('flex h-12 items-center justify-between gap-3 px-4', !inApp && 'mx-auto max-w-6xl')}
+          >
+            <SwoopVersionTooltip>
+              <div data-testid="swoop-picker-mark" className="flex min-w-0 items-center gap-1.5">
+                <SwoopLogo size={24} className="translate-y-[1px]" />
+                <SwoopLockup className="translate-y-[1px]" />
+              </div>
+            </SwoopVersionTooltip>
+            {!inApp && (
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/dashboard" data-testid="swoop-picker-dashboard-link">
+                  <ArrowLeft />
+                  dashboard
+                </Link>
+              </Button>
+            )}
+          </div>
+          <SwoopWindowControls className="absolute inset-y-0 right-0" />
+        </header>
+      )}
 
       <main
         className={cn(
@@ -167,29 +203,7 @@ export function SwoopPicker() {
           inApp && 'motion-safe:animate-in fade-in-0 duration-300',
         )}
       >
-        {sites.length > 0 && (
-          <div className="flex flex-wrap items-center gap-2">
-            <Select value={siteId} onValueChange={handleSiteChange}>
-              <SelectTrigger data-testid="swoop-picker-site" aria-label="site" className="min-w-0 max-w-full">
-                <SelectValue placeholder="choose a site" />
-              </SelectTrigger>
-              <SelectContent>
-                {sites.map((site) => (
-                  <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {machines.length > FILTER_MIN && (
-              <Input
-                value={filter}
-                onChange={(e) => setFilter(e.target.value)}
-                placeholder="filter machines…"
-                aria-label="filter machines"
-                className="h-9 min-w-0 flex-1 basis-40"
-              />
-            )}
-          </div>
-        )}
+        {platform !== 'mac' && siteControls && <div className="flex flex-wrap items-center gap-2">{siteControls}</div>}
         {body}
       </main>
     </div>

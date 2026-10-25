@@ -37,6 +37,8 @@ const MACHINE_ID = 'e2e-swoop-viewer-app';
 const SESSION = `/swoop/${SITE_ID}/${MACHINE_ID}`;
 // the desktop chrome ua is a windows one, so the page draws windows' buttons
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
+const MAC_APP_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/0.0.0';
 
 // the bar's own controls; the strip, fixed to the window, sits inside the bar too
 const BAR_CONTROLS = ':scope > [data-testid="window-controls"]';
@@ -167,6 +169,30 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     await expect(header).toHaveAttribute('data-tauri-drag-region', 'deep');
     await header.getByRole('button', { name: 'maximize' }).click();
     expect(await bridgeCalls(page)).toEqual(['toggleMaximize']);
+    // owlette swoop's own small eye and one plain name, nothing between the words
+    const mark = header.getByTestId('swoop-picker-mark');
+    await expect(mark).toHaveText('owlette swoop');
+    await expect(mark.locator('img')).toHaveAttribute('src', /owlette-swoop-icon\.png/);
+    await expect(mark.locator('svg')).toHaveCount(0);
+    await test.info().attach('picker header', { body: await header.screenshot(), contentType: 'image/png' });
+  });
+});
+
+test.describe('inside owlette swoop on a mac — admin on site-A', () => {
+  test.use({ ...roleState('admin'), userAgent: MAC_APP_UA });
+
+  test('the picker has no header: the site row is the top bar, beside the traffic lights', async ({ page }) => {
+    await page.goto('/swoop');
+    const picker = page.getByTestId('swoop-picker');
+    // the menu bar already names the app
+    await expect(picker.getByRole('banner')).toHaveCount(0);
+    await expect(picker.getByTestId('swoop-picker-mark')).toHaveCount(0);
+    const top = picker.getByTestId('swoop-picker-top');
+    await expect(top).toHaveAttribute('data-tauri-drag-region', 'deep');
+    await expect(top).toHaveCSS('padding-left', '86px');
+    await expect(top).toHaveCSS('height', '48px');
+    await expect(top.getByTestId('swoop-picker-site')).toBeVisible();
+    await test.info().attach('mac picker top', { body: await page.screenshot({ clip: { x: 0, y: 0, width: 640, height: 160 } }), contentType: 'image/png' });
   });
 });
 
@@ -211,6 +237,8 @@ test.describe('inside owlette swoop — signed out', () => {
     await expect(page.getByText('keep your installation running')).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'privacy' })).toHaveCount(0);
     await expect(page.getByRole('link', { name: 'sign up' })).toBeVisible();
+    // owlette swoop's own small eye, not owlette's full one
+    await expect(page.locator('img[src*="owlette-swoop-icon.png"]')).toBeVisible();
 
     // a press on the page's background lands on the window's drag surface
     const dragsAt = (x: number, y: number) =>
@@ -240,6 +268,22 @@ test.describe('inside owlette swoop — signed out', () => {
     const open = test.info().outputPath('swoop-login-email.png');
     await page.screenshot({ path: open, animations: 'disabled' });
     await test.info().attach('login email open', { path: open, contentType: 'image/png' });
+  });
+});
+
+test.describe('inside owlette swoop on a mac — signed out', () => {
+  test.use({ storageState: { cookies: [], origins: [] }, userAgent: MAC_APP_UA });
+
+  test('the login page shows the logo and leaves the name to the menu bar', async ({ page }) => {
+    await page.setViewportSize({ width: 1060, height: 680 });
+    await page.goto('/login');
+    await expect(page.locator('img[src*="owlette-swoop-icon.png"]')).toBeVisible();
+    // still the page's heading for a screen reader, drawn nowhere
+    const heading = page.getByRole('heading', { level: 1, name: 'owlette swoop' });
+    await expect(heading).toHaveCount(1);
+    await expect(heading.getByText('owlette swoop')).toHaveClass(/sr-only/);
+    await expect(page.getByTestId('swoop-login-mark')).toHaveCount(0);
+    await test.info().attach('mac login', { body: await page.screenshot({ animations: 'disabled' }), contentType: 'image/png' });
   });
 });
 

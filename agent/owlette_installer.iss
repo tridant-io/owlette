@@ -423,7 +423,10 @@ Root: HKA; Subkey: "Software\Classes\owlette-swoop\shell\open\command"; ValueTyp
 Name: "{group}\Owlette"; Filename: "{#MyAppExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
 ; owlette swoop, the viewer app. A plain launcher: it raises no toasts, so it
 ; carries no AppUserModelID of its own, and never the desktop app's (above).
-Name: "{group}\owlette swoop"; Filename: "{#SwoopViewerExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"
+; Its icon is the exe's own, owlette swoop's small eye: Windows draws a launched
+; window's taskbar button from this shortcut, and owlette's full eye there made
+; the two apps look the same.
+Name: "{group}\owlette swoop"; Filename: "{#SwoopViewerExePath}"; WorkingDir: "{app}\app"
 Name: "{group}\View Logs"; Filename: "{commonappdata}\Owlette\logs"; IconFilename: "{sys}\shell32.dll"; IconIndex: 4
 Name: "{group}\Edit Configuration"; Filename: "{commonappdata}\Owlette\config\config.json"; IconFilename: "{sys}\shell32.dll"; IconIndex: 70
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"

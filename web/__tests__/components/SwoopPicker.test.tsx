@@ -24,6 +24,8 @@ import type { Machine } from '@/hooks/useFirestore';
 
 const SITE = 'site-1';
 const APP_UA = 'Mozilla/5.0 Chrome/141.0.0.0 owlette-swoop-viewer/4.1.8';
+const MAC_APP_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/4.1.8';
 
 // what the open says when it fails or finds no app is openViewerApp's own test
 const mockOpenInViewerApp = jest.fn();
@@ -429,6 +431,32 @@ describe('SwoopPicker', () => {
     expect(within(header).getByTestId('swoop-picker-header-row')).not.toHaveClass('mx-auto');
     expect(within(header).getByTestId('window-controls')).toBeInTheDocument();
     expect(within(header).getByRole('button', { name: 'close' })).toBeInTheDocument();
+  });
+
+  it("marks owlette swoop with its own small eye and one plain name, nothing between the words", async () => {
+    machines = [machine('m1')];
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_UA);
+    renderPicker();
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const mark = screen.getByTestId('swoop-picker-mark');
+    expect(mark).toHaveTextContent(/^owlette swoop$/);
+    // owlette swoop's app icon, the small eye; owlette's own mark is the full one
+    expect(mark.querySelector('img')?.getAttribute('src')).toContain('owlette-swoop-icon.png');
+    expect(mark.querySelector('svg')).toBeNull();
+  });
+
+  it('inside owlette swoop on a mac has no header: the site row is the top bar, beside the traffic lights', async () => {
+    machines = [machine('m1')];
+    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(MAC_APP_UA);
+    renderPicker();
+    await screen.findByTestId('swoop-picker-machine-m1');
+    // the menu bar already names the app
+    expect(screen.queryByRole('banner')).toBeNull();
+    expect(screen.queryByTestId('swoop-picker-mark')).toBeNull();
+    const top = screen.getByTestId('swoop-picker-top');
+    expect(top).toHaveAttribute('data-tauri-drag-region', 'deep');
+    expect(top).toHaveStyle({ paddingLeft: '86px' });
+    expect(within(top).getByTestId('swoop-picker-site')).toBeInTheDocument();
   });
 
   it('grows a filter past eight machines', async () => {

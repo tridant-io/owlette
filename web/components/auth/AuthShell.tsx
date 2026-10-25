@@ -98,6 +98,8 @@ export const authFooterLinkClass =
   'whitespace-nowrap font-medium hl-link text-accent-cyan';
 
 export interface AuthShellProps {
+  /** The mark above the title: owlette's full eye unless a product has its own. */
+  brandMark?: ReactNode;
   /** Brand panel headline — the page's own title. */
   brandTitle?: ReactNode;
   /** The brand title's element: the page's h1 by default. See contract 4. */
@@ -129,6 +131,7 @@ export interface AuthShellProps {
 }
 
 export function AuthShell({
+  brandMark,
   brandTitle = 'owlette',
   brandTitleAs = 'h1',
   brandDescription = 'keep your installation running',
@@ -179,7 +182,7 @@ export function AuthShell({
                 />
               </>
             )}
-            <OwletteEyeIcon size={minimal ? 56 : 80} />
+            {brandMark ?? <OwletteEyeIcon size={minimal ? 56 : 80} />}
             <div className="min-w-0 space-y-1">
               {brandTitleAs === 'div' ? (
                 <CardTitle className={BRAND_TITLE_CLASS}>{brandTitle}</CardTitle>
