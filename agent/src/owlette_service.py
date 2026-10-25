@@ -7518,10 +7518,18 @@ class OwletteService:
         entry, announced as rebootSource 'deferred', on its own thread. It
         keeps no attempt and stamps no entry: its record is dropped before
         the fire, and an attempt nothing clears (no schedule to run the stale
-        check, no boot) would hold the connection watchdog off for good.
+        check, no boot) would hold the connection watchdog off for good. It
+        has its own shutdown notice and log actions: in the schedule's words
+        it read as a weekly restart, even on a machine with none.
         """
         source = 'scheduled' if entry_id else 'deferred'
         label = f'entry {entry_id[:8]}' if entry_id else source
+        if entry_id:
+            announced_action, failed_action = 'scheduled_reboot_announced', 'scheduled_reboot_failed'
+            notice = 'Owlette scheduled reboot — cancellable from dashboard'
+        else:
+            announced_action, failed_action = 'deferred_reboot_announced', 'deferred_reboot_failed'
+            notice = 'owlette: restart held until active hours ended — cancellable from dashboard'
         now_utc = datetime.datetime.now(datetime.timezone.utc)
         target_reboot_at = now_utc + datetime.timedelta(
             seconds=REBOOT_ANNOUNCE_PREROLL_SECONDS + REBOOT_OS_COUNTDOWN_SECONDS
@@ -7575,7 +7583,7 @@ class OwletteService:
                     self.firebase_client.set_machine_flags(announce_payload)
                     self.firebase_client.mirror_reboot_state(state)
                     self.firebase_client.log_event(
-                        action='scheduled_reboot_announced',
+                        action=announced_action,
                         level='warning',
                         details=f'target {target_reboot_at_iso} ({label})'
                     )
@@ -7606,10 +7614,7 @@ class OwletteService:
         # 5. Issue OS shutdown.
         self._shutting_down = True
         try:
-            osadapter.reboot(
-                REBOOT_OS_COUNTDOWN_SECONDS,
-                'Owlette scheduled reboot — cancellable from dashboard',
-            )
+            osadapter.reboot(REBOOT_OS_COUNTDOWN_SECONDS, notice)
             logging.info(
                 f"{source.capitalize()} reboot command issued ({REBOOT_OS_COUNTDOWN_SECONDS}s OS countdown)"
             )
@@ -7631,7 +7636,7 @@ class OwletteService:
                     })
                     self.firebase_client.mirror_reboot_state(state)
                     self.firebase_client.log_event(
-                        action='scheduled_reboot_failed',
+                        action=failed_action,
                         level='error',
                         details=f'shutdown command failed: {e} ({label})'
                     )

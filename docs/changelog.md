@@ -18,7 +18,8 @@ the machine is inside its active hours, the hours Windows holds its own update
 restarts back (08:00–17:00 unless someone set others). The dashboard asks
 first: cancel, restart when active hours end, or restart now with a reason,
 which is logged with your name. A held restart shows as an amber "restart at"
-pill, and a crash loop inside active hours waits for them to end. hoot checks
+pill, and a crash loop inside active hours waits for them to end. A held
+restart's Windows notice and log rows say it was held for active hours. hoot checks
 active hours and talons before it acts. To stop Windows restarting a machine on
 its own it now limits update restarts to outside active hours
 (`limit_auto_restart`), or turns automatic installs off (`disable_auto_install`)

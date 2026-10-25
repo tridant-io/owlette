@@ -192,6 +192,8 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'active_hours_refused', label: 'refused inside active hours' },
       { value: 'active_hours_override', label: 'active hours overridden' },
       { value: 'reboot_deferred', label: 'restart held until active hours end' },
+      { value: 'deferred_reboot_announced', label: 'held restart announced' },
+      { value: 'deferred_reboot_failed', label: 'held restart failed' },
     ],
   },
   {

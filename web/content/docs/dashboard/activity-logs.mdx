@@ -110,7 +110,7 @@ see [deployments](/docs/dashboard/deployments).
 
 | action | filter label | level | when |
 |---|---|---|---|
-| `scheduled_reboot_announced` | scheduled restart announced | warning | a scheduled restart's countdown started, or a restart held for active hours began its countdown (the details end `(deferred)`) |
+| `scheduled_reboot_announced` | scheduled restart announced | warning | a scheduled restart's countdown started |
 | `scheduled_reboot_success` | scheduled restart completed | info | the machine came back and the agent matched it to the attempt |
 | `scheduled_reboot_failed` | scheduled restart failed | error | the OS refused it, or the attempt was interrupted |
 | `scheduled_reboot_missed` | scheduled restart missed | warning | it was noticed more than five minutes late and skipped |
@@ -122,13 +122,15 @@ the scheduled outcomes are explained in [restart schedules](/docs/dashboard/rest
 
 ### active hours
 
-Windows machines only. the row's user is whoever approved the override, or else whoever queued the command; a refused install names nobody, since deployments carry no `queuedBy`. rows also carry `queuedBy` and the `window`, and a command's rows its `commandType`.
+Windows machines only. the row's user is whoever approved the override, or else whoever queued the command; a refused install names nobody, since deployments carry no `queuedBy`. rows also carry `queuedBy` and the `window`, and a command's rows its `commandType`, except the two a held restart writes when it fires.
 
 | action | filter label | level | when |
 |---|---|---|---|
 | `active_hours_refused` | refused inside active hours | info | the agent refused a restart, a shutdown or an install inside the machine's active hours, or held a crash loop's restart |
 | `active_hours_override` | active hours overridden | warning | a person's override let one through. the details and `reason` carry their reason, `approvedBy` who approved it |
 | `reboot_deferred` | restart held until active hours end | info | a restart is waiting for active hours to end; `deferredUntil` is when it fires |
+| `deferred_reboot_announced` | held restart announced | warning | active hours ended and the held restart's one-minute countdown started. Windows' shutdown notice says the restart was held until active hours ended |
+| `deferred_reboot_failed` | held restart failed | error | the OS refused the held restart; it is not retried |
 
 see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours).
 
