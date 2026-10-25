@@ -11,8 +11,16 @@
  * sees the menu disabled rather than absent, so the affordance is learnable.
  */
 
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Keyboard } from 'lucide-react';
+import {
+  Fragment,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+  type SVGAttributes,
+} from 'react';
+import { ArrowBigUp, ChevronUp, Command, Keyboard, Option } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -46,6 +54,41 @@ const SETTING_LABELS: Readonly<Record<ModifierSwap, Readonly<Record<ModifierMapp
     passthrough: 'keys match: cmd is the windows key',
   },
 };
+
+/** the windows logo key's four panes, in the text's own colour. */
+function WindowsKeyGlyph(props: SVGAttributes<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 16 16" fill="currentColor" {...props}>
+      <path d="M0 0h7.5v7.5H0zM8.5 0H16v7.5H8.5zM0 8.5h7.5V16H0zM8.5 8.5H16V16H8.5z" />
+    </svg>
+  );
+}
+
+/** the glyph printed on a key the menu names. a pc's ctrl and alt carry none. */
+const KEY_GLYPHS: Readonly<Record<string, ComponentType<SVGAttributes<SVGSVGElement>>>> = {
+  'windows key': WindowsKeyGlyph,
+  win: WindowsKeyGlyph,
+  cmd: Command,
+  control: ChevronUp,
+  option: Option,
+  shift: ArrowBigUp,
+};
+// one capture group, so `split` leaves each name at an odd index.
+const GLYPH_NAMES = new RegExp(`\\b(${Object.keys(KEY_GLYPHS).join('|')})\\b`);
+
+/** menu copy, each key it names led by that key's glyph. */
+function WithKeyGlyphs({ text }: { text: string }) {
+  return text.split(GLYPH_NAMES).map((part, index) => {
+    const Glyph = index % 2 === 1 ? KEY_GLYPHS[part] : undefined;
+    if (!Glyph) return part;
+    return (
+      <span key={index} className="inline-flex items-center gap-1">
+        <Glyph aria-hidden className="size-[0.85em]" />
+        {part}
+      </span>
+    );
+  });
+}
 
 const subscribeNever = (): (() => void) => () => {};
 const onServer = (): boolean => false;
@@ -138,9 +181,13 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
           >
             {legend.map((row) => (
               <Fragment key={row.press}>
-                <dt>{row.press}</dt>
+                <dt>
+                  <WithKeyGlyphs text={row.press} />
+                </dt>
                 <dd aria-hidden>→</dd>
-                <dd>{row.gets}</dd>
+                <dd>
+                  <WithKeyGlyphs text={row.gets} />
+                </dd>
               </Fragment>
             ))}
           </dl>
@@ -165,7 +212,9 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
               if (!sent.current) setNote('that key could not be sent right now.');
             }}
           >
-            <span>{key.label}</span>
+            <span>
+              <WithKeyGlyphs text={key.label} />
+            </span>
             {key.hint && <span className="text-xs text-muted-foreground">{key.hint}</span>}
           </DropdownMenuItem>
         ))}

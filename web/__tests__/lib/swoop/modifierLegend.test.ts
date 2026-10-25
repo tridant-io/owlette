@@ -3,8 +3,12 @@ import { modifierLegend } from '@/lib/swoop/modifierLegend';
 const rows = (legend: ReturnType<typeof modifierLegend>) => legend.map((row) => `${row.press} > ${row.gets}`);
 
 describe('modifierLegend', () => {
-  it('a pc viewer on a mac: shortcuts match sends ctrl as cmd, keys match sends it as control', () => {
-    expect(rows(modifierLegend('macos', false, 'swap'))).toEqual(['ctrl > cmd', 'windows key > cmd', 'alt > option']);
+  it('a pc viewer on a mac: shortcuts match swaps ctrl and the windows key, keys match sends each as itself', () => {
+    expect(rows(modifierLegend('macos', false, 'swap'))).toEqual([
+      'ctrl > cmd',
+      'windows key > control',
+      'alt > option',
+    ]);
     expect(rows(modifierLegend('macos', false, 'passthrough'))).toEqual([
       'ctrl > control',
       'windows key > cmd',
@@ -12,8 +16,12 @@ describe('modifierLegend', () => {
     ]);
   });
 
-  it('a mac viewer on windows: shortcuts match sends cmd as ctrl, keys match sends it as the windows key', () => {
-    expect(rows(modifierLegend('windows', true, 'swap'))).toEqual(['control > ctrl', 'cmd > ctrl', 'option > alt']);
+  it('a mac viewer on windows: shortcuts match swaps cmd and control, keys match sends each as itself', () => {
+    expect(rows(modifierLegend('windows', true, 'swap'))).toEqual([
+      'control > windows key',
+      'cmd > ctrl',
+      'option > alt',
+    ]);
     expect(rows(modifierLegend('windows', true, 'passthrough'))).toEqual([
       'control > ctrl',
       'cmd > windows key',

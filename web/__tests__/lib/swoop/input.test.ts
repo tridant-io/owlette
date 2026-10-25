@@ -74,9 +74,9 @@ interface PointerProps {
 
 /** jsdom has no PointerEvent constructor, so build the surface we read. */
 function pointerEvent(type: string, props: PointerProps = {}, coalesced?: PointerProps[]): Event {
-  const base = { clientX: 0, clientY: 0, movementX: 0, movementY: 0, button: 0, pointerId: 1 };
+  const base = { clientX: 0, clientY: 0, movementX: 0, movementY: 0, button: 0, pointerId: 1, ...modifierFlags() };
   const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.assign(event, base, props);
+  Object.assign(event, base, props, { getModifierState: () => false });
   if (coalesced) {
     Object.assign(event, {
       getCoalescedEvents: () => coalesced.map((sample) => ({ ...base, ...props, ...sample })),
@@ -85,8 +85,34 @@ function pointerEvent(type: string, props: PointerProps = {}, coalesced?: Pointe
   return event;
 }
 
-const keyEvent = (type: string, code: string, init: KeyboardEventInit = {}): KeyboardEvent =>
-  new KeyboardEvent(type, { code, bubbles: true, cancelable: true, ...init });
+const MODIFIER_FLAGS: Readonly<Record<string, 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>> = {
+  ControlLeft: 'ctrlKey',
+  ControlRight: 'ctrlKey',
+  MetaLeft: 'metaKey',
+  MetaRight: 'metaKey',
+  AltLeft: 'altKey',
+  AltRight: 'altKey',
+  ShiftLeft: 'shiftKey',
+  ShiftRight: 'shiftKey',
+};
+/** the modifiers down on the test's keyboard, whose flags every event carries, as a real one's do. */
+const modifiersDown = new Set<string>();
+const modifierFlags = (): Partial<Record<'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey', boolean>> =>
+  Object.fromEntries([...modifiersDown].map((code) => [MODIFIER_FLAGS[code], true]));
+
+const keyEvent = (type: string, code: string, init: KeyboardEventInit = {}): KeyboardEvent => {
+  if (code in MODIFIER_FLAGS) {
+    if (type === 'keydown') modifiersDown.add(code);
+    else modifiersDown.delete(code);
+  }
+  return new KeyboardEvent(type, { code, bubbles: true, cancelable: true, ...modifierFlags(), ...init });
+};
+
+/** each sent message as one string: a key or button edge, or the message's kind. */
+const edges = (h: Harness) =>
+  h.sent().map((m) =>
+    m.t === 'k' ? `${m.code}:${m.down ? 'down' : 'up'}` : m.t === 'b' ? `b${m.button}:${m.down ? 'down' : 'up'}` : m.t,
+  );
 
 function setPointerLock(element: Element | null): void {
   Object.defineProperty(document, 'pointerLockElement', { value: element, configurable: true });
@@ -97,6 +123,7 @@ afterEach(() => {
   // document- and window-level listeners outlive the element, so every capture
   // is detached or the next test inherits it.
   for (const capture of attached.splice(0, attached.length)) capture.detach();
+  modifiersDown.clear();
   document.body.innerHTML = '';
   Object.defineProperty(document, 'pointerLockElement', { value: null, configurable: true });
 });
@@ -525,7 +552,6 @@ describe('keys owlette swoop captures itself', () => {
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) owlette-swoop-viewer/4.1.8 (keys)';
   type NativeKeyHost = { __owletteNativeKey?: (code: string, down: boolean) => void };
   const nativeKeyHost = (): NativeKeyHost => window as unknown as NativeKeyHost;
-  const keys = (h: Harness) => h.sent().map((m) => (m.t === 'k' ? `${m.code}:${m.down ? 'down' : 'up'}` : m.t));
 
   /** a mac viewing a mac in the app, the stage focused as fullscreen leaves it. */
   const appHarness = (options: Partial<Parameters<typeof attachInputCapture>[0]> = {}): Harness => {
@@ -545,7 +571,7 @@ describe('keys owlette swoop captures itself', () => {
     nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
     h.target.dispatchEvent(keyEvent('keyup', 'KeyQ'));
     h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
-    expect(keys(h)).toEqual(['MetaLeft:down', 'KeyQ:down', 'KeyQ:up', 'MetaLeft:up']);
+    expect(edges(h)).toEqual(['MetaLeft:down', 'KeyQ:down', 'KeyQ:up', 'MetaLeft:up']);
 
     // nothing is left held for a blur to release
     h.clear();
@@ -558,7 +584,7 @@ describe('keys owlette swoop captures itself', () => {
     h.capture.nativeKey('KeyW', true);
     h.capture.nativeKey('KeyW', true);
     h.capture.nativeKey('KeyW', false);
-    expect(keys(h)).toEqual(['KeyW:down', 'KeyW:up']);
+    expect(edges(h)).toEqual(['KeyW:down', 'KeyW:up']);
   });
 
   it('releases what it pressed on blur, with everything else', () => {
@@ -566,14 +592,14 @@ describe('keys owlette swoop captures itself', () => {
     h.capture.nativeKey('KeyQ', true);
     h.clear();
     window.dispatchEvent(new Event('blur'));
-    expect(keys(h)).toEqual(['KeyQ:up']);
+    expect(edges(h)).toEqual(['KeyQ:up']);
   });
 
   it('goes through the modifier mapping, as a typed key does', () => {
     const h = appHarness({ hostOs: 'windows' });
     h.capture.nativeKey('MetaLeft', true);
     h.target.dispatchEvent(keyEvent('keyup', 'MetaLeft'));
-    expect(keys(h)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
+    expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
   });
 
   it('takes no down while the stage lacks focus, since its keyup would never reach the stage', () => {
@@ -598,7 +624,7 @@ describe('keys owlette swoop captures itself', () => {
     h.capture.detach();
     expect(nativeKeyHost().__owletteNativeKey).toBeUndefined();
     h.capture.nativeKey('KeyQ', true);
-    expect(keys(h)).toEqual([]);
+    expect(edges(h)).toEqual([]);
   });
 
   it("leaves a newer capture's in place when an older one detaches", () => {
@@ -606,7 +632,7 @@ describe('keys owlette swoop captures itself', () => {
     const newer = appHarness();
     older.capture.detach();
     nativeKeyHost().__owletteNativeKey?.('KeyQ', true);
-    expect(keys(newer)).toEqual(['KeyQ:down']);
+    expect(edges(newer)).toEqual(['KeyQ:down']);
   });
 });
 
@@ -665,6 +691,15 @@ describe('modifier mapping', () => {
     h.target.dispatchEvent(keyEvent('keydown', 'MetaRight'));
 
     expect(codes(h)).toEqual(['ControlLeft', 'ControlLeft', 'ControlRight']);
+  });
+
+  it("sends a mac viewer's control to a windows host as the windows key, which cmd no longer is", () => {
+    const h = harness({ hostOs: 'windows', viewerIsMac: true });
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+    h.target.dispatchEvent(keyEvent('keydown', 'ControlRight'));
+
+    expect(codes(h)).toEqual(['MetaLeft', 'MetaLeft', 'MetaRight']);
   });
 
   it("sends a pc viewer's ctrl to a mac host as cmd by default, so ctrl+c copies there", () => {
@@ -831,6 +866,100 @@ describe('releases', () => {
     h.target.dispatchEvent(keyEvent('keydown', 'KeyB'));
     h.capture.detach();
     expect(h.sent()).toHaveLength(0);
+  });
+
+  describe('a modifier whose keyup the os kept, with the window still focused', () => {
+    // a mac's ctrl+up opens mission control, which takes the keyup and never blurs the window.
+    const keptKeyup = (code: string) => modifiersDown.delete(code);
+
+    it('is released before the next key goes, so typing is not a string of shortcuts', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      keptKeyup('ControlLeft');
+      h.target.dispatchEvent(keyEvent('keydown', 'KeyA'));
+      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up', 'KeyA:down']);
+    });
+
+    it('is released as the host has it down, through the mapping', () => {
+      const h = harness({ viewerIsMac: true });
+      h.target.dispatchEvent(keyEvent('keydown', 'MetaLeft'));
+      keptKeyup('MetaLeft');
+      h.target.dispatchEvent(keyEvent('keydown', 'KeyA'));
+      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up', 'KeyA:down']);
+    });
+
+    it('is released before a click, which would otherwise go as ctrl+click', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      keptKeyup('ControlLeft');
+      h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 50, clientY: 50 }));
+      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up', 'b0:down']);
+    });
+
+    it('is released when the mouse next moves', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      keptKeyup('ControlLeft');
+      h.target.dispatchEvent(pointerEvent('pointermove', { clientX: 50, clientY: 50 }));
+      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
+    });
+
+    it('keeps ctrl and alt down under altgr, which some browsers report as neither', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      h.target.dispatchEvent(keyEvent('keydown', 'AltRight'));
+      // firefox on windows: the character altgr types carries no ctrl and no alt, only AltGraph.
+      h.target.dispatchEvent(keyEvent('keydown', 'KeyQ', { ctrlKey: false, altKey: false, modifierAltGraph: true }));
+      expect(edges(h)).toEqual(['ControlLeft:down', 'AltRight:down', 'KeyQ:down']);
+    });
+  });
+
+  describe("a modifier's release sent again, since swoop-input never retransmits", () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('goes again at 100 ms and 500 ms, so one lost on the way, or overtaking its press, still lands', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+      h.clear();
+      jest.advanceTimersByTime(99);
+      expect(h.sent()).toHaveLength(0);
+      jest.advanceTimersByTime(1);
+      expect(edges(h)).toEqual(['ControlLeft:up']);
+      jest.advanceTimersByTime(400);
+      expect(edges(h)).toEqual(['ControlLeft:up', 'ControlLeft:up']);
+    });
+
+    it('stays quiet once the modifier is down again', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+      jest.advanceTimersByTime(100);
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      h.clear();
+      jest.advanceTimersByTime(1_000);
+      expect(h.sent()).toHaveLength(0);
+    });
+
+    it('never goes again for a letter or a mouse button: the host injects every up it gets, held or not', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'KeyA'));
+      h.target.dispatchEvent(keyEvent('keyup', 'KeyA'));
+      h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 50, clientY: 50 }));
+      h.target.dispatchEvent(pointerEvent('pointerup', { clientX: 50, clientY: 50 }));
+      h.clear();
+      jest.advanceTimersByTime(1_000);
+      expect(h.sent()).toHaveLength(0);
+    });
+
+    it('is dropped on detach', () => {
+      const h = harness();
+      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
+      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
+      h.capture.detach();
+      expect(jest.getTimerCount()).toBe(0);
+    });
   });
 });
 

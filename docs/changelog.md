@@ -11,6 +11,38 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop's pointer moves with your mouse, not with the machine's reply
+
+Over a slow or jittery link, such as a phone's 5G, the machine's pointer
+jumped behind the mouse. Wherever the viewer draws the machine's pointer itself
+— always in owlette swoop, and in a browser for a Mac or a Windows display not
+at 100% — it drew it where the machine last said its pointer was, a round trip
+after each move. It now draws it where your mouse sent it, the moment you move,
+so a slow connection lags the picture and never the pointer. Fullscreen with
+the mouse captured still follows the machine, which is what a captured mouse
+means.
+
+### fixed — a Mac's control is the Windows key, and a held ctrl no longer sticks
+
+Under the keyboard menu's default "shortcuts match", a Mac viewing a Windows
+machine sent both cmd and control as ctrl, so no key reached the Windows key;
+a PC viewing a Mac had the same gap the other way. The setting now swaps the
+two keys: from a Mac, cmd is ctrl and control is the Windows key; from a PC,
+ctrl is cmd and the Windows key is the Mac's control. The menu draws each key's
+symbol beside its name: the Windows logo, ⌘, ⌃, ⌥ and ⇧.
+
+A key could stay down on the machine after you let go of it, until you
+switched away and back, and with ctrl that turned every key typed meanwhile
+into a shortcut. Two ways in are closed. Your own system can keep a modifier's
+release without the window losing focus, as a Mac's control+arrow for Mission
+Control does; the browser still says which modifiers are down on every key,
+click and mouse move, and the viewer now lets go on the machine of any that
+are not before passing the event on. And swoop's input travels unordered and is
+never resent, so on a lossy link such as a phone's a release could be lost or
+arrive before its own press; the release of ctrl, shift, alt, cmd or the
+Windows key now goes twice more, 100 ms and 500 ms later, unless you have
+pressed that key again.
+
 ## [4.1.20] - 2026-10-21
 
 ### fixed — a token file the agent can't read no longer unpairs the machine

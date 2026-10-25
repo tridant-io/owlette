@@ -613,6 +613,15 @@ test.describe('through a host, inside owlette swoop', () => {
       await expect(stage).toHaveCSS('cursor', 'none');
       await test.info().attach('machine pointer', { body: await page.screenshot(), contentType: 'image/png' });
 
+      // the mouse moves and the drawn pointer goes with it, with no word from the host: over a slow link
+      // a pointer that waited for `cpos` lagged every move by a round trip.
+      await page.mouse.move(box.x + 5 - 100, box.y + 5 - 50);
+      await expect(async () => {
+        const moved = (await drawn.boundingBox())!;
+        expect(Math.abs(moved.x - (box.x - 100))).toBeLessThanOrEqual(1);
+        expect(Math.abs(moved.y - (box.y - 50))).toBeLessThanOrEqual(1);
+      }).toPass({ timeout: 2_000 });
+
       // a program on the machine hides its pointer, with no drag under way: the local one comes back.
       const hidden = JSON.stringify({ t: 'cpos', x: 0.5, y: 0.5, visible: false, tsUs: 2 });
       await expect(async () => {

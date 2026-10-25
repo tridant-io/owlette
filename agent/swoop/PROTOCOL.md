@@ -258,9 +258,16 @@ those repeats are what an attack in progress looks like in the audit trail.
 the host maps `code` through [`testdata/keymap.json`](testdata/keymap.json) to a ps/2 set-1 scancode plus an
 extended flag. **the host keys on `code` and never on `key`**: the numpad and the control/arrow pad share
 scancode low bytes and are told apart only by `extended`. left and right modifiers stay distinct on the wire.
-the shortcut modifier is mapped **in the browser**, before it sends, so the host never guesses: a mac client maps
-cmd → `ControlLeft` / `ControlRight` for a windows or linux host, and a client that is not a mac maps ctrl →
-`MetaLeft` / `MetaRight` for a macos host. the viewer may turn either off, and then every key goes as pressed.
+the shortcut modifier is mapped **in the browser**, before it sends, so the host never guesses: a mac client
+swaps cmd and ctrl for a windows or linux host, and a client that is not a mac swaps ctrl and meta for a macos
+host, so cmd arrives as `ControlLeft` / `ControlRight` and the mac's control as `MetaLeft` / `MetaRight`, and
+the other way round. the viewer may turn the swap off, and then every key goes as pressed.
+
+`swoop-input` is unordered and never retransmits, so a release can be lost or arrive before its own press. a
+viewer sends a modifier's release (`Control*`, `Shift*`, `Alt*`, `Meta*`) again 100 ms and 500 ms later,
+unless it has pressed that key again by then. the host injects every up it is sent, whether that viewer holds
+the key or not, and for a modifier that is already up that is a release nothing acts on. no other release is
+sent again: a second mouse up is a real release wherever the pointer has gone.
 `PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them. a
 macos host goes on from the scancode to the mac's virtual keycode through
 [`testdata/keymap-macos.json`](testdata/keymap-macos.json), so the host's keyboard layout decides what a key
@@ -288,7 +295,8 @@ each *other* controller is pointing, so a session with more than one controller 
 publishes one per absolute `m` it accepts, from the viewer it accepted it from, and never for the viewer it
 is being sent to. a viewer in pointer lock sends `mr` deltas and has no position of its own, so it publishes
 no `vpos` at all; `cpos` is where that pointer went. a viewer draws `vpos` as an overlay element and leaves
-its own cursor a css cursor.
+its own cursor a css cursor. a controller outside pointer lock that overlays the machine's pointer draws it
+where its own last `m` put it, not at `cpos`, which trails that by a round trip.
 
 ### clipboard — `swoop-control`, both directions, host→viewer ungated, viewer→host requires `ctl`
 

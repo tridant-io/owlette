@@ -50,7 +50,9 @@ describe('SwoopSpecialKeys', () => {
   it('names the two settings and shows what the keys do, for a pc viewer on a mac', async () => {
     const { user, trigger } = await open('macos');
     expect(screen.getByRole('menuitemradio', { name: 'shortcuts match: ctrl acts as cmd' })).toBeChecked();
-    expect(legend()).toBe('ctrl→cmdwindows key→cmdalt→option');
+    expect(legend()).toBe('ctrl→cmdwindows key→controlalt→option');
+    // cmd, the windows key, control and option each lead with their key's glyph; ctrl and alt have none.
+    expect(screen.getByTestId('modifier-legend').querySelectorAll('svg')).toHaveLength(4);
 
     await user.click(screen.getByRole('menuitemradio', { name: 'keys match: ctrl is control' }));
     await user.click(trigger);
@@ -58,6 +60,15 @@ describe('SwoopSpecialKeys', () => {
 
     expect(screen.getByRole('menuitemradio', { name: 'keys match: ctrl is control' })).toBeChecked();
     expect(legend()).toBe('ctrl→controlwindows key→cmdalt→option');
+  });
+
+  it('leads each modifier a key names with the glyph on its key', async () => {
+    await open('windows');
+    const glyphs = (name: RegExp) => screen.getByRole('menuitem', { name }).querySelectorAll('svg').length;
+    expect(glyphs(/^windows key$/)).toBe(1);
+    expect(glyphs(/^win \+ d/)).toBe(1);
+    expect(glyphs(/^ctrl \+ shift \+ esc/)).toBe(1);
+    expect(glyphs(/^alt \+ tab$/)).toBe(0);
   });
 
   it('offers to hold the super key outside fullscreen, says what to do, and shows no legend where nothing is converted', async () => {
@@ -103,7 +114,7 @@ describe('SwoopSpecialKeys', () => {
       await open('macos');
       expect(screen.queryByRole('menuitem', { name: /^cmd \+ q/ })).toBeNull();
       expect(screen.getByRole('menuitem', { name: /^cmd \+ tab/ })).toBeInTheDocument();
-      expect(screen.getByRole('menuitem', { name: /^cmd \+ ctrl \+ q/ })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: /^cmd \+ control \+ q/ })).toBeInTheDocument();
       expect(screen.queryByTestId('super-key-note')).toBeNull();
     });
   });

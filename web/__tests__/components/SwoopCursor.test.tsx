@@ -105,6 +105,7 @@ const pointerAt = (type: string, clientX: number, clientY: number): Event =>
     movementY: 0,
     button: 0,
     pointerId: 1,
+    getModifierState: () => false,
   });
 /** an upload as a host that names no dpi sends it: one older than the field. */
 const shape = (w = 32, h = 32, scale?: number) =>
@@ -470,6 +471,60 @@ describe('SwoopCursor', () => {
       h.cursor(cpos(0.5, 0.5));
       expect(h.stage.style.cursor).toBe(`url(data:image/png;base64,${PNG}) 4 6, auto`);
       expect(screen.queryByTestId('machine-cursor')).toBeNull();
+      h.detach();
+    });
+  });
+
+  describe('at the speed of the local mouse', () => {
+    it('in the app, draws the pointer where the mouse moved it before the host says so', () => {
+      inApp = true;
+      try {
+        const h = harness({ input: true });
+        render(<SwoopCursor session={h.session} />);
+        h.cursor(shape());
+        h.cursor(cpos(0.5, 0.5));
+        // the picture spans y 81..719 of this stage, so (250, 400) is (0.25, 0.5) on it.
+        act(() => {
+          h.stage.dispatchEvent(pointerAt('pointermove', 250, 400));
+        });
+        const drawn = screen.getByTestId('machine-cursor');
+        expect(drawn.style.left).toBe(`${0.25 * 999 - 4}px`);
+        expect(drawn.style.top).toBe(`${81 + 0.5 * 637 - 6}px`);
+        // the host's word on an earlier move, a round trip late, does not pull it back.
+        h.cursor(cpos(0.5, 0.5));
+        expect(drawn.style.left).toBe(`${0.25 * 999 - 4}px`);
+        h.detach();
+      } finally {
+        inApp = false;
+      }
+    });
+
+    it('pins it to the picture edge through a drag past it, where the machine one is', () => {
+      const h = harness({ input: true });
+      render(<SwoopCursor session={h.session} />);
+      h.cursor(shape(64, 64));
+      h.cursor(cpos(0.5, 0.5));
+      act(() => {
+        h.stage.dispatchEvent(pointerAt('pointerdown', 500, 400));
+        h.stage.dispatchEvent(pointerAt('pointermove', 500, 40));
+      });
+      expect(screen.getByTestId('machine-cursor').style.top).toBe(`${81 - 6}px`);
+      act(() => {
+        h.stage.dispatchEvent(pointerAt('pointerup', 500, 40));
+      });
+      h.detach();
+    });
+
+    it('goes back to the host position under pointer lock, which has no local one', () => {
+      const h = harness({ input: true });
+      render(<SwoopCursor session={h.session} />);
+      h.cursor(shape());
+      h.cursor(cpos(0.5, 0.5));
+      act(() => {
+        h.stage.dispatchEvent(pointerAt('pointermove', 250, 400));
+      });
+      h.lock(true);
+      expect(screen.getByTestId('machine-cursor').style.left).toBe(`${0.5 * 999 - 4}px`);
       h.detach();
     });
   });

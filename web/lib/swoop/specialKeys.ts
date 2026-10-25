@@ -51,7 +51,7 @@ const MACOS_KEYS: readonly SpecialKey[] = [
   { id: 'cmd-tab', label: 'cmd + tab', codes: ['MetaLeft', 'Tab'] },
   { id: 'cmd-space', label: 'cmd + space', hint: 'spotlight', codes: ['MetaLeft', 'Space'] },
   { id: 'cmd-q', label: 'cmd + q', hint: 'quit app', codes: ['MetaLeft', 'KeyQ'] },
-  { id: 'cmd-ctrl-q', label: 'cmd + ctrl + q', hint: 'lock', codes: ['MetaLeft', 'ControlLeft', 'KeyQ'] },
+  { id: 'cmd-ctrl-q', label: 'cmd + control + q', hint: 'lock', codes: ['MetaLeft', 'ControlLeft', 'KeyQ'] },
   { id: 'esc', label: 'esc', codes: ['Escape'] },
 ];
 
