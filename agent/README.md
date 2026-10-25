@@ -49,7 +49,7 @@ Never change the `firebase` section yourself: it is what ties the machine to its
 
 ## Development
 
-Python 3.11 matches what ships (Windows embeds 3.11.8; macOS and Linux bundle python-build-standalone 3.11). 3.10 is the floor: `requirements.txt` no longer resolves below it. Platform-only dependencies (`pywin32`, `wmi`, the hardware monitor) carry `sys_platform` markers, so the same files install everywhere.
+Python 3.11 matches what ships (Windows embeds 3.11.8; macOS and Linux bundle python-build-standalone 3.11). 3.11 is also the floor: `requirements.txt` no longer resolves below it (Pillow 13 requires it). Platform-only dependencies (`pywin32`, `wmi`, the hardware monitor) carry `sys_platform` markers, so the same files install everywhere.
 
 ### Set up the venv
 
