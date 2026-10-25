@@ -193,10 +193,12 @@ main one and each swoop window, is built without a frame (`windows.rs`):
 `decorations(false)` on Windows and Linux; on macOS the overlay title bar with a
 hidden title, so the traffic lights float over the page's top left (as in the
 desktop app, minus its `mac_window.rs` toolbar, which only buys macOS 26's
-corner radius). owlette.app draws the rest
+corner radius), placed by `traffic_light_position` to centre on the page's
+48 px bar; that is safe here because no toolbar shares the title-bar container
+tao resizes. owlette.app draws the rest
 (`web/components/swoop/SwoopWindowControls.tsx`): the session bar on top, the
 picker's header and a strip on the login page carry minimize, maximize/restore
-and close at the right on Windows and Linux, or leave the traffic lights 78 px
+and close at the right on Windows and Linux, or leave the traffic lights 86 px
 on macOS, and are the window's drag surface (`data-tauri-drag-region="deep"`:
 a press on anything in them that is not a control drags, a double press
 maximizes). When the session bar runs down a side, the controls move to a slim
