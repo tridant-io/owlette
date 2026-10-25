@@ -13,7 +13,7 @@ paths:
 
 ## Tech Stack
 
-- **Language**: Python 3.11 (ships embedded 3.11.8 on Windows, python-build-standalone 3.11 on macOS/Linux; a fresh dev install needs ≥ 3.10); type hints encouraged
+- **Language**: Python 3.11 (ships embedded 3.11.8 on Windows, python-build-standalone 3.11 on macOS/Linux; a fresh dev install needs ≥ 3.11); type hints encouraged
 - **Platform**: Windows service via `owlette-host` (`agent/host`, Rust — not pywin32 ServiceFramework directly, and not NSSM since 3.0.0); a launchd daemon on macOS and a systemd unit on Linux. Platform differences live behind `agent/src/osadapter/` (`win`, `darwin`, `linux`, `posix`)
 - **Cloud**: Firestore REST API (`firestore_rest_client.py`) — NOT Firebase Admin SDK
 - **Auth**: OAuth two-token system (access + refresh) with Fernet AES encrypted storage

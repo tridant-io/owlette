@@ -46,7 +46,7 @@ Content-addressed sync of project folders to machines: chunks on Cloudflare R2, 
 ## Tech Stack
 
 - **Web** (`web/`): Next.js 16 (App Router, React 19), TypeScript, Tailwind CSS 4, shadcn/ui, Firebase Auth + Firestore
-- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.10 — Pillow 12.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), as a launchd daemon on macOS and a systemd unit on Linux, Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
+- **Agent** (`agent/`): Python 3.11 (bundled 3.11.8 ships; a fresh dependency install needs ≥3.11 — Pillow 13.x) hosted as a Windows service by `owlette-host` (`agent/host`, Rust — replaced NSSM in 3.0.0), as a launchd daemon on macOS and a systemd unit on Linux, Firestore REST API (not Admin SDK), psutil, pywin32, Inno Setup installer
 - **Database**: Cloud Firestore (real-time NoSQL), Firebase Auth (Email/Password, Google OAuth, Passkey/WebAuthn)
 - **Package Managers**: Web: npm (not pnpm/yarn) | Agent: pip
 

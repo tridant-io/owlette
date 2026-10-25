@@ -62,6 +62,12 @@ updates:
       # or raises its engines floor to >=22.12, then delete this rule and take the PR.
       - dependency-name: "commander"
         update-types: ["version-update:semver-major"]
+      # eslint-config-next 16.4 brings eslint-plugin-react-hooks 7.1.1, whose react
+      # compiler rules (set-state-in-effect, refs, immutability, purity) fail web lint 79
+      # times, so it stays on 16.3.8 while next moves on. Exit: those findings are fixed or
+      # the rules configured; then delete this rule and match next's version.
+      - dependency-name: "eslint-config-next"
+        versions: [">=16.4.0"]
 
   # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
   # the swoop remote-desktop host crate.

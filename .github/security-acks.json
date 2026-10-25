@@ -40,6 +40,20 @@
       "expires": "2027-01-16",
       "revisit": "When sprintf-js or argparse publishes a fix, or jest coverage stops pulling argparse 1.x, drop this entry and let the bump land."
     },
+    "alert:dependabot:376": {
+      "reason": "ASSESSED. katex 0.16.47 (GHSA-238p-pmpm-9mq7) arrives only through mermaid 11.17.2, which pins ^0.16.47; the fix, 0.18.2, needs mermaid 12.2.0, the first release on katex ^0.18.The advisory needs an already-polluted Object.prototype plus attacker-controlled math. Mermaid renders only the ```mermaid fences in owlette's own committed docs (web/components/mdx/mermaid.tsx via remarkMdxMermaid in source.config.ts); hoot replies go through react-markdown, not mermaid, so no user or model text reaches katex.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-10-25",
+      "expires": "2027-01-25",
+      "revisit": "When mermaid moves to 12.2.0 or later (katex ^0.18), drop this entry and let the bump land."
+    },
+    "alert:dependabot:374": {
+      "reason": "ASSESSED, fixed on dev. postcss-selector-parser 6.0.10 (GHSA-rj75-hqrm-r3gf) came only from @tailwindcss/typography, which nothing loaded (no @plugin in any stylesheet); both were removed from web/package.json, so dev pins no postcss-selector-parser. The gate reports a package a lockfile no longer pins as UNPROVEN by design. The alert is filed against main and closes itself when the dev to main promotion carries the removal; the short expiry makes a slipped promotion block again.",
+      "accepted_by": "dylan@roscover.com",
+      "accepted_on": "2026-10-25",
+      "expires": "2026-11-08",
+      "revisit": "Once the promotion lands and Dependabot closes alert 374, drop this entry."
+    },
     "alert:code-scanning:315": {
       "reason": "UNTRIAGED. js/tainted-format-string at web/lib/hoot/turnRunner.server.ts:518, rated high by CodeQL. Waived for 30 days ONLY to let the security gate land without a permanently red CI; nobody has assessed exploitability yet. This is a scheduling decision, not a safety judgement.",
       "accepted_by": "rosco@theexperiential.com",

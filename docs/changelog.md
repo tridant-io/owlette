@@ -52,6 +52,27 @@ arrive before its own press; the release of ctrl, shift, alt, cmd or the
 Windows key now goes twice more, 100 ms and 500 ms later, unless you have
 pressed that key again.
 
+### security — dependency updates
+
+- `next` 16.4.3: fixes remote code execution in the image optimizer through the
+  sharp library it bundles (GHSA-2464-fhr4-w9xw), and the other advisories
+  closed in 16.4.1. The critical `use cache` advisory never applied: owlette
+  does not use `use cache`.
+- `@sentry/nextjs` 10.75.2: fixes a middleware bypass under the tunnel route
+  (GHSA-mchm-gjx6-7h55). owlette builds with turbopack and has no route under
+  the tunnel path, so it was not affected.
+- `dompurify` 3.4.17, `undici` 7.30.1 and `zod` 4.6.7 in the web app, and
+  `body-parser` 2.4.0 in the cloud functions.
+- The agent bundles Pillow 13.0.0, clearing the advisories against 12.3.0, and
+  setuptools 84.1.0. Pillow 13 needs Python 3.11, which every installer already
+  ships.
+- `@tailwindcss/typography` is removed from the web app; nothing loaded it.
+- `smol-toml` 1.9.1 in the cli.
+- Development only: wrangler 4.152.0 (with sharp 0.35.5 and undici 7.30.1) in
+  the swoop signal worker and its spike, vitest 5.0.5 in the worker's tests,
+  vitest 4.1.12 and source-map-js 1.2.2 in the desktop app's tests, and black
+  26.10.1.
+
 ## [4.1.20] - 2026-10-21
 
 ### fixed — a token file the agent can't read no longer unpairs the machine

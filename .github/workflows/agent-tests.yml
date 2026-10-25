@@ -106,7 +106,7 @@ jobs:
       # 3.11 mirrors production: build_installer_full.bat embeds
       # python-3.11.8-embed-amd64 and build-installer.yml pins the same
       # toolchain version. It is also the floor — agent/requirements.txt no
-      # longer resolves on 3.9 (Pillow 12.3.0 requires >=3.10), so the
+      # longer resolves on 3.10 (Pillow 13.0.0 requires >=3.11), so the
       # "Python 3.9+" line in the docs and pytest.ini's `minversion = 3.9`
       # are both stale.
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

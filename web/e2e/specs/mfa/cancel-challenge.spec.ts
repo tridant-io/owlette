@@ -10,8 +10,9 @@
  *   (looping until the DELETE won). A cold dev server compiles the DELETE on
  *   first use, which is how the owner hit it; the delay stands in for that.
  * - a /login redirect cached by the App Router earlier in the challenge (a
- *   prefetch here, through Next's debug router handle) is replayed by any later
- *   client push to /login.
+ *   prefetch here, through Next's debug router handle) was replayed by a later
+ *   client push to /login on next 16.3. 16.4 no longer replays it; see the
+ *   note in the second test.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -53,6 +54,12 @@ test('cancel reaches the login page while the session delete is slow', async ({ 
 
 test('cancel reaches the login page past a cached challenge redirect', async ({ page }) => {
   await reachChallenge(page, 'cancel-cached-redirect');
+  // next 16.4 keeps the /login the browser started on in the router cache, so a
+  // prefetch of it is a hit and nothing bounces. a document load of the
+  // challenge starts that cache empty and the prefetch has to ask the proxy.
+  // 16.4 no longer replays that redirect on a push, so this passes against
+  // router.push too; the guard is __tests__/app/verify-2fa-leave-challenge.
+  await page.reload();
   const prefetched = page.waitForResponse((res) => new URL(res.url()).pathname === '/login');
   await page.evaluate(() => {
     (window as unknown as { next: { router: { prefetch: (href: string) => void } } }).next.router.prefetch('/login');
