@@ -247,8 +247,9 @@ export function SwoopToolbar({
           // the bottom rule is an inset shadow, not a border: the box stays exactly 48 px, so
           // every icon's centre is the bar's centre (a border would add its own pixel below)
           'flex min-h-12 flex-wrap items-center gap-2 bg-card px-3 py-2 shadow-[inset_0_-1px_0_0_var(--border)] md:bar-side:min-h-0 md:bar-side:shadow-none',
-          // in the app a session opens in the picker's window, whose header has the bar's
-          // height and tone: the bar stays put and only what is on it fades in
+          // in the app a session opens in the picker's window, whose header (on windows and
+          // linux; a mac's picker has none) has the bar's height and tone: the bar stays put
+          // and only what is on it fades in
           platform && '[&>*]:motion-safe:animate-in [&>*]:fade-in-0 [&>*]:animation-duration-300',
           'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
           'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',

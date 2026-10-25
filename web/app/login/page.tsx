@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { AuthShell, AuthDivider, AuthFooterDot, authFooterLinkClass } from '@/components/auth/AuthShell';
 import { SwoopWindowStrip, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { Fingerprint, Globe } from 'lucide-react';
-import { SwoopLockup } from '@/components/swoop/SwoopLockup';
+import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { toast } from '@/lib/toast';
 import { sanitizeError } from '@/lib/errorHandler';
@@ -36,6 +36,7 @@ import { useFieldError } from '@/hooks/useFieldError';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { useRedirectIfAuthenticated } from '@/hooks/useRedirectIfAuthenticated';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import type { ViewerAppPlatform } from '@/lib/swoop/viewerApp';
 
 // every 3 s for the 10 min a pending code lives is at most 200 exchange calls, under the route's
 // 300/h per-ip limit; a faster poll would get a full wait rate-limited part way through.
@@ -46,21 +47,26 @@ const APP_LINK_POLL_MS = 3000;
 const APP_LINK_WAIT_MS = 10 * 60 * 1000;
 
 /**
- * owlette swoop's login is the app's own: its "owlette | swoop" lockup, as the picker's header
- * shows it, naming the installed release on hover as it does there, and no tagline, in one
- * narrow column.
+ * owlette swoop's login is the app's own: its small eye and its name, as the picker's header
+ * shows them, naming the installed release on hover as it does there, and no tagline, in one
+ * narrow column. a mac shows the name in its menu bar, so there it is for screen readers only,
+ * and the release is the menu's about item.
  */
-const SWOOP_SHELL = {
+const swoopShell = (platform: ViewerAppPlatform) => ({
   minimal: true,
-  brandTitle: (
-    <SwoopVersionTooltip>
-      <span data-testid="swoop-login-mark">
-        <SwoopLockup size="lg" />
-      </span>
-    </SwoopVersionTooltip>
-  ),
+  brandMark: <SwoopLogo size={56} />,
+  brandTitle:
+    platform === 'mac' ? (
+      <span className="sr-only">owlette swoop</span>
+    ) : (
+      <SwoopVersionTooltip>
+        <span data-testid="swoop-login-mark">
+          <SwoopLockup size="lg" />
+        </span>
+      </SwoopVersionTooltip>
+    ),
   brandDescription: null,
-};
+});
 
 /**
  * Wire half of a passkey sign-in (options → ceremony → verify → Firebase session), shared by the
@@ -158,7 +164,8 @@ function LoginForm() {
    * inside owlette swoop, whose webview fails both google and passkey sign-in (measured), so a
    * signed-in browser approves the app instead.
    */
-  const viewerApp = useViewerAppPlatform() !== null;
+  const viewerPlatform = useViewerAppPlatform();
+  const viewerApp = viewerPlatform !== null;
   /** the absolute approval url while its browser approval is being waited on. */
   const [browserWait, setBrowserWait] = useState<string | null>(null);
   const [browserLinkExpired, setBrowserLinkExpired] = useState(false);
@@ -544,7 +551,7 @@ function LoginForm() {
 
   return (
     <AuthShell
-      {...(viewerApp ? SWOOP_SHELL : {})}
+      {...(viewerPlatform ? swoopShell(viewerPlatform) : {})}
       footer={
         viewerApp ? (
           signUp
@@ -707,7 +714,8 @@ function LoginForm() {
 }
 
 export default function LoginPage() {
-  const inViewerApp = useViewerAppPlatform() !== null;
+  const viewerPlatform = useViewerAppPlatform();
+  const inViewerApp = viewerPlatform !== null;
   return (
     // in owlette swoop the whole page is the window's drag surface: a press on
     // anything that is not a control moves the window
@@ -716,7 +724,7 @@ export default function LoginPage() {
       <SwoopWindowStrip />
       {/* Same shell as the loaded form, so the card doesn't change shape when the
           suspense boundary resolves. */}
-      <Suspense fallback={<AuthShell loading {...(inViewerApp ? SWOOP_SHELL : {})} />}>
+      <Suspense fallback={<AuthShell loading {...(viewerPlatform ? swoopShell(viewerPlatform) : {})} />}>
         <LoginForm />
       </Suspense>
     </div>
