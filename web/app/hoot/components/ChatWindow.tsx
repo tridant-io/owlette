@@ -16,6 +16,7 @@ import { YOU_TRANSLATIONS } from '@/lib/dashboardConstants';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { useScrollFade } from '@/hooks/useScrollFade';
+import { useFollowBottom } from '@/hooks/useFollowBottom';
 import { ADVISOR_MODEL_NAME, ADVISOR_TOOL_NAME } from '@/lib/llmModels';
 import { formatTargetLabel, readHootTurnMetadata, type HootTurnMetadata } from '@/lib/hoot/target';
 
@@ -134,21 +135,22 @@ interface ChatWindowProps {
    * the buttons there is the OWL-47 double-execution window.
    */
   turnRunning?: boolean;
+  /** stop was pressed; the stream doc can still say running until the runner hears it. */
+  stopRequested?: boolean;
   /** The last turn failed. The error banner explains it, so its empty reply is not shown. */
   turnErrored?: boolean;
   /** The suggestions fill the composer, so they go when there is no composer to fill. */
   hideSuggestions?: boolean;
 }
 
-export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage, approvalTargetLabel, toolCommands, onCancelTool, cancelPendingCommandIds, turnStale, turnRunning, turnErrored, hideSuggestions }: ChatWindowProps) {
+export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage, approvalTargetLabel, toolCommands, onCancelTool, cancelPendingCommandIds, turnStale, turnRunning, stopRequested, turnErrored, hideSuggestions }: ChatWindowProps) {
   const { user } = useAuth();
-  const bottomRef = useRef<HTMLDivElement>(null);
   const topRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // Messages dissolve under the header rather than being cut mid-line by it.
   // The hook keeps `containerRef` pointed at the same node for the autoscroll.
   const scrollerRef = useScrollFade(containerRef);
-  const isUserScrolledUp = useRef(false);
+  const { follow: followBottom, stop: stopFollowing, noteScroll, noteWheel, release } = useFollowBottom(containerRef);
   const [expandedImage, setExpandedImage] = useState<string | null>(null);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -162,6 +164,9 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
   const inFlight = isLoading || (Boolean(turnRunning) && !turnStale);
   const thinking = inFlight && Boolean(lastMessage) && (lastMessage.role === 'user' || !hasVisibleContent(lastMessage));
   const approvalTool = awaitedApprovalTool(lastMessage, Boolean(turnRunning));
+  // whether the newest reply can still grow, for its thread line: a stop or an
+  // error ends it here, before the stream doc catches up and says so.
+  const replyGrowing = inFlight && !stopRequested && !turnErrored;
 
   // screen readers hear a reply once, when its turn ends: a live region over the
   // streaming transcript would read out every token. set while rendering, on the
@@ -223,21 +228,20 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
   const handleScroll = () => {
     const el = containerRef.current;
     if (!el) return;
-    // "Near bottom" = within 100px of the bottom edge
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
-    isUserScrolledUp.current = !nearBottom;
+    noteScroll();
     setShowScrollTop(el.scrollTop > 200);
   };
 
   const scrollToTop = () => {
+    // the reader asked to go up: no glide may pull them back down on the way
+    release();
     topRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // follows only a reader at the bottom; one who scrolled up is left reading
   useEffect(() => {
-    if (!isUserScrolledUp.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages, isLoading]);
+    followBottom();
+  }, [messages, isLoading, followBottom]);
 
   // Grow the edit box with its text, as the composer does: collapse to the
   // 3-row floor, then take the content height. A layout effect, so the box
@@ -331,7 +335,19 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
         </span>
       </button>
 
-      <div ref={scrollerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+      {/* a wheel, a touch or a press on the scrollbar ends a glide to the
+          bottom (scroll keys do too, heard on window while one runs), and
+          scrolling up stops the following until the reader comes back down.
+          pb-10 is the edge padding plus one message gap under the newest reply. */}
+      <div
+        ref={scrollerRef}
+        data-testid="hoot-transcript"
+        onScroll={handleScroll}
+        onWheel={noteWheel}
+        onTouchStart={stopFollowing}
+        onPointerDown={stopFollowing}
+        className="flex-1 overflow-y-auto px-4 pt-4 pb-10 space-y-6"
+      >
       <div ref={topRef} />
 
       <ImageLightbox src={expandedImage} alt="pasted image" onClose={() => setExpandedImage(null)} />
@@ -350,6 +366,9 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
         if (emptyReply && index === messages.length - 1 && (inFlight || turnStale || turnErrored)) {
           return null;
         }
+        // the newest reply while its turn runs: the line beside it flows until
+        // the reply lands, stops or fails.
+        const replyInFlight = !isUser && replyGrowing && index === messages.length - 1;
         return (
         <div key={message.id} className="max-w-3xl mx-auto">
           <div className={`group flex gap-3 ${isUser ? 'justify-end' : ''}`}>
@@ -359,7 +378,10 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                 <div className="h-7 w-7 rounded-full bg-accent flex items-center justify-center">
                   <HootIcon className="h-4 w-4 text-foreground" />
                 </div>
-                <div className="mt-1 flex-1 w-0.5 bg-accent-cyan/25" />
+                <div
+                  data-testid="hoot-thread-line"
+                  className={`mt-1 flex-1 w-0.5 bg-accent-cyan/25${replyInFlight ? ' animate-hoot-thread' : ''}`}
+                />
               </div>
             )}
 
@@ -619,8 +641,6 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
           </div>
         </div>
       )}
-
-      <div ref={bottomRef} />
       </div>
     </div>
     </>

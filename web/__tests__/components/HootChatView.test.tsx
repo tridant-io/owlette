@@ -705,3 +705,30 @@ describe('HootChatView plan', () => {
     expect(screen.getByTestId('chat-window')).toHaveAttribute('data-can-edit', 'true');
   });
 });
+
+describe('HootChatView new hoot', () => {
+  const composer = () => screen.getByRole('textbox', { name: 'chat message' });
+
+  it('puts the caret in the composer, so typing goes straight in', async () => {
+    const { user } = renderView();
+    // opening the page takes no focus: on a phone that would pop the keyboard
+    expect(composer()).not.toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'new hoot' }));
+
+    expect(mockChat.startNewChat).toHaveBeenCalledTimes(1);
+    expect(composer()).toHaveFocus();
+    // the fixture's question holds no x, so one arriving means the key landed here
+    await user.keyboard('x');
+    expect(mockChat.setInput).toHaveBeenLastCalledWith(expect.stringContaining('x'));
+  });
+
+  it('leaves focus alone when a site change starts the chat', async () => {
+    const { user } = renderView();
+
+    await user.click(screen.getByRole('button', { name: 'switch to site b' }));
+
+    expect(mockChat.startNewChat).toHaveBeenCalledTimes(1);
+    expect(composer()).not.toHaveFocus();
+  });
+});

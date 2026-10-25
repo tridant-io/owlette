@@ -947,6 +947,37 @@ input[type="week"] {
   animation: chart-plot-draw 2.4s ease-in-out infinite;
 }
 
+/* hoot's thread line while its reply is in flight (ChatWindow): a soft bright
+   segment runs down the line on a loop, fading in at the top and out at the
+   bottom, like a vertical loading bar. the segment is a 4rem band at the top of
+   a layer as tall as the line, so translating that layer by 100% carries it the
+   whole length whatever the reply's height. transform and opacity only. */
+@keyframes hoot-thread {
+  0%   { transform: translateY(-4rem); opacity: 0; }
+  20%  { opacity: 1; }
+  70%  { opacity: 1; }
+  100% { transform: translateY(100%); opacity: 0; }
+}
+.animate-hoot-thread {
+  position: relative;
+  overflow: hidden;
+}
+.animate-hoot-thread::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent, var(--accent-cyan), transparent) top / 100% 4rem no-repeat;
+  animation: hoot-thread 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* nothing moves: the line holds a brighter tone until the reply lands */
+  .animate-hoot-thread::after {
+    animation: none;
+    background: var(--accent-cyan);
+    opacity: 0.5;
+  }
+}
+
 /* Hoot markdown styling */
 .hoot-markdown {
   line-height: 1.75;
