@@ -1,5 +1,5 @@
 # Active-hours guard — Tasks
-**Progress**: 0/18 complete
+**Progress**: 1/18 complete
 
 Work only in the worktree `C:\Users\admin\Documents\Git-restored\Owlette-active-hours-wt` (branch `feat/active-hours-guard`). Never edit the shared `Owlette` checkout; other sessions work on `dev` there. Read `plan.md` and `context.md` first. Line numbers are from origin/dev 58b08d23.
 
@@ -29,7 +29,7 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
       - Event 1074 names the process that asked for the restart.
   - Done when: context.md names the cause with quoted evidence (log lines, event records, chat tool calls), or states exactly what is still unknown and why.
 
-- [ ] **Task 0.2: Measure and document the Windows restart and active-hours values**
+- [x] **Task 0.2: Measure and document the Windows restart and active-hours values** (done 2026-10-25; table and recommendations in context.md, owner's choice in decision 11)
   - Files: `dev/active/active-hours-guard/context.md` (section "Windows restart facts")
   - Do: answer each question below.
     - Mark each answer **measured** (on this Windows 11 Pro 22631 box, read-only registry reads via `reg query`) or **documented** (with a learn.microsoft.com URL).
@@ -138,25 +138,47 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     - the heartbeat fields.
   - Depends on: Task 1.1
 
-- [ ] **Task 2.2: manage_windows_update: honest status, real disable, safe set_active_hours**
+- [ ] **Task 2.2: manage_windows_update: honest status, outside-hours restarts, no-auto-install, safe set_active_hours**
   - Files:
-    - `agent/src/tools_windows.py` (`manage_windows_update` `:733-~860`)
+    - `agent/src/tools_windows.py` (`manage_windows_update` `:733-858`, `check_pending_reboot` `~:480-535`, `_REBOOT_TASK` `:30`)
     - `agent/src/mcp_tools.py` (`execute_tool`)
+    - `web/lib/talons/templates.ts` (the "update guard" template, `:180-208`)
     - agent unit tests for `tools_windows` (find the existing file, or add `agent/tests/unit/test_manage_windows_update.py`)
   - Do:
+    - Read context.md "Windows restart facts" and decisions 11–13 first. Shorthand there: `P` = `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`, `AU` = `P\AU`, `UX` = `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`, `UPS` = `...\UpdatePolicy\Settings`.
     - **Interface:** `execute_tool(tool_name, params, config, command_id=None, active_hours_override=None)` forwards the override to `manage_windows_update` only.
     - **`get_status`:** keep the existing keys and add:
-      - `active_hours` (from `osadapter.active_hours()`), `inside_active_hours_now`, `machine_local_time`;
-      - every restart-related value task 0.2 listed, with its source;
-      - pending-restart state.
+      - `active_hours` (from `osadapter.active_hours()`, with its source), `inside_active_hours_now`, `machine_local_time`;
+      - `AUOptions`, `NoAutoUpdate`, `ScheduledInstall*`, and `NoAutoRebootWithLoggedOnUsers`, warning when it's set because it switches off policy active hours;
+      - every deadline value in the table, saying which still forces a restart;
+      - MDM conflict flags;
+      - pause state (`UPS\Paused*Status`);
+      - Windows Update pending restart (the `RebootRequired` key, WUA), separate from file renames.
+
+      Fix the `Defer*` reads to `P`.
+    - **New action `limit_auto_restart`** (default for "stop windows restarting on its own"):
+      - Optional `start_hour`/`end_hour`, defaulting to the current window. Set the policy window exactly as `set_active_hours` does.
+      - Delete the local restart-deadline values: `P\SetAutoRestartDeadline`, `P\AutoRestartDeadlinePeriodInDays*`, owlette's old `AU\AutoRestartDeadlinePeriodInDays`, and the `SetComplianceDeadline*`/`ConfigureDeadline*` values under `P`.
+      - Report any deadline that remains (MDM, or a GPO that will re-apply), and that Windows can still restart outside the window.
+    - **New actions `disable_auto_install` / `enable_auto_install`:**
+      - disable: `AU\NoAutoUpdate=0`, `AU\AUOptions=3`, delete `AU\ScheduledInstall*`.
+      - enable: delete `AU\AUOptions`, `AU\NoAutoUpdate` and `AU\ScheduledInstall*`, so Windows' default automatic behaviour returns.
+      - The disable result says security updates now wait until someone installs them.
     - **`set_active_hours`:**
-      - Reject start == end and windows over 18 hours, wrap-aware.
-      - Write the key 0.2 recommends.
+      - Validate: 0–23, start ≠ end, wrap-aware length ≤ the effective max (`P`, then `MDM`, else 18).
+      - Refuse "managed by MDM" when `MDM\ActiveHoursStart`/`End` are set.
+      - Write `P\ActiveHoursStart`, then `P\ActiveHoursEnd`, then `P\SetActiveHours=1` last. Stop writing `UX\IsActiveHoursEnabled`.
       - If now is inside the current window and the new window would put now outside it, refuse with the `active_hours` error unless the override is valid. This stops unattended hoot from shrinking the window and then rebooting.
-    - **New actions `disable_auto_restart` / `enable_auto_restart`:** write and remove exactly the values 0.2 recommends. The result says plainly what changed and what it can't stop (a restart already pending).
-    - **`pause`:** write the full set 0.2 lists.
+      - Report the read-back window and that Settings can no longer change it.
+    - **`pause` / `resume`:**
+      - pause writes all six `UX` values (UTC `%Y-%m-%dT%H:%M:%SZ`) and reports `paused` only when `UPS\Paused{Quality,Feature}Status` reads 1, else "written, not yet confirmed by Windows".
+      - If `P\SetDisablePauseUXAccess=1` or a policy pause is present, report it instead of writing.
+      - resume deletes all six.
+    - **Remove `set_restart_deadline`.** It never worked and only forced restarts. Remove it from the "update guard" template directive too, which then sets active hours via `limit_auto_restart`.
+    - **Deferrals:** `set_feature_deferral` / `set_quality_deferral` write to `P`.
+    - **`check_pending_reboot`:** don't report `PendingFileRenameOperations` alone as a Windows Update restart. Report it as `file_renames`. Stop reading the non-existent `\UpdateOrchestrator\Reboot` task as a source of truth on Win11 (report null with "unknown on this build").
     - Every action keeps the `[MCP-AUDIT]` log line.
-  - Done when: pytest is green with fake winreg asserting each action's writes, the refusal case and the validation errors.
+  - Done when: pytest is green with fake winreg asserting each action's writes and deletes, the refusal case, the MDM refusal, the validation errors, the pause read-back, and the `Defer*` key fix; the template test passes.
   - Depends on: Task 0.2, Task 1.1
 
 - [ ] **Task 2.3: Routes accept the override and deferral; audit; openapi; log labels**
@@ -189,10 +211,11 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - Do:
     - **Schemas** (`mcp-tools.ts`):
       - `reboot_machine` (`:1305`) gains `when` (`now` | `after_active_hours`), `override_active_hours` (boolean) and `reason` (string). `shutdown_machine` (`:1314`) and `deploy_software` (`:1221`) gain the override and reason.
-      - `manage_windows_update` (`:653-695`) gains `disable_auto_restart`, `enable_auto_restart`, and the override and reason for `set_active_hours`.
+      - `manage_windows_update` (`:653-695`) gains `limit_auto_restart`, `disable_auto_install`, `enable_auto_install`, and the override and reason for `set_active_hours`. It loses `set_restart_deadline` and `deadline_days` (2.2 removes it).
     - **Honest descriptions:**
       - `set_scheduled_install` turns on scheduled install and Windows then restarts at that time.
-      - `set_restart_deadline` makes Windows force a restart after that many days.
+      - `limit_auto_restart`: Windows restarts for updates only outside active hours; a nightly restart can still happen.
+      - `disable_auto_install`: no automatic installs and so no update restarts, but security updates wait for a person.
       - Active hours hold Windows' own restarts only until a deadline passes, and owlette refuses reboots, shutdowns and deployments inside them.
       - The countdown is 60 s, not 30 (`REBOOT_OS_COUNTDOWN_SECONDS`, `owlette_service.py:200`). Drop "quiet hours".
     - **`list_talons`** (`:1060`) moves to tier 1. Update `EXPECTED_TIER2` (`mcp-tools.test.ts:63`). Rewrite the tier assertion in `talon-tools.test.ts:156-162`: reads tier 1, writes tier 2. Its comment should argue the reversal: members already read talons (`firestore.rules:654-658`, `/talons` via `hooks/useTalons.ts:40`).
@@ -264,7 +287,12 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
       - never pass `override_active_hours` unless the operator explicitly asked to act inside active hours and gave a reason;
       - prefer `when: after_active_hours`.
 
-      And: when asked to stop Windows restarting on its own, call `manage_windows_update disable_auto_restart`, then `get_status`, and report what changed and what it can't stop.
+      And: when asked to stop Windows restarting on its own:
+      - call `manage_windows_update limit_auto_restart` (asking for the hours if unknown), then `get_status`;
+      - report what changed, that a restart can still happen outside active hours, and any deadline that remains;
+      - use `disable_auto_install` only when the operator says they want no update restarts at all, after saying security updates will then wait for a person.
+
+      Never claim a setting changed without the tool result showing it.
     - **Autonomous prompt** (`buildAutonomousSystemPrompt` `:315-344`, which has its own rules and no time context): add the time line and the same rule, without the override.
   - Done when: jest is green, prompt tests assert the rule and the time line, and eslint and tsc are clean.
   - Depends on: Task 2.4
@@ -371,8 +399,13 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
     1. Set active hours to include now. The dashboard reboot shows the window. Restart now without a reason is impossible; with a reason it reboots, and the site log has `active_hours_override` with the reason.
     2. Defer with a window ending in 5 minutes: the pill shows "restart at", the reboot fires at the end, and cancel works on a second run.
     3. Autonomous hoot with `maxTier: 3` can't override; a crafted override in its params never reaches the command doc.
-    4. A hoot chat on that machine: "stop windows from restarting this machine on its own" → the chat shows `manage_windows_update disable_auto_restart`, and `reg query` shows the 0.2 values.
-    5. A crash loop inside the window defers.
+    4. A hoot chat on that machine: "stop windows from restarting this machine on its own".
+       - The chat shows `manage_windows_update limit_auto_restart` and hoot's explanation of the nightly window.
+       - `reg query` shows `P\SetActiveHours=1` with the window and no deadline values.
+       - Then "no update restarts at all": hoot explains the trade-off, calls `disable_auto_install`, and `AU\AUOptions=3`.
+       - Restore afterwards with `enable_auto_install`.
+    5. In the same sitting, the owner checks from context.md: the Settings pause and `reg query`, the "adjust automatically" toggle, and the elevated `schtasks` read.
+    6. A crash loop inside the window defers.
   - Done when: context.md has screenshots, log lines and registry output for each step.
   - Depends on: Task 6.1
 

@@ -3,7 +3,7 @@
 
 ## Summary
 
-On Windows, the agent refuses reboot, shutdown and deployments while the machine is inside its active hours, unless the command carries an override a person approved. A refused reboot can instead wait for the window to end. hoot gets a real "stop Windows restarting on its own" action, an honest `set_active_hours`, and a rule to check active hours and talons before acting. It started from two reports: hoot had no awareness of either, and Jeff's machine rebooted itself after hoot agreed to stop that.
+On Windows, the agent refuses reboot, shutdown and deployments while the machine is inside its active hours, unless the command carries an override a person approved. A refused reboot can instead wait for the window to end. hoot gets working ways to stop Windows restarting on its own (restarts only outside active hours by default; no automatic installs when the operator wants zero restarts), an honest `set_active_hours`, and a rule to check active hours and talons before acting. It started from two reports: hoot had no awareness of either, and Jeff's machine rebooted itself after hoot agreed to stop that.
 
 ## Owner decisions (2026-10-24/25)
 
@@ -16,7 +16,8 @@ On Windows, the agent refuses reboot, shutdown and deployments while the machine
 7. owlette's crash-loop reboot inside active hours waits for the window to end; the dashboard's existing approve button can still reboot now (with an override).
 8. The weekly reboot schedule is left alone: a person chose that time.
 9. hoot checks active hours and talons before disruptive actions; `list_talons` moves to tier 1; hoot's time context gains the machine's local time.
-10. hoot can set active hours (it already can; the writer gets fixed) and gains a real `disable_auto_restart`.
+10. hoot can set active hours (it already can; the writer gets fixed).
+11. Stopping Windows' own restarts (after task 0.2 showed nothing on Win11 Pro stops them outright): `limit_auto_restart` is the default (policy active hours plus no restart deadline: Windows restarts only outside the window). `disable_auto_install` (`AUOptions=3`) is for when the operator explicitly wants zero update restarts and accepts that security updates wait for a person. Never `NoAutoRebootWithLoggedOnUsers`.
 
 ## Approach
 
@@ -32,13 +33,19 @@ On Windows, the agent refuses reboot, shutdown and deployments while the machine
 
 **Deferred reboot.** `reboot_machine` with `when: 'after_active_hours'` persists its own record in `reboot_state.json` (not `attempt`, which would disable the connection watchdog, `connection_manager.py:872-877`) and sets `rebootDeferredUntil`. The agent re-announces it after the startup flag clear (`owlette_service.py:9445-9462`), fires it through the scheduled-reboot path at the window end, re-holds it if the machine is inside the window again, and `cancel_reboot` clears it. Deferral isn't an override, so any caller, autonomous hoot included, can use it.
 
-**hoot.** Honest tool descriptions: `set_scheduled_install` turns on scheduled install-and-restart, and `set_restart_deadline` forces a restart. New `disable_auto_restart` / `enable_auto_restart` actions, and a fixed `pause`, whose values come from task 0.2. `set_active_hours` validates the window (start ≠ end, ≤ 18 hours), writes the value Windows actually honours, and won't move "now" out of the window without an override. A prompt rule tells hoot to check active hours and talons before acting, and to use `disable_auto_restart` when asked. The time context gains the machine's local time.
+**hoot.**
+- Honest tool descriptions: `set_scheduled_install` turns on scheduled install-and-restart.
+- New `limit_auto_restart`, `disable_auto_install` and `enable_auto_install` actions, plus a fixed `pause`, all built on task 0.2's values.
+- `set_restart_deadline` is removed: it never worked (wrong key) and only forced restarts.
+- `set_active_hours` validates the window (start ≠ end, at most 18 hours), writes the policy value Windows honours over the auto-adjust setting, and won't move "now" out of the window without an override.
+- A prompt rule tells hoot to check active hours and talons before acting, to offer the outside-hours option first, and to explain the trade-off before turning off automatic installs.
+- The time context gains the machine's local time.
 
 ## Waves (detail in tasks.md)
 
 - **Wave 0, facts:** 0.1 Jeff's reboot cause · 0.2 Windows restart and active-hours values, measured and documented.
 - **Wave 1:** 1.1 agent reader and maths · 1.2 server strips override names everywhere · 1.3 glossary entry and ADR 0013.
-- **Wave 2:** 2.1 agent guard, override log, heartbeat, `Error:` prefix fix · 2.2 `manage_windows_update` fixes and new actions · 2.3 commands and deployments routes, audit, openapi, logs labels · 2.4 hoot tools, approval and override wiring, `list_talons` tier 1.
+- **Wave 2:** 2.1 agent guard, override log, heartbeat, `Error:` prefix fix · 2.2 `manage_windows_update` fixes, `limit_auto_restart`, `disable_auto_install`, deferral key fix, `set_restart_deadline` removed · 2.3 commands and deployments routes, audit, openapi, logs labels · 2.4 hoot tools, approval and override wiring, `list_talons` tier 1.
 - **Wave 3:** 3.1 agent deferred reboot and crash-loop deferral · 3.2 hoot prompt rule and machine local time · 3.3 dashboard reboot and shutdown flow.
 - **Wave 4:** 4.1 status pill deferred state · 4.2 CLI and SDK flags · 4.3 deployments page override.
 - **Wave 5:** 5.1 docs and both changelogs.
@@ -61,6 +68,6 @@ On Windows, the agent refuses reboot, shutdown and deployments while the machine
 - The only exception is an override a person approved on a single machine; it is logged with `approvedBy` and the reason.
 - Autonomous hoot, talons, follow-ups and the public conversations API can't override, proven by tests that feed the override through each funnel.
 - "Restart when active hours end" fires at the window end, survives a service restart, and can be cancelled. A crash loop inside the window defers instead of rebooting.
-- In a hoot chat on a real Windows machine, "stop windows from restarting this machine on its own" calls `disable_auto_restart`, and the registry shows the values from 0.2.
+- In a hoot chat on a real Windows machine, "stop windows from restarting this machine on its own" calls `limit_auto_restart` and explains the nightly window. "No update restarts at all" calls `disable_auto_install` after the security trade-off. The registry shows the expected values each time.
 - Jeff's reboot has a named cause with evidence.
 - Agent pytest, web jest, lint, typecheck, the rules tests and the e2e suite are green. UI changes have screenshot review in light and dark at desktop and phone widths.
