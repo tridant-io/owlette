@@ -102,9 +102,9 @@ describe('modifier mapping', () => {
 
   // every host and viewer, under both mappings: [host, viewer, what swap sends for MODIFIERS].
   it.each([
-    ['windows', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight']],
-    ['linux', 'mac', ['ControlLeft', 'ControlRight', 'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight']],
-    ['macos', 'pc', ['MetaLeft', 'MetaRight', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight']],
+    ['windows', 'mac', ['ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight']],
+    ['linux', 'mac', ['ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight']],
+    ['macos', 'pc', ['ControlLeft', 'ControlRight', 'MetaLeft', 'MetaRight', 'AltLeft', 'AltRight']],
     ['macos', 'mac', [...MODIFIERS]],
     ['windows', 'pc', [...MODIFIERS]],
     ['linux', 'pc', [...MODIFIERS]],

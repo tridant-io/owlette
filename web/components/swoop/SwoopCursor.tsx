@@ -52,6 +52,12 @@
  * draw it at another size, or it is above 32 css px, which browsers silently
  * ignore (PROTOCOL.md §5).
  *
+ * **an overlay moves with the local mouse.** outside pointer lock the
+ * controller's overlay is drawn where its last move sent the machine's
+ * pointer, the moment it is sent, as a css cursor would be: `cpos` is a round
+ * trip behind, and over a slow link every move waited on it. until the first
+ * move, under pointer lock and for a watcher, it is drawn at `cpos`.
+ *
  * the overlay has a thin halo in both black and white: the host draws a
  * monochrome cursor's "invert the screen" pixels as black, which is the
  * i-beam, and over dark text that is nothing at all. the halo colours are the
@@ -73,6 +79,7 @@ const subscribeNever = (): (() => void) => () => {};
 const noCursor = () => NO_CURSOR;
 const onPicture = () => false;
 const noButton = () => false;
+const noPoint = () => null;
 
 /** §5: the largest shape a css cursor can be trusted with. */
 const MAX_CSS_CURSOR_PX = 32;
@@ -133,6 +140,11 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     capture ? () => capture.buttonHeld : noButton,
     noButton,
   );
+  const sent = useSyncExternalStore(
+    capture ? capture.onPointerSentChange : subscribeNever,
+    capture ? () => capture.pointerSent : noPoint,
+    noPoint,
+  );
   // whether the machine's pointer was showing when the press now held went
   // down: windows hides it for a title-bar drag it paints into the picture,
   // while a kiosk's or a player's was hidden all along.
@@ -170,8 +182,9 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
 
   if (!session || !box || !overlay || !state.visible || outside) return null;
 
-  const left = toPixel(state.x, box.left, box.width);
-  const top = toPixel(state.y, box.top, box.height);
+  const at = sent ?? state;
+  const left = toPixel(at.x, box.left, box.width);
+  const top = toPixel(at.y, box.top, box.height);
   if (!state.shape) {
     // no shape yet, or its upload was lost: a plain arrow, hotspot at its tip.
     return (

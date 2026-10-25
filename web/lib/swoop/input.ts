@@ -34,8 +34,11 @@
  *
  * the top user-visible bug in this class of product. every key and button we
  * believe is held is released on blur, on `visibilitychange`, on pointer-lock
- * exit and on detach — exactly once each, because the held sets are cleared as
- * the releases are queued.
+ * exit and on detach — once each, because the held sets are cleared as the
+ * releases are queued. a modifier a key or pointer event says is up is
+ * released before that event goes, and a modifier's release goes twice more a
+ * moment later, because `swoop-input` can lose it or deliver it before its
+ * press.
  */
 
 import type { MachineOsFamily } from '@/lib/machineOs';
@@ -77,6 +80,9 @@ const ESCAPE_TWICE_WINDOW_MS = 500;
 /** owlette swoop has no browser escape hold, so escape held this long leaves fullscreen there. */
 const ESCAPE_HOLD_MS = 2000;
 
+/** when a release goes again, see `repeatRelease`. */
+const RELEASE_REPEAT_MS = [100, 500] as const;
+
 const TICK_FALLBACK_MS = 16;
 
 export interface InputCaptureOptions {
@@ -117,6 +123,15 @@ export interface InputCapture {
   readonly buttonHeld: boolean;
   /** called whenever `buttonHeld` changes; returns the unsubscribe. */
   onButtonHeldChange(listener: () => void): () => void;
+  /**
+   * where the last absolute move sent the machine's pointer, normalised over
+   * the picture: the page draws it there at once rather than a round trip
+   * later at the host's `cpos`. null before the first move and under pointer
+   * lock, which has no position of its own.
+   */
+  readonly pointerSent: { x: number; y: number } | null;
+  /** called whenever `pointerSent` changes; returns the unsubscribe. */
+  onPointerSentChange(listener: () => void): () => void;
   /**
    * the keyboard's way off the stage, which otherwise sends every key — tab
    * included — to the host. a second tap of escape within half a second, with
@@ -195,13 +210,23 @@ function defaultSchedule(tick: () => void): () => void {
 
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
 
-/** a flag the page reads, and is told about each time it changes. */
-function watchedFlag() {
-  let value = false;
+/** each flag an event carries for a modifier, and the keys that set it. */
+const MODIFIER_FLAGS = [
+  ['ctrlKey', ['ControlLeft', 'ControlRight']],
+  ['metaKey', ['MetaLeft', 'MetaRight']],
+  ['altKey', ['AltLeft', 'AltRight']],
+  ['shiftKey', ['ShiftLeft', 'ShiftRight']],
+] as const;
+
+const MODIFIER_CODES: ReadonlySet<string> = new Set(MODIFIER_FLAGS.flatMap(([, codes]) => codes));
+
+/** a value the page reads, and is told about each time it changes. */
+function watched<T>(initial: T) {
+  let value = initial;
   const listeners = new Set<() => void>();
   return {
-    get: (): boolean => value,
-    set: (next: boolean): void => {
+    get: (): T => value,
+    set: (next: T): void => {
       if (next === value) return;
       value = next;
       for (const listener of listeners) listener();
@@ -255,9 +280,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   // held. nothing reaches the host from there: a move pinned to the edge drags
   // the machine's pointer along it, and a click in the bars lands on whatever
   // sits at the screen's edge.
-  const outside = watchedFlag();
+  const outside = watched(false);
   // whether `heldButtons` has anything in it, for the page.
-  const held = watchedFlag();
+  const held = watched(false);
+  const sent = watched<{ x: number; y: number } | null>(null);
 
   /** a client point in the picture's `0..1`, or null while there is no picture box. */
   const onPicture = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -298,6 +324,33 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // `PendingInput & { seq }` is exactly `InputMessage`; the compiler cannot
     // see that through a spread of a union.
     queue.push({ ...message, seq: seq++ } as InputMessage);
+    repeatRelease(message);
+  };
+
+  const repeats = new Set<ReturnType<typeof setTimeout>>();
+  /**
+   * a modifier's release goes again at each of `RELEASE_REPEAT_MS`, because
+   * `swoop-input` is unordered and never retransmits (PROTOCOL.md §3): an up
+   * lost, or overtaking its own down, held it on the host until the next blur,
+   * and on a lossy link that was a ctrl that stuck, every key typed after it a
+   * shortcut. not once it is down again. modifiers only: the host injects
+   * every up it is sent, held or not, so a mouse up sent again is a real
+   * release wherever the pointer has gone, while a letter left down on the
+   * host types nothing more.
+   */
+  const repeatRelease = (message: PendingInput): void => {
+    if (message.t !== 'k' || message.down || !MODIFIER_CODES.has(message.code)) return;
+    const { code } = message;
+    for (const delay of RELEASE_REPEAT_MS) {
+      const timer = setTimeout(() => {
+        repeats.delete(timer);
+        if (heldKeys.has(code)) return;
+        // not through `enqueue`, which would repeat the repeat, forever
+        queue.push({ ...message, tsUs: nowUs(), seq: seq++ } as InputMessage);
+        flush();
+      }, delay);
+      repeats.add(timer);
+    }
   };
 
   const flush = (): void => {
@@ -373,6 +426,27 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (armedKeyDown && code !== armed) releaseArmed();
   };
 
+  /**
+   * the up for every modifier the host has down that this event says is up.
+   * the viewer's os can keep a modifier's keyup with the window still focused,
+   * as a mac's ctrl+arrow for mission control does, and the host then held it
+   * until the next blur, every key typed meanwhile a shortcut. the key the
+   * menu holds for the next key is down on purpose and stays.
+   */
+  const releaseLifted = (event: KeyboardEvent | MouseEvent): void => {
+    // altgr types through ctrl and alt, and firefox on windows and chrome on
+    // linux set neither flag on the character it types.
+    const altGraph = event.getModifierState('AltGraph');
+    for (const [flag, eventCodes] of MODIFIER_FLAGS) {
+      if (event[flag] || (altGraph && (flag === 'ctrlKey' || flag === 'altKey'))) continue;
+      for (const eventCode of eventCodes) {
+        const code = hostCode(eventCode);
+        if (code === null || code === armed || !heldKeys.delete(code)) continue;
+        key(code, false, nowUs());
+      }
+    }
+  };
+
   const nativeKey = (eventCode: string, down: boolean): void => {
     if (detached) return;
     const code = hostCode(eventCode);
@@ -389,6 +463,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (composing || event.isComposing) return;
+    releaseLifted(event);
     if (BROWSER_RESERVED.has(event.code)) return;
     if (event.code === 'Escape') {
       lastEscapeMs = nowMs();
@@ -437,6 +512,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   };
 
   const onPointerMove = (event: PointerEvent): void => {
+    releaseLifted(event);
     const events =
       typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
     const samples = events.length > 0 ? events : [event];
@@ -464,11 +540,14 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       return;
     }
     outside.set(false);
-    enqueue({ t: 'm', x: clamp01(point.x), y: clamp01(point.y), tsUs });
+    const at = { x: clamp01(point.x), y: clamp01(point.y) };
+    sent.set(at);
+    enqueue({ t: 'm', ...at, tsUs });
   };
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button < 0 || event.button > 4) return;
+    releaseLifted(event);
     // under pointer lock the pointer has no position, only the machine's.
     if (!locked && !inPicture(onPicture(event.clientX, event.clientY))) return;
     event.preventDefault();
@@ -510,6 +589,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
 
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
+    releaseLifted(event);
     if (!locked && !inPicture(onPicture(event.clientX, event.clientY))) return;
     enqueue({
       t: 'w',
@@ -546,6 +626,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     locked = nowLocked;
     if (locked) {
       outside.set(false);
+      sent.set(null);
       return;
     }
 
@@ -599,6 +680,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       return held.get();
     },
     onButtonHeldChange: held.subscribe,
+    get pointerSent(): { x: number; y: number } | null {
+      return sent.get();
+    },
+    onPointerSentChange: sent.subscribe,
 
     onEscapeTwice(listener: () => void): () => void {
       escapeTwiceListeners.add(listener);
@@ -652,6 +737,9 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       clearEscapeHold();
       releaseAll();
       cancelSchedule();
+      // the session is going, and its channel with it
+      for (const timer of repeats) clearTimeout(timer);
+      repeats.clear();
       target.removeEventListener('keydown', onKeyDown);
       target.removeEventListener('keyup', onKeyUp);
       target.removeEventListener('pointermove', onPointerMove);

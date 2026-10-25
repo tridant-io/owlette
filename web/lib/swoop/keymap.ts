@@ -109,13 +109,19 @@ export const EXTENDED_CODES: ReadonlySet<string> = new Set(EXTENDED);
 /**
  * what the viewer's shortcut key does on the host. `'swap'`, the default, moves
  * it to where the host keeps its own, so cmd+c from a mac copies on a windows
- * host and ctrl+c from a pc copies on a mac one; `'passthrough'` sends every key
- * as pressed. the conversion happens here, in the browser, before the message
- * is sent — PROTOCOL.md §5: the host never guesses.
+ * host and ctrl+c from a pc copies on a mac one, and the key it displaced takes
+ * its place: a mac's control is the windows key, a pc's windows key the mac's
+ * control. `'passthrough'` sends every key as pressed. the conversion happens
+ * here, in the browser, before the message is sent — PROTOCOL.md §5: the host
+ * never guesses.
  */
 export type ModifierMapping = 'swap' | 'passthrough';
 
-/** what `'swap'` converts for one host and viewer. */
+/**
+ * which way the viewer's shortcut key moves under `'swap'`, for one host and
+ * viewer: it names the setting, while the conversion trades ctrl and meta both
+ * ways whichever it is.
+ */
 export type ModifierSwap = 'cmd-to-ctrl' | 'ctrl-to-cmd';
 
 /** a viewer on a mac keeps its shortcuts on cmd; every other keeps them on ctrl. */
@@ -134,6 +140,14 @@ export function modifierSwap(host: MachineOsFamily, viewerIsMac: boolean): Modif
   return viewerIsMac ? 'cmd-to-ctrl' : null;
 }
 
+/** either swap trades ctrl and meta both ways, so neither end loses a key. */
+const SWAPPED: ReadonlyMap<string, string> = new Map([
+  ['MetaLeft', 'ControlLeft'],
+  ['MetaRight', 'ControlRight'],
+  ['ControlLeft', 'MetaLeft'],
+  ['ControlRight', 'MetaRight'],
+]);
+
 /** the code we actually put on the wire for `code`. */
 export function applyModifierMapping(
   code: string,
@@ -141,16 +155,8 @@ export function applyModifierMapping(
   viewerIsMac: boolean,
   mapping: ModifierMapping,
 ): string {
-  if (mapping !== 'swap') return code;
-  const swap = modifierSwap(host, viewerIsMac);
-  if (swap === 'cmd-to-ctrl') {
-    if (code === 'MetaLeft') return 'ControlLeft';
-    if (code === 'MetaRight') return 'ControlRight';
-  } else if (swap === 'ctrl-to-cmd') {
-    if (code === 'ControlLeft') return 'MetaLeft';
-    if (code === 'ControlRight') return 'MetaRight';
-  }
-  return code;
+  if (mapping !== 'swap' || modifierSwap(host, viewerIsMac) === null) return code;
+  return SWAPPED.get(code) ?? code;
 }
 
 /** null for a code the table does not know at all. */
