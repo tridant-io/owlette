@@ -19,8 +19,12 @@ import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { cn } from '@/lib/utils';
 import { closeViewerWindow, currentViewerWindow } from '@/lib/swoop/viewerWindow';
 
-/** room for the traffic lights at the top left of a macos window with an overlay title bar. */
-export const TRAFFIC_LIGHTS_INSET_PX = 78;
+/**
+ * room for the traffic lights at the top left of a macos window with an overlay
+ * title bar: 16 px in, where `TRAFFIC_LIGHTS` in desktop/viewer/src/windows.rs
+ * lands them, three 16 px lights 23 px apart, then 8 px of air.
+ */
+export const TRAFFIC_LIGHTS_INSET_PX = 86;
 
 /**
  * spread on a bar to make it the window's drag surface. `deep`: a press on

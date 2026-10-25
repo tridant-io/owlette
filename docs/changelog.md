@@ -11,6 +11,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — owlette swoop's traffic lights sit centred on its bar on a Mac
+
+The close, minimize and full-screen buttons sat where macOS puts them for its
+own title bar, 8 points above the middle of owlette swoop's 48-point bar. The
+app now places them 16 points down and 16 points in, centred on the bar, and
+the page leaves them room to match. The page's half goes out with the web
+deploy and the buttons move with the app update; until it is installed the bar
+only leaves a little more room.
+
 ### fixed — swoop's pointer moves with your mouse, not with the machine's reply
 
 Over a slow or jittery link, such as a phone's 5G, the machine's pointer

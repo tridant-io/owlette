@@ -34,6 +34,15 @@ const MAIN_SIZE: (f64, f64) = (1060.0, 680.0);
 const SWOOP_SIZE: (f64, f64) = (1280.0, 800.0);
 const MIN_SIZE: (f64, f64) = (780.0, 540.0);
 
+// the traffic lights centred on the page's 48 px top bar, 16 pt down and 16 pt
+// in. tao makes the title-bar container the buttons' height plus `y` and keeps
+// their offset from its bottom, so where they land is measured, not derived:
+// on macos 26.6 (2026-10-25) these put the close button's top left at 16, 16
+// (`x` 16, `y` 22 had put it at 15, 12). the default left them 8 pt down,
+// centred 8 pt high
+#[cfg(target_os = "macos")]
+const TRAFFIC_LIGHTS: (f64, f64) = (17.0, 26.0);
+
 // each new swoop window steps right and down from the newest one still open,
 // so two sessions never stack exactly; after the last step it starts over
 const CASCADE_OFFSET: f64 = 32.0;
@@ -247,7 +256,8 @@ fn build(
   #[cfg(target_os = "macos")]
   let builder = builder
     .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .hidden_title(true);
+    .hidden_title(true)
+    .traffic_light_position(LogicalPosition::new(TRAFFIC_LIGHTS.0, TRAFFIC_LIGHTS.1));
   let builder = builder
     .user_agent(&user_agent())
     .on_navigation(navigation_allowed)
