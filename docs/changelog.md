@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — owlette swoop's Mac icon fills its tile like owlette's
+
+On a Mac, owlette swoop's icon sat shrunk on a grey tile in the Dock, Finder
+and Launchpad, because macOS 26 shrinks an app icon not made for it. It now
+has one made for it, like owlette's: its dark disc fills most of the tile, the
+same size as owlette's eye.
+
 ### added — release notes a click from every update and download
 
 The update owlette dialog now links the release notes beside the version it

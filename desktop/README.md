@@ -132,9 +132,12 @@ swoop window opens 32 px right and down from the newest one still open; it is
 centred when there is none, when that one is minimised, and again after eight
 steps. There is no tray and no agent coupling: the app reads and writes nothing under the
 owlette data root, so it runs on a workstation without an agent. It has icons of
-its own (`desktop/viewer/icons`, the small eye, beside the desktop app's full one) and
-shares nothing with the desktop app; the two crates are separate on purpose
-(their own identifiers, WebView2 profiles and instance locks).
+its own (`desktop/viewer/icons`, the small eye, beside the desktop app's full one;
+on macOS 26 the `Assets.car` in `icons/macos`, compiled from its Icon Composer
+source with `desktop/src-tauri/icons/macos/compile.sh desktop/viewer/icons/macos`,
+sizes it to match the desktop app's Dock icon) and shares no code with the desktop
+app; the two crates are separate on purpose (their own identifiers, WebView2
+profiles and instance locks).
 
 ```bash
 cd desktop/viewer
