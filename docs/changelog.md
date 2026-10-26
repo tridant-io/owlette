@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.22] - 2026-10-25
+
 ### changed — swoop's fullscreen leaves your mouse free
 
 Fullscreen in a browser or in owlette swoop on Windows and Linux captured the
