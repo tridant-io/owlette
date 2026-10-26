@@ -47,6 +47,7 @@ const FRESH_ID = `mach-fresh-${SUFFIX}`;
 const LIVE_ID = `mach-live-${SUFFIX}`;
 const KILLED_ID = `mach-killed-${SUFFIX}`;
 const CURSOR_ID = `mach-cursor-${SUFFIX}`;
+const FIT_ID = `mach-fit-${SUFFIX}`;
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
 /** a real png, so the drawn pointer is an image the page lays out. */
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -65,6 +66,8 @@ let watcher: TestUser;
 // an operator of its own, so its sign-in never spends a code another spec's just did.
 let pointerOperator: TestUser;
 let pointerOperatorSecret = '';
+let fitOperator: TestUser;
+let fitOperatorSecret = '';
 
 async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
   const user = await seedDedicatedUser(dedicatedUser('member', suffix));
@@ -197,6 +200,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, LIVE_ID, { displayName: `live box ${SUFFIX}` });
   await seedMachine(SITE_ID, KILLED_ID, { displayName: `killed box ${SUFFIX}` });
   await seedMachine(SITE_ID, CURSOR_ID, { displayName: `cursor box ${SUFFIX}` });
+  await seedMachine(SITE_ID, FIT_ID, { displayName: `fit box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -209,6 +213,11 @@ test.beforeAll(async () => {
   pointerOperator = pointerSeeded.user;
   pointerOperatorSecret = pointerSeeded.secret;
   await grantMembership(SITE_ID, pointerOperator.uid, 'admin');
+
+  const fitSeeded = await seedTotpUser(`swoop-fit-${SUFFIX}`);
+  fitOperator = fitSeeded.user;
+  fitOperatorSecret = fitSeeded.secret;
+  await grantMembership(SITE_ID, fitOperator.uid, 'admin');
 
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
   await getAdminDb()
@@ -648,6 +657,38 @@ test.describe('through a host, inside owlette swoop', () => {
       }).toPass({ timeout: 15_000 });
       await expect(stage).not.toHaveCSS('cursor', 'none');
       expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  test('a 16:9 machine fills the window to its edges at the sizes the app opens with', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: FIT_ID });
+    try {
+      // control, so the bar holds every button it can
+      await signIn(page, fitOperator, fitOperatorSecret, { fresh: true, inApp: true, redirect: '/swoop' });
+      const granted = nextGrant(page, FIT_ID);
+      await page.goto(`/swoop/${SITE_ID}/${FIT_ID}`);
+      expect((await granted).ctl).toBe(true);
+      await expectHostPicture(page);
+
+      const bar = page.getByTestId('session-bar');
+      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      // desktop/viewer/src/windows.rs: MAIN_SIZE, where the first session opens, and SWOOP_SIZE
+      for (const [width, height] of [
+        [1120, 678],
+        [1280, 768],
+      ]) {
+        await page.setViewportSize({ width, height });
+        // one row of bar, and under it a stage the host's 640x360 fills with no bars
+        await expect.poll(async () => (await bar.boundingBox())?.height).toBe(48);
+        await expect
+          .poll(async () => {
+            const box = (await stage.boundingBox())!;
+            return box.width * 9 === box.height * 16 ? [box.width, box.height] : null;
+          })
+          .toEqual([width, height - 48]);
+      }
     } finally {
       await host.stop();
     }

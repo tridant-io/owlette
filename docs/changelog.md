@@ -11,6 +11,24 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop's pointer keeps its size while you drag a window
+
+Dragging a window by its title bar on a Windows machine shrank the pointer to
+the size of the picture until you let go, often to half its size: Windows
+paints the pointer into the picture for the drag and stops reporting it, so
+swoop stopped drawing its own. The machine now reports where the pointer is
+for the drag, and swoop keeps drawing it at its usual size; the painted one
+can trail a moment behind it while the window moves. Needs this agent on the
+machine.
+
+### changed — owlette swoop's windows fit a 16:9 screen exactly
+
+owlette swoop now opens its windows at a size where a 16:9 machine fills the
+picture to the edges, with no bars above and below: 1120×678 for the first
+session and 1280×768 for each one after it, the picture plus the session bar
+on top, where it starts. Comes with owlette swoop from this release, on the
+computer you watch from.
+
 ### fixed — hoot never promises a held restart on a machine that can't hold one
 
 On an agent older than 4.1.21, or off Windows, hoot no longer sends "restart

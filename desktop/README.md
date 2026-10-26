@@ -127,7 +127,9 @@ page goes to the main window as before. An app-link,
 `/app-link?code=<code>&next=/swoop/<site>/<machine>` (the page signs the app
 in, then replaces itself with `next`), counts as its session in all of this; one
 whose `next` is not a relative session path is no session and opens in the main
-window. Each new
+window. The main window opens at 1120×678 and a swoop window at 1280×768: a
+16:9 machine's picture, 1120×630 or 1280×720, under the 48 px session bar, so
+it fills the window with no bars. Each new
 swoop window opens 32 px right and down from the newest one still open; it is
 centred when there is none, when that one is minimised, and again after eight
 steps. There is no tray and no agent coupling: the app reads and writes nothing under the
