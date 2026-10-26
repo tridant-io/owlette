@@ -4,8 +4,8 @@ import { cn } from '@/lib/utils';
 /**
  * owlette swoop's own mark: the small eye its app icon carries, where owlette's
  * mark is the full eye (`OwletteEyeIcon`). the same pixels as the app's icon
- * (`desktop/src-tauri/icons`, which desktop/viewer's tauri.conf.json points
- * at), so the window, the taskbar and the page show one logo.
+ * (`desktop/viewer/icons/128x128@2x.png`), so the window, the taskbar and the
+ * page show one logo.
  */
 export function SwoopLogo({ size, className }: { size: number; className?: string }) {
   return (
