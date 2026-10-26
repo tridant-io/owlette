@@ -95,10 +95,11 @@ function localTimeLine(localTime: PromptLocalTime, now: Date): string {
 const ACTIVE_HOURS_RULE_HEADING = 'CHECK ACTIVE HOURS AND TALONS FIRST';
 
 /**
- * the agent refuses the dedicated tools inside active hours; on the shell route
- * this text is the only check. every tool, parameter and value it names is pinned
- * against mcp-tools.ts by llm.test.ts. `attended` is false for autonomous hoot,
- * which nobody approves, so it is never offered the override.
+ * an agent that enforces active hours refuses the dedicated tools inside them;
+ * on the shell route this text is the only check. every tool, parameter and
+ * value it names is pinned against mcp-tools.ts by llm.test.ts. `attended` is
+ * false for autonomous hoot, which nobody approves, so it is never offered the
+ * override.
  */
 function activeHoursRule(attended: boolean): string {
   const report = attended ? 'tell the operator' : 'say in your summary';
@@ -109,7 +110,34 @@ function activeHoursRule(attended: boolean): string {
   const noRestarts = attended
     ? 'the operator wants no update restarts at all, after telling them'
     : 'your directive asks for no update restarts at all, and say';
-  return `Before reboot_machine, shutdown_machine, deploy_software or kill_process, or a shell command that does the same, call manage_windows_update with action get_status (on Windows) and list_talons, then ${report} whether the machine is inside its active hours and whether a talon will act on it soon. owlette refuses reboots, shutdowns and deployments inside active hours: prefer reboot_machine with when: "after_active_hours", and never use a shell command to get around a refusal. ${override} To stop Windows restarting the machine on its own, call manage_windows_update with action limit_auto_restart${askHours}, then get_status, and report what changed, that Windows can still restart outside active hours, and any deadline that remains. Use disable_auto_install only when ${noRestarts} that security updates will then wait for a person. Never say a setting changed unless a tool result shows it.`;
+  return `Before reboot_machine, shutdown_machine, deploy_software or kill_process, or a shell command that does the same, call manage_windows_update with action get_status (on Windows) and list_talons, then ${report} whether the machine is inside its active hours and whether a talon will act on it soon. A machine whose agent enforces active hours refuses reboots, shutdowns and deployments inside them: there, prefer reboot_machine with when: "after_active_hours", and never use a shell command to get around a refusal. On any other machine they are not held or refused for active hours, and after_active_hours is not available. ${override} To stop Windows restarting the machine on its own, call manage_windows_update with action limit_auto_restart${askHours}, then get_status, and report what changed, that Windows can still restart outside active hours, and any deadline that remains. Use disable_auto_install only when ${noRestarts} that security updates will then wait for a person. Never say a setting changed unless a tool result shows it.`;
+}
+
+/** a turn's machines, and those whose agent enforces active hours (`capabilities.activeHoursGuard`). */
+export interface PromptActiveHoursGuard {
+  machineIds: readonly string[];
+  guardedIds: readonly string[];
+}
+
+const UNGUARDED_CONSEQUENCE =
+  'reboots, shutdowns and deployments are not held or refused for active hours, and after_active_hours is not available';
+
+function singleMachineGuardLine(guarded: boolean): string {
+  return guarded
+    ? "This machine's agent enforces active hours."
+    : `This machine's agent does not enforce active hours (owlette older than 4.1.21, or not Windows): its ${UNGUARDED_CONSEQUENCE}.`;
+}
+
+/** which of the rule's two cases applies to each of this turn's machines; a fan-out names the unguarded ones. */
+function activeHoursGuardLine({ machineIds, guardedIds }: PromptActiveHoursGuard): string {
+  const total = machineIds.length;
+  const unguarded = machineIds.filter((id) => !guardedIds.includes(id));
+  if (total === 1) return singleMachineGuardLine(unguarded.length === 0);
+  if (unguarded.length === 0) return `All ${total} machines enforce active hours.`;
+  if (unguarded.length === total) return `None of the ${total} machines enforce active hours: their ${UNGUARDED_CONSEQUENCE}.`;
+  const named = promptSafeIds(unguarded);
+  const others = named.length > 0 ? `The others (${formatPromptIds(named)})` : 'The others';
+  return `${total - unguarded.length} of ${total} machines enforce active hours. ${others} do not: their ${UNGUARDED_CONSEQUENCE}.`;
 }
 
 /**
@@ -175,18 +203,20 @@ const HOOT_IDENTITY = `You are hoot, owlette's AI assistant for managing media s
 
 export function buildSystemPrompt(
   machineName: string,
-  siteMode: boolean = false,
-  processes?: ProcessSummary[],
-  localTime?: PromptLocalTime,
+  siteMode: boolean,
+  processes: ProcessSummary[] | undefined,
+  localTime: PromptLocalTime | undefined,
+  activeHoursGuard: PromptActiveHoursGuard,
 ): string {
   const coreRules = buildCoreRules(localTime);
+  const guardLine = `\n\n${activeHoursGuardLine(activeHoursGuard)}`;
 
   if (siteMode) {
     return `${HOOT_IDENTITY} You operate in site-wide mode — your tool calls will be sent to ALL online machines in the site simultaneously and results will be aggregated.
 
 ${coreRules}
 
-${FAN_OUT_RESULT_RULES}
+${FAN_OUT_RESULT_RULES}${guardLine}
 
 ${languageRule("a machine's name")}
 
@@ -201,7 +231,7 @@ ${coreRules}
 
 Tool calls are executed on that remote machine, not your local environment — you are observing and acting on "${machineName}" from a distance.
 
-Use your tools to get real data. If a tool returns an error, explain what happened and suggest next steps.${buildProcessContext(processes)}
+Use your tools to get real data. If a tool returns an error, explain what happened and suggest next steps.${buildProcessContext(processes)}${guardLine}
 
 ${languageRule(`"${machineName}"`)}
 
@@ -233,6 +263,8 @@ export interface HootSystemPromptOptions {
   narrowedByMention?: boolean;
   /** the machine's zone on a single-machine turn, the site's on a fan-out. */
   localTime?: PromptLocalTime;
+  /** the targets whose agent enforces active hours; absent means none, the safe thing to tell the model. */
+  activeHoursGuardIds?: readonly string[];
 }
 
 /**
@@ -265,6 +297,7 @@ function buildTargetsBlock(options: HootSystemPromptOptions, ids: string[]): str
   if (ids.length > 0) {
     const noun = ids.length === 1 ? 'machine' : 'machines';
     lines.push(`Tool calls in this turn go to ${ids.length} ${noun}: ${formatPromptIds(ids)}.`);
+    lines.push(activeHoursGuardLine({ machineIds: ids, guardedIds: options.activeHoursGuardIds ?? [] }));
   }
 
   const offline = promptSafeIds(options.skipped?.offline);
@@ -387,6 +420,7 @@ export function buildAutonomousSystemPrompt(
   directive: string,
   eventContext: string,
   machineTimeZone?: string,
+  activeHoursGuard: boolean = false,
 ): string {
   return `You are hoot, owlette's AI assistant, operating in AUTONOMOUS mode. You have been triggered by a system alert — no human initiated this conversation. You specialize in managing interactive and immersive media installations (TouchDesigner, Unreal Engine, Unity, digital signage, media walls, kiosks).
 
@@ -397,6 +431,7 @@ ${eventContext}
 
 You are connected to machine "${machineName}". Your job is to investigate the issue using your tools, attempt remediation, and report your findings.
 ${localTimeLine({ scope: 'machine', timeZone: machineTimeZone }, new Date())}
+${singleMachineGuardLine(activeHoursGuard)}
 
 RULES:
 1. NEVER HALLUCINATE — every claim about system state, specs, or metrics MUST come from a tool call. If you haven't checked, you don't know. A wrong answer is worse than no answer.

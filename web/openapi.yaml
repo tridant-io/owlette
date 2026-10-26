@@ -6829,8 +6829,11 @@ paths:
         (`user:<uid>` or `apiKey:<keyId>`) as `approvedBy`, and the agent logs
         `active_hours_override` to the site log. Instead of overriding,
         `reboot_machine` can take `params.when: after_active_hours` to restart
-        when active hours end. macOS, Linux and agents without the guard ignore
-        both fields, so there `after_active_hours` restarts at once.
+        when active hours end. Only a machine with the guard can hold that
+        restart: anywhere else (an older agent, macOS, Linux) the agent would
+        restart at once, so the request is refused with 409
+        `held_restart_unsupported` and nothing is queued. macOS, Linux and
+        agents without the guard ignore `active_hours_override`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6877,7 +6880,7 @@ paths:
                       type: string
                       enum: [now, after_active_hours]
                       default: now
-                      description: "`reboot_machine` only. `after_active_hours` restarts when the machine's active hours end, or now when it is outside them."
+                      description: "`reboot_machine` only. `after_active_hours` restarts when the machine's active hours end, or now when it is outside them. Needs `capabilities.activeHoursGuard: 1` on the machine, else `409 held_restart_unsupported`."
                     active_hours_override:
                       $ref: '#/components/schemas/ActiveHoursOverrideRequest'
                     monitor:
@@ -6947,6 +6950,9 @@ paths:
         '409':
           description: |
             `machine_offline` — machine is not currently connected; queueing is refused.
+            `held_restart_unsupported` — `reboot_machine` with `when: after_active_hours`
+            on a machine without `capabilities.activeHoursGuard: 1`, whose agent would
+            restart at once; nothing is queued.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -13480,7 +13486,8 @@ components:
             Absent or null on an agent too old to report them.
             `activeHoursGuard: 1` marks a Windows agent that refuses
             `reboot_machine`, `shutdown_machine` and deployments inside its
-            `activeHours` unless the command carries an override.
+            `activeHours` unless the command carries an override, and the
+            only kind of machine that accepts `when: after_active_hours`.
           type: object
           nullable: true
           additionalProperties: true

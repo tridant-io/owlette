@@ -65,6 +65,15 @@ export function parseActiveHours(value: unknown): ActiveHours | undefined {
 }
 
 /**
+ * `capabilities.activeHoursGuard === 1`: only a windows agent of 4.1.21 or later
+ * writes it, and only such an agent refuses inside active hours or can hold a
+ * restart until they end.
+ */
+export function hasActiveHoursGuard(machine: { capabilities?: { activeHoursGuard?: unknown } | null }): boolean {
+  return machine.capabilities?.activeHoursGuard === 1;
+}
+
+/**
  * The window this machine's agent enforces, or null where it enforces none:
  * only windows agents with `capabilities.activeHoursGuard` refuse, and only
  * while they report a window. Every other agent ignores `when` and restarts at
@@ -78,7 +87,7 @@ export function activeHoursGuardOf(machine: {
 }): ActiveHoursGuard | null {
   // an absent osFamily is a pre-3.4 agent, and those are all windows
   if ((machine.osFamily ?? 'windows') !== 'windows') return null;
-  if (machine.capabilities?.activeHoursGuard !== 1) return null;
+  if (!hasActiveHoursGuard(machine)) return null;
   const window = parseActiveHours(machine.activeHours);
   if (!window) return null;
   return { window, timezone: machine.machineTimezone ?? undefined };

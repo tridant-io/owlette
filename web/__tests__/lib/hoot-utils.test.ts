@@ -149,6 +149,7 @@ type MachineFixture = {
   online?: unknown;
   cortexEnabled?: unknown;
   machine_timezone_iana?: unknown;
+  capabilities?: unknown;
 };
 
 /**
@@ -182,6 +183,7 @@ import {
   executeExistingCommand,
   executeServerSideTool,
   buildExecutableTools,
+  getMachineSummary,
   listSiteMachines,
   resolveHootTargets,
   assertLlmKeyAvailable,
@@ -584,10 +586,10 @@ describe('listSiteMachines', () => {
     ]);
 
     await expect(listSiteMachines(db, 's1')).resolves.toEqual([
-      { id: 'kiosk-01', online: true, hootEnabled: true },
-      { id: 'kiosk-02', online: false, hootEnabled: false },
-      { id: 'kiosk-03', online: true, hootEnabled: true },
-      { id: 'kiosk-04', online: false, hootEnabled: true },
+      { id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false },
+      { id: 'kiosk-02', online: false, hootEnabled: false, activeHoursGuard: false },
+      { id: 'kiosk-03', online: true, hootEnabled: true, activeHoursGuard: false },
+      { id: 'kiosk-04', online: false, hootEnabled: true, activeHoursGuard: false },
     ]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
   });
@@ -609,6 +611,64 @@ describe('listSiteMachines', () => {
     expect(withZone.timezone).toBe('America/New_York');
     expect(withoutZone.timezone).toBeUndefined();
     expect(badZone.timezone).toBeUndefined();
+  });
+
+  it('carries whether each agent holds a restart for active hours, off the same read', async () => {
+    const { db, machinesGet } = createSiteMachinesDb([
+      // a windows agent of 4.1.21 or later
+      { id: 'kiosk-01', online: true, capabilities: { activeHoursGuard: 1, swoop: 1 } },
+      // older agents, and macOS and Linux, never write it
+      { id: 'kiosk-02', online: true, capabilities: { swoop: 1 } },
+      { id: 'kiosk-03', online: true },
+      { id: 'kiosk-04', online: true, capabilities: { activeHoursGuard: true } },
+    ]);
+
+    const machines = await listSiteMachines(db, 's1');
+    expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false]);
+    expect(machinesGet).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('getMachineSummary', () => {
+  function createMachineDb(data: Record<string, unknown> | null) {
+    const get = jest.fn(async () => ({ exists: data !== null, data: () => data ?? undefined }));
+    const paths: string[] = [];
+    const db = {
+      collection: (root: string) => ({
+        doc: (siteId: string) => ({
+          collection: (child: string) => ({
+            doc: (machineId: string) => {
+              paths.push(`${root}/${siteId}/${child}/${machineId}`);
+              return { get };
+            },
+          }),
+        }),
+      }),
+    } as unknown as FirebaseFirestore.Firestore;
+    return { db, get, paths };
+  }
+
+  it('reads one machine doc into the same summary the listing gives', async () => {
+    const { db, get, paths } = createMachineDb({
+      online: true,
+      machine_timezone_iana: 'Europe/Berlin',
+      capabilities: { activeHoursGuard: 1 },
+    });
+
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toEqual({
+      id: 'kiosk-01',
+      online: true,
+      hootEnabled: true,
+      timezone: 'Europe/Berlin',
+      activeHoursGuard: true,
+    });
+    expect(paths).toEqual(['sites/s1/machines/kiosk-01']);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers null for a machine with no doc', async () => {
+    const { db } = createMachineDb(null);
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toBeNull();
   });
 });
 
@@ -1339,7 +1399,11 @@ describe('active-hours override', () => {
     const { db, docs } = createStoreDb();
 
     // `when` is not privileged, so it needs no card beyond the tier's own.
-    await toolFor(db, 'reboot_machine', { ...PERSON, requireTier3Approval: false }).execute(
+    await toolFor(db, 'reboot_machine', {
+      ...PERSON,
+      requireTier3Approval: false,
+      activeHoursGuardIds: ['m1'],
+    }).execute(
       { when: 'after_active_hours', reason: 'not an override' },
       { toolCallId: 'call_1' },
     );
@@ -1349,6 +1413,104 @@ describe('active-hours override', () => {
     expect(command).not.toHaveProperty('activeHoursOverride');
     expect(command).not.toHaveProperty('reason');
   }, 15000);
+
+  /**
+   * An agent older than 4.1.21, or one off windows, ignores `when` and restarts
+   * within a minute, so a held restart only goes to a machine whose agent
+   * reports `capabilities.activeHoursGuard`.
+   */
+  describe('a restart held until active hours end', () => {
+    const HELD = { when: 'after_active_hours' };
+    const PENDING_M2 = 'sites/s1/machines/m2/commands/pending';
+
+    it('is refused on a machine whose agent cannot hold it, before anything is asked or queued', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine');
+
+      // tier 3 would ask, but there is nothing to approve.
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(false);
+      const result = await tool.execute(HELD, { toolCallId: 'call_1' });
+
+      expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+      const { detail } = result as { detail: string };
+      expect(detail).toMatch(/older than owlette 4\.1\.21, or the machine isn't on Windows/);
+      // read by autonomous hoot too, which has nobody to ask.
+      expect(detail).toMatch(/nothing was sent; restart now only if that's what's wanted\.$/);
+      expect(docs.size).toBe(0);
+    });
+
+    it('is refused even with tier-3 approval off, and with an override asked for', async () => {
+      const { db, docs } = createStoreDb();
+      const toggleOff = { ...PERSON, requireTier3Approval: false };
+
+      for (const input of [HELD, { ...HELD, ...REBOOT_NOW }]) {
+        const tool = toolFor(db, 'reboot_machine', toggleOff);
+        expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(false);
+        expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+          error: 'held_restart_unsupported',
+        });
+      }
+      expect(docs.size).toBe(0);
+    });
+
+    it('still goes to a machine whose agent holds it', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] });
+
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await tool.execute(HELD, { toolCallId: 'call_1' });
+
+      expect(queuedAt(docs)).toEqual([
+        expect.objectContaining({ type: 'reboot_machine', when: 'after_active_hours' }),
+      ]);
+    }, 15000);
+
+    it('leaves a restart now, and a shutdown, to every machine as before', async () => {
+      const { db, docs } = createStoreDb();
+      const toggleOff = { ...PERSON, requireTier3Approval: false };
+
+      await toolFor(db, 'reboot_machine', toggleOff).execute({ when: 'now' }, { toolCallId: 'call_1' });
+      await toolFor(db, 'shutdown_machine', toggleOff).execute({}, { toolCallId: 'call_2' });
+
+      expect(queuedAt(docs).map((command) => command.type)).toEqual(['reboot_machine', 'shutdown_machine']);
+    }, 15000);
+
+    it('in a fan-out, is refused in the result of each machine that cannot hold it, and sent to the rest', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] }, true);
+
+      // m1 can hold it, so the card still asks.
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      const result = (await tool.execute(HELD, { toolCallId: 'call_1' })) as {
+        machines: Record<string, unknown>[];
+      };
+
+      expect(result.machines).toEqual([
+        expect.objectContaining({ machine: 'm1', status: 'completed' }),
+        expect.objectContaining({ machine: 'm2', ok: false, error: 'held_restart_unsupported' }),
+      ]);
+      expect(queuedAt(docs)).toEqual([
+        expect.objectContaining({ type: 'reboot_machine', when: 'after_active_hours' }),
+      ]);
+      expect(docs.has(PENDING_M2)).toBe(false);
+    }, 15000);
+
+    it('in a fan-out where no machine can hold it, asks nobody and queues nothing', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', PERSON, true);
+
+      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(false);
+      const result = (await tool.execute(HELD, { toolCallId: 'call_1' })) as {
+        machines: Record<string, unknown>[];
+      };
+
+      expect(result.machines.map((entry) => [entry.machine, entry.error])).toEqual([
+        ['m1', 'held_restart_unsupported'],
+        ['m2', 'held_restart_unsupported'],
+      ]);
+      expect(docs.size).toBe(0);
+    });
+  });
 });
 
 // schedule_followup / cancel_followup (server-side, never relayed)

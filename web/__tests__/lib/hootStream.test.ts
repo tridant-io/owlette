@@ -17,7 +17,7 @@ const mockResolveLlmConfig = jest.fn();
 const mockGetHootRequireTier3Approval = jest.fn();
 const mockIsMachineOnline = jest.fn();
 const mockIsHootEnabled = jest.fn();
-const mockGetMachineTimezone = jest.fn();
+const mockGetMachineSummary = jest.fn();
 
 jest.mock('@/lib/hoot-utils.server', () => ({
   __esModule: true,
@@ -26,6 +26,7 @@ jest.mock('@/lib/hoot-utils.server', () => ({
   listSiteMachines: (...args: unknown[]) => mockListSiteMachines(...args),
   isMachineOnline: (...args: unknown[]) => mockIsMachineOnline(...args),
   isHootEnabled: (...args: unknown[]) => mockIsHootEnabled(...args),
+  getMachineSummary: (...args: unknown[]) => mockGetMachineSummary(...args),
   getHootRequireTier3Approval: (...args: unknown[]) => mockGetHootRequireTier3Approval(...args),
   buildExecutableTools: (...args: unknown[]) => mockBuildExecutableTools(...args),
   resolveLlmConfig: (...args: unknown[]) => mockResolveLlmConfig(...args),
@@ -35,11 +36,6 @@ jest.mock('@/lib/llm', () => ({
   __esModule: true,
   createModel: jest.fn(() => ({ modelId: 'stub' })),
   buildSystemPrompt: jest.fn(() => 'system prompt'),
-}));
-
-jest.mock('@/lib/adminUtils.server', () => ({
-  __esModule: true,
-  getMachineTimezone: (...args: unknown[]) => mockGetMachineTimezone(...args),
 }));
 
 jest.mock('@/lib/hoot/advisor', () => ({
@@ -132,8 +128,8 @@ describe('runHootStream site mode', () => {
   /** The tools builder's 7th positional argument: the fan-out machine list. */
   const FANOUT_ARG = 6;
 
-  function machine(id: string, online: boolean, hootEnabled: boolean) {
-    return { id, online, hootEnabled };
+  function machine(id: string, online: boolean, hootEnabled: boolean, activeHoursGuard = false) {
+    return { id, online, hootEnabled, activeHoursGuard };
   }
 
   /**
@@ -256,10 +252,30 @@ describe('runHootStream site mode', () => {
     });
     await settle();
 
-    expect(buildSystemPrompt).toHaveBeenCalledWith('', true, undefined, {
-      scope: 'site',
-      timeZone: 'Asia/Tokyo',
-    });
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      '',
+      true,
+      undefined,
+      { scope: 'site', timeZone: 'Asia/Tokyo' },
+      { machineIds: ['m1'], guardedIds: [] },
+    );
+  });
+
+  it('tells the tools and the model which dispatched agents hold a restart for active hours', async () => {
+    mockListSiteMachines.mockResolvedValue([
+      machine('m1', true, true, true),
+      // guarded, but hoot is off on it, so it is not a target
+      machine('m2', true, false, true),
+      machine('m3', true, true),
+      machine('m4', false, true, true),
+    ]);
+
+    await send();
+    await settle();
+
+    expect(mockBuildExecutableTools.mock.calls[0][FANOUT_ARG]).toEqual(['m1', 'm3']);
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: ['m1'] });
+    expect((buildSystemPrompt as jest.Mock).mock.calls[0][4]).toEqual({ machineIds: ['m1', 'm3'], guardedIds: ['m1'] });
   });
 });
 
@@ -281,11 +297,11 @@ describe('runHootStream single-machine mode', () => {
     mockBuildExecutableTools.mockReturnValue({});
   });
 
-  it("tells the model the machine's local time", async () => {
-    mockGetMachineTimezone.mockResolvedValue('America/New_York');
+  const db = {} as unknown as Firestore;
 
-    const result = await runHootStream({
-      db: {} as unknown as Firestore,
+  function send() {
+    return runHootStream({
+      db,
       userId: 'u1',
       siteId: 'site-a',
       machineId: 'kiosk-01',
@@ -293,14 +309,52 @@ describe('runHootStream single-machine mode', () => {
       messages: [],
       chatId: 'conv-1',
     });
+  }
+
+  it("tells the model the machine's local time, and that its agent holds restarts, from one read", async () => {
+    mockGetMachineSummary.mockResolvedValue({
+      id: 'kiosk-01',
+      online: true,
+      hootEnabled: true,
+      timezone: 'America/New_York',
+      activeHoursGuard: true,
+    });
+
+    const result = await send();
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(result.ok).toBe(true);
-    expect(mockGetMachineTimezone).toHaveBeenCalledWith('site-a', 'kiosk-01');
-    expect(buildSystemPrompt).toHaveBeenCalledWith('Lobby', false, [], {
-      scope: 'machine',
-      timeZone: 'America/New_York',
-    });
+    expect(mockGetMachineSummary).toHaveBeenCalledTimes(1);
+    expect(mockGetMachineSummary).toHaveBeenCalledWith(db, 'site-a', 'kiosk-01');
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      'Lobby',
+      false,
+      [],
+      { scope: 'machine', timeZone: 'America/New_York' },
+      { machineIds: ['kiosk-01'], guardedIds: ['kiosk-01'] },
+    );
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: ['kiosk-01'] });
+  });
+
+  it.each([
+    ['an agent that does not hold restarts', () => Promise.resolve({ id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false })],
+    ['a machine with no doc', () => Promise.resolve(null)],
+    // the read failing is no reason to fail the turn: utc, and nothing held, as before.
+    ['a machine read that fails', () => Promise.reject(new Error('unavailable'))],
+  ])('tells the tools and the model about %s', async (_label, summary) => {
+    mockGetMachineSummary.mockImplementation(summary);
+
+    await send();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      'Lobby',
+      false,
+      [],
+      { scope: 'machine', timeZone: undefined },
+      { machineIds: ['kiosk-01'], guardedIds: [] },
+    );
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: [] });
   });
 });
 
@@ -323,7 +377,8 @@ describe('runHootStream never offers an active-hours override', () => {
       isSiteAdmin: true,
       isSiteOwner: false,
     });
-    mockListSiteMachines.mockResolvedValue([{ id: 'm1', online: true, hootEnabled: true }]);
+    mockListSiteMachines.mockResolvedValue([{ id: 'm1', online: true, hootEnabled: true, activeHoursGuard: true }]);
+    mockGetMachineSummary.mockResolvedValue({ id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: true });
     mockIsMachineOnline.mockResolvedValue(true);
     mockIsHootEnabled.mockResolvedValue(true);
     mockGetHootRequireTier3Approval.mockResolvedValue(true);

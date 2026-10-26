@@ -383,13 +383,13 @@ function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
   if (err.entitlement) {
     return problemPlanRequired(err.detail, err.entitlement);
   }
-  if (err.code === 'machine_offline') {
+  if (err.code === 'machine_offline' || err.code === 'held_restart_unsupported') {
     return problem({
       type: ProblemType.Conflict,
-      title: 'machine offline',
+      title: err.code === 'machine_offline' ? 'machine offline' : 'held restart unsupported',
       status: 409,
       detail: err.detail,
-      code: 'machine_offline',
+      code: err.code,
     });
   }
   if (err.status === 404) {

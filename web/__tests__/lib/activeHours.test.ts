@@ -7,6 +7,7 @@ import {
   activeHoursGuardOf,
   describeActiveHours,
   describeCommandError,
+  hasActiveHoursGuard,
   insideActiveHoursNow,
   isInsideActiveHours,
   machineClockAt,
@@ -77,6 +78,15 @@ describe('parseActiveHours', () => {
     expect(parseActiveHours({ start: 8, end: 24 })).toBeUndefined();
     expect(parseActiveHours({ start: 8.5, end: 17 })).toBeUndefined();
     expect(parseActiveHours({ start: '8', end: 17 })).toBeUndefined();
+  });
+});
+
+describe('hasActiveHoursGuard', () => {
+  it('is true only for the value the agent writes, 1', () => {
+    expect(hasActiveHoursGuard({ capabilities: { activeHoursGuard: 1 } })).toBe(true);
+    for (const capabilities of [undefined, null, {}, { activeHoursGuard: 0 }, { activeHoursGuard: true }, { activeHoursGuard: '1' }]) {
+      expect(hasActiveHoursGuard({ capabilities })).toBe(false);
+    }
   });
 });
 

@@ -84,7 +84,7 @@ on Windows the agent refuses a reboot while the machine is inside its [active ho
 | flag | required | purpose |
 |---|---|---|
 | `--site <siteId>` | yes | site ID that owns the machine |
-| `--after-active-hours` | no | restart once the machine's active hours end, or now if it is outside them. the CLI reads the machine first: a Windows agent without the active-hours guard would ignore the flag and restart at once, so the CLI stops with an error instead. macOS and Linux have no active hours and restart now |
+| `--after-active-hours` | no | restart once the machine's active hours end, or now if it is outside them. the CLI reads the machine first: an agent without the active-hours guard (older than 4.1.21, or on macOS or Linux) would ignore the flag and restart at once, so the CLI stops with an error instead. when it can't read the machine it warns and sends the command, and the API refuses it with `409 held_restart_unsupported` |
 | `--override-active-hours` | no | restart inside active hours anyway. needs `--reason`, and does not go with `--after-active-hours` |
 | `--reason <text>` | with `--override-active-hours` | why, 500 characters or fewer. the agent writes it to the site log with your key as the approver |
 | `--delay-seconds <n>` | no | non-negative number of seconds the agent waits before firing (default 0; a fraction is rounded down) |
@@ -199,7 +199,7 @@ owlette --json machine live-view m_abc123 --site site-1
 ## exit codes
 
 - `0`: success
-- `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, the agent refusing a reboot or shutdown inside active hours, `--after-active-hours` on an agent without the active-hours guard, or a missing `--site` (a usage error)
+- `1`: generic error: network failure, an API error, an unexpected response shape, the screenshot poll timing out, the agent reporting a failure, the agent refusing a reboot or shutdown inside active hours, `--after-active-hours` on an agent without the active-hours guard (or the API's `409 held_restart_unsupported`), or a missing `--site` (a usage error)
 - `2`: usage error: no token configured, a bad `--monitor` value, a negative `--delay-seconds`, `--override-active-hours` without `--reason`, `--reason` without it, or it together with `--after-active-hours`
 - `3`: stub (`machine live-view` only)
 
@@ -210,7 +210,7 @@ API errors print their problem code, with a hint for `machine_offline`, `unsuppo
 ## notes
 
 - **scope**: site-scoped. the mutating verbs need an API key with `machine=<id>:write` (or `machine=*:write`); `screenshot` needs `machine=<id>:read` as well. `reboot` and `shutdown` read their outcome, and `--after-active-hours` the machine, with `read` too; without it they warn on stderr and still send the command. permissions are exact: `write` does not imply `read`
-- **active hours**: Windows always has active hours, so a daytime `reboot` or `shutdown` from a script is refused by a guarded agent unless it passes `--override-active-hours --reason`, or `--after-active-hours` for a reboot. an agent from before the guard reboots or shuts down at once, whatever you pass
+- **active hours**: Windows always has active hours, so a daytime `reboot` or `shutdown` from a script is refused by a guarded agent unless it passes `--override-active-hours --reason`, or `--after-active-hours` for a reboot. an agent from before the guard reboots or shuts down at once with or without an override, and the API refuses `--after-active-hours` for it
 - **tier**: A for `list`, `get`, `deployments`, `reboot`, `shutdown`, `screenshot`; C stub for `live-view`
 - **idempotency**: every mutation sends an `Idempotency-Key`, so retrying a failed `reboot`, `shutdown` or `screenshot` will not fire it twice. a request that never got a confirmed response prints its key and the flag to retry with
 - **screenshot TTL**: the agent's signed URL expires shortly after capture; the CLI downloads it at once, so you never handle the expiry

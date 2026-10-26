@@ -131,8 +131,10 @@ queued; `get_command()` then reports `failed` (a deployment target ends
 `failed`) with an `error` that starts `Error: active_hours:`.
 `after_active_hours` restarts once they end; `active_hours_override` acts now
 and logs the reason. `installer_deployments.create()` and `retry()` take the
-same override, and a retry needs its own. Older agents, macOS and Linux ignore
-both and act at once.
+same override, and a retry needs its own. Older agents ignore both and act at
+once, as macOS and Linux do for a reboot or shutdown. The API refuses
+`after_active_hours` on all of them with `409 held_restart_unsupported`, since
+none can hold the restart.
 
 ## push progress
 

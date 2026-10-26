@@ -137,9 +137,9 @@ function siteListing(
   overrides: Array<Partial<SiteMachineSummary> & { id: string }> = [],
 ): SiteMachineSummary[] {
   const base: SiteMachineSummary[] = [
-    { id: 'machine-1', online: true, hootEnabled: true },
-    { id: 'machine-2', online: true, hootEnabled: true },
-    { id: 'machine-3', online: true, hootEnabled: true },
+    { id: 'machine-1', online: true, hootEnabled: true, activeHoursGuard: false },
+    { id: 'machine-2', online: true, hootEnabled: true, activeHoursGuard: false },
+    { id: 'machine-3', online: true, hootEnabled: true, activeHoursGuard: false },
   ];
   return base.map((machine) => {
     const override = overrides.find((entry) => entry.id === machine.id);
@@ -385,6 +385,7 @@ describe('startTurn — happy path', () => {
       processes: [],
       narrowedByMention: false,
       localTime: { scope: 'machine', timeZone: undefined },
+      activeHoursGuardIds: [],
     });
   });
 
@@ -1268,6 +1269,40 @@ describe('startTurn — the local clock in the prompt', () => {
     expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
       expect.objectContaining({ localTime: { scope: 'site', timeZone: 'UTC' } }),
     );
+  });
+});
+
+describe('startTurn — which agents hold a restart for active hours', () => {
+  const toolOptions = () => (hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7];
+
+  it.each([
+    ['a single-machine turn', () => baseParams(), [MACHINE_ID]],
+    ['a fan-out', () => siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) }), ['machine-1']],
+  ])('%s hands the guarded targets to the tools and the prompt, off the listing it read', async (_label, params, expected) => {
+    // machine-3 holds restarts too, but this turn never reaches it.
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue(
+      siteListing([
+        { id: 'machine-1', activeHoursGuard: true },
+        { id: 'machine-3', activeHoursGuard: true },
+      ]),
+    );
+
+    await collectChunks(startTurn(fakeDb, params()));
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledTimes(1);
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: expected });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ activeHoursGuardIds: expected }),
+    );
+  });
+
+  it('hands over none when no target reports it', async () => {
+    await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: [] });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(expect.objectContaining({ activeHoursGuardIds: [] }));
   });
 });
 

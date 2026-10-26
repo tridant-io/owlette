@@ -37,7 +37,7 @@ function activeHoursOverrideFields(override: string): McpToolDefinition['paramet
   return {
     override_active_hours: {
       type: 'boolean',
-      description: `${override} Set it only when the operator explicitly asked for that and gave a reason. The call then waits for their approval in this chat, and works on one machine at a time.`,
+      description: `${override} Set it only when the operator explicitly asked for that and gave a reason. The call then waits for their approval in this chat, and works on one machine at a time. It only matters on Windows machines running owlette 4.1.21 or later; older agents ignore it.`,
     },
     reason: {
       type: 'string',
@@ -694,7 +694,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_update',
-    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts.",
+    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette 4.1.21 or later refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts.",
     tier: 2,
     parameters: {
       type: 'object',
@@ -880,7 +880,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'registry_operation',
-    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. It refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe.',
+    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. On owlette 4.1.21 or later it refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe.',
     tier: 2,
     parameters: {
       type: 'object',
@@ -1275,7 +1275,7 @@ WORKFLOW:
 4. Only after the user confirms, call this tool. It returns immediately with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
 
 ACTIVE HOURS:
-- On Windows, owlette refuses a deployment while the machine is inside its active hours, and the Deployments page shows the refusal. Tell the user before you deploy during them.
+- On Windows machines running owlette 4.1.21 or later, owlette refuses a deployment while the machine is inside its active hours, and the Deployments page shows the refusal. Tell the user before you deploy during them. On an older Windows agent a deployment installs right away; macOS and Linux can't run one.
 
 TOUCHDESIGNER SPECIFICS:
 - Provide the version number (e.g. "2025.32280") and the download URL is resolved automatically via https://download.derivative.ca/TouchDesigner.{version}.exe
@@ -1351,7 +1351,7 @@ WHEN TO ASK THE USER:
   },
   {
     name: 'reboot_machine',
-    description: 'Reboot the remote machine after a 60-second countdown, so running processes can be saved; cancel_reboot stops it. On Windows, owlette refuses a reboot while the machine is inside its active hours: when: after_active_hours restarts it as soon as they end instead.',
+    description: 'Reboot the remote machine after a 60-second countdown, so running processes can be saved; cancel_reboot stops it. On Windows machines running owlette 4.1.21 or later, owlette refuses a reboot while the machine is inside its active hours: when: after_active_hours restarts it as soon as they end instead.',
     tier: 3,
     parameters: {
       type: 'object',
@@ -1359,7 +1359,7 @@ WHEN TO ASK THE USER:
         when: {
           type: 'string',
           enum: ['now', 'after_active_hours'],
-          description: "now (default): restart after the countdown. after_active_hours: wait until the machine's active hours end, then restart; outside active hours it restarts now. cancel_reboot cancels a waiting restart too.",
+          description: "now (default): restart after the countdown. after_active_hours: wait until the machine's active hours end, then restart; outside active hours it restarts now. cancel_reboot cancels a waiting restart too. Only Windows machines running owlette 4.1.21 or later can wait; on any other machine owlette refuses after_active_hours, because its agent would restart at once.",
         },
         ...activeHoursOverrideFields('Restart now even though the machine is inside its active hours.'),
       },
@@ -1367,7 +1367,7 @@ WHEN TO ASK THE USER:
   },
   {
     name: 'shutdown_machine',
-    description: 'Shut down the remote machine after a 60-second countdown; cancel_reboot stops it. The machine will NOT automatically restart. On Windows, owlette refuses a shutdown while the machine is inside its active hours.',
+    description: 'Shut down the remote machine after a 60-second countdown; cancel_reboot stops it. The machine will NOT automatically restart. On Windows machines running owlette 4.1.21 or later, owlette refuses a shutdown while the machine is inside its active hours.',
     tier: 3,
     parameters: {
       type: 'object',

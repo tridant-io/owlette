@@ -94,6 +94,8 @@ function buildFakeDb(opts: {
   completedResults?: Record<string, Record<string, unknown>>;
   /** When true, completedDoc.get() always returns `exists: false`. */
   completedAlwaysEmpty?: boolean;
+  /** The machine doc the action core reads; defaults to an online machine. */
+  machine?: Record<string, unknown>;
 }) {
   const sets: RecordedSet[] = [];
   const updates: RecordedUpdate[] = [];
@@ -124,7 +126,7 @@ function buildFakeDb(opts: {
               docPath[0] === 'sites' &&
               docPath[2] === 'machines'
             ) {
-              return { exists: true, data: () => ({ online: true }) };
+              return { exists: true, data: () => opts.machine ?? { online: true } };
             }
             return { exists: false, data: () => undefined };
           }),
@@ -473,6 +475,7 @@ describe('dispatchExistingCommandAsSystem', () => {
       completedResults: new Proxy({}, {
         get: () => ({ status: 'success', result: 'rebooting' }),
       }) as Record<string, Record<string, unknown>>,
+      machine: { online: true, capabilities: { activeHoursGuard: 1 } },
     });
 
     await dispatchExistingCommandAsSystem(
@@ -486,6 +489,19 @@ describe('dispatchExistingCommandAsSystem', () => {
     const entry = written[Object.keys(written)[0]];
     for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
     expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
+  });
+
+  it('refuses a held restart an agent without the guard would run at once, and queues nothing', async () => {
+    const { db, sets } = buildFakeDb({ machine: { online: true } });
+
+    await expect(
+      dispatchExistingCommandAsSystem(
+        { db, siteId: SITE_ID, machineId: MACHINE_ID, chatId: CHAT_ID, eventId: EVENT_ID },
+        'reboot_machine',
+        { when: 'after_active_hours' },
+      ),
+    ).rejects.toMatchObject({ status: 409, code: 'held_restart_unsupported' });
+    expect(sets.find((s) => s.path[s.path.length - 1] === 'pending')).toBeUndefined();
   });
 
   it('skips a running marker and returns the later terminal result', async () => {

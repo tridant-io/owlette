@@ -346,10 +346,29 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     });
 
     it.each(['now', 'after_active_hours'])('202 reboot_machine forwards when: %s', async (when) => {
-      queueIdemAndMachine({ online: true });
+      queueIdemAndMachine({ online: true, capabilities: { activeHoursGuard: 1 } });
       const res = await post(`idem-ah-when-${when}`, { type: 'reboot_machine', params: { when } });
       expect(res.status).toBe(202);
       expect(lastMergedCommand().when).toBe(when);
+    });
+
+    it('409 held_restart_unsupported: a held restart to an agent that cannot hold it queues nothing', async () => {
+      // an older agent ignores `when` and would restart at once.
+      queueIdemAndMachine({ online: true, capabilities: { swoop: 1 } });
+      const res = await post('idem-ah-held-old', { type: 'reboot_machine', params: { when: 'after_active_hours' } });
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.type).toBe('https://owlette.app/problems/conflict');
+      expect(body.code).toBe('held_restart_unsupported');
+      expect(body.detail).toMatch(/nothing was sent; restart now only if that's what's wanted/);
+      expect(mergeCallCount()).toBe(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+
+    it('202 a restart now still goes to an agent without the guard', async () => {
+      queueIdemAndMachine({ online: true });
+      const res = await post('idem-ah-now-old', { type: 'reboot_machine', params: { when: 'now' } });
+      expect(res.status).toBe(202);
     });
 
     it.each([
