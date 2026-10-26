@@ -475,7 +475,7 @@ describe('dispatchExistingCommandAsSystem', () => {
       completedResults: new Proxy({}, {
         get: () => ({ status: 'success', result: 'rebooting' }),
       }) as Record<string, Record<string, unknown>>,
-      machine: { online: true, capabilities: { activeHoursGuard: 1 } },
+      machine: { online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } },
     });
 
     await dispatchExistingCommandAsSystem(

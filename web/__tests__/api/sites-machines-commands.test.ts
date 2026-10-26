@@ -346,21 +346,27 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     });
 
     it.each(['now', 'after_active_hours'])('202 reboot_machine forwards when: %s', async (when) => {
-      queueIdemAndMachine({ online: true, capabilities: { activeHoursGuard: 1 } });
+      queueIdemAndMachine({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } });
       const res = await post(`idem-ah-when-${when}`, { type: 'reboot_machine', params: { when } });
       expect(res.status).toBe(202);
       expect(lastMergedCommand().when).toBe(when);
     });
 
-    it('409 held_restart_unsupported: a held restart to an agent that cannot hold it queues nothing', async () => {
+    it.each([
       // an older agent ignores `when` and would restart at once.
-      queueIdemAndMachine({ online: true, capabilities: { swoop: 1 } });
-      const res = await post('idem-ah-held-old', { type: 'reboot_machine', params: { when: 'after_active_hours' } });
+      ['an older agent', 'old', { online: true, capabilities: { swoop: 1 } }],
+      // rolled back below 4.1.21, the old agent keeps the capability it never clears
+      ['a stale capability on 3.3.7', 'stale', { online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }],
+    ])('409 held_restart_unsupported: a held restart to %s queues nothing', async (_label, key, machine) => {
+      queueIdemAndMachine(machine);
+      const res = await post(`idem-ah-held-${key}`, { type: 'reboot_machine', params: { when: 'after_active_hours' } });
       expect(res.status).toBe(409);
       const body = await res.json();
       expect(body.type).toBe('https://owlette.app/problems/conflict');
       expect(body.code).toBe('held_restart_unsupported');
-      expect(body.detail).toMatch(/nothing was sent; restart now only if that's what's wanted/);
+      // the neutral reason: an API caller is not told what a model should do next.
+      expect(body.detail).toMatch(/older than owlette 4\.1\.21.*so nothing was sent\.$/);
+      expect(body.detail).not.toMatch(/ask them|summary/);
       expect(mergeCallCount()).toBe(0);
       expect(mockedEmit).not.toHaveBeenCalled();
     });

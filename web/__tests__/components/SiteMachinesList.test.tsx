@@ -113,4 +113,23 @@ describe('SiteMachinesList — restart', () => {
 
     expect(postedParams()).toEqual({ delay_seconds: 60 });
   });
+
+  it('keeps the plain confirm for a machine rolled back below 4.1.21 that still carries the capability', async () => {
+    listResponds([{
+      ...base,
+      id: 'kiosk-1',
+      name: 'kiosk-1',
+      agentVersion: '3.3.7',
+      capabilities: { activeHoursGuard: 1 },
+      activeHours: { start: hour, end: (hour + 2) % 24, source: 'policy' },
+    }]);
+    const user = await openRestart();
+
+    expect(await screen.findByRole('dialog', { name: 'restart kiosk-1?' })).toHaveTextContent('60 seconds');
+    expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'restart when active hours end' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'restart' }));
+
+    expect(postedParams()).toEqual({ delay_seconds: 60 });
+  });
 });

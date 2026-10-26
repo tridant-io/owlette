@@ -318,21 +318,25 @@ describe('executeMachineCommand — machine doc gating', () => {
     it.each([
       ['an agent older than the guard', { online: true, capabilities: { swoop: 1 } }],
       ['a machine with no capabilities', { online: true }],
-      ['a capability that is not 1', { online: true, capabilities: { activeHoursGuard: true } }],
+      ['a capability that is not 1', { online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: true } }],
       ['a Mac, which has no active hours', { online: true, osFamily: 'macos', capabilities: { keepAwake: 1 } }],
+      // the old agent never clears the 1 its newer self wrote
+      ['a machine rolled back to 3.3.7', { online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }],
+      ['a capability with no agent version', { online: true, capabilities: { activeHoursGuard: 1 } }],
     ])('throws 409 held_restart_unsupported on %s, before anything is queued', async (_label, machine) => {
       const fake = buildFakeDb(machine);
       await expect(executeMachineCommand(ctxFor(), HELD, { db: fake.db })).rejects.toMatchObject({
         status: 409,
         code: 'held_restart_unsupported',
-        detail: expect.stringMatching(/older than owlette 4\.1\.21/),
+        // the neutral reason: api and CLI readers get no advice meant for a model.
+        detail: expect.stringMatching(/older than owlette 4\.1\.21.*so nothing was sent\.$/),
       });
       expect(fake.setCalls).toHaveLength(0);
       expect(mockedEmit).not.toHaveBeenCalled();
     });
 
     it('queues it on an agent that holds it', async () => {
-      const fake = buildFakeDb({ online: true, capabilities: { activeHoursGuard: 1 } });
+      const fake = buildFakeDb({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } });
       await executeMachineCommand(ctxFor(), HELD, { db: fake.db, now: () => 1 });
       const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
       expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
@@ -461,7 +465,7 @@ describe('executeMachineCommand — command write shape', () => {
   });
 
   it('strips every active-hours override name from the payload', async () => {
-    const fake = buildFakeDb({ online: true, capabilities: { activeHoursGuard: 1 } });
+    const fake = buildFakeDb({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } });
     await executeMachineCommand(
       ctxFor(),
       { type: 'reboot_machine', payload: { ...overrideBag(), delay_seconds: 5, when: 'after_active_hours' } },

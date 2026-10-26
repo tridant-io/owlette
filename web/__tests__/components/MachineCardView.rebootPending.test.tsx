@@ -161,6 +161,7 @@ describe('MachineCardView — restart pending banner', () => {
       lastHeartbeat: NOW_SEC,
       machineTimezone: 'UTC',
       capabilities: { activeHoursGuard: 1 },
+      agent_version: '4.1.21',
       activeHours: { start, end: (start + 2) % 24, source: 'policy' },
     });
 
@@ -209,6 +210,16 @@ describe('MachineCardView — restart pending banner', () => {
         }),
         { onRestart },
       );
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', {});
+      expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+    });
+
+    it('restarts straight away on a machine rolled back below 4.1.21 that still carries the capability', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard({ ...guarded(hour), agent_version: '3.3.7' }, { onRestart });
 
       await user.click(screen.getByTestId('reboot-pending-approve'));
 

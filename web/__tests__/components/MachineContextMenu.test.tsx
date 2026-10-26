@@ -21,7 +21,7 @@ import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { markThisMachine } from '@/lib/swoop/thisMachine';
-import type { ActiveHoursGuard, PowerCommandOptions, PowerCommandSent } from '@/lib/activeHours';
+import { activeHoursGuardOf, type ActiveHoursGuard, type PowerCommandOptions, type PowerCommandSent } from '@/lib/activeHours';
 
 // jsdom ships no ResizeObserver; Radix's dropdown positioning constructs one.
 global.ResizeObserver = class {
@@ -403,6 +403,25 @@ describe('MachineContextMenu — restart and shutdown inside active hours', () =
     const dialog = await screen.findByRole('dialog', { name: 'restart kiosk-1?' });
     expect(dialog).toHaveTextContent('60 seconds');
     expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'restart' }));
+    expect(onRestart).toHaveBeenCalledWith({});
+  });
+
+  it("keeps today's confirm on a machine rolled back below 4.1.21 that still carries the capability", async () => {
+    const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+    const rolledBack = activeHoursGuardOf({
+      osFamily: 'windows',
+      capabilities: { activeHoursGuard: 1 },
+      agent_version: '3.3.7',
+      activeHours: INSIDE.window,
+      machineTimezone: 'UTC',
+    });
+    const user = await openMenu({ isSiteAdmin: true, activeHoursGuard: rolledBack, onRestart });
+
+    await user.click(screen.getByTestId('machine-context-menu-reboot'));
+    expect(await screen.findByRole('dialog', { name: 'restart kiosk-1?' })).toHaveTextContent('60 seconds');
+    expect(screen.queryByRole('button', { name: 'restart when active hours end' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'restart' }));
     expect(onRestart).toHaveBeenCalledWith({});

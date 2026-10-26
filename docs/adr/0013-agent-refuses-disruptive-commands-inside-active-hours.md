@@ -5,7 +5,7 @@ hoot knew nothing of a machine's active hours, and one machine rebooted on its o
 ## Consequences
 
 - Windows always has active hours: 8–17 when nobody set any. From the first guarded release, daytime API and CLI scripts that reboot, shut down or send a deployment are refused until they pass `active_hours_override` with a reason. That breaks API users, so the changelog and the docs call it out.
-- A machine is protected only once it runs a guarded release. An old agent ignores the window and the override, so the dashboard keys its active-hours wording on `capabilities.activeHoursGuard`.
+- A machine is protected only once it runs a guarded release. An old agent ignores the window and the override, so the dashboard keys its active-hours wording on `capabilities.activeHoursGuard` and agent version 4.1.21 or later.
 - Every override is logged with who approved it and why.
 - The guard covers the dedicated commands, not the shell. hoot's `execute_script` and `run_powershell`, and local hoot's shell tools, can still run `shutdown /r` or an installer; only a prompt rule stands in the way: dashboard hoot's, and local hoot's in `agent/CLAUDE.md`.
 - owlette's own crash-loop reboot inside the window waits for the window to end. The weekly reboot schedule is left alone, because a person chose its time.

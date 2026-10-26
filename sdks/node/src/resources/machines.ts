@@ -59,9 +59,9 @@ export interface CommandStatus {
 export interface ShutdownOptions {
   /**
    * Act inside the machine's active hours anyway. The reason goes to the site
-   * log with your key as the approver. Without it, a Windows agent with
-   * `capabilities.activeHoursGuard` refuses inside active hours: the command
-   * ends `failed` with an `error` starting `Error: active_hours:`.
+   * log with your key as the approver. Without it, a Windows agent of 4.1.21
+   * or later (`capabilities.activeHoursGuard`) refuses inside active hours: the
+   * command ends `failed` with an `error` starting `Error: active_hours:`.
    */
   activeHoursOverride?: { reason: string };
   /** Override the dispatch's idempotency key. */
@@ -71,9 +71,11 @@ export interface ShutdownOptions {
 export interface RebootOptions extends ShutdownOptions {
   /**
    * Restart once the machine's active hours end, or now when it is outside
-   * them. Agents without `capabilities.activeHoursGuard` (older Windows
-   * agents, macOS, Linux) can't hold it, so the API refuses it with
-   * `409 held_restart_unsupported`. Not with `activeHoursOverride`.
+   * them. Agents without `capabilities.activeHoursGuard` and an `agentVersion`
+   * of 4.1.21 or later (older Windows agents, a machine rolled back below
+   * 4.1.21, which keeps the capability, macOS, Linux) can't hold it, so the API
+   * refuses it with `409 held_restart_unsupported`. Not with
+   * `activeHoursOverride`.
    */
   afterActiveHours?: boolean;
 }

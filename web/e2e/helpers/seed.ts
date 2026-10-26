@@ -365,11 +365,18 @@ export interface SeedMachineOptions {
    */
   activeHours?: { start: number; end: number; source?: 'policy' | 'mdm' | 'user' | 'default' };
   /**
-   * Writes `capabilities.activeHoursGuard: 1`: a windows agent that refuses
-   * restarts, shutdowns and deployments inside `activeHours`. Without it the
-   * dashboard treats the machine as an agent that guards nothing.
+   * Writes `capabilities.activeHoursGuard: 1` and `agent_version` 4.1.21: a
+   * windows agent that refuses restarts, shutdowns and deployments inside
+   * `activeHours`. Without it the dashboard treats the machine as an agent
+   * that guards nothing.
    */
   activeHoursGuard?: boolean;
+  /**
+   * `agent_version` as the agent heartbeats it. Default 2.9.0, or 4.1.21 with
+   * `activeHoursGuard`; an older one beside the guard is a machine rolled back
+   * below 4.1.21, whose old agent never clears the capability.
+   */
+  agentVersion?: string;
   /**
    * Unix seconds a restart waits for active hours to end: `rebootDeferredUntil`
    * with `rebootSource: 'deferred'`, as the agent writes them.
@@ -466,7 +473,7 @@ export async function seedMachine(
     .set({
       online: true,
       lastHeartbeat: heartbeat,
-      agent_version: '2.9.0',
+      agent_version: opts.agentVersion ?? (opts.activeHoursGuard ? '4.1.21' : '2.9.0'),
       machine_timezone_iana: 'UTC',
       // Without the capability handshake the recall button stays disabled on an
       // "agent too old" tooltip, breaking every recall spec.

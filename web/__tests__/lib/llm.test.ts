@@ -357,6 +357,8 @@ describe('the active-hours rule', () => {
     expect(rule).toContain('any deadline that remains');
     expect(rule).toContain('disable_auto_install');
     expect(rule).toContain('security updates will then wait for a person');
+    // an older agent answers "Unknown action" to both.
+    expect(rule).toContain('limit_auto_restart and disable_auto_install need owlette 4.1.21 or later.');
     expect(rule).toContain('Never say a setting changed unless a tool result shows it.');
   });
 

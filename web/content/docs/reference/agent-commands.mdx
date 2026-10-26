@@ -68,7 +68,7 @@ two ways through:
 
 not guarded: a rollout's `sync_pull`, which restarts nothing; a fleet update's `update_owlette`, which reboots no machine; and the weekly [restart schedule](/docs/dashboard/restart-schedules), whose time a person chose.
 
-the agent writes the window it enforces to the machine document as `activeHours: { start, end, source }`, with `source` `policy`, `mdm`, `user` or `default`, and reports `capabilities.activeHoursGuard: 1`. macOS and Linux have no active hours. an older Windows agent reports neither and ignores the window, the override and `when`: a machine is protected only once it runs a release with the guard.
+the agent writes the window it enforces to the machine document as `activeHours: { start, end, source }`, with `source` `policy`, `mdm`, `user` or `default`, and reports `capabilities.activeHoursGuard: 1`. macOS and Linux have no active hours. an older Windows agent reports neither and ignores the window, the override and `when`: a machine is protected only once it runs a release with the guard. an older agent never clears the capability either, so the dashboard, hoot and the API count a machine as guarded only while its `agent_version` is also 4.1.21 or later: one rolled back below that, or with no readable version, is treated as an older agent.
 
 ### completed, failed or cancelled
 
@@ -279,7 +279,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 
 - **an `Idempotency-Key` header is required**: without one the request is refused with `400`. the same key and body within 24 hours replays the first response; the same key with another body is `422`. see [idempotency](/docs/api/idempotency)
 - **capability**: `capture_screenshot`, `start_live_view` and `stop_live_view` need `MACHINE_VIEW`, which site members hold. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
-- **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`. a `reboot_machine` with `when: "after_active_hours"` gets `409 held_restart_unsupported` on a machine without `capabilities.activeHoursGuard: 1` (an older agent, macOS or Linux), whose agent would restart at once; nothing is queued
+- **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`. a `reboot_machine` with `when: "after_active_hours"` gets `409 held_restart_unsupported` on a machine without `capabilities.activeHoursGuard: 1` and an `agent_version` of 4.1.21 or later (an older agent, one rolled back below 4.1.21, macOS or Linux), whose agent would restart at once; nothing is queued
 - **`timeout_seconds`** (default 60, max 600) is stamped into every payload. only `restart_process` reads it at the agent, capped at 30, so an API restart waits the full 30 seconds for a graceful exit unless the body sends less. a `timeout_seconds` inside `params` is dropped
 - **active hours**: Windows always has active hours, 8 to 17 when nobody set any, so a daytime script's reboot or shutdown is refused by a guarded agent unless it sends `active_hours_override`. the request still answers `202`; the command then ends `failed` with the [active-hours refusal](#active-hours). to wait instead, send a reboot with `when: "after_active_hours"`
 

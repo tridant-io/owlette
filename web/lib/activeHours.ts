@@ -8,6 +8,8 @@
  * it, so the confirm asks for a choice exactly when the agent would refuse.
  */
 
+import { ACTIVE_HOURS_GUARD_MIN_AGENT_VERSION, compareVersions } from '@/lib/versionUtils';
+
 const ACTIVE_HOURS_SOURCES = ['policy', 'mdm', 'user', 'default'] as const;
 
 /** where the agent read the window: policy, MDM, the person's setting, or windows' 8–17 default. */
@@ -65,23 +67,39 @@ export function parseActiveHours(value: unknown): ActiveHours | undefined {
 }
 
 /**
- * `capabilities.activeHoursGuard === 1`: only a windows agent of 4.1.21 or later
- * writes it, and only such an agent refuses inside active hours or can hold a
- * restart until they end.
+ * `capabilities.activeHoursGuard === 1` on an agent of 4.1.21 or later: only
+ * such a windows agent writes it, and only it refuses inside active hours or
+ * can hold a restart until they end. the version is the machine doc's
+ * `agent_version`, since an older agent never clears the key; a missing or
+ * unreadable one counts as no guard.
  */
-export function hasActiveHoursGuard(machine: { capabilities?: { activeHoursGuard?: unknown } | null }): boolean {
-  return machine.capabilities?.activeHoursGuard === 1;
+export function hasActiveHoursGuard(machine: {
+  capabilities?: { activeHoursGuard?: unknown } | null;
+  agent_version?: unknown;
+}): boolean {
+  if (machine.capabilities?.activeHoursGuard !== 1) return false;
+  const version = typeof machine.agent_version === 'string' ? machine.agent_version : null;
+  return (compareVersions(version, ACTIVE_HOURS_GUARD_MIN_AGENT_VERSION) ?? -1) >= 0;
 }
 
 /**
+ * why a `reboot_machine` with `when: after_active_hours` is refused on a machine
+ * without the guard: its agent ignores `when` and would restart at once. the
+ * API's 409 detail as is; hoot adds what a model does next (hoot-utils.server).
+ */
+export const HELD_RESTART_UNSUPPORTED_REASON =
+  "this machine's agent can't hold a restart for active hours: it is older than owlette 4.1.21, or the machine isn't on Windows, the only platform with active hours. sending it would restart the machine right away, so nothing was sent.";
+
+/**
  * The window this machine's agent enforces, or null where it enforces none:
- * only windows agents with `capabilities.activeHoursGuard` refuse, and only
- * while they report a window. Every other agent ignores `when` and restarts at
+ * only windows agents with the guard ({@link hasActiveHoursGuard}: the
+ * capability on 4.1.21 or later) refuse, and only while they report a window. Every other agent ignores `when` and restarts at
  * once, so the dashboard keeps its plain confirm for them.
  */
 export function activeHoursGuardOf(machine: {
   osFamily?: string | null;
   capabilities?: { activeHoursGuard?: number } | null;
+  agent_version?: string | null;
   activeHours?: unknown;
   machineTimezone?: string | null;
 }): ActiveHoursGuard | null {

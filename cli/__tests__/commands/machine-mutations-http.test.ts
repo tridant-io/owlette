@@ -104,7 +104,7 @@ const MACHINE_URL = 'https://dev.test/api/sites/site-1/machines/m-1';
 const COMMANDS_URL = `${MACHINE_URL}/commands`;
 const ACTIVE_HOURS_REFUSAL =
   'Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00';
-const GUARDED_MACHINE = { id: 'm-1', osFamily: 'windows', capabilities: { activeHoursGuard: 1 } };
+const GUARDED_MACHINE = { id: 'm-1', osFamily: 'windows', agentVersion: '4.1.21', capabilities: { activeHoursGuard: 1 } };
 
 /** POST queues cmd_abc; the command poll answers `poll`; the machine read answers `machine`. */
 function powerStub(
@@ -375,6 +375,9 @@ describe('owlette machine reboot --after-active-hours', () => {
     // no active hours to wait for; the API refuses the held restart there too.
     ['macOS', { id: 'm-1', osFamily: 'macos', capabilities: null }],
     ['linux', { id: 'm-1', osFamily: 'linux', capabilities: { keepAwake: 1 } }],
+    // an older agent never clears the capability its newer self wrote
+    ['a machine rolled back to 3.3.7', { ...GUARDED_MACHINE, agentVersion: '3.3.7' }],
+    ['a capability with no agent version', { ...GUARDED_MACHINE, agentVersion: null }],
   ])('refuses on %s, which cannot hold the restart', async (_label, machine) => {
     const calls = powerStub(finished({ status: 'completed' }), { status: 200, payload: machine });
     const stderr = captureStream(process.stderr);

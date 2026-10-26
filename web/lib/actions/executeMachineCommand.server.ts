@@ -15,7 +15,7 @@
 import { getAdminDb } from '@/lib/firebase-admin';
 import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
-import { hasActiveHoursGuard, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
+import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import type { Actor } from '@/lib/capabilities';
 import { PLAN_REQUIRED_DETAIL, requireEntitlement, type PlanFlag } from '@/lib/plan.server';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -131,14 +131,6 @@ const ACTIVE_HOURS_OVERRIDE_KEY_SET: ReadonlySet<string> = new Set<string>(ACTIV
 export function stripActiveHoursOverride(params: Record<string, unknown>): Record<string, unknown> {
   return omitKeys(params, ACTIVE_HOURS_OVERRIDE_KEY_SET);
 }
-
-/**
- * why a `reboot_machine` with `when: after_active_hours` is refused on a machine
- * without the guard: its agent ignores `when` and would restart at once. read by
- * api callers, hoot and autonomous hoot alike, so it asks nobody anything.
- */
-export const HELD_RESTART_UNSUPPORTED_DETAIL =
-  "this machine's agent can't hold a restart for active hours: it is older than owlette 4.1.21, or the machine isn't on Windows, the only platform with active hours. sending it would restart the machine right away, so nothing was sent; restart now only if that's what's wanted.";
 
 /** the envelope field the agent honours, set only by the server. */
 export interface ActiveHoursOverride {
@@ -326,7 +318,7 @@ export async function executeMachineCommand(
     );
   }
   if (cmdType === 'reboot_machine' && safePayload.when === 'after_active_hours' && !hasActiveHoursGuard(machineData)) {
-    throw new ExecuteMachineCommandError(409, 'held_restart_unsupported', HELD_RESTART_UNSUPPORTED_DETAIL);
+    throw new ExecuteMachineCommandError(409, 'held_restart_unsupported', HELD_RESTART_UNSUPPORTED_REASON);
   }
 
   // ── write command to pending queue ──────────────────────────────────────

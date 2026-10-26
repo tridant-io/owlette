@@ -189,7 +189,7 @@ a machine that does not report its timezone gets the same choice with **may be i
 
 **a refusal** takes back the countdown the dashboard drew and says why: *restart refused: inside active hours 08:00–17:00*, with when they end. any other failure says *restart failed on* the machine, with the agent's error.
 
-the choice appears only for a Windows machine whose agent enforces active hours (`capabilities.activeHoursGuard`). an older agent, and every Mac and Linux machine, gets the plain confirm and restarts at once. the weekly [restart schedule](/docs/dashboard/restart-schedules) is not held: a person chose its time.
+the choice appears only for a Windows machine whose agent enforces active hours (`capabilities.activeHoursGuard` on owlette 4.1.21 or later). an older agent, a machine rolled back below 4.1.21, and every Mac and Linux machine get the plain confirm and restart at once. the weekly [restart schedule](/docs/dashboard/restart-schedules) is not held: a person chose its time.
 
 ---
 

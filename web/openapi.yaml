@@ -6880,7 +6880,7 @@ paths:
                       type: string
                       enum: [now, after_active_hours]
                       default: now
-                      description: "`reboot_machine` only. `after_active_hours` restarts when the machine's active hours end, or now when it is outside them. Needs `capabilities.activeHoursGuard: 1` on the machine, else `409 held_restart_unsupported`."
+                      description: "`reboot_machine` only. `after_active_hours` restarts when the machine's active hours end, or now when it is outside them. Needs `capabilities.activeHoursGuard: 1` and an `agentVersion` of 4.1.21 or later on the machine, else `409 held_restart_unsupported`."
                     active_hours_override:
                       $ref: '#/components/schemas/ActiveHoursOverrideRequest'
                     monitor:
@@ -6951,8 +6951,8 @@ paths:
           description: |
             `machine_offline` — machine is not currently connected; queueing is refused.
             `held_restart_unsupported` — `reboot_machine` with `when: after_active_hours`
-            on a machine without `capabilities.activeHoursGuard: 1`, whose agent would
-            restart at once; nothing is queued.
+            on a machine without `capabilities.activeHoursGuard: 1` and an `agentVersion`
+            of 4.1.21 or later, whose agent would restart at once; nothing is queued.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -13488,6 +13488,8 @@ components:
             `reboot_machine`, `shutdown_machine` and deployments inside its
             `activeHours` unless the command carries an override, and the
             only kind of machine that accepts `when: after_active_hours`.
+            An older agent never clears it, so it counts only with an
+            `agentVersion` of 4.1.21 or later.
           type: object
           nullable: true
           additionalProperties: true
