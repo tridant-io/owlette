@@ -1,12 +1,14 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
+import Link from 'next/link';
 import { ChevronDown, Copy, Download, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -15,6 +17,7 @@ import {
   detectBrowserPlatform,
   INSTALLER_PLATFORMS,
   PLATFORM_LABEL,
+  RELEASE_NOTES_HREF,
   type BrowserPlatform,
   type InstallerPlatform,
 } from '@/lib/installerPlatform';
@@ -247,6 +250,14 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
               </Tooltip>
             );
           })}
+          <DropdownMenuSeparator />
+          {/* px-3 lines its label up with the platforms'; a new tab keeps a dialog
+              this menu sits in (add machine) open */}
+          <DropdownMenuItem asChild className="cursor-pointer px-3">
+            <Link href={RELEASE_NOTES_HREF} target="_blank" rel="noopener noreferrer">
+              release notes
+            </Link>
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

@@ -6,6 +6,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -20,6 +21,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { RefreshCw, AlertCircle, AlertTriangle, CheckCircle2, Loader2, X } from 'lucide-react';
 import { useOwletteUpdates } from '@/hooks/useOwletteUpdates';
 import { Machine } from '@/hooks/useFirestore';
+import { RELEASE_NOTES_HREF } from '@/lib/installerPlatform';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 
@@ -180,6 +182,16 @@ export function UpdateOwletteButton({ siteId, machines, compact }: UpdateOwlette
             <DialogTitle>update owlette agents</DialogTitle>
             <DialogDescription>
               update selected machines to owlette v{latestVersion || 'latest'}
+              <span aria-hidden="true"> · </span>
+              {/* a new tab, so the dialog and its selection stay put */}
+              <Link
+                href={RELEASE_NOTES_HREF}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hl-link text-accent-cyan"
+              >
+                release notes
+              </Link>
             </DialogDescription>
           </DialogHeader>
 
