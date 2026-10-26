@@ -83,9 +83,28 @@ describe('parseActiveHours', () => {
 
 describe('hasActiveHoursGuard', () => {
   it('is true only for the value the agent writes, 1', () => {
-    expect(hasActiveHoursGuard({ capabilities: { activeHoursGuard: 1 } })).toBe(true);
+    expect(hasActiveHoursGuard({ capabilities: { activeHoursGuard: 1 }, agent_version: '4.1.21' })).toBe(true);
     for (const capabilities of [undefined, null, {}, { activeHoursGuard: 0 }, { activeHoursGuard: true }, { activeHoursGuard: '1' }]) {
-      expect(hasActiveHoursGuard({ capabilities })).toBe(false);
+      expect(hasActiveHoursGuard({ capabilities, agent_version: '4.1.21' })).toBe(false);
+    }
+  });
+
+  it('needs an agent of 4.1.21 or later, since an older one never clears a stale capability', () => {
+    const capabilities = { activeHoursGuard: 1 };
+    for (const version of ['4.1.21', '4.1.22', '4.2.0', '5.0.0']) {
+      expect(hasActiveHoursGuard({ capabilities, agent_version: version })).toBe(true);
+    }
+    // rolled back from 4.1.2x, the old agent keeps the 1 it never writes
+    for (const version of ['3.3.7', '4.1.20', '4.1.21-beta']) {
+      expect(hasActiveHoursGuard({ capabilities, agent_version: version })).toBe(false);
+    }
+  });
+
+  it('is false when the version is missing or unreadable', () => {
+    const capabilities = { activeHoursGuard: 1 };
+    expect(hasActiveHoursGuard({ capabilities })).toBe(false);
+    for (const version of [null, '', 'unknown', 'legacy', 4.1, {}]) {
+      expect(hasActiveHoursGuard({ capabilities, agent_version: version })).toBe(false);
     }
   });
 });
@@ -94,6 +113,7 @@ describe('activeHoursGuardOf', () => {
   const guarded = {
     osFamily: 'windows' as const,
     capabilities: { activeHoursGuard: 1 },
+    agent_version: '4.1.21',
     activeHours: WORKDAY,
     machineTimezone: 'Europe/Berlin',
   };
@@ -110,6 +130,9 @@ describe('activeHoursGuardOf', () => {
     // an agent that predates the guard ignores `when` and restarts at once
     expect(activeHoursGuardOf({ ...guarded, capabilities: {} })).toBeNull();
     expect(activeHoursGuardOf({ ...guarded, capabilities: undefined })).toBeNull();
+    // a machine rolled back below 4.1.21 keeps the capability its old agent never clears
+    expect(activeHoursGuardOf({ ...guarded, agent_version: '3.3.7' })).toBeNull();
+    expect(activeHoursGuardOf({ ...guarded, agent_version: undefined })).toBeNull();
     expect(activeHoursGuardOf({ ...guarded, osFamily: 'macos' })).toBeNull();
     expect(activeHoursGuardOf({ ...guarded, osFamily: 'linux' })).toBeNull();
     // a failed read deletes the field, and the agent then holds nothing back

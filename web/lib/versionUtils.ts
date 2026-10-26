@@ -170,3 +170,10 @@ export const SITE_TIME_MIN_AGENT_VERSION = '3.2.3';
  * bundle contract raises it.
  */
 export const SWOOP_MIN_AGENT_VERSION = '3.3.7';
+
+/**
+ * the first agent with the active-hours guard. its `capabilities.activeHoursGuard`
+ * can't say so alone: the agent writes it by dotted path and an older one never
+ * clears it, so a machine rolled back below this keeps a stale 1.
+ */
+export const ACTIVE_HOURS_GUARD_MIN_AGENT_VERSION = '4.1.21';

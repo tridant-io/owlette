@@ -71,8 +71,9 @@ jest.mock('@/lib/hoot-utils.server', () => ({
   isMachineOnline: (...args: unknown[]) => mockIsMachineOnline(...args),
   isHootEnabled: (...args: unknown[]) => mockIsHootEnabled(...args),
   getMachineSummary: (...args: unknown[]) => mockGetMachineSummary(...args),
-  // the real refusal, so the route is checked against what it actually returns.
+  // the real refusal and wording, so the route is checked against what it actually returns.
   heldRestartRefusal: jest.requireActual('@/lib/hoot-utils.server').heldRestartRefusal,
+  HELD_RESTART_AUTONOMOUS_DETAIL: jest.requireActual('@/lib/hoot-utils.server').HELD_RESTART_AUTONOMOUS_DETAIL,
 }));
 
 const mockDispatchToolCall = jest.fn();
@@ -454,6 +455,32 @@ describe('autonomous and active hours', () => {
 
   it('refuses a held restart its agent cannot hold, and sends nothing', async () => {
     docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    const result = await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+    const { detail } = result as { detail: string };
+    expect(detail).toMatch(/older than owlette 4\.1\.21/);
+    // nobody is there to ask, so it never reads as licence to restart now.
+    expect(detail).toMatch(/nothing was sent\. don't restart it; report it in your summary\.$/);
+    expect(detail).not.toMatch(/ask them/);
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses a held restart on a machine rolled back below 4.1.21 that still carries the capability', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    // the real summary over the machine doc, so the stale capability is judged as in production
+    const { getMachineSummary } = jest.requireActual('@/lib/hoot-utils.server');
+    const machineDoc = { online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } };
+    const machineDb = {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({
+        get: async () => ({ exists: true, data: () => machineDoc }),
+      }) }) }) }),
+    };
+    mockGetMachineSummary.mockImplementation((_db: unknown, siteId: string, machineId: string) =>
+      getMachineSummary(machineDb, siteId, machineId),
+    );
     const tools = await buildTools();
 
     const result = await tools.reboot_machine.execute({ when: 'after_active_hours' });

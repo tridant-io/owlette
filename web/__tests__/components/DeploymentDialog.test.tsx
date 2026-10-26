@@ -24,6 +24,7 @@ jest.mock('@/hooks/useFirestore', () => {
     online: true,
     processes: [],
     capabilities: { activeHoursGuard: 1 },
+    agent_version: '4.1.21',
     activeHours: { start, end: (start + 2) % 24, source: 'policy' },
     machineTimezone: 'UTC',
   });

@@ -23,11 +23,10 @@ import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
 import {
   ACTIVE_HOURS_OVERRIDE_KEYS,
-  HELD_RESTART_UNSUPPORTED_DETAIL,
   stripActiveHoursOverride,
   type ActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
-import { hasActiveHoursGuard, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
+import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
 import { Capability, hasCapability, type Actor, type Role, type SystemActorName } from '@/lib/capabilities';
 import { timestampToIso } from '@/lib/firestoreTime.server';
@@ -164,9 +163,10 @@ export interface BuildExecutableToolsOptions {
    */
   allowActiveHoursOverride?: boolean;
   /**
-   * The targets whose agent reports `capabilities.activeHoursGuard`. On any
-   * other, `reboot_machine` with `when: after_active_hours` is refused before
-   * anything is queued, since its agent would restart at once. Absent means none.
+   * The targets whose agent has the guard (`hasActiveHoursGuard`: the
+   * capability on an agent of 4.1.21 or later). On any other, `reboot_machine`
+   * with `when: after_active_hours` is refused before anything is queued, since
+   * its agent would restart at once. Absent means none.
    */
   activeHoursGuardIds?: readonly string[];
   /**
@@ -554,9 +554,10 @@ export interface SiteMachineSummary {
   /** `machine_timezone_iana` as the agent wrote it, unchecked; absent before agent 2.6.1. */
   timezone?: string;
   /**
-   * `capabilities.activeHoursGuard === 1`: a windows agent of 4.1.21 or later,
-   * which refuses reboots, shutdowns and deployments inside active hours and can
-   * hold a restart until they end. Any other agent holds nothing back for them.
+   * {@link hasActiveHoursGuard}: `capabilities.activeHoursGuard === 1` on an
+   * agent of 4.1.21 or later, a windows agent which refuses reboots, shutdowns
+   * and deployments inside active hours and can hold a restart until they end.
+   * Any other agent holds nothing back for them.
    */
   activeHoursGuard: boolean;
 }
@@ -609,18 +610,31 @@ export async function getMachineSummary(
 }
 
 /**
+ * what hoot reads when a held restart is refused, after the neutral reason the
+ * API gives: a model may take a bare reason as licence to retry with `when:
+ * "now"`. an attended turn sends that choice to the operator; an autonomous one
+ * has nobody to ask.
+ */
+export const HELD_RESTART_ATTENDED_DETAIL =
+  `${HELD_RESTART_UNSUPPORTED_REASON} don't restart it now unless the operator explicitly asks for that; ask them.`;
+export const HELD_RESTART_AUTONOMOUS_DETAIL =
+  `${HELD_RESTART_UNSUPPORTED_REASON} don't restart it; report it in your summary.`;
+
+/**
  * `reboot_machine` asked to wait for active hours on a machine whose agent
  * can't: an older or non-windows agent ignores `when` and restarts within a
- * minute, so the call is refused before anything is queued.
+ * minute, so the call is refused before anything is queued. `detail` is one of
+ * the two above; attended unless the caller says otherwise.
  */
 export function heldRestartRefusal(
   toolName: string,
   input: unknown,
   activeHoursGuard: boolean,
+  detail: string = HELD_RESTART_ATTENDED_DETAIL,
 ): ProcessToolResult | null {
   if (toolName !== 'reboot_machine' || activeHoursGuard) return null;
   if (!isRecord(input) || input.when !== 'after_active_hours') return null;
-  return toolRefusal('held_restart_unsupported', HELD_RESTART_UNSUPPORTED_DETAIL, 409);
+  return toolRefusal('held_restart_unsupported', detail, 409);
 }
 
 /** What a turn asks to target, before the site has been consulted. */

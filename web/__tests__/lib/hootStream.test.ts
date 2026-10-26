@@ -299,6 +299,17 @@ describe('runHootStream single-machine mode', () => {
 
   const db = {} as unknown as Firestore;
 
+  /** hoot-utils' real summary of one machine doc, so a stale capability is judged as in production. */
+  function realMachineSummary(data: Record<string, unknown>) {
+    const { getMachineSummary } = jest.requireActual('@/lib/hoot-utils.server');
+    const machineDb = {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({
+        get: async () => ({ exists: true, data: () => data }),
+      }) }) }) }),
+    };
+    return getMachineSummary(machineDb, 'site-a', 'kiosk-01');
+  }
+
   function send() {
     return runHootStream({
       db,
@@ -341,6 +352,9 @@ describe('runHootStream single-machine mode', () => {
     ['a machine with no doc', () => Promise.resolve(null)],
     // the read failing is no reason to fail the turn: utc, and nothing held, as before.
     ['a machine read that fails', () => Promise.reject(new Error('unavailable'))],
+    // the real summary: an older agent never clears the capability its newer self wrote
+    ['a machine rolled back to 3.3.7 that still carries the capability', () =>
+      realMachineSummary({ online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } })],
   ])('tells the tools and the model about %s', async (_label, summary) => {
     mockGetMachineSummary.mockImplementation(summary);
 

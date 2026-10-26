@@ -31,6 +31,7 @@ function machine(machineId: string, extra: Record<string, unknown> = {}) {
     machineId,
     osFamily: 'windows',
     capabilities: { activeHoursGuard: 1 },
+    agent_version: '4.1.21',
     activeHours: INSIDE,
     machineTimezone: 'UTC',
     ...extra,
@@ -44,11 +45,13 @@ describe('machinesInActiveHours', () => {
       machine('outside', { activeHours: OUTSIDE }),
       machine('not-chosen'),
       machine('old-agent', { capabilities: {} }),
+      // rolled back below 4.1.21: the old agent keeps the capability and installs at once
+      machine('rolled-back', { agent_version: '3.3.7' }),
       machine('mac', { osFamily: 'macos' }),
       machine('no-window', { activeHours: undefined }),
     ];
 
-    expect(machinesInActiveHours(machines, ['inside', 'outside', 'old-agent', 'mac', 'no-window'])).toEqual([
+    expect(machinesInActiveHours(machines, ['inside', 'outside', 'old-agent', 'rolled-back', 'mac', 'no-window'])).toEqual([
       { machineId: 'inside', window: INSIDE, inside: true },
     ]);
   });

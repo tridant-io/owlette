@@ -616,15 +616,18 @@ describe('listSiteMachines', () => {
   it('carries whether each agent holds a restart for active hours, off the same read', async () => {
     const { db, machinesGet } = createSiteMachinesDb([
       // a windows agent of 4.1.21 or later
-      { id: 'kiosk-01', online: true, capabilities: { activeHoursGuard: 1, swoop: 1 } },
+      { id: 'kiosk-01', online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1, swoop: 1 } },
       // older agents, and macOS and Linux, never write it
       { id: 'kiosk-02', online: true, capabilities: { swoop: 1 } },
       { id: 'kiosk-03', online: true },
-      { id: 'kiosk-04', online: true, capabilities: { activeHoursGuard: true } },
+      { id: 'kiosk-04', online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: true } },
+      // rolled back below 4.1.21: the old agent never clears the 1
+      { id: 'kiosk-05', online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } },
+      { id: 'kiosk-06', online: true, capabilities: { activeHoursGuard: 1 } },
     ]);
 
     const machines = await listSiteMachines(db, 's1');
-    expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false]);
+    expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false, false, false]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
   });
 });
@@ -652,6 +655,7 @@ describe('getMachineSummary', () => {
     const { db, get, paths } = createMachineDb({
       online: true,
       machine_timezone_iana: 'Europe/Berlin',
+      agent_version: '4.1.22',
       capabilities: { activeHoursGuard: 1 },
     });
 
@@ -664,6 +668,14 @@ describe('getMachineSummary', () => {
     });
     expect(paths).toEqual(['sites/s1/machines/kiosk-01']);
     expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['rolled back to 3.3.7', { agent_version: '3.3.7' }],
+    ['with no version', {}],
+  ])('holds nothing on a machine %s that still carries the capability', async (_label, version) => {
+    const { db } = createMachineDb({ online: true, capabilities: { activeHoursGuard: 1 }, ...version });
+    await expect(getMachineSummary(db, 's1', 'kiosk-01')).resolves.toMatchObject({ activeHoursGuard: false });
   });
 
   it('answers null for a machine with no doc', async () => {
@@ -1434,8 +1446,8 @@ describe('active-hours override', () => {
       expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
       const { detail } = result as { detail: string };
       expect(detail).toMatch(/older than owlette 4\.1\.21, or the machine isn't on Windows/);
-      // read by autonomous hoot too, which has nobody to ask.
-      expect(detail).toMatch(/nothing was sent; restart now only if that's what's wanted\.$/);
+      // a person is there to ask, and a restart now is theirs to choose.
+      expect(detail).toMatch(/nothing was sent\. don't restart it now unless the operator explicitly asks for that; ask them\.$/);
       expect(docs.size).toBe(0);
     });
 

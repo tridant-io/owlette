@@ -1304,6 +1304,28 @@ describe('startTurn — which agents hold a restart for active hours', () => {
     expect(toolOptions()).toMatchObject({ activeHoursGuardIds: [] });
     expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(expect.objectContaining({ activeHoursGuardIds: [] }));
   });
+
+  it('leaves out a target rolled back below 4.1.21 that still carries the capability', async () => {
+    // the real listing over the machine docs: an older agent never clears the capability
+    const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
+    const docs = [
+      { id: 'machine-1', data: () => ({ online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-2', data: () => ({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } }) },
+      { id: 'machine-3', data: () => ({ online: true }) },
+    ];
+    const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation((_db: unknown, siteId: string) =>
+      listSiteMachines(machinesDb, siteId),
+    );
+
+    await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));
+    await flushAsync();
+
+    expect(toolOptions()).toMatchObject({ activeHoursGuardIds: ['machine-2'] });
+    expect(llm.buildHootSystemPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({ activeHoursGuardIds: ['machine-2'] }),
+    );
+  });
 });
 
 describe('startTurn — who can approve an active-hours override', () => {

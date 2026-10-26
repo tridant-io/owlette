@@ -28,6 +28,7 @@ import {
   isHootEnabled,
   getMachineSummary,
   heldRestartRefusal,
+  HELD_RESTART_AUTONOMOUS_DETAIL,
   executeServerSideTool,
   SERVER_SIDE_TOOLS,
   type BuildExecutableToolsOptions,
@@ -118,7 +119,7 @@ function buildAutonomousTools(
   chatId: string,
   eventId: string,
   toolDefs: McpToolDefinition[],
-  /** the machine's agent reports `capabilities.activeHoursGuard`, so it can hold a restart. */
+  /** the machine's agent has the guard (`hasActiveHoursGuard`: the capability on 4.1.21 or later), so it can hold a restart. */
   activeHoursGuard: boolean,
 ) {
   const dispatchCtx = { db, siteId, machineId, chatId, eventId };
@@ -152,7 +153,7 @@ function buildAutonomousTools(
         }
         const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
         if (existingCmd) {
-          const refusal = heldRestartRefusal(toolName, params, activeHoursGuard);
+          const refusal = heldRestartRefusal(toolName, params, activeHoursGuard, HELD_RESTART_AUTONOMOUS_DETAIL);
           if (refusal) return refusal;
           return dispatchExistingCommandAsSystem(
             dispatchCtx,

@@ -7,6 +7,13 @@ description: "All notable changes to owlette are documented here. The format is 
 
 ## [Unreleased]
 
+### fixed — a machine rolled back below 4.1.21 is no longer offered a held restart
+
+An agent of 4.1.21 or later marks its machine as able to hold a restart until
+active hours end, and an older agent never clears the mark. The dashboard, hoot,
+the API and the CLI now check the agent's version too, so a machine rolled back
+below 4.1.21 is no longer sent a held restart that its agent would run at once.
+
 ## [4.1.23] - 2026-10-26
 
 ### fixed — swoop's pointer keeps its size while you drag a window

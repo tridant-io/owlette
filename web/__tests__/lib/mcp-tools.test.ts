@@ -486,6 +486,8 @@ describe('mcp-tools: active-hours schemas', () => {
     // active hours hold Windows' restarts only until a deadline passes.
     expect(description).toMatch(/until an update deadline passes/);
     expect(description).toMatch(/owlette 4\.1\.21 or later refuses reboots, shutdowns and deployments inside them/);
+    // an older agent answers "Unknown action" to the three it never had.
+    expect(description).toMatch(/limit_auto_restart, disable_auto_install and enable_auto_install need owlette 4\.1\.21 or later\./);
     expect(description).not.toMatch(/quiet hours/i);
   });
 

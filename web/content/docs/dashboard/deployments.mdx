@@ -62,7 +62,7 @@ a warning lists everything that will be closed before you deploy.
 
 on Windows the agent refuses an install while the machine is inside its **active hours**, the hours, on the machine's own clock, in which Windows holds its own update restarts back: 08:00–17:00 when nobody set any. it refuses before it closes any process, and the target fails with `refused: inside active hours 08:00–17:00 (machine time), they end at 17:00` on its line. any other failure shows there as the agent wrote it. see [agent commands](/docs/reference/agent-commands#active-hours).
 
-when any machine you chose is inside its active hours, **deploy to N machines** asks first: **deploy inside active hours?** lists those machines with their hours (**may be inside** for a machine that reports no timezone) and offers **cancel** or **deploy anyway**, which needs a **reason**. the reason goes on every install in the deployment, and each machine logs `active_hours_override` with it and your name. only Windows machines whose agent enforces active hours (`capabilities.activeHoursGuard`) are listed; an older agent installs at once.
+when any machine you chose is inside its active hours, **deploy to N machines** asks first: **deploy inside active hours?** lists those machines with their hours (**may be inside** for a machine that reports no timezone) and offers **cancel** or **deploy anyway**, which needs a **reason**. the reason goes on every install in the deployment, and each machine logs `active_hours_override` with it and your name. only Windows machines whose agent enforces active hours (`capabilities.activeHoursGuard` on owlette 4.1.21 or later) are listed; an older agent, or a machine rolled back below 4.1.21, installs at once.
 
 ---
 

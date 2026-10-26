@@ -125,16 +125,18 @@ await client.installer_deployments.retry(
 )
 ```
 
-A Windows agent with `capabilities.activeHoursGuard` refuses a reboot,
-shutdown or install inside the machine's active hours. The command is still
-queued; `get_command()` then reports `failed` (a deployment target ends
-`failed`) with an `error` that starts `Error: active_hours:`.
-`after_active_hours` restarts once they end; `active_hours_override` acts now
-and logs the reason. `installer_deployments.create()` and `retry()` take the
-same override, and a retry needs its own. Older agents ignore both and act at
-once, as macOS and Linux do for a reboot or shutdown. The API refuses
-`after_active_hours` on all of them with `409 held_restart_unsupported`, since
-none can hold the restart.
+A Windows agent of 4.1.21 or later, which reports
+`capabilities.activeHoursGuard`, refuses a reboot, shutdown or install inside
+the machine's active hours. The command is still queued; `get_command()` then
+reports `failed` (a deployment target ends `failed`) with an `error` that
+starts `Error: active_hours:`. `after_active_hours` restarts once they end;
+`active_hours_override` acts now and logs the reason.
+`installer_deployments.create()` and `retry()` take the same override, and a
+retry needs its own. Older agents ignore both and act at once, as macOS and
+Linux do for a reboot or shutdown. That includes a machine rolled back below
+4.1.21: it keeps the capability, so the API also needs an `agentVersion` of
+4.1.21 or later. The API refuses `after_active_hours` on all of them with
+`409 held_restart_unsupported`, since none can hold the restart.
 
 ## push progress
 

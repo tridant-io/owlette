@@ -221,7 +221,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         open={restartOpen}
         onOpenChange={setRestartOpen}
         machineName={restartTarget?.name ?? ''}
-        guard={restartTarget ? activeHoursGuardOf(restartTarget) : null}
+        guard={restartTarget ? activeHoursGuardOf({ ...restartTarget, agent_version: restartTarget.agentVersion }) : null}
         sending={power.sending}
         onConfirm={(options) => void handleConfirmRestart(options)}
       />

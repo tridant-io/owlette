@@ -23,6 +23,7 @@ import { writeFile } from 'fs/promises';
 import * as path from 'path';
 import { loadConfig } from '../config';
 import { activeHoursOverrideFrom, addActiveHoursOverrideOptions } from '../lib/activeHoursOverride';
+import { isAgentVersionAtLeast } from '../lib/agentVersion';
 import { fetchWithTimeout } from '../lib/http';
 import {
   isJson,
@@ -601,6 +602,8 @@ async function pollCommand(pollUrl: string, token: string, json: boolean): Promi
  * other ignores `when` and restarts at once, and the API refuses the command
  * there (409 held_restart_unsupported). Checking first gives a plain error before
  * anything is sent. An unreadable machine goes ahead, since the API still refuses.
+ * The guard is the API's rule: `capabilities.activeHoursGuard: 1` on an agent of
+ * 4.1.21 or later, since an older agent never clears the capability.
  */
 async function honoursAfterActiveHours(
   machineUrl: string,
@@ -620,9 +623,10 @@ async function honoursAfterActiveHours(
     return true;
   }
   const m = (await res.json().catch(() => ({}))) as {
+    agentVersion?: unknown;
     capabilities?: { activeHoursGuard?: unknown } | null;
   };
-  if (m.capabilities?.activeHoursGuard !== 1) {
+  if (m.capabilities?.activeHoursGuard !== 1 || !isAgentVersionAtLeast(m.agentVersion, '4.1.21')) {
     fatal(
       `machine ${machineId} can't hold a restart for active hours: its agent is older than 4.1.21, or it isn't on Windows. drop the flag to restart now`,
     );

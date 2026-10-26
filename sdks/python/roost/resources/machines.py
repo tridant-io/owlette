@@ -168,11 +168,12 @@ class Machines:
     ) -> dict[str, Any]:
         """Queue ``reboot_machine``; returns ``{commandId, status}``.
 
-        A Windows agent with ``capabilities.activeHoursGuard`` refuses inside
-        the machine's active hours: ``get_command`` then reports ``failed``
-        with an ``error`` starting ``Error: active_hours:``.
+        A Windows agent of 4.1.21 or later (``capabilities.activeHoursGuard``)
+        refuses inside the machine's active hours: ``get_command`` then
+        reports ``failed`` with an ``error`` starting ``Error: active_hours:``.
         ``after_active_hours`` restarts once they end (now when outside them);
-        older agents, macOS and Linux can't hold it, so the API refuses it with
+        older agents, a machine rolled back below 4.1.21 (which keeps the
+        capability), macOS and Linux can't hold it, so the API refuses it with
         409 ``held_restart_unsupported``.
         ``active_hours_override`` restarts inside them anyway. Not both.
         """
