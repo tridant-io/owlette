@@ -2,14 +2,17 @@
 
 /**
  * the session bar: the way back to the dashboard, the machine's name, a badge
- * only when something is wrong, the one gesture that takes fullscreen,
- * keyboard lock and pointer lock together, and whatever menus the page hands
- * it as children. every button is an icon with a tooltip; the bar stays clean.
+ * only when something is wrong, the one gesture that takes fullscreen and
+ * keyboard lock together (and pointer lock, when the mouse-capture toggle beside
+ * it is on), and whatever menus the page hands it as children. every button is
+ * an icon with a tooltip; the bar stays clean.
  *
- * **all three locks ride one click, and the order is fixed.** keyboard lock is
- * only granted in js-initiated fullscreen, so fullscreen must be awaited first;
+ * **the locks ride one click, and the order is fixed.** keyboard lock is only
+ * granted in js-initiated fullscreen, so fullscreen must be awaited first;
  * pointer lock and fullscreen both need the same transient activation, so they
- * cannot be split across two clicks without the second one being refused.
+ * cannot be split across two clicks without the second one being refused. the
+ * mouse is left free unless the toggle says otherwise (`lib/swoop/mouseCapture.ts`):
+ * captured, the pointer is the machine's, a round trip behind every move.
  *
  * keyboard lock is chromium-only. firefox and safari have no `navigator.keyboard`
  * at all, and there is nothing to fall back to — so the tooltip says so plainly
@@ -19,7 +22,8 @@
  *
  * the fullscreen target is the STAGE, not the page: input capture binds there
  * and the picture should be every pixel. the bar is off screen while fullscreen
- * holds, which is why the stage carries its own click-to-recapture hint.
+ * holds, which is why the stage carries its own click-to-recapture hint, and
+ * why the toggle is set before going fullscreen.
  *
  * on a side (from md up, marked as `data-swoop-bar` on <html> before first
  * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name and
@@ -36,7 +40,7 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Eye, Gauge, Info, Maximize, Minimize, PowerOff, RotateCcw } from 'lucide-react';
+import { ArrowLeft, Eye, Gauge, Info, Maximize, Minimize, Mouse, PowerOff, RotateCcw } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -53,9 +57,11 @@ import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
+import { readMouseCapture, setMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCapture';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 const subscribeNever = (): (() => void) => () => {};
+const mouseFree = (): boolean => false;
 
 /** an app-level round trip above this, or a delay rise above it, is a poor connection. */
 const POOR_RTT_US = 150_000;
@@ -175,6 +181,8 @@ export function SwoopToolbar({
   const nativeKeys = useViewerAppNativeKeys();
   // null in a browser, where the bar is only the session's
   const platform = useViewerAppPlatform();
+  const mouseCapture = useSyncExternalStore(subscribeMouseCapture, readMouseCapture, mouseFree);
+  const viewOnly = session !== null && !session.ctl;
 
   useEffect(() => {
     const sync = () => {
@@ -218,7 +226,7 @@ export function SwoopToolbar({
     stage.focus();
 
     const capture = swoopInputCapture(session);
-    if (!capture) return;
+    if (!capture || !readMouseCapture()) return;
     if (!(await capture.requestPointerLock())) {
       setNotice('the mouse could not be captured; pointer positions stay absolute.');
     }
@@ -329,6 +337,32 @@ export function SwoopToolbar({
             </Button>
           </BarTooltip>
 
+          {/* set before going fullscreen, where the bar is off screen. a mac's
+              owlette swoop has no pointer lock at all (adr 0012), a view-only
+              session sends no mouse to capture, and a touch screen has none. */}
+          {platform !== 'mac' && !viewOnly && (
+            <BarTooltip
+              label={
+                <p className="max-w-xs">
+                  {mouseCapture
+                    ? 'fullscreen captures the mouse, for games and 3D views that turn with it. click to leave it free.'
+                    : 'capture the mouse in fullscreen, for games and 3D views that turn with it. left free, your pointer moves the moment you do.'}
+                </p>
+              }
+            >
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="pointer-coarse:hidden"
+                aria-label="capture the mouse in fullscreen"
+                aria-pressed={mouseCapture}
+                onClick={() => setMouseCapture(!mouseCapture)}
+              >
+                <Mouse aria-hidden />
+              </Button>
+            </BarTooltip>
+          )}
+
           {/* keyboard lock is chromium-only and brave ships with it off: the
               tooltip says which case this browser is, and the keyboard menu
               covers the rest either way. owlette swoop captures keys itself. */}
@@ -340,8 +374,8 @@ export function SwoopToolbar({
                   : nativeKeys
                     ? `fullscreen: the app hands every shortcut it can to the machine; hold esc to come back.${platform === 'mac' ? ' cmd+tab stays on this mac.' : ''}`
                     : lockSupported
-                      ? 'fullscreen captures the keyboard and mouse: shortcuts like alt+tab go to the machine.'
-                      : 'fullscreen captures the mouse; this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.'}
+                      ? `fullscreen captures the keyboard${mouseCapture ? ' and mouse' : ''}: shortcuts like alt+tab go to the machine.`
+                      : `${mouseCapture ? 'fullscreen captures the mouse; ' : 'in fullscreen '}this browser keeps its own shortcuts (alt+tab, ctrl+w). the keyboard menu sends those.`}
               </p>
             }
           >
@@ -349,7 +383,7 @@ export function SwoopToolbar({
               variant="ghost"
               size="icon-sm"
               disabled={!live}
-              aria-label={fullscreen ? 'exit fullscreen' : 'fullscreen with keyboard and mouse capture'}
+              aria-label={fullscreen ? 'exit fullscreen' : `fullscreen with keyboard${mouseCapture ? ' and mouse' : ''} capture`}
               onClick={() => void engage()}
             >
               {fullscreen ? <Minimize aria-hidden /> : <Maximize aria-hidden />}

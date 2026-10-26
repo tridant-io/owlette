@@ -23,12 +23,13 @@
  * changing `contentRect` breaks clicks on every non-matching aspect ratio.
  */
 
-import { useCallback, useEffect, useId, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useState, useSyncExternalStore, type RefObject } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
 import { hasKeyboardLock } from '@/lib/swoop/keyboardLock';
+import { readMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCapture';
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
@@ -67,6 +68,7 @@ export interface SwoopStageProps {
 const HINT_MS = 4000;
 /** the fullscreen hint's fade; matches its `motion-safe:duration-300`. */
 const HINT_FADE_MS = 300;
+const mouseFree = (): boolean => false;
 
 /** four seconds, once per entry, then gone. */
 function Hint({ children, onDone }: { children: React.ReactNode; onDone: () => void }) {
@@ -163,6 +165,8 @@ export function SwoopStage({
   const leaveHintId = useId();
   // a view-only session captures nothing, so its keys never leave the page.
   const capture = swoopInputCapture(session);
+  // fullscreen leaves the mouse free unless the session bar's toggle says otherwise
+  const mouseCapture = useSyncExternalStore(subscribeMouseCapture, readMouseCapture, mouseFree);
 
   useEffect(() => {
     if (!capture) return;
@@ -203,11 +207,11 @@ export function SwoopStage({
     stageRef.current?.focus();
     // escape drops pointer lock but leaves fullscreen, and the toolbar is off
     // screen at that point — a click is the way back in.
-    if (fullscreen && !locked) void swoopInputCapture(session)?.requestPointerLock();
-  }, [fullscreen, locked, session, stageRef]);
+    if (fullscreen && !locked && mouseCapture) void swoopInputCapture(session)?.requestPointerLock();
+  }, [fullscreen, locked, mouseCapture, session, stageRef]);
 
   const windowedCapture = capture !== null && !fullscreen;
-  const captureHint = state === 'connected' && fullscreen && !locked;
+  const captureHint = state === 'connected' && fullscreen && !locked && mouseCapture;
   // a stall recovery speaks for the stage until the page is connecting again.
   const recovering = stall === 'reattaching' || stall === 'reconnecting';
   // an ended or failed session is not connecting: it says why, and the way on.

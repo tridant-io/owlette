@@ -579,7 +579,7 @@ test.describe('through a host', () => {
 test.describe('through a host, inside owlette swoop', () => {
   test.use({ userAgent: APP_UA });
 
-  test('the local pointer stays until the host places its own, a 2x mac arrow keeps its size in points, and the local one is back when a program hides it', async ({
+  test('the local pointer stays until the host places its own, a 2x mac arrow keeps its size in points, the drawn one follows the mouse windowed and in fullscreen, and the local one is back when a program hides it', async ({
     page,
     browser,
   }) => {
@@ -621,6 +621,24 @@ test.describe('through a host, inside owlette swoop', () => {
         expect(Math.abs(moved.x - (box.x - 100))).toBeLessThanOrEqual(1);
         expect(Math.abs(moved.y - (box.y - 50))).toBeLessThanOrEqual(1);
       }).toPass({ timeout: 2_000 });
+
+      // fullscreen leaves the mouse free unless the bar's toggle says otherwise: the drawn pointer
+      // follows the mouse there too, where a captured one was the machine's, a round trip late.
+      await expect(page.getByRole('button', { name: 'capture the mouse in fullscreen' })).toHaveAttribute('aria-pressed', 'false');
+      await page.getByRole('button', { name: 'fullscreen with keyboard capture' }).click();
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement !== null)).toBe(true);
+      await stage.click({ position: { x: 200, y: 200 } });
+      await expect(page.getByText('click to capture the mouse')).toHaveCount(0);
+      expect(await page.evaluate(() => document.pointerLockElement)).toBeNull();
+      await page.mouse.move(300, 260);
+      await expect(async () => {
+        const moved = (await drawn.boundingBox())!;
+        // the arrow's hot spot, 5 css px in, sits on the mouse
+        expect(Math.abs(moved.x + 5 - 300)).toBeLessThanOrEqual(2);
+        expect(Math.abs(moved.y + 5 - 260)).toBeLessThanOrEqual(2);
+      }).toPass({ timeout: 2_000 });
+      await page.evaluate(() => document.exitFullscreen());
+      await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
 
       // a program on the machine hides its pointer, with no drag under way: the local one comes back.
       const hidden = JSON.stringify({ t: 'cpos', x: 0.5, y: 0.5, visible: false, tsUs: 2 });

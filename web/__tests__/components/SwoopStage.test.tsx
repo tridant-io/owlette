@@ -17,9 +17,13 @@
 import React from 'react';
 import { render, screen, cleanup, act } from '@testing-library/react';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
+import { setMouseCapture } from '@/lib/swoop/mouseCapture';
 
 /** the input capture's escape-twice seam, or null for a view-only session. */
-let mockCapture: { onEscapeTwice: (listener: () => void) => () => void } | null = null;
+let mockCapture: {
+  onEscapeTwice: (listener: () => void) => () => void;
+  requestPointerLock?: () => Promise<boolean>;
+} | null = null;
 let escapeTwice: (() => void) | null = null;
 
 jest.mock('@/lib/swoop/features', () => ({
@@ -42,6 +46,7 @@ afterEach(() => {
   jest.useRealTimers();
   mockCapture = null;
   escapeTwice = null;
+  localStorage.clear();
   delete (navigator as Navigator & { keyboard?: unknown }).keyboard;
   Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
 });
@@ -175,12 +180,42 @@ describe('SwoopStage esc hint inside owlette swoop', () => {
   });
 
   it('sits above the click-to-capture line rather than over it', () => {
+    setMouseCapture(true);
     const stageRef = renderStage();
     enterFullscreen(stageRef.current);
     const hint = screen.getByTestId('fullscreen-hint');
     const capture = screen.getByText('click to capture the mouse');
     expect(capture.parentElement).toBe(hint.parentElement);
     expect(hint.compareDocumentPosition(capture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe('SwoopStage — the mouse in fullscreen', () => {
+  it('leaves the mouse free unless capture is on: no hint, and a click takes no lock', () => {
+    captureControl();
+    const requestPointerLock = jest.fn(() => Promise.resolve(true));
+    mockCapture = { ...mockCapture!, requestPointerLock };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.queryByText('click to capture the mouse')).toBeNull();
+    act(() => {
+      stageRef.current!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    });
+    expect(requestPointerLock).not.toHaveBeenCalled();
+  });
+
+  it('with capture on, says a click captures it, and a click does', () => {
+    setMouseCapture(true);
+    captureControl();
+    const requestPointerLock = jest.fn(() => Promise.resolve(true));
+    mockCapture = { ...mockCapture!, requestPointerLock };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.getByText('click to capture the mouse')).toBeInTheDocument();
+    act(() => {
+      stageRef.current!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    });
+    expect(requestPointerLock).toHaveBeenCalledTimes(1);
   });
 });
 

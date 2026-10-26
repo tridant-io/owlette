@@ -11,6 +11,18 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — swoop's fullscreen leaves your mouse free
+
+Fullscreen in a browser or in owlette swoop on Windows and Linux captured the
+mouse on the first click: your own pointer vanished and the one you saw was the
+machine's, which came back a round trip late, so over a slow connection it
+lagged every move. Fullscreen now takes the keyboard and leaves the mouse free,
+so the pointer moves the moment you do, as it has in a window since 4.1.21. A
+new button beside fullscreen in the session bar, "capture the mouse in
+fullscreen", turns capture back on for a game or a 3D view that turns with the
+mouse; this browser remembers it. owlette swoop on a Mac never captured the
+mouse and has no such button.
+
 ### changed — owlette's own icon is the full eye, and big in the Mac Dock
 
 owlette and owlette swoop shared one icon set, so the desktop app wore swoop's
