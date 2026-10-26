@@ -3,8 +3,8 @@
 # 1.2): one `Owlette-Installer-v<ver>.deb` — the service runtime under
 # /opt/owlette, its system unit, the app's user unit, the polkit rule, the
 # desktop app itself (the Tauri build's deb, unpacked into the payload with
-# its Depends carried over) and owlette swoop, the viewer app (the binary from
-# its own Tauri deb, with our launcher). the package stays `owlette-agent` and
+# its Depends carried over) and owlette swoop, the viewer app (the binary and
+# its hicolor icons from its own Tauri deb, with our launcher). the package stays `owlette-agent` and
 # provides, replaces and conflicts with the old `owlette` app package, so a box
 # on the two-package install upgrades in one apt-get install. runs on the
 # architecture it packages for (x86_64 or aarch64) with the Tauri build
@@ -101,10 +101,11 @@ APP_DEPENDS="$(dpkg-deb -f "${APP_DEB}" Depends)"
 [ -n "${APP_DEPENDS}" ] || { echo "build.sh: ${APP_DEB##*/} declares no Depends" >&2; exit 1; }
 
 # --- owlette swoop, the viewer app ------------------------------------------------
-# a second Tauri crate with no frontend, run from the app's node_modules. only
-# its binary joins the payload: the launcher is ours (packaging/linux), one
-# menu entry that wears the desktop app's icon and claims owlette-swoop://, in
-# place of the bundler's second one.
+# a second Tauri crate with no frontend, run from the app's node_modules. its
+# binary and its own icons (hicolor owlette-swoop-viewer, the small eye, where the
+# desktop app's is owlette's full one) join the payload: the launcher is ours
+# (packaging/linux), one menu entry that claims owlette-swoop://, in place of
+# the bundler's second one.
 if [ "${SKIP_APP}" = "0" ]; then
   say "building owlette swoop"
   ( cd "${REPO}/desktop/viewer" && ../node_modules/.bin/tauri build --bundles deb --ci )
@@ -116,6 +117,9 @@ dpkg-deb -x "${VIEWER_DEB}" "${WORK}/viewer"
 [ -x "${WORK}/viewer/usr/bin/owlette-swoop-viewer" ] \
   || { echo "build.sh: ${VIEWER_DEB##*/} has no usr/bin/owlette-swoop-viewer" >&2; exit 1; }
 install -Dm755 "${WORK}/viewer/usr/bin/owlette-swoop-viewer" "${PAYLOAD}/usr/bin/owlette-swoop-viewer"
+ls "${WORK}"/viewer/usr/share/icons/hicolor/*/apps/owlette-swoop-viewer.png >/dev/null 2>&1 \
+  || { echo "build.sh: ${VIEWER_DEB##*/} has no hicolor owlette-swoop-viewer icon" >&2; exit 1; }
+cp -r "${WORK}/viewer/usr/share/icons" "${PAYLOAD}/usr/share/"
 install -Dm644 "${PACKAGING}/owlette-swoop-viewer.desktop" "${PAYLOAD}/usr/share/applications/owlette-swoop-viewer.desktop"
 VIEWER_DEPENDS="$(dpkg-deb -f "${VIEWER_DEB}" Depends)"
 [ -n "${VIEWER_DEPENDS}" ] || { echo "build.sh: ${VIEWER_DEB##*/} declares no Depends" >&2; exit 1; }

@@ -131,8 +131,9 @@ window. Each new
 swoop window opens 32 px right and down from the newest one still open; it is
 centred when there is none, when that one is minimised, and again after eight
 steps. There is no tray and no agent coupling: the app reads and writes nothing under the
-owlette data root, so it runs on a workstation without an agent. It shares the
-desktop app's icons and nothing else; the two crates are separate on purpose
+owlette data root, so it runs on a workstation without an agent. It has icons of
+its own (`desktop/viewer/icons`, the small eye, beside the desktop app's full one) and
+shares nothing with the desktop app; the two crates are separate on purpose
 (their own identifiers, WebView2 profiles and instance locks).
 
 ```bash
