@@ -537,3 +537,12 @@ Repo rules that apply to every task (from `.claude/CLAUDE.md`):
   - `pause`/`get_status` trust Windows' lagging pause status.
 - The owner's hoot UI asks (thread-line progress animation, focus "ask anything" on new hoot, eased auto-scroll) are on `feat/hoot-thinking-line` in worktree `Owlette-hoot-progress-wt`.
 - Still open: 0.1 (Jeff's details); 7.2 (after 4.1.21). owlette-1b cuts 4.1.21 after the follow-up merges.
+- 2026-10-25/26 after 4.1.21:
+  - The held-restart notice was confirmed on TEC-A4D on 4.1.21 (see context.md "Proof").
+  - #434 (hoot UI) merged and rode in 4.1.22.
+  - owlette-f9's prod audit found that hoot claimed the guard and sent `when: after_active_hours` to agents older than 4.1.21, which restart at once. On prod (3.3.x, tier-3 approval off on some sites) that would be an instant restart. Fixed on `fix/hoot-guard-capability`:
+    - hoot refuses a held restart per machine without `capabilities.activeHoursGuard` (single, fan-out, autonomous, conversations);
+    - the prompt says per machine whether it enforces active hours;
+    - the commands API answers `409 held_restart_unsupported`.
+  - It must merge before any dev→prod promotion.
+

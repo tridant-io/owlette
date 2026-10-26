@@ -265,6 +265,11 @@ Task 7.1, 2026-10-25. Machine: TEC-A4D (the owner's dev box, site `default_site`
   - The three P active-hours values were deleted (P now holds only the empty AU subkey) and `-RemoveDevGrant` ran.
   - The agent reports `{start: 8, end: 2, source: user}` again.
   - The box keeps running the branch's agent source over the 4.1.18 install until 4.1.21 installs.
+- **Held-restart notice on 4.1.21** (2026-10-25, after owlette-1b installed 4.1.21 on TEC-A4D):
+  - A held reboot fired at 17:00. Windows' event 1074 at 17:00:26 carried "owlette: restart held until active hours ended — cancellable from dashboard"; the 12:00:32 event from the first test said "Owlette scheduled reboot — cancel…".
+  - The site log shows `deferred_reboot_announced`, then the cancel. The agent's `cancel_reboot` landed and the local abort loop found nothing pending; no restart happened.
+  - The test policy window was deleted again (elevated, owner's click).
+  - TEC-A4D's clock reads about a minute behind UTC.
 - **Not run:**
   - the crash-loop deferral (optional; unit-tested);
   - the elevated `schtasks` read (no restart pending);
