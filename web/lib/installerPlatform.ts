@@ -22,6 +22,9 @@ export const PLATFORM_EXT: Record<InstallerPlatform, string> = {
   linux_x64: 'deb',
 };
 
+// what each release changed: the public changelog, which needs no sign-in
+export const RELEASE_NOTES_HREF = '/docs/changelog';
+
 const PLATFORM_BY_OS: Record<MachineOsFamily, InstallerPlatform> = {
   windows: 'windows_x64',
   macos: 'macos_arm64',

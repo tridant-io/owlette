@@ -94,6 +94,15 @@ describe('DownloadButton', () => {
     }
   });
 
+  it('ends the menu with the release notes, in a new tab', async () => {
+    setNavigator(WINDOWS_UA);
+    await openMenu('download v3.4.0 for windows');
+
+    const notes = menuItem('release notes');
+    expect(notes).toHaveAttribute('href', '/docs/changelog');
+    expect(notes).toHaveAttribute('target', '_blank');
+  });
+
   it('offers a mac the pkg', async () => {
     setNavigator(MAC_UA);
     render(

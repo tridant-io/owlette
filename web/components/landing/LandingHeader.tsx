@@ -8,11 +8,12 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { useAuth } from '@/contexts/AuthContext';
-import { PLATFORM_LABEL, type InstallerPlatform } from '@/lib/installerPlatform';
+import { PLATFORM_LABEL, RELEASE_NOTES_HREF, type InstallerPlatform } from '@/lib/installerPlatform';
 import { OwletteEyeIcon } from './OwletteEye';
 
 type NavLinkDef = { label: string; href: string; external?: boolean };
@@ -38,6 +39,9 @@ function downloadLinks(platforms: readonly InstallerPlatform[]) {
     href: `/download?os=${platform.split('_')[0]}`,
   }));
 }
+
+// ends the download menu, so what changed in a release is a click from its download
+const RELEASE_NOTES_LINK: NavLinkDef = { label: 'release notes', href: RELEASE_NOTES_HREF };
 
 // Appended only while signed out — offering "sign in" to a signed-in visitor is
 // the thing this header used to get wrong.
@@ -127,6 +131,10 @@ export function LandingHeader({ downloadPlatforms }: { downloadPlatforms: readon
                     <a href={link.href}>{link.label}</a>
                   </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild className="cursor-pointer">
+                  <Link href={RELEASE_NOTES_LINK.href}>{RELEASE_NOTES_LINK.label}</Link>
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           )}
@@ -243,6 +251,8 @@ export function LandingHeader({ downloadPlatforms }: { downloadPlatforms: readon
                 ))}
               </div>
             )}
+            {downloads.length > 0 &&
+              linkEl(RELEASE_NOTES_LINK, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close)}
             {authReady &&
               !signedIn &&
               linkEl(SIGN_IN_LINK, 'py-3 text-base text-muted-foreground hover:text-foreground transition-colors', close)}

@@ -2,7 +2,7 @@
  * Landing — the header's download offers each platform the latest release has a
  * build for: a menu on desktop, a row in the phone menu. Each entry is the public
  * /download permalink for its os, so a signed-out visitor needs nothing more,
- * and no entry ends in "no macos build".
+ * and no entry ends in "no macos build". The release notes follow the downloads.
  */
 
 import { test, expect } from '@playwright/test';
@@ -25,10 +25,11 @@ test.describe('landing — download', () => {
     await page.getByRole('banner').getByRole('button', { name: 'download' }).click();
 
     const items = page.getByRole('menu').getByRole('menuitem');
-    await expect(items).toHaveText(['windows', 'macOS (apple silicon)', 'linux (.deb)']);
+    await expect(items).toHaveText(['windows', 'macOS (apple silicon)', 'linux (.deb)', 'release notes']);
     for (const [i, href] of PERMALINKS.entries()) {
       await expect(items.nth(i)).toHaveAttribute('href', href);
     }
+    await expect(items.last()).toHaveAttribute('href', '/docs/changelog');
     // the page keeps its scroll, so its scrollbar and layout stay put
     await expect(page.locator('body')).not.toHaveAttribute('data-scroll-locked');
   });
@@ -48,6 +49,7 @@ test.describe('landing — download', () => {
       tops.add(Math.round(box.y));
     }
     expect(tops.size).toBe(1);
+    await expect(page.locator('header nav a[href="/docs/changelog"]')).toHaveText('release notes');
   });
 
   test('a release with only a windows build offers only windows', async ({ page }) => {
@@ -58,7 +60,7 @@ test.describe('landing — download', () => {
     await page.getByRole('banner').getByRole('button', { name: 'download' }).click();
 
     const items = page.getByRole('menu').getByRole('menuitem');
-    await expect(items).toHaveText(['windows']);
+    await expect(items).toHaveText(['windows', 'release notes']);
     await expect(items.first()).toHaveAttribute('href', '/download?os=windows');
 
     await page.setViewportSize({ width: 390, height: 844 });
@@ -77,6 +79,7 @@ test.describe('landing — download', () => {
     await page.goto('/');
     await page.getByRole('button', { name: 'open menu' }).click();
     await expect(page.locator('header nav a[href^="/download?os="]')).toHaveCount(0);
+    await expect(page.locator('header nav a[href="/docs/changelog"]')).toHaveCount(0);
   });
 });
 
