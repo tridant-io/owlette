@@ -30,8 +30,11 @@ const APP_LINK_PATH: &str = "/app-link";
 const APP_LINK_NEXT: &str = "next";
 
 const TITLE: &str = "owlette swoop";
-const MAIN_SIZE: (f64, f64) = (1060.0, 680.0);
-const SWOOP_SIZE: (f64, f64) = (1280.0, 800.0);
+// a 16:9 machine fills a session window to the edges: its picture, 1120x630
+// and 1280x720, under the page's 48 px top bar (SwoopToolbar.tsx). main is
+// where the first session opens, and a swoop window takes each one after it
+const MAIN_SIZE: (f64, f64) = (1120.0, 678.0);
+const SWOOP_SIZE: (f64, f64) = (1280.0, 768.0);
 const MIN_SIZE: (f64, f64) = (780.0, 540.0);
 
 // the traffic lights centred on the page's 48 px top bar, 16 pt down and 16 pt

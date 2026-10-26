@@ -4212,9 +4212,19 @@ mod host {
                     // frame is held — which is why this is an observer.
                     //
                     // `ts_ticks` is `platform::clock` ticks; §5's `tsUs` is the
-                    // same epoch as every other stamp the viewer is sent.
-                    let ts_us = clock.us(sample.ts_ticks) as i64;
-                    if let Some(at) = sample.position {
+                    // same epoch as every other stamp the viewer is sent. a
+                    // frame with no pointer news has none, so a pointer the
+                    // system paints in mid-drag is stamped now.
+                    let ts_us = match sample.ts_ticks {
+                        0 => clock.now_us(),
+                        ticks => clock.us(ticks),
+                    } as i64;
+                    let position = crate::cursor::with_painted(
+                        sample.position,
+                        platform::painted_pointer,
+                        geometry,
+                    );
+                    if let Some(at) = position {
                         if let Some(message) = tracker.on_position(at, geometry, ts_us) {
                             pointer.push(message);
                         }

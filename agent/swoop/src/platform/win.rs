@@ -2,7 +2,7 @@
 //! process setup.
 
 pub use crate::capture::{enumerate_outputs, DesktopWatcher, Duplication as CaptureSource};
-pub use crate::cursor::dpi_for_rect;
+pub use crate::cursor::{dpi_for_rect, painted_pointer};
 pub use crate::gpu::scale::{Downscaler, ScaleError};
 pub use crate::input::SendInputInjector as InputInjector;
 

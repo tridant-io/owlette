@@ -24,6 +24,6 @@ pub mod unsupported;
 use unsupported as imp;
 
 pub use imp::{
-    clock, dpi_for_rect, enumerate_outputs, process, CaptureSource, DesktopWatcher, Downscaler,
-    InputInjector, ScaleError,
+    clock, dpi_for_rect, enumerate_outputs, painted_pointer, process, CaptureSource,
+    DesktopWatcher, Downscaler, InputInjector, ScaleError,
 };

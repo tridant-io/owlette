@@ -259,6 +259,22 @@ impl PointerSpace {
             py.clamp(self.rect.top, self.rect.bottom - 1),
         )
     }
+
+    /// Virtual-desktop pixels → viewer space: the inverse of
+    /// [`PointerSpace::to_desktop`], for a position the system reports in
+    /// desktop pixels. `None` off this output.
+    pub fn from_desktop(&self, (x, y): (i32, i32)) -> Option<(f64, f64)> {
+        let rect = self.rect;
+        if x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom {
+            return None;
+        }
+        let axis = |v: i32, lo: i32, size: i32| f64::from(v - lo) / f64::from((size - 1).max(1));
+        Some(rotate_back(
+            axis(x, rect.left, rect.width()),
+            axis(y, rect.top, rect.height()),
+            self.rotation,
+        ))
+    }
 }
 
 /// Apply an output's rotation to a normalised texture point, which is what
@@ -273,6 +289,16 @@ fn un_rotate(u: f64, v: f64, rotation: Rotation) -> (f64, f64) {
         Rotation::Rotate90 => (1.0 - v, u),
         Rotation::Rotate180 => (1.0 - u, 1.0 - v),
         Rotation::Rotate270 => (v, 1.0 - u),
+    }
+}
+
+/// [`un_rotate`] undone: a desktop-local point back in texture space.
+fn rotate_back(u: f64, v: f64, rotation: Rotation) -> (f64, f64) {
+    match rotation {
+        Rotation::Identity => (u, v),
+        Rotation::Rotate90 => (v, 1.0 - u),
+        Rotation::Rotate180 => (1.0 - u, 1.0 - v),
+        Rotation::Rotate270 => (1.0 - v, u),
     }
 }
 
@@ -1507,6 +1533,34 @@ mod tests {
         // they land on this display's own corner and never on the neighbouring
         // monitor.
         assert_eq!(rotated.to_desktop(-5.0, 9.0), (-1, 2701));
+    }
+
+    #[test]
+    fn from_desktop_undoes_to_desktop_on_every_rotation() {
+        let rect = measured_outputs()[1].desktop_rect;
+        for rotation in [
+            Rotation::Identity,
+            Rotation::Rotate90,
+            Rotation::Rotate180,
+            Rotation::Rotate270,
+        ] {
+            let space = PointerSpace { rect, rotation };
+            for point in [(0.0_f32, 0.0_f32), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.25, 0.5)] {
+                let (u, v) = space
+                    .from_desktop(space.to_desktop(point.0, point.1))
+                    .expect("on this output");
+                // a pixel's worth of rounding on the way out, nothing more
+                let pixel = 1.0 / f64::from(rect.width().min(rect.height()) - 1);
+                let near = |got: f64, want: f32| (got - f64::from(want)).abs() <= pixel;
+                assert!(
+                    near(u, point.0) && near(v, point.1),
+                    "{rotation:?} {point:?} came back as ({u}, {v})"
+                );
+            }
+        }
+        let space = PointerSpace::from_output(&measured_outputs()[1]);
+        assert_eq!(space.from_desktop((rect.right, rect.top)), None);
+        assert_eq!(space.from_desktop((rect.left, rect.top - 1)), None);
     }
 
     #[test]

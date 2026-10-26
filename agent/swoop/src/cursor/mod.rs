@@ -5,7 +5,9 @@
 //! without it. So the encoded frames carry no cursor at all and the viewer has
 //! to composite one from the messages this module emits — which is what
 //! [`CursorMetadata::pointer_in_frame`] says on the wire, and why it is `false`
-//! and stays `false` for this backend.
+//! and stays `false` for this backend. The one exception is a window move or
+//! resize, when the system paints the pointer into the picture itself: see
+//! [`with_painted`].
 //!
 //! Every number below is a measurement from spike 0.8 (Windows 11 23H2
 //! 22631.6199, two attached outputs), over 500 frames / 25 s:
@@ -228,6 +230,30 @@ pub trait PointerSampler: Send {
     fn sample(&mut self) -> PointerSample<'_>;
 }
 
+/// The pointer a viewer is told about for one capture step.
+///
+/// During a window move or resize Windows paints the pointer into the picture
+/// itself, and Desktop Duplication reports it hidden at 0,0 for the whole
+/// drag (TEC-A4D, 2026-10-26: the foreground thread is then in its move/size
+/// loop, and an app hiding the pointer never is). The painted pointer is the
+/// picture's size, so a viewer that stopped drawing its own showed the pointer
+/// shrink for the drag. `painted` is where the system has it then, in
+/// virtual-desktop pixels; on this output it is reported shown there, and a
+/// viewer keeps drawing it at its own size, over the painted one.
+pub fn with_painted(
+    sampled: Option<PointerPosition>,
+    painted: impl FnOnce() -> Option<(i32, i32)>,
+    geometry: &OutputGeometry,
+) -> Option<PointerPosition> {
+    if matches!(sampled, Some(PointerPosition { visible: true, .. })) {
+        return sampled;
+    }
+    match painted().and_then(|at| geometry.texture_from_desktop(at)) {
+        Some((x, y)) => Some(PointerPosition { x, y, visible: true }),
+        None => sampled,
+    }
+}
+
 /// One output's geometry, as the cursor path needs it.
 ///
 /// The three spaces Desktop Duplication hands out are not interchangeable
@@ -309,6 +335,16 @@ impl OutputGeometry {
             rect: self.desktop_rect,
             rotation: self.rotation,
         }
+    }
+
+    /// A virtual-desktop pixel as a pointer position on this output, in the
+    /// texture's pixels: [`OutputGeometry::pointer_space`] run backwards.
+    /// `None` off this output.
+    pub fn texture_from_desktop(&self, at: (i32, i32)) -> Option<(i32, i32)> {
+        let (u, v) = self.pointer_space().from_desktop(at)?;
+        let texel =
+            |n: f64, size: u32| (n * f64::from(size.saturating_sub(1).max(1))).round() as i32;
+        Some((texel(u, self.texture.0), texel(v, self.texture.1)))
     }
 }
 
@@ -724,8 +760,30 @@ mod win32 {
     };
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetGUIThreadInfo, GUITHREADINFO, GUI_INMOVESIZE,
+    };
 
     use super::{PointerPosition, Rect, ShapeInfo, ShapeKind, DEFAULT_DPI};
+
+    /// Where the pointer is while the system paints it into the picture: a
+    /// window move or resize, the foreground thread's move/size loop. Desktop
+    /// pixels, made physical like Desktop Duplication's by the per-monitor dpi
+    /// awareness capture sets on the process. `None` any other time, when
+    /// the duplication's own report stands (see [`super::with_painted`]).
+    pub fn painted_pointer() -> Option<(i32, i32)> {
+        let mut gui = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetGUIThreadInfo(0, &mut gui) }.ok()?;
+        if gui.flags.0 & GUI_INMOVESIZE.0 == 0 {
+            return None;
+        }
+        let mut at = POINT::default();
+        unsafe { GetCursorPos(&mut at) }.ok()?;
+        Some((at.x, at.y))
+    }
 
     /// The pointer position a frame carries, or `None` when it carries none.
     ///
@@ -815,7 +873,7 @@ mod win32 {
 }
 
 #[cfg(windows)]
-pub use win32::{dpi_for_rect, pointer_position, PointerReader};
+pub use win32::{dpi_for_rect, painted_pointer, pointer_position, PointerReader};
 
 // The arithmetic half of the macOS sampler is portable, so the Windows suite
 // runs its tests too; the sampler itself is macOS only.
@@ -1064,6 +1122,61 @@ mod tests {
         assert_eq!(round_trip(&geometry, (0, 0)), (-2160, 2701));
         assert_eq!(round_trip(&geometry, (3839, 0)), (-2160, -1138));
         assert_eq!(round_trip(&geometry, (0, 2159)), (-1, 2701));
+    }
+
+    /// The rotate270 4K panel of the test above.
+    fn portrait_panel() -> OutputGeometry {
+        OutputGeometry {
+            desktop_rect: Rect {
+                left: -2160,
+                top: -1138,
+                right: 0,
+                bottom: 2702,
+            },
+            rotation: Rotation::Rotate270,
+            texture: (3840, 2160),
+            dpi: 96,
+        }
+    }
+
+    #[test]
+    fn a_desktop_pixel_maps_back_to_the_texel_that_drew_it() {
+        let geometry = portrait_panel();
+        for texel in [(0, 0), (3839, 0), (0, 2159), (3839, 2159), (1200, 700)] {
+            let desktop = round_trip(&geometry, texel);
+            assert_eq!(
+                geometry.texture_from_desktop(desktop),
+                Some(texel),
+                "{texel:?} via {desktop:?}"
+            );
+        }
+        // the neighbouring monitor is not this output
+        assert_eq!(geometry.texture_from_desktop((0, 100)), None);
+    }
+
+    #[test]
+    fn a_pointer_painted_into_a_window_drag_is_reported_shown_where_it_is() {
+        let geometry = portrait_panel();
+        let hidden = Some(PointerPosition { x: 0, y: 0, visible: false });
+        let shown = Some(PointerPosition { x: 10, y: 20, visible: true });
+        let painted = round_trip(&geometry, (1200, 700));
+
+        // a drag: hidden at 0,0 by the duplication, painted where it is
+        assert_eq!(
+            with_painted(hidden, || Some(painted), &geometry),
+            Some(PointerPosition { x: 1200, y: 700, visible: true })
+        );
+        // a frame with no pointer news mid-drag still says where it went
+        assert_eq!(
+            with_painted(None, || Some(painted), &geometry),
+            Some(PointerPosition { x: 1200, y: 700, visible: true })
+        );
+        // a program hid it, or it is on another output: the duplication's word stands
+        assert_eq!(with_painted(hidden, || None, &geometry), hidden);
+        assert_eq!(with_painted(hidden, || Some((0, 100)), &geometry), hidden);
+        assert_eq!(with_painted(None, || None, &geometry), None);
+        // a shown pointer is never second-guessed, nor the system asked
+        assert_eq!(with_painted(shown, || unreachable!(), &geometry), shown);
     }
 
     #[test]
@@ -1381,5 +1494,50 @@ mod tests {
             shape_messages <= shape_updates,
             "the cache must never emit more than it is given"
         );
+    }
+
+    /// Live window drag. With the working directory `agent/swoop`:
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture cursor::tests::live_window_drag
+    /// ```
+    ///
+    /// Drag a window on the first output by its title bar while it runs: the
+    /// duplication reports the pointer hidden for the drag, and every one of
+    /// those reports goes out shown, where the pointer is.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs a real desktop and a window dragged on it"]
+    fn live_window_drag_keeps_the_pointer_shown() {
+        use crate::capture::{Duplication, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
+
+        let outputs = crate::capture::enumerate_outputs().expect("enumerate outputs");
+        let output = outputs.first().expect("an attached output");
+        let mut source = Duplication::open(output, RebuildSignal::new()).expect("duplicate output");
+        let mut tracker = CursorTracker::new();
+        let (mut painted, mut hidden_sent) = (0u32, 0u32);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        while std::time::Instant::now() < deadline {
+            let geometry = OutputGeometry::for_output(source.output(), source.size());
+            source
+                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
+                    let position = with_painted(sample.position, painted_pointer, &geometry);
+                    let duplication_shown =
+                        matches!(sample.position, Some(PointerPosition { visible: true, .. }));
+                    if position.is_some_and(|at| at.visible) && !duplication_shown {
+                        painted += 1;
+                    }
+                    if let Some(Cursor::Cpos { visible: false, .. }) =
+                        position.and_then(|at| tracker.on_position(at, &geometry, 0))
+                    {
+                        hidden_sent += 1;
+                    }
+                })
+                .expect("acquire");
+        }
+
+        println!("painted={painted} hidden_cpos={hidden_sent}");
+        assert!(painted > 0, "no painted pointer seen - drag a window by its title bar");
     }
 }

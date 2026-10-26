@@ -27,10 +27,12 @@
  * is: over the connecting stage, and until the first `cpos`, the local pointer
  * stays up. when the host says its pointer is hidden, the local one is hidden
  * only while a press that went down over the machine's showing pointer is
- * held: windows hides it for a title-bar drag and paints it into the picture,
- * where the local arrow was a second one. any other time a program has hidden
- * it, a kiosk or a player, or it is on another of the machine's displays, and
- * the operator would be clicking blind. under pointer lock the browser hides
+ * held: a program that hides it for a drag, a 3d view's mouse look, means it.
+ * (an older host also reported windows' title-bar drag that way, with the
+ * pointer painted into the picture; a current one sends that pointer shown,
+ * PROTOCOL.md §5.) any other time a program has hidden it, a kiosk or a
+ * player, or it is on another of the machine's displays, and the operator
+ * would be clicking blind. under pointer lock the browser hides
  * the local one whatever this says, and a game that hides the machine's means
  * it. the drawn pointer paints above the stage's panels, so none covers it.
  *
@@ -148,8 +150,8 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     noPoint,
   );
   // whether the machine's pointer was showing when the press now held went
-  // down: windows hides it for a title-bar drag it paints into the picture,
-  // while a kiosk's or a player's was hidden all along.
+  // down: a program that hides it for a drag hid a showing one, while a
+  // kiosk's or a player's was hidden all along.
   const [press, setPress] = useState({ held: false, overShown: false });
   if (press.held !== held) setPress({ held, overShown: held && state.visible });
   const box = useSwoopPictureBox(session);
@@ -158,7 +160,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   const watching = session !== null && !session.ctl;
   const overlay = watching || locked || inApp || (state.shape !== null && !fitsCssCursor(state.shape));
   // the machine's pointer is in the local one's place: drawn over the picture,
-  // or, hidden during a drag, painted into it.
+  // or, hidden by a program for a drag, not drawn at all.
   const standIn = picture && state.positioned && (state.visible ? overlay : press.held && press.overShown);
 
   // the css half: one pointer, never two and never none. outside pointer lock

@@ -298,6 +298,11 @@ no `vpos` at all; `cpos` is where that pointer went. a viewer draws `vpos` as an
 its own cursor a css cursor. a controller outside pointer lock that overlays the machine's pointer draws it
 where its own last `m` put it, not at `cpos`, which trails that by a round trip.
 
+`visible` says whether the machine's pointer is on screen. during a window move or resize windows paints the
+pointer into the picture itself and desktop duplication reports it hidden at 0,0; the host still sends it
+`visible`, where the system has it, so a viewer draws it at its own size over the painted one, which is the
+picture's size.
+
 ### clipboard — `swoop-control`, both directions, host→viewer ungated, viewer→host requires `ctl`
 
 `{"t":"clip","dir":"to-host"|"to-viewer","fmt":"text"|"png","seq":n,"chunk":i,"chunks":k,"totalBytes":n,"data":"<base64>"}`

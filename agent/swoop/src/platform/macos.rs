@@ -39,7 +39,7 @@ use objc2_foundation::NSError;
 use objc2_screen_capture_kit::{SCShareableContent, SCStreamErrorCode};
 use serde::Serialize;
 
-pub use super::unsupported::{process, DesktopWatcher};
+pub use super::unsupported::{painted_pointer, process, DesktopWatcher};
 pub use crate::gpu::vt_transfer::{PixelTransfer as Downscaler, ScaleError};
 pub use crate::input::CgInjector as InputInjector;
 
