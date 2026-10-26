@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — hoot never promises a held restart on a machine that can't hold one
+
+On an agent older than 4.1.21, or off Windows, hoot no longer sends "restart
+after active hours", which that agent would run at once, and no longer says
+owlette holds reboots, shutdowns or deployments there. The API refuses such a
+held restart too, with `409 held_restart_unsupported`, so the CLI and both SDKs
+can't send one either.
+
 ### added — hoot from a machine's menu
 
 A machine's menu on the dashboard now has **hoot**: it opens hoot on that

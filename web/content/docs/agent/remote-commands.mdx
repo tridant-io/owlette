@@ -303,7 +303,7 @@ Error: active_hours: inside active hours 08:00–17:00 (machine time); they end 
 ```
 
 - **`activeHoursOverride: { reason, approvedBy }`** lets the command run inside active hours, and the agent logs `active_hours_override` with both. only the server writes it, for a call a person approved: the dashboard's confirm, an API call with `active_hours_override`, or an approved hoot call in a single-machine chat. unattended hoot, talons and follow-ups cannot
-- **`when: "after_active_hours"`** on `reboot_machine` holds the reboot until active hours end, sets the machine's `rebootDeferredUntil`, and fires it then with the usual countdown. outside active hours it reboots now. `cancel_reboot` drops it
+- **`when: "after_active_hours"`** on `reboot_machine` holds the reboot until active hours end, sets the machine's `rebootDeferredUntil`, and fires it then with the usual countdown. outside active hours it reboots now. `cancel_reboot` drops it. the API, hoot and the CLI send it only to a machine with the guard, since any other agent would restart at once: elsewhere the API answers `409 held_restart_unsupported`
 - an install is refused before it closes any process
 
 rollouts, fleet updates and the weekly restart schedule are not held. macOS and Linux have no active hours, and an agent from before the guard ignores both fields, so a machine is protected only once it runs a release with the guard (`capabilities.activeHoursGuard: 1`). the full rules are in [agent commands](/docs/reference/agent-commands#active-hours).

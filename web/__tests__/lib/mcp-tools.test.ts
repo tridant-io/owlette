@@ -485,8 +485,34 @@ describe('mcp-tools: active-hours schemas', () => {
     expect(description).toMatch(/disable_auto_install[^.]*security updates[^.]*wait/);
     // active hours hold Windows' restarts only until a deadline passes.
     expect(description).toMatch(/until an update deadline passes/);
-    expect(description).toMatch(/owlette refuses reboots, shutdowns and deployments inside them/);
+    expect(description).toMatch(/owlette 4\.1\.21 or later refuses reboots, shutdowns and deployments inside them/);
     expect(description).not.toMatch(/quiet hours/i);
+  });
+
+  it('claims the refusal only for agents that enforce it', () => {
+    // older agents, and macOS and Linux, run these at once.
+    for (const name of ['reboot_machine', 'shutdown_machine', 'deploy_software']) {
+      const description = getToolByName(name)!.description;
+      expect(description).toMatch(/On Windows machines running owlette 4\.1\.21 or later, owlette refuses/);
+      expect(description).not.toMatch(/On Windows, owlette refuses/);
+    }
+    // deployments are Windows only.
+    expect(getToolByName('deploy_software')!.description).toMatch(
+      /On an older Windows agent a deployment installs right away; macOS and Linux can't run one\./,
+    );
+    const registry = getToolByName('registry_operation')!.description;
+    expect(registry).toMatch(/On owlette 4\.1\.21 or later it refuses to write or delete the active hours values/);
+    expect(registry).not.toMatch(/\. It refuses to write or delete/);
+
+    const when = getToolByName('reboot_machine')!.parameters.properties.when.description;
+    expect(when).toMatch(/Only Windows machines running owlette 4\.1\.21 or later can wait/);
+    expect(when).toMatch(/would restart at once/);
+
+    for (const name of OVERRIDE_TOOLS) {
+      expect(getToolByName(name)!.parameters.properties.override_active_hours.description).toMatch(
+        /only matters on Windows machines running owlette 4\.1\.21 or later/,
+      );
+    }
   });
 
   it('the countdown the tools quote is the agent`s 60 seconds', () => {

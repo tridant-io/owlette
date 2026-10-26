@@ -312,6 +312,45 @@ describe('executeMachineCommand — machine doc gating', () => {
     expect(mockedEmit).not.toHaveBeenCalled();
   });
 
+  describe('a restart held until active hours end', () => {
+    const HELD = { type: 'reboot_machine', payload: { when: 'after_active_hours' } };
+
+    it.each([
+      ['an agent older than the guard', { online: true, capabilities: { swoop: 1 } }],
+      ['a machine with no capabilities', { online: true }],
+      ['a capability that is not 1', { online: true, capabilities: { activeHoursGuard: true } }],
+      ['a Mac, which has no active hours', { online: true, osFamily: 'macos', capabilities: { keepAwake: 1 } }],
+    ])('throws 409 held_restart_unsupported on %s, before anything is queued', async (_label, machine) => {
+      const fake = buildFakeDb(machine);
+      await expect(executeMachineCommand(ctxFor(), HELD, { db: fake.db })).rejects.toMatchObject({
+        status: 409,
+        code: 'held_restart_unsupported',
+        detail: expect.stringMatching(/older than owlette 4\.1\.21/),
+      });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+
+    it('queues it on an agent that holds it', async () => {
+      const fake = buildFakeDb({ online: true, capabilities: { activeHoursGuard: 1 } });
+      await executeMachineCommand(ctxFor(), HELD, { db: fake.db, now: () => 1 });
+      const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+      expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
+    });
+
+    it('leaves a restart now, and a shutdown, to every agent', async () => {
+      const fake = buildFakeDb({ online: true });
+      for (const input of [
+        { type: 'reboot_machine', payload: { when: 'now' } },
+        { type: 'reboot_machine', payload: {} },
+        { type: 'shutdown_machine', payload: {} },
+      ]) {
+        await executeMachineCommand(ctxFor(), input, { db: fake.db });
+      }
+      expect(fake.setCalls).toHaveLength(3);
+    });
+  });
+
   it('writes when machine.online is missing (legacy docs without the field)', async () => {
     // `online === false` is the gate; an absent field means online, so legacy
     // pre-heartbeat machine docs still accept commands.
@@ -422,7 +461,7 @@ describe('executeMachineCommand — command write shape', () => {
   });
 
   it('strips every active-hours override name from the payload', async () => {
-    const fake = buildFakeDb();
+    const fake = buildFakeDb({ online: true, capabilities: { activeHoursGuard: 1 } });
     await executeMachineCommand(
       ctxFor(),
       { type: 'reboot_machine', payload: { ...overrideBag(), delay_seconds: 5, when: 'after_active_hours' } },

@@ -567,6 +567,10 @@ export function startTurn(
       }
 
       const fanOut = resolved.fanOut;
+      // off the same listing: which targets' agents hold a restart for active hours.
+      const activeHoursGuardIds = resolved.ids.filter(
+        (id) => siteMachines.find((machine) => machine.id === id)?.activeHoursGuard === true,
+      );
       // A fan-out dispatches from the id LIST, so the positional id is only the
       // single path's target; in a fan-out it is just the legacy "not one
       // machine" view, and the `chatMachineId` default it feeds is always
@@ -621,6 +625,7 @@ export function startTurn(
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),
+          activeHoursGuardIds,
           resumedToolCallIds: approvalResponseIds(params.messages),
           // A follow-up fires where it was promised (D-D): this turn's target
           // AFTER any mention narrowing, with `null` left as the dynamic "all".
@@ -663,6 +668,7 @@ export function startTurn(
           processes,
           narrowedByMention: params.turnTarget.source === 'mention',
           localTime,
+          activeHoursGuardIds,
         }),
         // Pass `tools` so per-tool toModelOutput hooks (e.g. capture_screenshot
         // → image-url) also project PRIOR-turn outputs into model content.

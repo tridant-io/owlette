@@ -453,7 +453,7 @@ function registerSimpleCommandVerb(
   if (cfg.verb === 'reboot') {
     verbCmd.option(
       '--after-active-hours',
-      "restart once the machine's windows active hours end, or now if it is outside them. needs an agent with the active-hours guard; macos and linux restart now",
+      "restart once the machine's windows active hours end, or now if it is outside them. needs a windows agent with the active-hours guard (4.1.21 or later)",
     );
   }
   addActiveHoursOverrideOptions(verbCmd, `${doing} inside the machine's active hours anyway`)
@@ -597,9 +597,10 @@ async function pollCommand(pollUrl: string, token: string, json: boolean): Promi
 }
 
 /**
- * Only a windows agent with the active-hours guard defers; an older one ignores
- * `when` and restarts at once, the opposite of what the flag asks. macOS and
- * linux have no active hours, so restarting now is what the flag means there.
+ * Only a windows agent with the active-hours guard can hold the restart; any
+ * other ignores `when` and restarts at once, and the API refuses the command
+ * there (409 held_restart_unsupported). Checking first gives a plain error before
+ * anything is sent. An unreadable machine goes ahead, since the API still refuses.
  */
 async function honoursAfterActiveHours(
   machineUrl: string,
@@ -614,18 +615,16 @@ async function honoursAfterActiveHours(
   }
   if (!res?.ok) {
     process.stderr.write(
-      `owlette: could not check that machine ${machineId} honours --after-active-hours (${res ? res.status : 'no response'}); an agent without the active-hours guard restarts at once\n`,
+      `owlette: could not check that machine ${machineId} honours --after-active-hours (${res ? res.status : 'no response'}); the API refuses it if the machine cannot hold the restart\n`,
     );
     return true;
   }
   const m = (await res.json().catch(() => ({}))) as {
-    osFamily?: string | null;
     capabilities?: { activeHoursGuard?: unknown } | null;
   };
-  // an absent osFamily is a pre-3.4 agent, and those are all windows
-  if ((m.osFamily ?? 'windows') === 'windows' && m.capabilities?.activeHoursGuard !== 1) {
+  if (m.capabilities?.activeHoursGuard !== 1) {
     fatal(
-      `machine ${machineId} runs an agent without the active-hours guard, which ignores --after-active-hours and restarts at once. update its agent, or drop the flag to restart now`,
+      `machine ${machineId} can't hold a restart for active hours: its agent is older than 4.1.21, or it isn't on Windows. drop the flag to restart now`,
     );
     return false;
   }

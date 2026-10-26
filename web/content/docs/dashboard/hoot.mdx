@@ -207,10 +207,11 @@ the bound machines are re-checked when you answer. one that went offline, or had
 
 ## active hours
 
-on Windows the agent refuses a reboot, a shutdown or a deployment while the machine is inside its active hours, the hours Windows holds its own update restarts back, on the machine's own clock (see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours)). hoot is told the machine's local time, or the site's in a chat across several machines, and checks before it acts:
+on Windows, from owlette 4.1.21, the agent refuses a reboot, a shutdown or a deployment while the machine is inside its active hours, the hours Windows holds its own update restarts back, on the machine's own clock (see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours)). hoot is told the machine's local time, or the site's in a chat across several machines, and whether each machine's agent enforces active hours, and checks before it acts:
 
 - before `reboot_machine`, `shutdown_machine`, `deploy_software` or `kill_process`, or a shell command that does the same, it calls `manage_windows_update get_status` and `list_talons`, then tells you whether the machine is inside its active hours and whether a talon will act on it soon.
 - it prefers `reboot_machine` with `when: after_active_hours`, which restarts once they end, and never uses a shell command to get around a refusal. that last part rests on its instructions alone: the agent guards the dedicated tools, not `run_powershell` or `execute_script`.
+- it only offers a restart held until active hours end on a machine that can hold one. an older Windows agent reboots, shuts down and installs right away, and a Mac or Linux machine reboots and shuts down right away (it can't run a deployment): hoot says so, and refuses a held restart there without sending anything. in a chat across several machines it names the machines that don't enforce active hours, and only the ones that can hold the restart get it.
 - asked to stop Windows restarting the machine on its own, it calls `limit_auto_restart` first, asking for the hours if it does not know them: Windows then restarts for updates only outside active hours, so a nightly restart can still happen, and hoot says so along with any deadline that remains. only when you say you want no update restarts at all does it use `disable_auto_install`, after telling you security updates will then wait for a person.
 
 **restarting inside active hours anyway.** hoot passes `override_active_hours` only when you asked for it and gave a reason. that call always waits for your approval, even on a site with the approval gate off, and the card shows *override active hours:* with the reason. it works in a dashboard chat on one machine: a chat across several machines gets an error and nothing is sent, and a scheduled follow-up, a talon, the public conversations API and autonomous hoot are never offered it. the machine logs the reason and your name. see [overriding active hours](/docs/reference/hoot-tools#overriding-active-hours).
@@ -369,7 +370,7 @@ a custom directive can be set in Firestore at `sites/{siteId}/settings/cortex`, 
 - a site runs at most three autonomous investigations at once.
 - each investigation is limited to 15 steps.
 - the default tier cap rules out shell commands unless the site raises `maxTier`.
-- it can never override active hours, at any tier: its tools carry no `override_active_hours`. it can still ask for a restart once they end.
+- it can never override active hours, at any tier: its tools carry no `override_active_hours`. it can still ask for a restart once they end, on a machine whose agent can hold one.
 - the per-machine hoot toggle blocks tool execution for that machine on every path: single-machine chats, multi-machine fan-out, scheduled follow-ups, talons, autonomous investigations, and the public conversations API.
 - offline machines escalate instead of spending LLM calls.
 

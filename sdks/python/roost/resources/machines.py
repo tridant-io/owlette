@@ -172,7 +172,8 @@ class Machines:
         the machine's active hours: ``get_command`` then reports ``failed``
         with an ``error`` starting ``Error: active_hours:``.
         ``after_active_hours`` restarts once they end (now when outside them);
-        older agents, macOS and Linux ignore it and restart at once.
+        older agents, macOS and Linux can't hold it, so the API refuses it with
+        409 ``held_restart_unsupported``.
         ``active_hours_override`` restarts inside them anyway. Not both.
         """
         params = _active_hours_params(active_hours_override)

@@ -26,6 +26,8 @@ import {
   resolveSiteKeyOwner,
   isMachineOnline,
   isHootEnabled,
+  getMachineSummary,
+  heldRestartRefusal,
   executeServerSideTool,
   SERVER_SIDE_TOOLS,
   type BuildExecutableToolsOptions,
@@ -35,7 +37,6 @@ import {
   dispatchExistingCommandAsSystem,
 } from '@/lib/hoot/dispatch.server';
 import { escalate } from '@/lib/hoot-escalation.server';
-import { getMachineTimezone } from '@/lib/adminUtils.server';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
 import { hootInternalSecret } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
@@ -116,7 +117,9 @@ function buildAutonomousTools(
   machineId: string,
   chatId: string,
   eventId: string,
-  toolDefs: McpToolDefinition[]
+  toolDefs: McpToolDefinition[],
+  /** the machine's agent reports `capabilities.activeHoursGuard`, so it can hold a restart. */
+  activeHoursGuard: boolean,
 ) {
   const dispatchCtx = { db, siteId, machineId, chatId, eventId };
   // No chatId/userId — an autonomous run has no session, so server-side
@@ -149,6 +152,8 @@ function buildAutonomousTools(
         }
         const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
         if (existingCmd) {
+          const refusal = heldRestartRefusal(toolName, params, activeHoursGuard);
+          if (refusal) return refusal;
           return dispatchExistingCommandAsSystem(
             dispatchCtx,
             existingCmd,
@@ -372,11 +377,13 @@ async function runAutonomousInvestigation(
     // No shared site key exists and a machine-triggered run has no author, so
     // it spends the SITE OWNER's key — the one uid durable for the site's life.
     const llmConfig = await resolveLlmConfig(db, await resolveSiteKeyOwner(db, siteId));
-    const machineTimeZone = await getMachineTimezone(siteId, machineId);
+    // a failed read is no reason to drop the investigation: utc, and a machine that holds nothing.
+    const machine = await getMachineSummary(db, siteId, machineId).catch(() => null);
+    const activeHoursGuard = machine?.activeHoursGuard === true;
 
     const maxTier = settings.maxTier ?? 2;
     const toolDefs = getToolsByTier(maxTier as 1 | 2 | 3);
-    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs);
+    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs, activeHoursGuard);
 
     const eventLabel = eventType === 'process_start_failed' ? 'failed to start' : 'crashed';
     const eventContext = [
@@ -388,7 +395,8 @@ async function runAutonomousInvestigation(
       machineName,
       settings.directive || '',
       eventContext,
-      machineTimeZone,
+      machine?.timezone,
+      activeHoursGuard,
     );
 
     const model = createModel(llmConfig);

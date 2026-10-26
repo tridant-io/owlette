@@ -54,17 +54,12 @@ jest.mock('@/lib/llm', () => ({
   buildAutonomousSystemPrompt: (...args: unknown[]) => mockBuildAutonomousSystemPrompt(...args),
 }));
 
-const mockGetMachineTimezone = jest.fn();
-
-jest.mock('@/lib/adminUtils.server', () => ({
-  getMachineTimezone: (...args: unknown[]) => mockGetMachineTimezone(...args),
-}));
-
 const mockExecuteServerSideTool = jest.fn();
 const mockResolveLlmConfig = jest.fn();
 const mockResolveSiteKeyOwner = jest.fn();
 const mockIsMachineOnline = jest.fn();
 const mockIsHootEnabled = jest.fn();
+const mockGetMachineSummary = jest.fn();
 
 jest.mock('@/lib/hoot-utils.server', () => ({
   // Real membership: the branch under test keys off this exact set, so the
@@ -75,6 +70,9 @@ jest.mock('@/lib/hoot-utils.server', () => ({
   resolveSiteKeyOwner: (...args: unknown[]) => mockResolveSiteKeyOwner(...args),
   isMachineOnline: (...args: unknown[]) => mockIsMachineOnline(...args),
   isHootEnabled: (...args: unknown[]) => mockIsHootEnabled(...args),
+  getMachineSummary: (...args: unknown[]) => mockGetMachineSummary(...args),
+  // the real refusal, so the route is checked against what it actually returns.
+  heldRestartRefusal: jest.requireActual('@/lib/hoot-utils.server').heldRestartRefusal,
 }));
 
 const mockDispatchToolCall = jest.fn();
@@ -244,6 +242,7 @@ beforeEach(() => {
 
   mockIsMachineOnline.mockResolvedValue(true);
   mockIsHootEnabled.mockResolvedValue(true);
+  mockGetMachineSummary.mockResolvedValue({ id: MACHINE, online: true, hootEnabled: true, activeHoursGuard: false });
   // An unattended investigation has no author, so it spends the SITE OWNER's
   // key — there is no shared site key scope any more.
   mockResolveSiteKeyOwner.mockResolvedValue('owner-uid');
@@ -415,16 +414,65 @@ describe('autonomous tool set exclusions', () => {
 describe('autonomous and active hours', () => {
   const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
 
-  it("builds the prompt with the machine's timezone, so it can tell its local time", async () => {
-    mockGetMachineTimezone.mockResolvedValue('America/New_York');
+  it("builds the prompt with the machine's timezone and whether its agent holds restarts, from one read", async () => {
+    mockGetMachineSummary.mockResolvedValue({
+      id: MACHINE,
+      online: true,
+      hootEnabled: true,
+      timezone: 'America/New_York',
+      activeHoursGuard: true,
+    });
     await buildTools();
 
-    expect(mockGetMachineTimezone).toHaveBeenCalledWith(SITE, MACHINE);
+    expect(mockGetMachineSummary).toHaveBeenCalledTimes(1);
+    expect(mockGetMachineSummary).toHaveBeenCalledWith(mockDb, SITE, MACHINE);
     expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
       'Lobby PC',
       '',
       expect.stringContaining('TouchDesigner'),
       'America/New_York',
+      true,
+    );
+  });
+
+  it.each([
+    ['a machine with no doc', () => Promise.resolve(null)],
+    // the read failing is no reason to drop the investigation: utc, and nothing held, as before.
+    ['a machine read that fails', () => Promise.reject(new Error('unavailable'))],
+  ])('tells the prompt that %s holds nothing, and investigates anyway', async (_label, summary) => {
+    mockGetMachineSummary.mockImplementation(summary);
+    await buildTools();
+
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
+      'Lobby PC',
+      '',
+      expect.any(String),
+      undefined,
+      false,
+    );
+  });
+
+  it('refuses a held restart its agent cannot hold, and sends nothing', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    const result = await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
+  });
+
+  it('sends a held restart to an agent that holds it', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    mockGetMachineSummary.mockResolvedValue({ id: MACHINE, online: true, hootEnabled: true, activeHoursGuard: true });
+    const tools = await buildTools();
+
+    await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(mockDispatchExistingCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: SITE, machineId: MACHINE }),
+      'reboot_machine',
+      { when: 'after_active_hours' },
     );
   });
 

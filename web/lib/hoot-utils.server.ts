@@ -23,10 +23,11 @@ import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
 import {
   ACTIVE_HOURS_OVERRIDE_KEYS,
+  HELD_RESTART_UNSUPPORTED_DETAIL,
   stripActiveHoursOverride,
   type ActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
-import { OVERRIDE_REASON_MAX } from '@/lib/activeHours';
+import { hasActiveHoursGuard, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
 import { Capability, hasCapability, type Actor, type Role, type SystemActorName } from '@/lib/capabilities';
 import { timestampToIso } from '@/lib/firestoreTime.server';
@@ -162,6 +163,12 @@ export interface BuildExecutableToolsOptions {
    * sets it anyway before anything is queued.
    */
   allowActiveHoursOverride?: boolean;
+  /**
+   * The targets whose agent reports `capabilities.activeHoursGuard`. On any
+   * other, `reboot_machine` with `when: after_active_hours` is refused before
+   * anything is queued, since its agent would restart at once. Absent means none.
+   */
+  activeHoursGuardIds?: readonly string[];
   /**
    * The tool calls this turn resumes after a person answered their approval.
    * ai 7 re-runs `needsApproval` on them with the input the browser sent back,
@@ -538,7 +545,7 @@ export async function getHootRequireTier3Approval(
   }
 }
 
-/** One machine of a site, with the two facts a dispatch turns on. */
+/** One machine of a site, with the facts a dispatch and its prompt turn on. */
 export interface SiteMachineSummary {
   id: string;
   online: boolean;
@@ -546,6 +553,22 @@ export interface SiteMachineSummary {
   hootEnabled: boolean;
   /** `machine_timezone_iana` as the agent wrote it, unchecked; absent before agent 2.6.1. */
   timezone?: string;
+  /**
+   * `capabilities.activeHoursGuard === 1`: a windows agent of 4.1.21 or later,
+   * which refuses reboots, shutdowns and deployments inside active hours and can
+   * hold a restart until they end. Any other agent holds nothing back for them.
+   */
+  activeHoursGuard: boolean;
+}
+
+function machineSummary(id: string, data: FirebaseFirestore.DocumentData): SiteMachineSummary {
+  return {
+    id,
+    online: !!data.online,
+    hootEnabled: data.cortexEnabled !== false,
+    timezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
+    activeHoursGuard: hasActiveHoursGuard(data),
+  };
 }
 
 /**
@@ -566,15 +589,38 @@ export async function listSiteMachines(
     .collection('machines')
     .get();
 
-  return snapshot.docs.map((doc) => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      online: !!data.online,
-      hootEnabled: data.cortexEnabled !== false,
-      timezone: typeof data.machine_timezone_iana === 'string' ? data.machine_timezone_iana : undefined,
-    };
-  });
+  return snapshot.docs.map((doc) => machineSummary(doc.id, doc.data()));
+}
+
+/** One named machine's summary in one document read, for the paths that act on it alone; null with no doc. */
+export async function getMachineSummary(
+  db: FirebaseFirestore.Firestore,
+  siteId: string,
+  machineId: string,
+): Promise<SiteMachineSummary | null> {
+  const machineDoc = await db
+    .collection('sites')
+    .doc(siteId)
+    .collection('machines')
+    .doc(machineId)
+    .get();
+
+  return machineDoc.exists ? machineSummary(machineId, machineDoc.data() ?? {}) : null;
+}
+
+/**
+ * `reboot_machine` asked to wait for active hours on a machine whose agent
+ * can't: an older or non-windows agent ignores `when` and restarts within a
+ * minute, so the call is refused before anything is queued.
+ */
+export function heldRestartRefusal(
+  toolName: string,
+  input: unknown,
+  activeHoursGuard: boolean,
+): ProcessToolResult | null {
+  if (toolName !== 'reboot_machine' || activeHoursGuard) return null;
+  if (!isRecord(input) || input.when !== 'after_active_hours') return null;
+  return toolRefusal('held_restart_unsupported', HELD_RESTART_UNSUPPORTED_DETAIL, 409);
 }
 
 /** What a turn asks to target, before the site has been consulted. */
@@ -1892,7 +1938,8 @@ function activeHoursOverrideReason(input: Record<string, unknown>): string | nul
   return reason && reason.length <= OVERRIDE_REASON_MAX ? reason : null;
 }
 
-function overrideRefusal(error: string, detail: string, status: number): ProcessToolResult {
+/** A tool call refused before anything is queued, in the shape the model reads. */
+function toolRefusal(error: string, detail: string, status: number): ProcessToolResult {
   return { ok: false, error, detail, status };
 }
 
@@ -1911,21 +1958,21 @@ function activeHoursOverrideRefusal(
   siteMode: boolean,
 ): ProcessToolResult | null {
   if (!personCanApproveOverride(options)) {
-    return overrideRefusal(
+    return toolRefusal(
       'active_hours_override_needs_person',
       'an active-hours override needs a person to approve it in a dashboard chat, and this turn has none. leave override_active_hours off.',
       403,
     );
   }
   if (siteMode) {
-    return overrideRefusal(
+    return toolRefusal(
       'active_hours_override_needs_single_machine',
       'an active-hours override works on one machine at a time. ask for it in a chat aimed at that machine.',
       400,
     );
   }
   if (activeHoursOverrideReason(input) === null) {
-    return overrideRefusal(
+    return toolRefusal(
       'active_hours_override_needs_reason',
       `override_active_hours needs a reason: ask the operator why this can't wait, then pass it as reason (${OVERRIDE_REASON_MAX} characters or fewer).`,
       400,
@@ -1987,7 +2034,7 @@ async function grantActiveHoursOverride(
   if (!request?.exists || request.data()?.inputHash !== overrideRequestHash(toolName, params)) {
     return {
       ok: false,
-      result: overrideRefusal(
+      result: toolRefusal(
         'active_hours_override_not_approved',
         "this call's active-hours override is not the one the operator approved, so nothing was sent. call the tool again to ask them.",
         403,
@@ -2038,6 +2085,9 @@ export function buildExecutableTools(
   // can't ask for one there; execute still refuses one sent anyway.
   const offerOverride = personCanApproveOverride(options);
 
+  const guarded = new Set(options.activeHoursGuardIds ?? []);
+  const targets = siteMode ? onlineMachines : [machineId];
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = {};
 
@@ -2057,6 +2107,13 @@ export function buildExecutableTools(
       // An override asks a person whatever the tier or the site toggle, and is
       // recorded as asked so the resumed turn can check it.
       needsApproval: async (input: unknown, approvalOptions?: { toolCallId?: string }) => {
+        // nothing would be sent, so there is nothing to approve: execute refuses at once.
+        if (
+          targets.length > 0 &&
+          targets.every((mid) => heldRestartRefusal(toolName, input, guarded.has(mid)) !== null)
+        ) {
+          return false;
+        }
         if (!takesOverride || !hasActiveHoursOverride(input)) return tierGate;
         if (activeHoursOverrideRefusal(input as Record<string, unknown>, options, siteMode)) return false;
         const toolCallId = approvalOptions?.toolCallId;
@@ -2093,6 +2150,11 @@ export function buildExecutableTools(
             : undefined;
 
         let toolParams = params as Record<string, unknown>;
+        // ahead of the override grant: a held restart this agent can't hold is refused as that.
+        if (!siteMode) {
+          const refusal = heldRestartRefusal(toolName, toolParams, guarded.has(machineId));
+          if (refusal) return refusal;
+        }
         let envelope: CommandEnvelopeOptions = {};
         if (takesOverride) {
           // refuses any override in a fan-out, so the fan-out below never needs an envelope.
@@ -2121,6 +2183,8 @@ export function buildExecutableTools(
         if (siteMode) {
           const results = await Promise.all(
             onlineMachines.map(async (mid) => {
+              const refusal = heldRestartRefusal(toolName, toolParams, guarded.has(mid));
+              if (refusal) return { machine: mid, ...refusal };
               try {
                 const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
                 if (existingCmd) {

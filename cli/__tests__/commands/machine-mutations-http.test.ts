@@ -372,7 +372,10 @@ describe('owlette machine reboot --after-active-hours', () => {
   it.each([
     ['a windows agent without the guard', { id: 'm-1', osFamily: 'windows', capabilities: { keepAwake: 1 } }],
     ['a pre-3.4 agent', { id: 'm-1', osFamily: null, capabilities: null }],
-  ])('refuses on %s, which would restart at once', async (_label, machine) => {
+    // no active hours to wait for; the API refuses the held restart there too.
+    ['macOS', { id: 'm-1', osFamily: 'macos', capabilities: null }],
+    ['linux', { id: 'm-1', osFamily: 'linux', capabilities: { keepAwake: 1 } }],
+  ])('refuses on %s, which cannot hold the restart', async (_label, machine) => {
     const calls = powerStub(finished({ status: 'completed' }), { status: 200, payload: machine });
     const stderr = captureStream(process.stderr);
     const program = buildProgram();
@@ -380,22 +383,10 @@ describe('owlette machine reboot --after-active-hours', () => {
     await program.parseAsync(ARGS, { from: 'user' });
 
     expect(calls.map((c) => c.url)).toEqual([MACHINE_URL]);
-    expect(stderr.join('')).toContain('ignores --after-active-hours and restarts at once');
+    expect(stderr.join('')).toContain("machine m-1 can't hold a restart for active hours");
+    expect(stderr.join('')).toContain('drop the flag to restart now');
     expect(process.exitCode).toBe(1);
     process.exitCode = 0;
-  });
-
-  it('goes ahead on macOS and linux, which have no active hours', async () => {
-    const calls = powerStub(finished({ status: 'completed' }), {
-      status: 200,
-      payload: { id: 'm-1', osFamily: 'macos', capabilities: null },
-    });
-    const program = buildProgram();
-
-    await program.parseAsync(ARGS, { from: 'user' });
-
-    expect(calls[1]!.url).toBe(COMMANDS_URL);
-    expect(process.exitCode).toBe(0);
   });
 
   it('warns and goes ahead when the machine cannot be read', async () => {
@@ -410,7 +401,34 @@ describe('owlette machine reboot --after-active-hours', () => {
 
     expect(calls[1]!.url).toBe(COMMANDS_URL);
     expect(stderr.join('')).toContain('could not check that machine m-1 honours --after-active-hours');
+    // the API is the backstop, so going ahead is safe.
+    expect(stderr.join('')).toContain('the API refuses it if the machine cannot hold the restart');
     expect(process.exitCode).toBe(0);
+  });
+
+  it('reports the API refusing a held restart the machine cannot hold', async () => {
+    installFetchStub((call) => {
+      if (call.url === MACHINE_URL) return { status: 403, payload: { status: 403, code: 'scope_insufficient' } };
+      if (call.url === COMMANDS_URL) {
+        return {
+          status: 409,
+          payload: {
+            status: 409,
+            code: 'held_restart_unsupported',
+            detail: "this machine's agent can't hold a restart for active hours",
+          },
+        };
+      }
+      throw new Error(`unexpected fetch url ${call.url}`);
+    });
+    const stderr = captureStream(process.stderr);
+    const program = buildProgram();
+
+    await program.parseAsync(ARGS, { from: 'user' });
+
+    expect(stderr.join('')).toContain('held_restart_unsupported');
+    expect(process.exitCode).toBe(1);
+    process.exitCode = 0;
   });
 
   it('cannot be combined with --override-active-hours', async () => {

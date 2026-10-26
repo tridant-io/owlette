@@ -72,8 +72,8 @@ export interface RebootOptions extends ShutdownOptions {
   /**
    * Restart once the machine's active hours end, or now when it is outside
    * them. Agents without `capabilities.activeHoursGuard` (older Windows
-   * agents, macOS, Linux) ignore it and restart at once. Not with
-   * `activeHoursOverride`.
+   * agents, macOS, Linux) can't hold it, so the API refuses it with
+   * `409 held_restart_unsupported`. Not with `activeHoursOverride`.
    */
   afterActiveHours?: boolean;
 }

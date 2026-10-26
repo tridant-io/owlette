@@ -22,7 +22,7 @@ members and chat-scoped API keys are capped at tier 1. see [approving privileged
 
 ### overriding active hours
 
-on Windows the agent refuses a reboot, a shutdown or a deployment while the machine is inside its active hours (see [agent commands](/docs/reference/agent-commands#active-hours)). four tools take an `override_active_hours` flag with a `reason`: `reboot_machine`, `shutdown_machine`, `deploy_software`, and `manage_windows_update` for `set_active_hours` and `limit_auto_restart`. a call that sets it always waits for an approval card, whatever its tier and even on a site that turned the approval gate off, and the card shows *override active hours:* with the reason. once approved, the command carries `activeHoursOverride: { reason, approvedBy: "user:<uid>" }`.
+on Windows, from owlette 4.1.21, the agent refuses a reboot, a shutdown or a deployment while the machine is inside its active hours (see [agent commands](/docs/reference/agent-commands#active-hours)). four tools take an `override_active_hours` flag with a `reason`: `reboot_machine`, `shutdown_machine`, `deploy_software`, and `manage_windows_update` for `set_active_hours` and `limit_auto_restart`. a call that sets it always waits for an approval card, whatever its tier and even on a site that turned the approval gate off, and the card shows *override active hours:* with the reason. once approved, the command carries `activeHoursOverride: { reason, approvedBy: "user:<uid>" }`.
 
 the override works only in a dashboard chat a person drives, on one machine. a turn nobody is there to approve, so a scheduled follow-up, a talon's hoot output, the public conversations API and autonomous hoot, is never offered the flag or its `reason`. otherwise the call queues nothing and the model gets an error:
 
@@ -33,7 +33,7 @@ the override works only in a dashboard chat a person drives, on one machine. a t
 | `active_hours_override_needs_reason` | `reason` is missing, blank or over 500 characters |
 | `active_hours_override_not_approved` | the call that came back is not the one the card showed |
 
-without the flag, `reboot_machine` with `when: "after_active_hours"` is open to every caller.
+without the flag, `reboot_machine` with `when: "after_active_hours"` is open to every caller, on a machine whose agent can hold the restart: Windows running owlette 4.1.21 or later. hoot only offers a held restart there. anywhere else the call answers `held_restart_unsupported` and queues nothing, because an older agent, or one on macOS or Linux, would restart the machine right away. on those machines nothing is held or refused for active hours, and the prompt says so: an older Windows agent reboots, shuts down and installs right away, and macOS and Linux reboot and shut down right away and can't run a deployment.
 
 ---
 
@@ -910,7 +910,7 @@ deploy and install software on the machine through the full deployment pipeline:
 
 reboot the machine after a one-minute countdown, cancellable from the dashboard or with `cancel_reboot` until it fires. the countdown is a minute on every platform, because macOS and Linux schedule a shutdown in whole minutes.
 
-on Windows the agent refuses it while the machine is inside its active hours. `when: "after_active_hours"` holds the reboot until they end instead, needs no approval beyond the tool's own, and is what hoot is told to prefer; outside active hours, and on macOS and Linux, it reboots now. see [a held reboot](/docs/reference/agent-commands#a-held-reboot).
+on Windows the agent refuses it while the machine is inside its active hours. `when: "after_active_hours"` holds the reboot until they end instead, needs no approval beyond the tool's own, and is what hoot is told to prefer; outside active hours it reboots now. hoot sends it only to a machine whose agent can hold it, Windows on owlette 4.1.21 or later; elsewhere it refuses with `held_restart_unsupported` and sends nothing (see [overriding active hours](#overriding-active-hours)). see [a held reboot](/docs/reference/agent-commands#a-held-reboot).
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|

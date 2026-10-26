@@ -22,7 +22,6 @@ import { SITE_TARGET_ID } from '@/lib/hoot/target';
 import { FieldValue } from 'firebase-admin/firestore';
 import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
-import { getMachineTimezone } from '@/lib/adminUtils.server';
 import { getSiteTimezone } from '@/lib/talons/store.server';
 import {
   resolveLlmConfig,
@@ -30,9 +29,11 @@ import {
   resolveHootMaxTier,
   isMachineOnline,
   isHootEnabled,
+  getMachineSummary,
   listSiteMachines,
   getHootRequireTier3Approval,
   buildExecutableTools,
+  type SiteMachineSummary,
 } from '@/lib/hoot-utils.server';
 
 // Re-exported, not redefined: both conversation routes import the sentinel from
@@ -102,9 +103,7 @@ export async function runHootStream(
     // path below. Offline is classified first, so a machine that is both keeps
     // its 503 and the "turn hoot back on" fix stays visible when it is the only
     // thing in the way.
-    const dispatchMachines = online
-      .filter((machine) => machine.hootEnabled)
-      .map((machine) => machine.id);
+    const dispatchMachines = online.filter((machine) => machine.hootEnabled);
     if (dispatchMachines.length === 0) {
       return {
         ok: false,
@@ -422,12 +421,14 @@ async function runServerSideLLM(
   maxToolTier: ToolTier,
   userRole: string | null,
 ): Promise<Response> {
-  const [llmConfig, processes, requireTier3Approval, machineTimeZone] = await Promise.all([
+  const [llmConfig, processes, requireTier3Approval, machine] = await Promise.all([
     resolveLlmConfig(db, userId),
     fetchProcessSummaries(db, siteId, machineId),
     getHootRequireTier3Approval(db, siteId),
-    getMachineTimezone(siteId, machineId),
+    // a failed read is no reason to fail the turn: utc, and a machine that holds nothing.
+    getMachineSummary(db, siteId, machineId).catch(() => null),
   ]);
+  const activeHoursGuardIds = machine?.activeHoursGuard === true ? [machineId] : [];
 
   const toolDefs = conversationsToolDefs(maxToolTier);
   const executableTools = buildExecutableTools(
@@ -438,17 +439,20 @@ async function runServerSideLLM(
     toolDefs,
     false,
     [],
-    { userId, userRole, requireTier3Approval },
+    { userId, userRole, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
 
   const result = streamText({
     model,
-    system: buildSystemPrompt(machineName || machineId, false, processes, {
-      scope: 'machine',
-      timeZone: machineTimeZone,
-    }),
+    system: buildSystemPrompt(
+      machineName || machineId,
+      false,
+      processes,
+      { scope: 'machine', timeZone: machine?.timezone },
+      { machineIds: [machineId], guardedIds: activeHoursGuardIds },
+    ),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),
@@ -465,7 +469,7 @@ function handleSiteWideMode(
   messages: ModelMessage[],
   chatId: string,
   maxToolTier: ToolTier,
-  dispatchMachines: string[],
+  dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
@@ -483,7 +487,7 @@ async function runSiteWideMode(
   chatId: string,
   maxToolTier: ToolTier,
   /** Online AND hoot-enabled — the kill switch is applied before we get here. */
-  dispatchMachines: string[],
+  dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
 ): Promise<Response> {
   const [llmConfig, requireTier3Approval, siteTimeZone] = await Promise.all([
@@ -491,6 +495,10 @@ async function runSiteWideMode(
     getHootRequireTier3Approval(db, siteId),
     getSiteTimezone(db, siteId),
   ]);
+  const machineIds = dispatchMachines.map((machine) => machine.id);
+  const activeHoursGuardIds = dispatchMachines
+    .filter((machine) => machine.activeHoursGuard)
+    .map((machine) => machine.id);
   const toolDefs = conversationsToolDefs(maxToolTier);
   const executableTools = buildExecutableTools(
     db,
@@ -499,15 +507,21 @@ async function runSiteWideMode(
     chatId,
     toolDefs,
     true,
-    dispatchMachines,
-    { userId, userRole, requireTier3Approval },
+    machineIds,
+    { userId, userRole, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
 
   const result = streamText({
     model,
-    system: buildSystemPrompt('', true, undefined, { scope: 'site', timeZone: siteTimeZone }),
+    system: buildSystemPrompt(
+      '',
+      true,
+      undefined,
+      { scope: 'site', timeZone: siteTimeZone },
+      { machineIds, guardedIds: activeHoursGuardIds },
+    ),
     messages,
     // Plus the Opus 5 advisor, capped per reply, when this model may consult it.
     ...withAdvisor(llmConfig, executableTools),
