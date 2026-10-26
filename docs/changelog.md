@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — hoot from a machine's menu
+
+A machine's menu on the dashboard now has **hoot**: it opens hoot on that
+machine's site with a new conversation aimed at that machine alone, the cursor
+in the message box. Your saved choice of machines for the site stays as it was.
+
 ### changed — owlette swoop's Mac icon fills its tile like owlette's
 
 On a Mac, owlette swoop's icon sat shrunk on a grey tile in the Dock, Finder

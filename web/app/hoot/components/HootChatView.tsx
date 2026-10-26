@@ -32,6 +32,7 @@ import { ConversationResizeHandle } from './ConversationResizeHandle';
 import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
 import { isUntitledChat } from '@/lib/hoot/untitledChat';
+import { readHootMachineLink } from '@/lib/hoot/machineLink';
 import {
   SITE_TARGET_ID,
   effectiveFanOut,
@@ -305,9 +306,19 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   // site's machines.
   const pendingChatSiteIdRef = useRef<string | null>(null);
 
+  // "new hoot" and a machine menu's "hoot" hand the composer the caret: the
+  // person asked for a fresh chat to type into. a site change starts one too,
+  // and leaves focus alone.
+  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
+
   // Load saved site from Firestore (cross-browser) or localStorage (same-browser fallback)
   useEffect(() => {
     if (sites.length === 0 || currentSiteId) return;
+
+    // a machine menu's "hoot": read once, then dropped from the url, so a reload
+    // or the next chat doesn't aim at that machine again
+    const machineLink = readHootMachineLink(window.location.search);
+    if (machineLink) window.history.replaceState(null, '', window.location.pathname);
 
     // A chat the URL points at outranks the stored preference: it is the thing
     // on screen, and its machines are the ones the picker has to show.
@@ -315,6 +326,16 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     if (pendingChatSiteId && sites.some((s) => s.id === pendingChatSiteId)) {
       pendingChatSiteIdRef.current = null;
       setCurrentSiteId(pendingChatSiteId);
+      return;
+    }
+
+    // so does the machine link: the landing chat isn't pinned yet, so it sends
+    // to whatever the header holds. not persisted, as opening a chat isn't:
+    // following a link is not a change of preference.
+    if (machineLink && sites.some((s) => s.id === machineLink.siteId)) {
+      setCurrentSiteId(machineLink.siteId);
+      setSelection({ machineIds: [machineLink.machineId] });
+      setComposerFocusRequest((n) => n + 1);
       return;
     }
 
@@ -636,9 +657,6 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     sidebarScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
   }, [chat, initialChatId, router]);
 
-  // "new hoot" alone hands the composer the caret: the person asked for a fresh
-  // chat to type into. a site change starts one too, and leaves focus alone.
-  const [composerFocusRequest, setComposerFocusRequest] = useState(0);
   const handleNewHootClick = useCallback(() => {
     handleNewChat();
     setComposerFocusRequest((n) => n + 1);
