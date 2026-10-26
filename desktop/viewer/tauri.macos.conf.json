@@ -3,7 +3,10 @@
   "bundle": {
     "macOS": {
       "signingIdentity": null,
-      "minimumSystemVersion": "15.0"
+      "minimumSystemVersion": "15.0",
+      "files": {
+        "Resources/Assets.car": "icons/macos/Assets.car"
+      }
     }
   }
 }
