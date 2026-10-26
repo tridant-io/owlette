@@ -21,9 +21,18 @@ import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 // not have: null is what it gets before attach, and one test hands it a store.
 jest.mock('@/lib/swoop/clipboard', () => ({ swoopClipboard: jest.fn(() => null) }));
 
+// the bar asks a live session's input capture for pointer lock; null is a session with none.
+let mockInputCapture: { requestPointerLock: () => Promise<boolean>; exitPointerLock: () => void } | null = null;
+jest.mock('@/lib/swoop/features', () => ({
+  ...jest.requireActual('@/lib/swoop/features'),
+  swoopInputCapture: () => mockInputCapture,
+}));
+
 afterEach(() => {
   cleanup();
   jest.mocked(swoopClipboard).mockReturnValue(null);
+  mockInputCapture = null;
+  localStorage.clear();
 });
 
 function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
@@ -97,7 +106,7 @@ describe('SwoopToolbar', () => {
     expect(screen.getByText('TEC-B4A')).toBeInTheDocument();
     expect(screen.queryByText(/^connected$/i)).toBeNull();
     expect(screen.queryByTestId('session-badge')).toBeNull();
-    for (const name of [/end session/i, /fullscreen/i, /latency stats/i]) {
+    for (const name of [/end session/i, /^fullscreen with keyboard capture$/, /^capture the mouse in fullscreen$/, /latency stats/i]) {
       expect(screen.getByRole('button', { name })).toHaveTextContent('');
     }
   });
@@ -301,7 +310,7 @@ describe('SwoopToolbar inside owlette swoop', () => {
         />
       </TooltipProvider>,
     );
-    return { fullscreen: screen.getByRole('button', { name: 'fullscreen with keyboard and mouse capture' }), requestFullscreen };
+    return { fullscreen: screen.getByRole('button', { name: 'fullscreen with keyboard capture' }), requestFullscreen };
   };
 
   it.each([
@@ -337,5 +346,72 @@ describe('SwoopToolbar inside owlette swoop', () => {
     } finally {
       Reflect.deleteProperty(navigator, 'keyboard');
     }
+  });
+
+  describe('the mouse in fullscreen', () => {
+    const lockable = () => {
+      const requestPointerLock = jest.fn(() => Promise.resolve(true));
+      mockInputCapture = { requestPointerLock, exitPointerLock: jest.fn() };
+      return requestPointerLock;
+    };
+
+    it('leaves the mouse free unless capture is on, so the pointer follows it as in a window', async () => {
+      const requestPointerLock = lockable();
+      const { fullscreen, requestFullscreen } = renderLive();
+      await userEvent.click(fullscreen);
+      await act(async () => {});
+      expect(requestFullscreen).toHaveBeenCalledTimes(1);
+      expect(requestPointerLock).not.toHaveBeenCalled();
+    });
+
+    it('with the toggle on, captures it too, and keeps the choice', async () => {
+      const requestPointerLock = lockable();
+      const { fullscreen } = renderLive();
+      const toggle = screen.getByRole('button', { name: 'capture the mouse in fullscreen' });
+      expect(toggle).toHaveAttribute('aria-pressed', 'false');
+      await userEvent.click(toggle);
+      expect(toggle).toHaveAttribute('aria-pressed', 'true');
+      expect(localStorage.getItem('owlette.swoop.mouseCapture')).toBe('on');
+      await userEvent.click(fullscreen);
+      await act(async () => {});
+      expect(requestPointerLock).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers no toggle in the mac app, which never captures the mouse', () => {
+      as(app('Macintosh; Intel Mac OS X 10_15_7'));
+      renderLive();
+      expect(screen.queryByRole('button', { name: 'capture the mouse in fullscreen' })).toBeNull();
+    });
+
+    it('offers the toggle in the windows app, where pointer lock exists', () => {
+      as(app('Windows NT 10.0; Win64; x64'));
+      renderLive();
+      expect(screen.getByRole('button', { name: 'capture the mouse in fullscreen' })).toBeInTheDocument();
+    });
+
+    it('says the mouse is captured too, on the fullscreen button, once the toggle is on', async () => {
+      renderLive();
+      await userEvent.click(screen.getByRole('button', { name: 'capture the mouse in fullscreen' }));
+      expect(screen.getByRole('button', { name: 'fullscreen with keyboard and mouse capture' })).toBeInTheDocument();
+    });
+
+    it('offers no toggle to a view-only session, which sends no mouse to capture', () => {
+      const stage = document.createElement('div');
+      render(
+        <TooltipProvider delayDuration={0}>
+          <SwoopToolbar
+            session={{ ctl: false, stage } as unknown as SwoopSession}
+            machineId="TEC-B4A"
+            state="connected"
+            error={null}
+            onEnd={() => {}}
+            onReconnect={() => {}}
+            statsOpen={false}
+            onToggleStats={() => {}}
+          />
+        </TooltipProvider>,
+      );
+      expect(screen.queryByRole('button', { name: 'capture the mouse in fullscreen' })).toBeNull();
+    });
   });
 });

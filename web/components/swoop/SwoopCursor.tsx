@@ -13,8 +13,10 @@
  *   few pixels from the real one on every move, which reads as lag that is
  *   not there.
  * - **under pointer lock** the browser hides the local cursor (fullscreen
- *   takes the lock on click), so the shape is overlaid at `cpos` over the
- *   picture, hotspot on the position, and hidden when the machine hides it.
+ *   takes the lock on click when the session bar's mouse-capture toggle is
+ *   on, `lib/swoop/mouseCapture.ts`), so the shape is overlaid at `cpos` over
+ *   the picture, hotspot on the position, and hidden when the machine hides
+ *   it.
  * - **off the picture** — over the letterbox bars, with no drag under way —
  *   input sends nothing, so the local pointer is shown as itself and the
  *   machine's is not drawn: pinned to the picture's edge it looked stuck

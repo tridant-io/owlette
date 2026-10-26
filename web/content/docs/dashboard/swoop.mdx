@@ -98,7 +98,8 @@ an account with no passkey and no authenticator app cannot take control, and bac
 the toolbar carries the session state, an **end** button, and:
 
 - **back to dashboard**: the arrow at the start of the bar, there in every state. leaving the page ends your session. in owlette swoop it is **back to machines** and leads to the machine picker
-- **fullscreen with keyboard and mouse capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out; a session that ends or fails for good also lets go of fullscreen. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so. what owlette swoop captures is [below](#fullscreen-and-the-keyboard)
+- **capture the mouse in fullscreen**: off unless you turn it on, and remembered by this browser. fullscreen leaves your mouse free, so the pointer moves the moment you do, as it does in a window; turn this on for a game or a 3D view that turns with the mouse, which needs the raw movement only a captured mouse gives. captured, the pointer you see is the machine's, so on a slow connection it lags. press `esc` to let the mouse go, and click the picture to capture it again. not in owlette swoop on a Mac, which never captures the mouse
+- **fullscreen with keyboard capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out; a session that ends or fails for good also lets go of fullscreen. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so. what owlette swoop captures is [below](#fullscreen-and-the-keyboard)
 - **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab or window
 - **display picker**: which of the machine's monitors you are looking at
 - **quality**: see [quality](#quality) below
@@ -189,7 +190,7 @@ the session bar is the window's title bar: drag it to move the window and double
 
 ### fullscreen and the keyboard
 
-**fullscreen with keyboard and mouse capture** works as in a browser, and holding `esc` for two seconds leaves it; a reminder says so for a few seconds as you go in. what else reaches the machine depends on your computer:
+**fullscreen with keyboard capture** works as in a browser, and holding `esc` for two seconds leaves it; a reminder says so for a few seconds as you go in. what else reaches the machine depends on your computer:
 
 - **macOS**: in fullscreen the Dock hides and switching apps is off, and cmd+q, cmd+w, cmd+h and cmd+m go to the machine instead of quitting, closing, hiding or minimizing the app. cmd+tab switches nothing but does not reach the machine either, because macOS keeps it; send it from the keyboard menu. cmd+space, Mission Control, ctrl+arrows and ctrl+cmd+q (lock) stay with macOS. the mouse is never captured: WebKit gives the app no pointer lock, so a game or a 3D view that wants raw mouse motion does not get it. outside fullscreen the app behaves like any other Mac app
 - **Windows**: the app captures no shortcuts of its own yet. fullscreen asks WebView2 for keyboard lock, as Chrome does, but how much of it takes effect in the app has not been measured yet; the keyboard menu sends the rest. win+l and ctrl+alt+del always stay with Windows. a lone `alt` tap puts the window into its menu mode until you press `esc`
