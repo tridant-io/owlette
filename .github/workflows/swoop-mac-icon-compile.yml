@@ -1,0 +1,36 @@
+name: swoop mac icon compile
+
+# one-off: compile desktop/viewer/icons/macos/AppIcon.icon into Assets.car with xcode 26's actool,
+# which only a macos runner has (the team mac has the command line tools alone). lives on its branch only.
+on:
+  push:
+    branches: [spike/swoop-mac-icon]
+    paths-ignore: ['**/*.md', 'docs/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swoop-mac-icon-compile-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: compile
+        run: |
+          xcodebuild -version
+          zsh desktop/src-tauri/icons/macos/compile.sh desktop/viewer/icons/macos
+          mkdir -p out
+          cp desktop/viewer/icons/macos/Assets.car out/Assets.car
+          xcrun assetutil --info out/Assets.car > out/assetutil.json
+          shasum -a 256 out/Assets.car
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: swoop-mac-icon
+          path: out
