@@ -160,7 +160,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   const watching = session !== null && !session.ctl;
   const overlay = watching || locked || inApp || (state.shape !== null && !fitsCssCursor(state.shape));
   // the machine's pointer is in the local one's place: drawn over the picture,
-  // or, hidden during a drag, painted into it.
+  // or, hidden by a program for a drag, not drawn at all.
   const standIn = picture && state.positioned && (state.visible ? overlay : press.held && press.overShown);
 
   // the css half: one pointer, never two and never none. outside pointer lock

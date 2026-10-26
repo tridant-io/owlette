@@ -4221,7 +4221,7 @@ mod host {
                     } as i64;
                     let position = crate::cursor::with_painted(
                         sample.position,
-                        crate::cursor::painted_pointer,
+                        platform::painted_pointer,
                         geometry,
                     );
                     if let Some(at) = position {

@@ -25,6 +25,11 @@ pub fn dpi_for_rect(_rect: &Rect) -> u32 {
     DEFAULT_DPI
 }
 
+/// Only Windows paints the pointer into the picture (`cursor::with_painted`).
+pub fn painted_pointer() -> Option<(i32, i32)> {
+    None
+}
+
 pub struct CaptureSource(Infallible);
 
 impl CaptureSource {

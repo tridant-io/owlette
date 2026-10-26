@@ -254,12 +254,6 @@ pub fn with_painted(
     }
 }
 
-/// No system but Windows paints the pointer into the picture.
-#[cfg(not(windows))]
-pub fn painted_pointer() -> Option<(i32, i32)> {
-    None
-}
-
 /// One output's geometry, as the cursor path needs it.
 ///
 /// The three spaces Desktop Duplication hands out are not interchangeable
