@@ -23,6 +23,17 @@ fullscreen", turns capture back on for a game or a 3D view that turns with the
 mouse; this browser remembers it. owlette swoop on a Mac never captured the
 mouse and has no such button.
 
+### changed — owlette's own icon is the full eye, and big in the Mac Dock
+
+owlette and owlette swoop shared one icon set, so the desktop app wore swoop's
+smaller eye. The desktop app now carries the full eye on its window, its
+Windows Start menu and login shortcuts and so its taskbar button, and the
+Linux menu, and in the Mac Dock the eye fills most of its tile where it sat at
+half its width, on the light tile and the dark one alike. owlette swoop keeps
+the smaller eye, now from icons of its own, and its Linux menu entry wears that
+one instead of owlette's. A taskbar pin made before this update keeps the old
+icon until it is pinned again.
+
 ### changed — hoot's thread line shows it's working
 
 While hoot works on a reply, the thin line beside it now carries a soft light

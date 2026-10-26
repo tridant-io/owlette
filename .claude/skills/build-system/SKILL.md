@@ -49,7 +49,7 @@ Runs on an Apple silicon Mac with the Command Line Tools, Node, cargo and **cmak
 
 Runs on Ubuntu 24.04. Output: `agent/build/linux/Owlette-Installer-v<version>.deb`. On an aarch64 host it builds an arm64 deb under the same file name, and `upload-installer.mjs` maps every `.deb` to `linux_x64` — only upload an x86_64 build.
 
-- The desktop app's Tauri deb is unpacked into the payload whole. owlette swoop's deb (`--bundles deb` in `desktop/viewer`) gives only its binary, `/usr/bin/owlette-swoop-viewer`; its launcher is `agent/packaging/linux/owlette-swoop-viewer.desktop` (the desktop app's icon, `MimeType=x-scheme-handler/owlette-swoop;`), not the bundler's. Both debs' Depends are merged, each library once, and postinst runs `update-desktop-database` when present.
+- The desktop app's Tauri deb is unpacked into the payload whole. owlette swoop's deb (`--bundles deb` in `desktop/viewer`) gives its binary, `/usr/bin/owlette-swoop-viewer`, and its own hicolor `owlette-swoop-viewer` icons (the small eye; the desktop app's is the full one); its launcher is `agent/packaging/linux/owlette-swoop-viewer.desktop` (`Icon=owlette-swoop-viewer`, `MimeType=x-scheme-handler/owlette-swoop;`), not the bundler's. Both debs' Depends are merged, each library once, and postinst runs `update-desktop-database` when present.
 
 ### Version Bump Flow
 

@@ -419,8 +419,10 @@ Root: HKA; Subkey: "Software\Classes\owlette-swoop\shell\open\command"; ValueTyp
 ; actual window — confused its first real user within a day of existing. The
 ; tray needs no Start-menu launcher: the service and the {userstartup} link own
 ; that lifecycle. Upgrades delete the retired "Owlette Configuration" lnk via
-; [InstallDelete] above.
-Name: "{group}\Owlette"; Filename: "{#MyAppExePath}"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
+; [InstallDelete] above. Both Owlette links take the exe's own icon, owlette's
+; full eye: Windows draws the taskbar button from the link, and normal.ico (the
+; tray's look) there made the taskbar and the window disagree.
+Name: "{group}\Owlette"; Filename: "{#MyAppExePath}"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
 ; owlette swoop, the viewer app. A plain launcher: it raises no toasts, so it
 ; carries no AppUserModelID of its own, and never the desktop app's (above).
 ; Its icon is the exe's own, owlette swoop's small eye: Windows draws a launched
@@ -442,7 +444,7 @@ Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 ; Setup creates it unconditionally because a 2.x machine's copy points at the
 ; now-deleted owlette_tray.py and must be repaired; an operator who turns the
 ; toggle off after upgrading keeps that choice until the next agent update.
-Name: "{userstartup}\Owlette"; Filename: "{#MyAppExePath}"; Parameters: "--tray"; IconFilename: "{app}\agent\icons\normal.ico"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
+Name: "{userstartup}\Owlette"; Filename: "{#MyAppExePath}"; Parameters: "--tray"; WorkingDir: "{app}\app"; AppUserModelID: "{#MyAppUserModelID}"
 
 [Run]
 ; Step 0: RETRACT the Windows Defender exclusions previous versions added for
