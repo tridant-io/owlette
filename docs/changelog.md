@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.23] - 2026-10-26
+
 ### fixed — swoop's pointer keeps its size while you drag a window
 
 Dragging a window by its title bar on a Windows machine shrank the pointer to
