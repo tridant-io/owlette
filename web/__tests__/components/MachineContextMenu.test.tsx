@@ -334,6 +334,7 @@ describe('MachineContextMenu — plan', () => {
       'schedule restarts',
       'swooppart of pro',
       'view displays',
+      'hoot',
       'mute alerts',
       'revoke token',
       'remove machine',
@@ -460,5 +461,22 @@ describe('MachineContextMenu — a restart held until active hours end', () => {
     await openMenu({ isOnline: false, isSiteAdmin: true, rebootDeferredUntil: HELD });
 
     expect(screen.queryByTestId('machine-context-menu-cancel-reboot')).not.toBeInTheDocument();
+  });
+});
+
+describe('MachineContextMenu — hoot', () => {
+  it('opens hoot aimed at this machine, for a member too', async () => {
+    await openMenu({});
+
+    expect(screen.getByTestId('machine-context-menu-hoot')).toHaveAttribute(
+      'href',
+      '/hoot?site=site-A&machine=kiosk-1',
+    );
+  });
+
+  it('stays on an offline machine, where hoot says its tool calls will not arrive', async () => {
+    await openMenu({ isOnline: false });
+
+    expect(screen.getByTestId('machine-context-menu-hoot')).toHaveTextContent('hoot');
   });
 });

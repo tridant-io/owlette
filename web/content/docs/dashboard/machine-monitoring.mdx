@@ -207,13 +207,14 @@ the **⋮** button on a card or row opens the machine menu. when someone is in a
 | **live view** | online, the machine cannot host swoop | the older screenshot slideshow. exactly one of swoop and live view is offered, so the menu never loses its screen entry |
 | **screenshot** | online | captures the machine's screen and opens the screenshot history |
 | **view displays** | any signed-in user | opens the [displays](/docs/dashboard/displays) panel |
+| **hoot** | any signed-in user | opens [hoot](/docs/dashboard/hoot) with a new conversation aimed at this machine alone, ready to type into |
 | **mute alerts** / **unmute alerts** | any signed-in user | silences every alert email for this machine, **for you only**. listed under [account settings → alerts](/docs/dashboard/account-settings#muted-machines) |
 | **revoke token** | site admin | invalidates the agent's refresh token for this hostname and cuts the agent off. see below |
 | **remove machine** | site admin | removes the machine from the site. see below |
 
 which machines can host swoop, take screenshots or show live view depends on the platform. a Mac needs the owlette app running with Screen Recording granted. a Linux machine cannot host swoop, and although its menu still shows **live view** and **screenshot**, both fail on Linux for now. see [platform support](/docs/reference/platform-support#screens).
 
-an offline machine keeps **schedule restarts**, **view displays**, **mute alerts**, **revoke token** and **remove machine** — everything else needs an agent on the other end.
+an offline machine keeps **schedule restarts**, **view displays**, **hoot**, **mute alerts**, **revoke token** and **remove machine** — everything else needs an agent on the other end. on an offline machine, hoot's header warns that its tool calls won't be delivered.
 
 ### revoke token
 

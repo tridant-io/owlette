@@ -21,8 +21,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { HootIcon } from '@/components/icons/HootIcon';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
+import { hootMachineHref } from '@/lib/hoot/machineLink';
 import { useAuth } from '@/contexts/AuthContext';
 import RestartScheduleDialog from '@/components/RestartScheduleDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
@@ -551,8 +553,23 @@ export function MachineContextMenu({
               view displays
             </DropdownMenuItem>
           )}
-          {(showScreen || showViewDisplays) && (
-            <DropdownMenuSeparator className="bg-border" />
+          {/* online or not: the hoot page says when a machine's tool calls won't
+              be delivered */}
+          {!planLocked && (
+            <>
+              <DropdownMenuItem
+                asChild
+                onClick={(e) => e.stopPropagation()}
+                data-testid="machine-context-menu-hoot"
+                className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+              >
+                <Link href={hootMachineHref(siteId, machineId)}>
+                  <HootIcon className="mr-2 h-4 w-4" />
+                  hoot
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="bg-border" />
+            </>
           )}
           <DropdownMenuItem
             onClick={(e) => {

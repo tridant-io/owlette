@@ -706,6 +706,59 @@ describe('HootChatView plan', () => {
   });
 });
 
+describe('HootChatView opened from a machine menu', () => {
+  const composer = () => screen.getByRole('textbox', { name: 'chat message' });
+  const openLink = (query: string) => window.history.pushState(null, '', `/hoot?${query}`);
+
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('aims the new chat at that machine, on its site, with the caret in the composer', () => {
+    mockLastMachineIds = { 'site-b': ['edge-02'] };
+    mockMachinesBySite = {
+      'site-b': [
+        { machineId: 'edge-01', online: true, cortexEnabled: true },
+        { machineId: 'edge-02', online: true, cortexEnabled: true },
+      ],
+    };
+    openLink('site=site-b&machine=edge-01');
+
+    renderView();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-b');
+    expect(screen.getByRole('button', { name: 'hoot target' })).toHaveTextContent('edge-01');
+    expect(composer()).toHaveFocus();
+    expect(window.location.search).toBe('');
+    // following a link is not a change of preference
+    expect(mockUpdateLastMachine).not.toHaveBeenCalled();
+    expect(mockUpdateLastSite).not.toHaveBeenCalled();
+  });
+
+  it('gives way to a chat the url points at', () => {
+    mockSites = [];
+    openLink('site=site-a&machine=kiosk-01');
+    const { rerender } = renderView();
+
+    loadChatWith({ machineIds: null }, { siteId: 'site-b' });
+    mockSites = [SITE_A, SITE_B];
+    rerender();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-b');
+    expect(window.location.search).toBe('');
+  });
+
+  it("falls back to the saved site and target for a site that isn't yours", () => {
+    mockLastMachineIds = { 'site-a': ['kiosk-02'] };
+    openLink('site=site-z&machine=kiosk-01');
+
+    renderView();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-a');
+    expect(screen.getByRole('button', { name: 'hoot target' })).toHaveTextContent('kiosk-02');
+    expect(composer()).not.toHaveFocus();
+    expect(window.location.search).toBe('');
+  });
+});
+
 describe('HootChatView new hoot', () => {
   const composer = () => screen.getByRole('textbox', { name: 'chat message' });
 
