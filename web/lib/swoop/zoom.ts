@@ -11,6 +11,10 @@
  * so the clamps work on the picture's box, not the element's: zoomed past the
  * stage, the picture's edges never come inside it; narrower than the stage
  * along an axis, it sits in the middle of that axis.
+ *
+ * "stage" here is where the picture is shown: the video's layout box, which
+ * is the stage's own except while the phone keyboard pads the stage, and
+ * then the part the keyboard leaves.
  */
 
 export const ZOOM_MAX = 5;

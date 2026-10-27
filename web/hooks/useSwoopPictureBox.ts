@@ -79,8 +79,24 @@ export function useSwoopPictureBox(session: SwoopSession | null): PictureBox | n
     session.video.addEventListener('resize', sync);
     // a pinch moves the picture without moving the element, so nothing above fires for it
     const offZoom = swoopTouch(session)?.zoom.subscribe(sync);
+    // nor for the phone keyboard's padding, which resizes the element alone,
+    // or, when the visible area pans, moves it at one size; the padding lands
+    // in the render that event starts, so the move is measured a frame on
+    const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(sync) : null;
+    resizes?.observe(session.video);
+    let frame = 0;
+    const afterPadding = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(sync);
+    };
+    window.visualViewport?.addEventListener('resize', afterPadding);
+    window.visualViewport?.addEventListener('scroll', afterPadding);
     return () => {
       offZoom?.();
+      resizes?.disconnect();
+      cancelAnimationFrame(frame);
+      window.visualViewport?.removeEventListener('resize', afterPadding);
+      window.visualViewport?.removeEventListener('scroll', afterPadding);
       window.removeEventListener('resize', sync);
       document.removeEventListener('fullscreenchange', sync);
       session.video.removeEventListener('resize', sync);
