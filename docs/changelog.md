@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — the changelog's list of releases opens at once on a phone
+
+The changelog's "on this page" list held every heading on the page, about 470
+of them, and drawing it froze a phone for half a minute after a tap. It now
+lists the releases only, and opens in under a second.
+
 ### added — swoop on a phone
 
 On a phone, swoop's bar keeps one row: the back arrow, the machine's name, any

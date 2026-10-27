@@ -11,6 +11,11 @@ export const docs = defineDocs({
       // for terms an operator types that our prose never uses — we write
       // "reboot" and "roost", people search "restart" and "projects".
       keywords: z.array(z.string()).optional(),
+      // deepest heading level the page's "on this page" list shows. fumadocs'
+      // toc measures its svg track once per item along the whole path, so its
+      // cost grows with the square of the item count: the changelog's ~470
+      // headings froze a phone for 30s on opening the list.
+      tocDepth: z.number().int().min(2).optional(),
     }),
   },
 });
