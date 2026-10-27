@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the dashboard on a phone
+
+A machine card's metric row now shows an icon for each metric instead of its
+name, so cpu, memory, disk, gpu and network all fit without being cut off;
+temperatures, disk activity and packet loss are in the expanded card. The menu's site list
+starts closed, so the pages stay in reach however many sites you have. Help
+sits in the top bar where a computer has the agent download.
+
 ### fixed — a machine rolled back below 4.1.21 is no longer offered a held restart
 
 An agent of 4.1.21 or later marks its machine as able to hold a restart until

@@ -179,7 +179,8 @@ export default function DownloadButton({ variant = 'header' }: DownloadButtonPro
   return (
     <div
       className={
-        header ? 'flex items-center gap-0.5 sm:gap-1' : iconOnly ? 'flex items-center gap-0.5 shrink-0' : 'flex gap-2'
+        // a phone does not install the agent: below `md` the header gives the room to help
+        header ? 'hidden md:flex items-center gap-1' : iconOnly ? 'flex items-center gap-0.5 shrink-0' : 'flex gap-2'
       }
     >
       {iconOnly ? <Tip tip={label} className={tipClass}>{primaryButton}</Tip> : primaryButton}

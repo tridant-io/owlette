@@ -25,7 +25,7 @@ import { MachineStatusPill } from '@/components/MachineStatusPill';
 import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
-import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
+import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor, Cpu, MemoryStick, HardDrive, Gpu, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import {
@@ -142,6 +142,24 @@ function TileButton({ label }: { label: string }) {
       aria-label={label}
       className="absolute inset-0 z-[1] cursor-pointer"
     />
+  );
+}
+
+/** in the collapsed metric row, what only fits from `sm` up. */
+const WIDE_ONLY = 'hidden sm:inline';
+
+/**
+ * a collapsed-row label: an icon below `sm`, the word from there up, and the
+ * word to a screen reader at both. two spans, not `sm:not-sr-only`, which
+ * resets white-space and let the cell wrap at the label's space.
+ */
+function RowLabel({ icon: Icon, label }: { icon?: LucideIcon; label: string }) {
+  return (
+    <>
+      {Icon && <Icon aria-hidden className="mr-0.5 inline size-3 align-[-1px] sm:hidden" />}
+      <span className="sr-only sm:hidden">{label}</span>
+      <span className={WIDE_ONLY}>{label} </span>
+    </>
   );
 }
 
@@ -560,12 +578,15 @@ const MachineCard = memo(function MachineCard({
                       as columns rather than five different ragged rows.
                       text-left: this is a button's content, and a button centres
                       its text, which floated each label to the middle of its cell */}
-                  <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-left text-sm text-muted-foreground">
+                  {/* below `sm` the row is 12px with an icon for each label, and net gets
+                      two cells' room, so the worst case (four cells at "100%", net at 1023K each way)
+                      still fits one line at 390px. the extras are in the expanded view. */}
+                  <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,2fr)] gap-x-1.5 flex-1 min-w-0 text-left text-xs text-muted-foreground sm:grid-cols-5 sm:gap-x-2 sm:text-sm">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
-                        <>cpu <span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
+                        <><RowLabel icon={Cpu} label="cpu" /><span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
                           {cpuDevice.temperature != null && (
-                            <span className={`ml-1 ${getTemperatureColorClass(cpuDevice.temperature)}`}>
+                            <span className={`ml-1 ${WIDE_ONLY} ${getTemperatureColorClass(cpuDevice.temperature)}`}>
                               {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
@@ -574,21 +595,21 @@ const MachineCard = memo(function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {memory?.percent != null && (
-                        <>mem <span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
+                        <><RowLabel icon={MemoryStick} label="mem" /><span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
                       )}
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {diskDevice && diskDevice.percent != null && (() => {
                         const io = machine.metrics?.diskio?.[diskDevice.id];
                         return (
-                          <>disk <span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
+                          <><RowLabel icon={HardDrive} label="disk" /><span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
                             {io && io.readBps > 0 && (
-                              <span className="ml-1" style={{ color: DISK_IO_COLORS.read }}>
+                              <span className={`ml-1 ${WIDE_ONLY}`} style={{ color: DISK_IO_COLORS.read }}>
                                 r {formatThroughputShort(io.readBps)}
                               </span>
                             )}
                             {io && io.writeBps > 0 && (
-                              <span className="ml-1" style={{ color: DISK_IO_COLORS.write }}>
+                              <span className={`ml-1 ${WIDE_ONLY}`} style={{ color: DISK_IO_COLORS.write }}>
                                 w {formatThroughputShort(io.writeBps)}
                               </span>
                             )}
@@ -598,9 +619,9 @@ const MachineCard = memo(function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {gpuDevice && gpuDevice.usagePercent != null && (
-                        <>gpu <span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
+                        <><RowLabel icon={Gpu} label="gpu" /><span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
                           {gpuDevice.temperature != null && (
-                            <span className={`ml-1 ${getTemperatureColorClass(gpuDevice.temperature)}`}>
+                            <span className={`ml-1 ${WIDE_ONLY} ${getTemperatureColorClass(gpuDevice.temperature)}`}>
                               {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
@@ -609,10 +630,11 @@ const MachineCard = memo(function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
-                        <>net <span className="text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
-                          <span className="ml-1 text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
+                        // the arrows are net's icon
+                        <><RowLabel label="net" /><span className="text-[var(--series-nic-tx-1)]">{'\u2191'}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-0.5 sm:ml-1 text-[var(--series-nic-rx-1)]">{'\u2193'}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
-                            <span className="ml-1 text-danger">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
+                            <span className={`ml-1 ${WIDE_ONLY} text-danger`}>{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
                         </>
                       )}
@@ -804,6 +826,7 @@ const MachineCard = memo(function MachineCard({
           {/* Network Metric */}
           {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (() => {
             const maxUtil = Math.max(nicDevice.txUtil ?? 0, nicDevice.rxUtil ?? 0);
+            const lossPct = machine.metrics?.network?.packetLossPct ?? 0;
             return (
               <div
                 className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
@@ -822,6 +845,8 @@ const MachineCard = memo(function MachineCard({
                     )}
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
+                    {/* here too: a phone's collapsed row has no room for it */}
+                    {lossPct > 0 && <span className="text-xs font-medium text-danger">{Math.round(lossPct)}% loss</span>}
                     <span className="text-xs font-medium text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
                     <span className="text-xs font-medium text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
                   </div>

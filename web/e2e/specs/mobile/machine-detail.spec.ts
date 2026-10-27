@@ -52,6 +52,11 @@ async function seedDetailMachine(): Promise<void> {
           timestamp: Timestamp.now(),
           cpus: { CPU0: { percent: CPU_PERCENT, temperature: 54 } },
           memory: { percent: MEMORY_PERCENT, usedGb: 19.5 },
+          // the widest the collapsed row's other cells get: 100% and four-digit kilobytes
+          disks: { 'C:': { percent: 100 } },
+          gpus: { GPU0: { usagePercent: 100, temperature: 85 } },
+          nics: { eth0: { txBps: 1023 * 1024, rxBps: 1023 * 1024 } },
+          network: { packetLossPct: 3 },
           primary: { cpu: 'CPU0' },
           processes: {
             [PROCESS_ID]: {
@@ -146,6 +151,26 @@ test.describe('mobile machine detail — admin on site-A', () => {
     // Back to fully expanded so the card ends as it started.
     await page.locator('button:has(svg.lucide-chevrons-up-down)').click();
     await expect(card.getByText(PROCESS_NAME, { exact: true })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+  });
+
+  test('the collapsed metric row fits a phone: an icon for each label, and no cell cut short', async ({ page }) => {
+    const card = await cardFor(page);
+    // what the row leaves out on a phone is in the expanded card, packet loss included
+    await expect(card.getByText('3% loss', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'collapse all', exact: true }).click();
+
+    const row = card.getByRole('button').filter({ hasText: `${CPU_PERCENT}%` });
+    await expect(row).toBeVisible();
+    for (const icon of ['cpu', 'memory-stick', 'hard-drive', 'gpu']) {
+      await expect(row.locator(`svg.lucide-${icon}`)).toBeVisible();
+    }
+    await expect(row).toContainText('↑1023K');
+    await expect(row).toContainText('↓1023K');
+    const overflow = await row
+      .locator('.grid > span')
+      .evaluateAll((cells) => cells.map((cell) => cell.scrollWidth - cell.clientWidth));
+    expect(overflow).toEqual([0, 0, 0, 0, 0]);
     await assertNoHorizontalOverflow(page);
   });
 

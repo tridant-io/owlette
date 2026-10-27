@@ -4,7 +4,9 @@
  *
  * The app's nav drawer behaves as the modal it looks like: focus moves in, tab
  * stays in, escape hands focus back to the menu button. The current site stays
- * named in the bar, where the breadcrumb that names it on desktop is hidden. The
+ * named in the bar, where the breadcrumb that names it on desktop is hidden, and
+ * the drawer's site list opens on request. Help sits in the bar, where desktop
+ * has the agent download a phone has no use for. The
  * landing menu's links take no tab stop while it is closed. And the hoot
  * composer types at 16px, below which iOS zooms the page into the field.
  */
@@ -23,6 +25,39 @@ test.describe('app nav drawer', () => {
     const site = page.getByTestId('mobile-current-site');
     await expect(site).toBeVisible();
     await expect(site).not.toBeEmpty();
+  });
+
+  test('the bar offers help, and leaves the agent download to a computer', async ({ page }) => {
+    await page.goto('/dashboard');
+
+    await expect(page.getByRole('button', { name: 'download owlette agent' })).toBeHidden();
+    // the only way to the docs and to submit an issue on a phone
+    await page.getByRole('button', { name: 'help', exact: true }).tap();
+    const menu = page.getByRole('menu');
+    await expect(menu.getByRole('menuitem', { name: 'docs' })).toBeVisible();
+    await expect(menu.getByRole('menuitem')).toHaveCount(2);
+  });
+
+  test('the site list starts closed every time, so the pages stay in view', async ({ page }) => {
+    await page.goto('/dashboard');
+    const current = (await page.getByTestId('mobile-current-site').textContent())?.trim() ?? '';
+    expect(current).not.toBe('');
+
+    const trigger = page.getByRole('button', { name: 'menu', exact: true });
+    await trigger.click();
+    const drawer = page.getByRole('navigation', { name: /site and page navigation/i });
+    const sites = drawer.getByTestId('drawer-site-toggle');
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
+    await expect(drawer.getByRole('button', { name: current, exact: true })).toHaveCount(0);
+    await expect(drawer.getByRole('button', { name: /^logs/ })).toBeInViewport();
+
+    await sites.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'true');
+    await expect(drawer.getByRole('button', { name: current, exact: true })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await trigger.click();
+    await expect(sites).toHaveAttribute('aria-expanded', 'false');
   });
 
   test('focus moves in, tab stays in, and escape hands it back', async ({ page }) => {
