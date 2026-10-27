@@ -156,7 +156,7 @@ const WIDE_ONLY = 'hidden sm:inline';
 function RowLabel({ icon: Icon, label }: { icon?: LucideIcon; label: string }) {
   return (
     <>
-      {Icon && <Icon aria-hidden className="mr-0.5 inline size-3 align-[-1px] sm:hidden" />}
+      {Icon && <Icon aria-hidden className="mr-px inline size-3 align-[-1px] sm:hidden" />}
       <span className="sr-only sm:hidden">{label}</span>
       <span className={WIDE_ONLY}>{label} </span>
     </>
@@ -580,8 +580,8 @@ const MachineCard = memo(function MachineCard({
                       its text, which floated each label to the middle of its cell */}
                   {/* below `sm` the row is 12px with an icon for each label, and net gets
                       two cells' room, so the worst case (four cells at "100%", net at 1023K each way)
-                      still fits one line at 390px, with room to spare for linux, which ci showed
-                      drawing these cells wider than windows. the extras are in the expanded view. */}
+                      still fits one line at 390px with room to spare on linux, which ci measured
+                      about 2px wider per cell than windows. the extras are in the expanded view. */}
                   <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,2fr)] gap-x-1 flex-1 min-w-0 text-left text-xs text-muted-foreground sm:grid-cols-5 sm:gap-x-2 sm:text-sm">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
@@ -633,7 +633,7 @@ const MachineCard = memo(function MachineCard({
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
                         // the arrows are net's icon
                         <><RowLabel label="net" /><span className="text-[var(--series-nic-tx-1)]">{'\u2191'}{formatThroughputShort(nicDevice.txBps)}</span>
-                          <span className="ml-0.5 sm:ml-1 text-[var(--series-nic-rx-1)]">{'\u2193'}{formatThroughputShort(nicDevice.rxBps)}</span>
+                          <span className="ml-px sm:ml-1 text-[var(--series-nic-rx-1)]">{'\u2193'}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
                             <span className={`ml-1 ${WIDE_ONLY} text-danger`}>{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
