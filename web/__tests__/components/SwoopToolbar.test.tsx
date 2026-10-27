@@ -28,11 +28,38 @@ jest.mock('@/lib/swoop/features', () => ({
   swoopInputCapture: () => mockInputCapture,
 }));
 
+// jsdom has no fullscreen api, and the bar offers fullscreen only where the
+// browser has one: these tests are a desktop browser's, which does.
+const elementFullscreen = (present: boolean) => {
+  if (present) {
+    Object.defineProperty(Element.prototype, 'requestFullscreen', {
+      value: () => Promise.resolve(),
+      configurable: true,
+      writable: true,
+    });
+  } else {
+    delete (Element.prototype as Partial<Element>).requestFullscreen;
+  }
+};
+beforeEach(() => elementFullscreen(true));
+
+// a window under `md`: the media query for the wide bar does not match.
+const narrowWindow = () => {
+  window.matchMedia = jest.fn((query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: jest.fn(),
+    removeEventListener: jest.fn(),
+  })) as unknown as typeof window.matchMedia;
+};
+
 afterEach(() => {
   cleanup();
   jest.mocked(swoopClipboard).mockReturnValue(null);
   mockInputCapture = null;
   localStorage.clear();
+  elementFullscreen(false);
+  delete (window as Partial<Window>).matchMedia;
 });
 
 function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
@@ -56,6 +83,33 @@ function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
   );
   return { onEnd, onReconnect };
 }
+
+describe('SwoopToolbar on a phone', () => {
+  it('puts every control behind one button, each labelled under it', async () => {
+    narrowWindow();
+    renderBar('connected');
+    expect(screen.queryByRole('button', { name: 'latency stats' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'back to dashboard' })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'session controls' }));
+    const menu = screen.getByRole('dialog');
+    expect(menu).toContainElement(screen.getByRole('button', { name: 'latency stats' }));
+    expect(menu).toContainElement(screen.getByRole('button', { name: 'end session' }));
+    expect(menu).toHaveTextContent('stats');
+    // the short label, not the tooltip's sentence
+    expect(menu).toHaveTextContent('fullscreen');
+    expect(menu).not.toHaveTextContent('shortcuts like alt+tab');
+  });
+
+  it('leaves fullscreen out where the browser has none for a page, as on an iphone', () => {
+    elementFullscreen(false);
+    renderBar('connected');
+    expect(screen.queryByRole('button', { name: /^fullscreen with/ })).toBeNull();
+    // the mouse is captured only in fullscreen, so its toggle goes with it
+    expect(screen.queryByRole('button', { name: 'capture the mouse in fullscreen' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'end session' })).toBeInTheDocument();
+  });
+});
 
 describe('SwoopToolbar', () => {
   it.each(['idle', 'authorizing', 'connecting', 'connected', 'ended', 'error'] as const)(
@@ -165,14 +219,15 @@ describe('SwoopToolbar', () => {
     expect(screen.queryByTestId('clipboard-notice')).toBeNull();
   });
 
-  it('a notice is a sentence on a top bar and an icon that says it on a side one', () => {
+  it('a notice is a sentence on a wide top bar and an icon that says it on a side one or a phone', () => {
     jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
     renderBar('connected');
     // both are rendered and css picks one from `data-swoop-bar`, which is set
-    // before first paint; react state would put the sentence up for a frame
-    expect(screen.getByTestId('clipboard-held-notice')).toHaveClass('md:bar-side:hidden');
+    // before first paint; react state would put the sentence up for a frame.
+    // below `md` the sentence would push the bar onto a second row.
+    expect(screen.getByTestId('clipboard-held-notice')).toHaveClass('hidden', 'md:inline', 'md:bar-side:hidden');
     expect(screen.getByRole('button', { name: /allow the clipboard for this site/ })).toHaveClass(
-      'hidden',
+      'md:hidden',
       'md:bar-side:inline-flex',
     );
     expect(screen.getByTestId('session-bar')).toHaveClass('md:bar-side:flex-col');

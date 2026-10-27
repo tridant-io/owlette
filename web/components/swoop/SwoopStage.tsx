@@ -203,12 +203,19 @@ export function SwoopStage({
     if (state === 'connected') stageRef.current?.focus();
   }, [state, stageRef]);
 
-  const onPointerDown = useCallback(() => {
-    stageRef.current?.focus();
-    // escape drops pointer lock but leaves fullscreen, and the toolbar is off
-    // screen at that point — a click is the way back in.
-    if (fullscreen && !locked && mouseCapture) void swoopInputCapture(session)?.requestPointerLock();
-  }, [fullscreen, locked, mouseCapture, session, stageRef]);
+  const onPointerDown = useCallback(
+    (event: React.PointerEvent) => {
+      const stage = stageRef.current;
+      // the phone keyboard's field is in the stage, and a tap on the picture keeps it typing
+      if (!stage?.contains(document.activeElement)) stage?.focus();
+      // a finger has no pointer to capture
+      if (event.pointerType === 'touch') return;
+      // escape drops pointer lock but leaves fullscreen, and the toolbar is off
+      // screen at that point — a click is the way back in.
+      if (fullscreen && !locked && mouseCapture) void swoopInputCapture(session)?.requestPointerLock();
+    },
+    [fullscreen, locked, mouseCapture, session, stageRef],
+  );
 
   const windowedCapture = capture !== null && !fullscreen;
   const captureHint = state === 'connected' && fullscreen && !locked && mouseCapture;
@@ -224,7 +231,9 @@ export function SwoopStage({
 
   return (
     // touch-none: a drag is the machine's, never a page pan, and android's
-    // pull-to-refresh must not reload the page mid-session. `dark` scopes the
+    // pull-to-refresh must not reload the page mid-session. select-none and no
+    // callout: a hold is the magnifier's, not a text selection or ios's
+    // save-image sheet. `dark` scopes the
     // night palette to the stage in both themes: it is a video surface, not
     // chrome, so its overlays read the same over any picture and on the black
     // of fullscreen. the letterbox and hints follow the page instead: mid grey
@@ -236,7 +245,7 @@ export function SwoopStage({
       aria-label={capture ? 'remote screen' : undefined}
       aria-describedby={windowedCapture ? leaveHintId : undefined}
       onPointerDown={onPointerDown}
-      className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none [&:fullscreen]:bg-black"
+      className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none select-none [-webkit-touch-callout:none] [&:fullscreen]:bg-black"
     >
       <video
         ref={videoRef}

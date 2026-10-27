@@ -11,6 +11,20 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — swoop on a phone
+
+On a phone, swoop's bar keeps one row: the back arrow, the machine's name, any
+warning, and one button that opens every other control, each with its name
+under it. A tap now clicks where you tap; before, it clicked wherever the
+pointer had last been. The machine's pointer is drawn on a touch screen, and
+pressing and holding opens a magnifier above your finger with the pointer's tip
+where the lift will click. Two fingers right-click with a tap, scroll with a
+drag and zoom the picture with a pinch, and **fit** zooms back out. The phone's
+own keyboard types on the machine, with a row for esc, tab, the arrows and the
+modifier keys; typing arrives as a US keyboard's keys, so accented letters and
+emoji are not sent yet. An iPhone, which has no fullscreen for a page, no
+longer offers it. Nothing to update on the machine.
+
 ### changed — the dashboard on a phone
 
 A machine card's metric row now shows an icon for each metric instead of its

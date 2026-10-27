@@ -39,6 +39,9 @@ import { SwoopAudioToggle } from '@/components/swoop/SwoopAudioToggle';
 import { SwoopPresence } from '@/components/swoop/SwoopPresence';
 import { SwoopCursor } from '@/components/swoop/SwoopCursor';
 import { SwoopBarPositionMenu } from '@/components/swoop/SwoopBarPositionMenu';
+import { SwoopMagnifier } from '@/components/swoop/SwoopMagnifier';
+import { SwoopZoomPill } from '@/components/swoop/SwoopZoomPill';
+import { SwoopPhoneKeyboard, SwoopPhoneKeyboardButton } from '@/components/swoop/SwoopPhoneKeyboard';
 
 const barOnTop = (): SwoopBarPosition => 'top';
 
@@ -133,6 +136,7 @@ export default function SwoopPage({
         <SwoopQualityMenu session={session} />
         <SwoopAudioToggle session={session} />
         <SwoopSpecialKeys session={session} osFamily={osFamily} />
+        <SwoopPhoneKeyboardButton session={session} />
         <SwoopBarPositionMenu position={position} />
       </SwoopToolbar>
 
@@ -155,6 +159,9 @@ export default function SwoopPage({
           <SwoopCursor session={session} />
           <SwoopPresence session={session} />
           <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
+          <SwoopMagnifier session={session} />
+          <SwoopZoomPill session={session} />
+          <SwoopPhoneKeyboard session={session} osFamily={osFamily} />
         </SwoopStage>
       </div>
 

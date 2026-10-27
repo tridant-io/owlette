@@ -140,7 +140,7 @@ export function SwoopSpecialKeys({ session, osFamily }: SwoopSpecialKeysProps) {
 
   return (
     <DropdownMenu>
-      <BarTooltip label="send a key combination">
+      <BarTooltip label="send a key combination" short="keys">
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="icon-sm" aria-label="send a key combination" disabled={!enabled}>
             <Keyboard aria-hidden />

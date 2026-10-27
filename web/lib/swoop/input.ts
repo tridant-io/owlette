@@ -173,9 +173,35 @@ export interface InputCapture {
    * a modifier held down until the next typed key's release, for the super
    * key outside keyboard lock, which the viewer's own system keeps for itself.
    * sent as written, never through the mapping; released with everything
-   * else by `releaseAll`.
+   * else by `releaseAll`. several may be held, for ctrl+alt and the like, and
+   * all of them go after the next key.
    */
   holdNextKey(code: string): void;
+  /** one key `holdNextKey` has down let go before the next key: the phone key row's second tap. */
+  releaseArmedKey(code: string): void;
+  /** the keys `holdNextKey` has down, in the order they went; the phone key row lights them. */
+  readonly armedKeys: readonly string[];
+  /** called whenever `armedKeys` changes; returns the unsubscribe. */
+  onArmedKeysChange(listener: () => void): () => void;
+  /**
+   * the touch layer's way in (`touch.ts`). a finger is not a mouse: it has no
+   * hover, and what a touch means is the gesture's, not the pointer event's,
+   * so the pointer handlers here leave touch alone and the gesture says what
+   * to send. a move to a client point, false when the point is off the picture.
+   */
+  pointAt(clientX: number, clientY: number): boolean;
+  /** a button down, held until `release` or `releaseAll`. */
+  press(button: number): void;
+  release(button: number): void;
+  /** a pixel-mode wheel, coalesced like the mouse's. */
+  scroll(dx: number, dy: number): void;
+  /**
+   * one key typed, as a us keyboard's physical key, shift held around it when
+   * asked. it goes through what is held, so a key armed by `holdNextKey`
+   * applies to it and lets go after it. sent as written, never through the
+   * mapping: the phone keyboard names physical keys, not shortcuts.
+   */
+  typeKey(code: string, shift: boolean): void;
   /**
    * a key owlette swoop took before the page could see it (an os shortcut a
    * webview never gets), by its `KeyboardEvent.code`. it goes the way a typed
@@ -220,8 +246,11 @@ const MODIFIER_FLAGS = [
 
 const MODIFIER_CODES: ReadonlySet<string> = new Set(MODIFIER_FLAGS.flatMap(([, codes]) => codes));
 
+/** nothing armed: one array, so a store that stays empty never says it changed. */
+const NONE_ARMED: readonly string[] = [];
+
 /** a value the page reads, and is told about each time it changes. */
-function watched<T>(initial: T) {
+export function watched<T>(initial: T) {
   let value = initial;
   const listeners = new Set<() => void>();
   return {
@@ -271,8 +300,9 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const queue: InputMessage[] = [];
   const heldKeys = new Set<string>();
   const heldButtons = new Set<number>();
-  /** the modifier `holdNextKey` has down, until the next key's release. */
-  let armed: string | null = null;
+  /** the keys `holdNextKey` has down, until the next key's release. */
+  const armedKeys = watched<readonly string[]>(NONE_ARMED);
+  const isArmed = (code: string): boolean => armedKeys.get().includes(code);
   /** whether that next key has gone down: the release of an earlier key is not its release. */
   let armedKeyDown = false;
 
@@ -379,23 +409,30 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     const tsUs = nowUs();
     for (const code of heldKeys) enqueue({ t: 'k', code, down: false, tsUs });
     heldKeys.clear();
-    armed = null;
+    armedKeys.set(NONE_ARMED);
     releaseButtons();
     flush();
   };
 
   const holdNextKey = (code: string): void => {
-    if (armed === code) return;
-    armed = code;
+    if (isArmed(code)) return;
+    armedKeys.set([...armedKeys.get(), code]);
     armedKeyDown = false;
     heldKeys.add(code);
     key(code, true, nowUs());
   };
 
   const releaseArmed = (): void => {
-    if (armed === null) return;
-    const code = armed;
-    armed = null;
+    const codes = armedKeys.get();
+    if (codes.length === 0) return;
+    armedKeys.set(NONE_ARMED);
+    for (const code of codes) if (heldKeys.delete(code)) key(code, false, nowUs());
+  };
+
+  const releaseArmedKey = (code: string): void => {
+    if (!isArmed(code)) return;
+    const rest = armedKeys.get().filter((armed) => armed !== code);
+    armedKeys.set(rest.length === 0 ? NONE_ARMED : rest);
     if (heldKeys.delete(code)) key(code, false, nowUs());
   };
 
@@ -415,7 +452,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   const pressKey = (code: string): void => {
     heldKeys.add(code);
     key(code, true, nowUs());
-    if (armed !== null && code !== armed) armedKeyDown = true;
+    if (armedKeys.get().length > 0 && !isArmed(code)) armedKeyDown = true;
   };
 
   const releaseKey = (code: string): void => {
@@ -423,7 +460,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // and a spurious release is cheaper than a stuck key.
     heldKeys.delete(code);
     key(code, false, nowUs());
-    if (armedKeyDown && code !== armed) releaseArmed();
+    if (armedKeyDown && !isArmed(code)) releaseArmed();
   };
 
   /**
@@ -441,7 +478,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       if (event[flag] || (altGraph && (flag === 'ctrlKey' || flag === 'altKey'))) continue;
       for (const eventCode of eventCodes) {
         const code = hostCode(eventCode);
-        if (code === null || code === armed || !heldKeys.delete(code)) continue;
+        if (code === null || isArmed(code) || !heldKeys.delete(code)) continue;
         key(code, false, nowUs());
       }
     }
@@ -461,7 +498,15 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (!heldKeys.has(code)) pressKey(code);
   };
 
+  // the phone keyboard's textarea sits in the stage and types through
+  // `typeKey`; its own keys and compositions are not the stage's, and a
+  // prevented keydown there would stop its text arriving at all.
+  const fromTextEntry = (event: Event): boolean =>
+    event.target !== target &&
+    (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement);
+
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (fromTextEntry(event)) return;
     if (composing || event.isComposing) return;
     releaseLifted(event);
     if (BROWSER_RESERVED.has(event.code)) return;
@@ -503,6 +548,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   };
 
   const onKeyUp = (event: KeyboardEvent): void => {
+    if (fromTextEntry(event)) return;
     if (BROWSER_RESERVED.has(event.code)) return;
     if (event.code === 'Escape') clearEscapeHold();
     else event.preventDefault();
@@ -511,7 +557,30 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (code !== null) releaseKey(code);
   };
 
+  /** the machine's pointer to a point on the picture, pinned to its edge. */
+  const moveTo = (point: { x: number; y: number }, tsUs: number): void => {
+    outside.set(false);
+    const at = { x: clamp01(point.x), y: clamp01(point.y) };
+    sent.set(at);
+    enqueue({ t: 'm', ...at, tsUs });
+  };
+
+  const pressButton = (button: number): void => {
+    heldButtons.add(button);
+    held.set(true);
+    enqueueNow({ t: 'b', button, down: true, tsUs: nowUs() });
+  };
+
+  /** false for a button the host was never sent, or was already sent the release of. */
+  const releaseButton = (button: number): boolean => {
+    if (!heldButtons.delete(button)) return false;
+    held.set(heldButtons.size > 0);
+    enqueueNow({ t: 'b', button, down: false, tsUs: nowUs() });
+    return true;
+  };
+
   const onPointerMove = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
     releaseLifted(event);
     const events =
       typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event];
@@ -539,18 +608,21 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       outside.set(true);
       return;
     }
-    outside.set(false);
-    const at = { x: clamp01(point.x), y: clamp01(point.y) };
-    sent.set(at);
-    enqueue({ t: 'm', ...at, tsUs });
+    moveTo(point, tsUs);
   };
 
   const onPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
     if (event.button < 0 || event.button > 4) return;
     releaseLifted(event);
     // under pointer lock the pointer has no position, only the machine's.
-    if (!locked && !inPicture(onPicture(event.clientX, event.clientY))) return;
+    const point = locked ? null : onPicture(event.clientX, event.clientY);
+    if (!locked && !inPicture(point)) return;
     event.preventDefault();
+    // a pen held off the screen has no hover, so its press comes with no move
+    // to where it landed, and would click wherever the last one left the
+    // machine's pointer. for a mouse this coalesces into the move it just sent.
+    if (point) moveTo(point, nowUs());
     // keep the release even if the drag leaves the element, or the button is
     // held on the host forever.
     if (typeof target.setPointerCapture === 'function') {
@@ -560,29 +632,27 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
         // a pointer that has already been released; nothing to capture.
       }
     }
-    heldButtons.add(event.button);
-    held.set(true);
-    enqueueNow({ t: 'b', button: event.button, down: true, tsUs: nowUs() });
+    pressButton(event.button);
   };
 
   const onPointerUp = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
     if (event.button < 0 || event.button > 4) return;
     // only a press the host was sent: one in the bars never was, and one
     // already released on blur or cancel was released there.
-    if (!heldButtons.delete(event.button)) return;
-    held.set(heldButtons.size > 0);
-    event.preventDefault();
-    enqueueNow({ t: 'b', button: event.button, down: false, tsUs: nowUs() });
+    if (releaseButton(event.button)) event.preventDefault();
   };
 
   // off the stage is off the picture, unless a drag carries the pointer there.
-  const onPointerLeave = (): void => {
+  const onPointerLeave = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
     if (heldButtons.size === 0) outside.set(true);
   };
 
   // a cancelled pointer never sends its up, and the button would stay down on
   // the host. its `button` is -1, so it cannot go through the pointerup path.
-  const onPointerCancel = (): void => {
+  const onPointerCancel = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') return;
     releaseButtons();
     flush();
   };
@@ -601,13 +671,15 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   };
 
   const onContextMenu = (event: MouseEvent): void => event.preventDefault();
-  const onCompositionStart = (): void => {
+  const onCompositionStart = (event: CompositionEvent): void => {
+    if (fromTextEntry(event)) return;
     composing = true;
     // the composition owns the keyboard from here; release what we were holding
     // so no modifier is left down on the host for its duration.
     releaseAll();
   };
-  const onCompositionEnd = (): void => {
+  const onCompositionEnd = (event: CompositionEvent): void => {
+    if (fromTextEntry(event)) return;
     composing = false;
   };
 
@@ -729,7 +801,35 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     releaseAll,
     pressChord,
     holdNextKey,
+    releaseArmedKey,
+    get armedKeys(): readonly string[] {
+      return armedKeys.get();
+    },
+    onArmedKeysChange: armedKeys.subscribe,
     nativeKey,
+
+    pointAt(clientX: number, clientY: number): boolean {
+      const point = onPicture(clientX, clientY);
+      // as for a mouse: a drag goes on past the picture, pinned to its edge
+      if (point === null || (heldButtons.size === 0 && !inPicture(point))) return false;
+      moveTo(point, nowUs());
+      return true;
+    },
+    press: pressButton,
+    release(button: number): void {
+      releaseButton(button);
+    },
+    scroll(dx: number, dy: number): void {
+      if (dx === 0 && dy === 0) return;
+      enqueue({ t: 'w', dx, dy, mode: 'pixel', tsUs: nowUs() });
+    },
+    typeKey(code: string, shift: boolean): void {
+      if (!isInjectable(code)) return;
+      if (shift) pressKey('ShiftLeft');
+      pressKey(code);
+      releaseKey(code);
+      if (shift) releaseKey('ShiftLeft');
+    },
 
     detach(): void {
       if (detached) return;
