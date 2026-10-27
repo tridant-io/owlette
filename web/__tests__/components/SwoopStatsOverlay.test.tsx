@@ -235,3 +235,36 @@ describe('SwoopStatsOverlay path indicator', () => {
     expect(getStats).not.toHaveBeenCalled();
   });
 });
+
+describe('SwoopStatsOverlay on a phone', () => {
+  afterEach(cleanup);
+
+  const mountGlance = async (onClose?: () => void) => {
+    await act(async () => {
+      render(
+        <div>
+          <button type="button">elsewhere</button>
+          <SwoopStatsOverlay session={sessionWith(async () => report({}))} stats={EMPTY_STATS} open onClose={onClose} />
+        </div>,
+      );
+      await Promise.resolve();
+    });
+  };
+
+  it('closes at the next tap anywhere else, and keeps a tap on itself', async () => {
+    const onClose = jest.fn();
+    await mountGlance(onClose);
+    const overlay = screen.getByRole('complementary', { name: 'latency breakdown' });
+    expect(overlay).toHaveClass('pointer-events-auto');
+
+    overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'elsewhere' }).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays up, and lets the picture take its taps, without a way to close it', async () => {
+    await mountGlance();
+    expect(screen.getByRole('complementary', { name: 'latency breakdown' })).toHaveClass('pointer-events-none');
+  });
+});

@@ -67,12 +67,10 @@ import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
 import { readMouseCapture, setMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCapture';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
-import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { useSwoopCompactBar } from '@/hooks/useSwoopCompactBar';
 const subscribeNever = (): (() => void) => () => {};
 const mouseFree = (): boolean => false;
 
-/** tailwind's `md`: from there up the bar has room for every button; below it, one opens them all. */
-const WIDE = '(min-width: 768px)';
 // an iphone has no element fullscreen at all, only a video's own player
 const canFullscreen = (): boolean => typeof Element.prototype.requestFullscreen === 'function';
 const fullscreenOnServer = (): boolean => true;
@@ -196,9 +194,9 @@ export function SwoopToolbar({
   // null in a browser, where the bar is only the session's
   const platform = useViewerAppPlatform();
   const mouseCapture = useSyncExternalStore(subscribeMouseCapture, readMouseCapture, mouseFree);
-  const wide = useMediaQuery(WIDE, true);
-  // a touch screen has no hover to read a tooltip with, wide or not: a phone on its side, a tablet
-  const touch = useMediaQuery('(pointer: coarse)', false);
+  const compact = useSwoopCompactBar();
+  // the menu closes when stats opens, which sits where the menu was
+  const [menuOpen, setMenuOpen] = useState(false);
   const fullscreenAvailable = useSyncExternalStore(subscribeNever, canFullscreen, fullscreenOnServer);
   const viewOnly = session !== null && !session.ctl;
 
@@ -273,7 +271,10 @@ export function SwoopToolbar({
           size="icon-sm"
           aria-label="latency stats"
           aria-pressed={statsOpen}
-          onClick={onToggleStats}
+          onClick={() => {
+            onToggleStats();
+            setMenuOpen(false);
+          }}
         >
           <Gauge aria-hidden />
         </Button>
@@ -432,12 +433,12 @@ export function SwoopToolbar({
           />
         )}
 
-        {wide && !touch ? (
+        {!compact ? (
           <div className="ml-auto flex items-center gap-1 md:bar-side:ml-0 md:bar-side:mt-auto md:bar-side:flex-col">
             {controls}
           </div>
         ) : (
-          <Popover>
+          <Popover open={menuOpen} onOpenChange={setMenuOpen}>
             {/* no tooltip: a tap focuses the button, and the tooltip it raised sat over the menu it opened */}
             <PopoverTrigger asChild>
               <Button
