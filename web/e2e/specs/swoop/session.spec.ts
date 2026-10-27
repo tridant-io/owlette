@@ -877,6 +877,52 @@ test.describe('through a host, on a phone', () => {
         expect(box.x).toBeGreaterThanOrEqual(0);
         expect(box.x + box.width).toBeLessThanOrEqual(390);
       }
+
+      // the phone's keyboard comes up: chromium has none, so its visual viewport
+      // shrinks the way a phone's does, the layout viewport staying as it was.
+      // the picture moves up, centred between the bar and the key row, and the
+      // field sits at the top, where no keyboard covers it
+      const keyboardPx = 300;
+      const keyboardCovers = (px: number) =>
+        page.evaluate((cover) => {
+          const viewport = window.visualViewport!;
+          const height = window.innerHeight - cover;
+          Object.defineProperty(viewport, 'height', { configurable: true, get: () => height });
+          viewport.dispatchEvent(new Event('resize'));
+        }, px);
+      await keyboardCovers(keyboardPx);
+      const barBox = (await bar.boundingBox())!;
+      const barBottom = barBox.y + barBox.height;
+      const rowEdges = async () => {
+        const box = (await row.boundingBox())!;
+        return { top: box.y, bottom: Math.round(box.y + box.height) };
+      };
+      await expect.poll(async () => (await rowEdges()).bottom).toBe(844 - keyboardPx);
+      const rowTop = (await rowEdges()).top;
+      // object-contain centres the picture in the video's box, so its centre is the box's
+      const pictureCentre = () =>
+        video.evaluate((node) => {
+          const box = node.getBoundingClientRect();
+          return box.top + box.height / 2;
+        });
+      await expect.poll(async () => Math.abs((await pictureCentre()) - (barBottom + rowTop) / 2)).toBeLessThanOrEqual(2);
+      expect(Math.round((await field.boundingBox())!.y)).toBe(Math.round(barBottom));
+      await test.info().attach('keyboard up', { body: await page.screenshot(), contentType: 'image/png' });
+
+      // turned on its side and back with the keyboard up: the fit is worked out again each time
+      await page.setViewportSize({ width: 844, height: 390 });
+      await keyboardCovers(200);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await keyboardCovers(keyboardPx);
+      await expect.poll(async () => (await rowEdges()).bottom).toBe(844 - keyboardPx);
+      await expect
+        .poll(async () => Math.abs((await pictureCentre()) - (barBottom + (await rowEdges()).top) / 2))
+        .toBeLessThanOrEqual(2);
+      await page.evaluate(() => {
+        const viewport = window.visualViewport!;
+        delete (viewport as unknown as Record<string, unknown>).height;
+        viewport.dispatchEvent(new Event('resize'));
+      });
       mark = lastSeq();
       await page.keyboard.insertText('Hi!');
       await expect

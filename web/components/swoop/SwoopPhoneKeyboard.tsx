@@ -15,7 +15,7 @@
  * never take focus, which would close the keyboard under the finger.
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ChevronDown, TextCursorInput } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { BarTooltip } from '@/components/swoop/BarTooltip';
@@ -86,22 +86,43 @@ function useFieldFocused(session: SwoopSession | null): boolean {
   );
 }
 
-/** how far the phone's keyboard covers the layout viewport's bottom, in css pixels. */
-function useKeyboardInset(open: boolean): number {
-  const [inset, setInset] = useState(0);
+/** what of the page the phone's keyboard leaves: the visual viewport, in the layout viewport's css pixels. */
+interface VisibleArea {
+  top: number;
+  bottom: number;
+  /** how much of the layout viewport's bottom the keyboard covers, where the key row sits. */
+  covered: number;
+}
+
+/**
+ * the visible area while the keyboard is up. a phone shrinks the visual
+ * viewport for its keyboard and leaves the layout one as it was, so the page
+ * goes on laying out under the keyboard; re-read on each turn of the phone too.
+ */
+function useVisibleArea(open: boolean): VisibleArea | null {
+  const [area, setArea] = useState<VisibleArea | null>(null);
   useEffect(() => {
     const viewport = window.visualViewport;
     if (!open || !viewport) return;
-    const sync = () => setInset(Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
+    const sync = () => {
+      const bottom = viewport.offsetTop + viewport.height;
+      const next = { top: viewport.offsetTop, bottom, covered: Math.max(0, window.innerHeight - bottom) };
+      setArea((held) =>
+        held && held.top === next.top && held.bottom === next.bottom && held.covered === next.covered ? held : next,
+      );
+    };
     sync();
     viewport.addEventListener('resize', sync);
     viewport.addEventListener('scroll', sync);
+    window.addEventListener('resize', sync);
     return () => {
       viewport.removeEventListener('resize', sync);
       viewport.removeEventListener('scroll', sync);
+      window.removeEventListener('resize', sync);
     };
   }, [open]);
-  return inset;
+  // what was read before the keyboard went down is not the page's now
+  return open ? area : null;
 }
 
 /** the bar's way to the phone keyboard; on a touch screen only, where there is no other. */
@@ -132,12 +153,30 @@ export function SwoopPhoneKeyboard({ session, osFamily }: { session: SwoopSessio
   const composing = useRef(false);
   const [note, setNote] = useState<string | null>(null);
   const open = useFieldFocused(session);
-  const inset = useKeyboardInset(open);
+  const visible = useVisibleArea(open);
+  const rowRef = useRef<HTMLDivElement>(null);
   const armed = useSyncExternalStore(
     capture?.onArmedKeysChange ?? subscribeNever,
     capture ? () => capture.armedKeys : nothingArmed,
     nothingArmed,
   );
+
+  // the picture fits what the keyboard and the row leave of the stage, centred
+  // there: padded out of the covered parts, the stage's content box is the
+  // video's, which `contentRect()`, input and the zoom all measure.
+  useLayoutEffect(() => {
+    if (!session || !open || !visible) return;
+    const style = session.stage.style;
+    const box = session.stage.getBoundingClientRect();
+    const row = rowRef.current?.offsetHeight ?? 0;
+    style.setProperty('padding-top', `${Math.max(0, visible.top - box.top)}px`);
+    style.setProperty('padding-bottom', `${Math.max(0, box.bottom - visible.bottom) + row}px`);
+    return () => {
+      style.removeProperty('padding-top');
+      style.removeProperty('padding-bottom');
+    };
+    // `note`: its line changes the row's height
+  }, [session, open, visible, note]);
 
   // a watcher types nothing
   if (!capture) return null;
@@ -192,8 +231,10 @@ export function SwoopPhoneKeyboard({ session, osFamily }: { session: SwoopSessio
         autoCorrect="off"
         autoComplete="off"
         spellCheck={false}
-        // 16px, below which ios zooms the page into a focused field
-        className="pointer-events-none absolute bottom-0 left-0 h-px w-px resize-none text-base opacity-0"
+        // 16px, below which ios zooms the page into a focused field. at the
+        // top, which the keyboard never covers: at the bottom, ios panned the
+        // page up to show it and the bar went off the top
+        className="pointer-events-none absolute left-0 top-0 h-px w-px resize-none text-base opacity-0"
         onFocus={(event) => {
           reset(event.currentTarget);
           setNote(null);
@@ -212,9 +253,10 @@ export function SwoopPhoneKeyboard({ session, osFamily }: { session: SwoopSessio
       />
       {open && (
         <div
+          ref={rowRef}
           data-testid="swoop-key-row"
           className="fixed inset-x-0 z-30 border-t border-border bg-card"
-          style={{ bottom: inset }}
+          style={{ bottom: visible?.covered ?? 0 }}
         >
           {note && <p className="px-3 pt-1.5 text-xs text-muted-foreground">{note}</p>}
           {/* ten keys sharing the width, so the narrowest phone shows every one */}

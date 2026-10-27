@@ -62,13 +62,14 @@ export const NO_AIM: AimState = { active: false, x: 0, y: 0 };
 export interface GestureDeps {
   /** null for a watcher, whose touches send nothing. */
   capture: TouchCapture | null;
-  /** the stage's top left, in client coordinates: a pinch works in the stage's own. */
+  /** where the picture is shown (the video's layout box) starts, in client coordinates: a pinch works in its own. */
   stageOrigin(): Point;
   zoom: {
     get(): ZoomState;
     set(next: ZoomState): void;
     /** the picture's box in the element, untransformed. */
     picture(): Box;
+    /** the size of where the picture is shown, which a zoom keeps it covering. */
     stage(): Size;
   };
   /** css pixels on screen per machine pixel, the zoom included; 0 before a picture. */
@@ -340,7 +341,9 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
       { width: video.offsetWidth, height: video.offsetHeight },
       { width: video.videoWidth, height: video.videoHeight },
     );
-  const stageSize = (): Size => ({ width: stage.clientWidth, height: stage.clientHeight });
+  // what the picture is shown in: the video's layout box, which is the stage's
+  // but for what the stage pads out from under the phone keyboard
+  const area = (): Size => ({ width: video.offsetWidth, height: video.offsetHeight });
   // the transform before the word: a listener measures the picture's box as it is told
   const setZoom = (next: ZoomState): void => {
     video.style.transformOrigin = '0 0';
@@ -350,11 +353,12 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
 
   const gestures = createGestures({
     capture,
+    // the video's layout origin, which its transform is about: the stage is its offset parent
     stageOrigin: () => {
       const box = stage.getBoundingClientRect();
-      return { x: box.left, y: box.top };
+      return { x: box.left + video.offsetLeft, y: box.top + video.offsetTop };
     },
-    zoom: { get: zoom.get, set: setZoom, picture, stage: stageSize },
+    zoom: { get: zoom.get, set: setZoom, picture, stage: area },
     pictureScale: () => (video.videoWidth > 0 ? session.contentRect().width / video.videoWidth : 0),
     haptic: () => {
       // android only: an iphone has no vibration a page may use
@@ -396,8 +400,10 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
   };
   // safari's pinch, which would zoom the page instead of the picture
   const onGesture = (event: Event): void => event.preventDefault();
-  // the picture's box moves with the stage's size, and the zoom with it
-  const reclamp = (): void => setZoom(clampZoom(zoom.get(), picture(), stageSize()));
+  // the picture's box moves with the video's size, and the zoom with it
+  const reclamp = (): void => setZoom(clampZoom(zoom.get(), picture(), area()));
+  // the keyboard's padding resizes the video with no window resize to say so
+  const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(reclamp) : null;
 
   stage.addEventListener('pointerdown', onDown);
   stage.addEventListener('pointermove', onMove);
@@ -409,6 +415,7 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
   window.addEventListener('resize', reclamp);
   document.addEventListener('fullscreenchange', reclamp);
   video.addEventListener('resize', reclamp);
+  resizes?.observe(video);
 
   touches.set(session, {
     zoom: { get: zoom.get, subscribe: zoom.subscribe, reset: () => setZoom(NO_ZOOM) },
@@ -428,6 +435,7 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
     window.removeEventListener('resize', reclamp);
     document.removeEventListener('fullscreenchange', reclamp);
     video.removeEventListener('resize', reclamp);
+    resizes?.disconnect();
     video.style.removeProperty('transform');
     video.style.removeProperty('transform-origin');
   };
