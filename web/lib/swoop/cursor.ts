@@ -60,6 +60,9 @@ export interface SwoopCursorState {
 /** the snapshot before the first message lands, and the server's. */
 export const NO_CURSOR: SwoopCursorState = { shape: null, positioned: false, x: 0, y: 0, visible: false };
 
+/** a shape's png as an image source. */
+export const cursorPngUrl = (shape: SwoopCursorShape): string => `data:image/png;base64,${shape.png}`;
+
 export interface SwoopCursorStore {
   subscribe(listener: () => void): SwoopDetach;
   get(): SwoopCursorState;

@@ -70,6 +70,7 @@ interface PointerProps {
   movementY?: number;
   button?: number;
   pointerId?: number;
+  pointerType?: string;
 }
 
 /** jsdom has no PointerEvent constructor, so build the surface we read. */
@@ -174,10 +175,31 @@ describe('pointer batching', () => {
     h.target.dispatchEvent(pointerEvent('pointermove', { clientX: -40, clientY: 400 }));
     h.tick();
     expect(h.sent()).toEqual([
-      { t: 'b', button: 0, down: true, seq: 1, tsUs: TS_US },
-      { t: 'm', x: 0, y: 1, seq: 2, tsUs: TS_US },
+      { t: 'm', x: 0.5, y: 0.5, seq: 1, tsUs: TS_US },
+      { t: 'b', button: 0, down: true, seq: 2, tsUs: TS_US },
+      { t: 'm', x: 0, y: 1, seq: 3, tsUs: TS_US },
     ]);
     expect(h.capture.pointerOutside).toBe(false);
+  });
+
+  it('moves to where a press lands before pressing, for a pointer that never hovered there', () => {
+    const h = harness();
+    h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 150, clientY: 25, button: 0 }));
+    expect(h.sent()).toEqual([
+      { t: 'm', x: 0.75, y: 0.25, seq: 1, tsUs: TS_US },
+      { t: 'b', button: 0, down: true, seq: 2, tsUs: TS_US },
+    ]);
+  });
+
+  it('leaves touch to the touch layer: a finger sends nothing of its own', () => {
+    const h = harness();
+    const touch = { clientX: 100, clientY: 50, pointerType: 'touch' };
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'pointerleave']) {
+      h.target.dispatchEvent(pointerEvent(type, touch));
+    }
+    h.tick();
+    expect(h.sent()).toEqual([]);
+    expect(h.capture.pointerSent).toBeNull();
   });
 
   it('flushes the pending move ahead of a key, without waiting for a tick', () => {
@@ -679,6 +701,94 @@ describe('a held modifier', () => {
     const keys = h.sent().filter((m) => m.t === 'k');
     expect(keys.map((m) => `${m.code}:${m.down ? 'down' : 'up'}`)).toEqual(['MetaLeft:down', 'MetaLeft:up']);
   });
+
+  it('holds two armed modifiers together through the next key, so ctrl+alt can be typed', () => {
+    const h = harness();
+    h.capture.holdNextKey('ControlLeft');
+    h.capture.holdNextKey('AltLeft');
+    h.capture.typeKey('Tab', false);
+    expect(edges(h)).toEqual(['ControlLeft:down', 'AltLeft:down', 'Tab:down', 'Tab:up', 'ControlLeft:up', 'AltLeft:up']);
+    expect(h.capture.armedKeys).toEqual([]);
+  });
+
+  it('lets one armed modifier go before the next key, the others staying down', () => {
+    const h = harness();
+    h.capture.holdNextKey('ControlLeft');
+    h.capture.holdNextKey('AltLeft');
+    h.capture.releaseArmedKey('ControlLeft');
+    h.capture.releaseArmedKey('ControlLeft');
+    expect(h.capture.armedKeys).toEqual(['AltLeft']);
+    h.capture.typeKey('Tab', false);
+    expect(edges(h)).toEqual(['ControlLeft:down', 'AltLeft:down', 'ControlLeft:up', 'Tab:down', 'Tab:up', 'AltLeft:up']);
+  });
+
+  it('says which modifiers are armed, and when they let go', () => {
+    const h = harness();
+    const seen: (readonly string[])[] = [];
+    h.capture.onArmedKeysChange(() => seen.push(h.capture.armedKeys));
+    h.capture.holdNextKey('ControlLeft');
+    h.capture.holdNextKey('ShiftLeft');
+    h.capture.typeKey('KeyC', false);
+    expect(seen).toEqual([['ControlLeft'], ['ControlLeft', 'ShiftLeft'], []]);
+  });
+});
+
+describe('the touch layer', () => {
+  it('points at a client point on the picture, and refuses one off it', () => {
+    const h = harness();
+    expect(h.capture.pointAt(50, 75)).toBe(true);
+    expect(h.capture.pointAt(250, 50)).toBe(false);
+    h.tick();
+    expect(h.sent()).toEqual([{ t: 'm', x: 0.25, y: 0.75, seq: 1, tsUs: TS_US }]);
+    expect(h.capture.pointerSent).toEqual({ x: 0.25, y: 0.75 });
+  });
+
+  it('pins a held press to the edge, as a mouse drag is', () => {
+    const h = harness();
+    h.capture.pointAt(100, 50);
+    h.capture.press(0);
+    expect(h.capture.pointAt(260, -20)).toBe(true);
+    h.tick();
+    expect(h.sent().slice(-1)).toEqual([{ t: 'm', x: 1, y: 0, seq: 3, tsUs: TS_US }]);
+  });
+
+  it('presses and releases once each, and lets releaseAll take a press it holds', () => {
+    const h = harness();
+    h.capture.press(2);
+    h.capture.release(2);
+    h.capture.release(2);
+    h.capture.press(0);
+    h.capture.releaseAll();
+    expect(edges(h)).toEqual(['b2:down', 'b2:up', 'b0:down', 'b0:up']);
+  });
+
+  it('scrolls in pixels, coalesced within a tick', () => {
+    const h = harness();
+    h.capture.scroll(0, 12);
+    h.capture.scroll(3, 8);
+    h.capture.scroll(0, 0);
+    h.tick();
+    expect(h.sent()).toEqual([{ t: 'w', dx: 3, dy: 20, mode: 'pixel', seq: 1, tsUs: TS_US }]);
+  });
+
+  it('types a key, shift around it when asked, and drops a code the host cannot inject', () => {
+    const h = harness();
+    h.capture.typeKey('KeyH', true);
+    h.capture.typeKey('KeyI', false);
+    h.capture.typeKey('NotAKey', false);
+    expect(edges(h)).toEqual(['ShiftLeft:down', 'KeyH:down', 'KeyH:up', 'ShiftLeft:up', 'KeyI:down', 'KeyI:up']);
+  });
+
+  it('leaves the keys of a text field inside the stage to it', () => {
+    const h = harness();
+    const field = document.createElement('textarea');
+    h.target.appendChild(field);
+    const down = keyEvent('keydown', 'KeyA');
+    field.dispatchEvent(down);
+    field.dispatchEvent(keyEvent('keyup', 'KeyA'));
+    expect(h.sent()).toEqual([]);
+    expect(down.defaultPrevented).toBe(false);
+  });
 });
 
 describe('modifier mapping', () => {
@@ -810,7 +920,7 @@ describe('buttons', () => {
 
     // a cancelled pointer reports button -1, so it cannot go through pointerup.
     h.target.dispatchEvent(pointerEvent('pointercancel', { button: -1 }));
-    expect(h.sent()).toEqual([{ t: 'b', button: 0, down: false, seq: 2, tsUs: TS_US }]);
+    expect(h.sent()).toEqual([{ t: 'b', button: 0, down: false, seq: 3, tsUs: TS_US }]);
   });
 
   it('prevents the context menu so right-click reaches the host', () => {
@@ -833,9 +943,9 @@ describe('releases', () => {
     window.dispatchEvent(new Event('blur'));
 
     expect(h.sent()).toEqual([
-      { t: 'k', code: 'KeyA', down: false, seq: 4, tsUs: TS_US },
-      { t: 'k', code: 'ShiftLeft', down: false, seq: 5, tsUs: TS_US },
-      { t: 'b', button: 2, down: false, seq: 6, tsUs: TS_US },
+      { t: 'k', code: 'KeyA', down: false, seq: 5, tsUs: TS_US },
+      { t: 'k', code: 'ShiftLeft', down: false, seq: 6, tsUs: TS_US },
+      { t: 'b', button: 2, down: false, seq: 7, tsUs: TS_US },
     ]);
   });
 
@@ -893,7 +1003,7 @@ describe('releases', () => {
       h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
       keptKeyup('ControlLeft');
       h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 50, clientY: 50 }));
-      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up', 'b0:down']);
+      expect(edges(h)).toEqual(['ControlLeft:down', 'ControlLeft:up', 'm', 'b0:down']);
     });
 
     it('is released when the mouse next moves', () => {

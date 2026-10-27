@@ -62,6 +62,10 @@
  * trip behind, and over a slow link every move waited on it. until the first
  * move, under pointer lock and for a watcher, it is drawn at `cpos`.
  *
+ * **on a touch screen it is always overlaid.** a finger has no css cursor to
+ * wear the shape, and without the overlay a phone showed no pointer at all;
+ * a tap moves it where the finger landed, at once (`lib/swoop/touch.ts`).
+ *
  * the overlay has a thin halo in both black and white: the host draws a
  * monochrome cursor's "invert the screen" pixels as black, which is the
  * i-beam, and over dark text that is nothing at all. the halo colours are the
@@ -70,10 +74,11 @@
 
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { MousePointer2 } from 'lucide-react';
-import { NO_CURSOR, swoopCursor, type SwoopCursorShape } from '@/lib/swoop/cursor';
+import { NO_CURSOR, cursorPngUrl, swoopCursor, type SwoopCursorShape } from '@/lib/swoop/cursor';
 import { toPixel, useSwoopPictureBox, type PictureBox } from '@/hooks/useSwoopPictureBox';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 
 export interface SwoopCursorProps {
   session: SwoopSession | null;
@@ -110,7 +115,6 @@ const toCss =
       ? px * box.scale * shape.scale
       : (px * shape.scale * DEFAULT_DPI) / (shape.dpi ?? DEFAULT_DPI);
 
-const pngUrl = (shape: SwoopCursorShape): string => `data:image/png;base64,${shape.png}`;
 
 function usePointerLocked(session: SwoopSession | null): boolean {
   const [locked, setLocked] = useState(false);
@@ -157,8 +161,9 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
   const box = useSwoopPictureBox(session);
   const picture = box !== null;
   const inApp = useViewerAppPlatform() !== null;
+  const coarse = useMediaQuery('(pointer: coarse)', false);
   const watching = session !== null && !session.ctl;
-  const overlay = watching || locked || inApp || (state.shape !== null && !fitsCssCursor(state.shape));
+  const overlay = watching || locked || inApp || coarse || (state.shape !== null && !fitsCssCursor(state.shape));
   // the machine's pointer is in the local one's place: drawn over the picture,
   // or, hidden by a program for a drag, not drawn at all.
   const standIn = picture && state.positioned && (state.visible ? overlay : press.held && press.overShown);
@@ -175,7 +180,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
     } else if (standIn) {
       style.setProperty('cursor', 'none');
     } else if (state.shape && !overlay) {
-      style.setProperty('cursor', `url(${pngUrl(state.shape)}) ${state.shape.hotX} ${state.shape.hotY}, auto`);
+      style.setProperty('cursor', `url(${cursorPngUrl(state.shape)}) ${state.shape.hotX} ${state.shape.hotY}, auto`);
     } else {
       style.removeProperty('cursor');
     }
@@ -207,7 +212,7 @@ export function SwoopCursor({ session }: SwoopCursorProps) {
       alt=""
       aria-hidden
       data-testid="machine-cursor"
-      src={pngUrl(state.shape)}
+      src={cursorPngUrl(state.shape)}
       className="pointer-events-none absolute z-10 max-w-none select-none [filter:drop-shadow(0_0_1px_white)_drop-shadow(0_0_1px_black)]"
       style={{
         left: left - css(state.shape.hotX),

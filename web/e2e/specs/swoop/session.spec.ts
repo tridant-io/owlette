@@ -48,6 +48,7 @@ const LIVE_ID = `mach-live-${SUFFIX}`;
 const KILLED_ID = `mach-killed-${SUFFIX}`;
 const CURSOR_ID = `mach-cursor-${SUFFIX}`;
 const FIT_ID = `mach-fit-${SUFFIX}`;
+const PHONE_ID = `mach-phone-${SUFFIX}`;
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
 /** a real png, so the drawn pointer is an image the page lays out. */
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -68,6 +69,8 @@ let pointerOperator: TestUser;
 let pointerOperatorSecret = '';
 let fitOperator: TestUser;
 let fitOperatorSecret = '';
+let phoneOperator: TestUser;
+let phoneOperatorSecret = '';
 
 async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
   const user = await seedDedicatedUser(dedicatedUser('member', suffix));
@@ -201,6 +204,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, KILLED_ID, { displayName: `killed box ${SUFFIX}` });
   await seedMachine(SITE_ID, CURSOR_ID, { displayName: `cursor box ${SUFFIX}` });
   await seedMachine(SITE_ID, FIT_ID, { displayName: `fit box ${SUFFIX}` });
+  await seedMachine(SITE_ID, PHONE_ID, { displayName: `phone box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -218,6 +222,11 @@ test.beforeAll(async () => {
   fitOperator = fitSeeded.user;
   fitOperatorSecret = fitSeeded.secret;
   await grantMembership(SITE_ID, fitOperator.uid, 'admin');
+
+  const phoneSeeded = await seedTotpUser(`swoop-phone-${SUFFIX}`);
+  phoneOperator = phoneSeeded.user;
+  phoneOperatorSecret = phoneSeeded.secret;
+  await grantMembership(SITE_ID, phoneOperator.uid, 'admin');
 
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
   await getAdminDb()
@@ -689,6 +698,217 @@ test.describe('through a host, inside owlette swoop', () => {
           })
           .toEqual([width, height - 48]);
       }
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
+test.describe('through a host, on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
+  test('one button holds the bar, a tap clicks where it lands, two fingers right-click, scroll and pinch, a hold magnifies, and the phone keyboard types', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: PHONE_ID });
+    try {
+      // a fresh sign-in is the step-up, so control comes without a dialog.
+      await signIn(page, phoneOperator, phoneOperatorSecret, { fresh: true });
+      const granted = nextGrant(page, PHONE_ID);
+      await page.goto(`/swoop/${SITE_ID}/${PHONE_ID}`);
+      const grant = await granted;
+      expect(grant.ctl).toBe(true);
+      await expectHostPicture(page);
+
+      // the bar is one row, its controls behind one button, each labelled there
+      const bar = page.getByTestId('session-bar');
+      await expect.poll(async () => (await bar.boundingBox())?.height).toBe(48);
+      await expect(bar.getByRole('button', { name: 'latency stats' })).toHaveCount(0);
+      await bar.getByRole('button', { name: 'session controls' }).tap();
+      const menu = page.getByRole('dialog');
+      await expect(menu.getByRole('button', { name: 'latency stats' })).toBeVisible();
+      await expect(menu.getByRole('button', { name: 'end session' })).toBeVisible();
+      await expect(menu.getByText('keys', { exact: true })).toBeVisible();
+      await test.info().attach('phone menu', { body: await page.screenshot(), contentType: 'image/png' });
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+
+      const video = page.locator('video[aria-label="remote screen"]');
+      const picture = await video.evaluate((node) => {
+        const element = node as HTMLVideoElement;
+        const box = element.getBoundingClientRect();
+        const scale = Math.min(box.width / element.videoWidth, box.height / element.videoHeight);
+        const width = element.videoWidth * scale;
+        const height = element.videoHeight * scale;
+        return { left: box.left + (box.width - width) / 2, top: box.top + (box.height - height) / 2, width, height };
+      });
+      const at = (x: number, y: number) => ({ x: picture.left + x * picture.width, y: picture.top + y * picture.height });
+      const middleX = () => picture.left + picture.width / 2;
+      // the channel is unordered: what arrived after a mark, in the order it was sent
+      const lastSeq = () => Math.max(0, ...host.inputs.map((m) => m.seq));
+      const after = (seq: number) => host.inputs.filter((m) => m.seq > seq).sort((a, b) => a.seq - b.seq);
+      const buttons = (seq: number) => after(seq).filter((m) => m.t === 'b').map((m) => `${m.button}:${m.down ? 'down' : 'up'}`);
+      // a modifier's release goes again later (input.ts), so a key already up is not counted twice
+      const keys = (seq: number) => {
+        const down = new Set<string>();
+        const out: string[] = [];
+        for (const m of after(seq)) {
+          if (m.t !== 'k') continue;
+          const code = String(m.code);
+          if (m.down) {
+            down.add(code);
+            out.push(`${code}:down`);
+          } else if (down.delete(code)) out.push(`${code}:up`);
+        }
+        return out;
+      };
+      const cdp = await page.context().newCDPSession(page);
+      const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', points: { x: number; y: number }[]) =>
+        cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points.map((p, id) => ({ x: p.x, y: p.y, id })) });
+
+      // the host places its pointer, and a phone draws it: there is no css cursor to wear its shape
+      const drawn = page.getByTestId('machine-cursor');
+      const centre = JSON.stringify({ t: 'cpos', x: 0.5, y: 0.5, visible: true, tsUs: 1 });
+      await expect(async () => {
+        await host.cursor(grant.viewerId, centre);
+        await expect(drawn).toBeVisible({ timeout: 1_000 });
+      }).toPass({ timeout: 15_000 });
+
+      // a tap moves the pointer to where it landed, then clicks there
+      let mark = lastSeq();
+      const quarter = at(0.25, 0.5);
+      await page.touchscreen.tap(quarter.x, quarter.y);
+      await expect.poll(() => buttons(mark)).toEqual(['0:down', '0:up']);
+      const tapped = after(mark);
+      const moved = tapped.slice(0, tapped.findIndex((m) => m.t === 'b')).filter((m) => m.t === 'm').at(-1);
+      expect(Number(moved?.x)).toBeCloseTo(0.25, 2);
+      expect(Number(moved?.y)).toBeCloseTo(0.5, 2);
+      const pointer = (await drawn.boundingBox())!;
+      expect(Math.abs(pointer.x - quarter.x)).toBeLessThanOrEqual(2);
+
+      // a tap on the bars around the picture clicks nothing, as a mouse there does not
+      mark = lastSeq();
+      await page.touchscreen.tap(middleX(), picture.top - 40);
+      await page.waitForTimeout(500);
+      expect(after(mark)).toEqual([]);
+
+      // two fingers tapped together are a right-click
+      mark = lastSeq();
+      await touch('touchStart', [at(0.3, 0.5), at(0.6, 0.5)]);
+      await touch('touchEnd', []);
+      await expect.poll(() => buttons(mark)).toEqual(['2:down', '2:up']);
+
+      // two fingers moving up together scroll, and what is under them follows them
+      mark = lastSeq();
+      const [left, right] = [at(0.4, 0.7), at(0.6, 0.7)];
+      await touch('touchStart', [left, right]);
+      for (const rise of [10, 20, 30, 40]) {
+        await touch('touchMove', [{ x: left.x, y: left.y - rise }, { x: right.x, y: right.y - rise }]);
+      }
+      await touch('touchEnd', []);
+      await expect
+        .poll(() => after(mark).filter((m) => m.t === 'w').reduce((sum, m) => sum + Number(m.dy), 0))
+        .toBeGreaterThan(0);
+      expect(buttons(mark)).toEqual([]);
+
+      // a pinch zooms the picture here and sends the machine nothing; fit puts it back
+      mark = lastSeq();
+      const middle = at(0.5, 0.5);
+      await touch('touchStart', [{ x: middle.x - 20, y: middle.y }, { x: middle.x + 20, y: middle.y }]);
+      for (const spread of [30, 45, 60, 80]) {
+        await touch('touchMove', [{ x: middle.x - spread, y: middle.y }, { x: middle.x + spread, y: middle.y }]);
+      }
+      await touch('touchEnd', []);
+      await expect(video).toHaveCSS('transform', /^matrix\(4, 0, 0, 4,/);
+      expect(after(mark).filter((m) => m.t !== 'm')).toEqual([]);
+      await test.info().attach('pinched', { body: await page.screenshot(), contentType: 'image/png' });
+      await page.getByRole('button', { name: 'fit', exact: true }).tap();
+      await expect(video).toHaveCSS('transform', 'none');
+
+      // the host's own pointer shape, hot spot at its corner, which the magnifier draws magnified
+      const shape = JSON.stringify({ t: 'cshape', id: 1, hotX: 0, hotY: 0, w: 12, h: 18, scale: 1, dpi: 96, png: ONE_PIXEL_PNG });
+      await expect(async () => {
+        await host.cursor(grant.viewerId, shape);
+        await expect(drawn).toHaveAttribute('src', /^data:image\/png/, { timeout: 1_000 });
+      }).toPass({ timeout: 15_000 });
+
+      // a hold brings the magnifier up; the lift clicks where the finger slid to
+      mark = lastSeq();
+      const aim = at(0.7, 0.4);
+      await touch('touchStart', [aim]);
+      const magnifier = page.getByTestId('swoop-magnifier');
+      await expect(magnifier).toBeVisible();
+      const loupePointer = (await magnifier.locator('img').boundingBox())!;
+      expect([loupePointer.width, loupePointer.height]).toEqual([24, 36]);
+      await touch('touchMove', [{ x: aim.x + 12, y: aim.y }]);
+      await test.info().attach('magnifier', { body: await page.screenshot(), contentType: 'image/png' });
+      await touch('touchEnd', []);
+      await expect(magnifier).toHaveCount(0);
+      await expect.poll(() => buttons(mark)).toEqual(['0:down', '0:up']);
+      // drawn where the lift clicked, measured against the picture as it is after fit, not as it was zoomed
+      const lifted = (await drawn.boundingBox())!;
+      expect(Math.abs(lifted.x - (aim.x + 12))).toBeLessThanOrEqual(2);
+      expect(Math.abs(lifted.y - aim.y)).toBeLessThanOrEqual(2);
+
+      // the phone keyboard, from the bar's menu, types on the machine as a us keyboard's keys
+      await bar.getByRole('button', { name: 'session controls' }).tap();
+      await page.getByRole('dialog').getByRole('button', { name: "type with this phone's keyboard" }).tap();
+      const field = page.getByLabel('type on the machine');
+      await expect(field).toBeFocused();
+      const row = page.getByTestId('swoop-key-row');
+      await expect(row).toBeVisible();
+      // every key in reach at 390px, none scrolled away or cut off
+      for (const key of await row.getByRole('button').all()) {
+        const box = (await key.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(390);
+      }
+      mark = lastSeq();
+      await page.keyboard.insertText('Hi!');
+      await expect
+        .poll(() => keys(mark))
+        .toEqual([
+          'ShiftLeft:down', 'KeyH:down', 'KeyH:up', 'ShiftLeft:up',
+          'KeyI:down', 'KeyI:up',
+          'ShiftLeft:down', 'Digit1:down', 'Digit1:up', 'ShiftLeft:up',
+        ]);
+
+      // the key row's ctrl stays down for the next key, lit until it goes
+      mark = lastSeq();
+      const ctrl = row.getByRole('button', { name: 'ctrl', exact: true });
+      await ctrl.tap();
+      await expect(ctrl).toHaveAttribute('aria-pressed', 'true');
+      await expect(field).toBeFocused();
+      await page.keyboard.insertText('c');
+      await expect.poll(() => keys(mark)).toEqual(['ControlLeft:down', 'KeyC:down', 'KeyC:up', 'ControlLeft:up']);
+      await expect(ctrl).toHaveAttribute('aria-pressed', 'false');
+      await test.info().attach('key row', { body: await page.screenshot(), contentType: 'image/png' });
+
+      // two modifiers hold together for the next key, and a second tap lets one go
+      mark = lastSeq();
+      const alt = row.getByRole('button', { name: 'alt', exact: true });
+      await ctrl.tap();
+      await alt.tap();
+      await page.keyboard.insertText('x');
+      await expect
+        .poll(() => keys(mark))
+        .toEqual(['ControlLeft:down', 'AltLeft:down', 'KeyX:down', 'KeyX:up', 'ControlLeft:up', 'AltLeft:up']);
+      mark = lastSeq();
+      await alt.tap();
+      await expect(alt).toHaveAttribute('aria-pressed', 'true');
+      await alt.tap();
+      await expect(alt).toHaveAttribute('aria-pressed', 'false');
+      await expect.poll(() => keys(mark)).toEqual(['AltLeft:down', 'AltLeft:up']);
+
+      // one still lit when the keyboard goes, goes with it: nothing stays down on the machine
+      mark = lastSeq();
+      await ctrl.tap();
+      await expect(ctrl).toHaveAttribute('aria-pressed', 'true');
+      await row.getByRole('button', { name: 'hide the keyboard' }).tap();
+      await expect(row).toHaveCount(0);
+      await expect.poll(() => keys(mark)).toEqual(['ControlLeft:down', 'ControlLeft:up']);
+      expect(host.problems).toEqual([]);
     } finally {
       await host.stop();
     }

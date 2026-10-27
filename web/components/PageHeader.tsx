@@ -117,6 +117,7 @@ export function PageHeader({
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
   const [openMenuCount, setOpenMenuCount] = useState(0);
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
+  const [drawerSitesOpen, setDrawerSitesOpen] = useState(false);
   const feedbackIndex = useRef(0);
   const drawerRef = useRef<HTMLDivElement>(null);
   const drawerTriggerRef = useRef<HTMLButtonElement>(null);
@@ -124,10 +125,6 @@ export function PageHeader({
   const handleMenuOpenChange = (open: boolean) => {
     setOpenMenuCount((n) => Math.max(0, open ? n + 1 : n - 1));
   };
-
-  // The rotating feedback label runs whenever a surface showing it is open —
-  // the desktop help dropdown or the mobile drawer's help section.
-  const feedbackRotating = helpMenuOpen || navDrawerOpen;
 
   // Drawer dismissal: Escape, plus crossing up into the `md` breakpoint. The
   // drawer is `md:hidden`, so without the media listener a drawer left open on
@@ -174,8 +171,9 @@ export function PageHeader({
     };
   }, [navDrawerOpen]);
 
+  // the help menu's feedback label rotates while the menu is open
   useEffect(() => {
-    if (!feedbackRotating) return;
+    if (!helpMenuOpen) return;
     feedbackIndex.current = Math.floor(Math.random() * FEEDBACK_LABELS.length);
     setFeedbackLabel(FEEDBACK_LABELS[feedbackIndex.current]);
 
@@ -189,7 +187,7 @@ export function PageHeader({
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [feedbackRotating]);
+  }, [helpMenuOpen]);
 
   const currentSiteName = sites.find(s => s.id === currentSiteId)?.name ?? 'select site';
   // Non-null only when there is actually a site to switch to. Holds the narrowed
@@ -224,7 +222,10 @@ export function PageHeader({
               type="button"
               aria-label="menu"
               aria-expanded={navDrawerOpen}
-              onClick={() => setNavDrawerOpen(true)}
+              onClick={() => {
+                setDrawerSitesOpen(false);
+                setNavDrawerOpen(true);
+              }}
               className="md:hidden inline-flex items-center justify-center h-8 w-8 flex-shrink-0 rounded-md hover:bg-secondary transition-colors cursor-pointer"
             >
               <Menu className="h-5 w-5 text-muted-foreground" />
@@ -338,7 +339,7 @@ export function PageHeader({
               <DropdownMenuTrigger asChild>
                 <button
                   aria-label="help"
-                  className="hidden md:inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors cursor-pointer"
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md hover:bg-secondary transition-colors cursor-pointer"
                 >
                   <CircleHelp className="h-4 w-4 text-muted-foreground" />
                 </button>
@@ -464,8 +465,8 @@ export function PageHeader({
     <VerifyEmailBanner />
     <TrialBanner />
 
-    {/* Mobile nav drawer — carries the site + page switchers (and the help
-        items) that the `md` bar shows inline. Plain fixed positioning rather
+    {/* Mobile nav drawer — carries the site + page switchers that the `md`
+        bar shows inline. Plain fixed positioning rather
         than a Radix sheet: a portalled surface escapes `md:hidden` and would
         need JS breakpoint gating to stay off the desktop viewport. Rendered
         only while open, and force-closed on the way up past `md` (see the
@@ -498,8 +499,21 @@ export function PageHeader({
 
           {selectSite && (
             <div className="border-b border-border py-2">
-              <p className="px-4 py-1.5 text-xs text-muted-foreground">site</p>
-              {sites.map((site) => (
+              {/* closed on every open: a long site list pushed the pages out of view */}
+              <button
+                type="button"
+                data-testid="drawer-site-toggle"
+                aria-expanded={drawerSitesOpen}
+                onClick={() => setDrawerSitesOpen((open) => !open)}
+                className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors cursor-pointer"
+              >
+                <span className="text-xs text-muted-foreground">site</span>
+                <span className="min-w-0 flex-1 truncate text-foreground">{currentSiteName}</span>
+                <ChevronDown
+                  className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+              {drawerSitesOpen && sites.map((site) => (
                 <button
                   key={site.id}
                   type="button"
@@ -568,30 +582,6 @@ export function PageHeader({
                 </button>
               );
             })}
-          </div>
-
-          <div className="mt-auto border-t border-border py-2">
-            <Link
-              href="/docs"
-              onClick={() => setNavDrawerOpen(false)}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-sm text-foreground hover:bg-accent transition-colors"
-            >
-              <BookOpen className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-              docs
-            </Link>
-            <button
-              type="button"
-              onClick={() => {
-                setReportBugOpen(true);
-                setNavDrawerOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-foreground hover:bg-accent transition-colors cursor-pointer"
-            >
-              <Bug className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
-              <span className="transition-opacity duration-300" style={{ opacity: feedbackFading ? 0 : 1 }}>
-                {feedbackLabel}
-              </span>
-            </button>
           </div>
         </nav>
       </div>

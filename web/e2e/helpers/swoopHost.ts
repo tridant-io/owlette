@@ -19,9 +19,10 @@
  * `swoop-control` carries in section 11's order with `fp` against the offer,
  * and on a queued `swoop_kill` says `bye` with reason `kill` and stops.
  *
- * what it is not: capture, the encoder's tuning, input, audio, the rate
- * governor or `swoop-meta` records, and its pointer is whatever a spec has it
- * send on `swoop-cursor` (`cursor`). the picture is h.264 because the real
+ * what it is not: capture, the encoder's tuning, audio, the rate governor or
+ * `swoop-meta` records, and its pointer is whatever a spec has it send on
+ * `swoop-cursor` (`cursor`). input it keeps rather than injects: every
+ * `swoop-input` message a viewer sends lands in `inputs`. the picture is h.264 because the real
  * host's is, and because playwright's bundled chrome encodes and decodes it
  * headless (spike 2.12 section 8b); never hevc, which headless cannot decode.
  */
@@ -149,7 +150,11 @@ export interface VerifiedLease {
 
 type HostOut =
   | { kind: 'lease'; viewer: string; token: string }
+  | { kind: 'input'; viewer: string; message: string }
   | { kind: 'refused'; viewer: string; reason: string };
+
+/** one `swoop-input` message as the host received it (PROTOCOL.md section 5). */
+export type ReceivedInput = { t: string; seq: number } & Record<string, unknown>;
 
 interface HostPageApi {
   answer(viewer: string, sdp: string): Promise<string>;
@@ -200,6 +205,10 @@ function installHostPage([colour, out]: [readonly number[], string]): void {
           return;
         }
         if (channel.label === 'swoop-cursor') cursors.set(viewer, channel);
+        if (channel.label === 'swoop-input') {
+          channel.onmessage = ({ data }) => send({ kind: 'input', viewer, message: String(data) });
+          return;
+        }
         if (channel.label !== 'swoop-control') return;
         controls.set(viewer, channel);
         channel.onmessage = ({ data }) => {
@@ -271,6 +280,8 @@ export class FakeSwoopHost {
   readonly problems: string[] = [];
   /** the viewer tokens the host verified on `swoop-control`. */
   readonly leases: VerifiedLease[] = [];
+  /** every `swoop-input` message, in arrival order; the channel is unordered, so sort by `seq`. */
+  readonly inputs: ReceivedInput[] = [];
 
   private readonly sockets = new Set<RoomSocket>();
   /** the session the host is streaming, once its command landed; null when none is. */
@@ -469,6 +480,10 @@ export class FakeSwoopHost {
   private fromHostPage(message: HostOut): void {
     if (message.kind === 'refused') {
       this.problems.push(`host refused viewer ${message.viewer}: ${message.reason}`);
+      return;
+    }
+    if (message.kind === 'input') {
+      this.inputs.push(JSON.parse(message.message) as ReceivedInput);
       return;
     }
     const verdict = verifyViewerToken(message.token, {

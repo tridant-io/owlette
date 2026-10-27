@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from 'react';
 import type { SwoopSession } from '@/lib/swoop/features';
+import { swoopTouch } from '@/lib/swoop/touch';
 
 /** the picture's box, in the stage's own coordinates. */
 export interface PictureBox {
@@ -53,7 +54,8 @@ export const toPixel = (normalised: number, offset: number, size: number): numbe
   offset + normalised * Math.max(size - 1, 0);
 
 /**
- * re-measured on a window resize, on entering or leaving fullscreen, and on the
+ * re-measured on a window resize, on entering or leaving fullscreen, on a
+ * change of the local zoom (`lib/swoop/zoom.ts`), and on the
  * `<video>` element's own `resize` — which is the first frame, before which
  * there is no box, and the display switch, which changes the picture's aspect
  * ratio inside an element whose box never moved and so fires nothing else.
@@ -75,7 +77,10 @@ export function useSwoopPictureBox(session: SwoopSession | null): PictureBox | n
     window.addEventListener('resize', sync);
     document.addEventListener('fullscreenchange', sync);
     session.video.addEventListener('resize', sync);
+    // a pinch moves the picture without moving the element, so nothing above fires for it
+    const offZoom = swoopTouch(session)?.zoom.subscribe(sync);
     return () => {
+      offZoom?.();
       window.removeEventListener('resize', sync);
       document.removeEventListener('fullscreenchange', sync);
       session.video.removeEventListener('resize', sync);

@@ -77,9 +77,13 @@ export default async function Page({ params }: PageProps) {
   }
 
   const MDXContent = page.data.body;
+  const { tocDepth } = page.data;
+  const toc = tocDepth
+    ? page.data.toc.filter((item) => item.depth <= tocDepth)
+    : page.data.toc;
 
   return (
-    <DocsPage toc={page.data.toc} full={page.data.full}>
+    <DocsPage toc={toc} full={page.data.full}>
       <DocsTitle>{page.data.title}</DocsTitle>
       <DocsDescription>{page.data.description}</DocsDescription>
       <DocsBody>

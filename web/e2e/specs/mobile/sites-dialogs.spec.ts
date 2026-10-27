@@ -79,7 +79,9 @@ test('the nav drawer lists sites and reaches manage-sites', async ({ page }) => 
   await expect(drawer).toBeVisible();
 
   // Drawer order mirrors the desktop breadcrumb: sites, page nav, manage-sites.
-  await expect(drawer.getByRole('button', { name: 'Site A (Assigned)' })).toBeVisible();
+  // The site list opens from its own toggle; it starts closed.
+  await drawer.getByTestId('drawer-site-toggle').click();
+  await expect(drawer.getByRole('button', { name: 'Site A (Assigned)', exact: true })).toBeVisible();
   await expect(drawer.getByRole('button', { name: /^roost/ })).toBeVisible();
   await assertNoHorizontalOverflow(page);
 

@@ -30,6 +30,13 @@ const LABEL: Record<SwoopAudioState, string> = {
   playing: 'mute this machine',
 };
 
+/** under the button in the bar's menu, where the sentence does not fit. */
+const SHORT: Record<SwoopAudioState, string> = {
+  unavailable: 'no audio',
+  muted: 'unmute',
+  playing: 'mute',
+};
+
 const noop = (): (() => void) => () => {};
 
 export function SwoopAudioToggle({ session }: SwoopAudioToggleProps) {
@@ -46,7 +53,7 @@ export function SwoopAudioToggle({ session }: SwoopAudioToggleProps) {
 
   const unavailable = state === 'unavailable';
   return (
-    <BarTooltip label={LABEL[state]}>
+    <BarTooltip label={LABEL[state]} short={SHORT[state]}>
       <Button
         variant="ghost"
         size="icon-sm"
