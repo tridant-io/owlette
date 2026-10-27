@@ -90,6 +90,7 @@ const DISPLAY_EVENT_LABEL: Record<string, string> = {
   display_auto_restore_fired: 'auto-restored',
   display_auto_restore_skipped_unfixable: 'auto-restore skipped',
   display_auto_restore_circuit_breaker_tripped: 'auto-restore paused',
+  display_auto_restore_parked: 'auto-restore waiting',
 };
 
 /**
@@ -139,7 +140,8 @@ function eventMonitorName(payload: Record<string, unknown>): string {
 
 /**
  * Per-action details: `display_drift` → `changes.join(', ')`,
- * `display_apply_failed` → `error`, everything else → '' (em-dash cell).
+ * `display_apply_failed` → `error`, `display_auto_restore_parked` → why it
+ * waits, everything else → '' (em-dash cell).
  */
 function eventDetailsSnippet(
   action: string,
@@ -155,6 +157,9 @@ function eventDetailsSnippet(
   if (action === 'display_apply_failed') {
     const err = payload.error;
     if (typeof err === 'string') return err;
+  }
+  if (action === 'display_auto_restore_parked') {
+    return 'stored monitor not connected';
   }
   return '';
 }

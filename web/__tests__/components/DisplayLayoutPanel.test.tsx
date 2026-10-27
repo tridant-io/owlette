@@ -624,3 +624,34 @@ describe('DisplayLayoutPanel — without control', () => {
     expect(mockedUseDisplayModes).toHaveBeenLastCalledWith('site-a', 'machine-1', expect.objectContaining({ triggerForHash: 'sig-abc' }));
   });
 });
+
+describe('DisplayLayoutPanel — events tab', () => {
+  it('shows a waiting auto-restore with the stored monitor it waits on', async () => {
+    const user = userEvent.setup();
+    setup({ canSiteAdmin: true });
+    mockedUseDisplayEventFeed.mockReturnValue({
+      events: [{
+        id: 'evt-1',
+        action: 'display_auto_restore_parked',
+        level: 'warning',
+        details: JSON.stringify({
+          eventType: 'display_auto_restore_parked',
+          reason: 'assigned_monitor_absent',
+          monitor: { edidHash: 'hash-2', friendlyName: 'LG SDQHD', port: 'dp' },
+          missingFromLive: ['hash-2'],
+        }),
+        machineId: 'machine-1',
+        machineName: 'box',
+        timestamp: Date.now(),
+      }],
+      loading: false,
+      error: null,
+    });
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: 'events' }));
+
+    expect(screen.getByText('auto-restore waiting')).toBeInTheDocument();
+    expect(screen.getByText('LG SDQHD')).toBeInTheDocument();
+    expect(screen.getByText('stored monitor not connected')).toBeInTheDocument();
+  });
+});

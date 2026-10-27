@@ -444,11 +444,13 @@ the agent stamps `_last_apply_finished_at = time.time()` at the end of every suc
 4. _apply_in_flight             (false required — no concurrent manual apply)
 5. drift fixable                (every drifted edidHash present in assigned.monitors)
                                 — else: emit display_auto_restore_skipped_unfixable, return
+5b. stored monitors live        (every assigned edidHash present in the live profile)
+                                — else: emit display_auto_restore_parked once per missing set, return
 6. _drift_pending_tick_count    (>= 2 — drift persisted across two 30s topology checks ≈ 60s)
 7. apply cooldown               (time.time() - _last_apply_time >= _APPLY_COOLDOWN_SECONDS)
 ```
 
-gates 1 to 3 short-circuit silently: the operator already knows their config, so no audit is needed. gate 5 emits the `display_auto_restore_skipped_unfixable` audit so the operator sees why the auto-fix did not fire when a new monitor was plugged in. gates 4, 6 and 7 are silent; the next topology check retries.
+gates 1 to 3 short-circuit silently: the operator already knows their config, so no audit is needed. gate 5 emits the `display_auto_restore_skipped_unfixable` audit so the operator sees why the auto-fix did not fire when a new monitor was plugged in. gate 5b emits `display_auto_restore_parked` once per missing-monitor set, naming the stored monitor, so a layout that waits on a panel that is off, or one that came back under a new identity, is not mistaken for a silent failure (issue #29); the key resets when the monitor returns or the drift clears. gates 4, 6 and 7 are silent; the next topology check retries.
 
 ### auto-restore: fixability model
 

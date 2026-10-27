@@ -924,6 +924,7 @@ class TestSendDisplayAlert:
         'display_revert_deferred',
         'display_auto_restore_skipped_unfixable',
         'display_auto_restore_circuit_breaker_tripped',
+        'display_auto_restore_parked',
         'process_crash',
     ])
     def test_unrouted_event_is_dropped(self, firebase_client, monkeypatch, event_type):

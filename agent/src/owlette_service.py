@@ -1257,6 +1257,9 @@ class OwletteService:
         self._drift_pending_tick_count = 0
         self._drift_pending_key = None
         self._last_auto_restore_success_key = None
+        # the missing-monitor set auto-restore last parked on, so the parked
+        # event fires once per episode and not on every 30 s tick
+        self._auto_restore_parked_key = None
         # Ticks toward ROOST_SCRUB_CHECK_ITERATIONS; _roost_scrub_thread keeps the
         # scrub single-flight.
         self._roost_scrub_check_counter = 0
@@ -6914,6 +6917,7 @@ class OwletteService:
             self._drift_pending_tick_count = 0
             self._drift_pending_key = None
             self._last_auto_restore_success_key = None
+            self._auto_restore_parked_key = None
             return
 
         drift_key = self._assigned_drift_key(drift_details)
@@ -7134,18 +7138,36 @@ class OwletteService:
             })
             return
 
-        # Gate 5b: an assigned monitor that is powered off can never be applied
+        # gate 5b: an assigned monitor that is not live can never be applied
         # (apply_topology returns MISSING_MONITORS pre-SetDisplayConfig), and
         # retrying every tick emits a `display_apply_failed` audit each time.
-        # `display_monitor_removed` already records the absence, so skip
-        # silently; drift is re-evaluated once the monitor returns.
+        # park, and say so once per missing set: a powered-off panel returns
+        # on its own, but a panel that re-enumerated under a new id (#29)
+        # never does, and without the event the dashboard showed drift with
+        # no sign that auto-restore had stopped trying
         live_hashes = {
             m.get('edidHash')
             for m in (new_profile.get('monitors') or [])
             if isinstance(m, dict) and m.get('edidHash')
         }
-        if any(h not in live_hashes for h in assigned_hashes):
+        missing_live = sorted(h for h in assigned_hashes if h not in live_hashes)
+        if missing_live:
+            parked_key = ','.join(missing_live)
+            if parked_key != getattr(self, '_auto_restore_parked_key', None):
+                self._auto_restore_parked_key = parked_key
+                first_missing = next(
+                    m for m in assigned_monitors if m.get('edidHash') == missing_live[0]
+                )
+                self._emit_display_event('display_auto_restore_parked', 'warning', {
+                    'eventType': 'display_auto_restore_parked',
+                    'severity': 'warning',
+                    'reason': 'assigned_monitor_absent',
+                    # the stored entry: the panel is not live to describe itself
+                    'monitor': self._display_monitor_summary(first_missing),
+                    'missingFromLive': missing_live,
+                })
             return
+        self._auto_restore_parked_key = None
 
         # Gate 6: >= 2 consecutive drift ticks, so a cable wiggle can't fire it.
         if self._drift_pending_tick_count < 2:
