@@ -31,25 +31,25 @@ built for teams running **digital signage**, **media servers**, **kiosks**, **To
 live CPU, memory, disk, GPU, temperature and network metrics, with history and sparkline charts. heartbeat-based online status, process health tracking, crash detection, and remote screenshots.
 
 **process management**
-add an app, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding) and restarts the machine when relaunching is not enough.
+add a program, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding), and on Windows restarts the machine when relaunching is not enough.
 
 **swoop: remote desktop**
-a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs site membership; control needs a site admin and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS.
+a machine's screen, live in a browser tab, on a phone, or in owlette swoop, the desktop viewer app, with keyboard, mouse and clipboard. watching needs site membership; control needs a site owner or admin and a step-up, a second-factor check that covers that machine for 7 days. off until a site turns it on, every session leased and audited, and an API key can never start one. Windows and macOS machines host it; Windows gives the best picture with an NVIDIA GPU.
 
 **remote deployment**
 push software silently to any number of Windows machines: NSIS, Inno Setup, MSI, and custom installers. save deployment templates, track progress in real time, and cancel mid-install. the agent itself updates remotely on all three platforms.
 
-**roost: project distribution**
-drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; re-deploys and machines that already hold a chunk skip it. every deploy is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowlisted destination.
+**roost: project sync**
+drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; a new version uploads only the chunks that changed, and a machine that already holds a chunk skips it. every upload is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowed extract path.
 
 **hoot: ai assistant**
-LLM-powered fleet management in natural language. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, shareable conversations, and Anthropic and OpenAI providers.
+LLM-powered fleet management in natural language, on your own Anthropic or OpenAI key. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, and shareable conversations.
 
 **talons: automations**
 site-scoped automations: a trigger (a schedule, a machine or process event, a metric threshold), an optional condition, and one or more outputs. hoot can write them for you, and every run is recorded.
 
 **machine care**
-restart machines on a weekly schedule in their own timezone, store a machine's monitor layout and restore it when it drifts, and keep screens awake: a site switch that stops every machine sleeping, blanking or locking.
+restart machines on a weekly schedule in their own timezone, and keep screens awake: a site switch that stops every machine sleeping, blanking or locking. on Windows, owlette also stores a machine's monitor layout and restores it when it drifts, and refuses reboots, shutdowns and deployments inside the machine's active hours unless a person overrides it.
 
 **multi-site access control**
 organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site; a platform superadmin reaches every site. sign-in with email, Google or a passkey, and a required second factor.
@@ -58,7 +58,7 @@ organize machines into sites by location, department or project. roles are per s
 threshold and offline alerts by email, signed webhooks for external systems, and an activity log across the fleet. a public REST API with an [OpenAPI reference](https://owlette.app/docs/api), a command line client (`@owlette/cli`), and SDKs for Node (`@owlette/sdk`) and Python (`owlette-sdk`).
 
 **desktop app**
-the local window and tray (menu bar on macOS) icon on each machine: the process list, launch modes and schedules, drag and drop to add a process, joining or leaving a site, and the service's status. light, dark or system appearance, like the dashboard.
+the local window and tray (menu bar on macOS) icon on each machine: the process list, launch modes and schedules, drag and drop to add a process, joining or leaving a site, and the service's status. **submit issue** sends support a problem or a request with the machine's system info and, if you tick it, its logs; the dashboard's help menu has it too, with screenshots and video. light, dark or system appearance, like the dashboard.
 
 > **[full documentation →](https://owlette.app/docs)**
 
@@ -103,6 +103,8 @@ bulk file bytes do **not** go through Firestore. roost chunks and version bodies
 5. a **3-word pairing phrase** appears in the owlette window; authorize it from the dashboard or your phone
 6. your machine appears in the dashboard within 30 seconds
 
+owlette is in beta and every feature is free while it lasts; [plans](https://owlette.app/docs/plans) describes owlette free, core and pro for after it.
+
 > **[full setup guide →](https://owlette.app/docs/getting-started)**
 
 ### run from source
@@ -143,7 +145,7 @@ running your own instance (Firebase project, Cloudflare R2, Cloud Functions, the
 | Cloud Functions (`functions/`) | by hand: `FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project <dev or prod>`, with `functions/.env.<project-id>` present |
 | scheduled jobs | registered per environment on an external scheduler (cron-job.org); every job is listed in `infra/cron-jobs.json` |
 | swoop signalling worker (`infra/swoop-signal`) | a push to `dev` that touches it deploys the dev worker; production is a manual workflow dispatch |
-| agent installers | bump with `node scripts/sync-versions.js X.Y.Z` and add the changelog entry, then tag `vX.Y.Z`: `build-installer.yml` builds the exe, pkg and deb with SLSA L3 provenance and attaches them to the GitHub release. agents only see a version once it is uploaded with `scripts/upload-installer.mjs`, which publishes it to `download.tridant.io/owlette/` (dev: `download-staging.tridant.io`; Firebase Storage on a server without the installer R2 keys) and registers it with tridant id on promote |
+| agent installers | bump with `node scripts/sync-versions.js X.Y.Z` and add the changelog entry, then build: locally (the exe on Windows, the pkg on a Mac, the deb on Linux), or from a `vX.Y.Z` tag, where `build-installer.yml` builds all three with SLSA L3 provenance and attaches them to the GitHub release. agents only see a version once it is uploaded with `scripts/upload-installer.mjs`, which publishes it to `download.tridant.io/owlette/` (dev: `download-staging.tridant.io`; Firebase Storage on a server without the installer R2 keys); a version set as latest is listed in tridant id's release log |
 | CLI and SDKs | tags `cli-vX.Y.Z`, `node-sdk-vX.Y.Z` and `py-sdk-vX.Y.Z` publish to npm and PyPI |
 
 environment variables are registered by name in `scripts/env-manifest.json` and checked across Railway and Vercel with `node scripts/sync-env.mjs`. the step-by-step procedures are in [docs/runbooks](docs/runbooks): [production-deploy.md](docs/runbooks/production-deploy.md), [agent-installer-release.md](docs/runbooks/agent-installer-release.md), [manual-infrastructure.md](docs/runbooks/manual-infrastructure.md) and [hotfix-rollback.md](docs/runbooks/hotfix-rollback.md).
@@ -167,9 +169,9 @@ environment variables are registered by name in `scripts/env-manifest.json` and 
 | **swoop** | Rust streamer, WebRTC, Cloudflare Workers + Durable Objects for signalling, Cloudflare TURN |
 | **database** | Cloud Firestore (real-time NoSQL), Cloud Functions |
 | **auth** | Firebase Auth, WebAuthn passkeys, TOTP 2FA, device-code pairing, Cloudflare Turnstile |
-| **ai** | Anthropic and OpenAI via the AI SDK, tool-calling |
+| **ai** | Anthropic and OpenAI via the AI SDK, tool-calling; the Claude CLI on the agent for local hoot |
 | **email** | Resend |
-| **hosting** | Railway (web), a Vercel standby behind a Cloudflare load balancer, Firebase (Auth, Firestore, Storage, Functions), Cloudflare R2 (roost storage) |
+| **hosting** | Railway (web), a Vercel standby behind a Cloudflare load balancer, Firebase (Auth, Firestore, Storage, Functions), Cloudflare R2 (roost storage and installers on `download.tridant.io`) |
 
 ## documentation
 
@@ -188,6 +190,7 @@ full documentation is available at **[owlette.app/docs](https://owlette.app/docs
 - [architecture](https://owlette.app/docs/architecture): system design and data flow
 - [authentication](https://owlette.app/docs/reference/authentication): auth methods, device-code pairing, tokens
 - [self-hosting](https://owlette.app/docs/setup): Firebase, R2, the web app, and scheduled jobs
+- [plans](https://owlette.app/docs/plans): owlette free, core and pro, after the beta
 
 ## contributing
 
