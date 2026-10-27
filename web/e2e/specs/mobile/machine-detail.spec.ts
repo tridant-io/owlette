@@ -15,7 +15,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
-import { assertNoHorizontalOverflow } from '../../helpers/mobile';
+import { assertNoHorizontalOverflow, stabilize } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
 import { TEST_SITES, TEST_USERS, seedMachine } from '../../helpers/seed';
 
@@ -167,10 +167,22 @@ test.describe('mobile machine detail — admin on site-A', () => {
     }
     await expect(row).toContainText('↑1023K');
     await expect(row).toContainText('↓1023K');
-    const overflow = await row
-      .locator('.grid > span')
-      .evaluateAll((cells) => cells.map((cell) => cell.scrollWidth - cell.clientWidth));
-    expect(overflow).toEqual([0, 0, 0, 0, 0]);
+    // a pixel to spare in every cell, not just no overflow: linux draws these
+    // cells wider than windows, and with no headroom ci cut three of them short.
+    // measured on the real webfont, not the fallback it swaps from
+    await stabilize(page);
+    const spare = await row.locator('.grid > span').evaluateAll((cells) =>
+      cells.map((cell) => {
+        const content = document.createRange();
+        content.selectNodeContents(cell);
+        return cell.getBoundingClientRect().width - content.getBoundingClientRect().width;
+      }),
+    );
+    expect(spare).toHaveLength(5);
+    expect(
+      spare.every((px) => px >= 1),
+      `spare px per cell (cpu, mem, disk, gpu, net): ${spare.map((px) => px.toFixed(2)).join(', ')}`,
+    ).toBe(true);
     await assertNoHorizontalOverflow(page);
   });
 

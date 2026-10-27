@@ -793,6 +793,19 @@ test.describe('through a host, on a phone', () => {
       await page.waitForTimeout(500);
       expect(after(mark)).toEqual([]);
 
+      // stats closes the menu, so the menu never covers it, and the next tap elsewhere closes stats
+      await bar.getByRole('button', { name: 'session controls' }).tap();
+      await menu.getByRole('button', { name: 'latency stats' }).tap();
+      await expect(menu).toHaveCount(0);
+      const glance = page.getByRole('complementary', { name: 'latency breakdown' });
+      await expect(glance).toBeVisible();
+      await test.info().attach('stats', { body: await page.screenshot(), contentType: 'image/png' });
+      mark = lastSeq();
+      // on the bars under the picture, so the tap that closes it sends the machine nothing
+      await page.touchscreen.tap(middleX(), picture.top + picture.height + 40);
+      await expect(glance).toHaveCount(0);
+      expect(after(mark)).toEqual([]);
+
       // two fingers tapped together are a right-click
       mark = lastSeq();
       await touch('touchStart', [at(0.3, 0.5), at(0.6, 0.5)]);

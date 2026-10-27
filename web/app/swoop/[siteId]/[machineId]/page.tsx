@@ -28,6 +28,7 @@ import {
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import { closeViewerWindow, isSessionWindow } from '@/lib/swoop/viewerWindow';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { SwoopStatsOverlay } from '@/components/swoop/SwoopStatsOverlay';
@@ -65,6 +66,9 @@ export default function SwoopPage({
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
   const [statsOpen, setStatsOpen] = useState(false);
+  // on a touch screen the overlay is dismissible; a narrow window with a mouse keeps it pinned
+  const touch = useMediaQuery('(pointer: coarse)', false);
+  const closeStats = useCallback(() => setStatsOpen(false), []);
   // escape twice on the stage lands the keyboard on the bar's first button.
   const toolbarRef = useRef<HTMLDivElement>(null);
   const leaveStage = useCallback(() => {
@@ -158,7 +162,12 @@ export default function SwoopPage({
         >
           <SwoopCursor session={session} />
           <SwoopPresence session={session} />
-          <SwoopStatsOverlay session={session} stats={stats} open={statsOpen} />
+          <SwoopStatsOverlay
+            session={session}
+            stats={stats}
+            open={statsOpen}
+            onClose={touch ? closeStats : undefined}
+          />
           <SwoopMagnifier session={session} />
           <SwoopZoomPill session={session} />
           <SwoopPhoneKeyboard session={session} osFamily={osFamily} />

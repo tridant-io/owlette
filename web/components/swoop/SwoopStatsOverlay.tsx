@@ -22,7 +22,7 @@
  * to the button that opens it.
  */
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopStats } from '@/hooks/useSwoopSession';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
@@ -33,6 +33,12 @@ export interface SwoopStatsOverlayProps {
   stats: SwoopStats;
   /** the toolbar's toggle; the overlay is off by default. */
   open: boolean;
+  /**
+   * given (a phone, from the bar's menu), the overlay is a glance: it takes its
+   * own taps and closes at the next one anywhere else. without it, it stays up
+   * until the toggle, over a picture that clicks through it.
+   */
+  onClose?: () => void;
 }
 
 interface Row {
@@ -172,8 +178,20 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
   ];
 }
 
-export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayProps) {
+export function SwoopStatsOverlay({ session, stats, open, onClose }: SwoopStatsOverlayProps) {
   const path = usePathProfile(session, open);
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open || !onClose) return;
+    // capture, so a tap the picture sends to the machine closes it too
+    const onDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const budget = path ? PATH_BUDGETS[path] : null;
@@ -189,8 +207,9 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
 
   return (
     <aside
+      ref={ref}
       aria-label="latency breakdown"
-      className="pointer-events-none absolute right-3 top-3 w-72 md:bar-side:top-auto md:bar-side:bottom-3 md:bar-left:left-3 md:bar-left:right-auto rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
+      className={`${onClose ? 'pointer-events-auto z-20' : 'pointer-events-none'} absolute right-3 top-3 w-72 md:bar-side:top-auto md:bar-side:bottom-3 md:bar-left:left-3 md:bar-left:right-auto rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm`}
     >
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 whitespace-nowrap [&>dd]:tabular-nums">
         {rows.map((row) => (

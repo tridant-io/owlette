@@ -65,6 +65,7 @@ afterEach(() => {
 function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
   const onEnd = jest.fn();
   const onReconnect = jest.fn();
+  const onToggleStats = jest.fn();
   // the app's root layout provides this; the fullscreen tooltip needs it.
   render(
     <TooltipProvider>
@@ -76,12 +77,12 @@ function renderBar(state: SwoopSessionState, stats?: SwoopStats) {
         onEnd={onEnd}
         onReconnect={onReconnect}
         statsOpen={false}
-        onToggleStats={() => {}}
+        onToggleStats={onToggleStats}
         stats={stats}
       />
     </TooltipProvider>,
   );
-  return { onEnd, onReconnect };
+  return { onEnd, onReconnect, onToggleStats };
 }
 
 describe('SwoopToolbar on a phone', () => {
@@ -99,6 +100,15 @@ describe('SwoopToolbar on a phone', () => {
     // the short label, not the tooltip's sentence
     expect(menu).toHaveTextContent('fullscreen');
     expect(menu).not.toHaveTextContent('shortcuts like alt+tab');
+  });
+
+  it('closes its menu when stats opens, which shows where the menu was', async () => {
+    narrowWindow();
+    const { onToggleStats } = renderBar('connected');
+    await userEvent.click(screen.getByRole('button', { name: 'session controls' }));
+    await userEvent.click(screen.getByRole('button', { name: 'latency stats' }));
+    expect(onToggleStats).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('leaves fullscreen out where the browser has none for a page, as on an iphone', () => {
