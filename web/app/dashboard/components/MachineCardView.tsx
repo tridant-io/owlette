@@ -580,8 +580,9 @@ const MachineCard = memo(function MachineCard({
                       its text, which floated each label to the middle of its cell */}
                   {/* below `sm` the row is 12px with an icon for each label, and net gets
                       two cells' room, so the worst case (four cells at "100%", net at 1023K each way)
-                      still fits one line at 390px. the extras are in the expanded view. */}
-                  <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,2fr)] gap-x-1.5 flex-1 min-w-0 text-left text-xs text-muted-foreground sm:grid-cols-5 sm:gap-x-2 sm:text-sm">
+                      still fits one line at 390px, with room to spare for linux, which ci showed
+                      drawing these cells wider than windows. the extras are in the expanded view. */}
+                  <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,2fr)] gap-x-1 flex-1 min-w-0 text-left text-xs text-muted-foreground sm:grid-cols-5 sm:gap-x-2 sm:text-sm">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
                         <><RowLabel icon={Cpu} label="cpu" /><span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
