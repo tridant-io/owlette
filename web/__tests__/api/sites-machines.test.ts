@@ -334,7 +334,7 @@ describe('GET /api/sites/{siteId}/machines', () => {
     seedSite();
     authedKey([siteScope('read')]);
     seedMachine('mach-b', { name: 'Beta' });
-    seedMachine('mach-a', { name: 'Alpha' });
+    seedMachine('mach-a', { name: 'Alpha', osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
     seedRoost('roost-one', {
       name: 'Main Show',
       targets: ['mach-a'],
@@ -352,6 +352,10 @@ describe('GET /api/sites/{siteId}/machines', () => {
     expect(body.items).toBeUndefined();
     expect(body.next_page_token).toBeUndefined();
     expect(body.machines.map((m: { id: string }) => m.id)).toEqual(['mach-a', 'mach-b']);
+    // the os fields the agent heartbeats, and null for a windows agent that
+    // predates them.
+    expect(body.machines[0]).toMatchObject({ osFamily: 'linux', arch: 'x64', osVersion: 'Ubuntu 24.04' });
+    expect(body.machines[1]).toMatchObject({ osFamily: null, arch: null, osVersion: null });
     expect(body.machines[0].currentRoosts).toEqual([
       {
         roostId: 'roost-one',
@@ -360,6 +364,35 @@ describe('GET /api/sites/{siteId}/machines', () => {
         versionCounter: 7,
       },
     ]);
+  });
+
+  // the manage-sites machine list asks before restarting inside active hours,
+  // which it can only do with the window, the guard and the machine's clock.
+  it('carries active hours, the agent capabilities and the machine timezone', async () => {
+    seedSite();
+    authedKey([siteScope('read')]);
+    seedMachine('mach-a', {
+      name: 'Alpha',
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machine_timezone_iana: 'Europe/Berlin',
+    });
+    seedMachine('mach-b', { name: 'Beta' });
+
+    const res = await listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.machines[0]).toMatchObject({
+      activeHours: { start: 8, end: 17, source: 'policy' },
+      capabilities: { keepAwake: 1, activeHoursGuard: 1 },
+      machineTimezone: 'Europe/Berlin',
+    });
+    // null, never absent, for an agent that reports none of them
+    expect(body.machines[1]).toMatchObject({ activeHours: null, capabilities: null, machineTimezone: null });
   });
 });
 
@@ -372,6 +405,9 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       hostname: 'lobby-host',
       metrics: { cpu: 0.4 },
       processes: [{ id: 'proc-1', name: 'Player' }],
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
 
     const res = await machineGET(
@@ -387,6 +423,9 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       name: 'Lobby Player',
       hostname: 'lobby-host',
       metrics: { cpu: 0.4 },
+      osFamily: 'macos',
+      arch: 'arm64',
+      osVersion: 'macOS 26.6',
     });
     expect(body.processes).toHaveLength(1);
   });

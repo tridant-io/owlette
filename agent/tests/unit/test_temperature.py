@@ -38,6 +38,14 @@ def _reset_watchdog_latch():
     shared_utils._temp_suppressed_until = 0.0
 
 
+@pytest.fixture(autouse=True)
+def _sensors_as_on_windows():
+    """the librehardwaremonitor arm is windows-only; these tests exercise it
+    on every ci leg, so they run as windows unless a test says otherwise."""
+    with patch.object(shared_utils, '_IS_WINDOWS', True):
+        yield
+
+
 @pytest.fixture
 def _no_pynvml():
     """Make the pynvml fallback unavailable so tests isolate the LHM branch."""
@@ -128,6 +136,9 @@ class TestPynvmlFallback:
     def _fake_pynvml(self, temps, shutdown_calls):
         mod = types.ModuleType('pynvml')
         mod.NVML_TEMPERATURE_GPU = 0
+        # the two error classes the read imports beside the calls
+        mod.NVMLError_LibraryNotFound = type('NVMLError_LibraryNotFound', (Exception,), {})
+        mod.NVMLError_DriverNotLoaded = type('NVMLError_DriverNotLoaded', (Exception,), {})
         mod.nvmlInit = lambda: None
         mod.nvmlDeviceGetCount = lambda: len(temps)
         mod.nvmlDeviceGetHandleByIndex = lambda i: i
@@ -151,7 +162,8 @@ class TestPynvmlFallback:
     def test_pynvml_fallback_when_lhm_empty(self):
         shutdown_calls = []
         fake = self._fake_pynvml([66.0, 71.0], shutdown_calls)
-        with patch.object(shared_utils, 'read_config', return_value=None):
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_MACOS', False):
             with patch.dict(sys.modules, {
                 'temp_sensors': _mock_temp_sensors(gpus=[]),
                 'pynvml': fake,
@@ -162,6 +174,43 @@ class TestPynvmlFallback:
                 ]
         # nvmlShutdown ran exactly once (finally-guarded).
         assert shutdown_calls == [1]
+
+    def test_macos_never_tries_nvml(self):
+        # no nvidia driver exists for macos, so the read could only fail, and it
+        # logged a warning on every metrics pass
+        shutdown_calls = []
+        fake = self._fake_pynvml([66.0], shutdown_calls)
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_MACOS', True):
+            with patch.dict(sys.modules, {
+                'temp_sensors': _mock_temp_sensors(gpus=[]),
+                'pynvml': fake,
+            }):
+                assert shared_utils.get_gpu_temperatures() == []
+        assert shutdown_calls == []
+
+
+class TestWindowsOnlySensors:
+    """librehardwaremonitor is a .net library over the pawnio driver. off
+    windows the reads can only fail, and each one spun up a worker and logged
+    a failure on every metrics pass (issue #27, #28 log tails)."""
+
+    def test_cpu_read_is_skipped_off_windows(self):
+        sensors = _mock_temp_sensors(cpu_raises=AssertionError('read on a mac'))
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_WINDOWS', False), \
+                patch.object(shared_utils, '_temp_read_with_timeout') as read:
+            with patch.dict(sys.modules, {'temp_sensors': sensors}):
+                assert shared_utils.get_cpu_temperature() is None
+        read.assert_not_called()
+
+    def test_gpu_lhm_read_is_skipped_off_windows(self, _no_pynvml):
+        with patch.object(shared_utils, 'read_config', return_value=None), \
+                patch.object(shared_utils, '_IS_WINDOWS', False), \
+                patch.object(shared_utils, '_temp_read_with_timeout') as read:
+            with patch.dict(sys.modules, {'temp_sensors': _mock_temp_sensors(gpus=[70.0])}):
+                assert shared_utils.get_gpu_temperatures() == []
+        read.assert_not_called()
 
 
 class TestConfigDefaults:

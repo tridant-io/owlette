@@ -31,6 +31,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { HootChatView } from '@/app/hoot/components/HootChatView';
 import type { ChatConversation, ChatLoadedTarget } from '@/hooks/useHoot';
 import type { HootTarget, ChatTargetType } from '@/lib/hoot/target';
+import type { PlanResponse } from '@/lib/plan.server';
 
 // jsdom ships no ResizeObserver; Radix's menu and popover positioning build one.
 global.ResizeObserver = class {
@@ -73,7 +74,7 @@ const CHAT_ID = 'chat_live';
 
 // Mutable fixtures. `mock`-prefixed so the jest.mock factories below may close
 // over them (babel-plugin-jest-hoist allows exactly that).
-let mockSites: { id: string; name: string }[] = [SITE_A, SITE_B];
+let mockSites: { id: string; name: string; owner?: string }[] = [SITE_A, SITE_B];
 let mockMachines: MockMachine[] = THREE_MACHINES;
 /** Per-site override, for the cases where "which site is the header on" is the point. */
 let mockMachinesBySite: Record<string, MockMachine[]> = {};
@@ -141,6 +142,11 @@ jest.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 
+let mockPlan: PlanResponse | undefined;
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
+}));
+
 jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites: mockSites, loading: false }),
   // Site-aware, because "the header followed the chat's site" is only visible
@@ -158,15 +164,18 @@ jest.mock('@/hooks/useHoot', () => ({
   },
 }));
 
+let mockCollapsedGroups = new Set<string>();
+let mockPrefsHydrated = true;
+
 jest.mock('@/hooks/useHootSidebarPrefs', () => ({
   useHootSidebarPrefs: () => ({
     sidebarOpen: true,
     setSidebarOpen: jest.fn(),
-    collapsedGroups: new Set<string>(),
+    collapsedGroups: mockCollapsedGroups,
     setCollapsedGroups: jest.fn(),
     sidebarWidth: 256,
     setSidebarWidth: jest.fn(),
-    hydrated: true,
+    hydrated: mockPrefsHydrated,
   }),
   HOOT_SIDEBAR_DEFAULT_WIDTH: 256,
   HOOT_SIDEBAR_MIN_WIDTH: 180,
@@ -201,10 +210,24 @@ jest.mock('@/app/hoot/components/ShareChatDialog', () => ({
 }));
 
 // Stands in for the transcript, and reports the fallback label it was handed
-// for messages that carry no per-turn metadata of their own.
+// for messages that carry no per-turn metadata of their own, and whether it
+// may offer suggestions and edits, which both send.
 jest.mock('@/app/hoot/components/ChatWindow', () => ({
-  ChatWindow: ({ approvalTargetLabel }: { approvalTargetLabel?: string }) => (
-    <div data-testid="chat-window" data-approval-target-label={approvalTargetLabel} />
+  ChatWindow: ({
+    approvalTargetLabel,
+    hideSuggestions,
+    onEditMessage,
+  }: {
+    approvalTargetLabel?: string;
+    hideSuggestions?: boolean;
+    onEditMessage?: unknown;
+  }) => (
+    <div
+      data-testid="chat-window"
+      data-approval-target-label={approvalTargetLabel}
+      data-hide-suggestions={String(Boolean(hideSuggestions))}
+      data-can-edit={String(Boolean(onEditMessage))}
+    />
   ),
 }));
 
@@ -284,6 +307,37 @@ beforeEach(() => {
   mockLastMachineIds = {};
   mockChat.chatId = CHAT_ID;
   mockChatOptions = null;
+  mockCollapsedGroups = new Set<string>();
+  mockPrefsHydrated = true;
+  mockPlan = undefined;
+  mockChat.error = null;
+});
+
+describe('HootChatView conversation groups', () => {
+  it('holds the list until the saved collapsed groups arrive, so a collapsed group never opens first', () => {
+    mockConversations = [conversation({ id: 'convo-ops', title: 'cache cleanup', category: 'Operations' })];
+    mockPrefsHydrated = false;
+    const { rerender } = renderView();
+    expect(screen.queryByText('cache cleanup')).not.toBeInTheDocument();
+
+    mockCollapsedGroups = new Set(['Operations']);
+    mockPrefsHydrated = true;
+    rerender();
+    expect(screen.getByRole('button', { name: /^operations/i })).toBeInTheDocument();
+    expect(screen.queryByText('cache cleanup')).not.toBeInTheDocument();
+  });
+
+  it('keeps never-categorized conversations in their own unsorted group, after general', () => {
+    mockConversations = [
+      conversation({ id: 'convo-unsorted', title: 'kiosk reboot loop' }),
+      conversation({ id: 'convo-general', title: 'hello there', category: 'General' }),
+    ];
+    renderView();
+
+    const groups = screen.getAllByRole('button', { name: /^(general|unsorted)/i });
+    expect(groups.map((g) => g.textContent)).toEqual(['General1', 'Unsorted1']);
+    expect(screen.getByRole('button', { name: 'categorize 1 unsorted' })).toBeInTheDocument();
+  });
 });
 
 describe('HootChatView target selection', () => {
@@ -589,5 +643,145 @@ describe('HootChatView labels', () => {
     expect(screen.getByRole('button', { name: /^deployment triage/ })).toHaveTextContent(
       'all machines',
     );
+  });
+});
+
+const ALL_FLAGS: PlanResponse['flags'] = {
+  control: true,
+  deployments: true,
+  swoop: true,
+  hoot: true,
+  roost: true,
+  talons: true,
+  webhooks: true,
+  api_keys: true,
+};
+const CORE_PLAN: PlanResponse = {
+  enforced: true,
+  plan: 'core',
+  standing: 'active',
+  limits: { machines: null, sites: 1 },
+  flags: { ...ALL_FLAGS, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false },
+  activeMachinesThisMonth: 3,
+};
+
+describe('HootChatView plan', () => {
+  it("shows a refusal's problem detail, not its raw json", () => {
+    mockChat.error = new Error(
+      JSON.stringify({
+        type: 'https://owlette.app/docs/api/errors#plan_required',
+        title: 'Payment Required',
+        status: 402,
+        detail: "your plan doesn't include hoot. upgrade to continue.",
+        code: 'plan_required',
+      }),
+    );
+    renderView();
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("your plan doesn't include hoot. upgrade to continue.");
+    expect(alert).not.toHaveTextContent('plan_required');
+  });
+
+  it("puts the upgrade note where the composer was on the viewer's own site", () => {
+    mockPlan = CORE_PLAN;
+    mockSites = [{ ...SITE_A, owner: 'user-1' }, SITE_B];
+    renderView();
+
+    expect(screen.getByTestId('upgrade-gate-inline')).toHaveTextContent("your plan doesn't include hoot.");
+    expect(document.querySelector('[data-chat-input]')).toBeNull();
+    const transcript = screen.getByTestId('chat-window');
+    expect(transcript).toHaveAttribute('data-hide-suggestions', 'true');
+    expect(transcript).toHaveAttribute('data-can-edit', 'false');
+  });
+
+  it('keeps the composer on a site another account pays for', () => {
+    mockPlan = CORE_PLAN;
+    mockSites = [{ ...SITE_A, owner: 'someone-else' }, SITE_B];
+    renderView();
+
+    expect(screen.queryByTestId('upgrade-gate-inline')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-chat-input]')).not.toBeNull();
+    expect(screen.getByTestId('chat-window')).toHaveAttribute('data-can-edit', 'true');
+  });
+});
+
+describe('HootChatView opened from a machine menu', () => {
+  const composer = () => screen.getByRole('textbox', { name: 'chat message' });
+  const openLink = (query: string) => window.history.pushState(null, '', `/hoot?${query}`);
+
+  afterEach(() => window.history.replaceState(null, '', '/'));
+
+  it('aims the new chat at that machine, on its site, with the caret in the composer', () => {
+    mockLastMachineIds = { 'site-b': ['edge-02'] };
+    mockMachinesBySite = {
+      'site-b': [
+        { machineId: 'edge-01', online: true, cortexEnabled: true },
+        { machineId: 'edge-02', online: true, cortexEnabled: true },
+      ],
+    };
+    openLink('site=site-b&machine=edge-01');
+
+    renderView();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-b');
+    expect(screen.getByRole('button', { name: 'hoot target' })).toHaveTextContent('edge-01');
+    expect(composer()).toHaveFocus();
+    expect(window.location.search).toBe('');
+    // following a link is not a change of preference
+    expect(mockUpdateLastMachine).not.toHaveBeenCalled();
+    expect(mockUpdateLastSite).not.toHaveBeenCalled();
+  });
+
+  it('gives way to a chat the url points at', () => {
+    mockSites = [];
+    openLink('site=site-a&machine=kiosk-01');
+    const { rerender } = renderView();
+
+    loadChatWith({ machineIds: null }, { siteId: 'site-b' });
+    mockSites = [SITE_A, SITE_B];
+    rerender();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-b');
+    expect(window.location.search).toBe('');
+  });
+
+  it("falls back to the saved site and target for a site that isn't yours", () => {
+    mockLastMachineIds = { 'site-a': ['kiosk-02'] };
+    openLink('site=site-z&machine=kiosk-01');
+
+    renderView();
+
+    expect(screen.getByTestId('current-site')).toHaveTextContent('site-a');
+    expect(screen.getByRole('button', { name: 'hoot target' })).toHaveTextContent('kiosk-02');
+    expect(composer()).not.toHaveFocus();
+    expect(window.location.search).toBe('');
+  });
+});
+
+describe('HootChatView new hoot', () => {
+  const composer = () => screen.getByRole('textbox', { name: 'chat message' });
+
+  it('puts the caret in the composer, so typing goes straight in', async () => {
+    const { user } = renderView();
+    // opening the page takes no focus: on a phone that would pop the keyboard
+    expect(composer()).not.toHaveFocus();
+
+    await user.click(screen.getByRole('button', { name: 'new hoot' }));
+
+    expect(mockChat.startNewChat).toHaveBeenCalledTimes(1);
+    expect(composer()).toHaveFocus();
+    // the fixture's question holds no x, so one arriving means the key landed here
+    await user.keyboard('x');
+    expect(mockChat.setInput).toHaveBeenLastCalledWith(expect.stringContaining('x'));
+  });
+
+  it('leaves focus alone when a site change starts the chat', async () => {
+    const { user } = renderView();
+
+    await user.click(screen.getByRole('button', { name: 'switch to site b' }));
+
+    expect(mockChat.startNewChat).toHaveBeenCalledTimes(1);
+    expect(composer()).not.toHaveFocus();
   });
 });

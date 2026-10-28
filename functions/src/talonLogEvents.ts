@@ -30,7 +30,8 @@ import http = require('http');
  * Excluded on purpose: display audit actions with no routing entry
  * (`display_auto_restore_fired`, `display_apply_acked`, `display_revert_deferred`,
  * `display_auto_restore_skipped_unfixable`,
- * `display_auto_restore_circuit_breaker_tripped`), and the engine's own `talon_*`
+ * `display_auto_restore_circuit_breaker_tripped`,
+ * `display_auto_restore_parked`), and the engine's own `talon_*`
  * companion logs — the latter is what stops a run re-triggering itself here.
  */
 const TALON_LOG_ACTIONS: ReadonlySet<string> = new Set([

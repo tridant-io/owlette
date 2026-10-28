@@ -124,3 +124,18 @@ it('code verification leaves with a document load, not a client-side push', asyn
   await waitFor(() => expect(assign).toHaveBeenCalledWith('/dashboard'));
   expect(push).not.toHaveBeenCalled();
 });
+
+// the proxy also answers /login with a redirect here while the challenge is
+// pending, so cancel needs a document load too. on next 16.4 a push no longer
+// replays the redirect the e2e cancel spec prefetches, so this is the guard.
+it('cancel leaves with a document load, not a client-side push', async () => {
+  global.fetch = jest.fn(async () => ({ ok: true, json: async () => ({}) })) as unknown as typeof fetch;
+  signOut.mockResolvedValue(undefined);
+
+  const user = await renderPage();
+  await user.click(screen.getByRole('button', { name: 'cancel and sign out' }));
+
+  await waitFor(() => expect(assign).toHaveBeenCalledWith('/login'));
+  expect(signOut).toHaveBeenCalled();
+  expect(push).not.toHaveBeenCalled();
+});

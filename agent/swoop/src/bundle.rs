@@ -52,7 +52,7 @@ const SERVICE_MAX_LIFETIME_S: i64 = 300;
 /// A bundle string that must never be printed. `Debug` and `Display` render a
 /// placeholder, so a `{:?}` anywhere — an error, a struct, a panic message —
 /// cannot leak it, and the buffer is wiped on drop.
-#[derive(Clone, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct Secret(String);
 
@@ -60,6 +60,12 @@ impl Secret {
     /// Hand the value to the one place that needs it. Never to a logger.
     pub fn expose(&self) -> &str {
         &self.0
+    }
+
+    /// For the tests that build a bundle's worth of credentials by hand.
+    #[cfg(test)]
+    pub(crate) fn for_tests(value: &str) -> Self {
+        Self(value.to_owned())
     }
 }
 

@@ -1,0 +1,458 @@
+/**
+ * @jest-environment jsdom
+ */
+
+/**
+ * the stage says how to leave fullscreen only where that is not obvious: with
+ * the keyboard captured a tap of esc goes to the machine, so the hint shows for
+ * a few seconds when fullscreen engages in a browser that has keyboard lock,
+ * and never in one that does not.
+ *
+ * windowed, every key goes to the machine, tab included. the way out — esc
+ * twice — is told to a screen reader, not shown, and sends focus where the page
+ * says when it is used. and a touch drag on the stage is the
+ * machine's: the page must not pan, or pull-to-refresh reload it mid-session.
+ */
+
+import React from 'react';
+import { render, screen, cleanup, act } from '@testing-library/react';
+import { SwoopStage } from '@/components/swoop/SwoopStage';
+import { setMouseCapture } from '@/lib/swoop/mouseCapture';
+
+/** the input capture's escape-twice seam, or null for a view-only session. */
+let mockCapture: {
+  onEscapeTwice: (listener: () => void) => () => void;
+  requestPointerLock?: () => Promise<boolean>;
+} | null = null;
+let escapeTwice: (() => void) | null = null;
+
+jest.mock('@/lib/swoop/features', () => ({
+  swoopInputCapture: () => mockCapture,
+}));
+
+function captureControl() {
+  mockCapture = {
+    onEscapeTwice: (listener) => {
+      escapeTwice = listener;
+      return () => {
+        escapeTwice = null;
+      };
+    },
+  };
+}
+
+afterEach(() => {
+  cleanup();
+  jest.useRealTimers();
+  mockCapture = null;
+  escapeTwice = null;
+  localStorage.clear();
+  delete (navigator as Navigator & { keyboard?: unknown }).keyboard;
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+});
+
+function renderStage(props: Partial<React.ComponentProps<typeof SwoopStage>> = {}) {
+  const stageRef = React.createRef<HTMLDivElement>();
+  const videoRef = React.createRef<HTMLVideoElement>();
+  render(<SwoopStage session={null} state="connected" stageRef={stageRef} videoRef={videoRef} {...props} />);
+  return stageRef;
+}
+
+function enterFullscreen(stage: HTMLElement | null) {
+  Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => stage });
+  act(() => {
+    document.dispatchEvent(new Event('fullscreenchange'));
+  });
+}
+
+describe('SwoopStage esc hint', () => {
+  it('shows the esc hold for four seconds when fullscreen engages with keyboard lock', () => {
+    jest.useFakeTimers();
+    (navigator as Navigator & { keyboard?: unknown }).keyboard = {
+      lock: () => Promise.resolve(),
+      unlock: () => {},
+    };
+    const stageRef = renderStage();
+    expect(screen.queryByText(/hold esc/i)).toBeNull();
+
+    enterFullscreen(stageRef.current);
+    expect(screen.getByText(/hold esc for two seconds/i)).toBeInTheDocument();
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(screen.queryByText(/hold esc/i)).toBeNull();
+  });
+
+  it('says nothing about esc in a browser without keyboard lock, where a tap already leaves', () => {
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.queryByText(/hold esc/i)).toBeNull();
+  });
+
+  it('shows no fullscreen notice in a browser, keyboard lock or not', () => {
+    (navigator as Navigator & { keyboard?: unknown }).keyboard = {
+      lock: () => Promise.resolve(),
+      unlock: () => {},
+    };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+});
+
+/**
+ * owlette swoop has no browser overlay that tells the way out of fullscreen,
+ * and a toast would sit outside the fullscreen element, so the stage says it
+ * itself: a notice at the top on every entry, fading after four seconds.
+ */
+describe('SwoopStage esc hint inside owlette swoop', () => {
+  const APP_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 owlette-swoop-viewer/4.1.8';
+  let ua: jest.SpyInstance | undefined;
+  beforeEach(() => {
+    ua = jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(APP_UA);
+  });
+  afterEach(() => ua?.mockRestore());
+
+  function exitFullscreen() {
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, get: () => null });
+    act(() => {
+      document.dispatchEvent(new Event('fullscreenchange'));
+    });
+  }
+
+  it('says press and hold esc on entry, fades it after four seconds, then drops it', () => {
+    jest.useFakeTimers();
+    const stageRef = renderStage();
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    enterFullscreen(stageRef.current);
+    const hint = screen.getByRole('status');
+    expect(hint).toHaveAttribute('data-testid', 'fullscreen-hint');
+    expect(hint).toHaveTextContent('press and hold esc to exit fullscreen');
+    // the fade is motion-safe: with reduced motion the hint just goes
+    expect(hint).toHaveClass('motion-safe:transition-opacity');
+    expect(hint).not.toHaveClass('opacity-0');
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(screen.getByTestId('fullscreen-hint')).toHaveClass('opacity-0');
+
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    // a pointer lock change inside fullscreen is not an entry
+    act(() => {
+      document.dispatchEvent(new Event('pointerlockchange'));
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+
+  it('says it again on every entry, and leaves with fullscreen', () => {
+    jest.useFakeTimers();
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+
+    exitFullscreen();
+    enterFullscreen(stageRef.current);
+    expect(screen.getByTestId('fullscreen-hint')).toBeInTheDocument();
+
+    exitFullscreen();
+    expect(screen.queryByTestId('fullscreen-hint')).toBeNull();
+  });
+
+  it('is the one message: no second hold-esc line, keyboard lock or not', () => {
+    (navigator as Navigator & { keyboard?: unknown }).keyboard = {
+      lock: () => Promise.resolve(),
+      unlock: () => {},
+    };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.getAllByText(/esc/i)).toHaveLength(1);
+    expect(screen.queryByText(/hold esc for two seconds/i)).toBeNull();
+  });
+
+  it('sits above the click-to-capture line rather than over it', () => {
+    setMouseCapture(true);
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    const hint = screen.getByTestId('fullscreen-hint');
+    const capture = screen.getByText('click to capture the mouse');
+    expect(capture.parentElement).toBe(hint.parentElement);
+    expect(hint.compareDocumentPosition(capture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});
+
+describe('SwoopStage — the mouse in fullscreen', () => {
+  it('leaves the mouse free unless capture is on: no hint, and a click takes no lock', () => {
+    captureControl();
+    const requestPointerLock = jest.fn(() => Promise.resolve(true));
+    mockCapture = { ...mockCapture!, requestPointerLock };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.queryByText('click to capture the mouse')).toBeNull();
+    act(() => {
+      stageRef.current!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    });
+    expect(requestPointerLock).not.toHaveBeenCalled();
+  });
+
+  it('with capture on, says a click captures it, and a click does', () => {
+    setMouseCapture(true);
+    captureControl();
+    const requestPointerLock = jest.fn(() => Promise.resolve(true));
+    mockCapture = { ...mockCapture!, requestPointerLock };
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+    expect(screen.getByText('click to capture the mouse')).toBeInTheDocument();
+    act(() => {
+      stageRef.current!.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    });
+    expect(requestPointerLock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SwoopStage — leaving with the keyboard', () => {
+  it('shows no tip when the stage takes the keyboard in a window', () => {
+    captureControl();
+    const stageRef = renderStage();
+
+    expect(stageRef.current).toHaveFocus();
+    expect(screen.queryByText(/esc twice/)).toBeNull();
+  });
+
+  it('tells a screen reader the way out, on a surface that passes its keys through', () => {
+    captureControl();
+    renderStage();
+
+    expect(screen.getByRole('application', { name: 'remote screen' })).toHaveAccessibleDescription(
+      'press escape twice to leave the remote screen',
+    );
+  });
+
+  it('sends focus where the page says on escape twice', () => {
+    captureControl();
+    const onLeave = jest.fn();
+    renderStage({ onLeave });
+
+    act(() => escapeTwice?.());
+
+    expect(onLeave).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets go of focus on escape twice when the page names no place for it', () => {
+    captureControl();
+    const stageRef = renderStage();
+
+    act(() => escapeTwice?.());
+
+    expect(stageRef.current).not.toHaveFocus();
+  });
+
+  it('keeps quiet in fullscreen, which has its own exit', () => {
+    captureControl();
+    const stageRef = renderStage();
+    enterFullscreen(stageRef.current);
+
+    expect(screen.queryByText(/esc twice/)).toBeNull();
+    expect(screen.getByRole('application')).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('says nothing for a view-only session, whose keys never leave the page', () => {
+    renderStage();
+
+    expect(screen.queryByText(/esc twice/)).toBeNull();
+    expect(screen.queryByRole('application')).toBeNull();
+  });
+});
+
+describe('SwoopStage touch', () => {
+  it('keeps touch gestures from panning the page or pulling it to refresh', () => {
+    const stageRef = renderStage();
+
+    expect(stageRef.current).toHaveClass('touch-none', 'overscroll-none');
+  });
+});
+
+describe('SwoopStage theme', () => {
+  it('keeps the video surface in the night palette whatever the page theme', () => {
+    // jsdom computes no tokens, so the scoping class is the guard: without it a
+    // light page turns the letterbox to paper and leaves the fullscreen hints
+    // in light-theme grey on black.
+    const stageRef = renderStage();
+
+    expect(stageRef.current).toHaveClass('dark');
+  });
+});
+
+describe('SwoopStage — no media path', () => {
+  it('says connecting while there is no word about the path', () => {
+    renderStage({ state: 'connecting' });
+    expect(screen.getByText('connecting')).toBeTruthy();
+  });
+
+  it('says the machine cannot be reached, and that no relay is set up', () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: false, hostRelay: false, browserRelay: null },
+    });
+    expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
+    expect(screen.getByText(/no relay is set up for this site/)).toBeTruthy();
+    expect(screen.queryByText('connecting')).toBeNull();
+  });
+
+  it("blames the machine's network when the host never reached the relay", () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: false, browserRelay: true },
+    });
+    expect(screen.getByText("can't reach this machine from your network")).toBeTruthy();
+    expect(screen.getByText(/the machine's side never reached the relay/)).toBeTruthy();
+  });
+
+  it('blames this network when the host reached the relay and the browser did not', () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: false },
+    });
+    expect(screen.getByText(/the machine reached the relay but this browser did not/)).toBeTruthy();
+  });
+
+  it('blames neither network when the relay was reached, or this browser never tried one', () => {
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: true },
+    });
+    expect(screen.getByText(/the relay was reached and still no path came up/)).toBeTruthy();
+    cleanup();
+    renderStage({
+      state: 'connecting',
+      noPath: { relayConfigured: true, hostRelay: true, browserRelay: null },
+    });
+    expect(screen.getByText(/the relay was reached and still no path came up/)).toBeTruthy();
+    expect(screen.queryByText(/this browser did not/)).toBeNull();
+  });
+
+  it('shows the picture, not the message, once connected', () => {
+    renderStage({
+      state: 'connected',
+      noPath: { relayConfigured: false, hostRelay: false, browserRelay: null },
+    });
+    expect(screen.queryByText("can't reach this machine from your network")).toBeNull();
+  });
+});
+
+describe('SwoopStage — a session that failed or ended', () => {
+  it('keeps the relay diagnosis when a session that found no path fails', () => {
+    renderStage({
+      state: 'error',
+      error: 'this machine did not answer.',
+      retryIn: 7,
+      noPath: { relayConfigured: true, hostRelay: false, browserRelay: null },
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine did not answer.');
+    expect(alert).toHaveTextContent("the machine's side never reached the relay");
+    expect(alert.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('says why and when it tries again, without a spinner that says connecting', () => {
+    renderStage({ state: 'error', error: 'this machine is offline.', retryIn: 7 });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine is offline.');
+    expect(alert).toHaveTextContent('reconnecting in 7 s');
+    expect(screen.queryByText('connecting')).toBeNull();
+    expect(alert.querySelector('.animate-spin')).toBeNull();
+  });
+
+  it('says the session ended and why, with the way back', () => {
+    renderStage({ state: 'ended', error: 'this session was ended from elsewhere.' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('session ended');
+    expect(alert).toHaveTextContent('this session was ended from elsewhere.');
+    expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+  });
+
+  it('leads back to the picker inside the owlette swoop desktop app', () => {
+    const ua = jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 owlette-swoop-viewer/4.1.8',
+    );
+    try {
+      renderStage({ state: 'ended', error: 'this session was ended from elsewhere.' });
+      expect(screen.getByRole('link', { name: 'back to machines' })).toHaveAttribute('href', '/swoop');
+      expect(screen.queryByRole('link', { name: 'back to dashboard' })).toBeNull();
+    } finally {
+      ua.mockRestore();
+    }
+  });
+
+  it('explains only the swoop switch, not every refusal', () => {
+    renderStage({
+      state: 'error',
+      error: 'swoop is excluded on this machine.',
+      refusal: 'machine_excluded',
+      settingsHref: '/dashboard?settings=site-1',
+    });
+    expect(screen.queryByText(/turn it on/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+  });
+
+  it('says a plan refusal is about the plan, with the way to upgrade, not the swoop switch', () => {
+    renderStage({
+      state: 'error',
+      error: "your plan doesn't include swoop. upgrade to continue.",
+      refusal: 'plan_required',
+      settingsHref: '/dashboard?settings=site-1',
+      upgradeHref: '/settings/plan',
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
+    expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+    expect(screen.queryByText(/turn it on/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+  });
+
+  it('tells someone who does not pay for the site to ask its owner, with no upgrade link', () => {
+    renderStage({
+      state: 'error',
+      error: "your plan doesn't include swoop. upgrade to continue.",
+      refusal: 'plan_required',
+      settingsHref: '/dashboard?settings=site-1',
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
+    expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();
+  });
+});
+
+describe('SwoopStage — a picture that froze', () => {
+  it('says the picture is being restarted, not reconnected, while the element is reattached', () => {
+    renderStage({ state: 'connected', stall: 'reattaching' });
+    expect(screen.getByRole('status')).toHaveTextContent('picture stalled — restarting the picture');
+    expect(screen.queryByText(/reconnecting/)).toBeNull();
+  });
+
+  it('says so in place of "session ended" while the reconnect is due', () => {
+    renderStage({ state: 'ended', stall: 'reconnecting' });
+    expect(screen.getByRole('status')).toHaveTextContent('picture stalled — reconnecting');
+    expect(screen.queryByText('session ended')).toBeNull();
+  });
+
+  it('raises the frozen picture as an alert over the live session once it stops recovering on its own', () => {
+    renderStage({ state: 'connected', stall: 'frozen' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('the picture froze');
+    expect(alert).toHaveTextContent(/reconnect from the bar/);
+  });
+
+  it('says nothing about a stall when there is none', () => {
+    renderStage({ state: 'ended' });
+    expect(screen.getByText('session ended')).toBeInTheDocument();
+    expect(screen.queryByText(/picture stalled|picture froze/)).toBeNull();
+  });
+});

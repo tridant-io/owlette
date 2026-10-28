@@ -70,6 +70,8 @@
 //! texture and that is what it will draw.
 
 pub mod enumerate;
+#[cfg(target_os = "macos")]
+pub mod mac;
 pub mod policy;
 
 use std::thread::JoinHandle;

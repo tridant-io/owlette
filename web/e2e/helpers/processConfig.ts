@@ -255,9 +255,9 @@ export function processRow(card: Locator, processName: string): Locator {
     .filter({ has: card.page().getByText(processName, { exact: true }) });
 }
 
-/** The row's pencil button — icon-only with no accessible name. */
+/** The row's pencil button, named "edit <process>". */
 export function processEditButton(row: Locator): Locator {
-  return row.locator('button:has(svg.lucide-pencil)');
+  return row.getByRole('button', { name: /^edit / });
 }
 
 /** Sonner toasts, scoped so app copy containing the same words can't match. */

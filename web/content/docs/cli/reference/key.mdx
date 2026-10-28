@@ -1,28 +1,23 @@
 ---
 title: "key"
-description: "list and mint api keys from the terminal. superadmin keys only — the backing route requires user=*:admin. new keys inherit the calling key's scopes and cannot widen them."
+description: "key lists and mints API keys from the terminal. it needs a superadmin key (user=*:admin), and a new key copies the calling key's scopes — it can never widen them."
+keywords: ["api token", "access token", "credentials"]
 ---
 
-> ⚠️ **`key create` prints the raw `owk_*` value exactly once.** the server never
-> returns it again. copy it into a secret manager or env file immediately —
-> there is no recovery path if you lose it.
+verbs:
+
+- [`key list`](#list) — list your API keys; never shows a raw key
+- [`key create`](#create) — mint a key with the calling key's scopes; prints the raw key once
 
 <Callout type="warn" title={"most key management belongs in the dashboard"}>
 
-this command drives `/api/account/api-keys`, the only key route that accepts
-api-key authentication. that route is deliberately narrow:
+this command drives `/api/account/api-keys`, the key route that accepts API-key authentication. it is deliberately narrow:
 
-- **superadmin only** — it is wrapped in a platform-capability check, so the
-  calling key needs `user=*:admin`. anything less returns
-  `403 scope_insufficient`.
-- **scopes are inherited, not chosen** — `create` clones the calling key's
-  scopes verbatim. a key can never widen its own privileges, so you cannot mint
-  an `installer`- or `user`-scoped key unless the calling key already holds it.
-- **no scope editing, rotate, or revoke** — those live on `/api/keys/{keyId}`,
-  which takes a session or firebase id token and rejects api-key auth outright.
+- **superadmin only** — the calling key needs `user=*:admin`; anything less gets `403 scope_insufficient`.
+- **scopes are copied, not chosen** — `create` clones the calling key's scopes exactly, so you cannot mint an `installer`- or `user`-scoped key unless the calling key already holds that scope.
+- **no rotate, scope edit or revoke verb** — rotation and scope edits live on `/api/keys/{keyId}`, which accepts only a dashboard session. revocation also has an API-key route, `DELETE /api/account/api-keys/{keyId}`, but the CLI has no verb for it.
 
-for custom scopes, editing an existing key's scopes, rotation, revocation, or
-anything a non-superadmin needs, use **settings → api keys** in the dashboard.
+for custom scopes, a different expiry, rotation, revocation, or anything a non-superadmin needs, use **settings → api keys** in the dashboard.
 
 </Callout>
 
@@ -30,59 +25,89 @@ anything a non-superadmin needs, use **settings → api keys** in the dashboard.
 
 ## list
 
-**synopsis** — `owlette key list [--json]`
+lists the API keys on your account, newest first. raw key values are never returned — only the display prefix.
 
-lists your api keys. never returns raw key values — only the display prefix.
+```bash
+owlette key list [--json]
+```
+
+no verb-specific flags. the table has these columns, or prints `no api keys`:
+
+| column | meaning |
+|---|---|
+| `id` | key ID — the ID the dashboard's edit, rotate and revoke actions use |
+| `name` | label |
+| `prefix` | the first 15 characters of the raw key, for matching audit entries |
+| `created`, `last used`, `expires` | dates as `YYYY-MM-DD`, `—` when unset |
+| `scopes` | `<resource>=<id>:<perm>,<perm>` per scope, space-separated, or `legacy (full access)` |
+
+`--json` prints the raw response, `{ success, keys }`, where each key has `id`, `name`, `keyPrefix`, `environment`, `scopes`, `expiresAt`, `createdAt` and `lastUsedAt`.
+
+### examples
 
 ```bash
 owlette key list
 ```
 
-| column | meaning |
-|---|---|
-| `id` | key id, used by the dashboard's edit/rotate/revoke actions |
-| `name` | human-readable label |
-| `prefix` | first 15 characters of the raw key, for audit correlation |
-| `created` / `last used` / `expires` | dates, `—` when unset |
-| `scopes` | `<resource>=<id>:<perm>[,<perm>...]` per scope, or `legacy (full access)` |
+```bash
+# id and expiry (epoch ms) of every key
+owlette key list --json | jq -r '.keys[] | "\(.id) \(.expiresAt)"'
+```
 
-`--json` emits the raw response envelope for scripting.
+backing: `GET /api/account/api-keys`.
 
 ---
 
 ## create
 
-**synopsis** — `owlette key create [--name <name>] [--json]`
+mints a `live` key carrying **the same scopes as the key you call with**. there is no `--scope` or `--preset` flag, and the route accepts none. the key expires 90 days after it is minted.
 
-mints a key carrying **the same scopes as the key you are calling with**. there
-is no `--scope` or `--preset` flag — the backing route does not accept one.
+```bash
+owlette key create [--name <name>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--name <name>` | string | no | label for the key (default `API Key`) |
+
+human output ends with the raw key on its own line — the only time it is shown:
+
+```text
+created ci publisher (3f0c9a52-…)
+scopes inherited from the calling key — widen them in the dashboard
+copy this now — it is not shown again:
+owk_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+`--json` prints the raw response: `success`, `key` (the raw value), `keyId`, `name`, `environment`, `scopes`, `expiresAt` and `keyPrefix`.
+
+### examples
 
 ```bash
 owlette key create --name "ci publisher"
 ```
 
-the raw key is the final line in table mode, so this is a usable idiom:
-
 ```bash
+# the raw key is the last line, so this captures it
 OWLETTE_TOKEN=$(owlette key create --name ci | tail -1)
 ```
+
+backing: `POST /api/account/api-keys` with body `{ name }`.
 
 ---
 
 ## exit codes
 
-| code | meaning |
-|---|---|
-| `0` | success |
-| `1` | api error — the message carries the status and problem code |
-| `2` | no token configured; run `owlette auth login` or set `OWLETTE_TOKEN` |
+- `0` — success
+- `1` — network failure or a non-2xx response; the message carries the status and problem code (`403 scope_insufficient` when the calling key is not `user=*:admin`)
+- `2` — no token configured: run `owlette auth login` or set `OWLETTE_TOKEN`
 
 ---
 
 ## notes
 
-- `owlette auth login` already stores a key for you via the device-code flow;
-  you do not need `key create` to get started.
-- keys expire (default 90 days, max 365). there is no non-expiring option, and
-  nothing currently emails you before one lapses — check `key list` or the
-  dashboard periodically.
+- **scope**: your own account; the route is gated on `user=*:admin`
+- **store the key immediately**: the server keeps only its SHA-256 hash, so a lost raw key cannot be recovered — mint a new one
+- **you may not need this**: `owlette auth login` already stores a key for you through the device-code flow
+- **expiry**: keys minted here last 90 days with no override; the dashboard lets you pick 1 to 365 days
+- **related**: [`whoami`](/docs/cli/reference/whoami) shows the scopes of the key you are using, [authentication](/docs/api/authentication) explains scopes

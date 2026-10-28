@@ -86,7 +86,7 @@ export function WindowControls({ className }: { className?: string }) {
       <button
         type="button"
         aria-label="close"
-        className={cn(button, 'hover:bg-destructive hover:text-white')}
+        className={cn(button, 'hover:bg-destructive hover:text-danger-solid-foreground')}
         onClick={close}
       >
         <X className="size-4" />

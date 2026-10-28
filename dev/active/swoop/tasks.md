@@ -1,5 +1,5 @@
 # swoop — Tasks
-**Progress**: 63/80 complete
+**Progress**: 70/80 complete
 
 Every task is executed by a fresh agent with no conversation context. Read [plan.md](plan.md) and
 [context.md](context.md) first, then only the files your task names. Line numbers were read on `dev` at
@@ -43,7 +43,8 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `dev/active/swoop/spikes/0.2-video-path-bakeoff.md` exists and reports, as numbers with n: photon p50/p95 per arm on LAN and impaired, in 0.1's terms; the D3 decision rule applied explicitly (winner beats B by ≥ 15 ms p50 photon on LAN and does not lose to B at 2% loss / 40 ms RTT; ties go to the simpler path, B < C < A); **zero** `Channel::write()` → `Ok(false)` in a 60 s 50 Mbps run; measured goodput at 0 / 1 / 2% loss; single-frame-loss recovery time; ICE restart works; MSRV floor; release binary size; host CPU at 1 and 4 peers; cold-cache `windows-latest` build time (`review-3-delivery.md` F8). `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/bakeoff-host`. The memo's last section is the G1 recommendation with the numbers behind it, marked awaiting owner sign-off.
   - Blocks: **gate G1** — Tasks 1.1, 1.2, 2.5, 2.6, 3.8, 3.10, 3.11 and the Wave 9 second-video-path track are all written against the winner; 0.2's build time sets the `build-installer.yml` timeout.
 
-- [ ] **Task 0.3: SYSTEM console-session spawn with pipes + secure desktop** `[agent+human]`
+- [x] **Task 0.3: SYSTEM console-session spawn with pipes + secure desktop** `[agent+human]`
+  - **Status 2026-10-11:** done: memo `spikes/0.3-system-spawn-secure-desktop.md` (`868dcec2`); the shipped spawn and 6.1's run on B4A rest on it.
   - Files: `agent/swoop/spikes/spawn-py/**` (create: python driven by `agent/.venv/Scripts/python`, no imports from `agent/src`), `agent/swoop/spikes/securedesk/**` (create: Rust child, own `Cargo.toml` with an empty `[workspace]` table), `dev/active/swoop/spikes/0.3-system-spawn-secure-desktop.md` (create)
   - Do: Prove the six primitives plan.md D2 rests on. (1) The service's own SYSTEM token duplicated and retargeted to the active console session — the exact technique in `_get_elevated_install_token` (`agent/src/owlette_service.py:2777`): `OpenProcessToken` → `DuplicateTokenEx(TokenPrimary)` → `SetTokenInformation(TokenSessionId)` → `CreateEnvironmentBlock`. (2) `CreateProcessAsUser` with `lpDesktop = WinSta0\Default`, `bInheritHandles=TRUE`, `STARTF_USESTDHANDLES`, and **only** the two anonymous pipe handles in the `STARTUPINFOEX` `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` — `_launch_command_as_user` (`:2829`, `bInheritHandles=0` at `:2851`) cannot do this, which is why swoop gets its own helper. Carry a bundle-shaped JSON line on stdin and a `ready` event line on stdout, then `{"type":"kill"}` in and `exiting` out (names registry). (3) Job Object `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. (4) Capture and `SendInput` across Default↔Winlogon via `OpenInputDesktop`/`SetThreadDesktop` on a dedicated thread, recreating the D3D11 device and duplication on `DXGI_ERROR_ACCESS_LOST`. (5) `SendSAS(FALSE)` from a LocalSystem context with `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\SoftwareSASGeneration = 3`; record the prior value (including "absent") and restore it at the end. (6) That no path can raise a UAC prompt. `research/03-windows-host-stack.md` §1.4, §7.3, §7.4, §11.1 and §11.2 hold the detail. State in the memo how the prototype is run as SYSTEM non-destructively: the human opens an elevated console and registers a temporary `schtasks /RU SYSTEM` task (the `owlette_service.py:4980-5079` pattern), runs it, deletes it. Never `net stop OwletteService`, write into `C:\ProgramData\Owlette`, `runas`/ShellExecute-elevate from code, or put a secret on a command line; do not create `agent/src/swoop_spawn.py` (Task 2.1 owns it).
   - Human: the elevated console, the lock (Win+L), the UAC consent prompt, and a reboot to the logon screen with nobody logged in; eyes on whether the secure desktop is visible and controllable.
@@ -87,7 +88,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `dev/active/swoop/spikes/0.9-nvenc-config.md` reports all six as numbers with n, states the driver version and SDK version used, and shows the VUI result as a before/after pair (the claim under test is ~208 ms → ~8 ms). `cargo clippy -- -D warnings` and `cargo test` pass with the working directory set to `agent/swoop/spikes/nvenc-probe`. The memo ends with a recommendation: the exact settings struct Task 3.7 should ship, and any setting the measurement contradicts.
   - Blocks: Tasks 3.7 (NVENC), 4.5 (GPU convert/scale), 4.7 (governor), 6.5 (quality + resolution change), 6.7 (encoder breadth spike).
 
-- [ ] **Task 0.10: Web presentation probe** `[agent+human]`
+- [x] **Task 0.10: Web presentation probe** `[agent+human]`
   - Files: `agent/swoop/spikes/present-probe-web/**` (create: static page, worker scripts and a tiny local node http server that receives per-run JSON; its own `package.json` only if one is genuinely needed), `dev/active/swoop/spikes/0.10-web-presentation.md` (create)
   - Do: Settle plan.md D17's presentation contract empirically, browser-side only — no host, no Rust. Use a same-page loopback `RTCPeerConnection` pair and locally generated encoded chunks. Measure: (1) present from the `VideoDecoder` output callback vs from `requestAnimationFrame`, over 60 s at 60 fps into this box's panel, counting dropped and duplicated presents — use `requestVideoFrameCallback`'s `presentedFrames` and `expectedDisplayTime` only to measure, never to schedule; (2) `desynchronized` canvas vs WebGPU `importExternalTexture` vs canvas 2D `drawImage` vs `ImageBitmapRenderingContext`, reporting submit→present and throughput, and confirming the `desynchronized` readback-empty behaviour that constrains telemetry (`review-1-latency.md` F7); (3) decode in a worker with `OffscreenCanvas`, including whether `desynchronized` and OffscreenCanvas-in-a-worker combine (`research/02-browser-client.md` §2.4 says this is undocumented); (4) **whether transferable `RTCDataChannel` is available in stable Chrome today** — `research/01-parsec-and-peers.md:1002` says developer trial behind a flag at M130, `review-1-latency.md:300-305` says shipped at M130; transfer a channel to a dedicated worker and record the exact Chrome version and result; (5) receive-side `RTCRtpScriptTransform` — where in the pipeline frames appear relative to libwebrtc's frame buffer, and what happens when frames are **not** written back (watch `getStats()` `pliCount`). Call `frame.close()` immediately everywhere. Do not `npm install` into `web/` and do not create anything under `web/lib/swoop/` (Tasks 1.3 / 2.9 / 3.11 own it).
   - Human: runs the same page on Safari (macOS) and Firefox and reports the same fields, since neither browser is on this box.
@@ -502,7 +503,9 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cd web && npx jest __tests__/api/swoop/agent-routes.test.ts` is green with named cases: machine A's token requesting machine B's bundle → 404; a `sid` minted for another machine → 404; a session-cookie (non-agent) caller → 404/403; a doorbell-token request for a site with swoop disabled → 403 `swoop_disabled`; a host denial event writes an `audit_log` row with `outcome: 'deny'`. A test greps the three route sources and asserts neither `requireAgentOrSiteScope` nor `requireAgentOrSiteAuthAndScope` appears. `npx eslint` clean on all three routes.
   - Depends on: 1.3, 2.4
 
-- [ ] **Task 3.4: Worker deploy pipeline** `[agent+human]`
+- [x] **Task 3.4: Worker deploy pipeline** `[agent+human]` — closed 2026-09-23: zizmor green on every PR (the
+  CI job scans all workflows; #187), the dev push deploy on `1ebf3585` green with `/health` 200, prod deploys only
+  by dispatch (`3deb0bb6`), and the rollback rehearsed both ways on dev (README "rollback").
   - Files: `.github/workflows/swoop-signal-deploy.yml`, `infra/swoop-signal/README.md`
   - Do: Write the deploy workflow using `.github/workflows/agent-tests.yml` as the template — actions pinned to SHAs with a trailing `# vN` comment, `permissions: contents: read`, a `concurrency` group, `timeout-minutes`, `persist-credentials: false`, and path filters on `infra/swoop-signal/**` plus the workflow itself. Push to `dev` deploys `wrangler deploy --env dev`; push to `main` deploys `--env prod`; both run the Worker's vitest suite first and then smoke-check `GET /health` on the deployed URL, failing the job on a non-200. Repo secrets are `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`; Worker secrets (`SWOOP_JWT_PUBLIC_KEY`, `SWOOP_JWT_KID`, `SWOOP_SIGNAL_RING_SECRET`) are set with `wrangler secret put` and never committed. The README documents both environments, every secret and where it comes from, the rollback procedure (`wrangler deployments list` → `wrangler rollback`), and the key-rotation overlap window in which the Worker verifies against two public keys. The `[human]` half: create the scoped Cloudflare API token (Workers Scripts Edit + Durable Objects), add the two repo secrets, and run the first `--env dev` deploy by hand.
   - Done when: `zizmor .github/workflows/swoop-signal-deploy.yml` reports no findings; a push to `dev` touching `infra/swoop-signal/**` runs the workflow green and `curl https://<dev worker>/health` returns 200; the README's rollback steps have been executed once on dev and the result noted in the file.
@@ -641,6 +644,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Depends on: 3.2, 3.3
 
 - [ ] **Task 5.7: Capture edge-case spike** `[human]`
+  - **Status 2026-10-11:** not run. Nothing has needed it yet; it still gates the GA memo (10.1).
   - Files: `dev/active/swoop/spikes/5.7-capture-edge-cases.md`
   - Do: Run Desktop Duplication capture against the hardware and configurations this dev box cannot represent, and write the memo that decides whether a user-token Windows.Graphics.Capture helper is needed in v1 (plan D6 keeps it in reserve). Cover, one section each with the observed result and the exact machine/driver/OS build: TouchDesigner in perform mode (fullscreen, GPU-saturated) — capture works, and what encode latency it costs; Windows 11 24H2 and 25H2, where Lossless Scaling's maintainers report DXGI is no longer reliable without MPO support and Sunshine #3995 records live black screens; a hybrid-GPU laptop, where the capture device must sit on the same adapter as the output; an NVIDIA Mosaic spanned canvas; an HDR display (`DuplicateOutput1` with a float or 10-bit format list); a display powered off; an active RDP session; and a headless machine with no attached output, which must be detected and reported so the UI can recommend a dummy plug. Record failures verbatim, including HRESULTs. End with a single recommendation and its reasoning.
   - Done when: the memo exists with every configuration either measured or explicitly marked "not available, untested", each finding carries the machine, GPU driver and Windows build, and the final section states plainly whether a Windows.Graphics.Capture helper is required for the first release — with the evidence for that call.
@@ -650,11 +654,13 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 6: first-release features
 
-- [ ] **Task 6.1: Secure desktop + Ctrl+Alt+Del** `[agent+human]`
+- [x] **Task 6.1: Secure desktop + Ctrl+Alt+Del** `[agent+human]`
+  - **Status 2026-10-11:** done: confirmed on B4A for UAC, Ctrl+Alt+Del and Win+L (`df1318be`).
   - Files: `agent/swoop/src/securedesk/mod.rs`, `agent/swoop/src/securedesk/watch.rs`, `agent/swoop/src/securedesk/sas.rs`, `agent/src/swoop_manager.py`, `agent/tests/unit/test_swoop_manager_sas.py`, `web/components/swoop/SwoopSpecialKeys.tsx`
   - Do: Fill the `securedesk` Feature — it is already registered as a no-op in `session/features.rs`; do not edit that file. A watcher thread polls `OpenInputDesktop()` at 1–2 Hz and, on a change, signals the capture and input threads to `SetThreadDesktop` onto the new input desktop and re-create the D3D11 device plus the duplication object (reuse the `DXGI_ERROR_ACCESS_LOST` recovery path from Task 3.6). `SetThreadDesktop` fails on a thread that owns windows or hooks, so this stays on the dedicated capture/input threads. An `OpenInputDesktop` failure means "unknown", never "locked" (research `03-windows-host-stack.md` §1.4). Emit a `status` stdout event naming the desktop (`default`/`winlogon`/`screensaver`). Ctrl+Alt+Del: the streamer emits `sas_request`; `swoop_manager.py` calls `SendSAS(FALSE)` from `sas.dll` on its own worker thread — never on the 5-second loop, never elevating — and replies `{"type":"sas_result",…}` on stdin. On a console-session change (`WTSGetActiveConsoleSessionId` moves), SwoopManager kills and respawns the streamer into the new session. `SwoopSpecialKeys.tsx` is a lowercase lucide menu sending ctrl+alt+del, win, alt+tab and esc through the existing input channel.
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; a unit test proves a desktop change recreates duplication and that an `OpenInputDesktop` failure is not reported as "locked"; `pytest agent/tests/unit/test_swoop_manager_sas.py` proves `sas_request` → `SendSAS` runs off the main loop, is rate-limited to one SAS per ≥ 2 s, and returns `sas_result`; `npx eslint web/components/swoop/SwoopSpecialKeys.tsx` clean. Human: from a second machine, confirm the logon screen after a reboot with nobody logged in, the lock screen and a UAC consent prompt are visible and controllable, and that ctrl+alt+del from the menu reaches the secure desktop. No UAC prompt is raised by swoop itself.
   - Depends on: 2.1, 4.2, 4.3, 5.1
+  - **Status 2026-10-04 (branch `swoop/uac`), code done, human run owed.** Capture and input already followed the desktop on their own threads, so no watcher thread was added; what UAC needed was two fixes: the input thread ran capture's watcher beside the injector's follower (a latch that left input dead on or after a prompt; ignored test `injection_recovers_after_another_attach_moves_its_thread` failed before, passes after), and a rebuild re-duplicated without following the desktop (10 s freeze, exit 12). The feature reports `status.desktop` and carries ctrl+alt+del to the service, which calls `SendSAS(FALSE)` from session 0 (the session-1 call does nothing, spike 0.3 §8.4); tests in `test_swoop_manager.py::TestSas`. Win+L from the keyboard menu calls `LockWorkStation()` on the host (Windows ignores an injected lock chord). **Owner confirmed on TEC-B4A (4.1.4/4.1.5 dev builds, viewer A4D):** a UAC consent prompt answered from the viewer, ctrl+alt+del, win+l. Still open: the logon screen after a reboot with nobody logged in, and the console-session-change respawn.
 
 - [x] **Task 6.2: Clipboard** `[agent]`
   - Files: `agent/swoop/src/clipboard/mod.rs`, `agent/swoop/src/clipboard/listener.rs`, `agent/swoop/src/clipboard/formats.rs`, `web/lib/swoop/clipboard.ts`, `web/__tests__/lib/swoop/clipboard.test.ts`
@@ -687,6 +693,8 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Depends on: 3.2, 5.1, 5.4
 
 - [ ] **Task 6.7: Encoder breadth spike** `[human]`
+  - **Status 2026-10-12:** the memo is committed (`spikes/6.7-encoder-breadth.md`, #361) and shipped with 4.1.9. Owed: the owner's sign-off and the Intel and AMD rows.
+  - **Status 2026-10-11:** owner ruling: Media Foundation replaces the candidate bake-off. It ships in-box, needs no new crate, and covers Intel, AMD and a software floor in one backend. Measured on A4D by the 7.1/7.2 work on `feat/swoop-mf-encoder`; the Intel and AMD rows are owed on that hardware.
   - Files: `dev/active/swoop/spikes/6.7-encoder-breadth.md`
   - Do: On the owner's Intel iGPU box, AMD box and this NVIDIA box as control, measure the candidate Intel/AMD encoder backends and pick one. The memo is the input to Task 7.1 and must name the chosen directory (`encode/qsv`, `encode/amf`, `encode/ffmpeg` or `encode/mf`) and cargo feature. Candidates: FFmpeg `hevc_qsv`/`h264_qsv` and `hevc_amf`/`h264_amf` (LGPL, dynamic link — Sunshine's path), native oneVPL and native AMF, and Media Foundation hardware MFT **only as a last resort** — the plan's own research says MF exposes the fewest low-latency knobs and OBS removed its MF encoders (review-1 F5). Also measure the software floor on a 4-core VM: openh264 vs the in-box MF software encoder; never x264 (GPL). Record per candidate: encode latency p50/p95 at 1080p60 and 4K60; rate-control adherence with a 1-frame VBV; whether a D3D11 BGRA texture is accepted zero-copy and the cost of the conversion pass when it is not; forced-IDR latency; whether bitrate reconfigures without an IDR; max resolution per codec (note AMF's 4096 cap on both axes); packaging size and licence obligations. Record LTR advertisement (`CODECAPI_AVEncVideoSupportedControls`) for information only — LTR is deferred.
   - Done when: the memo exists with every named measurement filled in or explicitly marked "not measurable on available hardware"; it names one backend for Task 7.1, the software choice for 7.2 and the fallback chain for 7.3; the losing candidates' numbers are recorded; the owner signs it off in the memo.
@@ -694,6 +702,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Blocks: 7.1, 7.2, 7.3
 
 - [ ] **Task 6.8: TURN spike** `[human]`
+  - **Status 2026-10-11:** mostly overtaken by `dev/active/swoop-wan/`: the Cloudflare TURN key is set on railway-dev, railway-prod and vercel-prod; the mint tags each credential with the site id (`customIdentifier`, `web/lib/swoop/turn.server.ts`); the host's allocation is measured against coturn (swoop-wan proof 3.2). Still owed: an allocation against Cloudflare itself, the billing direction, the relay bitrate cap and the TLS profile (swoop-wan 3.3).
   - Files: `dev/active/swoop/spikes/6.8-turn.md`
   - Do: On the owner's Cloudflare account. Create a Realtime TURN key (`POST /accounts/{id}/calls/turn_keys`, token with **Calls Write**); the response `key` is shown once — put it in the secret stores, never in the repo or the memo. Mint credentials both ways: `/credentials/generate-ice-servers` (browser shape) and `/credentials/generate` with `customIdentifier` — and answer explicitly whether `generate-ice-servers` accepts `customIdentifier`, because Task 8.4's metering depends on it. Force relayed sessions (`iceTransportPolicy: "relay"`) and measure the relay RTT delta against direct. Prototype a host-side allocation with a Rust TURN client over UDP 3478, then TLS 443; record the path MTU over TLS and whether ChannelData framing survives. Validate the billing asymmetry: run a metered transfer in **each** direction, then query `callsTurnUsageAdaptiveGroups` **one site at a time** (adaptive sampling makes multi-customer queries wrong) and report egress vs ingress. Measure shaping at 30 and 50 Mbps per allocation and the packet-rate ceiling (documented at 5–10 kpps).
   - Done when: the memo records where the key id and bearer live (not their values), every measurement above, a yes/no on `customIdentifier` for both mint endpoints, the measured billing direction, the relay bitrate cap to ship (25–30 Mbps) and the TLS degraded profile — the exact numbers Tasks 7.4, 7.6 and 8.4 implement; the owner signs it off.
@@ -703,12 +712,16 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 ## Wave 7: every GPU, every network
 
 - [ ] **Task 7.1: Intel/AMD encoder backend** `[agent+human]`
+  - **Status 2026-10-12:** code merged in #361 and shipped in 4.1.9 as `encode/mf/hw.rs`. Measured only through NVIDIA's MFT (1080p60 p50 about 5 ms, 4K60 p50 12 ms). Owed: a run on an Intel and an AMD machine, with the memo's command.
+  - **Status 2026-10-11:** in progress on `feat/swoop-mf-encoder`: the Media Foundation hardware rung (`mf-hw`) per the owner's ruling under 6.7.
   - Files: `agent/swoop/src/encode/<backend named by memo 6.7>/mod.rs` and that directory's submodules
   - Do: Implement the backend chosen in `dev/active/swoop/spikes/6.7-encoder-breadth.md`, in its own directory under `encode/`, behind the matching cargo feature (`encode-vpl`, `encode-amf`, `encode-ffmpeg` or `encode-mf`). Implement the same `Encoder` trait the NVENC backend (`encode/nvenc`, Task 3.7) implements — same methods, same error type — so the selector can hold both. Expose at the module root, with exactly these names, `pub fn probe() -> BackendCaps` (codecs, max width/height per codec, whether a D3D11 BGRA texture is accepted, measured max fps, concurrent-session budget) and `pub fn create(cfg: &EncoderConfig) -> Result<Box<dyn Encoder>>`; Task 7.3 calls only those two, `#[cfg(feature = …)]`-gated. Configure for latency: no B-frames, no lookahead, CBR with a one-frame VBV, infinite GOP with explicit IDR on demand, **single-slice frames** (a lost slice is a hard decode failure in current Chrome), and VPS/SPS/PPS in band with every IRAP. If the backend needs NV12, convert with Task 4.5's GPU path — never a CPU copy. Refuse sizes above the hardware cap (AMD: 4096 on both axes) rather than emitting a broken stream. Do not enable the feature by default.
   - Done when: `cargo clippy --features <feature> -- -D warnings` and `cargo test --features <feature>` pass from `agent/swoop`; hardware tests are `#[ignore]`d with their manual command in the module doc; a bitstream from this backend decodes in Chrome (record the page used). Human: run the ignored tests on the Intel and/or AMD box and paste the as-built encode-latency numbers into 6.7's memo.
   - Depends on: 3.7, 4.5, 6.7
 
-- [ ] **Task 7.2: Software H.264 floor** `[agent]`
+- [x] **Task 7.2: Software H.264 floor** `[agent]`
+  - **Status 2026-10-12:** done in #361, shipped in 4.1.9 as `encode/mf/sw.rs`: Media Foundation's software encoder, not openh264, and `encode/soft` is gone. 720p30 p50 10-12 ms, and a 60 s run held within 3% of target. Owed before GA: the same run on a 4-core VM.
+  - **Status 2026-10-11:** in progress on `feat/swoop-mf-encoder`: the Media Foundation software rung (`mf-sw`) replaces openh264.
   - Files: `agent/swoop/src/encode/soft/mod.rs` and that directory's submodules
   - Do: The no-GPU floor, behind `encode-openh264` (or the MF-software feature if memo 6.7 chose it) — **never x264 (GPL)**, and no software HEVC. Implement the same `Encoder` trait as `encode/nvenc`, and expose the same two root symbols Task 7.3 calls: `pub fn probe() -> BackendCaps` and `pub fn create(cfg: &EncoderConfig) -> Result<Box<dyn Encoder>>`. Constrained-Baseline or Main, one slice per frame, no B-frames, infinite intra period with explicit IDR, CBR with a one-frame VBV, and the **H.264 VUI fix**: `bitstreamRestrictionFlag = 1` with `max_num_reorder_frames = 0` — without it Chrome's D3D11 decoder holds ~16 frames (208 ms instead of 8 ms; D5). Default ceiling 720p30 for a 4-core VM, with the measured ceiling reported through `probe()` so the selector can cap the session. Take the same BGRA frame the hardware path takes, converting on the CPU only when no GPU path exists, and cap worker threads so the encoder cannot starve the machine's real workload — these are signage boxes running TouchDesigner. Do not enable the feature by default.
   - Done when: `cargo clippy --features encode-openh264 -- -D warnings` and `cargo test --features encode-openh264` pass from `agent/swoop`; a golden test parses the emitted SPS and asserts `bitstreamRestrictionFlag = 1` and `max_num_reorder_frames = 0`; a 60 s 720p30 run on this box holds the target bitrate within ±10% with no frame-queue growth, and the numbers are recorded in the module doc.
@@ -720,7 +733,8 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop` with no features and with each encoder feature; table-driven tests cover NVIDIA-only, Intel-only, no-GPU, and "HEVC requested but only H.264 available"; `owlette-swoop.exe probe` on this box prints JSON whose top-level keys match the names listed above, asserted by a unit test in this task; exit 13 when every backend is unavailable.
   - Depends on: 2.2, 3.7, 6.7
 
-- [ ] **Task 7.4: Host-side TURN client** `[agent+human]`
+- [x] **Task 7.4: Host-side TURN client** `[agent+human]`
+  - **Status 2026-10-11:** superseded and shipped: the host allocates a relay over UDP 3478 since 4.1.8 (#330, swoop-wan 3.1). TCP/TLS and re-allocation past the 12 h credential moved to swoop-wan 3.3.
   - Files: `agent/swoop/src/transport/turn/mod.rs`, `agent/swoop/src/transport/turn/alloc.rs`, `agent/swoop/src/transport/turn/tls.rs`
   - Do: Host-side TURN behind the `turn` cargo feature, using the TURN crate already declared in `Cargo.toml` — do not add crates; if it is absent, stop and log it. Allocate over UDP 3478 first, falling back to TLS 443. Implement Allocate with long-term credentials, Refresh at ~50% of the allocation lifetime (Cloudflare credential TTL is ≤ 48 h), CreatePermission per peer, and ChannelBind for the data path so every packet does not carry a Send-indication header. Credentials arrive **in the session bundle**, minted by the API — the streamer never fetches them and never logs them, not even the username. Surface the relay candidate to the ICE agent as a normal candidate and report the allocation lifetime and negotiated transport in `status`. Handle: allocation lost mid-session (re-allocate once, then degrade to browser-side relay), Cloudflare's drop heuristics (>5 new peer IPs/sec, 5–10 kpps) without retrying into them, and an expired permission. Host-side allocation is preferred because Cloudflare bills only server→client egress (D13), so the video direction is unbilled.
   - Done when: `cargo clippy --features turn -- -D warnings` and `cargo test --features turn` pass from `agent/swoop`; unit tests drive the Allocate/Refresh/CreatePermission/ChannelBind state machine over a mocked socket, including the re-allocate-once-then-degrade path; a test asserts no credential string appears in any log record at any level. Human: supply a Cloudflare TURN credential and run the `#[ignore]`d live test to confirm a forced-relay session connects over UDP 3478 and over TLS 443, and paste the RTT delta into 6.8's memo.
@@ -738,13 +752,14 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop`; table-driven tests map each `PathProfile` plus MTU to the expected budget, including the TLS degraded profile and the fragment size; `npx eslint web/components/swoop/SwoopStatsOverlay.tsx` clean; a forced-relay session shows "relayed" within 2 s of connecting and never exceeds the cap.
   - Depends on: 3.8, 4.7, 6.8
 
-- [ ] **Task 7.7: Enable/disable side effects + uninstall cleanup** `[agent+human]`
+- [x] **Task 7.7: Enable/disable side effects + uninstall cleanup** `[agent+human]`
   - Files: `agent/src/swoop_manager.py`, `agent/owlette_installer.iss`, `agent/tests/unit/test_swoop_side_effects.py`
   - Do: **Read `.claude/skills/build-system.md` before touching the `.iss`, and get the owner's explicit ack for that edit** — it is a guardrailed file and only the three approved swoop edits are allowed. In `swoop_manager.py`, when swoop is enabled for this machine, apply two side effects on a worker thread (never on the 5-second loop; the service is already SYSTEM, so nothing elevates): (1) an idempotent inbound-UDP Windows Firewall allow rule named `Owlette swoop`, scoped to `{app}\swoop\owlette-swoop.exe`, plus inbound UDP 5353 for mDNS candidate resolution; (2) `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\SoftwareSASGeneration = 3`, **recording the prior value — including "absent" — in local agent state first**. On disable, delete the rule and restore the recorded value exactly (delete the value when it was absent). Both paths log through `log_event` and never raise. In `owlette_installer.iss`, add `[UninstallRun]` entries that remove the rule and revert the policy, mirroring the existing powershell entries in that block (`runhidden waituntilterminated`, `exit 0` so a missing rule is not an error), and sweep `logs\swoop` and `ipc\swoop`.
   - Done when: `agent/.venv/Scripts/python -m pytest agent/tests/unit/test_swoop_side_effects.py` proves enable and disable are idempotent, restore the exact prior SAS value (absent → value deleted), run off the main loop and never elevate; `python -m py_compile agent/src/swoop_manager.py` clean. Human: ack the `.iss` edit; then upgrade from the **oldest fielded version** (not from dev), confirm no streamer is stranded, uninstall, and confirm the firewall rule is gone and `SoftwareSASGeneration` is back to its pre-install state.
   - Depends on: 2.1, 2.6, 5.4
 
 - [ ] **Task 7.8: Signing dry run** `[human]`
+  - **Status 2026-10-11:** deferred by the owner: no signing yet, it comes later. The owner guide (2026-09-20) is written; nothing has been done in Azure.
   - Files: `dev/active/swoop/spikes/7.8-signing-dry-run.md`
   - Do: On the owner's Azure account. Create the Azure Trusted Signing account and start identity validation — it has a lead time, so start it before the rest of this memo. Record the account, certificate-profile and region names, the profile type (public trust) and how long validation took. Sign one throwaway spike exe end to end and verify it with `signtool verify /pa /v`. Then write the exact CI shape Task 8.6 will implement: the OIDC federated credential for this repo, `id-token: write` on the **build** job (`.github/workflows/build-installer.yml:78`), every action pinned by commit SHA with a `# vN` comment as the rest of this repo does, and the step's position — **before** the `compute base64-subjects` step at `:154`, because signing mutates bytes and that step hashes the SLSA subject the verify job re-hashes. Note that every shipped exe is signed (`owlette-swoop.exe`, `owlette-host.exe`, `owlette-desktop.exe`) plus the installer itself. Also write the Microsoft Defender false-positive submission procedure (the `Trojan:Win32/Bearfoos.B!ml` precedent) and an outline of the EDR allow-list document customers will need for a SYSTEM binary that captures the screen and injects input.
   - Done when: the memo exists with the account details (no secrets), the measured validation time, a verified-signature transcript for the spike exe, the exact workflow snippet 8.6 will adapt, the Defender submission steps and the EDR allow-list outline; the owner signs it off.
@@ -772,6 +787,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Depends on: 2.1, 5.1, 5.4
 
 - [ ] **Task 8.4: Relayed-GB metering** `[agent+human]`
+  - **Status 2026-10-11:** not started. The mint already tags credentials with the site id, so this needs only the analytics token, the cron route and the docs page.
   - Files: `web/lib/swoop/metering.server.ts`, `web/app/api/cron/swoop-metering/route.ts`, `infra/cron-jobs.json`, `scripts/env-manifest.json`, `web/content/docs/dashboard/swoop-usage.mdx`, `web/__tests__/lib/swoop/metering.test.ts`
   - Do: `metering.server.ts` queries Cloudflare GraphQL (`https://api.cloudflare.com/client/v4/graphql`, dataset `callsTurnUsageAdaptiveGroups`, metrics `egressBytes`/`ingressBytes`, filtered by `customIdentifier`) **one site per query** — adaptive sampling makes a multi-site query wrong — and writes a per-site rollup (relayed GB, session count, period) to Firestore through the admin SDK. `customIdentifier` is whatever memo 6.8 confirmed the credential mint sets (`site:<siteId>`). The cron route follows the house pattern exactly: `export const GET`, an inline `request.headers.get('x-cron-secret')` comparison against `process.env.CRON_SECRET` returning 401, nothing else (see `web/app/api/cron/retention/route.ts:91-94`). Register it in `infra/cron-jobs.json` with the full entry shape (`id, path, method, authHeader, authScheme, authEnvVar, schedule, cadenceLabel, minTimeoutSeconds, environments:["dev","prod"], urls:{dev,prod}, purpose, failureMode, detectedBy, sourceFile`) — `web/__tests__/infra/cronJobs.test.ts` fails the build otherwise. Add `CLOUDFLARE_ACCOUNT_ID` (class `config`) and `CLOUDFLARE_ANALYTICS_API_TOKEN` (class `secret`) to `scripts/env-manifest.json`. Write `swoop-usage.mdx` modelled on `web/content/docs/cli/reference/quota.mdx` (two-key lowercase front matter, prose lead, tables, `## notes` ending in a `- **related**:` link). **Do not edit any `meta.json` — Task 8.5 registers both new docs pages.**
   - Done when: `cd web && npm test -- cronJobs` and the new metering tests pass; `node scripts/sync-env.mjs check` reports no drift; `npx eslint` clean on every touched file; the docs page renders. Human: create the Cloudflare API token with Account Analytics, set both env vars on dev and prod, register the job twice on cron-job.org with each environment's `CRON_SECRET`, and confirm one site's rollup matches the Cloudflare dashboard.
@@ -784,12 +800,15 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
   - Depends on: 3.2, 5.2, 5.3
 
 - [ ] **Task 8.6: Signing in the release pipeline** `[agent+human]`
+  - **Status 2026-10-11:** deferred with 7.8.
   - Files: `.github/workflows/build-installer.yml`
   - Do: Implement the signing shape recorded in `dev/active/swoop/spikes/7.8-signing-dry-run.md`. Add `id-token: write` to the **build** job's `permissions` block (`:78`) — not to the top-level block — and an Azure OIDC login plus a Trusted Signing step that signs every shipped exe (`owlette-swoop.exe`, `owlette-host.exe`, `owlette-desktop.exe`) before they are assembled into the installer payload, then signs `Owlette-Installer-v<version>.exe` itself. All of it must happen **before** the `compute base64-subjects` step at `:154`: signing mutates bytes, and signing afterwards makes `slsa-verifier` fail on every tagged release. Pin every new action by commit SHA with a `# vN` comment, as the rest of this repo does. Fail the build loudly when a file that should be signed is missing or when `signtool verify /pa` fails — a silently unsigned release is worse than a red build. Secrets come from repo secrets and the OIDC federated credential; never inline a certificate or tenant secret, never echo a token.
   - Done when: `zizmor` is clean on the edited workflow; a `workflow_dispatch` run produces an installer whose `signtool verify /pa /v` succeeds and whose SLSA provenance still verifies end to end; the build stays inside its `timeout-minutes`. Human: create the Azure OIDC federated credential and the repo secrets for the Trusted Signing account, trigger the dispatch run, and confirm the verified publisher name on the downloaded installer.
   - Depends on: 2.6, 7.8
 
 - [ ] **Task 8.7: E2E + integration tests** `[agent]`
+  - **Status 2026-10-12:** the browser half merged in #360: a fake host peer, and a session reaches a live H.264 picture in CI. The host half merged in #361 (test pattern, testhooks override, `test_swoop_streamer.py`), but the integration test reaches only `ready` → `exiting` (14). `viewer_joined` needs a signal relay, so this stays open.
+  - **Status 2026-10-11:** in progress: the browser half on `test/swoop-e2e-host`, the host half (test pattern, streamer integration test) on `feat/swoop-mf-encoder`.
   - Files: `web/e2e/specs/swoop/session.spec.ts`, `web/e2e/specs/swoop/permissions.spec.ts`, `web/e2e/helpers/swoopHost.ts`, `agent/swoop/src/capture/testpattern.rs`, `agent/tests/integration/test_swoop_streamer.py`
   - Do: Browser side — `swoopHost.ts` is an **in-browser fake host peer**: it creates the answering `RTCPeerConnection` inside the page, so the specs exercise signaling, admission, the viewer JWT and the presentation path without a Windows host. Decode coverage goes only as far as the browser-matrix memo from Task 2.12 says the bundled Chromium allows — CI installs plain Chromium, which ships without proprietary codecs, so assert at the reassembly / `VideoDecoder.configure()` boundary with a stubbed decoder unless that memo says otherwise. Cover: a member is refused control, an api-key caller is refused outright (`api_key_not_permitted`), a request without a live step-up proof is refused, and the kill switch ends a live session. Use `web/e2e/helpers/roles.ts` and `seed.ts`; model the spec on `web/e2e/specs/settings/api-keys.spec.ts`. Host side — `capture/testpattern.rs` produces a deterministic moving pattern with an embedded frame counter, selected through the bundle's optional `overrides` object (`{"source":"testpattern","encoder":"soft"}`); **do not edit `main.rs`**. `test_swoop_streamer.py` spawns the built streamer with a synthetic bundle on stdin and asserts the `ready` → `viewer_joined` → `exiting` event sequence, the documented exit codes, and that no bundle field ever reaches a log.
   - Done when: `cd web && npm run e2e` passes locally including both new specs; `agent/.venv/Scripts/python -m pytest agent/tests/` passes, with the integration test skipping with a clear reason when the exe is not built; `cargo clippy --features encode-openh264 -- -D warnings` and `cargo test --features encode-openh264` pass from `agent/swoop`; `cargo test --features testhooks` covers the override path, and a test asserts a default-feature build rejects a bundle carrying `overrides` with exit 10; `npx eslint` clean on the new web files.
@@ -797,7 +816,8 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 
 ## Wave 9: `#[cfg]` platform seams
 
-- [ ] **Task 9.1: `#[cfg]` platform seams** `[agent]`
+- [x] **Task 9.1: `#[cfg]` platform seams** `[agent]`
+  - Status 2026-09-30: executed for macOS as `dev/active/swoop-macos/`, one plan with the tri-platform plan's Wave 8; the seams are `platform/{win,macos,unsupported}.rs` exporting one set of names, chosen by `cfg` (its decision 1). There, Waves 1–5 are done in code (17 of 24 tasks ticked; the Mac runs of 4.3, 4.4 and 4.9 are open), gate M0 was go on 2026-09-30, and gate M1 (the first real session) and the release are ahead. Linux is still to come: not started, with its own plan; until then it compiles against `platform/unsupported.rs`.
   - Files: `agent/swoop/src/platform/mod.rs`, `agent/swoop/src/platform/windows.rs`, `agent/swoop/src/platform/macos.rs`, `agent/swoop/src/platform/linux.rs`, `agent/swoop/src/main.rs`, `.github/workflows/rust-build.yml`
   - Do: Turn `platform/` into the documented seam the tri-platform plan's Wave 8 fills. Define traits for capture source, encoder factory, input injector, cursor source, clipboard, audio source, and — the one the delivery review says is missing — **process lifetime and bundle delivery**: "who owns my lifetime, and where does my bundle come from". On Windows the streamer is a child of the SYSTEM service in the console session, held in a Job Object with `KILL_ON_JOB_CLOSE` and the bundle on an inherited stdin pipe; on macOS/Linux it is a child of the user's desktop app (cross-plan rule C2), which is what carries TCC responsibility. Implement `windows.rs` purely by delegating to the existing modules — no behaviour change anywhere. Write `macos.rs` and `linux.rs` as compiling stubs returning `Unsupported`, each with a doc comment naming what a real backend must implement: macOS = ScreenCaptureKit + VideoToolbox, **Apple silicon only, macOS 15.0 floor**; Linux = X11/XShm (Wayland out of scope) with VAAPI or NVENC. Re-home every Windows-only module declaration behind `#[cfg(windows)]` in `main.rs` — the one exception to the no-`main.rs` rule, stated in the standing rules, and only for declarations Task 1.2 did not already gate — so the ubuntu and macos legs compile against the platform stubs; behaviour on Windows is unchanged. Add `ubuntu-latest` and `macos-latest` `cargo check` legs to `.github/workflows/rust-build.yml`, copying the shape of `.github/workflows/agent-tests.yml` (SHA-pinned actions with `# vN`, least-privilege `permissions`, `concurrency`, `timeout-minutes`, path filters).
   - Done when: `cargo clippy -- -D warnings` and `cargo test` pass from `agent/swoop` on Windows with the full Wave 3–8 suite still green and no behaviour change; the ubuntu and macos legs of `rust-build.yml` go green on a push to `dev`; `zizmor` is clean on the edited workflow.
@@ -806,6 +826,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 ## Wave 10: release (gate G4)
 
 - [ ] **Task 10.1: Release** `[agent+human]`
+  - **Status 2026-10-11:** swoop has shipped to dev since 4.1.0 as opt-in per site. GA still waits on 7.1/7.2, 8.4, 8.7, signing (deferred) and the install-dir advisory.
   - Files: `agent/swoop/Cargo.toml`, `docs/changelog.md`, `web/content/docs/changelog.mdx`, `/VERSION`, `agent/VERSION`, `web/package.json` (the last three only via `node scripts/sync-versions.js X.Y.Z`), `dev/active/swoop/spikes/10.1-ga-measurements.md`
   - Do: Finalise `[features] default = [...]` in `agent/swoop/Cargo.toml` — **this is the one task that changes that file** — enabling exactly the backends Tasks 7.1/7.2/7.3 proved plus `turn` and `audio-opus`, on top of the `encode-nvenc` Task 1.2 put there. `testhooks` is **never** in `default`: it gates Task 8.7's bundle `overrides` hook, and a shipped binary must reject a bundle carrying `overrides` with exit 10. Keep `[package] version` the first line in the file matching `^version = "X.Y.Z"`: `scripts/sync-versions.js` rewrites only the first match, so a dependency table with a three-component version above it would be stamped instead. Then, strictly in this order: run `node scripts/check-security-alerts.mjs` (exit 1 stops the release — fix it, dismiss it on GitHub with a written reason, or get the owner's explicit acceptance and list every ack with its reason in the release commit body; never ack on your own judgment); write the `## [X.Y.Z] - YYYY-MM-DD` entry into **both** `docs/changelog.md` and `web/content/docs/changelog.mdx`; run `node scripts/sync-versions.js X.Y.Z`; commit — **then** build per `.claude/skills/build-system.md` (non-interactive invocation with stdin from NUL, in the background). Record pilot measurements against every success criterion in `plan.md` in `10.1-ga-measurements.md`, plus the EDR allow-list document. Work on `dev`; never push to `main`.
   - Done when: the G4 checklist in the memo is complete — every `plan.md` success criterion carries a measured number or an explicit miss; every shipped binary is Authenticode-signed; **the install-directory security release has shipped**; `node scripts/check-security-alerts.mjs` exits 0; the agent suite, web unit tests, rules tests and e2e are green. Human: sign off the measurements, approve the version number, authorise and run the installer upload + finalize (mutating calls), and confirm an upgrade from the oldest fielded version on a real machine.
@@ -814,6 +835,7 @@ with plain `grep -rn`, not ripgrep-based tools. Interface decisions made while d
 ## Wave 11: legacy live view removal (gated on the fleet floor)
 
 - [ ] **Task 11.1: Legacy live view removal (gated on the fleet floor)** `[agent+human]`
+  - **Status 2026-10-11:** gated on the fleet floor: prod's fielded floor is 3.2.0 (2026-10-09 audit).
   - Files: `web/components/LiveViewModal.tsx` (delete), `web/components/MachineContextMenu.tsx`, `web/app/dashboard/page.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`, `web/hooks/useFirestore.ts`, `web/lib/actions/executeMachineCommand.server.ts`, `web/app/api/sites/[siteId]/machines/[machineId]/commands/route.ts`, `web/openapi.yaml`, `cli/src/commands/machine.ts`, `cli/__tests__/commands/stubs.test.ts`, `agent/src/owlette_service.py`, `agent/tests/unit/test_screenshot_paths.py`, `web/__tests__/api/sites-machines-commands.test.ts`, `web/__tests__/lib/actions/executeMachineCommand.test.ts`, `web/content/docs/agent/remote-commands.mdx`, `web/content/docs/reference/agent-commands.mdx`
   - Do: **Gate first.** Do not start until the fleet floor is the swoop agent version, confirmed against the live API — not inferred from the repo. No machine may ever have neither live view nor swoop. Then remove the screenshot-slideshow live view in lockstep across its four coupled surfaces: `ALLOWED_COMMAND_TYPES` (`executeMachineCommand.server.ts:31-32`), `VIEW_COMMAND_TYPES` and the `start_live_view` branch (`commands/route.ts:351-352` and `:177`), `web/openapi.yaml:5255`, and the CLI. Delete `LiveViewModal.tsx` and its dashboard wiring (the `MachineContextMenu.tsx` live-view item, `page.tsx` dialog state and handlers, the card/list prop pass-throughs), the `useFirestore.ts` `liveView` fields and helpers (`:285-295`, `:1740-1750`), the agent's `_handle_start_live_view` (`:7268`), `_handle_stop_live_view` (`:7305`), `_live_view_loop` (`:7315`) and their dispatch entries (`:5382-5386`), the CLI stub and its test, and the two docs tables. **`/api/agent/screenshot` and `_handle_capture_screenshot` (`:7180`) stay** — crash screenshots and cortex use them; update `test_screenshot_paths.py` to pin the two remaining pipelines instead of three and delete nothing else it covers.
   - Done when: `grep -rn "start_live_view\|stop_live_view\|liveView\|LiveViewModal" web/ agent/src/ cli/ docs/ web/content/` returns only changelog history; in `web/`: `npm test`, `npm run test:rules`, `npm run e2e`, `npx tsc --noEmit` and `npm run lint` all pass; `cd cli && npm test` passes; `agent/.venv/Scripts/python -m pytest agent/tests/` passes; all three screenshot pipelines (on-demand, crash, cortex) still work on this box. Human: confirm the fleet floor against the live API — the prod key is installer-scoped and cannot make that site/machine query — and authorise the removal.
@@ -1878,3 +1900,279 @@ rules were created by hand (task 7.7's, since `set_enabled()` has no caller), sw
 `default_site` in **dev firestore**, and `shared_utils.py` is patched to point at localhost
 (original at `.predev`). `web/lib/versionUtils.ts` is patched to 3.3.5 and **must be reverted** —
 the real value is 3.4.0 and the pre-commit hook catches it.
+
+### 2026-09-23 — resumed after the 3.3.6/3.3.7 releases and the prod promotion
+
+Gap analysis in `research/resume-2026-09-23.md` (status per wave, all 18 open tasks, every Log follow-up).
+Headline: the bundle route enforces `SWOOP_MIN_AGENT_VERSION` (`bundle/route.ts:128`) and it read 3.4.0, so no
+fielded 3.3.7 agent could be served a session; the 09-19 live session ran on a box-local patch. Owner rulings
+recorded at the top of plan.md. Milestone: **G3 on dev, A4D → B4A.** Wave A starts: 1.3 follow-up (floor =
+3.3.7, comments corrected, test that 3.3.7 is admitted), 7.7 agent half, 7.5 follow-ups, 3.4 close-out, G2 memo.
+- 2026-09-23 — Wave A progress. **1.3 follow-up done** (floor 3.3.7, `6869ae7d`). **7.7 agent half done**
+  (`f6dbafa6`): the doorbell reports the mint's 200 / 403 as the enable bit, on change only, and the service
+  hands it to `SwoopManager.set_enabled`; the `[UninstallRun]` half is next, with the owner's rulings (uninstall
+  removes all swoop logs; mDNS rule deferred). **7.5 follow-up, half:** a refused `send_to` is now counted
+  (`PeerStats.datagrams_send_failed`) and survived instead of ending the peer. The other half — treating
+  str0m's ICE `Disconnected` as recoverable with a give-up deadline — is deferred to Wave B: the viewer-side
+  policy (`session/mod.rs:2281` RestartIce) and the give-up length need the LAN measurement to size, and
+  loopback cannot exercise a real ICE disconnect. Recorded here so it is not read as done.
+- 2026-09-23 — **7.7 installer half done** (owner acked the `.iss` edit): `[UninstallRun]` gains one PowerShell
+  step after the host uninstall that removes both firewall rules by group and restores `SoftwareSASGeneration`
+  from `tmp\swoop_side_effects.json` (`absent` → value deleted, 0..3 → set, else untouched; always exit 0);
+  `usPostUninstall` removes `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record regardless of the
+  keep-user-data answer (ruling: remove all swoop logs). The mDNS rule is deferred, so nothing creates it and
+  the group removal still covers it. Quick build compiles; the generated PowerShell parses. VM proof of the
+  uninstall path is next.
+- 2026-09-23 — **7.7 uninstall path proven on the e2e VM** (`scripts/vm/18c-verify-swoop-uninstall.ps1`, 20/20):
+  two rounds, a record saying the SAS policy was absent (value deleted after uninstall) and one saying 1 (value
+  reads 1), both rules gone by group, `{app}\swoop`, `logs\swoop`, `ipc\swoop` and the record gone, the rest
+  of `logs\` kept. The first two runs failed on the uninstaller's PowerShell step (exit code 1 in the uninstall
+  log): Inno turns `{{` into `{` but a `}` is literal already, so the `}}` I wrote reached PowerShell doubled
+  and the whole command failed to parse. Single closing braces now, and the harness waits for the
+  uninstaller's temp copy (`_iu*.tmp`) rather than for `unins000.exe`, which exits at once.
+- 2026-09-23 16:43 UTC — **first A4D → B4A session on dev: black picture, "the connection to this machine
+  failed" (= `ice_failed`, `peer.ts:705`).** Evidence: session `f9256ae5…` under TEC-B4A stayed `pending`;
+  dev logs show `turn mint failed; offering stun only` (TURN not configured) and the host's bundle minted one
+  second later, so the streamer ran and answered — the header's "connected" is `onTrack`, i.e. the answer was
+  applied, not media flowing. ICE then found no pair: STUN-only on one LAN. Both machines run the catalog 3.3.7
+  (no Wave A wiring, so no `Owlette swoop` firewall rules on B4A). Two candidates, in order: (1) B4A cannot
+  resolve A4D's `.local` mDNS candidates (the host resolves through the Windows DNS client; a Public network
+  profile blocks inbound 5353) so the only pairs were srflx↔srflx behind one NAT; (2) inbound UDP to
+  `owlette-swoop.exe` blocked on B4A. Discriminator requested from the owner: retry with the browser's
+  mDNS obfuscation off (`#enable-webrtc-hide-local-ips-with-mdns` = Disabled). G2 memo not yet writable.
+- 2026-09-23 17:1x UTC — **G2 met: first picture over a real network** (A4D → B4A on dev, keyboard and mouse
+  worked) once the viewer's browser stopped hiding its LAN address behind mDNS — which confirms the 16:43
+  failure was the host failing to resolve `.local` candidates. Connect took 10–15 s by hand. Memo:
+  `spikes/g2-first-picture.md`. **Wave B opens with two findings:** host-side mDNS resolution (un-defer the
+  UDP 5353 rule and/or query mDNS from the streamer instead of the OS resolver) and the connect budget.
+- 2026-09-23 17:2x UTC — **second A4D → B4A session (host log read on B4A, both machines wired):** streamer up
+  and encoding on nvenc 135 ms after spawn; `peer connected` **17.5 s** later (all of it ICE, STUN-only);
+  overlay: capture→display 113.5 ms of which send→arrive 63.5 ms with app RTT 0.8 ms, delay rise 60 ms,
+  **gaps 2834**, direct path, cap 50 mbps / 60 fps; heavy smearing at 50 and at 30 mbps. Wired both ends, so
+  the gaps are host-side frame refusals (the pacer), not the network. **At +348 s the host logged "lease
+  lapsed past the grace, dropping it", then `room error token_expired (Remint(TokenExpired))`, socket closed,
+  exit 14 SignalLost:** the host token's 300 s TTL expired, the streamer exited by design ("holds no
+  credential to re-mint with"), and the page froze with no message. First session's peer had died at +31 s
+  with `peer poll failed: poll_output`. Wave B order is now: (1) sessions must survive the host token TTL,
+  (2) the pacer refusals / smearing, (3) the 17 s connect, (4) mDNS resolution on the host.
+- 2026-09-23 17:3x UTC — **third session: `ice_failed` again with the mDNS flag off.** Root cause, fits all
+  three: the viewer (A4D) has nine IPv4 interfaces (Ethernet ×2, three virtual, OpenVPN DCO, Tailscale, Wi-Fi,
+  Hyper-V default switch) and advertises a host candidate for each; the host binds one address and walks the
+  pairs; the fielded 3.3.7 streamer ends the peer on the first `send_to` to an unroutable address (session 1's
+  `peer poll failed` at +31 s, session 3's failure), and session 2's 17.5 s connect was the walk through dead
+  pairs before the Ethernet pair. The wave A fix (`265369eb`, a refused send is counted and survived) is on dev
+  and not on B4A. The host gathers no srflx at all (no STUN client), which is fine on the LAN and fatal off it
+  without TURN. mDNS remains a real second cause for a viewer without the flag off.
+- 2026-09-23 — **Wave B item 1 done: sessions survive the host token's lifetime.** 5.1 / 2.4 follow-up. The
+  service arms a timer at spawn (TTL 300 s from PROTOCOL §8, lead 60 s; not a bundle field, because the
+  fielded streamer's bundle parser is `deny_unknown_fields`), re-mints through the bundle route (allowed for
+  any non-ended sid), and writes `{"type":"token","host_token":…}` to the streamer's stdin; a failed mint
+  retries every 20 s while the token lives, then logs `swoop_token_refresh_failed`. The streamer re-dials the
+  room with the new token and swaps the socket (the room announces nothing for a host that goes; viewers
+  keep their peers), and swallows the joins the room replays for present viewers inside a 5 s window so
+  admission is not charged twice and a verified `ctl` is not reset. Also: `OWLETTE_SWOOP_LOG=debug|trace`
+  from `config.json` `swoop.logLevel` turns the streamer's per-frame counters on for the pacer diagnosis.
+  Tests: 4 manager tests (refresh lands, kill cancels, no-time failure logs, retry recovers), ipc parse test
+  (token never printed), client replay-window test; agent suite 1996 passed, crate 351 passed, clippy clean.
+  Proof on a real session (> 5 min without a freeze) comes with 3.3.8 on B4A.
+- 2026-09-23 — **pacer hypothesis for the smearing (from the code; unconfirmed until 3.3.8's debug counters):**
+  `pacer.rs` holds a bucket exactly one frame interval deep at the ceiling in force; an IRAP is admitted on
+  an exemption that leaves the bucket empty (`KEYFRAME_VBV_SCALE = 4`, so it is 4 frames' worth); the deltas
+  right behind it are refused as over budget (`dropped_over_budget`), each refusal is a gap at the viewer,
+  the viewer's PLI asks for another IRAP, and the loop never lets the picture clean. The governor only ever
+  descends on gaps (`governor.rs:15`), which shrinks the bucket and feeds the loop; the overlay's "cap" is
+  the top rung, not the rate in force. Candidate fixes, to be chosen on the counters: a pacer bucket 1.5–2
+  frames deep with the encoder's one-frame VBV untouched (absorbs NVENC's overshoot at ≤ 1 frame of queue),
+  and a refill to full after an IRAP exemption so the recovery point's own deltas are not the next casualty.
+- 2026-09-23 — **B4A debug log read (two sessions, both connected in < 150 ms):** ~35 `pacer refused frame`
+  lines over ~55 s at 17–39 KB each, in clusters right after keyframes, under a 50 mbps cap — so the rate in
+  force was ~15 mbps: the governor cut on its own refusals (`on_report` treated `dropped_over_budget` as
+  congestion) and again on the viewer's `framesDropped` rise those same refusals caused. Plus, with audio
+  on, every audio frame but the first per tick was refused by str0m ("Consecutive calls to write() without
+  poll_output() in between"). **Fixed on `swoop/pacer-loop`:** the governor counts refusals but never cuts on
+  them and matches viewer gaps against them before calling a gap the path's; the pacer bucket is two frame
+  intervals deep and an IRAP leaves no debt; audio writes one frame per `poll_output` round, interleaved.
+  Crate 352 passed, clippy clean, both feature sets. Ships as 3.3.9 to dev for B4A. The two connect failures
+  after 3.3.8 remain unexplained by the host (its debug log shows instant connects); most likely the browser
+  flag was back at default for those — owner to confirm.
+- 2026-09-23 — **UI finding (owner, 5.2 follow-up):** the ended and failed states are dead ends. Wanted: in
+  `ended` / `failed` the toolbar offers **reconnect** (a fresh session, same machine) — no "back to
+  dashboard", swoop opens in its own tab (owner); "end session" in the failed state resets the page instead
+  of doing nothing. **Done 2026-09-23 (`swoop/reconnect`):** `useSwoopSession.reconnect()` bumps the attempt
+  from a clean slate (proof dropped, error cleared) and the toolbar shows **reconnect** instead of "end
+  session" in `ended` / `error`; RTL test on the bar.
+- 2026-09-23 — **keyboard menu shipped (6.1's web half, owner's ask):** the toolbar's keyboard-lock sentence
+  is gone; the fullscreen button carries a tooltip that says what fullscreen captures in this browser; a
+  keyboard button beside settings sends ctrl+alt+del (the `sas` control message), windows key, alt+tab,
+  alt+f4, win+d, win+l, ctrl+esc, ctrl+shift+esc, print screen and esc as chords through the input capture's
+  own sequence (`InputCapture.pressChord`), with a two-line explainer and the sas refusal surfaced. Needs
+  `ctl`; disabled for a view-only session.
+- 2026-09-23 ~21:3x UTC — **3.3.9 on the dev catalog** (`Owlette-Installer-v3.3.9.exe`, sha256 `ff77cdd8…cec8`,
+  dev `68377293`, PR #194; VM upgrade from the fielded 3.3.7 12/0/4, uninstall proof 20/20). Carries #193's
+  pacer/governor/audio fixes, #191's keyboard menu, #192's reconnect, #190's log-level cleanup. Update
+  commands (`update_owlette`) sent to B4A and A4D through the dev API. Next: a B4A session for the picture.
+- 2026-09-23 22:xx UTC — **connect failures persist on 3.3.9 with the viewer's mDNS flag confirmed Disabled**, so
+  hidden addresses are not the cause. B4A's log is silent between "encoding on nvenc" and the failure because
+  str0m logs its ICE checks through `tracing`, which the host's `log` logger never saw. `swoop/ice-logging`:
+  the `tracing` crate's `log` feature is turned on (already in the tree via str0m; no new package), so every
+  ICE and DTLS event lands in the host log at debug. Ships as 3.3.10 to dev; the next failed attempt then
+  names the pair.
+- 2026-09-23 ~23:0x UTC — **3.3.10 on the dev catalog** (sha256 `e44a2117…45e7`, dev `353cd9c5`, PR #198; VM
+  12/0/4 + 20/20), both machines updated by `update_owlette`. Carries #196 (str0m's ICE/DTLS events in the
+  host log at debug). Web on dev also has #197 (esc hint on the stage only when fullscreen captures the
+  keyboard) and #195 (sessions route reads its body once). Next: one session attempt; a failure now leaves
+  the pair-level trace in B4A's log.
+- 2026-09-24 — **connect failures persist with one viewer interface (brave "default public interface only")
+  and the mDNS flag off**, so the viewer is cleared; the host's single bound address is the remaining
+  suspect: `local_bind_addr()` takes the interface on the internet route, which with a full-tunnel vpn up
+  on B4A is the tunnel, and a tunnel host candidate is unreachable from the lan. `swoop/bind-toward-viewer`:
+  the peer binds the interface the os routes to the viewer's first host (then srflx) candidate from the
+  offer, logged at info per viewer; an offer with no candidate keeps the session-wide address. Multi-
+  interface gathering (7.5) remains the full answer. Owner asked whether a vpn is up on B4A.
+- 2026-09-24 — **3.3.11 on the dev catalog** (sha256 `fa78255d…49d3`, dev `4323d17d`, PR #200; VM 12/0/4 +
+  20/20), both machines updated. Carries #199 (bind toward the viewer's candidate). Next: a B4A session; the
+  host log now says which address it bound per viewer.
+- 2026-09-24 — **sessions connect on 3.3.11 ("working better"); in fullscreen the owner cannot see the cursor.**
+  Root cause: the frames never carry the pointer (desktop duplication leaves it to the adapter, 4.4's
+  `pointer_in_frame: false`), and the browser decoded `cpos`/`cshape` (`protocol.ts`) but nothing consumed
+  them — presence only reads `vpos`. Under pointer lock the browser hides the local css cursor, so nothing
+  was left on screen. `swoop/machine-cursor`: a `cursor` feature (`lib/swoop/cursor.ts`, shape cache by id,
+  lost upload → no shape) and `SwoopCursor.tsx` on the stage: outside lock the machine's shape becomes the
+  stage's css cursor (one pointer, never two); under lock, or for a shape above 32 css px, the shape is
+  overlaid at `cpos` over the picture with the hotspot on the position, plain arrow before a shape lands,
+  hidden when the machine hides it. `useSwoopPictureBox` is the picture-box measure, moved out of presence
+  and shared. Web only; no host change.
+- 2026-09-24 ~04:1x UTC — **B4A stuck on "connecting": the signal room refuses every viewer join with 429
+  `room_full`.** Proven with `wrangler tail -e dev`: mint 200, ring 200, host joins, viewer joins 429 ×n;
+  the kill at 04:12:19 returned 200 and the room was still full 8 s later, so the four sockets it counts
+  are dead peers whose close never completes (earlier tabs behind the vpn / frozen sessions). The room
+  counted `getWebSockets('role:viewer')` raw. `swoop/stale-viewers`: a viewer with no frame and no
+  answered keepalive for 90 s (`LIMITS.viewerStaleMs`; browser pings every 25 s) is evicted when the room
+  is full — `departed` flag frees the slot at once, `bye reason=stale` to the host, close `stale`; kill
+  flags viewers too. Test worker runs with `SWOOP_VIEWER_STALE_MS=1500`; two new tests. Deploys to dev
+  through the worker workflow on merge; the B4A room's dead viewers get evicted on the next join.
+  Also seen: doorbell ring `rejected` at 03:53/03:54 (a non-4xx from the room) — one-off, ring 200 at
+  04:12:27; and something on A4D polling `GET /machines/TEC-A4D` every 20–40 s with 401 since 03:52.
+- 2026-09-24 ~04:4x UTC — **3.3.11 B4A log: every audio frame refused, "Consecutive calls to write() without
+  poll_output() in between", one line per frame for the whole session.** The wording misled #193: str0m
+  packetises ONE queued write per media per `handle_input(Timeout)`, never in `poll_output`, and refuses a
+  per-media queue past 100. `RtcPeer::poll` ran one timeout per call while audio arrived at 100/s, so the
+  queue filled in about a second and stayed full. `swoop/audio-timeout`: each round in `poll` is now a
+  timeout at `now` (packetises the session's video frame and the last audio frame), the outputs, then the
+  next audio frame. Loopback test feeds 5 audio frames per poll over 40 polls: 140/200 written before,
+  200/200 after. Host change → ships in 3.3.12. The black square on the same attempt is a separate stage:
+  ICE + DTLS came up (the host was writing media); waiting on the non-audio lines of that log.
+- 2026-09-24 ~06:0x UTC — **B4A black square, debug log in hand: not ICE, not the firewall, not the bind.**
+  At 05:57 UTC ICE completed in 25 ms (host 192.168.88.20:57309 ↔ browser prflx 192.168.88.10:63485,
+  nominated), the browser sent its DTLS hello, the host answered flight 4 and resent it four times into
+  silence. Two lines earlier: `Accept offer` / `Create answer` TWICE, 2 ms apart. The host sends a per-viewer
+  `host-ready` on every viewer join (`session/mod.rs:1752`); the page re-sends its standing offer on
+  `host-ready` whenever no answer has been applied; when the first offer already got through, the host
+  answers both copies, and the second answer lands inside the first one's async mac verification
+  (`acceptAnswer` only cleared `awaitingAnswer` after `setRemoteDescription`), so the page applies both,
+  the browser refuses the second (`InvalidStateError` in stable) → `abort('answer_not_applied')` → "the
+  connection to this machine failed", and the torn-down peer never answers DTLS. Timing-dependent, which
+  is why 03:04 connected and 04:25/05:57 did not. Firewall rules on B4A are enabled on every profile, both
+  adapters Private. `swoop/double-answer` (web only): `awaitingAnswer` is consumed before the first await
+  (the replay check moved ahead of it), and `host-ready` re-sends only while the offer is unanswered. Two
+  peer tests reproduce it (slow apply + a second copy 2 ms later; host-ready mid-apply), both fail on the
+  old code. The 03:04 session's end — "lease lapsed past the grace" at 03:10 — is the next item.
+- 2026-09-24 ~06:3x UTC — **PR #204 (double answer) live on dev; B4A connects ("looks like it worked this
+  time").** Next, the 5 min 30 s drop: the browser's renewer (`lease.ts`) renewed with the api on schedule
+  but never presented the renewed token to the host — `presentLease` ran only when `swoop-control` opened —
+  so the host's ledger lapsed at 5 min and its 30 s grace dropped the viewer (03:04 → 03:10 "lease lapsed
+  past the grace"). `swoop/lease-present` (web only): every renewal is presented down the control channel
+  (`presentLease(token)`); tests in lease.test.ts and peer.test.ts. Owner also reports the fullscreen
+  cursor overlay is too small and vanishes over dark text (an I-beam): scale with the picture and add a
+  contrast halo — next.
+- 2026-09-24 ~07:xx UTC — **owner ruling (going to bed): "sessions should stay active on swoop indefinitely, at
+  all costs"; keep auditing/fixing/testing unattended; tri-platform and swoop both priorities; playwright
+  multi-user.** `swoop/session-resilience` (web only): (1) `signaling.ts` ladder has no top — redials
+  forever, capped 15 s with jitter; `exhausted` fatal removed; (2) `peer.ts` ice restarts walk a ladder
+  (`RESTART_BASE_MS` 1 s → `RESTART_CAP_MS` 15 s) instead of aborting on the second failure; `ice_failed`
+  error removed; reset when the link is up; (3) the hook starts a new session after an end that was not a
+  decision (`lib/swoop/backoff.ts`: `isTransientEnd` table — lease lost, host gone, signal lost, peer
+  failed, start failed/5xx) on a 2 s → 30 s ladder that resets after 30 s connected; decisions (operator
+  end, kill, lease refused incl. the 12 h cap, mint refused, host proof failed) stop as before; the page
+  says "reconnecting in N s…" beside the error and the reconnect button reconnects now; `lease.ts` ends with
+  `lease_refused` vs `lease_expired`. Playwright: yamon blocks parallel subagents this week (82 % budget),
+  so everything runs inline. Real B4A/MBA sessions cannot be driven by playwright (api keys are refused on
+  the mint route by design; step-up is a passkey ceremony), so multi-user coverage will be emulator e2e.
+- 2026-09-24 ~08:xx UTC — **host half of "stays up": `swoop/host-signal-redial`.** The streamer exited
+  `SignalLost` the moment its room socket closed, ending a live p2p session that did not need the room.
+  Now a closed socket with a live viewer keeps the session and emits a new stdout event `token_needed`
+  (`ipc.rs`, PROTOCOL §6) every 20 s; the service answers with the same `token` control line a scheduled
+  refresh uses (`_on_token_needed`, floored at 5 s) and the host redials; a viewerless session still exits
+  as before. Rust 364/364 + clippy clean; python 31/31. Ships in 3.3.12 with the audio fix.
+- 2026-09-24 ~09:5x UTC — **3.3.12 on the dev catalog** (sha256 `8b9b4eae…895a`, release PR #209; VM upgrade
+  from the fielded 3.3.7 12/0/4, swoop uninstall proof 20/20), `update_owlette` queued to B4A and A4D. Carries
+  #203 (audio packetised per poll round) and #208 (host keeps a live session without its room). Docs
+  screenshots not refreshed (desktop app unchanged; last capture 3.3.7). E2E: `specs/swoop/session.spec.ts`
+  — 2/4 green on the first real run; the two mint-dependent tests need the e2e web server to carry swoop
+  signalling env (`SWOOP_SIGNAL_URL` is blanked as a third-party credential, so the mint route refuses with
+  `signal_not_configured`); fixing by giving the e2e server an unreachable signal origin plus generated jwt
+  keys. Also learned: the api refuses a replayed totp, so a step-up right after the sign-in that spent this
+  period's code waits for the next period.
+- 2026-09-24 ~07:48 UTC — **B4A and A4D on 3.3.12, online** (self-update via `update_owlette`, A4D log
+  `[SUCCESS] Self-update completed successfully!`). The `GET /machines/TEC-A4D` 401 every 20–40 s is a Google
+  Cloud Monitoring uptime check aimed at an authenticated route (`clientUa` GoogleStackdriverMonitoring); owner:
+  re-point it at `/api/health` in the dev GCP project.
+- 2026-09-24 ~08:0x UTC — **#207 (session resilience) and #209 (release 3.3.12) merged to dev (`cecbaa75`).**
+  Dev web now carries every overnight fix; the fleet (B4A, A4D) runs 3.3.12. Next: the swoop e2e spec to
+  green, the page's watch fallback for members (`controlRefusedForCapability`), then tri-platform.
+- 2026-09-24 ~10:xx UTC — **swoop e2e green (4/4) and the page's watch fallback.** `web/e2e/specs/swoop/session.spec.ts`:
+  step-up dialog + totp opens a control session and the record follows it to its end; a member is refused
+  control by the route's capability gate and the page now asks for a watch session instead
+  (`lib/swoop/intent.ts` `controlRefusedForCapability`, once, for that refusal only); site switch and
+  exclusion list refuse before any ceremony; over the api two viewers hold leases of their own, the token
+  carries the fingerprint presented (the host enforces it), an offline machine is 409, a watcher cannot
+  kill, one kill ends every session. The e2e web server now carries an unreachable swoop signal origin and
+  per-run ed25519 keys (`playwright.config.ts`). Learned the hard way: the mint answers 201; `problemDetail`
+  consumes the body; a waiter on "contains /swoop/sessions + 200" catches the lease renewal.
+- 2026-09-24 ~19:xx UTC — **the frozen session: channel starvation, not the path.** Owner's B4A log (3.3.12)
+  flooded with `SwoopMeta/SwoopCursor queue overflowed` and str0m's `Drop ChannelData event for id: 6`; the
+  overlay showed 61034 gaps on a "live" session. Stream 6 is the browser's `swoop-feedback` (dtls client,
+  even ids, fourth of five). str0m had closed that stream on the host and removed its channel; the browser
+  never learns of a close it did not make and kept sending (str0m re-accepts the stream and drops the data —
+  the warn). `OutQueue::drain` returned at the first `NotOpen` record, so a pong queued for the dead channel
+  sat at the head and every later cursor/meta record overflowed behind it. Fix (`swoop/channel-starvation`):
+  `WriteOutcome::Closed` (the peer remembers `closed_channels`) drops the record; `NotOpen` records step aside
+  in order; overflow warns once then every 500th with the count; `ChannelClose` logs at warn. Page:
+  `SwoopFeedback` `onSilence` after `PONG_SILENCE_MS = 8 s` without a pong (only after a first pong) →
+  `session.end('peer_failed')` → the hook's reconnect ladder, which is the only way to get new channels.
+  Still unknown: **why** str0m closed stream 6 — need the debug log around the freeze
+  (`closed|stream 6|Stream 6|DCEP|wrong state|Getting stream`). Ships in 3.3.13.
+- 2026-09-24 ~21:xx UTC — **#213 merged (`84211ba9`), 3.3.13 cut (#216).** Around it: #214 fixed the desktop
+  watcher burst test that went red on dev's ubuntu leg after #212 (asserts fewer reports than writes, not one
+  report in a window); #215 replaced MinIO in the roost CI rig with `versity/versitygw` + `amazon/aws-cli`
+  after MinIO withdrew its public images and binaries the same day (job green in 52 s). The outbox refusal
+  line now logs when the count moves, not every status tick (B4A's log was one such line every 2 s). Owner's
+  last log paste had no close/stream lines: the flood drowned them. Still wanted: the 80 lines before the
+  first `Drop ChannelData` on B4A. Vercel failover origin is down (account blocked, 402); a Tridant team
+  needs a card in the dashboard before the API will create it (`payment_method_required`).
+- 2026-09-25 (overnight) — **fleet on 3.3.15; page work merged.** 3.3.14 (cursor at true size via `cshape.scale`; one
+  pointer in the windowed view; black fullscreen letterbox) and 3.3.15 (cursor at full detail — the wire no longer
+  shrinks to the css ceiling) shipped to the dev catalog and to B4A/A4D. Page: clean session bar with badges only
+  when something is wrong (#221), screen wake lock for the life of a session, continuity — a control grant's token
+  lets the same tab reconnect without a passkey for its whole life (#223), step-up window 12 h (#225), legible
+  latency overlay with honest stage names and a codec row (#224). Still open: why str0m closed `swoop-feedback`
+  under the browser on B4A (needs the log window before the first drop on 3.3.15 — the flood is gone, so the next
+  one is readable), audio and a second viewer on hardware.
+
+### 2026-10-04 audit against the code (read-only pass, then ticks)
+- Ticked: 7.7 (f6dbafa6 set_enabled from the doorbell; 67736897, 02db1027 [UninstallRun] and the swoop dir sweep;
+  VM uninstall proof 20/20; the mDNS rule deferred by owner ruling), 9.1 (done through swoop-macos:
+  platform/{win,macos,unsupported}.rs; swoop-posix CI green), 0.10 (superseded: G1 closed on arm B 2026-09-18 and
+  3.11/3.12 shipped RTP into <video>; the probe was never built).
+- Open, with what is missing:
+  - 0.3: the spawn half is superseded by swoop_spawn.py; the memo still has the secure-desktop rows blank.
+  - 6.1: securedesk/mod.rs is a stub; nothing calls SendSAS. Over swoop on Windows the UAC prompt, lock screen and
+    logon screen take no keyboard or mouse (owner hit it on TEC-B4A, 2026-10-03).
+  - 5.7: no memo; perform mode, 24H2, hybrid GPU, Mosaic, HDR, display off, RDP and headless are unmeasured.
+  - 6.7, 7.1, 7.2: encode/{qsv,amf,mf,soft} are stubs and the default feature is encode-nvenc only. A Windows box
+    without NVIDIA, or a VM, advertises capabilities.swoop=1 and the streamer exits 13 (no_encoder) with no copy for it.
+  - 6.8, 7.4: no host STUN or TURN (transport/turn is a stub); CLOUDFLARE_TURN_KEY_* were empty on Railway on
+    2026-09-22. swoop works on the LAN and fails off it. Taken up as the swoop-wan plan, 2026-10-04.
+  - 7.8, 8.6: Authenticode is not wired (build-installer.yml:34); the 4.1.1 exe reads NotSigned.
+  - 8.4: no relayed-GB metering (moot until TURN). 8.7: browser-side session.spec.ts only; no CI test runs the
+    real streamer. 10.1: G4 unmet (unsigned pilot, defaults unchanged). 11.1: deferred by its gate.

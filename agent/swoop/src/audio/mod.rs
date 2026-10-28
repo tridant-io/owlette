@@ -1,15 +1,21 @@
-//! System audio capture (WASAPI loopback) and the Opus path.
+//! System audio capture (WASAPI loopback on Windows, ScreenCaptureKit on
+//! macOS) and the Opus path.
 //!
 //! # The shape, and why the pieces sit where they do
 //!
 //! - [`opus`] is portable: the wire parameters §3's `audio` m-line carries, the
 //!   10 ms frame clock that keeps timestamps contiguous across a device gap,
 //!   and the encoder seam.
-//! - [`wasapi`] is the Win32 half: the render endpoint, and the loopback
+//! - `wasapi` is the Win32 half: the render endpoint, and the loopback
 //!   capture that reads whatever the machine is playing. Its head documents the
 //!   two things about that capture that are not the obvious choice.
+//! - `sck` is the macOS half under the same two names, `Loopback` and
+//!   `render_endpoint_present`: a ScreenCaptureKit stream of its own, and
+//!   CoreAudio's default output device.
 //! - This file is the [`Feature`]: what the session drives, what `status`
-//!   reports, and what `mute` does.
+//!   reports, and what `mute` does. The stream, the frame clock and the
+//!   broadcast are the same on both systems; every other system keeps a
+//!   worker that only waits to be stopped.
 //!
 //! # Audio is its own RTP track, never the video one
 //!
@@ -27,17 +33,25 @@
 //!
 //! # Hardware check (`#[ignore]`d)
 //!
-//! `the_whole_path_encodes_what_this_machine_is_playing` runs the feature for a
-//! second and counts what reached a viewer's track. With the working directory
-//! `agent/swoop`:
+//! `the_whole_path_encodes_what_this_machine_is_playing` runs the feature for
+//! two seconds and counts what reached a viewer's track. With the working
+//! directory `agent/swoop`, on Windows:
 //!
 //! ```text
 //! cargo test --features audio-opus --lib -- --ignored audio::live --nocapture
 //! ```
 //!
-//! It opens a real loopback capture, so — like `wasapi`'s — it **records
-//! whatever the machine is playing** while it runs. Frames arrive either way:
-//! a silent desktop produces comfort silence rather than nothing.
+//! and on macOS, from a shell holding the Screen Recording grant with the
+//! display awake:
+//!
+//! ```text
+//! CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo test --no-default-features \
+//!     --features encode-videotoolbox,audio-opus --lib -- --ignored audio::live --nocapture
+//! ```
+//!
+//! It opens a real loopback capture, so — like `wasapi`'s and `sck`'s — it
+//! **records whatever the machine is playing** while it runs. Frames arrive
+//! either way: a silent desktop produces comfort silence rather than nothing.
 //!
 //! # What this feature will not do
 //!
@@ -47,6 +61,8 @@
 //! the page says so rather than offering a toggle that does nothing.
 
 pub mod opus;
+#[cfg(target_os = "macos")]
+pub mod sck;
 #[cfg(windows)]
 pub mod wasapi;
 
@@ -66,14 +82,21 @@ mod live {
     use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
     use std::sync::{Arc, Mutex};
     use std::thread::JoinHandle;
+    #[cfg(any(windows, target_os = "macos", test))]
     use std::time::Duration;
 
     use crossbeam_channel::{bounded, Receiver, Sender};
-    // Everything that *produces* packets is Windows-only until Wave 9 brings
-    // the other endpoints, so its imports and its constants are too. The hub
-    // and the feature itself are portable.
-    #[cfg(windows)]
+    // Everything that *produces* packets needs a platform capture, which
+    // Windows and macOS have, so its imports and its constants are theirs.
+    // The hub and the feature itself are portable.
+    #[cfg(any(windows, target_os = "macos"))]
     use crossbeam_channel::{RecvTimeoutError, TrySendError};
+
+    // The platform's capture and its endpoint probe, under one pair of names.
+    #[cfg(target_os = "macos")]
+    use super::sck::{render_endpoint_present, Loopback};
+    #[cfg(windows)]
+    use super::wasapi::{render_endpoint_present, Loopback};
 
     use super::opus;
     use crate::ipc::AudioState;
@@ -82,8 +105,8 @@ mod live {
 
     /// How often the endpoint is re-probed. A device enabled, unplugged or
     /// re-plugged mid-session shows up on the next `status` (which is itself on
-    /// a two-second cadence), and the probe is a single COM call.
-    #[cfg(windows)]
+    /// a two-second cadence), and the probe is a single COM or CoreAudio call.
+    #[cfg(any(windows, target_os = "macos"))]
     const PROBE_INTERVAL: Duration = Duration::from_secs(2);
 
     /// Nothing reported yet — the probe has not run once.
@@ -149,7 +172,7 @@ mod live {
     }
 
     /// One encoded frame to every viewer still listening.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn broadcast(rtp_48k: u64, payload: &[u8]) {
         viewers().retain(|tx| {
             match tx.try_send(AudioPacket {
@@ -272,8 +295,11 @@ mod live {
     /// The tick is the frame length while a capture is running and
     /// [`PROBE_INTERVAL`] while there is nothing to read, so an idle machine
     /// wakes twice a second rather than a hundred times.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn capture(shared: &Shared, stop: &Receiver<()>) {
+        // WASAPI wants COM on the thread that owns the capture; ScreenCaptureKit
+        // and CoreAudio want nothing of the kind.
+        #[cfg(windows)]
         let _com = match ComThread::enter() {
             Ok(com) => com,
             Err(e) => {
@@ -345,24 +371,24 @@ mod live {
         }
     }
 
-    /// Wave 9 brings the macOS and Linux endpoints. Until then the thread only
-    /// waits to be told to stop, and `status` says nothing about audio rather
-    /// than claiming a machine has none.
-    #[cfg(not(windows))]
+    /// Linux gets its own plan. Until then the thread only waits to be told to
+    /// stop, and `status` says nothing about audio rather than claiming a
+    /// machine has none.
+    #[cfg(not(any(windows, target_os = "macos")))]
     fn capture(_shared: &Shared, stop: &Receiver<()>) {
         let _ = stop.recv();
     }
 
     /// Where the 48 kHz clock stands after `elapsed`, rounded down to a whole
     /// frame so a new stream's first timestamp is still on the frame grid.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn rtp_at(elapsed: Duration) -> u64 {
         elapsed.as_millis() as u64 / u64::from(opus::FRAME_MS) * opus::FRAME_RTP_TICKS
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     fn probe() -> u8 {
-        if super::wasapi::render_endpoint_present() {
+        if render_endpoint_present() {
             OK
         } else {
             NO_ENDPOINT
@@ -370,9 +396,9 @@ mod live {
     }
 
     /// One running capture: the device, the clock, and the encoder behind it.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     struct Stream {
-        loopback: super::wasapi::Loopback,
+        loopback: Loopback,
         encoder: Box<dyn opus::Encoder>,
         timeline: opus::Timeline,
         /// The clock [`opus::Timeline::fill_to`] is measured against. It starts
@@ -388,11 +414,11 @@ mod live {
         payload: Vec<u8>,
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     impl Stream {
         fn open(rtp_base: u64) -> anyhow::Result<Self> {
             Ok(Self {
-                loopback: super::wasapi::Loopback::open()?,
+                loopback: Loopback::open()?,
                 encoder: opus::encoder()?,
                 timeline: opus::Timeline::new(),
                 started: std::time::Instant::now(),
@@ -553,9 +579,9 @@ mod live {
 
         /// A viewer that joins after the capture is running still gets a track,
         /// and one that leaves is dropped rather than encoded into forever.
-        /// (Windows, with `broadcast`, until Wave 9 gives the other platforms a
-        /// capture that feeds it.)
-        #[cfg(windows)]
+        /// (Windows and macOS, the systems with a capture that feeds
+        /// `broadcast`.)
+        #[cfg(any(windows, target_os = "macos"))]
         #[test]
         fn a_departed_viewer_is_dropped_from_the_hub() {
             viewers().clear();
@@ -571,7 +597,7 @@ mod live {
         /// A device that opens 30 s into a session picks the clock up where it
         /// stands, on the frame grid — never back at zero, which is the one
         /// direction an RTP timestamp may not go.
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         #[test]
         fn a_replacement_device_starts_where_the_session_clock_got_to() {
             assert_eq!(rtp_at(Duration::ZERO), 0);

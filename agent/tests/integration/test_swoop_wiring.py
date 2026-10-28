@@ -29,7 +29,10 @@ import time
 from pathlib import Path
 
 import pytest
-import win32event
+
+# the wiring under test is the windows service's; on a posix box this file
+# skips at collection instead of failing the whole run (mba, 2026-09-25).
+win32event = pytest.importorskip("win32event")
 
 import owlette_service
 import swoop_commands
@@ -249,6 +252,7 @@ class FakeStreamerBackend:
 
     def __init__(self):
         self.procs = []
+        self.sids = []
         self.bundles = 0
 
     def __getattr__(self, name):
@@ -262,7 +266,8 @@ class FakeStreamerBackend:
         return bytearray(
             json.dumps({'sid': sid, 'sessionKey': BUNDLE_SENTINEL}).encode())
 
-    def spawn(self, exe_path, log_dir=None):
+    def spawn(self, exe_path, log_dir=None, *, sid=None):
+        self.sids.append(sid)
         popen = subprocess.Popen(
             [sys.executable, exe_path, 'run'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -281,7 +286,7 @@ class RecordingManager:
     def ensure_streamer(self, sid):
         self.calls.append(('ensure_streamer', sid))
 
-    def kill(self, reason='kill'):
+    def kill(self, reason='kill', sid=None):
         self.calls.append(('kill', reason))
 
     def on_session_change(self):
@@ -408,6 +413,7 @@ def test_a_ring_spawns_the_streamer_and_a_service_stop_kills_it(wired):
     assert wait_for(lambda: svc.swoop_manager.status()['state'] == 'running')
     assert proc.is_running()
     assert backend.bundles == 1
+    assert backend.sids == ['sid-1'], "the ring's sid never reached the spawn"
 
     svc.graceful_shutdown('svc_stop')
 
@@ -561,6 +567,22 @@ def test_the_console_session_check_does_nothing_before_swoop_starts(monkeypatch)
     import win32ts
     monkeypatch.setattr(win32ts, 'WTSGetActiveConsoleSessionId',
                         lambda: reads.append(1))
+
+    svc._check_console_session()
+
+    assert reads == []
+
+
+def test_the_console_session_check_is_windows_only(monkeypatch):
+    # a mac or linux streamer is not tied to a console session, and the win32ts
+    # read logged a failure on every 5s tick there (issue #27, #28 log tails).
+    svc = ServiceDouble()
+    svc.swoop_manager = RecordingManager()
+    reads = []
+    import win32ts
+    monkeypatch.setattr(win32ts, 'WTSGetActiveConsoleSessionId',
+                        lambda: reads.append(1))
+    monkeypatch.setattr(sys, 'platform', 'darwin')
 
     svc._check_console_session()
 

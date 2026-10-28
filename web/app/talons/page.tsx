@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Zap } from 'lucide-react';
 
+import { PageCascade } from '@/components/PageCascade';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
@@ -18,6 +19,7 @@ import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
 import { PageHeader } from '@/components/PageHeader';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useAuth } from '@/contexts/AuthContext';
@@ -44,12 +46,15 @@ export default function TalonsPage() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     createSite,
     updateSite,
     deleteSite,
     selectSite,
     pickSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const talonsGated = usePlanGated('talons', siteOwner);
 
   const { machines } = useMachines(currentSiteId);
   const { talons, loading: talonsLoading, error } = useTalons(currentSiteId);
@@ -61,6 +66,7 @@ export default function TalonsPage() {
   } = useTalonPresets(currentSiteId || null);
 
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
@@ -151,13 +157,20 @@ export default function TalonsPage() {
   const loading = sitesLoading || talonsLoading;
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="Talons"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={() => {
+          setManageEditSiteId(currentSiteId);
+          setManageDialogOpen(true);
+        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -165,6 +178,7 @@ export default function TalonsPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         onUpdateSite={updateSite}
@@ -201,16 +215,18 @@ export default function TalonsPage() {
             </p>
           </div>
 
-          <Button
-            type="button"
-            data-testid="talon-create"
-            onClick={openCreate}
-            disabled={!currentSiteId}
-            className="flex-shrink-0 cursor-pointer text-gray-900"
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            create talon
-          </Button>
+          <UpgradeGate flag="talons" siteOwner={siteOwner} variant="inline" className="flex-shrink-0">
+            <Button
+              type="button"
+              data-testid="talon-create"
+              onClick={openCreate}
+              disabled={!currentSiteId}
+              className="flex-shrink-0 cursor-pointer"
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              create talon
+            </Button>
+          </UpgradeGate>
         </div>
 
         {/* Ahead of the loading branch: `loading` is derived from "the listener
@@ -241,12 +257,15 @@ export default function TalonsPage() {
             <p className="mt-1 text-xs text-muted-foreground">
               a talon watches for something — a schedule, a threshold, an event — and acts on it.
             </p>
-            <div className="mt-3 flex justify-center">
-              <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer text-gray-900">
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                create talon
-              </Button>
-            </div>
+            {/* the header already carries the upgrade note */}
+            {!talonsGated && (
+              <div className="mt-3 flex justify-center">
+                <Button type="button" size="sm" onClick={openCreate} className="cursor-pointer">
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  create talon
+                </Button>
+              </div>
+            )}
           </Card>
         ) : (
           <div className="overflow-hidden rounded-lg border border-border bg-card">
@@ -267,7 +286,7 @@ export default function TalonsPage() {
               <span aria-hidden="true" />
             </div>
 
-            <div className="divide-y divide-border">
+            <div className="cascade-rows divide-y divide-border">
               {talons.map((talon) => (
                 <TalonCard
                   key={talon.id}
@@ -320,6 +339,6 @@ export default function TalonsPage() {
           void writeTalonTemplate(talon, existing);
         }}
       />
-    </div>
+    </PageCascade>
   );
 }

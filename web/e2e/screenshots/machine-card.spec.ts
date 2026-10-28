@@ -4,7 +4,7 @@
  * Output: `web/public/docs-screens/machine-card.png`
  * Used by: `web/content/docs/getting-started.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { seedScreenshotFixtures } from './fixtures';
 import {
@@ -12,6 +12,7 @@ import {
   pinAdminSiteContext,
   saveDocsScreenshot,
   settleForDocsScreenshot,
+  test,
 } from './docs-helpers';
 
 test.use({ ...roleState('admin'), viewport: { width: 1440, height: 1000 } });

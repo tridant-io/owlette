@@ -1,31 +1,36 @@
 ---
 title: "CI/CD with GitHub Actions"
-description: "Use GitHub Actions to build a project, publish the output directory as an Owlette roost version, and deploy that exact version to the target fleet."
+description: "use GitHub Actions to build a project, publish the output directory as a roost version, and deploy that exact version to the target fleet."
+keywords: ["pipeline", "continuous deployment"]
 ---
 
-The recommended launch path is the reusable Owlette roost deploy action in `.github/actions/owlette-roost-deploy`. It uses the public `owlette` CLI instead of embedding raw chunk/upload API calls in every consumer repository.
+the recommended path is the reusable roost deploy action in `.github/actions/owlette-roost-deploy`. it drives the public `owlette` CLI instead of embedding raw chunk/upload API calls in every consumer repository.
 
-This is a Wave 5.4 launch asset. It becomes externally runnable after the Wave 5.3 `@owlette/cli@rc` publish gate is complete.
+<Callout type="warning" title={"not runnable until the CLI is published"}>
+
+both the action and the direct workflow below install `@owlette/cli@rc` from npm, which is not published yet (see [distribution](/docs/api/distribution)). until it is, the install step fails.
+
+</Callout>
 
 ---
 
 ## secrets and variables
 
-Configure these in the consumer repository under **Settings -> Secrets and variables -> Actions**.
+configure these in the consumer repository under **Settings -> Secrets and variables -> Actions**.
 
 | name | type | purpose |
 |---|---|---|
-| `OWLETTE_TOKEN` | secret | scoped Owlette API key |
-| `OWLETTE_SITE_ID` | variable | site id that owns the roost |
-| `OWLETTE_ROOST_ID` | variable | roost id to publish into |
+| `OWLETTE_TOKEN` | secret | scoped owlette API key (`owk_live_...`) |
+| `OWLETTE_SITE_ID` | variable | site ID that owns the roost |
+| `OWLETTE_ROOST_ID` | variable | roost ID to publish into |
 | `OWLETTE_API_URL` | variable | optional, defaults to `https://owlette.app` |
 
-Recommended key scope:
+recommended key scope:
 
-- `site=<site-id>:write`
-- `roost=<roost-id>:write,deploy`
+- `site=<site-id>:write` — the chunk dedup check and signed upload URLs
+- `roost=<roost-id>:write,deploy` — the version publish and the deploy
 
-Use a dedicated key per repository so audit logs and rate-limit signals remain attributable.
+use a dedicated key per repository so audit logs and rate-limit signals remain attributable. see [scopes](/docs/api/authentication#scopes).
 
 ---
 
@@ -48,9 +53,9 @@ jobs:
     env:
       OWLETTE_API_URL: ${{ vars.OWLETTE_API_URL || 'https://owlette.app' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -60,7 +65,7 @@ jobs:
       - name: Build artifact
         run: npm run build
 
-      - name: Publish and deploy with Owlette
+      - name: Publish and deploy with owlette
         uses: tridant-io/owlette/.github/actions/owlette-roost-deploy@main
         with:
           token: ${{ secrets.OWLETTE_TOKEN }}
@@ -71,13 +76,29 @@ jobs:
           description: ${{ github.ref_name }}
 ```
 
-A copyable template lives at `examples/github-actions/roost-deploy.yml`.
+action inputs:
+
+| input | required | default | purpose |
+|---|---|---|---|
+| `token` | yes | | owlette API key |
+| `site-id` | yes | | site that owns the roost |
+| `roost-id` | yes | | roost to publish into |
+| `path` | no | `dist` | directory to publish |
+| `api-url` | no | `https://owlette.app` | API base URL |
+| `description` | no | the git ref name | version description, ≤500 characters |
+| `deploy` | no | `'true'` | deploy the new version after the push |
+| `machines` | no | | comma-separated machine IDs for a targeted deploy |
+| `cli-version` | no | `rc` | npm dist-tag or version of `@owlette/cli` to install |
+
+the action sets up its own Node.js 20, runs `owlette version`, then `owlette --json roost push`, and exposes the published ID as the `version-id` output.
+
+a copyable template lives at `examples/github-actions/roost-deploy.yml`.
 
 ---
 
 ## direct CLI workflow
 
-Use this form when you do not want to depend on the reusable action yet.
+use this form when you do not want to depend on the reusable action.
 
 ```yaml
 name: deploy with owlette cli
@@ -99,9 +120,9 @@ jobs:
       OWLETTE_SITE_ID: ${{ vars.OWLETTE_SITE_ID }}
       OWLETTE_ROOST_ID: ${{ vars.OWLETTE_ROOST_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -128,11 +149,13 @@ jobs:
         run: owlette roost deploy "$OWLETTE_ROOST_ID" --site "$OWLETTE_SITE_ID" --version "${{ steps.publish.outputs.version_id }}"
 ```
 
+the CLI reads `OWLETTE_TOKEN` and `OWLETTE_API_URL` from the environment. `owlette roost deploy` also takes `--machines <ids>`, `--dry-run`, and `--at <iso8601>`; see [`roost`](/docs/cli/reference/roost).
+
 ---
 
 ## publish without deploy
 
-Set `deploy: false` on the action when CI should publish a version for manual approval in the dashboard:
+set `deploy: false` on the action when CI should publish a version for manual approval in the dashboard:
 
 ```yaml
 - uses: tridant-io/owlette/.github/actions/owlette-roost-deploy@main
@@ -144,18 +167,18 @@ Set `deploy: false` on the action when CI should publish a version for manual ap
     deploy: false
 ```
 
-The key can then omit roost `deploy`, but still needs `site=<site-id>:write` and `roost=<roost-id>:write`.
+the key can then omit roost `deploy`, but still needs `site=<site-id>:write` and `roost=<roost-id>:write`.
 
 ---
 
 ## launch verification
 
-Before linking this workflow from public launch material:
+before linking this workflow from public launch material:
 
 - confirm `@owlette/cli@rc` installs on a clean GitHub-hosted Ubuntu runner
 - run the workflow against a dev or staging roost fixture
 - confirm the published version appears in the roost version history with the Git tag as its description
 - confirm deployment either queues successfully or is deliberately disabled with `deploy: false`
-- confirm failures include the Owlette `requestId` and problem `code` in the job log
+- confirm failures include the owlette `requestId` and problem `code` in the job log
 
-Do not publish consumer examples that require undocumented helper scripts or raw R2 credentials. The CLI handles chunking, dedup, signed upload URLs, version publish, and deploy through the public API.
+do not publish consumer examples that require undocumented helper scripts or raw R2 credentials. the CLI handles chunking, dedup, signed upload URLs, version publish, and deploy through the public API.

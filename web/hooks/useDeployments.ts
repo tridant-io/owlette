@@ -45,6 +45,11 @@ export interface Deployment {
   status: 'pending' | 'in_progress' | 'completed' | 'failed' | 'partial' | 'cancelled' | 'uninstalled';
 }
 
+export interface DeploymentRequestOptions {
+  /** a person's reason to install inside active hours, sent as `active_hours_override`. */
+  override?: { reason: string };
+}
+
 export function useDeploymentTemplates(siteId: string) {
   // loadedSiteId pins state to the site it was populated for so `loading` can
   // be derived at render without forcing a synchronous reset on site changes.
@@ -206,7 +211,8 @@ export function useDeployments(siteId: string) {
 
   const createDeployment = async (
     deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>,
-    machineIds: string[]
+    machineIds: string[],
+    options: DeploymentRequestOptions = {},
   ) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
 
@@ -221,6 +227,7 @@ export function useDeployments(siteId: string) {
       ...(deployment.suppress_projects?.length ? { suppress_projects: deployment.suppress_projects } : {}),
       ...(deployment.parallel_install ? { parallel_install: true } : {}),
       ...(deployment.sha256_checksum ? { sha256_checksum: deployment.sha256_checksum } : {}),
+      ...overrideBody(options),
     };
 
     const response = await fetch(deploymentsUrl(siteId), {
@@ -242,8 +249,13 @@ export function useDeployments(siteId: string) {
    * specific machines; omitted → all failed targets. The server self-heals a
    * missing sha256_checksum from the installer URL, so legacy deployments retry
    * cleanly (slow for large installers — the server streams and hashes).
+   * The original request's override does not carry over: a retry sends its own.
    */
-  const retryDeployment = async (deploymentId: string, machineIds?: string[]) => {
+  const retryDeployment = async (
+    deploymentId: string,
+    machineIds?: string[],
+    options: DeploymentRequestOptions = {},
+  ) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
 
     const response = await fetch(`${deploymentsUrl(siteId)}/${encodeURIComponent(deploymentId)}/retry`, {
@@ -252,7 +264,10 @@ export function useDeployments(siteId: string) {
         'content-type': 'application/json',
         'Idempotency-Key': makeIdempotencyKey(`deployment-retry-${deploymentId}`),
       },
-      body: JSON.stringify(machineIds?.length ? { machines: machineIds } : {}),
+      body: JSON.stringify({
+        ...(machineIds?.length ? { machines: machineIds } : {}),
+        ...overrideBody(options),
+      }),
     });
     if (!response.ok) throw new Error(await readApiError(response, 'Failed to retry deployment'));
 
@@ -351,6 +366,10 @@ function deploymentsUrl(siteId: string): string {
 
 function deploymentTemplateUrl(siteId: string): string {
   return `/api/sites/${encodeURIComponent(siteId)}/presets/deployment-template`;
+}
+
+function overrideBody(options: DeploymentRequestOptions): { active_hours_override?: { reason: string } } {
+  return options.override ? { active_hours_override: { reason: options.override.reason } } : {};
 }
 
 function makeIdempotencyKey(prefix: string): string {

@@ -16,11 +16,11 @@ import {
   EmailAuthProvider,
 } from 'firebase/auth';
 import { doc, setDoc, onSnapshot } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 import { auth, db, storage } from '@/lib/firebase';
 import { handleError, logError } from '@/lib/errorHandler';
 import { inAppDiagnostics, isPopupUnavailableError } from '@/lib/inAppBrowser';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { THEMES, type ThemeChoice } from '@/lib/theme';
 import { toast } from '@/lib/toast';
 import * as Sentry from '@sentry/nextjs';
 // Type-only: mfaFactors.server.ts is Admin-SDK code that must never reach the
@@ -335,6 +335,9 @@ export interface UserPreferences {
   activeGraphPanel?: { machineId: string; metric: string } | null;
   /** MetricsDetailPanel range, global not per-machine: '1h'|'1d'|'1w'|'1m'|'1y'|'all'. Default '1h'. */
   graphTimeRange?: '1h' | '1d' | '1w' | '1m' | '1y' | 'all';
+  /** appearance, synced across devices. undefined = never chosen, so the
+   * browser's own (localStorage, else the os) stands. applied by ThemePreferenceSync. */
+  theme?: ThemeChoice;
 }
 
 /**
@@ -602,6 +605,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                   graphTabs: preferences.graphTabs || undefined,
                   activeGraphPanel: preferences.activeGraphPanel || null,
                   graphTimeRange: preferences.graphTimeRange || undefined,
+                  // an unknown value drops to undefined rather than reach setTheme
+                  theme: THEMES.find((t) => t === preferences.theme),
                 };
                 setUserPreferences(prev => {
                   // Keep prev's reference for unchanged fields — identity churn
@@ -633,7 +638,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     prev.processesExpanded === newPrefs.processesExpanded &&
                     prev.displaysExpanded === newPrefs.displaysExpanded &&
                     mutedEqual && ccEqual && graphTabsEqual && activeGraphPanelEqual &&
-                    prev.graphTimeRange === newPrefs.graphTimeRange;
+                    prev.graphTimeRange === newPrefs.graphTimeRange &&
+                    prev.theme === newPrefs.theme;
                   if (allEqual) return prev;
 
                   // Something changed: rebuild, keeping refs for unchanged fields.
@@ -852,8 +858,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
 
       intentionalSignOutRef.current = true;
-      await firebaseSignOut(auth);
+      // the session before the user: once the user clears, pages send them to
+      // /login, and a cookie still valid then bounces them straight back.
       await destroySessionCookie();
+      await firebaseSignOut(auth);
       toast.success('Signed Out', {
         description: 'You have been signed out successfully.',
       });
@@ -919,6 +927,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Storage is not initialized.');
       }
 
+      // loaded on first use: nothing else in the auth context needs storage.
+      const { ref: storageRef, uploadBytes, getDownloadURL, deleteObject } = await import('firebase/storage');
       const uid = auth.currentUser.uid;
       const avatarRef = storageRef(storage, `users/${uid}/avatar.jpg`);
 

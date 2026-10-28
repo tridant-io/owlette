@@ -109,6 +109,16 @@ test.describe('mobile responsive acceptance — public routes', () => {
     await assertNoHorizontalOverflow(page);
   });
 
+  test('/login puts the sign-up prompt on its own line', async ({ page }) => {
+    await page.goto('/login');
+    const forgot = await page.getByRole('link', { name: 'forgot password?' }).boundingBox();
+    const prompt = await page.getByText(/have an account\?/).boundingBox();
+    const signUp = await page.getByRole('link', { name: 'sign up', exact: true }).boundingBox();
+    expect(prompt!.y).toBeGreaterThanOrEqual(forgot!.y + forgot!.height);
+    // the prompt and its link wrap together, never mid-phrase
+    expect(Math.abs(signUp!.y - prompt!.y)).toBeLessThan(prompt!.height);
+  });
+
   // Task 4.4 calls /register broken, but the expanded form fits at 390px today,
   // so this asserts live — whatever 4.4 saw, it is not document overflow.
   test('/register does not scroll horizontally', async ({ page }) => {

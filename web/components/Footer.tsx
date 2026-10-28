@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo } from "react";
 import { usePathname } from "next/navigation";
+import { useViewerAppPlatform } from "@/hooks/useViewerAppPlatform";
 import { GITHUB_REPO_URL } from "@/lib/repoLinks";
 
 const RANDOM_EMOJIS = [
@@ -28,6 +29,7 @@ const RANDOM_EMOJIS = [
 
 export function Footer() {
   const pathname = usePathname();
+  const inViewerApp = useViewerAppPlatform() !== null;
   // Deterministically pick an emoji from the pathname so SSR and client render
   // the same glyph (no hydration mismatch) and the emoji changes per route.
   // The previous Math.random()-in-effect approach tripped
@@ -46,7 +48,10 @@ export function Footer() {
   // Hide footer on /swoop — a live remote session is full-window, and the root
   // layout renders this as a sibling of the page, so its own layout cannot
   // remove it.
+  // and on every page inside owlette swoop: the app's window is not a web page,
+  // so the site's links have no place in it.
   if (
+    inViewerApp ||
     pathname?.startsWith('/admin') ||
     pathname === '/' ||
     pathname?.startsWith('/hoot') ||
@@ -55,8 +60,15 @@ export function Footer() {
     return null;
   }
 
+  // the docs read to their last line, so there it closes the page instead of
+  // covering it
+  const pinned = !pathname?.startsWith('/docs');
+
   return (
-    <footer className="fixed bottom-0 left-0 right-0 w-full bg-gradient-to-t from-background via-background/95 to-transparent pt-8 pb-6 z-10 pointer-events-none">
+    // pinned over the page from `sm` up; on a phone it closes the page instead of covering it
+    <footer
+      className={`relative ${pinned ? 'sm:fixed sm:bottom-0 sm:left-0 sm:right-0' : ''} w-full bg-gradient-to-t from-background via-background/95 to-transparent pt-8 pb-6 z-10 pointer-events-none`}
+    >
       <div className="container mx-auto px-4 pointer-events-auto">
         <p className="text-center text-xs text-muted-foreground flex items-center justify-center gap-1">
           <span>made with</span>

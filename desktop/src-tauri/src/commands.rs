@@ -8,18 +8,22 @@
 //! runs to completion on one worker thread — keeps the main thread free during a
 //! mutex wait and satisfies Windows' acquire/release-on-the-same-thread rule.
 
+use std::path::Path;
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::{AppHandle, State};
+use tauri::ipc::{InvokeBody, Request};
+use tauri::{AppHandle, Manager, State};
 
 use crate::agent_cli::{self, Runs};
+use crate::issue_attachments::{self, Staged, StagedVideo};
 use crate::json_io::{self, WriteOutcome};
-use crate::paths::{self, SERVICE_STATUS_REL};
+use crate::paths::{self, ISSUE_ATTACHMENTS_REL, SERVICE_STATUS_REL};
 use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
 use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
-use crate::window_state::{DetailSections, LayoutState};
+use crate::viewer_launch;
+use crate::window_state::{self, DetailSections, LayoutState, ThemeChoice};
 
 /// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
 /// otherwise uses relative paths; this is for spawning the bundled interpreter or
@@ -46,20 +50,87 @@ pub fn hostname() -> String {
   crate::tray::hostname()
 }
 
+/// Whether macOS has granted this app Screen Recording, read without asking
+/// (`tcc.rs` asks once per launch). None off macOS: no such permission there.
+#[tauri::command(async)]
+pub fn screen_recording_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    Some(crate::tcc::granted())
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+/// Whether macOS lets this app post input (Accessibility), read without
+/// asking by the swoop sidecar (`tcc.rs`), so a grant made while the app runs
+/// is seen. None off macOS, where there is no such permission, and when the
+/// sidecar could not say.
+#[tauri::command(async)]
+pub fn accessibility_granted() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    crate::tcc::accessibility_granted()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+/// Ask macOS for Accessibility and open its pane. The ask can raise a system
+/// prompt, so this is the permission banner's button and nothing else.
+#[tauri::command(async)]
+pub fn request_accessibility() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    let asked = crate::tcc::request_accessibility();
+    log::info!("accessibility: asked from the banner, answer now {asked}");
+  }
+  shell_open::open_accessibility_settings()
+}
+
 /// Whether the run-on-login startup shortcut exists.
+#[tauri::command(async)]
+pub fn clipboard_sharing() -> Option<bool> {
+  #[cfg(target_os = "macos")]
+  {
+    crate::tcc::clipboard_sharing()
+  }
+  #[cfg(not(target_os = "macos"))]
+  {
+    None
+  }
+}
+
+#[tauri::command(async)]
+pub fn request_clipboard_sharing() -> Result<(), String> {
+  #[cfg(target_os = "macos")]
+  {
+    if let Err(error) = crate::tcc::request_clipboard_sharing() {
+      log::warn!("clipboard sharing: the read from the banner did not start: {error}");
+    }
+  }
+  shell_open::open_clipboard_settings()
+}
+
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {
   crate::startup_link::is_enabled()
 }
 
 /// Create or remove the run-on-login shortcut; returns the resulting state.
+/// The tray re-reads the setting on a slow cadence, so it is told now.
 #[tauri::command(async)]
-pub fn set_startup_link(enabled: bool) -> Result<bool, String> {
+pub fn set_startup_link(app: AppHandle, enabled: bool) -> Result<bool, String> {
   if enabled {
     crate::startup_link::enable()?;
   } else {
     crate::startup_link::disable()?;
   }
+  crate::tray::request_repaint(&app);
   Ok(crate::startup_link::is_enabled())
 }
 
@@ -97,6 +168,15 @@ pub fn service_start(allow_elevation: bool) -> Result<ServiceCommandOutcome, Str
 #[tauri::command(async)]
 pub fn service_stop() -> Result<ServiceCommandOutcome, String> {
   service_ctl::stop()
+}
+
+/// Restart the agent off windows (`systemctl restart` on linux, a request to
+/// the daemon on macos). Windows asks the service itself through
+/// `tmp/restart.flag` instead.
+#[cfg(unix)]
+#[tauri::command(async)]
+pub fn service_restart() -> Result<ServiceCommandOutcome, String> {
+  service_ctl::restart()
 }
 
 /// Close `pid` gracefully, then terminate it — but only if it is still running
@@ -175,10 +255,60 @@ pub fn open_owlette_path(path: String) -> Result<(), String> {
   shell_open::open_in_tree(&path)
 }
 
+/// Stage a screenshot for an issue report. The body is either `{ path }`, a
+/// file the operator picked, or the raw bytes of a pasted image.
+#[tauri::command(async)]
+pub fn stage_issue_screenshot(request: Request<'_>) -> Result<Staged, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  match request.body() {
+    InvokeBody::Raw(bytes) => issue_attachments::stage_bytes(&dir, bytes),
+    InvokeBody::Json(body) => {
+      let path = body
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "expected a file path or image bytes".to_string())?;
+      issue_attachments::stage_file(&dir, Path::new(path))
+    }
+  }
+}
+
+/// Stage a video the operator picked for an issue report, within the `room`
+/// in bytes the issue's other attachments leave.
+#[tauri::command(async)]
+pub fn stage_issue_video(path: String, room: u64) -> Result<StagedVideo, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  issue_attachments::stage_video(&dir, Path::new(&path), room)
+}
+
+/// Delete staged screenshots or videos by id; returns how many were removed.
+#[tauri::command(async)]
+pub fn discard_issue_screenshots(ids: Vec<String>) -> Result<usize, String> {
+  let dir = paths::resolve_in_root(&paths::data_root(), ISSUE_ATTACHMENTS_REL)?;
+  issue_attachments::discard(&dir, &ids)
+}
+
 /// Open an `http(s)` link in the default browser.
 #[tauri::command(async)]
 pub fn open_external_url(url: String) -> Result<(), String> {
   shell_open::open_url(&url)
+}
+
+/// Whether owlette swoop, the viewer app, is installed where this app looks for it.
+#[tauri::command(async)]
+pub fn swoop_viewer_installed() -> bool {
+  viewer_launch::viewer_installed()
+}
+
+/// Open owlette swoop on the swoop picker of this machine's dashboard.
+#[tauri::command(async)]
+pub fn open_swoop_viewer() -> Result<(), String> {
+  viewer_launch::open_picker()
+}
+
+/// Open macOS's Screen Recording pane, for the permission notice.
+#[tauri::command(async)]
+pub fn open_screen_recording_settings() -> Result<(), String> {
+  shell_open::open_screen_recording_settings()
 }
 
 /// Width the process-list sidebar should open at, in logical pixels. Shares the
@@ -226,6 +356,38 @@ pub fn set_detail_section(
   open: bool,
 ) -> Result<bool, String> {
   layout.set_detail_section(&section, open)
+}
+
+/// The stored appearance: `system`, `dark` or `light`.
+#[tauri::command(async)]
+pub fn appearance_theme(layout: State<'_, LayoutState>) -> ThemeChoice {
+  layout.theme()
+}
+
+/// the theme the page should draw now: the pinned one, or the os's under `system`.
+/// the page asks once before its first render and then follows
+/// [`window_state::RESOLVED_EVENT`].
+#[tauri::command(async)]
+pub fn resolved_appearance(app: AppHandle) -> &'static str {
+  app
+    .get_webview_window("main")
+    .map_or("dark", |window| window_state::resolved_name(&window))
+}
+
+/// Re-theme the open window, then remember the choice; returns what was kept.
+#[tauri::command(async)]
+pub fn set_appearance_theme(
+  app: AppHandle,
+  layout: State<'_, LayoutState>,
+  theme: ThemeChoice,
+) -> Result<ThemeChoice, String> {
+  // applied before it is stored, like the other layout preferences: a failed
+  // write costs the next launch, not this session
+  match app.get_webview_window("main") {
+    Some(window) => window_state::apply_theme(&window, theme),
+    None => log::warn!("no main window to apply the appearance to"),
+  }
+  layout.set_theme(theme)
 }
 
 #[cfg(test)]

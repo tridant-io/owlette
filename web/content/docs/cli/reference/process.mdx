@@ -1,199 +1,265 @@
 ---
 title: "process"
-description: "manage the lifecycle of long-running processes on a single machine — register, update, delete, and queue start / stop / restart / kill commands, plus configure run-mode + schedule blocks. every verb is machine-scoped and requires both --site and --machine . all ten verbs are tier A — ready and hit the wave-2B public process api today."
+description: "process manages the long-running processes owlette keeps alive on a machine: register, update and delete them, set their run mode and schedule, and queue start, stop, restart and kill commands. every verb takes --site and --machine."
+keywords: ["restart app", "kill app", "watchdog"]
 ---
 
-control verbs (`kill` / `restart` / `start` / `stop`) are queued through the agent command channel and return a `commandId` you can poll via `owlette machine` command-state endpoints.
+verbs:
 
-`schedule` writes process config through the `/schedule` api call and the cli prints completion once the mode is set. mutations auto-generate an `Idempotency-Key` (server caches the response for 24h on the same key).
+- [`process list`](#list) — managed processes on a machine, with live status
+- [`process get`](#get) — one process's record
+- [`process create`](#create) — register a new managed process
+- [`process update`](#update) — change fields on a process
+- [`process delete`](#delete) — remove a process
+- [`process start` / `stop` / `restart` / `kill`](#start-stop-restart-kill) — queue a control command on the agent
+- [`process schedule`](#schedule) — set the run mode and schedule blocks
+
+mutations other than `delete` send an `Idempotency-Key` (default `cli-process-<verb>-<uuid>`); the server caches the response against it for 24 hours. if a mutation fails before a response arrives, the CLI prints the key and the `--idempotency-key` to re-run with.
 
 ---
 
 ## list
 
-list every managed process on a machine — merged config + live status (pid, responsiveness, launch_mode).
+lists every managed process on a machine — its stored config merged with the live status from the agent's last report.
 
-**synopsis** — `owlette process list --site <siteId> --machine <machineId> [--json]`
+```bash
+owlette process list --site <siteId> --machine <machineId> [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id whose processes to list |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine to read |
+
+the table has `processId`, `name`, `launch_mode`, `status` and `pid`, or prints `(no processes)`. `--json` prints `{ "processes": [...], "nextPageToken": null }`, each process shaped like [`get`](#get).
+
+### examples
 
 ```bash
 owlette process list --site site-1 --machine m_abc123
-owlette process list --site site-1 --machine m_abc123 --json | jq '.processes[] | select(.status != "running")'
 ```
 
-**backing endpoint**: `GET /api/sites/{siteId}/machines/{machineId}/processes`
+```bash
+owlette --json process list --site site-1 --machine m_abc123 | jq '.processes[] | select(.status != "running")'
+```
+
+backing: `GET /api/sites/{siteId}/machines/{machineId}/processes`.
 
 ---
 
 ## get
 
-print the detail record for one managed process.
+prints one process: `processId`, `name`, `exe`, `cwd`, `priority`, `visibility`, `launch_mode`, `autolaunch`, `status`, `pid`, `responsive` and `last_updated`.
 
-**synopsis** — `owlette process get <processId> --site <siteId> --machine <machineId> [--json]`
+```bash
+owlette process get <processId> --site <siteId> --machine <machineId> [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id that owns the process |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine that owns the process |
+
+`--json` prints the record: `processId`, `name`, `exe_path`, `file_path`, `cwd`, `priority`, `visibility`, `time_delay`, `time_to_init`, `relaunch_attempts`, `autolaunch`, `launch_mode`, `schedules`, `schedule`, `schedulePresetId`, and the live fields `status`, `pid`, `responsive` and `last_updated`.
+
+### examples
 
 ```bash
 owlette process get pr_main_td --site site-1 --machine m_abc123
-owlette process get pr_main_td --site site-1 --machine m_abc123 --json
 ```
 
-**backing endpoint**: `GET /api/sites/{siteId}/machines/{machineId}/processes/{processId}`
+```bash
+owlette --json process get pr_main_td --site site-1 --machine m_abc123 | jq -r '.status'
+```
+
+backing: `GET /api/sites/{siteId}/machines/{machineId}/processes/{processId}`.
 
 ---
 
 ## create
 
-register a new managed process on a machine. `--name` must be unique per machine — duplicates return `409 duplicate_process_name`. wraps a `withProcessLock` firestore transaction so two concurrent creates can't race.
+registers a new managed process. `--name` must be unique on the machine; a duplicate returns `409 duplicate_process_name`. a new process starts with `launch_mode` `off` unless you set one.
 
-**synopsis** — `owlette process create --site <siteId> --machine <machineId> --name <name> --exe <path> [--cwd <path>] [--priority <p>] [--visibility <v>] [--launch-mode <mode>]`
+```bash
+owlette process create --site <siteId> --machine <machineId> --name <name> --exe <path> [--cwd <path>] [--priority <priority>] [--visibility <visibility>] [--launch-mode <mode>] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id to create the process on |
-| `--name <name>` | yes | human-readable name (must be unique on the machine) |
-| `--exe <path>` | yes | absolute path to the executable |
-| `--cwd <path>` | no | working directory for the process |
-| `--priority <p>` | no | `idle` \| `below` \| `normal` \| `above` \| `high` \| `realtime` |
-| `--visibility <v>` | no | `visible` \| `hidden` \| `minimized` \| `maximized` |
-| `--launch-mode <mode>` | no | `off` \| `always` \| `scheduled` |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine to add the process to |
+| `--name <name>` | string | yes | display name, unique on the machine |
+| `--exe <path>` | string | yes | absolute path to the executable |
+| `--cwd <path>` | string | no | working directory |
+| `--priority <priority>` | string | no | Windows priority label — `Low`, `Normal`, `High` or `Realtime` |
+| `--visibility <visibility>` | string | no | Windows window state — `Normal` or `Hidden` |
+| `--launch-mode <mode>` | `off` or `always` | no | `off` leaves the process unmanaged; `always` keeps it running and relaunches it after a crash |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--priority` and `--visibility` are stored exactly as given — the server does not check them, and the CLI's `--help` lists other spellings. use the values the dashboard writes, shown above. both apply only on Windows; macOS and Linux agents ignore them.
+
+`--launch-mode scheduled` passes the CLI's check but the server refuses it with `400 missing_schedules`, because `create` cannot send schedule blocks. create the process, then run [`schedule`](#schedule) with `--mode scheduled`.
+
+human mode prints `owlette: process <name> created (processId=<id>)`. `--json` prints `{ "processId": "..." }`.
+
+### examples
 
 ```bash
 owlette process create --site site-1 --machine m_abc123 \
   --name "main-td" \
   --exe "C:\Program Files\Derivative\TouchDesigner\bin\TouchDesigner.exe" \
   --cwd "C:\projects\signage" \
-  --priority high \
-  --visibility maximized \
+  --priority High \
   --launch-mode always
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/machines/{machineId}/processes`
+backing: `POST /api/sites/{siteId}/machines/{machineId}/processes`.
 
 ---
 
 ## update
 
-partial update on an existing process. at least one field flag is required. `processId` and `id` are server-managed (`forbidden_field` if you try to send them).
-
-**synopsis** — `owlette process update <processId> --site <siteId> --machine <machineId> [--name <n>] [--exe <p>] [--cwd <p>] [--priority <p>] [--visibility <v>] [--launch-mode <mode>]`
-
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id that owns the process |
-| `--name <n>` | no | rename (must stay unique on the machine) |
-| `--exe <p>` | no | new absolute exe path |
-| `--cwd <p>` | no | new working directory |
-| `--priority <p>` | no | `idle` \| `below` \| `normal` \| `above` \| `high` \| `realtime` |
-| `--visibility <v>` | no | `visible` \| `hidden` \| `minimized` \| `maximized` |
-| `--launch-mode <mode>` | no | `off` \| `always` \| `scheduled` |
+changes the fields you pass and leaves the rest alone. at least one field flag is required.
 
 ```bash
-owlette process update pr_main_td --site site-1 --machine m_abc123 --priority above
-owlette process update pr_main_td --site site-1 --machine m_abc123 --name "main-td-v2" --visibility hidden
+owlette process update <processId> --site <siteId> --machine <machineId> [--name <name>] [--exe <path>] [--cwd <path>] [--priority <priority>] [--visibility <visibility>] [--launch-mode <mode>] [--idempotency-key <key>] [--json]
 ```
 
-**backing endpoint**: `PATCH /api/sites/{siteId}/machines/{machineId}/processes/{processId}`
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine that owns the process |
+| `--name <name>` | string | no | new name, still unique on the machine |
+| `--exe <path>` | string | no | new executable path |
+| `--cwd <path>` | string | no | new working directory |
+| `--priority <priority>` | string | no | as for [`create`](#create) |
+| `--visibility <visibility>` | string | no | as for [`create`](#create) |
+| `--launch-mode <mode>` | `off` or `always` | no | as for [`create`](#create); `scheduled` is refused the same way — use [`schedule`](#schedule) |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+`--json` prints `{ "processId": "..." }`.
+
+### examples
+
+```bash
+owlette process update pr_main_td --site site-1 --machine m_abc123 --priority Normal
+```
+
+```bash
+owlette process update pr_main_td --site site-1 --machine m_abc123 --name "main-td-v2" --visibility Hidden
+```
+
+backing: `PATCH /api/sites/{siteId}/machines/{machineId}/processes/{processId}`.
 
 ---
 
 ## delete
 
-remove a managed process from the machine. true-idempotent — deleting an already-deleted process returns `alreadyDeleted: true` (no error). interactive by default; pass `--yes` to skip the confirmation, required when stdin is not a tty.
+removes a process from the machine. deleting one that is already gone succeeds and prints `was already deleted (no-op)`. this verb sends no `Idempotency-Key`.
 
-**synopsis** — `owlette process delete <processId> --site <siteId> --machine <machineId> [--yes]`
+```bash
+owlette process delete <processId> --site <siteId> --machine <machineId> [--yes] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id that owns the process |
-| `--yes` | no | skip the confirmation prompt (required for non-tty / scripted use) |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine that owns the process |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+
+`--json` prints `{ "processId": "...", "alreadyDeleted": false }`.
+
+### examples
 
 ```bash
 owlette process delete pr_main_td --site site-1 --machine m_abc123
-owlette process delete pr_main_td --site site-1 --machine m_abc123 --yes --json
 ```
 
-**backing endpoint**: `DELETE /api/sites/{siteId}/machines/{machineId}/processes/{processId}`
+```bash
+owlette --json process delete pr_main_td --site site-1 --machine m_abc123 --yes
+```
+
+backing: `DELETE /api/sites/{siteId}/machines/{machineId}/processes/{processId}`.
 
 ---
 
-## kill / restart / start / stop
+## start, stop, restart, kill
 
-queue a control command on the agent — `kill` forces termination, `restart` requests a graceful stop followed by a fresh start, `start` boots the process, `stop` requests a graceful shutdown. all four return `202` with a `commandId`; the cli prints the id so you can poll command-state.
+queues a control command for the agent: `start` launches the process, `stop` asks it to exit, `restart` stops it and starts it again, and `kill` terminates it. the server answers `202` with a command ID as soon as the command is queued; the result arrives when the agent next picks it up.
 
-**synopsis** — `owlette process <kill|restart|start|stop> <processId> --site <siteId> --machine <machineId>`
+```bash
+owlette process <start|stop|restart|kill> <processId> --site <siteId> --machine <machineId> [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id that owns the process |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine that owns the process |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+human mode prints `owlette: <verb> queued for process <processId> (commandId=<id>)`. `--json` prints `{ "commandId": "...", "status": "pending" }`. to follow the command, poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}`.
+
+### examples
 
 ```bash
 owlette process start   pr_main_td --site site-1 --machine m_abc123
 owlette process stop    pr_main_td --site site-1 --machine m_abc123
 owlette process restart pr_main_td --site site-1 --machine m_abc123
-owlette process kill    pr_main_td --site site-1 --machine m_abc123 --json
-# → { "commandId": "cmd_xyz", "status": "pending" }
+owlette --json process kill pr_main_td --site site-1 --machine m_abc123
 ```
 
-**backing endpoints**:
-- `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/kill`
-- `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/restart`
-- `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/start`
-- `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/stop`
+backing: `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/<verb>`.
 
 ---
 
 ## schedule
 
-configure run-mode + schedule blocks for a process. writes through process-config (no command queue) so the change persists across agent restarts. `--blocks` is required and must be a non-empty json array when `--mode=scheduled`.
+sets the process's run mode and, for `scheduled`, the time windows it runs in. this writes the process config directly — no command is queued — and the agent applies it on its next monitoring pass.
 
-**synopsis** — `owlette process schedule <processId> --site <siteId> --machine <machineId> --mode <off|always|scheduled> [--blocks <json>]`
+```bash
+owlette process schedule <processId> --site <siteId> --machine <machineId> --mode <off|always|scheduled> [--blocks <json>] [--idempotency-key <key>] [--json]
+```
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id that owns the machine |
-| `--machine <machineId>` | yes | machine id that owns the process |
-| `--mode <mode>` | yes | `off` (not managed) \| `always` (always-on) \| `scheduled` (run inside `--blocks`) |
-| `--blocks <json>` | conditionally | inline json array of schedule blocks; required when `--mode=scheduled` |
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site that owns the machine |
+| `--machine <machineId>` | string | yes | machine that owns the process |
+| `--mode <mode>` | `off`, `always` or `scheduled` | yes | `off` unmanaged, `always` kept running, `scheduled` running only inside `--blocks` |
+| `--blocks <json>` | JSON array | with `--mode scheduled` | schedule blocks, inline |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+each block is `{ "days": [...], "ranges": [{ "start": "HH:MM", "stop": "HH:MM" }] }`, with an optional `name`. days are lowercase three-letter names (`mon` … `sun`) and times are 24-hour machine time; a `stop` earlier than its `start` runs overnight into the next day.
+
+human mode prints `owlette: process <processId> schedule set to '<mode>'`. `--json` prints `{ "processId": "...", "mode": "..." }`.
+
+### examples
 
 ```bash
 owlette process schedule pr_main_td --site site-1 --machine m_abc123 --mode always
-owlette process schedule pr_main_td --site site-1 --machine m_abc123 --mode off
-owlette process schedule pr_main_td --site site-1 --machine m_abc123 \
-  --mode scheduled \
-  --blocks '[{"days":["mon","tue","wed","thu","fri"],"start":"08:00","end":"22:00"}]'
 ```
 
-**backing endpoint**: `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/schedule`
+```bash
+owlette process schedule pr_main_td --site site-1 --machine m_abc123 \
+  --mode scheduled \
+  --blocks '[{"days":["mon","tue","wed","thu","fri"],"ranges":[{"start":"08:00","stop":"22:00"}]}]'
+```
+
+backing: `POST /api/sites/{siteId}/machines/{machineId}/processes/{processId}/schedule` with body `{ mode, blocks? }`.
 
 ---
 
 ## exit codes
 
-- `0` — success
-- `1` — generic error (network, api 5xx, 409 `duplicate_process_name`, 404 `process_not_found`, 403 `scope_insufficient`, agent-side failure on a queued command, missing `--site` / `--machine`, no field flags on `update`, bad `--mode` or `--launch-mode` value, malformed `--blocks` json, refusal to delete on a non-tty without `--yes`)
-- `2` — usage error (no token configured)
-
-stable problem+json codes surfaced with hints: `duplicate_process_name`, `process_not_found`, `forbidden_field`, `scope_insufficient`, `machine_offline`, `unsupported_command_type`.
+- `0` — success, including a declined delete prompt and an already-deleted process
+- `1` — network failure, a non-2xx response (`409 duplicate_process_name`, `404 process_not_found`, `403 scope_insufficient`, `400 missing_schedules`, `forbidden_field`), or a missing `--site`, `--machine` or other required flag. for known codes the CLI adds a `hint:` line
+- `2` — `update` with no field flags; a `--launch-mode` or `--mode` outside `off`, `always`, `scheduled`; `--blocks` that is not a JSON array, or missing or empty with `--mode scheduled`; `delete` without `--yes` when stdin is not a tty; or no token configured
 
 ---
 
 ## notes
 
-- **scope**: machine-scoped. mutations require an api key with `machine=<id>:write` (or `site=<id>:write`).
-- **tier**: A — every verb hits a real public api (public-api Wave 2.4).
-- **idempotency**: every mutation auto-generates an `Idempotency-Key`. control verbs (`kill` / `restart` / `start` / `stop`) send an empty body so the server can hash + cache the request.
-- **race-safe creates**: the server uses `withProcessLock` (firestore transaction) so two concurrent `create` calls with the same `--name` resolve cleanly — one wins, the other gets `409 duplicate_process_name`.
-- **related**: [`owlette machine`](/docs/cli/reference/machine) for machine-level inspection (`get` shows the live process list inline) and reboot / shutdown.
-- see [overview](/docs/cli/overview) for global flags (`--profile`, `--json`, `--api-url`) and config precedence.
+- **scope**: reads need `machine=<id>:read`; mutations need `machine=<id>:write`
+- **JSON**: the server wraps responses in `{ ok, data }`; the CLI prints only `data`
+- **platforms**: `--priority` and `--visibility` apply only on Windows; macOS and Linux agents ignore them
+- **schedules follow machine time** unless the site is set to follow site time — see [site get](/docs/cli/reference/site#get) for `schedulesFollowSiteTime`
+- **related**: [`machine`](/docs/cli/reference/machine) to find machine IDs and reboot or shut a machine down

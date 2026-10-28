@@ -6,16 +6,15 @@
  * key material by construction (`lib/swoop/sessionStore.server.ts`), so the GET
  * body is safe to hand a site member as it stands.
  *
- * DELETE ends the record and then stops the streamer over the two independent
- * paths: the worker broadcast (<= 2 s, authoritative) and the polled command
- * (last resort). Neither failing withholds the 200 — the record is already
- * ended, and a streamer that survives both is stopped by its own lease.
+ * DELETE ends the record and then stops the streamer: the worker broadcast
+ * (<= 2 s, authoritative), and the polled command only when that did not land.
+ * Neither failing withholds the 200 — the record is already ended, and a
+ * streamer that survives both is stopped by its own lease.
  *
- * DELETE deliberately does NOT close the caller's step-up window: this is the
- * path a page reload takes (`hooks/useSwoopSession.ts` beacons `closed` on
- * teardown), and it sits on the WATCH bar, so any member could otherwise put
- * every admin on the machine through a fresh ceremony. Closing windows is the
- * kill route's job, and that one takes the control capability.
+ * DELETE deliberately does NOT close the caller's step-up window: it sits on
+ * the WATCH bar, so any member could otherwise put every admin on the machine
+ * through a fresh ceremony. Closing windows is the kill route's job, and that
+ * one takes the control capability.
  */
 
 import { NextResponse } from 'next/server';
@@ -29,12 +28,13 @@ import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHa
 import { Capability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { evaluateSwoopAccess } from '@/lib/swoop/policy.server';
+import { SWOOP_END_REASONS, isSwoopEndReason } from '@/lib/swoop/backoff';
 import {
   endSwoopSession,
   getSwoopSession,
   type SwoopSessionEndReason,
 } from '@/lib/swoop/sessionStore.server';
-import { killSession } from '@/lib/swoop/signal.server';
+import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopDenied, recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
 import {
@@ -79,7 +79,6 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
           state: session.state,
           createdBy: session.createdBy,
           startedAt: session.startedAt,
-          absoluteExpiresAt: session.absoluteExpiresAt,
           viewers: session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
@@ -119,13 +118,21 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
-    const raw = (parsed.body ?? {}) as { endReason?: unknown };
+    const raw = (parsed.body ?? {}) as { endReason?: unknown; viewerReason?: unknown };
     if (raw.endReason !== undefined && !CALLER_END_REASONS.has(String(raw.endReason))) {
       return problemValidation('field `endReason` is not one a caller may set', {
         endReason: [[...CALLER_END_REASONS].sort().join(', ')],
       });
     }
     const endReason = (raw.endReason ?? 'closed') as SwoopSessionEndReason;
+    // the page's own reason, kept beside the caller's `closed` so the audit
+    // trail says whether the operator left or the path failed under them.
+    if (raw.viewerReason !== undefined && !isSwoopEndReason(raw.viewerReason)) {
+      return problemValidation('field `viewerReason` is not one the page reports', {
+        viewerReason: [[...SWOOP_END_REASONS].sort().join(', ')],
+      });
+    }
+    const viewerReason = raw.viewerReason;
 
     const gate = await swoopGate({ ctx, machineId, intent: 'view' });
     const decision = evaluateSwoopAccess({ ...gate, stepUpOpen: false });
@@ -142,35 +149,35 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
     const session = await getSwoopSession(siteId, machineId, sessionId);
     if (!session) return problemNotFound('session not found');
 
-    await endSwoopSession({ siteId, machineId, sid: sessionId, endReason });
+    await endSwoopSession({ siteId, machineId, sid: sessionId, endReason, viewerReason });
 
-    const [killed, queued] = await Promise.allSettled([
-      killSession({ siteId, machineId, sid: sessionId }),
-      requestSwoopSession({
-        type: 'swoop_kill',
-        sid: sessionId,
-        siteId,
-        machineId,
-        actor: ctx.actor,
-        auditActor: `user:${ctx.actor.userId}`,
-        correlationId: ctx.correlationId,
-      }),
-    ]);
-    if (killed.status === 'fulfilled' && !killed.value.ok) {
+    const broadcast = await killSession({ siteId, machineId, sid: sessionId }).catch(
+      (): SwoopSignalResult => ({ ok: false, reason: 'unreachable' }),
+    );
+    // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+    // running, whatever sid it names, so a polled kill queued every time lands on the
+    // next session.
+    if (!broadcast.ok) {
       logger.warn('[swoop/sessions] kill broadcast failed; falling back to the polled command', {
         context: 'swoop/sessions',
-        data: { siteId, machineId, reason: killed.value.reason },
+        data: { siteId, machineId, reason: broadcast.reason },
       });
-    }
-    if (queued.status === 'rejected') {
-      logger.warn('[swoop/sessions] kill command could not be queued', {
-        context: 'swoop/sessions',
-        data: {
+      try {
+        await requestSwoopSession({
+          type: 'swoop_kill',
+          sid: sessionId,
           siteId,
           machineId,
-          err: queued.reason instanceof Error ? queued.reason.message : String(queued.reason),
-        },
-      });
+          actor: ctx.actor,
+          auditActor: `user:${ctx.actor.userId}`,
+          correlationId: ctx.correlationId,
+        });
+      } catch (err) {
+        logger.warn('[swoop/sessions] kill command could not be queued', {
+          context: 'swoop/sessions',
+          data: { siteId, machineId, err: err instanceof Error ? err.message : String(err) },
+        });
+      }
     }
 
     // After the streamer has been stopped, not before: an audit write that
@@ -179,6 +186,7 @@ const deleteHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, {
       ...auditBase,
       sid: sessionId,
       endReason,
+      viewerReason,
       durationMs: Date.now() - session.startedAt,
     });
 

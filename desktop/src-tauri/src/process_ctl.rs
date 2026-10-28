@@ -9,12 +9,16 @@
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+#[cfg(windows)]
 use windows::core::HRESULT;
+#[cfg(windows)]
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, WAIT_OBJECT_0, WPARAM};
+#[cfg(windows)]
 use windows::Win32::System::Threading::{
   OpenProcess, QueryFullProcessImageNameW, TerminateProcess, WaitForSingleObject,
   PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
   EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
 };
@@ -27,9 +31,14 @@ pub const DEFAULT_GRACEFUL_TIMEOUT: Duration = Duration::from_secs(5);
 const TERMINATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Exit code reported for a forced kill.
+#[cfg(windows)]
 const KILL_EXIT_CODE: u32 = 1;
+/// How often a signalled process is checked for having gone.
+#[cfg(unix)]
+const EXIT_POLL: Duration = Duration::from_millis(50);
 
 /// Windows error raised by `OpenProcess` for a PID that no longer exists.
+#[cfg(windows)]
 const ERROR_INVALID_PARAMETER: u32 = 87;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -38,9 +47,13 @@ pub enum TerminateMethod {
   /// The PID was already gone.
   NotFound,
   /// The process exited on its own after `WM_CLOSE`.
+  #[cfg(windows)]
   WmClose,
   /// The process had to be terminated.
   Terminated,
+  /// posix: the process left on SIGTERM, before SIGKILL was needed.
+  #[cfg(unix)]
+  Signaled,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -58,6 +71,117 @@ pub struct TerminateOutcome {
 /// Terminate `pid`, but only if it is still running `expected_exe` (a full
 /// path, compared whole, or a bare file name). A mismatch is an error, not a
 /// no-op: the UI's process table is stale and the operator must know.
+#[cfg(unix)]
+pub fn terminate_pid(
+  pid: u32,
+  expected_exe: &str,
+  graceful_timeout: Duration,
+) -> Result<TerminateOutcome, String> {
+  if pid == 0 {
+    return Err("pid 0 is not a terminable process".to_string());
+  }
+  if expected_exe.trim().is_empty() {
+    return Err("an expected executable is required to terminate a process".to_string());
+  }
+  let target = pid as libc::pid_t;
+  if !alive(target) {
+    return Ok(TerminateOutcome {
+      method: TerminateMethod::NotFound,
+      waited_ms: 0,
+      windows_closed: 0,
+      image_path: None,
+    });
+  }
+  let image_path = image_of(pid)?;
+  if !image_matches(&image_path, expected_exe) {
+    return Err(format!(
+      "pid {pid} is running {image_path}, not {expected_exe} — refusing to terminate it"
+    ));
+  }
+
+  let started = Instant::now();
+  // SIGTERM is the posix WM_CLOSE: the process gets its graceful window.
+  signal(target, libc::SIGTERM)?;
+  if wait_gone(target, graceful_timeout) {
+    return Ok(TerminateOutcome {
+      method: TerminateMethod::Signaled,
+      waited_ms: started.elapsed().as_millis() as u64,
+      windows_closed: 0,
+      image_path: Some(image_path),
+    });
+  }
+  signal(target, libc::SIGKILL)?;
+  if !wait_gone(target, TERMINATE_TIMEOUT) {
+    return Err(format!(
+      "process {pid} did not exit within {}s of being killed",
+      TERMINATE_TIMEOUT.as_secs()
+    ));
+  }
+  Ok(TerminateOutcome {
+    method: TerminateMethod::Terminated,
+    waited_ms: started.elapsed().as_millis() as u64,
+    windows_closed: 0,
+    image_path: Some(image_path),
+  })
+}
+
+/// kill(2) with signal 0 asks without sending: the process exists when the
+/// answer is success or EPERM (it exists, it is somebody else's).
+#[cfg(unix)]
+fn alive(pid: libc::pid_t) -> bool {
+  // SAFETY: kill with signal 0 sends nothing.
+  let rc = unsafe { libc::kill(pid, 0) };
+  rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(unix)]
+fn signal(pid: libc::pid_t, signal: libc::c_int) -> Result<(), String> {
+  // SAFETY: a plain kill(2); the pid was checked to exist and to run the expected image.
+  if unsafe { libc::kill(pid, signal) } == 0 {
+    return Ok(());
+  }
+  let error = std::io::Error::last_os_error();
+  if error.raw_os_error() == Some(libc::ESRCH) {
+    return Ok(());
+  }
+  Err(format!("could not signal process {pid}: {error}"))
+}
+
+#[cfg(unix)]
+fn wait_gone(pid: libc::pid_t, timeout: Duration) -> bool {
+  let deadline = Instant::now() + timeout;
+  while alive(pid) {
+    if Instant::now() >= deadline {
+      return false;
+    }
+    std::thread::sleep(EXIT_POLL);
+  }
+  true
+}
+
+/// The executable behind a pid: `/proc/<pid>/exe` on linux, `ps` where there
+/// is no procfs.
+#[cfg(all(unix, target_os = "linux"))]
+fn image_of(pid: u32) -> Result<String, String> {
+  std::fs::read_link(format!("/proc/{pid}/exe"))
+    .map(|path| path.to_string_lossy().into_owned())
+    .map_err(|error| format!("could not read the image path of process {pid}: {error}"))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn image_of(pid: u32) -> Result<String, String> {
+  let output = std::process::Command::new("ps")
+    .args(["-o", "comm=", "-p", &pid.to_string()])
+    .output()
+    .map_err(|error| format!("could not read the image path of process {pid}: {error}"))?;
+  let image = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  if image.is_empty() {
+    return Err(format!("could not read the image path of process {pid}"));
+  }
+  Ok(image)
+}
+
+#[cfg(windows)]
 pub fn terminate_pid(
   pid: u32,
   expected_exe: &str,
@@ -132,7 +256,8 @@ pub fn terminate_pid(
 
 /// Case- and separator-insensitive because config entries are operator-typed.
 /// A bare name matches the file name alone; anything with a separator must
-/// match the whole path.
+/// match the whole path. A macOS `.app` bundle is a directory, so it matches
+/// the image running from its `Contents/MacOS`.
 pub fn image_matches(actual: &str, expected: &str) -> bool {
   let actual_key = normalize(actual);
   let expected_key = normalize(expected);
@@ -140,10 +265,25 @@ pub fn image_matches(actual: &str, expected: &str) -> bool {
     return false;
   }
 
-  if expected_key.contains('\\') {
+  let whole = if expected_key.contains('\\') {
     actual_key == expected_key
   } else {
     file_name(&actual_key) == expected_key
+  };
+  whole || inside_bundle(&actual_key, &expected_key)
+}
+
+fn inside_bundle(actual_key: &str, expected_key: &str) -> bool {
+  let bundle = expected_key.trim_end_matches('\\');
+  if !bundle.ends_with(".app") {
+    return false;
+  }
+  let binaries = format!("{bundle}\\contents\\macos\\");
+  if bundle.contains('\\') {
+    actual_key.starts_with(&binaries)
+  } else {
+    // a bare name is a whole path component, never the tail of a longer one
+    actual_key.contains(&format!("\\{binaries}"))
   }
 }
 
@@ -160,8 +300,10 @@ fn file_name(normalized: &str) -> &str {
 }
 
 /// Handle wrapper so every early return closes the process handle.
+#[cfg(windows)]
 struct OwnedHandle(HANDLE);
 
+#[cfg(windows)]
 impl Drop for OwnedHandle {
   fn drop(&mut self) {
     // SAFETY: the handle came from OpenProcess and is closed exactly once.
@@ -171,6 +313,7 @@ impl Drop for OwnedHandle {
   }
 }
 
+#[cfg(windows)]
 fn open_process(pid: u32) -> windows::core::Result<HANDLE> {
   // SAFETY: OpenProcess either returns a valid handle or an error.
   unsafe {
@@ -182,6 +325,7 @@ fn open_process(pid: u32) -> windows::core::Result<HANDLE> {
   }
 }
 
+#[cfg(windows)]
 fn image_path(handle: HANDLE) -> windows::core::Result<String> {
   let mut buffer = vec![0u16; 32_768];
   let mut length = buffer.len() as u32;
@@ -200,6 +344,7 @@ fn image_path(handle: HANDLE) -> windows::core::Result<String> {
   Ok(String::from_utf16_lossy(&buffer))
 }
 
+#[cfg(windows)]
 fn wait_for_exit(handle: HANDLE, timeout: Duration) -> bool {
   // SAFETY: the handle was opened with PROCESS_SYNCHRONIZE.
   let result = unsafe { WaitForSingleObject(handle, timeout.as_millis() as u32) };
@@ -208,6 +353,7 @@ fn wait_for_exit(handle: HANDLE, timeout: Duration) -> bool {
 
 /// Visible top-level windows owned by `pid`, mirroring
 /// `shared_utils.find_windows_by_pid`.
+#[cfg(windows)]
 fn top_level_windows(pid: u32) -> Vec<HWND> {
   struct Search {
     pid: u32,
@@ -283,6 +429,46 @@ mod tests {
     // Guards against a substring check sneaking in: "player.exe" must not be
     // satisfied by "mediaplayer.exe".
     assert!(!image_matches("C:\\apps\\mediaplayer.exe", "player.exe"));
+  }
+
+  #[test]
+  fn a_mac_app_bundle_matches_the_binary_it_runs() {
+    let actual = "/Applications/Kiosk.app/Contents/MacOS/Kiosk";
+    assert!(image_matches(actual, "/Applications/Kiosk.app"));
+    assert!(image_matches(actual, "/applications/kiosk.app/"));
+    assert!(image_matches(actual, "Kiosk.app"));
+  }
+
+  #[test]
+  fn a_lookalike_bundle_or_another_file_in_it_does_not_match() {
+    assert!(!image_matches(
+      "/Applications/Kiosk.app.evil/Contents/MacOS/Kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app.evil/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Other.app/Contents/MacOS/Kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Other.app/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/MyKiosk.app/Contents/MacOS/Kiosk",
+      "Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app/Contents/Resources/kiosk",
+      "/Applications/Kiosk.app"
+    ));
+    assert!(!image_matches(
+      "/Applications/Kiosk.app/Contents/Resources/kiosk",
+      "Kiosk.app"
+    ));
   }
 
   #[test]

@@ -1,123 +1,216 @@
 ---
 title: "user"
-description: "owlette user manages platform users — promoting, demoting, granting site access, and soft-deleting accounts. superadmin token required on every verb. tier: ready — all seven verbs are wired to /api/users/* and covered by the public API contract."
+description: "user manages platform accounts: list and inspect users, change their global role, grant and revoke site access, and soft-delete accounts. it needs a superadmin session or a key with the matching user=* scope."
+keywords: ["accounts", "admin role", "offboarding"]
 ---
 
-mutations carry an auto-generated `Idempotency-Key` so a retry returns the cached response rather than re-running the cascade. two server-side conflict codes get special handling because they're the common operator-error path: `last_superadmin` on `demote` and `orphan_sites` on `delete`.
+verbs:
+
+- [`user list`](#list) — list platform users, one page per run
+- [`user get`](#get) — print one user's record and site list
+- [`user promote`](#promote) — raise a user's global role to `admin` or `superadmin`
+- [`user demote`](#demote) — drop a user's global role to `member`
+- [`user assign-sites`](#assign-sites) — grant access to one or more sites
+- [`user remove-sites`](#remove-sites) — revoke access to one or more sites
+- [`user delete`](#delete) — soft-delete an account
+
+`promote` and `demote` change the **global** role, which applies on every site the person belongs to. to change someone's role on one site, use [`site set-role`](/docs/cli/reference/site#set-role).
+
+every mutation sends an `Idempotency-Key` (default `cli-user-<verb>-<uuid>`), so a retry replays the cached response instead of running the change twice. if one fails before a response arrives, the CLI prints the key and the `--idempotency-key` to re-run with.
 
 ---
 
-## verbs
+## list
 
-### list
-
-filtered cursor-paged list of platform users.
+lists platform users. soft-deleted users are left out unless you ask for them.
 
 ```bash
-owlette user list [--role <r>] [--site <siteId>] [--include-deleted] [--limit <n>] [--cursor <token>]
+owlette user list [--role <role>] [--site <siteId>] [--include-deleted] [--limit <n>] [--cursor <token>] [--json]
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--role <r>` | no | filter to `member`, `admin`, or `superadmin` |
-| `--site <siteId>` | no | filter to users assigned to this site |
-| `--include-deleted` | no | include soft-deleted users (default: false) |
-| `--limit <n>` | no | page size, integer 1–100 (default 20) |
-| `--cursor <token>` | no | opaque `page_token` from a prior response |
+| flag | type | required | description |
+|---|---|---|---|
+| `--role <role>` | `member`, `admin` or `superadmin` | no | only users with this global role |
+| `--site <siteId>` | string | no | only users assigned to this site |
+| `--include-deleted` | boolean | no | include soft-deleted users |
+| `--limit <n>` | integer 1–100 | no | page size (default 20) |
+| `--cursor <token>` | string | no | `nextPageToken` from an earlier page |
 
-backing endpoint: `GET /api/users`. table renders `uid | email | role | sites | deleted | created`; `--json` emits `{ users, nextPageToken }`.
+the table has `uid`, `email`, `role`, `sites` (a count), `deleted` and `created`, or prints `(no users)`. when more pages remain it ends with `next page: --cursor <token>`. `--json` prints `{ "users": [...], "nextPageToken": "<token or empty>" }`.
 
-### get
-
-print the detail record for one user.
+### examples
 
 ```bash
-owlette user get <uid>
+owlette user list --role superadmin
 ```
-
-backing endpoint: `GET /api/users/{uid}`. text mode prints uid, email, role, names, timestamps, and the assigned site list. `--json` emits the raw record.
-
-### promote
-
-raise a user to `admin` or `superadmin`.
 
 ```bash
-owlette user promote <uid> --role admin|superadmin [--idempotency-key <key>]
+owlette --json user list --site site-1 | jq -r '.users[].email'
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--role <r>` | yes | target role: `admin` or `superadmin` |
-| `--idempotency-key <key>` | no | override the auto-generated key |
+backing: `GET /api/users?role=&site=&includeDeleted=&page_size=&page_token=`.
 
-backing endpoint: `POST /api/users/{uid}/promote` body `{ role }`. response includes `previousRole`, `role`, and `changed` (false on no-op).
+---
 
-### demote
+## get
 
-drop a user back to `member`.
+prints one user: uid, email, role, names, `createdAt`, `deletedAt` (`(active)` when not deleted) and the assigned sites.
 
 ```bash
-owlette user demote <uid> [--idempotency-key <key>]
+owlette user get <uid> [--json]
 ```
 
-backing endpoint: `POST /api/users/{uid}/demote`. rejects the last active superadmin with `409 last_superadmin` — the cli surfaces the active count and the configured floor (default 1) and tells you to promote another user first.
+no verb-specific flags. `--json` prints the raw record.
 
-### assign-sites
-
-grant a user access to one or more sites (atomic `arrayUnion`).
+### examples
 
 ```bash
-owlette user assign-sites <uid> --sites <csv> [--idempotency-key <key>]
+owlette user get u_123
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--sites <csv>` | yes | comma-separated site ids |
-| `--idempotency-key <key>` | no | override the auto-generated key |
+backing: `GET /api/users/{uid}`.
 
-backing endpoint: `POST /api/users/{uid}/assign-sites` body `{ siteIds: [...] }`. returns `400 unknown_site` with the offending ids if any site doesn't exist; the cli surfaces the bad ids verbatim.
+---
 
-### remove-sites
+## promote
 
-revoke a user's access to one or more sites and cancel their pending commands on those sites.
+raises a user's global role.
 
 ```bash
-owlette user remove-sites <uid> --sites <csv> [--idempotency-key <key>]
+owlette user promote <uid> --role <admin|superadmin> [--idempotency-key <key>] [--json]
 ```
 
-backing endpoint: `POST /api/users/{uid}/remove-sites`. response includes `removedSiteIds` and `cancelledCommandCount` (printed inline so operators see the blast radius).
+| flag | type | required | description |
+|---|---|---|---|
+| `--role <role>` | `admin` or `superadmin` | yes | the new global role |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
 
-### delete
+prints `owlette: <uid> promoted <old> → <new>`, or `already <role> (no change)`. `--json` prints the raw response, including `uid`, `role`, `previousRole` and `changed`.
 
-soft-delete a user. cascades to api keys and pending commands; if the user owns sites, ownership must transfer.
+### examples
 
 ```bash
-owlette user delete <uid> [--successor <uid>] [--yes] [--idempotency-key <key>]
+owlette user promote u_123 --role admin
 ```
 
-| flag | required | purpose |
-|---|---|---|
-| `--successor <uid>` | conditional | required if the target user owns sites; must be admin or superadmin |
-| `--yes` | no | skip the interactive `[y/N]` prompt |
-| `--idempotency-key <key>` | no | override the auto-generated key |
+backing: `POST /api/users/{uid}/promote` with body `{ role }`.
 
-backing endpoint: `DELETE /api/users/{uid}?successorUid=`. on `409 orphan_sites` the cli prints the owned site list and tells you to re-run with `--successor`. on `400 successor_invalid` it surfaces the `reason` field. when stdin is not a tty and `--yes` was not supplied, the cli refuses rather than delete silently.
+---
+
+## demote
+
+sets a user's global role back to `member`. the server refuses to demote the last active superadmin with `409 last_superadmin`; the CLI prints the active count and the floor and tells you to promote someone else first.
+
+```bash
+owlette user demote <uid> [--idempotency-key <key>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+prints `owlette: <uid> demoted <old> → member`, or `already member (no change)`. `--json` prints the raw response, including `uid`, `role`, `previousRole` and `changed`.
+
+### examples
+
+```bash
+owlette user demote u_123
+```
+
+backing: `POST /api/users/{uid}/demote`.
+
+---
+
+## assign-sites
+
+grants a user access to one or more sites.
+
+```bash
+owlette user assign-sites <uid> --sites <csv> [--idempotency-key <key>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--sites <csv>` | string | yes | site IDs, comma-separated |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+a site ID that does not exist returns `400 unknown_site`, and the CLI lists the unknown IDs. prints `owlette: <uid> granted access to <n> site(s): …`. `--json` prints the raw response, including `uid` and `assignedSiteIds`.
+
+### examples
+
+```bash
+owlette user assign-sites u_123 --sites site-1,site-2
+```
+
+backing: `POST /api/users/{uid}/assign-sites` with body `{ siteIds }`.
+
+---
+
+## remove-sites
+
+revokes a user's access to one or more sites and cancels their pending commands there.
+
+```bash
+owlette user remove-sites <uid> --sites <csv> [--idempotency-key <key>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--sites <csv>` | string | yes | site IDs, comma-separated |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+prints `owlette: <uid> revoked from <n> site(s): …`, with the number of pending commands cancelled. `--json` prints the raw response, including `uid`, `removedSiteIds` and `cancelledCommandCount`.
+
+### examples
+
+```bash
+owlette user remove-sites u_123 --sites site-2
+```
+
+backing: `POST /api/users/{uid}/remove-sites` with body `{ siteIds }`.
+
+---
+
+## delete
+
+soft-deletes an account: its API keys are revoked and its pending commands cancelled. a user who owns sites cannot be deleted until ownership moves — pass `--successor`.
+
+```bash
+owlette user delete <uid> [--successor <uid>] [--yes] [--idempotency-key <key>] [--json]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--successor <uid>` | string | when the user owns sites | user who takes over the owned sites; must be an admin or superadmin |
+| `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
+
+without a successor, an owner gets `409 orphan_sites` and the CLI lists the owned sites. a successor the server will not accept returns `400 successor_invalid`, and the CLI prints its `reason`. deleting an already-deleted user succeeds and prints `was already deleted`. otherwise it prints how many sites were transferred and keys revoked. `--json` prints the raw response, including `uid`, `alreadyDeleted`, `deletedAt`, `transferredSites` and `revokedKeyIds`.
+
+### examples
+
+```bash
+owlette user delete u_departing --successor u_456
+```
+
+```bash
+owlette user delete u_departing --successor u_456 --yes
+```
+
+backing: `DELETE /api/users/{uid}`, with `?successorUid=<uid>` when `--successor` is set.
 
 ---
 
 ## exit codes
 
-- `0` — success (including `alreadyDeleted: true`)
-- `1` — generic error (network, 5xx, conflict not specifically handled, bad `--role`, missing `--sites`, non-tty without `--yes`)
-- `2` — usage error (no token)
+- `0` — success, including no-op promotes and demotes, an already-deleted user, and a declined prompt
+- `1` — network failure, a non-2xx response (`409 last_superadmin`, `409 orphan_sites`, `400 successor_invalid`, `400 unknown_site`, `403 scope_insufficient`), or a missing required flag (`--role` on `promote`, `--sites`)
+- `2` — a `--role` other than `admin`/`superadmin` on `promote`, a `--sites` with no IDs, a `--limit` outside 1–100, `delete` without `--yes` when stdin is not a tty, or no token configured
 
 ---
 
 ## notes
 
-- **scope**: platform-wide. session callers are double-checked against `users/{uid}.role === 'superadmin'` server-side; api keys must carry the matching scope.
-- **tier**: ready (public-api Wave 2.2).
-- **idempotency**: every mutation auto-generates a unique key. set `--idempotency-key` to dedupe at the script level.
-- **floor enforcement**: `demote` cannot drop the platform below the minimum active-superadmin count (default 1). promote a successor first.
-- **cascade on delete**: soft-delete revokes all the target's api keys, cancels their pending commands, and (with `--successor`) transfers owned sites in a single transaction.
-- **see also**: the user-management routes in `web/openapi.yaml`; the dashboard surface lives at owlette.app/admin/users.
+- **scope**: platform-wide. a superadmin session works for every verb. an API key needs `user=*:read` for `list` and `get`; `user=*:write` for `demote`, `assign-sites` and `remove-sites` — the last two also need `site=<id>` `write` and `admin` for every site named; and `user=*:admin` for `promote` and `delete`
+- **JSON**: raw objects with no `{ ok, data }` wrapper
+- **related**: [`site`](/docs/cli/reference/site) for per-site roles and membership, the dashboard's **admin → users** page for the same actions

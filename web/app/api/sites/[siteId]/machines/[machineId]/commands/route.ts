@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import {
   problem,
   problemFromError,
+  problemPlanRequired,
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
@@ -20,6 +21,7 @@ import {
   ALLOWED_COMMAND_TYPES,
   executeMachineCommand,
   ExecuteMachineCommandError,
+  parseActiveHoursOverride,
 } from '@/lib/actions/executeMachineCommand.server';
 
 interface RouteParams {
@@ -38,8 +40,19 @@ const DEFAULT_TIMEOUT_S = 60;
 const MAX_TIMEOUT_S = 600;
 
 type NormalizedCommand =
-  | { ok: true; type: string; payload: Record<string, unknown> }
+  | {
+      ok: true;
+      type: string;
+      payload: Record<string, unknown>;
+      activeHoursOverride?: { reason: string };
+    }
   | { ok: false; response: NextResponse };
+
+/** the types the agent's active-hours guard refuses without an override. */
+const ACTIVE_HOURS_GUARDED_TYPES: ReadonlySet<string> = new Set<string>([
+  'reboot_machine',
+  'shutdown_machine',
+]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -133,9 +146,61 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
 
   const payload: Record<string, unknown> = { timeout_seconds: timeoutSeconds };
 
+  const override = parseActiveHoursOverride(inputParams.active_hours_override);
+  if (!override.ok) {
+    return {
+      ok: false,
+      response: problemValidation(`params.active_hours_override: ${override.error}`, {
+        'body.params.active_hours_override': [override.error],
+      }),
+    };
+  }
+  if (override.override && !ACTIVE_HOURS_GUARDED_TYPES.has(cmdType)) {
+    return {
+      ok: false,
+      response: problemValidation(
+        'params.active_hours_override is only accepted for reboot_machine and shutdown_machine',
+        { 'body.params.active_hours_override': ['not accepted for this command type'] },
+      ),
+    };
+  }
+
   if (cmdType === 'reboot_machine' || cmdType === 'shutdown_machine') {
     const error = copyOptionalPositiveInteger(inputParams, payload, 'delay_seconds', 0);
     if (error) return { ok: false, response: error };
+    const when = inputParams.when;
+    if (when !== undefined) {
+      if (cmdType !== 'reboot_machine') {
+        return {
+          ok: false,
+          response: problemValidation('params.when is only accepted for reboot_machine', {
+            'body.params.when': ['not accepted for shutdown_machine'],
+          }),
+        };
+      }
+      if (when !== 'now' && when !== 'after_active_hours') {
+        return {
+          ok: false,
+          response: problemValidation('params.when must be "now" or "after_active_hours"', {
+            'body.params.when': ['invalid value'],
+          }),
+        };
+      }
+      // an override restarts inside the window and a deferral waits it out; one call can't mean both.
+      if (when === 'after_active_hours' && override.override) {
+        return {
+          ok: false,
+          response: problemValidation(
+            'params.active_hours_override cannot be combined with params.when "after_active_hours"',
+            {
+              'body.params.when': ['conflicts with active_hours_override'],
+              'body.params.active_hours_override': ['conflicts with when "after_active_hours"'],
+            },
+          ),
+        };
+      }
+      payload.when = when;
+    }
   } else if (cmdType === 'capture_screenshot') {
     const monitor = inputParams.monitor;
     if (monitor !== undefined) {
@@ -308,20 +373,23 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
     }
   }
 
-  return { ok: true, type: cmdType, payload };
+  return { ok: true, type: cmdType, payload, activeHoursOverride: override.override };
 }
 
 function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
   if (err.code === 'unsupported_command_type') {
     return unsupportedCommandType(err.detail.match(/'([^']+)'/)?.[1] ?? 'unknown');
   }
-  if (err.code === 'machine_offline') {
+  if (err.entitlement) {
+    return problemPlanRequired(err.detail, err.entitlement);
+  }
+  if (err.code === 'machine_offline' || err.code === 'held_restart_unsupported') {
     return problem({
       type: ProblemType.Conflict,
-      title: 'machine offline',
+      title: err.code === 'machine_offline' ? 'machine offline' : 'held restart unsupported',
       status: 409,
       detail: err.detail,
-      code: 'machine_offline',
+      code: err.code,
     });
   }
   if (err.status === 404) {
@@ -383,7 +451,11 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
                 : `user:${ctx.actor.userId}`,
               correlationId: ctx.correlationId,
             },
-            { type: normalized.type, payload: normalized.payload },
+            {
+              type: normalized.type,
+              payload: normalized.payload,
+              activeHoursOverride: normalized.activeHoursOverride,
+            },
           );
 
           return applyAuthDeprecations(

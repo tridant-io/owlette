@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  the owlette service on macOS: a LaunchDaemon (tri-platform 5.1). the label
+  is what osadapter/darwin.py controls (`app.owlette.agent`), the program is
+  the bundled runtime under the data root, and KeepAlive is the supervision
+  the agent's own `service_control` counts on — a stop is a bootout, a signal
+  is a relaunch. the log paths are the daemon's own stdio only; the service
+  log proper is logs/service.log under the data root.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.owlette.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/Application Support/Owlette/runtime/python/bin/python3</string>
+    <string>/Library/Application Support/Owlette/runtime/agent/src/owlette_runner.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Library/Application Support/Owlette/runtime/agent/src</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/Application Support/Owlette/logs/launchd-agent.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/Application Support/Owlette/logs/launchd-agent.log</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>app.owlette.desktop</string>
+  </array>
+</dict>
+</plist>

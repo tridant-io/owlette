@@ -8,12 +8,16 @@
  * keeps sending whenever the list is closed, and a caller that passes no
  * mention options gets exactly the composer that shipped before this wave.
  *
+ * Also the pasted-image strip: named remove buttons, and thumbnails that open
+ * a modal lightbox from the keyboard and give focus back on Escape.
+ *
  * Radix positions the popover with a ResizeObserver that jsdom does not have.
  * Nothing here depends on layout, so a no-op observer is enough.
  */
 import React, { useState } from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { ChatInput } from '@/app/hoot/components/ChatInput';
 import type { MentionMachine } from '@/app/hoot/components/MentionPopover';
 
@@ -300,5 +304,54 @@ describe('ChatInput mention list', () => {
 
     await user.keyboard('{Enter}');
     expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ChatInput pasted images', () => {
+  const IMAGES = [
+    { url: 'https://example.test/a.png', mediaType: 'image/png', uploading: false },
+    { url: 'https://example.test/b.png', mediaType: 'image/png', uploading: false },
+  ];
+
+  function renderWithImages() {
+    const onRemoveImage = jest.fn();
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <ChatInput
+          input=""
+          isLoading={false}
+          onInputChange={jest.fn()}
+          onSubmit={jest.fn()}
+          onStop={jest.fn()}
+          pendingImages={IMAGES}
+          onPasteImage={jest.fn()}
+          onRemoveImage={onRemoveImage}
+        />
+      </TooltipProvider>,
+    );
+    return { user, onRemoveImage };
+  }
+
+  it('names each remove button after the image it removes', async () => {
+    const { user, onRemoveImage } = renderWithImages();
+
+    await user.click(screen.getByRole('button', { name: 'remove pasted image 2' }));
+
+    expect(onRemoveImage).toHaveBeenCalledWith(1);
+  });
+
+  it('opens a thumbnail from the keyboard into a dialog, and Escape hands focus back', async () => {
+    const { user } = renderWithImages();
+    const thumbnail = screen.getByRole('button', { name: 'view pasted image 1' });
+
+    thumbnail.focus();
+    await user.keyboard('{Enter}');
+    expect(screen.getByRole('dialog', { name: 'pasted image' })).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'close image' })).toHaveFocus();
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(thumbnail).toHaveFocus();
   });
 });

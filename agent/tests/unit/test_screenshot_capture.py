@@ -287,6 +287,45 @@ def test_upload_to_signed_url_exhausts_retries_then_raises():
         assert len(sleep_calls) == 2
 
 
+def test_upload_to_signed_url_streams_a_file_from_the_start_on_each_attempt(tmp_path):
+    from screenshot_capture import upload_to_signed_url
+
+    path = tmp_path / 'logs.zip'
+    path.write_bytes(b'0123456789')
+    sent = []
+
+    def put(url, data=None, headers=None, timeout=None):
+        sent.append((data.read(), headers, timeout))
+        return MagicMock(status_code=503 if len(sent) == 1 else 200, text='busy')
+
+    with patch('screenshot_capture.requests.put', side_effect=put):
+        upload_to_signed_url(
+            'https://signed.example/write',
+            lambda: open(path, 'rb'),
+            content_type='application/zip',
+            sleep_fn=lambda s: None,
+            timeout_s=(30, 300),
+            content_length=10,
+        )
+
+    headers = {'Content-Type': 'application/zip', 'Content-Length': '10'}
+    assert sent == [(b'0123456789', headers, (30, 300))] * 2
+
+
+def test_upload_to_signed_url_names_network_errors_without_the_signed_url():
+    import requests
+    from screenshot_capture import upload_to_signed_url, ScreenshotCaptureError
+
+    signed = 'https://signed.example/write?X-Amz-Signature=sekrit'
+    error = requests.ConnectionError(f"Max retries exceeded with url: {signed}")
+
+    with patch('screenshot_capture.requests.put', side_effect=error), \
+         pytest.raises(ScreenshotCaptureError) as raised:
+        upload_to_signed_url(signed, b'x', sleep_fn=lambda s: None)
+
+    assert str(raised.value) == 'upload: failed after 3 attempts: ConnectionError'
+
+
 # upload-url request envelope parsing
 
 
@@ -460,7 +499,7 @@ def test_capture_and_upload_full_pipeline_happy_path(capture, tmp_path):
     assert mock_request_url.call_args.kwargs['content_type'] == 'image/jpeg'
     upload_kwargs = mock_upload.call_args.kwargs
     assert upload_kwargs['upload_url'] == 'https://signed.example/write'
-    assert upload_kwargs['image_bytes'] == jpeg_bytes
+    assert upload_kwargs['body'] == jpeg_bytes
     assert upload_kwargs['content_type'] == 'image/jpeg'
     assert mock_finalize.call_args.kwargs['storage_path'] == 'screenshots/site_a/mach_x/1700-aabb.jpg'
     assert mock_finalize.call_args.kwargs['monitor'] == 1

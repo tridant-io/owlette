@@ -4,7 +4,7 @@
  * Output: `web/public/docs-screens/add-machine-modal.png`
  * Used by: `web/content/docs/agent/installation.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
@@ -15,6 +15,7 @@ import {
   pinAdminSiteContext,
   saveDocsScreenshot,
   settleForDocsScreenshot,
+  test,
 } from './docs-helpers';
 
 test.use({ ...roleState('admin'), viewport: { width: 1440, height: 900 } });
@@ -44,6 +45,9 @@ test('add machine modal docs screenshot', async ({ page }) => {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'enter code' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'generate code' })).toBeVisible();
+    // the download row is disabled until the version loads; never frame the spinner
+    await expect(dialog.getByLabel('download owlette agent')).toBeEnabled();
+    await expect(dialog.getByLabel('choose installer platform')).toBeEnabled();
 
     await settleForDocsScreenshot(page);
     await saveDocsScreenshot(dialog, 'add-machine-modal.png');

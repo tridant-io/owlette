@@ -44,7 +44,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/status-page-uptime.md](internal/status-page-uptime.md) — status page components and the uptime checks behind them.
 - [internal/gui-automation-machine-setup.md](internal/gui-automation-machine-setup.md) — canonical recipe for provisioning a windows GUI-automation box (capture machine and e2e runner).
 - [internal/hyper-v-capture-vm.md](internal/hyper-v-capture-vm.md) — building the windows 11 hyper-v guest that the setup doc then configures.
-- [internal/claude-system.md](internal/claude-system.md) — implementation guide for the `.claude/` workflow system (hooks, skills, commands).
+- [internal/claude-system.md](internal/claude-system.md) — how the `.claude/` agent harness loads and is checked (skills, commands, agents, hooks).
 - [internal/oauth-migration-testing.md](internal/oauth-migration-testing.md) — deprecated v2.1.0 OAuth browser-flow testing guide, kept as history; device code pairing replaced it in v2.4.1.
 
 ## api reference

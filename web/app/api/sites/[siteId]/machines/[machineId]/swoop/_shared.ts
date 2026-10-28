@@ -1,6 +1,6 @@
 /**
- * Refusal plumbing shared by the three user-facing swoop session routes
- * (`sessions`, `sessions/{sid}`, `sessions/{sid}/lease`).
+ * Refusal plumbing shared by the user-facing swoop routes (`sessions`,
+ * `sessions/{sid}`, `sessions/{sid}/lease`, `step-up`).
  *
  * Every decision itself lives in `lib/swoop/policy.server.ts` — this only turns
  * one into an RFC 7807 response and mints the opaque ids. Nothing here reads or
@@ -102,7 +102,7 @@ export async function swoopGate(args: {
  * too — this only moves the answer in front of the Firestore work, because no
  * later check can ever admit one.
  */
-export function apiKeyRefusal(ctx: SiteHandlerContext): NextResponse | null {
+export function apiKeyRefusal(ctx: Pick<SiteHandlerContext, 'auth'>): NextResponse | null {
   if (ctx.auth.keyContext === null) return null;
   return decisionProblem({
     ok: false,

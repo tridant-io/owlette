@@ -4,6 +4,8 @@ import { useState } from 'react';
 import React from 'react';
 import { Plus, Minus } from 'lucide-react';
 import {
+  AFTER_BETA,
+  FREE_COVERS,
   INCLUDED_STORAGE,
   PRICING_FACTS,
   STORAGE_OVERAGE,
@@ -14,21 +16,21 @@ import {
 const faqs: { q: string; a: React.ReactNode }[] = [
   {
     q: "is it actually free?",
-    a: `during beta, yes — both tiers, no credit card, no trial clock. after beta: core is ${perMachineMonth(
+    a: `during beta, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
       PRICING_FACTS.core.list,
     )} for monitoring, process control, displays, and alerts on a single site. pro is ${perMachineMonth(
       PRICING_FACTS.pro.list,
     )} (${
       PRICING_FACTS.pro.minMachines
-    }-machine minimum) and adds deployment, hoot, talons, the public API, CLI, SDK, webhooks, unlimited sites, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. the first ${
+    }-machine minimum) and adds deployment, hoot, talons, swoop, the public API, CLI, SDK, webhooks, unlimited sites, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. the first ${
       PRICING_FACTS.foundersCohort
     } customers keep a founders rate of ${usd(PRICING_FACTS.core.founders)} core / ${usd(
       PRICING_FACTS.pro.founders,
-    )} pro, permanently. no per-user fees on either.`,
+    )} pro, permanently. no per-user fees on any tier.`,
   },
   {
     q: "does it work on mac or linux?",
-    a: "no. owlette is windows-only. your mac is fine — it doesn't need monitoring. it'll let you know when something's wrong. loudly. in the middle of a show.",
+    a: "yes. the agent runs on windows, on macs with apple silicon (macos 15 or later) and on linux (ubuntu 24.04). one dashboard, every machine, including swoop on a mac.",
   },
   {
     q: "what happens if my machine loses internet?",
@@ -89,9 +91,11 @@ export function FAQSection() {
             const isOpen = openIndex === i;
             return (
               <React.Fragment key={i}>
+              {/* a white wash vanishes on paper, so day hovers with the shared
+                  surface tint and night keeps its faint white */}
               <div
                 className={`group px-6 transition-all duration-300 ${
-                  isOpen ? 'bg-card/60 rounded-2xl border border-border' : 'hover:bg-white/[0.04]'
+                  isOpen ? 'bg-card/60 rounded-2xl border border-border' : 'hover:bg-[var(--surface-hover)] dark:hover:bg-elevation-ring/40'
                 }`}
               >
                 <button

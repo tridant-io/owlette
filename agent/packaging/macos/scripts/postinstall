@@ -1,0 +1,73 @@
+#!/bin/sh
+# the owlette installer package, after the payload has landed (tri-platform 5.1).
+# runs as root. it builds the data tree the way osadapter/posix.py's mode
+# table has it, puts the console user in the owlette group so the app can
+# reach the tree, loads the daemon and the app, and hands a pairing preseed —
+# a config/pairing.json an operator or an MDM placed before the install — to
+# configure_site.py in the background, never in this script's own time.
+set -u
+
+DATA_ROOT="/Library/Application Support/Owlette"
+RUNTIME="${DATA_ROOT}/runtime"
+PYTHON="${RUNTIME}/python/bin/python3"
+GROUP="_owlette"
+DAEMON_PLIST="/Library/LaunchDaemons/app.owlette.agent.plist"
+AGENT_PLIST="/Library/LaunchAgents/app.owlette.desktop.plist"
+
+log() { echo "owlette postinstall: $*"; }
+
+# --- the group ---------------------------------------------------------------
+if ! dseditgroup -o read "${GROUP}" >/dev/null 2>&1; then
+  dseditgroup -o create -r "Owlette" "${GROUP}" && log "created group ${GROUP}"
+fi
+console_user=$(stat -f%Su /dev/console 2>/dev/null || true)
+if [ -n "${console_user}" ] && [ "${console_user}" != "root" ]; then
+  dseditgroup -o edit -a "${console_user}" -t user "${GROUP}" 2>/dev/null \
+    && log "added ${console_user} to ${GROUP}"
+fi
+
+# --- the data tree (posix._DIRECTORY_MODES / _FILE_MODES) --------------------
+# root-owned, group owlette; the root itself is not group-writable so the
+# token store cannot be replaced by anything the app runs.
+mode_dir() { mkdir -p "${DATA_ROOT}/$1" && chown "root:${GROUP}" "${DATA_ROOT}/$1" && chmod "$2" "${DATA_ROOT}/$1"; }
+chown "root:${GROUP}" "${DATA_ROOT}" && chmod 750 "${DATA_ROOT}"
+mode_dir config 770
+mode_dir tmp 770
+mode_dir ipc 770
+mode_dir logs 750
+mode_dir logs/swoop 770
+mode_dir cache 750
+# the cross-process json lock: whoever creates it first sets its mode, and a
+# 0640 lock is one the app cannot take at all.
+if [ ! -f "${DATA_ROOT}/tmp/json.lock" ]; then
+  : > "${DATA_ROOT}/tmp/json.lock"
+fi
+chown "root:${GROUP}" "${DATA_ROOT}/tmp/json.lock" && chmod 660 "${DATA_ROOT}/tmp/json.lock"
+[ -f "${DATA_ROOT}/config/config.json" ] && chmod 660 "${DATA_ROOT}/config/config.json"
+[ -f "${DATA_ROOT}/config/machine_id" ] && chmod 640 "${DATA_ROOT}/config/machine_id"
+# the runtime is the package's: root's, readable by the group, never writable
+# by it. the interpreter and the agent's own tree are executed as root.
+chown -R root:wheel "${RUNTIME}" && chmod -R go-w "${RUNTIME}"
+
+# --- the daemon and the app ------------------------------------------------
+if launchctl print system/app.owlette.agent >/dev/null 2>&1; then
+  launchctl kickstart -k system/app.owlette.agent && log "restarted the daemon"
+else
+  launchctl bootstrap system "${DAEMON_PLIST}" && log "loaded the daemon"
+fi
+if [ -n "${console_user}" ] && [ "${console_user}" != "root" ]; then
+  console_uid=$(id -u "${console_user}")
+  launchctl bootstrap "gui/${console_uid}" "${AGENT_PLIST}" 2>/dev/null \
+    && log "loaded the app for ${console_user}"
+fi
+
+# --- the pairing preseed ------------------------------------------------------
+# in the background: a preseed is polled against the api and must not hold
+# the installer, and configure_site.py retires it once it has paired.
+if [ -f "${DATA_ROOT}/config/pairing.json" ]; then
+  log "pairing preseed found; pairing in the background"
+  ( cd "${RUNTIME}/agent/src" && nohup "${PYTHON}" configure_site.py --preseed \
+      >> "${DATA_ROOT}/logs/pairing.log" 2>&1 & )
+fi
+
+exit 0

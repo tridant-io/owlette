@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
 import { Plus, Minus, Trash2, ChevronUp, ChevronDown, Save, Pencil, X } from 'lucide-react';
 import type { ScheduleBlock } from '@/hooks/useFirestore';
 import type { SchedulePreset } from '@/hooks/useSchedulePresets';
@@ -21,6 +21,8 @@ interface TimePickerProps {
   value: string; // "HH:MM" 24-hour format
   onChange: (value: string) => void;
   compact?: boolean;
+  /** Accessible name of the field; the ±15 steppers are named after it. */
+  label?: string;
 }
 
 function formatTimeDisplay(value: string, use24h: boolean): string {
@@ -82,10 +84,11 @@ function parseTimeInput(input: string, use24h: boolean, currentHour24?: number):
   return null;
 }
 
-export function TimePicker({ value, onChange, compact }: TimePickerProps) {
+export function TimePicker({ value, onChange, compact, label = 'time' }: TimePickerProps) {
   const { userPreferences } = useAuth();
   const use24h = (userPreferences.timeFormat || '12h') === '24h';
   const [draft, setDraft] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const [h, m] = value.split(':').map(Number);
 
@@ -104,14 +107,26 @@ export function TimePicker({ value, onChange, compact }: TimePickerProps) {
     setDraft(null);
   };
 
+  const step = (deltaMinutes: number) => {
+    const next = adjust(deltaMinutes);
+    // mid-edit the field shows its draft, so the draft follows the step
+    if (document.activeElement === inputRef.current) setDraft(formatTimeDisplay(next, use24h));
+  };
+
   const displayed = formatTimeDisplay(value, use24h);
-  const inputWidth = use24h ? 'w-14' : 'w-[4.5rem]';
-  const inputPy = compact ? 'py-0.5 text-[11px]' : 'py-1 text-sm';
+  // 16px below md: iOS zooms the page into any focused field set smaller
+  const inputWidth = use24h ? 'w-16 md:w-14' : 'w-20 md:w-[4.5rem]';
+  const inputPy = compact ? 'py-0.5 text-base md:text-[11px]' : 'py-1 text-base md:text-sm';
+  // pointerdown is cancelled so a mouse or touch step leaves focus, and any draft, in
+  // the field; the step itself runs on click, which keyboard and assistive tech also fire
+  const stepperClass = 'flex h-4 w-5 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground cursor-pointer pointer-coarse:h-5 pointer-coarse:w-8';
 
   return (
     <div className="flex items-center gap-0.5">
       <input
+        ref={inputRef}
         type="text"
+        aria-label={label}
         value={draft ?? displayed}
         onChange={(e) => setDraft(e.target.value)}
         onFocus={(e) => { setDraft(displayed); requestAnimationFrame(() => e.target.select()); }}
@@ -122,25 +137,27 @@ export function TimePicker({ value, onChange, compact }: TimePickerProps) {
           if (e.key === 'ArrowUp') { e.preventDefault(); setDraft(formatTimeDisplay(adjust(60), use24h)); }
           if (e.key === 'ArrowDown') { e.preventDefault(); setDraft(formatTimeDisplay(adjust(-60), use24h)); }
         }}
-        className={`${inputPy} ${inputWidth} rounded-md border border-border bg-background text-foreground font-medium text-center cursor-text outline-none focus:border-muted-foreground transition-colors`}
+        className={`${inputPy} ${inputWidth} rounded-md border border-border bg-background text-foreground font-medium text-center cursor-text focus:border-muted-foreground transition-colors`}
         title="Type a time (e.g. 9:00, 5pm, 17:00) or use ↑↓ arrows"
       />
       <div className="flex flex-col">
         <button
           type="button"
-          aria-label="+15 min"
-          onMouseDown={(e) => { e.preventDefault(); setDraft(formatTimeDisplay(adjust(15), use24h)); }}
-          className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
+          aria-label={`${label}, 15 minutes later`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(15)}
+          className={stepperClass}
         >
-          <ChevronUp className="h-2.5 w-2.5" />
+          <ChevronUp className="h-3 w-3" />
         </button>
         <button
           type="button"
-          aria-label="-15 min"
-          onMouseDown={(e) => { e.preventDefault(); setDraft(formatTimeDisplay(adjust(-15), use24h)); }}
-          className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
+          aria-label={`${label}, 15 minutes earlier`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(-15)}
+          className={stepperClass}
         >
-          <ChevronDown className="h-2.5 w-2.5" />
+          <ChevronDown className="h-3 w-3" />
         </button>
       </div>
     </div>
@@ -262,21 +279,22 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
               <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.pill}`} />
               <input
                 type="text"
+                aria-label="block name"
                 value={block.name || ''}
                 onChange={(e) => updateBlockName(blockIndex, e.target.value)}
                 placeholder={`block ${blockIndex + 1}`}
-                className="text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground/50 w-full min-w-0 outline-none focus:border-muted-foreground transition-colors"
+                className="text-base md:text-sm font-medium bg-background border border-border rounded-md px-2.5 py-1.5 text-foreground placeholder:text-muted-foreground w-full min-w-0 focus:border-muted-foreground transition-colors"
               />
             </div>
             {blocks.length > 1 && (
-              <Button
-                variant="ghost"
-                size="sm"
+              <IconButton
+                label="remove block"
+                variant="ghost-destructive"
                 onClick={() => removeBlock(blockIndex)}
-                className="h-6 w-6 p-0 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer flex-shrink-0"
+                className="size-6 flex-shrink-0"
               >
                 <Trash2 className="h-3 w-3" />
-              </Button>
+              </IconButton>
             )}
           </div>
 
@@ -297,57 +315,47 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                 <div key={rangeIndex} className="space-y-1">
                   <div className="flex items-center gap-2">
                     <TimePicker
+                      label="start time"
                       value={range.start}
                       onChange={(v) => updateRange(blockIndex, rangeIndex, 'start', v)}
                       compact={compact}
                     />
                     <span className="text-muted-foreground text-xs">to</span>
                     <TimePicker
+                      label="stop time"
                       value={range.stop}
                       onChange={(v) => updateRange(blockIndex, rangeIndex, 'stop', v)}
                       compact={compact}
                     />
                     {isOvernight && (
-                      <span className="text-[10px] font-medium text-amber-400 bg-amber-400/10 border border-amber-400/30 rounded px-1.5 py-0.5 whitespace-nowrap">
+                      <span className="text-[10px] font-medium text-warning bg-warning-surface border border-warning-border/75 rounded px-1.5 py-0.5 whitespace-nowrap">
                         +1 day
                       </span>
                     )}
                     {block.ranges.length > 1 && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => removeRange(blockIndex, rangeIndex)}
-                            className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
-                          >
-                            <Minus className="h-3 w-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>remove time range</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <IconButton
+                        label="remove time range"
+                        variant="ghost"
+                        onClick={() => removeRange(blockIndex, rangeIndex)}
+                        className="size-6 text-muted-foreground hover:text-destructive flex-shrink-0"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </IconButton>
                     )}
                     {/* Add time range button on the last row */}
                     {rangeIndex === block.ranges.length - 1 && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            onClick={() => addRange(blockIndex)}
-                            className="h-6 w-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
-                          >
-                            <Plus className="h-3 w-3" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          <p>add time range</p>
-                        </TooltipContent>
-                      </Tooltip>
+                      <IconButton
+                        label="add time range"
+                        variant="ghost"
+                        onClick={() => addRange(blockIndex)}
+                        className="size-6 text-muted-foreground hover:text-foreground flex-shrink-0"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </IconButton>
                     )}
                   </div>
                   {isOvernight && (
-                    <p className="text-[11px] text-amber-400/80 pl-0.5">
+                    <p className="text-[11px] text-warning dark:text-warning/80 pl-0.5">
                       ends the following day — schedule days control when it <em>starts</em>
                     </p>
                   )}
@@ -506,7 +514,7 @@ export default function ScheduleEditor({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-card border-border text-foreground gap-6">
+      <DialogContent className="sm:max-w-lg border-border text-foreground gap-6">
         <DialogHeader>
           <DialogTitle>configure schedule</DialogTitle>
           {/* Which clock evaluates these windows is a per-site setting
@@ -531,7 +539,7 @@ export default function ScheduleEditor({
           {targetBelowMinAgent && (
             <p
               data-testid="schedule-editor-agent-advisory"
-              className="text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/20 rounded-md px-3 py-2"
+              className="text-xs text-warning dark:text-warning/90 bg-warning-surface border border-warning-border/50 rounded-md px-3 py-2"
             >
               this machine runs agent {targetMachineAgentVersion} — site time needs{' '}
               {SITE_TIME_MIN_AGENT_VERSION} or newer. until it updates, it keeps evaluating
@@ -588,8 +596,8 @@ export default function ScheduleEditor({
                           onClick={() => applyPreset(preset)}
                           className={`px-2.5 py-1 rounded-full text-[13px] font-medium transition-colors duration-150 cursor-pointer ${
                             isActive
-                              ? 'bg-blue-600/20 text-blue-100 ring-1 ring-blue-500/40'
-                              : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
+                              ? 'bg-info-solid/20 text-foreground/90 ring-1 ring-info-solid/40'
+                              : 'bg-card-sunken text-muted-foreground hover:bg-accent hover:text-foreground'
                           }`}
                         >
                           {preset.name}
@@ -604,18 +612,16 @@ export default function ScheduleEditor({
                             <Input
                               value={editPresetName}
                               onChange={(e) => setEditPresetName(e.target.value)}
-                              className="h-7 w-28 text-[11px] px-2 bg-background border-border"
+                              aria-label="preset name"
+                              className="h-7 w-28 text-base md:text-[11px] px-2 bg-background border-border"
                               autoFocus
                             />
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"><Save className="h-3.5 w-3.5" /></button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>save</p>
-                              </TooltipContent>
-                            </Tooltip>
-                            <button type="button" onClick={() => setEditingPresetId(null)} className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"><X className="h-3.5 w-3.5" /></button>
+                            <IconButton type="submit" label="save name" variant="ghost" className="size-7 text-muted-foreground hover:text-foreground">
+                              <Save className="h-3.5 w-3.5" />
+                            </IconButton>
+                            <IconButton label="cancel rename" variant="ghost" onClick={() => setEditingPresetId(null)} className="size-7 text-muted-foreground hover:text-foreground">
+                              <X className="h-3.5 w-3.5" />
+                            </IconButton>
                           </form>
                         )}
 
@@ -647,7 +653,7 @@ export default function ScheduleEditor({
                               <button
                                 type="button"
                                 onClick={() => onDeletePreset(selectedPreset.id)}
-                                className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors"
+                                className="flex items-center gap-1 hover:text-danger cursor-pointer transition-colors"
                               >
                                 <Trash2 className="h-3 w-3" />
                                 delete
@@ -678,18 +684,16 @@ export default function ScheduleEditor({
                       value={newPresetName}
                       onChange={(e) => setNewPresetName(e.target.value)}
                       placeholder="preset name"
-                      className="h-7 w-28 text-[11px] px-2 bg-background border-border"
+                      aria-label="preset name"
+                      className="h-7 w-28 text-base md:text-[11px] px-2 bg-background border-border"
                       autoFocus
                     />
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button type="submit" className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"><Save className="h-3.5 w-3.5" /></button>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>save preset</p>
-                      </TooltipContent>
-                    </Tooltip>
-                    <button type="button" onClick={() => { setSavingPreset(false); setNewPresetName(''); }} className="p-1 text-muted-foreground hover:text-foreground cursor-pointer"><X className="h-3.5 w-3.5" /></button>
+                    <IconButton type="submit" label="save preset" variant="ghost" className="size-7 text-muted-foreground hover:text-foreground">
+                      <Save className="h-3.5 w-3.5" />
+                    </IconButton>
+                    <IconButton label="cancel" variant="ghost" onClick={() => { setSavingPreset(false); setNewPresetName(''); }} className="size-7 text-muted-foreground hover:text-foreground">
+                      <X className="h-3.5 w-3.5" />
+                    </IconButton>
                   </form>
                 )}
               </>
@@ -697,12 +701,12 @@ export default function ScheduleEditor({
           })()}
         </div>
 
-        <div className="max-h-[60vh] overflow-y-auto pr-1">
+        <div className="max-h-[60dvh] overflow-y-auto pr-1">
           <ScheduleBlocksEditor blocks={blocks} onChange={setBlocks} />
         </div>
 
         {currentLaunchMode === 'scheduled' && !isCurrentlyInSchedule(blocks, siteTimezone) && (
-          <p className="text-xs text-amber-400/90 bg-amber-400/10 border border-amber-400/20 rounded-md px-3 py-2">
+          <p className="text-xs text-warning dark:text-warning/90 bg-warning-surface border border-warning-border/50 rounded-md px-3 py-2">
             this looks outside the current window — a machine outside it will stop the process shortly after saving.
           </p>
         )}
@@ -711,7 +715,7 @@ export default function ScheduleEditor({
           <Button variant="ghost" onClick={() => onOpenChange(false)} className="bg-secondary border border-border cursor-pointer">
             cancel
           </Button>
-          <Button onClick={handleSave} className="text-gray-900 cursor-pointer">
+          <Button onClick={handleSave} className="cursor-pointer">
             save schedule
           </Button>
         </DialogFooter>

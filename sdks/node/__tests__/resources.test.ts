@@ -647,6 +647,39 @@ describe('owlette.installerDeployments', () => {
     expect(body.name).toBe('rollout');
     expect(body.close_processes).toEqual(['TouchDesigner.exe']);
     expect(body.suppress_projects).toEqual(['show-a']);
+    expect(body).not.toHaveProperty('active_hours_override');
+  });
+
+  it('create sends activeHoursOverride as active_hours_override', async () => {
+    const { owlette, calls } = makeOwlette([
+      { status: 201, body: { deploymentId: 'deploy-1', siteId: 'site-1', status: 'in_progress', targets: [] } },
+    ]);
+    await owlette.installerDeployments.create('site-1', {
+      name: 'rollout',
+      installer_url: 'https://example.com/x.exe',
+      installer_name: 'x.exe',
+      silent_flags: '/SILENT',
+      machines: ['m-1'],
+      activeHoursOverride: { reason: 'venue closed today' },
+    });
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.active_hours_override).toEqual({ reason: 'venue closed today' });
+    expect(body).not.toHaveProperty('activeHoursOverride');
+  });
+
+  it('retry → POST /retry with an empty body, or the override when given', async () => {
+    const { owlette, calls } = makeOwlette([
+      { status: 200, body: { deploymentId: 'deploy-1', siteId: 'site-1', status: 'in_progress', retried: 1 } },
+    ]);
+    await owlette.installerDeployments.retry('site-1', 'deploy-1');
+    await owlette.installerDeployments.retry('site-1', 'deploy-1', {
+      activeHoursOverride: { reason: 'venue closed today' },
+    });
+    expect(calls[0]!.url).toBe('https://dev.test/api/sites/site-1/deployments/deploy-1/retry');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({});
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({
+      active_hours_override: { reason: 'venue closed today' },
+    });
   });
 
   it('cancel → POST /cancel surfaces OwletteApiError on 409', async () => {
@@ -727,12 +760,30 @@ describe('owlette.installer', () => {
           uploaded_by: 'u1',
           release_date: '2026-04-28T00:00:00.000Z',
           deletedAt: null,
+          files: {
+            windows_x64: {
+              download_url: 'https://cdn.example/x.exe',
+              checksum_sha256: 'a'.repeat(64),
+              file_size: 123,
+              file_name: 'x.exe',
+              uploaded_at: 1,
+            },
+            linux_x64: {
+              download_url: 'https://cdn.example/x.deb',
+              checksum_sha256: 'b'.repeat(64),
+              file_size: 456,
+              file_name: 'x.deb',
+              uploaded_at: 2,
+            },
+          },
         },
       },
     ]);
     const latest = await owlette.installer.latest();
     expect(calls[0]!.url).toBe('https://dev.test/api/installer/latest');
     expect(latest.version).toBe('2.10.0');
+    expect(latest.files.linux_x64?.file_size).toBe(456);
+    expect(latest.files.macos_arm64).toBeUndefined();
   });
 
   it('upload -> POST, signed-url PUT, finalize with one idempotency key', async () => {
@@ -776,6 +827,52 @@ describe('owlette.installer', () => {
       expect(startHeaders['Idempotency-Key']).toMatch(/^sdk-installer-upload-/);
       expect(finalizeHeaders['Idempotency-Key']).toBe(startHeaders['Idempotency-Key']);
       expect(JSON.parse(String(calls[2]!.init.body)).checksum_sha256).toMatch(/^[a-f0-9]{64}$/);
+      expect(JSON.parse(String(calls[0]!.init.body)).platform).toBeUndefined();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('upload -> sends platform in the POST body when given', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'owlette-node-installer-test-'));
+    const filePath = join(tempDir, 'Owlette-Installer-v2.11.0.deb');
+    writeFileSync(filePath, Buffer.from('fake installer bytes'));
+    try {
+      const { owlette, calls } = makeOwlette([
+        {
+          status: 200,
+          body: {
+            uploadUrl: 'https://signed.example/upload',
+            uploadId: 'upload-1',
+            storagePath: 'agent-installers/versions/2.11.0/Owlette-Installer-v2.11.0.deb',
+            platform: 'linux_x64',
+            expiresAt: '2026-04-28T00:15:00.000Z',
+          },
+        },
+        { status: 200, body: '' },
+        {
+          status: 200,
+          body: {
+            version: '2.11.0',
+            download_url: 'https://cdn.example/Owlette-Installer-v2.11.0.deb',
+            checksum_sha256: 'a'.repeat(64),
+            file_size: 20,
+            platform: 'linux_x64',
+            files: {},
+          },
+        },
+      ]);
+
+      const result = await owlette.installer.upload({
+        filePath,
+        version: '2.11.0',
+        platform: 'linux_x64',
+      });
+
+      const startBody = JSON.parse(String(calls[0]!.init.body));
+      expect(startBody.fileName).toBe('Owlette-Installer-v2.11.0.deb');
+      expect(startBody.platform).toBe('linux_x64');
+      expect(result.platform).toBe('linux_x64');
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1192,6 +1289,48 @@ describe('owlette.machines (extended)', () => {
       'https://dev.test/api/sites/site-1/machines/m-1/commands/cmd_abc',
     );
     expect(result.status).toBe('completed');
+  });
+
+  const queued = { status: 202, body: { ok: true, data: { commandId: 'cmd_abc', status: 'pending' } } };
+
+  it('reboot → POST reboot_machine with no params by default', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    const result = await owlette.machines.reboot('site-1', 'm-1');
+    expect(calls[0]!.url).toBe('https://dev.test/api/sites/site-1/machines/m-1/commands');
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ type: 'reboot_machine' });
+    expect(result.commandId).toBe('cmd_abc');
+  });
+
+  it('reboot → afterActiveHours sends when: after_active_hours', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.reboot('site-1', 'm-1', { afterActiveHours: true });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'reboot_machine',
+      params: { when: 'after_active_hours' },
+    });
+  });
+
+  it('reboot → activeHoursOverride sends active_hours_override and honours idempotencyKey', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.reboot('site-1', 'm-1', {
+      activeHoursOverride: { reason: 'hotfix for the show' },
+      idempotencyKey: 'reboot-key',
+    });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'reboot_machine',
+      params: { active_hours_override: { reason: 'hotfix for the show' } },
+    });
+    const headers = calls[0]!.init.headers as Record<string, string>;
+    expect(headers['Idempotency-Key']).toBe('reboot-key');
+  });
+
+  it('shutdown → POST shutdown_machine with active_hours_override', async () => {
+    const { owlette, calls } = makeOwlette([queued]);
+    await owlette.machines.shutdown('site-1', 'm-1', { activeHoursOverride: { reason: 'power work' } });
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({
+      type: 'shutdown_machine',
+      params: { active_hours_override: { reason: 'power work' } },
+    });
   });
 
   it('captureScreenshot → dispatch + poll + fetch signed URL', async () => {

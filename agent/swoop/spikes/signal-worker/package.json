@@ -11,6 +11,9 @@
     "measure": "node scripts/measure.mjs"
   },
   "devDependencies": {
-    "wrangler": "4.134.0"
+    "wrangler": "4.152.0"
+  },
+  "overrides": {
+    "undici": "^7.30.1"
   }
 }

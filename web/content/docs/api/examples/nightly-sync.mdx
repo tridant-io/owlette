@@ -1,13 +1,14 @@
 ---
 title: "nightly directory sync"
-description: "a raw REST node script that runs nightly on a build box, walks a local directory, diffs against the roost's currently published version, and publishes a new version only if something actually changed. most nights nothing has changed — the script must not publish empty versions or burn quota. on quota_exceeded it sends an optional webhook alert; structured logs go to stdout for systemd journald / windows event log capture."
+description: "a raw REST Node script that runs nightly on a build box, walks a local directory, diffs against the roost's currently published version, and publishes a new version only if something actually changed. most nights nothing has changed — the script must not publish empty versions or burn quota. on quota_exceeded it sends an optional webhook alert; structured JSON logs go to stdout for journald, launchd, or task scheduler to capture."
+keywords: ["cron"]
 ---
 
 ## required env vars
 
-- `OWLETTE_TOKEN` — api key with `roost=<id>:read,write` and `site=<id>:write` scopes.
-- `ROOST_ID` — target roost id.
-- `ROOST_SITE_ID` — site id hosting the roost.
+- `OWLETTE_TOKEN` — API key with `roost=<id>:read,write` and `site=<id>:write` scopes.
+- `ROOST_ID` — target roost ID.
+- `ROOST_SITE_ID` — site ID hosting the roost.
 - `WATCH_DIR` — absolute path to the local tree to sync (e.g. `/mnt/creative/latest`).
 
 ## optional env vars
@@ -17,7 +18,7 @@ description: "a raw REST node script that runs nightly on a build box, walks a l
 
 ## `nightly-sync.mjs` raw REST variant
 
-the shipped python sdk example is `sdks/python/examples/nightly_sync.py`; this node listing is a raw REST variant of the same `roosts.get()` followed by `roosts.push()` flow.
+the SDK ports (`sdks/node/examples/nightly-sync.ts`, `sdks/python/examples/nightly_sync.py`) read the roost with `roosts.get()` and then call `roosts.push()` unconditionally. a push always mints a new version — its version body records when and where it was built, and the version ID is a hash of that body — so the ports publish every night. this raw REST variant diffs the file lists first and only publishes on a real change.
 
 ```js
 #!/usr/bin/env node
@@ -49,7 +50,7 @@ const H = {
 };
 
 function log(level, msg, extra = {}) {
-  // structured one-line json for journald / event-log ingestion
+  // structured one-line json for journald / launchd / task scheduler logs
   process.stdout.write(JSON.stringify({
     ts: new Date().toISOString(), level, msg,
     component: 'nightly-sync', roostId: ROOST_ID, ...extra,
@@ -261,7 +262,7 @@ try {
     await webhookAlert(
       `[roost] quota exceeded on ${ROOST_SITE_ID}`,
       `the nightly sync for roost ${ROOST_ID} hit a storage/bandwidth quota limit.\n\n` +
-      `detail: ${e.detail}\nsite: ${ROOST_SITE_ID}\n\nsee ${API_URL}/sites/${ROOST_SITE_ID}/quota`,
+      `detail: ${e.detail}\nsite: ${ROOST_SITE_ID}\n\ncheck usage: GET ${API_URL}/api/sites/${ROOST_SITE_ID}/quota`,
     );
     process.exit(2);
   }
@@ -270,9 +271,19 @@ try {
 }
 ```
 
-the shipped python sdk flow reads the current roost with `roosts.get()`, then calls `roosts.push()`, which performs chunking, dedup-check, upload, and publish internally. this raw REST variant expands those steps explicitly: files are split into 4 MiB SHA-256 chunks, zero-byte files are skipped, and chunk checks/upload-url requests are batched in groups of 900. every step emits a structured json log line with `ts`, `level`, `msg`, and relevant metadata, so journald's default json detector indexes each field for `journalctl -o json -u roost-nightly-sync.service`-style queries. a no-op night logs two lines (`started`, `no changes`) and exits 0 — cheap enough to run without rate-limit worries.
+`roosts.push()` performs chunking, dedup-check, upload, and publish internally; this raw REST variant expands those steps explicitly: files are split into 4 MiB SHA-256 chunks, zero-byte files are skipped, and chunk checks/upload-url requests are batched in groups of 900 (the server accepts up to 1000 hashes per call). the publish sends `expectedCurrentVersionId`, so if someone else publishes mid-run it fails with `412 version_stale` instead of overwriting their version. every step emits one JSON log line with `ts`, `level`, `msg`, and relevant metadata on stdout. a no-op night logs two lines (`started`, `no changes`) and exits 0 — cheap enough to run without rate-limit worries.
 
-## systemd timer (linux)
+all three schedulers below read the same env file, one `KEY=value` per line — systemd through `EnvironmentFile=`, launchd and Task Scheduler through Node's `--env-file` flag (Node.js 20.6 or newer):
+
+```bash
+# /etc/roost-sync.env (C:\roost-sync\roost-sync.env on windows) — readable only by the job's user
+OWLETTE_TOKEN=owk_live_...
+ROOST_ID=rst_...
+ROOST_SITE_ID=site_...
+WATCH_DIR=/mnt/creative/latest
+```
+
+## systemd timer (Linux)
 
 drop these two unit files under `/etc/systemd/system/` and enable with `sudo systemctl enable --now roost-nightly-sync.timer`.
 
@@ -311,9 +322,47 @@ Unit=roost-nightly-sync.service
 WantedBy=timers.target
 ```
 
-`EnvironmentFile=/etc/roost-sync.env` holds the `OWLETTE_TOKEN=...` etc. lock that file down to `chmod 0600`. `RandomizedDelaySec=15min` spreads load for operators running this on many boxes.
+lock `/etc/roost-sync.env` down to `chmod 0600`. `RandomizedDelaySec=15min` spreads load for operators running this on many boxes. each JSON line becomes the `MESSAGE` of one journal entry, so `journalctl -u roost-nightly-sync.service -o cat | jq` reads them back as JSON.
 
-## windows scheduled task (alternative)
+## launchd daemon (macOS)
+
+save as `/Library/LaunchDaemons/app.owlette.roost-nightly-sync.plist` (owned by `root:wheel`, mode `0644`) and load it with `sudo launchctl bootstrap system /Library/LaunchDaemons/app.owlette.roost-nightly-sync.plist`.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>app.owlette.roost-nightly-sync</string>
+  <key>UserName</key>
+  <string>roost</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>--env-file=/etc/roost-sync.env</string>
+    <string>/opt/roost-sync/nightly-sync.mjs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/opt/roost-sync</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/opt/roost-sync/nightly-sync.log</string>
+  <key>StandardErrorPath</key>
+  <string>/opt/roost-sync/nightly-sync.log</string>
+</dict>
+</plist>
+```
+
+use the path `which node` prints (`/usr/local/bin/node` on Intel Macs). the env file stays out of the world-readable plist: make it `0600` and owned by `roost`. if the Mac is asleep at 03:00, launchd runs the job when it wakes; if it is powered off, that night is skipped.
+
+## Windows scheduled task (alternative)
 
 save as `roost-nightly-sync.xml` and import with `schtasks /create /tn "roost nightly sync" /xml roost-nightly-sync.xml`.
 
@@ -348,19 +397,18 @@ save as `roost-nightly-sync.xml` and import with `schtasks /create /tn "roost ni
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Program Files\nodejs\node.exe</Command>
-      <Arguments>C:\roost-sync\nightly-sync.mjs</Arguments>
+      <Command>C:\Windows\System32\cmd.exe</Command>
+      <Arguments>/c ""C:\Program Files\nodejs\node.exe" --env-file=C:\roost-sync\roost-sync.env C:\roost-sync\nightly-sync.mjs &gt;&gt; C:\roost-sync\nightly-sync.log 2&gt;&amp;1"</Arguments>
       <WorkingDirectory>C:\roost-sync</WorkingDirectory>
     </Exec>
   </Actions>
 </Task>
 ```
 
-set the env vars machine-wide via `setx /M` or inject them through a small wrapper `.cmd` if you prefer keeping secrets out of the registry. task scheduler captures stdout/stderr to the event log when you run under `S-1-5-18` (local system) — the json lines are searchable via `Get-WinEvent -LogName "Microsoft-Windows-TaskScheduler/Operational"`.
+Task Scheduler does not keep a task's output, so the action runs Node through `cmd /c` and appends stdout and stderr to `C:\roost-sync\nightly-sync.log`. Node's `--env-file` keeps the token out of the registry; restrict `C:\roost-sync\roost-sync.env` to `SYSTEM` and administrators. the `Microsoft-Windows-TaskScheduler/Operational` log records only each run's start, finish, and exit code.
 
 ## error handling summary
 
-- `quota_exceeded` (402) — script sends an optional `ALERT_WEBHOOK` alert with a direct link to the quota dashboard. exit code 2 is distinct from 1 so an operator's `OnFailure=` unit can escalate differently.
-- other api errors, including `precondition_failed` / `version_stale`, are logged and exit 1; the next scheduled run tries again against the latest head.
+- `quota_exceeded` (402) — script sends an optional `ALERT_WEBHOOK` alert pointing at the site's quota route. exit code 2 is distinct from 1 so an operator's `OnFailure=` unit can escalate differently.
+- other API errors, including `precondition_failed` / `version_stale` (412), are logged and exit 1; the next scheduled run tries again against the latest head.
 - `rate_limited` (429) — not specially handled in this raw REST variant. for fleets syncing hundreds of roosts from one host, add a `Retry-After`-aware retry loop around `api()`.
-- `chunk_not_found` during a later download (not this script's concern) — gc ran on an orphan; safe because the next nightly run re-uploads missing chunks.

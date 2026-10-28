@@ -404,6 +404,53 @@ describe('owlette deploy retry', () => {
   });
 });
 
+/* active-hours override on create and retry */
+
+describe.each([
+  [
+    'create',
+    [
+      'deploy', 'create', '--site', 'site-1', '--name', 'r',
+      '--installer-url', 'https://cdn/x.exe', '--installer-name', 'x.exe',
+      '--silent-flags', '/S', '--machines', 'm-1',
+    ],
+  ],
+  ['retry', ['deploy', 'retry', 'deploy-1', '--site', 'site-1']],
+])('owlette deploy %s --override-active-hours', (_verb, args) => {
+  it('sends --reason, trimmed, as active_hours_override', async () => {
+    const calls = installFetchStub({
+      deploymentId: 'deploy-1',
+      siteId: 'site-1',
+      status: 'in_progress',
+      targets: [],
+    });
+    await buildProgram().parseAsync(
+      [...args, '--override-active-hours', '--reason', '  venue closed today  '],
+      { from: 'user' },
+    );
+    const body = JSON.parse(String(calls[0]!.init.body));
+    expect(body.active_hours_override).toEqual({ reason: 'venue closed today' });
+    expect(process.exitCode).toBe(0);
+  });
+
+  it.each([
+    [['--override-active-hours']],
+    [['--override-active-hours', '--reason', '   ']],
+    [['--reason', 'venue closed today']],
+  ])('refuses %j before any http', async (flags) => {
+    const calls = installFetchStub({});
+    const stderr: string[] = [];
+    (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stderr.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    await buildProgram().parseAsync([...args, ...flags], { from: 'user' });
+    expect(calls).toHaveLength(0);
+    expect(stderr.join('')).toContain('--override-active-hours');
+    expect(process.exitCode).toBe(2);
+  });
+});
+
 /* cancel */
 
 describe('owlette deploy cancel', () => {

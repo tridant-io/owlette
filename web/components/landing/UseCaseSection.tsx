@@ -2,52 +2,54 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ChevronDown, ChevronLeft, ChevronRight, Monitor, Power, Rocket, X, Zap } from 'lucide-react';
-import Image from 'next/image';
+import { useTheme } from 'next-themes';
 import { HootIcon } from '@/components/icons/HootIcon';
+import { ThemedImage } from '@/components/ThemedImage';
 
 // React.ElementType rather than lucide's LucideIcon: the hoot card uses the
 // custom HootIcon (a plain SVG component, not a lucide forwardRef export).
-const capabilities: { label: string; detail: string; expanded: string; preview: string; icon: React.ElementType }[] = [
+// each preview's light path is the dark capture until a light one is taken.
+const capabilities: { label: string; detail: string; expanded: string; preview: { dark: string; light: string }; icon: React.ElementType }[] = [
   {
     label: 'monitor',
     detail: 'real-time metrics and email/webhook notifications',
     expanded: 'live cpu, memory, gpu, and disk usage for every machine. inline sparkline charts track trends over time. know instantly when something drifts.',
-    preview: '/landing-screens/monitor.png',
+    preview: { dark: '/landing-screens/monitor.png', light: '/landing-screens/monitor-light.png' },
     icon: Activity,
   },
   {
     label: 'control',
     detail: 'start, stop, or restart any process — with a full API',
     expanded: 'full remote process control across your entire fleet. configure startup sequences, manage dependencies, and auto-restart crashed processes before anyone notices.',
-    preview: '/landing-screens/control.png',
+    preview: { dark: '/landing-screens/control.png', light: '/landing-screens/control-light.png' },
     icon: Power,
   },
   {
     label: 'deploy',
     detail: 'push software updates to all machines at once',
     expanded: 'deploy software, configurations, and content to any machine, anywhere. fleet-wide rollouts or targeted single-machine updates — your call.',
-    preview: '/landing-screens/preview-deploy.png',
+    preview: { dark: '/landing-screens/preview-deploy.png', light: '/landing-screens/preview-deploy-light.png' },
     icon: Rocket,
   },
   {
     label: 'diagnose',
     detail: 'ask hoot why a process crashed, what driver is installed, or which machine just dropped offline.',
     expanded: 'hoot turns plain-english questions into real diagnostic actions across your fleet. bring your own openai or anthropic key.',
-    preview: '/landing-screens/preview-diagnose.png',
+    preview: { dark: '/landing-screens/preview-diagnose.png', light: '/landing-screens/preview-diagnose-light.png' },
     icon: HootIcon,
   },
   {
     label: 'display',
     detail: 'displays that stay put — drift-detected and auto-restored after restarts, driver updates, or accidental changes.',
     expanded: 'owlette captures the windows display topology you want and watches for drift. when a restart, a driver update, or an accidental change moves a monitor, owlette restores the known-good layout automatically. mosaic-aware.',
-    preview: '/landing-screens/preview-displays.png',
+    preview: { dark: '/landing-screens/preview-displays.png', light: '/landing-screens/preview-displays-light.png' },
     icon: Monitor,
   },
   {
     label: 'automate',
     detail: 'talons fire on a schedule, a threshold, or an event — and can look at the screen before acting.',
     expanded: 'every talon is a trigger, an optional condition, and outputs. fire on a schedule, a metric threshold, or an event like a crash. gate it on an ai visual check of a fresh screenshot. then email, post a webhook, restart the process, or hand hoot a directive.',
-    preview: '/landing-screens/preview-automate.png',
+    preview: { dark: '/landing-screens/preview-automate.png', light: '/landing-screens/preview-automate-light.png' },
     icon: Zap,
   },
 ];
@@ -63,6 +65,8 @@ export function UseCaseSection() {
   const [isDragging, setIsDragging] = useState(false);
   const imgRef = useRef<HTMLImageElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
   const dragRef = useRef<{ dragging: boolean; didDrag: boolean; startX: number; startY: number; startPanX: number; startPanY: number }>({
     dragging: false, didDrag: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0,
   });
@@ -71,7 +75,10 @@ export function UseCaseSection() {
   });
   const isZoomed = scale > 1;
   const lightboxOpen = lightboxIndex !== null;
-  const lightboxSrc = lightboxOpen ? capabilities[lightboxIndex].preview : null;
+  // the lightbox opens on a click, after hydration, so the resolved theme is known
+  const { resolvedTheme } = useTheme();
+  const lightboxShot = lightboxOpen ? capabilities[lightboxIndex].preview : null;
+  const lightboxSrc = lightboxShot && (resolvedTheme === 'light' ? lightboxShot.light : lightboxShot.dark);
 
   // Matches the expanded-panel collapse transition (duration-500) + a small buffer.
   const COLLAPSE_MS = 520;
@@ -91,11 +98,24 @@ export function UseCaseSection() {
   };
 
   const closeLightbox = useCallback(() => {
+    const shown = lightboxIndex === null ? null : capabilities[lightboxIndex].label;
     setLightboxIndex(null);
     setScale(1);
     setPan({ x: 0, y: 0 });
     dragRef.current = { dragging: false, didDrag: false, startX: 0, startY: 0, startPanX: 0, startPanY: 0 };
-  }, []);
+    // focus goes back to the preview of what was shown last, not the opener:
+    // paging the lightbox moves the open card along, and the opener's panel
+    // may have collapsed. the accordion and the grid both carry one, and only
+    // the one this breakpoint lays out has client rects.
+    const triggers = Array.from(
+      sectionRef.current?.querySelectorAll<HTMLElement>(`[data-preview-trigger="${shown}"]`) ?? [],
+    );
+    (triggers.find((el) => el.getClientRects().length > 0) ?? triggers[0])?.focus();
+  }, [lightboxIndex]);
+
+  useEffect(() => {
+    if (lightboxOpen) closeButtonRef.current?.focus();
+  }, [lightboxOpen]);
 
   const goTo = useCallback((index: number) => {
     setLightboxIndex(index);
@@ -109,6 +129,17 @@ export function UseCaseSection() {
     if (!lightboxOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') closeLightbox();
+      // aria-modal says the page behind is out of reach, so tab wraps in here.
+      if (e.key === 'Tab' && overlayRef.current) {
+        const buttons = overlayRef.current.querySelectorAll<HTMLElement>('button');
+        const first = buttons[0];
+        const last = buttons[buttons.length - 1];
+        const active = document.activeElement;
+        if (!overlayRef.current.contains(active) || active === (e.shiftKey ? first : last)) {
+          e.preventDefault();
+          (e.shiftKey ? last : first).focus();
+        }
+      }
       if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
         e.preventDefault();
         setLightboxIndex((prev) => {
@@ -202,7 +233,7 @@ export function UseCaseSection() {
   const activePreview = openIndex !== null ? capabilities[openIndex].preview : undefined;
 
   return (
-    <section id="capabilities" className="pt-24 sm:pt-32 pb-20 sm:pb-32 px-4 sm:px-6 relative -scroll-mt-16 sm:-scroll-mt-24">
+    <section ref={sectionRef} id="capabilities" className="pt-24 sm:pt-32 pb-20 sm:pb-32 px-4 sm:px-6 relative -scroll-mt-16 sm:-scroll-mt-24">
       <div className="max-w-5xl mx-auto relative">
 
         {/* Mobile: single-column accordion — each card owns its expanded content */}
@@ -239,22 +270,22 @@ export function UseCaseSection() {
                   <button
                     type="button"
                     aria-label={`open ${cap.label} preview`}
+                    data-preview-trigger={cap.label}
                     tabIndex={openIndex === i ? 0 : -1}
-                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-black/30 ring-1 ring-white/5 cursor-zoom-in border-0 bg-transparent p-0"
+                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 cursor-zoom-in border-0 bg-transparent p-0"
                     style={{
                       maskImage: 'linear-gradient(to bottom, black 80%, transparent)',
                       WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent)',
                     }}
                     onClick={() => setLightboxIndex(i)}
                   >
-                    <Image
-                      src={cap.preview}
+                    <ThemedImage
+                      {...cap.preview}
                       alt={`${cap.label} preview`}
                       width={1280}
                       height={720}
+                      sizes="100vw"
                       className="w-full h-auto"
-                      priority
-                      unoptimized
                     />
                   </button>
                 </div>
@@ -326,8 +357,9 @@ export function UseCaseSection() {
                   <button
                     type="button"
                     aria-label={openIndex !== null ? `open ${capabilities[openIndex].label} preview` : 'open capability preview'}
+                    data-preview-trigger={rowHasActive && openIndex !== null ? capabilities[openIndex].label : undefined}
                     tabIndex={rowHasActive ? 0 : -1}
-                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-black/30 ring-1 ring-white/5 cursor-zoom-in border-0 bg-transparent p-0"
+                    className="block w-full relative rounded-xl overflow-hidden shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 cursor-zoom-in border-0 bg-transparent p-0"
                     style={{
                       maskImage: 'linear-gradient(to bottom, black 80%, transparent), linear-gradient(to right, transparent, black 25px, black calc(100% - 25px), transparent)',
                       maskComposite: 'intersect',
@@ -339,7 +371,7 @@ export function UseCaseSection() {
                     <div className="relative">
                       {rowCaps.map((cap) => (
                         <div
-                          key={cap.preview}
+                          key={cap.label}
                           className="transition-all duration-500 ease-out"
                           style={{
                             opacity: rowHasActive && activePreview === cap.preview ? 1 : 0,
@@ -350,14 +382,14 @@ export function UseCaseSection() {
                             transform: rowHasActive && activePreview === cap.preview ? 'translateY(0)' : 'translateY(12px)',
                           }}
                         >
-                          <Image
-                            src={cap.preview}
+                          <ThemedImage
+                            {...cap.preview}
                             alt={`${cap.label} preview`}
                             width={1280}
                             height={720}
+                            // max-w-5xl inside px-6: 1024px from a 1072px viewport.
+                            sizes="(max-width: 1072px) 100vw, 1024px"
                             className="w-full h-auto"
-                            priority
-                            unoptimized
                           />
                         </div>
                       ))}
@@ -399,23 +431,33 @@ export function UseCaseSection() {
           onMouseLeave={() => { dragRef.current.dragging = false; setIsDragging(false); }}
         >
           <button
+            ref={closeButtonRef}
+            type="button"
+            aria-label="close preview"
             onClick={closeLightbox}
             className="absolute top-4 right-4 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <X className="w-6 h-6 text-white" />
           </button>
 
           {/* Prev / Next arrows */}
           <button
+            type="button"
+            aria-label="previous preview"
             onClick={(e) => { e.stopPropagation(); goTo((lightboxIndex - 1 + capabilities.length) % capabilities.length); }}
             className="absolute left-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <ChevronLeft className="w-6 h-6 text-white" />
           </button>
           <button
+            type="button"
+            aria-label="next preview"
             onClick={(e) => { e.stopPropagation(); goTo((lightboxIndex + 1) % capabilities.length); }}
             className="absolute right-4 top-1/2 -translate-y-1/2 z-10 p-2 rounded-full bg-white/10 hover:bg-white/20 transition-colors cursor-pointer"
           >
+            {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
             <ChevronRight className="w-6 h-6 text-white" />
           </button>
 
@@ -449,6 +491,7 @@ export function UseCaseSection() {
           />
 
           {/* Caption under image */}
+          {/* eslint-disable-next-line no-restricted-syntax -- white on the lightbox's black scrim, in either theme */}
           <p className="absolute bottom-14 left-1/2 -translate-x-1/2 z-10 text-lg text-white/70 text-center text-balance max-w-2xl mx-auto px-4">
             {capabilities[lightboxIndex].detail}
           </p>
@@ -458,6 +501,9 @@ export function UseCaseSection() {
             {capabilities.map((cap, i) => (
               <button
                 key={cap.label}
+                type="button"
+                aria-label={`show ${cap.label} preview`}
+                aria-current={i === lightboxIndex ? 'true' : undefined}
                 onClick={(e) => { e.stopPropagation(); goTo(i); }}
                 className={`w-2 h-2 rounded-full transition-all cursor-pointer ${
                   i === lightboxIndex ? 'bg-accent-cyan w-6' : 'bg-white/30 hover:bg-white/50'

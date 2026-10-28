@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { useDeploymentManager, type Deployment, type DeploymentTarget } from '@/hooks/useDeployments';
 import { Button } from '@/components/ui/button';
@@ -12,8 +13,13 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Plus, CheckCircle2, XCircle, Clock, Loader2, Trash2, X, MoreVertical, RefreshCw, Package, PlayCircle, Archive } from 'lucide-react';
+import { Plus, CheckCircle2, XCircle, Clock, Loader2, Trash2, X, MoreVertical, RefreshCw, Package, PlayCircle, Archive, ChevronDown } from 'lucide-react';
 import DeploymentDialog from '@/components/DeploymentDialog';
+import {
+  ActiveHoursDeployConfirm,
+  machinesInActiveHours,
+  type MachineInActiveHours,
+} from '@/components/ActiveHoursDeployConfirm';
 import UninstallDialog from '@/components/UninstallDialog';
 import { ManageSitesDialog } from '@/components/ManageSitesDialog';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
@@ -24,40 +30,46 @@ import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { useUninstall } from '@/hooks/useUninstall';
+import { describeCommandError } from '@/lib/activeHours';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
 
 function getStatusIcon(status: string) {
   switch (status) {
     case 'completed':
-      return <CheckCircle2 className="h-5 w-5 text-green-500" />;
+      return <CheckCircle2 className="h-5 w-5 text-success" />;
     case 'uninstalled':
-      return <Trash2 className="h-5 w-5 text-purple-500" />;
+      return <Trash2 className="h-5 w-5 text-chart-4" />;
     case 'failed':
-      return <XCircle className="h-5 w-5 text-red-500" />;
+      return <XCircle className="h-5 w-5 text-danger" />;
     case 'cancelled':
-      return <XCircle className="h-5 w-5 text-orange-500" />;
+      return <XCircle className="h-5 w-5 text-accent-coral" />;
     case 'in_progress':
       return <Loader2 className="h-5 w-5 text-accent-cyan animate-spin" />;
     case 'partial':
-      return <Clock className="h-5 w-5 text-yellow-500" />;
+      return <Clock className="h-5 w-5 text-warning" />;
     default:
       return <Clock className="h-5 w-5 text-muted-foreground" />;
   }
 }
 
+// outcomes take the status families. the rest are categorical: in-flight steps
+// take the signal and the warm accents, and purple has no status family, so the
+// install steps borrow --chart-4. a fill with no text class keeps the badge's
+// primary-foreground ink, which reads on each of them in both themes
 const statusColors: Record<string, string> = {
-  completed: 'bg-green-600 hover:bg-green-700',
-  uninstalled: 'bg-purple-600 hover:bg-purple-700',
-  failed: 'bg-red-600 hover:bg-red-700',
-  cancelled: 'bg-orange-600 hover:bg-orange-700',
-  in_progress: 'bg-cyan-600 hover:bg-cyan-700',
-  partial: 'bg-yellow-600 hover:bg-yellow-700',
-  pending: 'bg-muted hover:bg-muted',
-  closing_processes: 'bg-amber-600 hover:bg-amber-700',
-  downloading: 'bg-cyan-600 hover:bg-cyan-700',
-  installing: 'bg-purple-600 hover:bg-purple-700',
+  completed: 'bg-success-solid text-success-solid-foreground',
+  uninstalled: 'bg-chart-4',
+  failed: 'bg-danger-solid text-danger-solid-foreground',
+  cancelled: 'bg-accent-coral',
+  in_progress: 'bg-primary',
+  partial: 'bg-warning-solid text-warning-solid-foreground',
+  pending: 'bg-muted text-muted-foreground',
+  closing_processes: 'bg-accent-warm',
+  downloading: 'bg-primary',
+  installing: 'bg-chart-4',
 };
 
 function getStatusBadge(status: string, error?: string) {
@@ -81,6 +93,11 @@ function getStatusBadge(status: string, error?: string) {
   }
 
   return badge;
+}
+
+/** the in-flight key of a retry: the deployment id (bulk) or `${deploymentId}:${machineId}` (per-row). */
+function retryKey(deployment: Deployment, machineIds?: string[]): string {
+  return machineIds?.length === 1 ? `${deployment.id}:${machineIds[0]}` : deployment.id;
 }
 
 const DeploymentRow = React.memo(function DeploymentRow({
@@ -114,7 +131,9 @@ const DeploymentRow = React.memo(function DeploymentRow({
   timeFormat: '12h' | '24h';
 }) {
   const failedTargets = deployment.targets.filter((t: DeploymentTarget) => t.status === 'failed' && t.error);
-  const errorMessages = failedTargets.map((t: DeploymentTarget) => `${t.machineId}: ${t.error}`).join('\n');
+  const errorMessages = failedTargets
+    .map((t: DeploymentTarget) => `${t.machineId}: ${describeCommandError(t.error ?? '')}`)
+    .join('\n');
   const bulkRetrying = retrying.has(deployment.id);
 
   return (
@@ -122,24 +141,26 @@ const DeploymentRow = React.memo(function DeploymentRow({
       open={isSelected}
       onOpenChange={() => onToggle(deployment.id)}
     >
-      <CollapsibleTrigger asChild>
-        <div
-          className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer"
-          onClick={(e) => {
-            // Don't toggle if the user's mid-drag-selecting text in the summary
-            // (names are `select-text`). preventDefault here short-circuits
-            // Radix's trigger (composeEventHandlers respects defaultPrevented).
-            const selection = window.getSelection();
-            if (selection && selection.toString().length > 0) {
-              e.preventDefault();
-            }
-          }}
-        >
+      {/* the whole row toggles for pointer users; the chevron button is the
+          real trigger, because a row that holds the actions menu can't itself
+          be a button */}
+      <div
+        className="flex items-center justify-between px-4 py-3 hover:bg-muted/50 transition-colors cursor-pointer"
+        onClick={() => {
+          // Don't toggle if the user's mid-drag-selecting text in the summary
+          // (names are `select-text`).
+          const selection = window.getSelection();
+          if (selection && selection.toString().length > 0) return;
+          onToggle(deployment.id);
+        }}
+      >
         <div className="flex items-center gap-3 min-w-0 flex-1">
           {getStatusIcon(deployment.status)}
           <div className="min-w-0">
             <span className="block truncate text-foreground font-medium select-text">{deployment.name}</span>
             <p className="text-xs text-muted-foreground select-text truncate">{deployment.installer_name}</p>
+            {/* below `sm` the badge is hidden and the icon alone carries the status */}
+            <span className="sr-only sm:hidden">{deployment.status.replace('_', ' ')}</span>
           </div>
         </div>
         <div className="flex items-center gap-3 flex-shrink-0">
@@ -152,6 +173,17 @@ const DeploymentRow = React.memo(function DeploymentRow({
           <span className="text-xs text-muted-foreground hidden sm:block w-[150px] text-right">
             {formatSiteScopedTimestamp(deployment.createdAt, timeDisplayMode, userTz, siteTz, timeFormat)}
           </span>
+          <CollapsibleTrigger asChild>
+            <Button
+              size="sm"
+              variant="ghost"
+              aria-label={`details for ${deployment.name}`}
+              onClick={(e) => e.stopPropagation()}
+              className="h-7 w-7 pointer-coarse:h-10 pointer-coarse:w-10 p-0 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+            >
+              <ChevronDown className={`h-4 w-4 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
+            </Button>
+          </CollapsibleTrigger>
           <DropdownMenu>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -171,7 +203,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                 <p>more options</p>
               </TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="border-border bg-secondary">
+            <DropdownMenuContent align="end" className="border-border bg-raised">
               {deployment.targets.some((t: DeploymentTarget) => t.status === 'failed') && (
                 <DropdownMenuItem
                   disabled={bulkRetrying}
@@ -202,7 +234,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                   e.stopPropagation();
                   onDelete(deployment.id);
                 }}
-                className="text-red-400 focus:bg-red-950/30 focus:text-red-400 cursor-pointer"
+                className="text-danger focus:bg-danger-surface focus:text-danger cursor-pointer"
               >
                 <X className="h-4 w-4 mr-2" />
                 delete record
@@ -210,8 +242,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        </div>
-      </CollapsibleTrigger>
+      </div>
 
       <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
         <div className="border-t border-border">
@@ -236,50 +267,56 @@ const DeploymentRow = React.memo(function DeploymentRow({
             </div>
 
             <div>
-              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">targets ({deployment.targets.length})</h4>
+              <h2 className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">targets ({deployment.targets.length})</h2>
               <div className="space-y-1.5">
                 {deployment.targets.map((target: DeploymentTarget) => (
-                  <div key={target.machineId} className="flex items-center justify-between py-1.5 px-3 rounded border border-border/40 bg-background/50">
-                    <span className="text-foreground text-sm select-text">{target.machineId}</span>
-                    <div className="flex items-center gap-2">
-                      {target.progress !== undefined && (target.status === 'downloading' || target.status === 'installing') && (
-                        <span className="text-xs text-muted-foreground">{target.progress}%</span>
-                      )}
-                      {getStatusBadge(target.status, target.error)}
-                      {target.status === 'failed' && (() => {
-                        const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
-                        return (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                disabled={rowRetrying}
-                                onClick={() => onRetryTarget(deployment, target.machineId)}
-                                aria-label={`retry deployment to ${target.machineId}`}
-                                className="h-7 px-2 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
-                              >
-                                <RefreshCw className={`h-4 w-4 ${rowRetrying ? 'animate-spin' : ''}`} />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>retry this machine</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        );
-                      })()}
-                      {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
-                          aria-label={`cancel deployment to ${target.machineId}`}
-                          className="h-7 px-2 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
+                  <div key={target.machineId} className="rounded border border-border/40 bg-background/50">
+                    <div className="flex items-center justify-between py-1.5 px-3">
+                      <span className="text-foreground text-sm select-text">{target.machineId}</span>
+                      <div className="flex items-center gap-2">
+                        {target.progress !== undefined && (target.status === 'downloading' || target.status === 'installing') && (
+                          <span className="text-xs text-muted-foreground">{target.progress}%</span>
+                        )}
+                        {getStatusBadge(target.status)}
+                        {target.status === 'failed' && (() => {
+                          const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
+                          return (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  disabled={rowRetrying}
+                                  onClick={() => onRetryTarget(deployment, target.machineId)}
+                                  aria-label={`retry deployment to ${target.machineId}`}
+                                  className="h-7 px-2 text-muted-foreground hover:text-foreground hover:bg-muted cursor-pointer"
+                                >
+                                  <RefreshCw className={`h-4 w-4 ${rowRetrying ? 'animate-spin' : ''}`} />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>retry this machine</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          );
+                        })()}
+                        {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
+                          <Button
+                            size="sm"
+                            variant="ghost-destructive"
+                            onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
+                            aria-label={`cancel deployment to ${target.machineId}`}
+                            className="h-7 px-2 cursor-pointer"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
+                    {/* inline, not tooltip-only: the reason is what the operator needs to act on */}
+                    {target.error && (
+                      <p className="px-3 pb-2 text-xs text-destructive whitespace-pre-wrap break-words select-text">{describeCommandError(target.error)}</p>
+                    )}
                   </div>
                 ))}
               </div>
@@ -297,6 +334,7 @@ export default function DeploymentsPage() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -305,12 +343,15 @@ export default function DeploymentsPage() {
     updateSite,
     deleteSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const deploymentsGated = usePlanGated('deployments', siteOwner);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [initialSoftwareName, setInitialSoftwareName] = useState<string | undefined>(undefined);
   const [uninstallDeploymentId, setUninstallDeploymentId] = useState<string | undefined>(undefined);
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -370,18 +411,23 @@ export default function DeploymentsPage() {
   // the installer to self-heal a legacy deployment's missing checksum, which is slow.
   const [retrying, setRetrying] = useState<ReadonlySet<string>>(new Set());
 
-  const runRetry = useCallback(async (deployment: Deployment, machineIds?: string[]) => {
-    const key = machineIds?.length === 1
-      ? `${deployment.id}:${machineIds[0]}`
-      : deployment.id;
+  /** true once the retry is queued. */
+  const runRetry = useCallback(async (
+    deployment: Deployment,
+    machineIds?: string[],
+    override?: { reason: string },
+  ): Promise<boolean> => {
+    const key = retryKey(deployment, machineIds);
     setRetrying((prev) => new Set(prev).add(key));
     try {
-      const retried = await retryDeploymentRef.current(deployment.id, machineIds);
+      const retried = await retryDeploymentRef.current(deployment.id, machineIds, override ? { override } : undefined);
       toast.success(`retrying deployment for ${retried} machine(s)`);
+      return true;
     } catch (error: unknown) {
       console.error('Failed to retry deployment:', error);
       const message = error instanceof Error ? error.message : String(error);
       toast.error(message || 'failed to retry deployment');
+      return false;
     } finally {
       setRetrying((prev) => {
         const next = new Set(prev);
@@ -391,17 +437,48 @@ export default function DeploymentsPage() {
     }
   }, []);
 
+  // a ref, not a dep: the machines array changes on every heartbeat, which
+  // would recreate the retry handlers and defeat DeploymentRow's memo
+  const machinesRef = useRef(machines);
+  machinesRef.current = machines;
+
+  // a retry needs its own override; kept on close so the list doesn't empty as it fades
+  const [retryConfirm, setRetryConfirm] = useState<{
+    open: boolean;
+    deployment: Deployment;
+    machineIds?: string[];
+    machines: MachineInActiveHours[];
+  } | null>(null);
+
+  const retryOrAsk = useCallback(async (deployment: Deployment, machineIds?: string[]) => {
+    const retriedIds = machineIds
+      ?? deployment.targets.filter((t: DeploymentTarget) => t.status === 'failed').map((t) => t.machineId);
+    const inActiveHours = machinesInActiveHours(machinesRef.current, retriedIds);
+    if (inActiveHours.length > 0) {
+      setRetryConfirm({ open: true, deployment, machineIds, machines: inActiveHours });
+      return;
+    }
+    await runRetry(deployment, machineIds);
+  }, [runRetry]);
+
   const handleRetryDeployment = useCallback(async (deployment: Deployment) => {
     if (!deployment.targets.some((t: DeploymentTarget) => t.status === 'failed')) {
       toast.error('no failed targets to retry');
       return;
     }
-    await runRetry(deployment);
-  }, [runRetry]);
+    await retryOrAsk(deployment);
+  }, [retryOrAsk]);
 
   const handleRetryTarget = useCallback(async (deployment: Deployment, machineId: string) => {
-    await runRetry(deployment, [machineId]);
-  }, [runRetry]);
+    await retryOrAsk(deployment, [machineId]);
+  }, [retryOrAsk]);
+
+  const closeRetryConfirm = () => setRetryConfirm((prev) => prev && { ...prev, open: false });
+
+  const handleRetryOverride = async (override: { reason: string }) => {
+    if (!retryConfirm) return;
+    if (await runRetry(retryConfirm.deployment, retryConfirm.machineIds, override)) closeRetryConfirm();
+  };
 
   const handleSiteChange = (siteId: string) => {
     selectSite(siteId);
@@ -454,13 +531,20 @@ export default function DeploymentsPage() {
 
   return (
     <TooltipProvider delayDuration={200}>
-    <div className="relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
         currentPage="deploy"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={() => {
+          setManageEditSiteId(currentSiteId);
+          setManageDialogOpen(true);
+        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -468,6 +552,7 @@ export default function DeploymentsPage() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         onUpdateSite={updateSite}
@@ -522,6 +607,17 @@ export default function DeploymentsPage() {
           variant="destructive"
         />
 
+        {retryConfirm && (
+          <ActiveHoursDeployConfirm
+            action="retry"
+            open={retryConfirm.open}
+            machines={retryConfirm.machines}
+            onCancel={closeRetryConfirm}
+            sending={retrying.has(retryKey(retryConfirm.deployment, retryConfirm.machineIds))}
+            onConfirm={handleRetryOverride}
+          />
+        )}
+
         {(() => {
           // A site-less account has a settled, knowable answer — zero — so
           // show it rather than a permanent '--' placeholder.
@@ -534,7 +630,7 @@ export default function DeploymentsPage() {
               never push the document past the viewport (same shape as the
               dashboard's quick-stats row). */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
-            <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">deployments</h2>
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-foreground">deployments</h1>
 
             <div className="flex flex-wrap items-center gap-x-4 gap-y-3 sm:gap-x-6 md:gap-8">
               <div className="flex items-center gap-2.5">
@@ -583,13 +679,15 @@ export default function DeploymentsPage() {
               beside `new deployment` and the pair is wider than a phone. */}
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
             <UpdateOwletteButton siteId={currentSiteId} machines={machines} />
-            <Button
-              onClick={() => setDeployDialogOpen(true)}
-              className="text-gray-900 cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              new deployment
-            </Button>
+            <UpgradeGate flag="deployments" siteOwner={siteOwner} variant="inline">
+              <Button
+                onClick={() => setDeployDialogOpen(true)}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                new deployment
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
           );
@@ -613,17 +711,20 @@ export default function DeploymentsPage() {
             <div className="p-8 text-center">
               <p className="text-foreground font-medium mb-1">no deployments yet</p>
               <p className="text-sm text-muted-foreground mb-4">create your first deployment to install software across your machines</p>
-              <Button
-                onClick={() => setDeployDialogOpen(true)}
-                className="text-gray-900 cursor-pointer"
-                size="sm"
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                new deployment
-              </Button>
+              {/* the header already carries the upgrade note */}
+              {!deploymentsGated && (
+                <Button
+                  onClick={() => setDeployDialogOpen(true)}
+                  className="cursor-pointer"
+                  size="sm"
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  new deployment
+                </Button>
+              )}
             </div>
           ) : (
-            <div className="divide-y divide-border">
+            <div className="cascade-rows divide-y divide-border">
               {deployments.map((deployment) => (
                 <DeploymentRow
                   key={deployment.id}
@@ -651,7 +752,7 @@ export default function DeploymentsPage() {
         open={accountSettingsOpen}
         onOpenChange={setAccountSettingsOpen}
       />
-    </div>
+    </PageCascade>
     </TooltipProvider>
   );
 }

@@ -28,8 +28,8 @@
 //!   mode.
 //! - Per-monitor DPI differs (96 and 120 here) and a desktop rect is in
 //!   **physical** pixels whatever the scaling is. So DPI never enters
-//!   [`DisplayEntry::canvas_point`]; it is carried because the cursor path
-//!   scales a bitmap by it ([`crate::cursor::fit_for_css`]).
+//!   [`DisplayEntry::canvas_point`]; it is carried for the cursor path's
+//!   [`crate::cursor::Output`], which reports the output's scale.
 //!
 //! # Hardware test
 //!
@@ -40,7 +40,8 @@
 //! Expected on a dev box: one line per attached output naming its path, name,
 //! rect, texture size, dpi and refresh, and a virtual-canvas line.
 
-use crate::capture::{OutputInfo, Rotation};
+use crate::capture::OutputInfo;
+use crate::input::PointerSpace;
 
 /// One attached output, as the picker and the capture retarget need it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,32 +105,7 @@ impl DisplayEntry {
     /// DPI is not in it: a desktop rect is physical pixels on a 200% output as
     /// much as on a 100% one (spike 0.8 §3).
     pub fn canvas_point(&self, at: (i32, i32)) -> Option<(f64, f64)> {
-        let rect = self.output.desktop_rect;
-        if at.0 < rect.left || at.0 >= rect.right || at.1 < rect.top || at.1 >= rect.bottom {
-            return None;
-        }
-        let axis = |value: i32, lo: i32, size: i32| {
-            f64::from(value - lo) / f64::from((size - 1).max(1))
-        };
-        let u = axis(at.0, rect.left, rect.width());
-        let v = axis(at.1, rect.top, rect.height());
-        Some(into_texture(u, v, self.output.rotation))
-    }
-}
-
-/// Displayed-space uv → un-rotated texture uv.
-///
-/// The inverse of `input::un_rotate`, which is private and runs the other way:
-/// the displayed image is the texture rotated clockwise, so undoing a clockwise
-/// 90 is the 270 mapping and the other way round. The round trip against
-/// `PointerSpace::to_desktop` is asserted below, which is what keeps these two
-/// tables from drifting apart.
-fn into_texture(u: f64, v: f64, rotation: Rotation) -> (f64, f64) {
-    match rotation {
-        Rotation::Identity => (u, v),
-        Rotation::Rotate90 => (v, 1.0 - u),
-        Rotation::Rotate180 => (1.0 - u, 1.0 - v),
-        Rotation::Rotate270 => (1.0 - v, u),
+        PointerSpace::from_output(&self.output).from_desktop(at)
     }
 }
 
@@ -141,9 +117,15 @@ pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
     Ok(outputs.into_iter().map(win32::enrich).collect())
 }
 
-/// Wave 9 brings the macOS and Linux siblings; until then a non-Windows build
-/// enumerates nothing and the feature reports headless, which is true of it.
-#[cfg(not(windows))]
+/// Every active display, from CoreGraphics, in pixels (see [`super::mac`]).
+#[cfg(target_os = "macos")]
+pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
+    super::mac::entries()
+}
+
+/// Linux gets its own plan; until then it enumerates nothing and the feature
+/// reports headless, which is true of a build that cannot capture.
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn enumerate() -> anyhow::Result<Vec<DisplayEntry>> {
     Ok(Vec::new())
 }
@@ -248,8 +230,7 @@ mod win32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capture::Rect;
-    use crate::input::PointerSpace;
+    use crate::capture::{Rect, Rotation};
 
     fn entry(rect: Rect, rotation: Rotation, dpi: u32, refresh_hz: u32) -> DisplayEntry {
         DisplayEntry {

@@ -260,6 +260,30 @@ describe('swoop signaling', () => {
     expect(h.sockets).toHaveLength(3);
   });
 
+  it('keeps redialing for as long as the room stays unreachable, and never reports exhaustion', async () => {
+    jest.useFakeTimers();
+    const h = harness();
+    await h.signaling.connect();
+    h.sockets[0].open();
+    h.sockets[0].deliver(HELLO);
+
+    // twenty unclean closes in a row, well past the eight the ladder used to
+    // allow: every one of them is followed by another dial within the ceiling.
+    for (let i = 0; i < 20; i += 1) {
+      h.sockets[h.sockets.length - 1].drop(1006);
+      await settle();
+      await jest.advanceTimersByTimeAsync(BACKOFF_CEILING_MS);
+    }
+    expect(h.sockets).toHaveLength(21);
+    expect(h.fatals).toEqual([]);
+    expect(h.signaling.connectionStatus).toBe('reconnecting');
+
+    // and the room coming back is all it takes.
+    h.sockets[20].open();
+    h.sockets[20].deliver(HELLO);
+    expect(h.signaling.connectionStatus).toBe('open');
+  });
+
   it('backs off within the bound after an unclean close and recovers', async () => {
     jest.useFakeTimers();
     const h = harness();
@@ -279,20 +303,21 @@ describe('swoop signaling', () => {
     expect(h.signaling.connectionStatus).toBe('open');
   });
 
-  it('does not reconnect after a clean close — a kill is not a hiccup', async () => {
+  it('redials after a clean close it did not ask for — only close() ends it', async () => {
     jest.useFakeTimers();
     const h = harness();
     await h.signaling.connect();
     h.sockets[0].open();
     h.sockets[0].deliver(HELLO);
 
-    h.sockets[0].deliver({ type: 'kill', sid: 'sid_1' });
+    // a stale eviction closes clean too. whether the session is over is the
+    // page's call, and the page closes this socket itself when it is.
     h.sockets[0].drop(1000);
     await settle();
-    await jest.advanceTimersByTimeAsync(60_000);
+    await jest.advanceTimersByTimeAsync(BACKOFF_CEILING_MS);
 
-    expect(h.sockets).toHaveLength(1);
-    expect(h.signaling.connectionStatus).toBe('closed');
+    expect(h.sockets).toHaveLength(2);
+    expect(h.signaling.connectionStatus).toBe('reconnecting');
   });
 
   it('re-mints before sending on a spent token instead of buying token_expired', async () => {
@@ -386,13 +411,17 @@ describe('swoop signaling', () => {
     expect(h.sockets).toHaveLength(1);
   });
 
-  it('gives up rather than minting forever when the api refuses', async () => {
+  it('walks the ladder when a mint fails, and dials once one succeeds', async () => {
+    jest.useFakeTimers();
     const fatals: SwoopSignalFatal[] = [];
     const sockets: FakeSocket[] = [];
+    let mints = 0;
     const signaling = new SwoopSignaling({
       roomUrl: ROOM_URL,
       mintToken: async () => {
-        throw new Error('403');
+        mints += 1;
+        if (mints < 3) throw new Error('the session lease could not be renewed.');
+        return mintFake(Math.floor(Date.now() / 1000) + 60, mints);
       },
       onMessage: () => undefined,
       onFatal: (code) => fatals.push(code),
@@ -402,9 +431,15 @@ describe('swoop signaling', () => {
         return socket;
       },
     });
+    openSignalings.push(signaling);
 
     await signaling.connect();
-    expect(fatals).toEqual(['mint_failed']);
     expect(sockets).toHaveLength(0);
+    expect(signaling.connectionStatus).toBe('reconnecting');
+
+    await jest.advanceTimersByTimeAsync(BACKOFF_CEILING_MS * 2);
+    expect(mints).toBe(3);
+    expect(sockets).toHaveLength(1);
+    expect(fatals).toEqual([]);
   });
 });

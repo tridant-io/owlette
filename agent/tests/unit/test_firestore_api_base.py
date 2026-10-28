@@ -147,7 +147,8 @@ class TestProductionUrlsAreByteIdentical:
             client,
             lambda c: c.batch_write([{"operation": "set", "path": "t/1", "data": {}}]),
         )
-        assert urls == [f"{PROD_DOCUMENTS}:batchWrite"]
+        # `:commit`, the endpoint a user token may use for a batch (`:batchWrite` is for service accounts).
+        assert urls == [f"{PROD_DOCUMENTS}:commit"]
 
     def test_collection_stream(self, mock_auth):
         client = FirestoreRestClient(project_id=PROJECT, auth_manager=mock_auth)
@@ -197,7 +198,7 @@ class TestEmulatorUrls:
             client,
             lambda c: c.batch_write([{"operation": "set", "path": "t/1", "data": {}}]),
         )
-        assert urls == [f"{self.EMU_DOCUMENTS}:batchWrite"]
+        assert urls == [f"{self.EMU_DOCUMENTS}:commit"]
 
     def test_no_googleapis_url_survives_anywhere(self, client):
         """A partial redirect is the failure mode worth naming: an agent pointed

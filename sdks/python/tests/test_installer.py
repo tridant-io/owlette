@@ -53,6 +53,8 @@ async def test_list_parses_versions() -> None:
     assert v.release_date == "2026-04-28T00:00:00.000Z"
     assert v.promoted_at == 1700000100
     assert v.promoted_by == "u2"
+    # a response without files (older api) parses to an empty map
+    assert v.files == {}
 
 
 @pytest.mark.asyncio
@@ -75,6 +77,22 @@ async def test_latest_parses_version() -> None:
                 "deletedAt": None,
                 "promoted_at": 1700000100,
                 "promoted_by": "u2",
+                "files": {
+                    "windows_x64": {
+                        "download_url": "https://r2/x.exe",
+                        "checksum_sha256": "a" * 64,
+                        "file_size": 1234,
+                        "file_name": "x.exe",
+                        "uploaded_at": 1700000000,
+                    },
+                    "macos_arm64": {
+                        "download_url": "https://r2/x.pkg",
+                        "checksum_sha256": "b" * 64,
+                        "file_size": 5678,
+                        "file_name": "x.pkg",
+                        "uploaded_at": 1700000050,
+                    },
+                },
             },
         )
 
@@ -87,6 +105,13 @@ async def test_latest_parses_version() -> None:
     assert latest.release_date == "2026-04-28T00:00:00.000Z"
     assert latest.promoted_at == 1700000100
     assert latest.promoted_by == "u2"
+    assert set(latest.files) == {"windows_x64", "macos_arm64"}
+    mac = latest.files["macos_arm64"]
+    assert mac.download_url == "https://r2/x.pkg"
+    assert mac.checksum_sha256 == "b" * 64
+    assert mac.file_size == 5678
+    assert mac.file_name == "x.pkg"
+    assert mac.uploaded_at == 1700000050
 
 
 @pytest.mark.asyncio
@@ -161,6 +186,46 @@ async def test_upload_three_step_flow_with_shared_idempotency_key(tmp_path: Path
     # Signed-url PUT happened exactly once.
     assert len(upload_calls) == 1
     assert upload_calls[0].method == "PUT"
+
+    # No platform given: the api derives it from the extension.
+    assert "platform" not in json.loads(api_calls[0].content)
+
+
+@pytest.mark.asyncio
+async def test_upload_sends_platform_when_given(tmp_path: Path) -> None:
+    file_path = tmp_path / "Owlette-Installer-v9.9.9.deb"
+    file_path.write_bytes(b"\x00\xff" * 16)
+
+    api_calls: list[httpx.Request] = []
+
+    def api_handler(request: httpx.Request) -> httpx.Response:
+        api_calls.append(request)
+        if request.method == "POST":
+            return httpx.Response(
+                200,
+                json={
+                    "uploadUrl": "https://r2.example/upload?sig=abc",
+                    "uploadId": "up_123",
+                    "platform": "linux_x64",
+                },
+            )
+        return httpx.Response(
+            200,
+            json={"version": "9.9.9", "platform": "linux_x64", "files": {}},
+        )
+
+    async with Roost(token="owk_live_x", transport=_transport(api_handler)) as client:
+        client.installer._upload_transport = _transport(lambda _r: httpx.Response(200))
+        result = await client.installer.upload(
+            file_path,
+            version="9.9.9",
+            platform="linux_x64",
+        )
+
+    assert result["platform"] == "linux_x64"
+    start_body = json.loads(api_calls[0].content)
+    assert start_body["fileName"] == "Owlette-Installer-v9.9.9.deb"
+    assert start_body["platform"] == "linux_x64"
 
 
 @pytest.mark.asyncio

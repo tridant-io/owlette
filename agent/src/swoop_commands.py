@@ -116,7 +116,7 @@ def _handle_swoop_session_requested(cmd_data: dict, cmd_id: str, service: Any) -
 
 
 def _handle_swoop_kill(cmd_data: dict, cmd_id: str, service: Any) -> str:
-    """kill the live streamer. an absent sid means whatever is running."""
+    """kill the streamer serving this sid, and no other. an absent sid means whatever is running."""
     err = _check_payload(cmd_data, 'swoop_kill', sid_allowed=True)
     if err:
         return err
@@ -130,7 +130,7 @@ def _handle_swoop_kill(cmd_data: dict, cmd_id: str, service: Any) -> str:
 
     reason = f"swoop_kill sid={sid}" if sid else "swoop_kill any"
     try:
-        manager.kill(reason)
+        manager.kill(reason, sid=sid)
     except Exception as e:
         logger.exception("swoop_kill: kill failed")
         return f"Error: swoop_kill failed: {type(e).__name__}: {e}"

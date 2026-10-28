@@ -12,11 +12,13 @@ import threading
 import time
 import json
 import os
+import sys
 import logging
 import hashlib
 from typing import Dict, Any, Callable, Optional
 from datetime import datetime
 
+import osadapter
 import shared_utils
 import hardware_profile
 import config_sync
@@ -40,8 +42,9 @@ SHUTDOWN_REQUEST_TIMEOUT = 3.0
 # "log-only", never a bad write.
 # Excluded on purpose — display_auto_restore_fired, display_apply_acked,
 # display_revert_deferred, display_auto_restore_skipped_unfixable,
-# display_auto_restore_circuit_breaker_tripped: no routing entry, so they hit the
-# endpoint's generic branch and duplicate the log doc the agent already wrote.
+# display_auto_restore_circuit_breaker_tripped, display_auto_restore_parked: no
+# routing entry, so they hit the endpoint's generic branch and duplicate the log
+# doc the agent already wrote.
 DISPLAY_ALERT_EVENT_TYPES = frozenset({
     # email + webhook
     'display_monitor_removed',
@@ -150,6 +153,10 @@ class FirebaseClient:
     ensuring robust reconnection handling for all failure scenarios.
     """
 
+    # Class-level because the heartbeat and keep-awake tests build the client
+    # with __new__ and skip __init__. See _on_removed_from_site.
+    _removed = False
+
     def __init__(self, auth_manager: AuthManager, project_id: str, site_id: str, config_cache_path: str = "config/firebase_cache.json"):
         """
         Initialize Firebase client with OAuth authentication.
@@ -205,6 +212,8 @@ class FirebaseClient:
 
         self.command_callback: Optional[Callable] = None
         self.config_update_callback: Optional[Callable] = None
+        # Takes a reason; the service leaves the site with it. See _on_removed_from_site.
+        self.removed_callback: Optional[Callable[[str], None]] = None
 
         # Slow-command queue (installs/uninstalls/updates — serialised).
         # Worker starts in start(), after self.running = True.
@@ -232,8 +241,11 @@ class FirebaseClient:
         # server decides, the agent mirrors. site_name is the operator label
         # published via tmp/service_status.json. None when unreadable/opted out —
         # consumers fall back to the site id and to each machine's local clock.
+        # site_keep_awake is the site's keep-screens-awake switch: on by default,
+        # and a failed lookup keeps the last answer rather than this default.
         self.site_timezone: Optional[str] = None
         self.site_name: Optional[str] = None
+        self.site_keep_awake: bool = True
         # A denial never changes for this client's life: log once, stop asking.
         # Cleared by construction (_initialize_or_restart_firebase_client).
         self._site_metadata_denied: bool = False
@@ -249,13 +261,14 @@ class FirebaseClient:
         self._last_heartbeat_time: float = 0.0
 
         # Hardware profile state (schemaVersion 1). _last_profile_check is
-        # monotonic secs; _cached_profile_hash is lazily read from
-        # profile_hash.json; _last_primary feeds compute_primary hysteresis.
+        # monotonic secs; _last_primary feeds compute_primary hysteresis.
+        # _cached_profile_hash is the last hash this client uploaded, in memory
+        # only: a re-pair builds a new client whose machine doc may have lost
+        # its hardware docs, so a hash kept on disk would skip that upload.
         self._last_profile_check: float = 0.0
         self._cached_profile: Optional[Dict] = None
         self._cached_profile_hash: Optional[str] = None
         self._last_primary: Optional[Dict] = None
-        self._profile_hash_path: str = shared_utils.get_data_path('tmp/profile_hash.json')
 
         # Buffers alerts whose fire-and-forget POST failed; drained by the
         # connection-state listener on the next CONNECTED. In-memory only (a
@@ -265,19 +278,17 @@ class FirebaseClient:
         self._PENDING_ALERTS_MAX = 100
 
         # Display profile state (schemaVersion 1). Same shape as the hardware
-        # cache: rate-limited rebuild, signature-hashed upload, hash persisted on
-        # disk. Writes go to hardware/display only — never online/lastHeartbeat.
+        # cache: rate-limited rebuild, signature-hashed upload, hash in memory.
+        # Writes go to hardware/display only — never online/lastHeartbeat.
         self._last_display_check: float = 0.0
         self._cached_display_profile: Optional[Dict] = None
         self._cached_display_hash: Optional[str] = None
-        self._display_hash_path: str = shared_utils.get_data_path('.display_profile_hash')
 
         # Display-modes catalogue: on-demand only (dashboard sends
         # enumerate_display_modes when the editor opens). signatureHash matches the
         # display profile's, so unchanged topology is a no-op upload; separate hash
-        # file so either cache can be invalidated alone.
+        # so either cache can be invalidated alone.
         self._cached_display_modes_hash: Optional[str] = None
-        self._display_modes_hash_path: str = shared_utils.get_data_path('.display_modes_hash')
 
         self._load_cached_config()
         self.connection_manager.connect()
@@ -377,41 +388,57 @@ class FirebaseClient:
         Args:
             event: ConnectionEvent with old_state, new_state, reason
         """
-        if event.new_state == ConnectionState.FATAL_ERROR:
-            self._handle_fatal_error(event.reason)
-        elif event.new_state == ConnectionState.CONNECTED:
+        if event.new_state == ConnectionState.CONNECTED:
             # Daemon thread: a slow drain must not block the state listener,
             # which every other listener queues behind.
             self._drain_pending_alerts_async()
 
-    def _handle_fatal_error(self, reason: str):
+    def _on_removed_from_site(self):
+        """The dashboard removed this machine: its config doc, deleted in the
+        same batch as the machine doc, vanished from under the config listener.
+
+        Removal deletes the refresh token too, but the access token is good for
+        up to an hour, and every heartbeat, presence and health write upserts,
+        so the next one wrote the row straight back (#326). From here nothing
+        in this process writes: `connected` answers False, the metrics loop
+        ends, and stop() skips its `online: false` flush, which would have
+        recreated the row as an offline ghost. The callback leaves the site
+        locally and ends hoot, which writes on a token of its own. Then the
+        row is deleted once more on the access token this process still holds
+        in memory: a heartbeat that landed between the dashboard's delete and
+        this poll had already put it back, and nothing else would take it away.
+
+        `running` goes False only after the callback has switched cloud sync
+        off, or the main loop could read a stopped client under an enabled
+        config and build a fresh one, which cannot see the doc is gone.
         """
-        Handle fatal connection errors (e.g., machine removed from site).
+        if self._removed:
+            return
+        self._removed = True
+        self.logger.warning(
+            "This machine was removed from the site on the dashboard - "
+            "stopping all cloud writes")
+        if self._command_listener_stop is not None:
+            self._command_listener_stop.set()
+        if self._config_listener_stop is not None:
+            self._config_listener_stop.set()
 
-        Args:
-            reason: Reason for the fatal error
-        """
-        self.logger.error(f"Fatal connection error: {reason}")
-
-        reason_lower = reason.lower()
-        if any(x in reason_lower for x in ['403', '404', 'permission', 'not found']):
-            self.logger.warning("Machine may have been removed from site via web dashboard")
-            self.logger.info("Disabling Firebase and clearing site_id in local config")
-
+        if self.removed_callback is None:
+            self.logger.warning("No removal callback registered - the local config still names the site")
+        else:
             try:
-                config = shared_utils.read_config()
+                self.removed_callback('this machine was removed from the site on the dashboard')
+            except Exception as e:
+                self.logger.error(f"Removal callback failed: {e}")
+        self.running = False
 
-                if 'firebase' not in config:
-                    config['firebase'] = {}
-
-                config['firebase']['enabled'] = False
-                config['firebase']['site_id'] = ''
-
-                shared_utils.save_config(config)
-                self.logger.info("Local config updated - machine deregistered from site")
-
-            except Exception as config_error:
-                self.logger.error(f"Failed to update local config after removal detection: {config_error}")
+        if self.db is None:
+            return
+        try:
+            self.db.delete_document(f"sites/{self.site_id}/machines/{self.machine_id}")
+            self.logger.info("Removed machine: deleted the row a late heartbeat may have written back")
+        except Exception as e:
+            self.logger.warning(f"Removed machine: could not delete the row again, it may linger offline: {e}")
 
     # Thread Factories (for ConnectionManager supervision)
 
@@ -426,16 +453,19 @@ class FirebaseClient:
     # Site Metadata
 
     def _fetch_site_metadata(self):
-        """Cache the site's display name and its schedule timezone.
+        """Cache the site's display name, schedule timezone and keep-awake switch.
 
-        1. ``GET /api/agent/site`` — name + timezone; the path that works today.
+        1. ``GET /api/agent/site`` — name + timezone + keepAwake; the path that
+           works today.
         2. Direct read of ``sites/{siteId}`` — firestore.rules scopes agents to
            their machine subtree, so it 403s; kept wired for a future rule grant.
+           It never touches keepAwake, which lives in ``settings/display``.
 
-        Runs on connect/reconnect and every 900s from the metrics thread (never
-        the 5s main loop — this is a network round trip). Both values are optional
-        and a failed lookup keeps the previous cache; callers fall back to the
-        site id and to each machine's local clock.
+        Runs on connect/reconnect, every 900s from the metrics thread, and on a
+        ``site_settings_refresh`` command from that handler's own thread (never
+        the 5s main loop — this is a network round trip). Name and timezone are
+        optional, and a failed lookup keeps the previous cache of all three;
+        callers fall back to the site id and to each machine's local clock.
         """
         if self._fetch_site_metadata_from_api():
             return
@@ -471,10 +501,10 @@ class FirebaseClient:
             return None
 
     def _fetch_site_metadata_from_api(self) -> bool:
-        """Resolve the site's display name and schedule timezone through the web API.
+        """Resolve the site's name, schedule timezone and keep-awake switch via the web API.
 
-        True = the API answered (both values cached, including "the site has
-        neither"); False = fall back to the Firestore read.
+        True = the API answered (all three cached, including "the site has no
+        name or timezone"); False = fall back to the Firestore read.
 
         The SERVER owns the policy: it returns a `timezone` only when the site's
         `schedulesFollowSiteTime` is true and it has one set, and `null` in every
@@ -497,6 +527,13 @@ class FirebaseClient:
             timezone = payload.get('timezone')
             timezone = timezone.strip() if isinstance(timezone, str) and timezone.strip() else None
             self._apply_site_timezone(timezone)
+
+            # Default on: only an explicit false turns it off, including from a
+            # server that predates the field.
+            keep_awake = payload.get('keepAwake') is not False
+            if keep_awake != self.site_keep_awake:
+                self.logger.info(f"Keep screens awake: {'on' if keep_awake else 'off'}")
+            self.site_keep_awake = keep_awake
             return True
         except Exception as e:
             self._warn_site_metadata_api_once(str(e))
@@ -583,12 +620,13 @@ class FirebaseClient:
 
     @property
     def connected(self) -> bool:
-        """Check if connected to Firestore (via ConnectionManager)."""
-        return self.connection_manager.is_connected
+        """Check if connected to Firestore (via ConnectionManager). False for
+        good once the dashboard removed this machine: every writer checks it."""
+        return not self._removed and self.connection_manager.is_connected
 
     def is_connected(self) -> bool:
         """Check if connected to Firestore."""
-        return self.connection_manager.is_connected
+        return self.connected
 
     def get_machine_id(self) -> str:
         """Get the persisted machine identity — this machine's document id."""
@@ -720,10 +758,14 @@ class FirebaseClient:
         """
         if intentional:
             self.logger.info("Stopping Firebase client (intentional restart - leaving presence untouched)...")
+        elif self._removed:
+            self.logger.info("Stopping Firebase client (machine removed from the site - nothing to mark offline)...")
         else:
             self.logger.info("Stopping Firebase client and setting machine offline...")
 
         # Offline BEFORE stopping threads, or the write has no transport left.
+        # `connected` is False after a removal, so the flush that would
+        # recreate the deleted row never runs.
         if not intentional and self.connected and self.db:
             # Bound outside the try so the failure log below can always read it.
             max_attempts = 3
@@ -969,45 +1011,50 @@ class FirebaseClient:
 
             def on_config_changed(config_data):
                 """Handle config document changes."""
-                if config_data is not None:
-                    incoming_hash = hashlib.md5(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
+                # The poller never reports None for a doc that never existed,
+                # so None is a doc that was there and is gone: the dashboard
+                # removed this machine.
+                if config_data is None:
+                    self._on_removed_from_site()
+                    return
+                incoming_hash = hashlib.md5(json.dumps(config_data, sort_keys=True).encode()).hexdigest()
 
-                    if incoming_hash == self._last_uploaded_config_hash:
-                        self.logger.debug(f"Skipping self-originated config change (hash: {incoming_hash[:8]}...)")
-                        # One-shot: without clearing, a later change that happens to
-                        # hash the same (web reverting a value) is dropped forever.
-                        self._last_uploaded_config_hash = None
-                        return
+                if incoming_hash == self._last_uploaded_config_hash:
+                    self.logger.debug(f"Skipping self-originated config change (hash: {incoming_hash[:8]}...)")
+                    # One-shot: without clearing, a later change that happens to
+                    # hash the same (web reverting a value) is dropped forever.
+                    self._last_uploaded_config_hash = None
+                    return
 
-                    # Second echo guard, and the one that catches our own
-                    # merge:true writes: upload_config hashes the PAYLOAD it
-                    # sends while this hashes the doc that comes back, and the
-                    # post-write doc is a superset whenever remote-only fields
-                    # exist, so the hash above never matches. Agent-originated
-                    # writes mirror themselves into the cache, so an echo that
-                    # equals the cache carries nothing new. Must be checked
-                    # BEFORE the cache is overwritten below.
-                    if config_sync.configs_equal(config_data, self.cached_config):
-                        self.logger.debug(
-                            f"Skipping config echo identical to the cached doc "
-                            f"(hash: {incoming_hash[:8]}...)"
-                        )
-                        return
+                # Second echo guard, and the one that catches our own
+                # merge:true writes: upload_config hashes the PAYLOAD it
+                # sends while this hashes the doc that comes back, and the
+                # post-write doc is a superset whenever remote-only fields
+                # exist, so the hash above never matches. Agent-originated
+                # writes mirror themselves into the cache, so an echo that
+                # equals the cache carries nothing new. Must be checked
+                # BEFORE the cache is overwritten below.
+                if config_sync.configs_equal(config_data, self.cached_config):
+                    self.logger.debug(
+                        f"Skipping config echo identical to the cached doc "
+                        f"(hash: {incoming_hash[:8]}...)"
+                    )
+                    return
 
-                    self.logger.info(f"Config change detected in Firestore (hash: {incoming_hash[:8]}...)")
+                self.logger.info(f"Config change detected in Firestore (hash: {incoming_hash[:8]}...)")
 
-                    self._save_cached_config(config_data)
-                    self.cached_config = config_data
+                self._save_cached_config(config_data)
+                self.cached_config = config_data
 
-                    if self.config_update_callback:
-                        try:
-                            self.config_update_callback(config_data)
-                        except Exception as e:
-                            self.logger.error(f"Error in config update callback: {e}")
-                            import traceback
-                            self.logger.error(f"Traceback: {traceback.format_exc()}")
-                    else:
-                        self.logger.warning("No config update callback registered")
+                if self.config_update_callback:
+                    try:
+                        self.config_update_callback(config_data)
+                    except Exception as e:
+                        self.logger.error(f"Error in config update callback: {e}")
+                        import traceback
+                        self.logger.error(f"Traceback: {traceback.format_exc()}")
+                else:
+                    self.logger.warning("No config update callback registered")
 
             _thread, _wake, stop = self.db.listen_to_document(
                 config_path, on_config_changed,
@@ -1094,29 +1141,6 @@ class FirebaseClient:
     PROGRESS_THROTTLE_SECONDS = 30.0
     PROGRESS_THROTTLE_PERCENT = 5
 
-    def _load_cached_profile_hash(self) -> Optional[str]:
-        """Load the cached profile signature hash from disk (once per process)."""
-        if self._cached_profile_hash is not None:
-            return self._cached_profile_hash
-        try:
-            data = shared_utils.read_json_from_file(self._profile_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_profile_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached profile hash available: {e}")
-        return self._cached_profile_hash
-
-    def _write_cached_profile_hash(self, signature_hash: str):
-        """Persist the profile signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._profile_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file({'signatureHash': signature_hash}, self._profile_hash_path)
-            self._cached_profile_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist profile hash: {e}")
-
     def _ensure_profile(self) -> Optional[Dict[str, Any]]:
         """
         Keep sites/{siteId}/machines/{machineId}/hardware/profile current.
@@ -1145,8 +1169,7 @@ class FirebaseClient:
         if not signature:
             return profile
 
-        cached_hash = self._load_cached_profile_hash()
-        if signature == cached_hash:
+        if signature == self._cached_profile_hash:
             return profile
 
         # Signature changed — upload. Offline: keep cache, retry next tick.
@@ -1158,60 +1181,12 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('profile')
             profile_ref.set(profile, merge=False)
-            self._write_cached_profile_hash(signature)
+            self._cached_profile_hash = signature
             self.logger.info(f"Hardware profile uploaded (hash={signature[:12]})")
         except Exception as e:
             self.logger.warning(f"Failed to upload hardware profile: {e}")
 
         return profile
-
-    def _load_cached_display_hash(self) -> Optional[str]:
-        """Load the cached display profile signature hash from disk (once per process)."""
-        if self._cached_display_hash is not None:
-            return self._cached_display_hash
-        try:
-            data = shared_utils.read_json_from_file(self._display_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_display_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached display profile hash available: {e}")
-        return self._cached_display_hash
-
-    def _write_cached_display_hash(self, signature_hash: str):
-        """Persist the display profile signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._display_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file({'signatureHash': signature_hash}, self._display_hash_path)
-            self._cached_display_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist display profile hash: {e}")
-
-    def _load_cached_display_modes_hash(self) -> Optional[str]:
-        """Load the display-modes signature hash from disk, once per process."""
-        if self._cached_display_modes_hash is not None:
-            return self._cached_display_modes_hash
-        try:
-            data = shared_utils.read_json_from_file(self._display_modes_hash_path)
-            if isinstance(data, dict):
-                hash_val = data.get('signatureHash')
-                if isinstance(hash_val, str) and hash_val:
-                    self._cached_display_modes_hash = hash_val
-        except Exception as e:
-            self.logger.debug(f"No cached display-modes hash available: {e}")
-        return self._cached_display_modes_hash
-
-    def _write_cached_display_modes_hash(self, signature_hash: str):
-        """Persist the display-modes catalogue signature hash to disk."""
-        try:
-            os.makedirs(os.path.dirname(self._display_modes_hash_path), exist_ok=True)
-            shared_utils.write_json_to_file(
-                {'signatureHash': signature_hash}, self._display_modes_hash_path,
-            )
-            self._cached_display_modes_hash = signature_hash
-        except Exception as e:
-            self.logger.warning(f"Failed to persist display-modes hash: {e}")
 
     def _ensure_display_modes_catalogue(self, force: bool = False) -> Dict[str, Any]:
         """Enumerate supported modes per active monitor and upload, skipping when
@@ -1286,8 +1261,7 @@ class FirebaseClient:
             }
 
         # Cache-by-hash skip — the whole point of A3.2.
-        cached_hash = self._load_cached_display_modes_hash()
-        if not force and signature == cached_hash:
+        if not force and signature == self._cached_display_modes_hash:
             return {
                 'ok': True,
                 'uploaded': False,
@@ -1318,7 +1292,7 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('displayModes')
             modes_ref.set(doc, merge=False)
-            self._write_cached_display_modes_hash(signature)
+            self._cached_display_modes_hash = signature
             self.logger.info(
                 f"Display modes catalogue uploaded "
                 f"(hash={signature[:12]}, monitors={monitor_count}, modes={mode_count})"
@@ -1382,6 +1356,28 @@ class FirebaseClient:
                 f"Failed to update display autoRestore circuit-breaker state: {e}"
             )
 
+    def _display_drift_count(self) -> int:
+        """Live monitors against the assigned layout, on every heartbeat so the
+        list and card views draw the drift dot without each opening its own
+        assigned-layout subscription. display_manager is windows-only, so
+        elsewhere there is nothing to compare."""
+        if sys.platform != 'win32':
+            return 0
+        try:
+            import display_manager
+
+            live_monitors = (
+                self._cached_display_profile.get('monitors')
+                if isinstance(self._cached_display_profile, dict) else None
+            )
+            assigned_monitors = shared_utils.read_config(
+                ['displays', 'assigned', 'monitors']
+            )
+            return display_manager.compute_drift_count(live_monitors, assigned_monitors)
+        except Exception as e:
+            self.logger.debug(f"compute_drift_count failed: {e}")
+            return 0
+
     def _ensure_display_profile(self, force: bool = False) -> Optional[Dict[str, Any]]:
         """
         Keep sites/{siteId}/machines/{machineId}/hardware/display current.
@@ -1401,11 +1397,13 @@ class FirebaseClient:
         except Exception:
             pass
 
-        # Behind the kill switch and inside a try, like every other lazy
-        # display import: the module is Windows-only and never ported, so
-        # importing it above the switch takes the heartbeat down elsewhere.
-        # Not ImportError - display_manager asserts the Windows x64 ABI while
-        # it builds its structures, so off Windows it is an AssertionError.
+        # display_manager is windows-only and never ported: it asserts the
+        # windows x64 abi while it builds its structures, so importing it on a
+        # mac failed every heartbeat. the try stays, behind the kill switch like
+        # every other lazy display import, for a windows box whose import
+        # breaks - the heartbeat must not go down with it.
+        if sys.platform != 'win32':
+            return self._cached_display_profile
         try:
             import display_manager
             import nvapi_display
@@ -1463,8 +1461,7 @@ class FirebaseClient:
         if not signature:
             return profile
 
-        cached_hash = self._load_cached_display_hash()
-        if signature == cached_hash:
+        if signature == self._cached_display_hash:
             return profile
 
         # Signature changed — upload. Offline: keep cache, retry next tick.
@@ -1476,12 +1473,27 @@ class FirebaseClient:
                 .collection('machines').document(self.machine_id)\
                 .collection('hardware').document('display')
             profile_ref.set(profile, merge=False)
-            self._write_cached_display_hash(signature)
+            self._cached_display_hash = signature
             self.logger.info(f"Display profile uploaded (hash={signature[:12]})")
         except Exception as e:
             self.logger.warning(f"Failed to upload display profile: {e}")
 
         return profile
+
+    def _active_hours_field(self):
+        """The machine document's activeHours: `{start, end, source}`, or a
+        delete where the machine has none.
+
+        A read that fails deletes it too and never fails the heartbeat: the
+        guard holds nothing back on that same failure, so the dashboard must
+        not show a window the agent is not enforcing.
+        """
+        try:
+            window = osadapter.active_hours()
+        except Exception as e:
+            self.logger.debug(f"active hours read failed: {e}")
+            return DELETE_FIELD
+        return window if window else DELETE_FIELD
 
     def _upload_metrics(self, metrics: Dict[str, Any]) -> bool:
         """Upload system metrics to Firestore.
@@ -1537,24 +1549,7 @@ class FirebaseClient:
 
             profile_hash = profile.get('signatureHash') if profile else None
 
-            # On every heartbeat so list/card views can draw the drift dot without
-            # each opening its own assigned-layout subscription.
-            try:
-                import display_manager
-
-                live_monitors = (
-                    self._cached_display_profile.get('monitors')
-                    if isinstance(self._cached_display_profile, dict) else None
-                )
-                assigned_monitors = shared_utils.read_config(
-                    ['displays', 'assigned', 'monitors']
-                )
-                display_drift_count = display_manager.compute_drift_count(
-                    live_monitors, assigned_monitors
-                )
-            except Exception as e:
-                self.logger.debug(f"compute_drift_count failed: {e}")
-                display_drift_count = 0
+            display_drift_count = self._display_drift_count()
 
             # update() + dot notation REPLACES nested maps rather than deep-merging,
             # so deleted processes/devices don't linger as ghost entries.
@@ -1574,6 +1569,13 @@ class FirebaseClient:
                 # Swoop: binary presence only, so it costs one stat per beat.
                 # capabilities.swoop == 1 is the gate the dashboard reads.
                 'capabilities.swoop': swoop_capability.swoop_capability_value(),
+                # This agent follows the site's keep screens awake switch and
+                # mirrors displayAwake; an older one does neither.
+                'capabilities.keepAwake': 1,
+                # this agent refuses reboots, shutdowns and deployments inside
+                # activeHours unless a person overrode it; an older one doesn't
+                **({'capabilities.activeHoursGuard': 1} if sys.platform == 'win32' else {}),
+                'activeHours': self._active_hours_field(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,
                 'metrics.timestamp': SERVER_TIMESTAMP,
@@ -1607,9 +1609,13 @@ class FirebaseClient:
     # Heavy roost work (sync_pull, rollback) stays on the slow lane.
     # The three swoop types belong here too: on the slow lane they would queue
     # behind an in-flight install, which would make the kill switch minutes late.
+    # site_settings_refresh likewise: a site switch should land in seconds.
     _FAST_COMMAND_TYPES = frozenset({
         'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
         'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
+        'site_settings_refresh',
+        # a revoke must not wait behind an install
+        'unpair',
     })
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
@@ -2358,6 +2364,12 @@ class FirebaseClient:
         """
         self.config_update_callback = callback
         self.logger.debug("Config update callback registered")
+
+    def register_removed_callback(self, callback: Callable[[str], None]):
+        """Register the function that leaves the site once the dashboard has
+        removed this machine. It takes the reason."""
+        self.removed_callback = callback
+        self.logger.debug("Removed callback registered")
 
     # Machine Flags (reboot, shutdown, reboot pending)
 

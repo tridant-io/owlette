@@ -8,30 +8,53 @@
 //! Start/stop go through the SCM when this process has the rights, falling back
 //! to an elevated `net start` / `net stop` otherwise.
 
+#[cfg(windows)]
 use std::ffi::OsStr;
 use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
+#[cfg(windows)]
 use windows::core::w;
+#[cfg(windows)]
 use windows::Win32::UI::Shell::ShellExecuteW;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+#[cfg(windows)]
 use windows_service::service::{ServiceAccess, ServiceStartType, ServiceState};
+#[cfg(windows)]
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
 /// Service name, as registered by the installer (`shared_utils.SERVICE_NAME`).
+#[cfg(windows)]
 pub const SERVICE_NAME: &str = "OwletteService";
+/// The systemd unit on linux; the launchd label on macos (tri-platform 5.1/5.2).
+#[cfg(all(unix, not(target_os = "macos")))]
+pub const SERVICE_NAME: &str = "owlette-agent";
+#[cfg(target_os = "macos")]
+pub const SERVICE_NAME: &str = "app.owlette.agent";
+/// How long a `systemctl` control may take to answer. without the polkit rule
+/// packaging ships, an in-seat call parks on polkit indefinitely, and on a box
+/// whose admin group exists it would put an auth dialog on the kiosk screen —
+/// so the call is bounded, and a timeout is reported as the rule missing.
+#[cfg(unix)]
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Age past which `service_status.json` no longer describes reality.
 pub const STATUS_STALE_AFTER: Duration = Duration::from_secs(120);
 
 /// Windows error codes we branch on.
+#[cfg(windows)]
 const ERROR_ACCESS_DENIED: i32 = 5;
+#[cfg(windows)]
 const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+#[cfg(windows)]
 const ERROR_SERVICE_ALREADY_RUNNING: i32 = 1056;
+#[cfg(windows)]
 const ERROR_SERVICE_NOT_ACTIVE: i32 = 1062;
 
 /// `ShellExecuteW` returns an HINSTANCE; > 32 means the process launched.
+#[cfg(windows)]
 const SHELL_EXECUTE_SUCCESS_FLOOR: isize = 32;
 
 #[derive(Clone, Debug, Serialize)]
@@ -100,6 +123,164 @@ pub fn status_file_info(path: &Path, now: SystemTime) -> StatusFileInfo {
 }
 
 /// SCM state plus status-file freshness.
+/// linux: one `systemctl show` for the three states, which needs no polkit
+/// rule and answers for a unit that is not there at all. macos: `launchctl
+/// print` on the system domain, read-only; a non-zero exit is "not
+/// installed".
+#[cfg(unix)]
+pub fn status(status_file: &Path) -> Result<ServiceStatus, String> {
+  let status_file = status_file_info(status_file, SystemTime::now());
+  if cfg!(target_os = "macos") {
+    let output = std::process::Command::new("launchctl")
+      .args(["print", &format!("system/{SERVICE_NAME}")])
+      .output()
+      .map_err(|error| format!("could not run launchctl: {error}"))?;
+    if !output.status.success() {
+      return Ok(ServiceStatus {
+        installed: false,
+        running: false,
+        state: "unknown".to_string(),
+        start_type: "unknown".to_string(),
+        status_file,
+      });
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let running = text.lines().any(|line| line.trim().starts_with("state = running"));
+    return Ok(ServiceStatus {
+      installed: true,
+      running,
+      state: if running { "running" } else { "stopped" }.to_string(),
+      start_type: "launchd".to_string(),
+      status_file,
+    });
+  }
+  let output = std::process::Command::new("systemctl")
+    .args(["show", "-p", "LoadState", "-p", "ActiveState", "-p", "UnitFileState", SERVICE_NAME])
+    .output()
+    .map_err(|error| format!("could not run systemctl: {error}"))?;
+  let text = String::from_utf8_lossy(&output.stdout);
+  let value = |key: &str| {
+    text
+      .lines()
+      .find_map(|line| line.strip_prefix(key).and_then(|rest| rest.strip_prefix('=')))
+      .unwrap_or("")
+      .trim()
+      .to_string()
+  };
+  let load = value("LoadState");
+  let active = value("ActiveState");
+  let unit_file = value("UnitFileState");
+  Ok(ServiceStatus {
+    installed: load == "loaded",
+    running: active == "active",
+    state: if active.is_empty() { "unknown".to_string() } else { active },
+    start_type: if unit_file.is_empty() { "unknown".to_string() } else { unit_file },
+    status_file,
+  })
+}
+
+/// linux: `systemctl start --no-block`, bounded — the polkit rule packaging
+/// ships (5.2) is what lets the kiosk user do this without a prompt, and a
+/// call that hangs past the bound is that rule missing. macos: the agent is a
+/// system launchd job the app cannot start from a user session; launchd keeps
+/// it running, said as a refusal rather than a hang.
+#[cfg(unix)]
+pub fn start(_allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
+  control("start", Some("active"))
+}
+
+#[cfg(unix)]
+pub fn stop() -> Result<ServiceCommandOutcome, String> {
+  control("stop", Some("inactive"))
+}
+
+/// linux: `systemctl restart`, which the same polkit rule allows and which
+/// starts a stopped or wedged unit too — the cases a restart is for — where the
+/// daemon's request seam needs a daemon alive to read it. the daemon ignores a
+/// `tmp/restart.flag` it did not write off windows. macos has no such rule:
+/// the restart is a request the daemon carries out ([`crate::seam`]), audited
+/// and held to one per five minutes there.
+#[cfg(unix)]
+pub fn restart() -> Result<ServiceCommandOutcome, String> {
+  if cfg!(target_os = "macos") {
+    return restart_through_seam();
+  }
+  control("restart", None)
+}
+
+#[cfg(unix)]
+fn restart_through_seam() -> Result<ServiceCommandOutcome, String> {
+  use crate::seam::{self, Seam, Verb};
+
+  let before = status(Path::new("/nonexistent"))
+    .map(|status| status.state)
+    .unwrap_or_else(|_| "unknown".to_string());
+  let terminal = Seam::new(crate::paths::data_root()).ask(Verb::Restart, None, &mut |_| {})?;
+  if seam::is_error(&terminal) {
+    return Err(seam::error_message(&terminal));
+  }
+  Ok(ServiceCommandOutcome {
+    method: "seam".to_string(),
+    state_before: before,
+  })
+}
+
+/// `already` is the state that makes the verb a no-op; a restart has none.
+#[cfg(unix)]
+fn control(verb: &str, already: Option<&str>) -> Result<ServiceCommandOutcome, String> {
+  if cfg!(target_os = "macos") {
+    return Err(format!(
+      "the owlette service on macos is run by the system, which keeps it running — this app cannot {verb} it"
+    ));
+  }
+  let before = status(Path::new("/nonexistent"))?.state;
+  if Some(before.as_str()) == already {
+    return Ok(ServiceCommandOutcome {
+      method: "noop".to_string(),
+      state_before: before,
+    });
+  }
+  let mut child = std::process::Command::new("systemctl")
+    .args([verb, "--no-block", SERVICE_NAME])
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::piped())
+    .spawn()
+    .map_err(|error| format!("could not run systemctl: {error}"))?;
+  let deadline = std::time::Instant::now() + CONTROL_TIMEOUT;
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) if status.success() => {
+        return Ok(ServiceCommandOutcome {
+          method: "systemd".to_string(),
+          state_before: before,
+        })
+      }
+      Ok(Some(status)) => {
+        let mut detail = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+          use std::io::Read;
+          let _ = stderr.read_to_string(&mut detail);
+        }
+        return Err(format!(
+          "systemctl {verb} {SERVICE_NAME} failed ({status}): {}",
+          detail.trim()
+        ));
+      }
+      Ok(None) if std::time::Instant::now() >= deadline => {
+        let _ = child.kill();
+        return Err(format!(
+          "systemctl {verb} {SERVICE_NAME} did not answer within {}s — is the owlette polkit rule installed?",
+          CONTROL_TIMEOUT.as_secs()
+        ));
+      }
+      Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+      Err(error) => return Err(format!("could not wait for systemctl: {error}")),
+    }
+  }
+}
+
+#[cfg(windows)]
 pub fn status(status_file: &Path) -> Result<ServiceStatus, String> {
   let status_file = status_file_info(status_file, SystemTime::now());
 
@@ -152,6 +333,7 @@ pub fn status(status_file: &Path) -> Result<ServiceStatus, String> {
 /// auto-start) passes `false` — during a self-update, every machine's tray app
 /// sees the service stop and would otherwise raise an unattended
 /// "Windows Command Processor" prompt over whatever is running.
+#[cfg(windows)]
 pub fn start(allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
   let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
     .map_err(|error| format!("could not connect to the service manager: {error}"))?;
@@ -210,6 +392,7 @@ pub fn start(allow_elevation: bool) -> Result<ServiceCommandOutcome, String> {
 
 /// The unelevated start was refused: elevate when the caller may, error when
 /// it may not.
+#[cfg(windows)]
 fn start_denied(
   allow_elevation: bool,
   state: ServiceState,
@@ -224,6 +407,7 @@ fn start_denied(
 }
 
 /// Stop the service, elevating only if this process lacks the right.
+#[cfg(windows)]
 pub fn stop() -> Result<ServiceCommandOutcome, String> {
   let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
     .map_err(|error| format!("could not connect to the service manager: {error}"))?;
@@ -269,6 +453,7 @@ pub fn stop() -> Result<ServiceCommandOutcome, String> {
 
 /// Elevated `net` command via the shell's `runas` verb (one UAC prompt).
 /// Success means the process launched, not that the service changed state.
+#[cfg(windows)]
 fn elevated(
   parameters: windows::core::PCWSTR,
   state_before: &str,
@@ -295,6 +480,7 @@ fn elevated(
   }
 }
 
+#[cfg(windows)]
 fn open_error(error: &windows_service::Error) -> String {
   if error_code(error) == Some(ERROR_SERVICE_DOES_NOT_EXIST) {
     format!("{SERVICE_NAME} is not installed")
@@ -303,6 +489,7 @@ fn open_error(error: &windows_service::Error) -> String {
   }
 }
 
+#[cfg(windows)]
 fn error_code(error: &windows_service::Error) -> Option<i32> {
   match error {
     windows_service::Error::Winapi(io) => io.raw_os_error(),
@@ -310,6 +497,7 @@ fn error_code(error: &windows_service::Error) -> Option<i32> {
   }
 }
 
+#[cfg(windows)]
 fn state_name(state: ServiceState) -> &'static str {
   match state {
     ServiceState::Stopped => "stopped",
@@ -322,6 +510,7 @@ fn state_name(state: ServiceState) -> &'static str {
   }
 }
 
+#[cfg(windows)]
 fn start_type_name(start_type: ServiceStartType) -> &'static str {
   match start_type {
     ServiceStartType::AutoStart => "auto_start",

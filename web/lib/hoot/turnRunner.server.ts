@@ -51,6 +51,7 @@ import {
   createModel,
   type HootPromptMode,
   type ProcessSummary,
+  type PromptLocalTime,
 } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import {
@@ -83,19 +84,34 @@ import {
 } from '@/lib/hoot/turnStore.server';
 import {
   SITE_TARGET_ID,
+  approvalResponseIds,
   chatTargetFields,
   type HootTarget,
   type HootTurnMetadata,
   type PriorTurn,
   type ResolvedTargets,
   type TurnTargetRecord,
+  type TurnTargetSource,
 } from '@/lib/hoot/target';
 import { categorizeNewChat } from '@/lib/hoot/categorizeChat.server';
+import { getSiteTimezone } from '@/lib/talons/store.server';
 import { UNTITLED_CHAT_TITLE } from '@/lib/hoot/untitledChat';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
 
 /** Transient heartbeat cadence — keeps proxies from seeing an idle stream. */
 export const HEARTBEAT_INTERVAL_MS = 20_000;
+
+/**
+ * Turns a person drives from the dashboard: a message they sent, or their
+ * answer to an approval. Only these may ask them to approve an active-hours
+ * override; follow-ups and talons fire with nobody watching.
+ */
+const PERSON_TURN_SOURCES: ReadonlySet<TurnTargetSource> = new Set<TurnTargetSource>([
+  'chat',
+  'mention',
+  'resume',
+]);
 
 const timing = {
   heartbeatMs: HEARTBEAT_INTERVAL_MS,
@@ -480,6 +496,16 @@ export function startTurn(
         chatExistedAtStart = true;
       }
 
+      // the dashboard route refuses with a 402 before it gets here; this is the
+      // gate for follow-up and talon turns, which have no response to refuse
+      // with. ahead of the one-shot approval claim, so a refused turn claims nothing.
+      if (await requireEntitlement(params.siteId, 'owlette.hoot')) {
+        console.warn(
+          `[hoot] turn refused in chat ${sanitizeForLog(chatId)}: the site's plan does not include owlette.hoot`,
+        );
+        throw new Error(PLAN_REQUIRED_DETAIL['owlette.hoot']);
+      }
+
       const resolveLostResult = buildResolveLostResult(db, params.siteId, params.priorTurn);
       const { messages: danglingRepaired, repairedToolCallIds } =
         await repairDanglingToolParts(params.messages, { resolveLostResult });
@@ -521,10 +547,8 @@ export function startTurn(
       // Re-check the caller's resolved set against the site as it is NOW. This
       // only ever removes machines (see `narrowToLiveMachines`), so an approved
       // tool call cannot reach a machine the approver never saw.
-      const resolved = narrowToLiveMachines(
-        params.resolved,
-        await listSiteMachines(db, params.siteId),
-      );
+      const siteMachines = await listSiteMachines(db, params.siteId);
+      const resolved = narrowToLiveMachines(params.resolved, siteMachines);
       if (resolved.ids.length === 0) throw noLiveMachinesError(params.turnTarget, resolved);
       // The record has to name what this turn actually dispatches to before it
       // dispatches: the NEXT approval in this chat binds to that list. A resume
@@ -543,13 +567,17 @@ export function startTurn(
       }
 
       const fanOut = resolved.fanOut;
+      // off the same listing: which targets' agents hold a restart for active hours.
+      const activeHoursGuardIds = resolved.ids.filter(
+        (id) => siteMachines.find((machine) => machine.id === id)?.activeHoursGuard === true,
+      );
       // A fan-out dispatches from the id LIST, so the positional id is only the
       // single path's target; in a fan-out it is just the legacy "not one
       // machine" view, and the `chatMachineId` default it feeds is always
       // overridden by `followupTarget` below.
       const dispatchMachineId = fanOut ? SITE_TARGET_ID : resolved.ids[0];
 
-      const [llmConfig, requireTier3Approval, processes] = await Promise.all([
+      const [llmConfig, requireTier3Approval, processes, localTime] = await Promise.all([
         resolveLlmConfig(db, params.userId),
         // A forced gate needs no site read: the setting could only turn it off,
         // and this flag exists to say it must not.
@@ -561,6 +589,16 @@ export function startTurn(
         fanOut
           ? Promise.resolve<ProcessSummary[]>([])
           : fetchProcessSummaries(db, params.siteId, resolved.ids[0]),
+        // a fan-out has no one machine's clock, so it reads the site's. a single
+        // machine's zone came with the listing above.
+        fanOut
+          ? getSiteTimezone(db, params.siteId).then(
+              (timeZone): PromptLocalTime => ({ scope: 'site', timeZone }),
+            )
+          : Promise.resolve<PromptLocalTime>({
+              scope: 'machine',
+              timeZone: siteMachines.find((machine) => machine.id === resolved.ids[0])?.timezone,
+            }),
       ]);
 
       const earnedTier = resolveHootMaxTier(params.access);
@@ -586,6 +624,9 @@ export function startTurn(
           userSiteRole: params.access.siteRole,
           maxToolTier: effectiveTier,
           requireTier3Approval,
+          allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),
+          activeHoursGuardIds,
+          resumedToolCallIds: approvalResponseIds(params.messages),
           // A follow-up fires where it was promised (D-D): this turn's target
           // AFTER any mention narrowing, with `null` left as the dynamic "all".
           followupTarget: { machineIds: params.turnTarget.machineIds },
@@ -626,6 +667,8 @@ export function startTurn(
           skipped: resolved.skipped,
           processes,
           narrowedByMention: params.turnTarget.source === 'mention',
+          localTime,
+          activeHoursGuardIds,
         }),
         // Pass `tools` so per-tool toModelOutput hooks (e.g. capture_screenshot
         // → image-url) also project PRIOR-turn outputs into model content.

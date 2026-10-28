@@ -1,16 +1,16 @@
 ---
 title: "idempotency"
-description: "Mutating public API routes that opt into idempotency use an Idempotency-Key header so clients can retry safely after a timeout, 429, or transient 5xx without accidentally creating duplicate work."
+description: "mutating routes that opt into idempotency take an Idempotency-Key header, so a client can retry after a timeout, a 429, or a transient 5xx without doing the work twice. some routes require the header, some honor it when sent, and the rest ignore it."
+keywords: ["retry", "retries", "duplicate requests", "safe retry", "replay", "Idempotency-Key"]
 ---
 
-**Last updated**: 2026-05-01
+**last updated**: 2026-10-05
 
-<Callout type="warning" title={"Route-specific support"}>
+<Callout type="warning" title={"route-specific support"}>
 
-The `Idempotency-Key` header is honored only on routes that explicitly say so in the endpoint reference. It is ignored on `POST /api/roosts`, `POST /api/keys`, `POST /api/keys/{id}/rotate`, `PATCH /api/keys/{id}`, `DELETE /api/keys/{id}`, and `POST /api/chunks/upload-urls`.
+the header protects only the routes listed under [which routes honor it](#which-routes-honor-it). every other route ignores it, so sending it there does not make a retry safe. notably ignored: `POST /api/roosts`, `POST /api/chunks/upload-urls`, every `/api/keys` route, and `DELETE` on webhooks and processes.
 
 </Callout>
-Treat the route implementation as authoritative until OpenAPI is corrected; `POST /api/chunks/upload-urls` currently ignores `Idempotency-Key`. Sending the header to an unsupported route does not make that route replay-safe.
 
 ---
 
@@ -20,73 +20,92 @@ Treat the route implementation as authoritative until OpenAPI is corrected; `POS
 Idempotency-Key: 7c55c5de-7ec6-4c63-a1c8-94e13c56f962
 ```
 
-Rules:
-
-- The key is an opaque client-generated string.
-- Maximum length is 255 characters.
-- Generate one key per logical mutation and reuse that same key for retries of the identical request.
-- Generate a new key when the method, URL, query string, or body changes.
-- UUIDv4, ULID, and deterministic hashes such as `bulk-<sha256(row)>` are valid.
+- the key is an opaque string you generate, up to 255 characters. surrounding whitespace is trimmed.
+- generate one key per logical mutation, and reuse it for every retry of that identical request.
+- generate a new key when the method, URL, query string, or body changes.
+- UUIDv4, ULID, and deterministic hashes such as `bulk-<sha256(row)>` all work.
 
 ---
 
 ## replay semantics
 
-For supported routes, Owlette caches successful non-streaming responses for 24 hours.
+a successful (`2xx`/`3xx`) response is cached for 24 hours. a later request replays it when all of these match:
 
-A replay matches only when all of these are the same:
+- the authenticated user
+- the API-key environment (`live`, `test`, or `unknown` for session and ID-token callers)
+- the `Idempotency-Key`
+- the HTTP method
+- the path
+- the query string
+- the SHA-256 of the request body
 
-- authenticated user
-- API-key environment (`live`, `test`, or `unknown` for session/ID-token callers)
-- `Idempotency-Key`
-- HTTP method
-- path
-- query string
-- request body hash
-
-For supported routes, if the same key is reused with the same method, path, query, and body, the API returns the original response instead of executing the handler again. Replayed responses include:
+a replay returns the original status, headers, and body without running the handler again, plus:
 
 ```http
 Idempotent-Replayed: true
 ```
 
-Error responses are not cached. Streaming SSE/x-ndjson/chunked responses are not cached. Current hoot `text/plain` streams are not excluded unless the helper is updated to detect them.
+the same key with a different body on the same route is refused with `422 idempotency_key_mismatch`. the same key on a different route, or a different query string, does not collide — it is simply a new request.
+
+error responses are never cached, so a retry after a `4xx` or `5xx` runs the handler again. `text/event-stream`, `application/x-ndjson`, and chunked responses are not cached either.
+
+the hoot send stream is the exception to watch for: it is `text/plain`, which the cache does not treat as a stream, so a completed reply is cached like any other `200`. a retry of `POST /api/hoot/conversations/{conversationId}` with the same key and body replays the recorded reply rather than asking hoot again — use a fresh key for each new message.
 
 ---
 
-## required vs optional
+## which routes honor it
 
-The API requires `Idempotency-Key` for mutations where a retry could double-trigger side effects, especially:
+### required
 
-- async machine commands and machine destructive operations
-- installer deployment create, retry, cancel, uninstall, and delete operations
-- installer upload, finalize, set-latest, and protected delete operations
-- site, user, member, process, and display-layout mutations
-- roost publish, deploy, rollback, and other side-effecting roost mutations where marked in the reference
-- hoot conversation create and send require `Idempotency-Key`; rename and delete accept it optionally.
+these return `400 idempotency_key_required` when the header is missing or blank:
 
-Some routes are naturally idempotent, read-only, or do not implement idempotency and ignore the header. The rendered endpoint reference marks required headers operation by operation.
+| area | operations |
+|---|---|
+| machine commands | `POST /api/sites/{siteId}/machines/{machineId}/commands` |
+| machines | `DELETE /api/sites/{siteId}/machines/{machineId}`; `POST` and `DELETE .../machines/{machineId}/uninstall`; `PUT` and `DELETE .../machines/{machineId}/display-layout` |
+| processes | `POST .../machines/{machineId}/processes`; `POST .../processes/{processId}/start`, `/stop`, `/restart`, `/kill`, `/schedule`; `PATCH .../processes/{processId}/launch-mode` |
+| installer deployments | `POST /api/sites/{siteId}/deployments`; `DELETE .../deployments/{deploymentId}`; `POST .../deployments/{deploymentId}/retry`, `/cancel`, `/uninstall` |
+| logs | `DELETE /api/sites/{siteId}/logs` |
+| installer releases | `POST` and `PUT /api/installer/upload`; `POST /api/installer/{version}/set-latest` |
+| hoot | `POST /api/hoot/conversations`; `POST /api/hoot/conversations/{conversationId}` |
+
+### optional
+
+these replay when you send the header and run normally when you do not:
+
+| area | operations |
+|---|---|
+| roost | `POST /api/roosts/{roostId}/versions` (publish); `PATCH .../versions/{versionRef}`; `POST /api/roosts/{roostId}/deploy`; `POST /api/roosts/{roostId}/rollback` |
+| sites | `POST /api/sites`; `PATCH` and `DELETE /api/sites/{siteId}`; `POST /api/sites/{siteId}/transfer-ownership` |
+| members | `POST /api/sites/{siteId}/members`; `PATCH` and `DELETE .../members/{uid}` |
+| processes | `PATCH .../processes/{processId}` |
+| talons | `POST /api/sites/{siteId}/talons`; `POST .../talons/reassign` |
+| webhooks | `POST /api/webhooks`; `PATCH /api/webhooks/{webhookId}`; `POST .../rotate-secret`; `POST .../deliveries/{deliveryId}/retry` |
+| users | `POST /api/users/bootstrap`; `DELETE /api/users/{uid}`; `POST .../promote`, `/demote`, `/assign-sites`, `/remove-sites` |
+| hoot | `PATCH` and `DELETE /api/hoot/conversations/{conversationId}` |
+
+the `/api/cortex/*` and `/api/chat/*` hoot aliases behave like the routes they alias. the [interactive reference](/docs/api) marks the header on each operation.
 
 ---
 
 ## errors
 
-| status | code | cause | client action |
+| status | code | cause | what to do |
 |---|---|---|---|
-| 400 | `idempotency_key_required` | Required header missing or blank. | Retry the same request with a generated key. |
-| 400 | `idempotency_key_invalid` | Header exceeds 255 characters. | Generate a shorter opaque key. |
-| 422 | `idempotency_key_mismatch` | Same key reused on the same route with a different body. | Use a new key for the changed payload, or resend the original body. |
+| 400 | `idempotency_key_required` | the route requires the header and it is missing or blank | retry the same request with a generated key |
+| 400 | `idempotency_key_invalid` | the key is longer than 255 characters | generate a shorter key |
+| 422 | `idempotency_key_mismatch` | the key was used on this route within 24 hours with a different body | resend the original body, or use a new key for the changed request |
 
-All three errors use the standard `application/problem+json` envelope documented in [errors.md](/docs/api/errors).
+all three use the standard [problem envelope](/docs/api/errors).
 
 ---
 
 ## retry pattern
 
-1. Build the request body.
-2. Generate an idempotency key and attach it to the request.
-3. If the network fails, the client times out, or the API returns `429` or a transient `5xx`, retry the identical request with the same key.
-4. If you intentionally change the body or query, generate a new key.
+1. build the request body.
+2. generate a key and attach it.
+3. if the network fails, the client times out, or the API answers `429` or a transient `5xx`, retry the identical request with the same key.
+4. if you change the body or the query, generate a new key.
 
 ```bash
 IDEMPOTENCY_KEY="$(uuidgen)"
@@ -98,17 +117,18 @@ curl -fsS -X POST "$OWLETTE_API_URL/api/sites/$SITE_ID/machines/$MACHINE_ID/comm
   -d '{"type":"capture_screenshot","params":{"monitor":"primary"},"timeout_seconds":60}'
 ```
 
-For batch importers that call idempotent endpoints, deterministic keys are useful because a rerun replays rows that already succeeded:
+for batch importers, deterministic keys mean a rerun replays the rows that already succeeded instead of repeating them:
 
 ```text
 Idempotency-Key: bulk-command-<sha256(canonical-row-json)>
 ```
 
+remember the 24-hour window: a rerun a day later executes again.
+
 ---
 
 ## see also
 
-- [errors.md](/docs/api/errors) for `idempotency_*` error bodies.
-- [rate-limits.md](/docs/api/rate-limits) for retry timing and `Retry-After`.
-- [pagination.md](/docs/api/pagination) for collection traversal conventions.
-- The interactive reference at [`/docs/api`](/docs/api) for operation-level required headers.
+- [errors](/docs/api/errors) for the `idempotency_*` error bodies.
+- [rate limits](/docs/api/rate-limits) for retry timing and `Retry-After`.
+- the interactive reference at [`/docs/api`](/docs/api) for each operation's headers.

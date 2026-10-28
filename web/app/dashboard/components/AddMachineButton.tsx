@@ -1,18 +1,41 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Plus, Loader2, CheckCircle2, Copy, Monitor, Terminal, Download, RefreshCw } from 'lucide-react';
+import { Plus, Loader2, CheckCircle2, Monitor, Terminal, RefreshCw } from 'lucide-react';
+import { CopyButton } from '@/components/CopyButton';
+import DownloadButton from '@/components/DownloadButton';
 import { toast } from '@/lib/toast';
 import { useInstallerVersion } from '@/hooks/useInstallerVersion';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
-import { serverFlagFor } from '@/lib/environment';
+import { pairingPreseedFor, serverFlagFor } from '@/lib/environment';
 
 type AddMachineTab = 'enter' | 'generate';
+
+/** Text to paste on the target machine; the text shown is the text copied. */
+function CopyField({ label, value, children }: { label: string; value: string; children?: ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <Label className="text-muted-foreground text-xs">{label}</Label>
+      <div className="flex items-center gap-2">
+        <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-xs text-muted-foreground break-all">
+          {value}
+        </div>
+        <CopyButton
+          value={value}
+          tooltipLabel={`copy ${label}`}
+          successMessage={`${label} copied`}
+          className="border-border text-foreground shrink-0"
+        />
+      </div>
+      {children}
+    </div>
+  );
+}
 
 interface AddMachineButtonProps {
   currentSiteId: string;
@@ -38,7 +61,7 @@ export function AddMachineButton({
 }: AddMachineButtonProps) {
   const [internalOpen, setInternalOpen] = useState(false);
   const [internalTab, setInternalTab] = useState<AddMachineTab>('enter');
-  const { version, downloadUrl, isLoading: isLoadingVersion } = useInstallerVersion();
+  const { version } = useInstallerVersion();
 
   // Uncontrolled by default; controlled when the parent passes the props above.
   const open = controlledOpen ?? internalOpen;
@@ -58,14 +81,13 @@ export function AddMachineButton({
   } = useDeviceCodeAuthorize(currentSiteId);
 
   /**
-   * The `/SERVER=` flag for the environment this dashboard *is*. Without it a
-   * phrase minted on dev.owlette.app produces a command that installs against
-   * production (the installer defaults to prod), the phrase is never found, and
-   * the mistake travels to every machine the command is pasted into. One
-   * expression feeds both the rendered command and the clipboard copy so the
-   * two cannot diverge.
+   * The host whose environment both commands name (`/SERVER=dev`,
+   * `"server": "dev"`). Without it a phrase minted on dev.owlette.app produces
+   * commands that install against production (the installer and a fresh
+   * preseed default to prod), the phrase is never found, and the mistake
+   * travels to every machine the command is pasted into.
    */
-  const serverFlag = typeof window === 'undefined' ? '' : serverFlagFor(window.location.host);
+  const host = typeof window === 'undefined' ? '' : window.location.host;
 
   // Generate Code tab state
   const [generatedPhrase, setGeneratedPhrase] = useState('');
@@ -130,11 +152,6 @@ export function AddMachineButton({
     }
   };
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copied to clipboard`);
-  };
-
   return (
     <>
       <TooltipProvider>
@@ -159,7 +176,7 @@ export function AddMachineButton({
       </TooltipProvider>
 
       <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-md bg-card border-border">
+        <DialogContent className="sm:max-w-md border-border">
           <DialogHeader>
             <DialogTitle className="text-foreground">add machine</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -168,10 +185,11 @@ export function AddMachineButton({
           </DialogHeader>
 
           {/* Tab switcher */}
-          <div className="relative grid grid-cols-2 rounded-lg bg-muted p-1">
-            {/* Sliding indicator */}
+          <div className="relative grid grid-cols-2 rounded-lg bg-card-sunken p-1">
+            {/* Sliding indicator. by day it lifts to the panel tone: the page tone
+                sits a hair off the light track and the thumb disappears */}
             <div
-              className="absolute rounded-md bg-background transition-transform duration-200 ease-in-out pointer-events-none"
+              className="absolute rounded-md bg-card shadow-xs dark:bg-background dark:shadow-none transition-transform duration-200 ease-in-out pointer-events-none"
               style={{
                 top: '4px', bottom: '4px', left: '4px',
                 width: 'calc(50% - 4px)',
@@ -179,6 +197,8 @@ export function AddMachineButton({
               }}
             />
             <button
+              type="button"
+              aria-pressed={tab === 'enter'}
               onClick={() => setTab('enter')}
               className={`relative z-10 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
                 tab === 'enter' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
@@ -187,6 +207,8 @@ export function AddMachineButton({
               enter code
             </button>
             <button
+              type="button"
+              aria-pressed={tab === 'generate'}
               onClick={() => setTab('generate')}
               className={`relative z-10 rounded-md px-3 py-1.5 text-sm font-medium transition-colors cursor-pointer ${
                 tab === 'generate' ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
@@ -201,8 +223,8 @@ export function AddMachineButton({
             <div className="space-y-5 mt-5">
               {enterSuccess ? (
                 <div className="text-center space-y-4 py-4">
-                  <div className="mx-auto w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                    <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                  <div className="mx-auto w-16 h-16 rounded-full bg-success/15 flex items-center justify-center">
+                    <CheckCircle2 className="h-8 w-8 text-success/80" />
                   </div>
                   <p className="text-foreground font-medium">machine authorized</p>
                   <p className="text-sm text-muted-foreground">
@@ -216,51 +238,7 @@ export function AddMachineButton({
                     <p className="text-sm text-muted-foreground leading-snug">
                       1) install owlette on the target machine
                     </p>
-                    <div className="flex items-center gap-0.5 shrink-0">
-                      <TooltipProvider disableHoverableContent>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isLoadingVersion || !downloadUrl}
-                              onClick={() => downloadUrl && window.open(downloadUrl, '_blank')}
-                              aria-label="download owlette agent"
-                              className="text-muted-foreground cursor-pointer p-1.5"
-                            >
-                              {isLoadingVersion ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            <p>{isLoadingVersion ? 'loading...' : `download v${version}`}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      <TooltipProvider disableHoverableContent>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              disabled={isLoadingVersion || !downloadUrl}
-                              onClick={() => {
-                                if (downloadUrl) {
-                                  navigator.clipboard.writeText(downloadUrl);
-                                  toast.success('download link copied');
-                                }
-                              }}
-                              aria-label="copy owlette agent download link"
-                              className="text-muted-foreground cursor-pointer p-1.5"
-                            >
-                              <Copy className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">
-                            <p>copy download link</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
+                    <DownloadButton variant="inline" />
                   </div>
                   <div className="space-y-2">
                     <p className="text-sm text-muted-foreground">
@@ -281,7 +259,7 @@ export function AddMachineButton({
                   <Button
                     onClick={handleAuthorize}
                     disabled={!enterPhrase.trim() || isAuthorizing}
-                    className="w-full text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full cursor-pointer disabled:cursor-not-allowed"
                   >
                     {isAuthorizing ? (
                       <>
@@ -306,8 +284,8 @@ export function AddMachineButton({
               {generateSuccess && generatedPhrase ? (
                 <div className="space-y-4">
                   <div className="text-center space-y-2">
-                    <div className="mx-auto w-16 h-16 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                      <CheckCircle2 className="h-8 w-8 text-emerald-500" />
+                    <div className="mx-auto w-16 h-16 rounded-full bg-success/15 flex items-center justify-center">
+                      <CheckCircle2 className="h-8 w-8 text-success/80" />
                     </div>
                     <p className="text-foreground font-medium">code ready</p>
                   </div>
@@ -319,39 +297,36 @@ export function AddMachineButton({
                       <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-foreground">
                         {generatedPhrase}
                       </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(generatedPhrase, 'Phrase')}
-                        aria-label="copy pairing phrase"
-                        className="border-border text-foreground cursor-pointer shrink-0"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </Button>
+                      <CopyButton
+                        value={generatedPhrase}
+                        tooltipLabel="copy pairing phrase"
+                        successMessage="pairing phrase copied"
+                        className="border-border text-foreground shrink-0"
+                      />
                     </div>
                   </div>
 
-                  {/* Command with copy */}
-                  <div className="space-y-2">
-                    <Label className="text-muted-foreground text-xs">silent install command</Label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 bg-muted/50 border border-border rounded-md px-3 py-2 font-mono text-xs text-muted-foreground break-all">
-                        Owlette-Installer-v{version ?? '...'}.exe /ADD={generatedPhrase}{serverFlag} /SILENT
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => copyToClipboard(
-                          `Owlette-Installer-v${version}.exe /ADD=${generatedPhrase}${serverFlag} /SILENT`,
-                          'Command'
-                        )}
-                        aria-label="copy silent install command"
-                        className="border-border text-foreground cursor-pointer shrink-0"
+                  <CopyField
+                    label="windows silent install command"
+                    value={`Owlette-Installer-v${version ?? '...'}.exe /ADD=${generatedPhrase}${serverFlagFor(host)} /SILENT`}
+                  />
+
+                  <CopyField
+                    label="macos / linux pairing preseed"
+                    value={pairingPreseedFor(generatedPhrase, host)}
+                  >
+                    <p className="text-xs text-muted-foreground">
+                      save it as config/pairing.json in the data root before installing the package.{' '}
+                      <a
+                        href="/docs/agent/installation#the-pairing-preseed-macos-and-linux"
+                        target="_blank"
+                        rel="noopener"
+                        className="underline underline-offset-2"
                       >
-                        <Copy className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
+                        paths and commands
+                      </a>
+                    </p>
+                  </CopyField>
 
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground">
@@ -376,15 +351,15 @@ export function AddMachineButton({
                       bulk deployment
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      generate a pre-authorized pairing phrase. use it with the installer&apos;s
-                      <code className="mx-1 px-1 py-0.5 bg-muted rounded text-foreground">/ADD=</code>
-                      flag to silently add machines to this site.
+                      generate a pre-authorized pairing phrase. use it with the windows installer&apos;s
+                      <code className="mx-1 px-1 py-0.5 bg-card-sunken rounded text-foreground">/ADD=</code>
+                      flag, or in a pairing preseed on macos and linux, to add machines to this site unattended.
                     </p>
                   </div>
                   <Button
                     onClick={handleGenerate}
                     disabled={isGenerating}
-                    className="w-full text-gray-900 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full cursor-pointer disabled:cursor-not-allowed"
                   >
                     {isGenerating ? (
                       <>

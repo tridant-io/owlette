@@ -1,27 +1,26 @@
 ---
-title: "firestore security rules"
-description: "Firestore security rules control who can read and write data. owlette's rules enforce site-scoped access, agent isolation, and role-based permissions."
+title: "Firestore security rules"
+description: "Firestore security rules control who can read and write data from a client. owlette's rules enforce site membership, per-site roles and strict agent isolation, and leave every control-plane write to trusted server code."
 ---
 
 ---
 
 ## deployment methods
 
-### method 1: firebase cli (recommended)
+### method 1: Firebase CLI (recommended)
+
+from the repository root:
 
 ```bash
-# Install Firebase CLI
-npm install -g firebase-tools
-
-# Login and select project
+npm install -g firebase-tools@15
 firebase login
 firebase use --add
-
-# Deploy rules
-firebase deploy --only firestore:rules
+firebase deploy --only firestore:rules --project <alias>
 ```
 
-Expected output:
+deploy the indexes the same way with `--only firestore:indexes`, or both at once with `--only firestore`. always name the project: owlette's own `.firebaserc` defaults to its dev project, and a deploy that lands in the wrong project still reports success.
+
+expected output:
 
 ```
 ✔ firestore: rules file firestore.rules compiled successfully
@@ -29,20 +28,19 @@ Expected output:
 ✔ Deploy complete!
 ```
 
-### method 2: firebase console
+### method 2: Firebase console
 
-1. Go to Firebase Console → Firestore Database → **Rules** tab
-2. Copy contents of `firestore.rules` from the repository
-3. Paste into the editor
-4. Click **"Validate"** (should show green checkmark)
-5. Click **"Publish"**
-6. Rules are live within ~30 seconds
+1. open the Firebase Console → **Firestore Database** → **rules**.
+2. copy the contents of `firestore.rules` from the repository.
+3. paste them into the editor.
+4. publish. new queries see the rules within about a minute; listeners that were already open can take up to ten.
 
-<Callout type="idea" title={"Source of truth"}>
+<Callout type="idea" title={"source of truth"}>
 
-The `firestore.rules` file in the repository is the canonical version. Always deploy from the file to keep version control synchronized.
+`firestore.rules` in the repository is the canonical version. deploy from the file so the live rules always match a commit.
 
 </Callout>
+
 ---
 
 ## rule architecture
@@ -51,72 +49,75 @@ The `firestore.rules` file in the repository is the canonical version. Always de
 
 | function | purpose |
 |----------|---------|
-| `isAuthenticated()` | User has a valid Firebase Auth token |
-| `isSuperadmin()` | User document has `role: "superadmin"` |
-| `isNotDeletedUser()` | User document has no `deletedAt` — a soft-deleted account loses site access immediately, even with a live session token |
-| `isServiceAccount()` | Request token has `admin: true`; Firebase Admin SDK calls bypass rules entirely |
-| `isAgent()` | Token has `role: "agent"`, `site_id`, and `machine_id` claims |
-| `agentCanAccessSite(siteId)` | Agent token `site_id` matches `siteId` |
-| `agentCanAccessMachine(siteId, machineId)` | Agent token matches both `site_id` and `machine_id` |
-| `isActiveMember(siteId)` | A `sites/{siteId}/members/{uid}` document exists with `status: "active"` |
-| `siteMemberRole(siteId)` | Per-site role (`owner`, `admin`, or `member`) read from that membership document. Only valid behind `isActiveMember()` |
-| `canAccessSite(siteId)` | Not soft-deleted, and either a superadmin or an active member of the site |
-| `isSiteAdmin(siteId)` | Superadmin, or an active member whose per-site role is `owner` or `admin`. A global `users/{uid}.role == "admin"` grants **nothing** on a site it holds no member row for |
-| `hasRequiredFields(required)` | Write payload contains all required field names |
+| `isAuthenticated()` | the request carries a valid Firebase Auth token |
+| `isSuperadmin()` | the caller's user document has `role: "superadmin"` |
+| `isNotDeletedUser()` | the caller's user document has no `deletedAt`: a soft-deleted account loses site access at once, even with a live session token |
+| `isServiceAccount()` | the token carries `admin: true`. Firebase Admin SDK calls bypass rules entirely |
+| `isAgent()` | the token has `role: "agent"`, `site_id` and `machine_id` claims |
+| `agentCanAccessSite(siteId)` | the agent token's `site_id` matches `siteId` |
+| `agentCanAccessMachine(siteId, machineId)` | the agent token matches both `site_id` and `machine_id` |
+| `isActiveMember(siteId)` | a `sites/{siteId}/members/{uid}` document exists with `status: "active"` |
+| `siteMemberRole(siteId)` | the per-site role (`owner`, `admin` or `member`) from that membership document. only valid behind `isActiveMember()` |
+| `canAccessSite(siteId)` | not soft-deleted, and either a superadmin or an active member of the site |
+| `isSiteAdmin(siteId)` | a superadmin, or an active member whose per-site role is `owner` or `admin`. a global `users/{uid}.role == "admin"` grants **nothing** on a site it holds no member row for |
+| `hasRequiredFields(required)` | the write payload contains every named field |
 
 site access is a document. `sites/{siteId}/members/{uid}` holds
 `{ uid, role, status, addedAt, addedBy }` and is the only thing that grants a
 user access to a site. the older `sites/{siteId}.owner` field and
 `users/{uid}.sites[]` array are still written, but no rule reads them.
-superadmins hold no member rows — they reach every site by global role. all
-member writes are server-only.
+superadmins hold no member rows; they reach every site by global role. every
+member write is server-only.
 
 ### access matrix
 
-These are Firestore client-rule permissions. Trusted server routes that use the Firebase Admin SDK bypass these rules; paths marked "server/Admin SDK only" are denied to ordinary client SDK writes and must be managed by server code.
+these are client-rule permissions. trusted server routes that use the Firebase Admin SDK bypass the rules, so "server only" means denied to every client SDK write and managed by owlette's server code.
 
 | path | member/admin client | superadmin client | agent client | trusted server / Admin SDK |
 |------|---------------------|-------------------|--------------|----------------------------|
-| `sites/{siteId}/members/{memberUid}` | Read only your own membership rows (by document id, or `where('uid','==',me)`); no write. Matched at `match /{path=**}/members/{memberUid}`, a recursive wildcard, which is what makes the dashboard's `collectionGroup('members')` listener legal | Same | No access | Full write — `membership.server.ts` is the single writer |
-| `sites/{siteId}` | Read sites where you hold an active member row; no direct write | Read all sites; no direct write | No access | Create/update/delete |
-| `sites/{siteId}/machines/{machineId}` | Read machines in accessible sites; no direct write | Read all machines; no direct write | Read/write/delete own machine only | Full write |
-| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | Read commands in accessible sites; no direct write | Read all commands; no direct write | Read/write/delete own machine commands | Full write |
-| `sites/{siteId}/machines/{machineId}/screenshots/{screenshotId}` | Read screenshots in accessible sites | Read all screenshots | No access | Write history entries |
-| `sites/{siteId}/machines/{machineId}/installed_software/{softwareId}` | Read and delete inventory in accessible sites | Read and delete inventory in all sites | Read/write/delete own machine inventory | Full write |
-| `sites/{siteId}/machines/{machineId}/hardware/{docId}` | Read hardware in accessible sites; no direct write | Read all hardware; no direct write | Read/write/delete own machine hardware | Full write |
-| `sites/{siteId}/machines/{machineId}/metrics_history/{bucketId}` | Read metrics in accessible sites; no direct write | Read all metrics; no direct write | Read/write/delete own machine metrics | Full write |
-| `sites/{siteId}/deployments/{deploymentId}` | Read deployments in accessible sites; no direct write | Read all deployments; no direct write | No access | Create/update/delete |
-| `sites/{siteId}/installer_templates/{templateId}` | Read templates in accessible sites; no direct write | Read all templates; no direct write | No access | Create/update/delete |
-| `sites/{siteId}/project_templates/{templateId}` | Read templates in accessible sites; no direct write | Read all templates; no direct write | No access | Create/update/delete |
-| `sites/{siteId}/roosts/{roostId}` | Read/create/update/delete roost shells in accessible sites; client creates cannot set version pointers and client updates cannot change version pointers or `schemaVersion` | Same for all sites | No access | Publish/rollback version pointer changes |
-| `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` | Read/delete target state in accessible sites; no direct create/update | Read/delete all target state; no direct create/update | Create/update own machine target state | Full write |
-| `sites/{siteId}/roosts/{roostId}/versions/{versionId}` | Read version history in accessible sites; no direct write | Read all version history; no direct write | No access | Server/Admin SDK only |
-| `sites/{siteId}/webhooks/{webhookId}` | Site admins (`owner`/`admin`) read; plain members denied, because the document can still carry a legacy in-document signing secret. No direct write | Read all webhooks; no direct write | No access | Write |
-| `sites/{siteId}/logs/{logId}` | Read logs in accessible sites; no direct write | Read all logs; no direct write | Read site logs and create own-machine log entries | Create/delete |
-| `sites/{siteId}/audit_log/{entryId}` | Site admins can read; members cannot read | Read all audit entries | No access | Server/Admin SDK only |
-| `sites/{siteId}/settings/{settingId}` | Read settings in accessible sites; no direct write | Read all settings; no direct write | No access | Write |
-| `config/{siteId}/machines/{machineId}` | Read machine config in accessible sites; no direct write | Read all machine config; no direct write | Read/write/delete own machine config | Full write |
-| `config/{siteId}/schedule_presets/{presetId}` | Read presets in accessible sites; no direct write | Read all presets; no direct write | No access | Write/delete |
-| `config/{siteId}/reboot_presets/{presetId}` | Read presets in accessible sites; no direct write | Read all presets; no direct write | No access | Write/delete |
-| `config/{siteId}/project_distribution_presets/{presetId}` | Read presets in accessible sites; no direct write | Read all presets; no direct write | No access | Write/delete |
-| `users/{userId}` | Read own profile, self-create as `member`, and update allowed self fields without changing `role`, `email`, or `sites`. Note this document does NOT grant site access — member rows do | Read all user profiles; role writes still server-mediated | No access | Manage roles and deletion; site access is granted by writing member rows |
-| `users/{userId}/settings/{settingId}` | Read/write own settings only | Read/write own settings only | No access | Admin SDK bypass only |
-| `users/{userId}/devicePrefs/{docId}` | Read/write own device preferences only | Read/write own device preferences only | No access | Admin SDK bypass only |
-| `users/{userId}/api_keys/{keyId}` | Read own API key inventory; no direct write | Read own API key inventory only; no direct write | No access | Server/Admin SDK only |
-| `installer_metadata/{document=**}` | Public read | Public read | Public read | Write |
-| `system_presets/{presetId}` | Read if authenticated; no direct write | Read if authenticated; no direct write | Read if authenticated; no direct write | Create/update/delete |
-| `chats/{chatId}` and `chats/{chatId}/messages/{messageId}` | Create own or autonomous chats; read/write own chats and messages; read autonomous chats for accessible sites | Same, plus read autonomous chats for all sites | No site-scoped reads; generic authenticated create/owner rules still apply | Admin SDK bypass only |
-| `agent_tokens/{tokenId}` | No access | No access | No access | Server/Admin SDK only |
-| `agent_refresh_tokens/{tokenHash}` | No access | No access | No access | Server/Admin SDK only |
-| `device_codes/{phrase}` | No access | No access | No access | Server/Admin SDK only |
-| `api_keys/{keyHash}` | No access | No access | No access | Server/Admin SDK only |
-| any unmatched path | No access | No access | No access | Admin SDK bypass only |
+| `sites/{siteId}/members/{memberUid}` | read only your own membership rows (by document ID, or `where('uid','==',me)`); no write. matched at `match /{path=**}/members/{memberUid}`, a recursive wildcard, which is what makes the dashboard's `collectionGroup('members')` listener legal | same | no access | full write; `membership.server.ts` is the single writer |
+| `site_ids/{siteId}` | single-document get only, never list; no write | same | same | write. tombstones for deleted sites, so an ID is never reused |
+| `sites/{siteId}` | read sites where you hold an active member row; no write | read all sites; no write | no access | create/update/delete |
+| `sites/{siteId}/machines/{machineId}` | read machines in accessible sites; no write | read all machines; no write | read/write/delete own machine only | full write |
+| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | read commands in accessible sites; no write | read all commands; no write | read/write/delete own machine's commands | full write |
+| `sites/{siteId}/machines/{machineId}/screenshots/{screenshotId}` | read in accessible sites | read all | no access | write history entries |
+| `sites/{siteId}/machines/{machineId}/installed_software/{softwareId}` | read and delete inventory in accessible sites | read and delete in all sites | read/write/delete own machine's inventory | full write |
+| `sites/{siteId}/machines/{machineId}/hardware/{docId}` | read in accessible sites; no write | read all; no write | read/write own machine's hardware | full write |
+| `sites/{siteId}/machines/{machineId}/metrics_history/{bucketId}` | read in accessible sites; no write | read all; no write | read/write own machine's metrics | full write |
+| `sites/{siteId}/machines/{machineId}/cortex/{docId}` | read in accessible sites; no write | read all; no write | read/write own machine's hoot chat state | full write |
+| `sites/{siteId}/machines/{machineId}/logs/{logId}` | read in accessible sites; no write | read all; no write | read and create own machine's log entries | full write |
+| `sites/{siteId}/deployments/{deploymentId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/installer_templates/{templateId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/project_templates/{templateId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/roosts/{roostId}` | read in accessible sites; no write. creating, publishing, rolling back and deleting go through the API, which checks the site-admin capability | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` | read/delete in accessible sites; no create/update | read/delete all; no create/update | create/update own machine's target state | full write |
+| `sites/{siteId}/roosts/{roostId}/versions/{versionId}` | read version history in accessible sites; no write | read all; no write | no access | server only; versions are immutable |
+| `sites/{siteId}/webhooks/{webhookId}` | site admins (`owner`/`admin`) read; plain members denied. no write | read all; no write | no access | write |
+| `sites/{siteId}/webhook_secrets/{webhookId}` | no access | no access | no access | server only |
+| `sites/{siteId}/talons/{talonId}` and `talon_runs/{runId}` | read in accessible sites; no write | read all; no write | no access | server only; run records are an audit surface |
+| `sites/{siteId}/talon_secrets/{secretId}` | no access | no access | no access | server only |
+| `sites/{siteId}/cortex-events/{eventId}` | read in accessible sites; no write | read all; no write | create, and update its own, for its own machine | full write |
+| `sites/{siteId}/logs/{logId}` | read in accessible sites; no write | read all; no write | read site logs and create own-machine entries | create/delete |
+| `sites/{siteId}/audit_log/{entryId}` | site admins read; members cannot | read all | no access | server only; nobody can edit or delete an entry from a client |
+| `sites/{siteId}/settings/{settingId}` | read in accessible sites; no write | read all; no write | no access | write |
+| `config/{siteId}/machines/{machineId}` | read in accessible sites; no write | read all; no write | read/write/delete own machine's config | full write |
+| `config/{siteId}/schedule_presets`, `reboot_presets`, `project_distribution_presets`, `talon_presets` | read in accessible sites; no write | read all; no write | no access | write/delete |
+| `users/{userId}` | read your own profile; self-create as `member` with no sites; update only `preferences`, `displayName`, `photoURL`, `timezone`, `lastSiteId` and `lastMachineIds`. this document does not grant site access; member rows do | read all profiles; role writes still go through the server | no access | manage roles and deletion |
+| `users/{userId}/settings/{settingId}` | read/write your own | read/write your own | no access | Admin SDK bypass only |
+| `users/{userId}/devicePrefs/{docId}` | read/write your own | read/write your own | no access | Admin SDK bypass only |
+| `users/{userId}/api_keys/{keyId}` | read your own key inventory; no write | read your own only; no write | no access | server only |
+| `installer_metadata/{document=**}` | public read | public read | public read | write |
+| `system_presets/{presetId}` | read if authenticated; no write | read if authenticated; no write | read if authenticated; no write | create/update/delete |
+| `chats/{chatId}`, its `messages` and `stream` | create your own chats; read/write your own chats and messages; read autonomous chats and their streams for accessible sites | same, for all sites | no site-scoped reads; the owner-only rules apply as to any signed-in caller | Admin SDK bypass only |
+| `cortex-followups/{followupId}` | read your own | read your own | no access | server only |
+| `agent_tokens`, `agent_refresh_tokens`, `device_codes`, `api_keys` | no access | no access | no access | server only |
+| any unmatched path, including `sites/{siteId}/machines/{machineId}/swoop_sessions` | no access | no access | no access | Admin SDK bypass only |
 
 ---
 
 ## agent authentication
 
-Agents use **custom Firebase tokens** with claims:
+agents use **custom Firebase tokens** with these claims:
 
 ```json
 {
@@ -126,67 +127,78 @@ Agents use **custom Firebase tokens** with claims:
 }
 ```
 
-Rules enforce **strict machine isolation** for machine-scoped agent writes. An agent can write only its own machine documents, config, command documents, inventory, hardware, metrics, logs, and roost target state. Agents can also read their own machine state, site logs, and authenticated system presets where the matrix above allows it.
+the rules enforce **strict machine isolation**: an agent can write only its own machine's documents, config, commands, inventory, hardware, metrics, logs, hoot events and roost target state. it can also read its own machine's state, its site's logs, and the system presets, as the matrix above allows.
 
 ---
 
 ## testing rules
 
+### the emulator suite
+
+the repository's rules tests run against the Firestore emulator. with JDK 21 and firebase-tools 15 installed, from `web/`:
+
+```bash
+npm run test:rules
+```
+
+the specs live in `web/__tests__/rules/`: the baseline matrix, explicit denials, membership, swoop sessions and the hardening cases. run them after any change to `firestore.rules`.
+
 ### rules playground
 
-1. Firebase Console → Firestore → Rules → **Playground**
-2. Set the document path to test
-3. Configure authentication (user, admin, or agent claims)
-4. Test read/write operations
+1. Firebase Console → **Firestore** → **rules** → **playground**.
+2. set the document path to test.
+3. set the authentication: a user, or custom agent claims.
+4. simulate the read or write.
 
-### example tests
+### example checks
 
-**Agent accessing own machine (should allow):**
+**agent reading its own machine (allowed):**
 
-- Path: `sites/site_abc/machines/DESKTOP-001`
-- Auth: Custom claims `{role: "agent", site_id: "site_abc", machine_id: "DESKTOP-001"}`
-- Operation: GET → Should be **allowed**
+- path: `sites/site_abc/machines/DESKTOP-001`
+- auth: custom claims `{role: "agent", site_id: "site_abc", machine_id: "DESKTOP-001"}`
+- operation: get → **allowed**
 
-**Agent accessing different machine (should deny):**
+**agent reading another machine (denied):**
 
-- Same as above but `machine_id: "DESKTOP-002"`
-- Operation: GET → Should be **denied**
+- the same, with `machine_id: "DESKTOP-002"`
+- operation: get → **denied**
 
-**Token collection access (should deny everyone):**
+**token collection (denied to everyone):**
 
-- Path: `agent_tokens/test_code`
-- Auth: Any (even admin)
-- Operation: GET → Should be **denied**
+- path: `agent_tokens/test_code`
+- auth: any, including a superadmin
+- operation: get → **denied**
 
 ---
 
 ## rollback
 
-If rules cause issues:
+if new rules break something:
 
-### via firebase console
+### from the Firebase console
 
-1. Firestore → Rules → Click **"History"** (clock icon)
-2. Find previous version → Click **"Restore"**
+1. **Firestore** → **rules** → the history list beside the editor.
+2. pick the previous version and restore it.
 
-### via git
+### from git
 
 ```bash
-git checkout HEAD~1 firestore.rules
-firebase deploy --only firestore:rules
+git checkout <last-good-commit> -- firestore.rules
+firebase deploy --only firestore:rules --project <alias>
 ```
+
+then commit the restored file, so the repository matches what is live.
 
 ---
 
 ## versioning
 
-Firestore rules version is managed independently from the product version. The rules version is tracked inside the `firestore.rules` file header comment.
+the rules version is independent of the product version. it is tracked in the header comment at the top of `firestore.rules`, with a line on what each version changed.
 
 ---
 
 ## monitoring
 
-- **Firebase Console → Firestore → Usage**: Monitor denied reads/writes
-- Spike in denials after a rule change = something broke
-- **Agent logs**: Look for "Permission denied" or "HTTP error 403"
-- **Browser console**: Look for "Missing or insufficient permissions"
+- **Firebase Console → Firestore → usage**: watch denied reads and writes. a spike right after a rules deploy means something broke.
+- **agent logs**: look for "Permission denied" or "HTTP error 403".
+- **browser console**: look for "Missing or insufficient permissions".

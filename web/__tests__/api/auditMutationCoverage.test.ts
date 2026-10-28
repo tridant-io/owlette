@@ -50,10 +50,22 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/swoop/events',
   // internal-secret endpoint called by the alert cloud function; sends notifications only.
   'alerts/trigger',
+  // app-link: the caller hands its own session to an owlette swoop window — sign-in, same class
+  // as auth/session. Single-use `app_links` record only; no resource or security state changes.
+  'auth/app-link',
+  // app-link: the caller approves a sign-in an owlette swoop window started for its own account;
+  // sign-in, same class as auth/session.
+  'auth/app-link/approve',
+  // app-link: unauthenticated code → custom-token exchange; the sign-in itself, no actor yet.
+  'auth/app-link/exchange',
+  // app-link: unauthenticated pending-code issuance, bootstrap step of the cold-start sign-in.
+  'auth/app-link/start',
   // public unauthenticated password-reset email send; no actor to attribute, enumeration-safe by design.
   'auth/forgot-password',
   // session create/destroy (sign-in / sign-out); the authentication act, not a resource mutation.
   'auth/session',
+  // resends the caller's own email-verification link; email only, no persisted owlette state.
+  'auth/verify-email',
   // user-submitted bug/feature intake into `bug_reports`; touches no fleet, account, or security state.
   'bug-report',
   // read-only upload negotiation — returns which chunk hashes are missing, writes nothing.
@@ -73,6 +85,12 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'hoot/autonomous',
   // internal-secret + cron-secret escalation notifier; no user actor.
   'hoot/escalation',
+  // e2e-only issue file sink standing in for an R2 presigned PUT — hard 404
+  // unless OWLETTE_E2E=1, so it does not exist in any real deployment.
+  'issue-attachments/e2e-put',
+  // session-only: mints signed PUT urls for the dashboard's issue screenshots and videos, writes
+  // nothing. The issue that names them is filed by `bug-report`, itself exempt above.
+  'issue-attachments/upload-url',
   // public DMCA § 512(c)(3) notice intake; touches no fleet, account, or security state.
   'legal/dmca',
   // login-time TOTP / backup-code verification (+ optional device-trust cookie); the sign-in ceremony.
@@ -92,6 +110,10 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'roosts/[roostId]/version-url',
   // read-only: lists the provider's available models for a supplied/stored key, writes nothing.
   'settings/llm-models',
+  // agent-only (the machine's own token): mints a signed PUT url for an issue's logs zip, writes
+  // nothing. The superadmin download, GET `admin/issues/[id]/logs`, is a read and so not scanned
+  // here; it writes its own blocking `global/audit_log` row and one in the issue's site audit log.
+  'sites/[siteId]/machines/[machineId]/issue-logs/upload-url',
   // agent-side screenshot pipeline (machine scope): publishes the uploaded object and records the capture.
   'sites/[siteId]/machines/[machineId]/screenshots/finalize',
   // agent-side screenshot pipeline (machine scope): mints a signed PUT url, writes nothing.

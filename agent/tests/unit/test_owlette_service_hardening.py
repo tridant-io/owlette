@@ -362,7 +362,8 @@ class TestConsoleWatch:
         monkeypatch.setattr(owlette_service, 'LOCAL_CONFIG_POLL_INTERVAL', 0)
         ticks = []
         svc = SimpleNamespace(is_alive=True, _check_local_config_changes=MagicMock(
-            side_effect=RuntimeError('a bad config tick')))
+            side_effect=RuntimeError('a bad config tick')),
+            _check_tray_swoop_kill=lambda: None)
 
         def check():
             ticks.append(1)

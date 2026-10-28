@@ -54,10 +54,7 @@ export default function ConfirmDialog({
           <Button variant="secondary" onClick={() => onOpenChange(false)} className="border border-border">
             {cancelText}
           </Button>
-          <Button
-            onClick={handleConfirm}
-            className={variant === 'destructive' ? 'bg-red-600 hover:bg-red-700 text-white' : ''}
-          >
+          <Button onClick={handleConfirm} variant={variant}>
             {confirmText}
           </Button>
         </DialogFooter>

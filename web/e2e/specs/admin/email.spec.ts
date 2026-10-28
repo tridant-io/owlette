@@ -40,7 +40,7 @@ test('config card renders provider + from/admin emails + environment', async ({ 
   await expect(page.getByText('admin email', { exact: true })).toBeVisible();
 });
 
-test('template selector shows all 10 templates and updates the description', async ({ page }) => {
+test('template selector shows all 11 templates and updates the description', async ({ page }) => {
   await page.goto('/admin/email');
 
   await expect(
@@ -62,9 +62,9 @@ test('template selector shows all 10 templates and updates the description', asy
   await select.selectOption('api_key_expiring');
   await expect(page.getByText('daily notice ladder before an api key expires')).toBeVisible();
 
-  // All 10 template options present.
+  // All 11 template options present.
   const optionCount = await select.locator('option').count();
-  expect(optionCount).toBe(10);
+  expect(optionCount).toBe(11);
 });
 
 test('clicking "send test email" with a stubbed success response shows the success panel', async ({ page }) => {

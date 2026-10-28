@@ -49,31 +49,22 @@ Roost(
     retry=RetryPolicy(max_attempts=3),  # optional
     transport=my_httpx_transport,     # for proxy / mTLS / recording
     timeout=30.0,
-    on_billing_warning=logger.warning,  # optional — free-trial advisory
+    on_billing_warning=logger.warning,  # accepted for compatibility; never fires
 )
 ```
 
-### billing warnings
+### plan refusals
 
-While the account is on its free trial, the api attaches an advisory
-`X-Owlette-Billing-Warning` header to responses. The SDK never prints it — a
-library has no business writing to your stderr — so pass
-`on_billing_warning` to surface it however your app already does:
+Plans are not enforced during the beta. Once they apply, a request that the
+site owner's plan does not cover raises `RoostApiError` with
+`code == "plan_required"` and `status == 402`, and is not retried.
+`error.problem["entitlement"]` names what the plan lacks — `owlette.api_keys`
+for every request made with a key on a plan without API keys. See
+[plans](https://owlette.app/docs/plans).
 
-```python
-async with Roost(
-    token=os.environ["OWLETTE_TOKEN"],
-    on_billing_warning=logger.warning,
-    # → "trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access"
-) as client:
-    ...
-```
-
-It fires once per response carrying the header, retried attempts included, so
-deduplicate on your side if you want at-most-once. Exceptions raised by the
-callback are swallowed and can never fail a request. Once the trial ends,
-requests raise `RoostApiError` with `code == "trial_expired"` and
-`status == 402`.
+`on_billing_warning` is still accepted for compatibility but never fires: the
+api stopped sending the `X-Owlette-Billing-Warning` header when billing was
+removed.
 
 ## resources
 
@@ -87,7 +78,7 @@ requests raise `RoostApiError` with `code == "trial_expired"` and
 | `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
 | `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe` |
 | `roost.sites`     | `list`, `get`                                                           |
-| `roost.machines`  | `list`, `get`, `deployments`, `dispatch_command`, `get_command`, `capture_screenshot` |
+| `roost.machines`  | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatch_command`, `get_command`, `capture_screenshot` |
 | `roost.quotas`    | `current`, `history`                                                    |
 
 Roost, version, deployment, and chunk-referrer paginated lists expose
@@ -121,6 +112,31 @@ await client.account.api_keys.revoke(created["keyId"])
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
+
+## active hours
+
+```python
+await client.machines.reboot("site-1", "m-1", after_active_hours=True)
+await client.machines.shutdown(
+    "site-1", "m-1", active_hours_override={"reason": "replacing the projector"}
+)
+await client.installer_deployments.retry(
+    "site-1", "deploy-1", active_hours_override={"reason": "venue closed today"}
+)
+```
+
+A Windows agent of 4.1.21 or later, which reports
+`capabilities.activeHoursGuard`, refuses a reboot, shutdown or install inside
+the machine's active hours. The command is still queued; `get_command()` then
+reports `failed` (a deployment target ends `failed`) with an `error` that
+starts `Error: active_hours:`. `after_active_hours` restarts once they end;
+`active_hours_override` acts now and logs the reason.
+`installer_deployments.create()` and `retry()` take the same override, and a
+retry needs its own. Older agents ignore both and act at once, as macOS and
+Linux do for a reboot or shutdown. That includes a machine rolled back below
+4.1.21: it keeps the capability, so the API also needs an `agentVersion` of
+4.1.21 or later. The API refuses `after_active_hours` on all of them with
+`409 held_restart_unsupported`, since none can hold the restart.
 
 ## push progress
 

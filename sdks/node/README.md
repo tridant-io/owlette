@@ -49,7 +49,7 @@ new Owlette({
   roostVersion: '2026-04-22',     // default, sent as Roost-Version header
   fetch: customFetch,             // optional — drop-in override for proxy / mtls
   retry: { maxAttempts: 3 },      // optional — overrides default policy
-  onBillingWarning: (w) => {},    // optional — free-trial countdown advisory
+  onBillingWarning: (w) => {},    // accepted for compatibility; never fires
 });
 ```
 
@@ -57,25 +57,18 @@ The sdk auto-generates an `Idempotency-Key` header on every mutating
 request so transparent retries can't create duplicate rollouts, roosts,
 or api keys.
 
-### billing warnings
+### plan refusals
 
-While the account is on its free trial, the api attaches an advisory
-`X-Owlette-Billing-Warning` header to responses. The sdk never prints it —
-a library has no business writing to your stderr — so wire up
-`onBillingWarning` to surface it however your app already surfaces warnings:
+Plans are not enforced during the beta. Once they apply, a request that the
+site owner's plan does not cover throws `OwletteApiError` with
+`code === 'plan_required'` and `status === 402`, and is not retried.
+`error.problem.entitlement` names what the plan lacks — `owlette.api_keys`
+for every request made with a key on a plan without API keys. See
+[plans](https://owlette.app/docs/plans).
 
-```ts
-const owlette = new Owlette({
-  token: process.env.OWLETTE_TOKEN!,
-  onBillingWarning: (warning) => logger.warn(warning),
-  // → "trial ends 2026-08-15T00:00:00.000Z; choose a plan to keep API access"
-});
-```
-
-It fires once per response carrying the header, retried attempts included, so
-deduplicate on your side if you want at-most-once. Throwing from the callback
-is swallowed and can never fail a request. Once the trial ends, requests throw
-`OwletteApiError` with `code === 'trial_expired'` and `status === 402`.
+`onBillingWarning` is still accepted for compatibility but never fires: the
+api stopped sending the `X-Owlette-Billing-Warning` header when billing was
+removed.
 
 ## resources
 
@@ -89,7 +82,7 @@ is swallowed and can never fail a request. Once the trial ends, requests throw
 | `owlette.keys`    | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
 | `owlette.webhooks` | `subscribe`, `list`, `get`, `update`, `remove`, `rotateSecret`, `probe`, `deliveries`, `delivery`, `retryDelivery` |
 | `owlette.sites`   | `list`, `get`                                                      |
-| `owlette.machines` | `list`, `get`, `deployments`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
+| `owlette.machines` | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
 | `owlette.installerDeployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete` |
 | `owlette.installer` | `list`, `latest`, `upload`, `setLatest`, `delete`                |
 | `owlette.processes(siteId, machineId)` | `list`, `create`, `update`, `start`, `stop`, `restart`, `kill`, `schedule`, `delete` |
@@ -100,6 +93,31 @@ is swallowed and can never fail a request. Once the trial ends, requests throw
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
+
+## active hours
+
+```ts
+await owlette.machines.reboot('site-1', 'm-1', { afterActiveHours: true });
+await owlette.machines.shutdown('site-1', 'm-1', {
+  activeHoursOverride: { reason: 'replacing the projector' },
+});
+await owlette.installerDeployments.retry('site-1', 'deploy-1', {
+  activeHoursOverride: { reason: 'venue closed today' },
+});
+```
+
+A Windows agent of 4.1.21 or later, which reports
+`capabilities.activeHoursGuard`, refuses a reboot, shutdown or install inside
+the machine's active hours. The command is still queued; `getCommand()` then
+reports `failed` (a deployment target ends `failed`) with an `error` that
+starts `Error: active_hours:`. `afterActiveHours` restarts once they end;
+`activeHoursOverride` acts now and logs the reason.
+`installerDeployments.create()` and `retry()` take the same override, and a
+retry needs its own. Older agents ignore both and act at once, as macOS and
+Linux do for a reboot or shutdown. That includes a machine rolled back below
+4.1.21: it keeps the capability, so the API also needs an `agentVersion` of
+4.1.21 or later. The API refuses `afterActiveHours` on all of them with
+`409 held_restart_unsupported`, since none can hold the restart.
 
 ## push progress
 

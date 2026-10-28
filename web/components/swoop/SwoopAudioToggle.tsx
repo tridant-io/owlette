@@ -16,6 +16,7 @@
 import { useCallback, useSyncExternalStore } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BarTooltip } from '@/components/swoop/BarTooltip';
 import { swoopAudio, type SwoopAudioState } from '@/lib/swoop/audio';
 import type { SwoopSession } from '@/lib/swoop/features';
 
@@ -27,6 +28,13 @@ const LABEL: Record<SwoopAudioState, string> = {
   unavailable: 'no audio endpoint',
   muted: 'unmute this machine',
   playing: 'mute this machine',
+};
+
+/** under the button in the bar's menu, where the sentence does not fit. */
+const SHORT: Record<SwoopAudioState, string> = {
+  unavailable: 'no audio',
+  muted: 'unmute',
+  playing: 'mute',
 };
 
 const noop = (): (() => void) => () => {};
@@ -45,16 +53,17 @@ export function SwoopAudioToggle({ session }: SwoopAudioToggleProps) {
 
   const unavailable = state === 'unavailable';
   return (
-    <Button
-      variant="ghost"
-      size="icon-sm"
-      disabled={unavailable}
-      title={LABEL[state]}
-      aria-label={LABEL[state]}
-      aria-pressed={state === 'playing'}
-      onClick={onClick}
-    >
-      {state === 'playing' ? <Volume2 aria-hidden /> : <VolumeX aria-hidden />}
-    </Button>
+    <BarTooltip label={LABEL[state]} short={SHORT[state]}>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        disabled={unavailable}
+        aria-label={LABEL[state]}
+        aria-pressed={state === 'playing'}
+        onClick={onClick}
+      >
+        {state === 'playing' ? <Volume2 aria-hidden /> : <VolumeX aria-hidden />}
+      </Button>
+    </BarTooltip>
   );
 }

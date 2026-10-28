@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
 import { toast } from '@/lib/toast';
 import { db } from '@/lib/firebase';
+import { launchCopy, type LaunchCopy } from '@/lib/launchCopy';
 
 export interface ExeMissingToastAlert {
   id: string;
@@ -39,16 +40,23 @@ function buildExeMissingAlert(id: string, data: Record<string, unknown>): ExeMis
   };
 }
 
+/**
+ * `launchCopyOf` names the missing target the way the alerting machine's
+ * system does — an .exe, an .app or a program; without it, windows.
+ */
 export function useAgentAlertToasts(
   siteId: string,
   onUseSuggestedPath?: UseSuggestedPathHandler,
+  launchCopyOf?: (machineId: string) => LaunchCopy,
 ): void {
   const onUseSuggestedPathRef = useRef(onUseSuggestedPath);
+  const launchCopyOfRef = useRef(launchCopyOf);
   const seenIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     onUseSuggestedPathRef.current = onUseSuggestedPath;
-  }, [onUseSuggestedPath]);
+    launchCopyOfRef.current = launchCopyOf;
+  }, [onUseSuggestedPath, launchCopyOf]);
 
   useEffect(() => {
     seenIdsRef.current = new Set();
@@ -86,7 +94,8 @@ export function useAgentAlertToasts(
             ? `${alert.exePath}\nsuggested: ${suggestions.join(' | ')}`
             : alert.exePath;
 
-          toast.error(`executable not found for ${alert.processName}`, {
+          const { target } = launchCopyOfRef.current?.(alert.machineId) ?? launchCopy(undefined);
+          toast.error(`${target} not found for ${alert.processName}`, {
             description,
             ...(firstSuggestion
               ? {

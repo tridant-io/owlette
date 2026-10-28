@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { useProjectDistributionPresets } from '@/hooks/useProjectDistributionPresets';
 import { useRoosts } from '@/hooks/useRoosts';
@@ -37,6 +38,7 @@ import { LoadingWord } from '@/components/LoadingWord';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { RoostDetailPanel } from '@/components/roost/RoostDetailPanel';
 import { RoostMobileSheet } from '@/components/roost/RoostMobileSheet';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 const DESCRIPTION_PREVIEW_CAP = 40;
 
@@ -52,6 +54,7 @@ export default function RoostsPageClient() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -60,11 +63,14 @@ export default function RoostsPageClient() {
     updateSite,
     deleteSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const roostGated = usePlanGated('roost', siteOwner);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
   const [newVersionContext, setNewVersionContext] = useState<NewVersionContext | null>(null);
   const [manageDialogOpen, setManageDialogOpen] = useState(false);
+  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   // Pending row actions; `null` = no prompt open. Each carries the roost plus
@@ -274,14 +280,21 @@ export default function RoostsPageClient() {
   }
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       {/* Header */}
       <PageHeader
         currentPage="roost"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
+        onManageSites={() => {
+          setManageEditSiteId(undefined);
+          setManageDialogOpen(true);
+        }}
+        onSiteSettings={() => {
+          setManageEditSiteId(currentSiteId);
+          setManageDialogOpen(true);
+        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
       />
@@ -290,6 +303,7 @@ export default function RoostsPageClient() {
       <ManageSitesDialog
         open={manageDialogOpen}
         onOpenChange={setManageDialogOpen}
+        editSiteId={manageEditSiteId}
         sites={sites}
         currentSiteId={currentSiteId}
         onUpdateSite={updateSite}
@@ -366,16 +380,18 @@ export default function RoostsPageClient() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <Button
-              onClick={() => {
-                setNewVersionContext(null);
-                setDistributionDialogOpen(true);
-              }}
-              className="text-gray-900 cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              new roost
-            </Button>
+            <UpgradeGate flag="roost" siteOwner={siteOwner} variant="inline">
+              <Button
+                onClick={() => {
+                  setNewVersionContext(null);
+                  setDistributionDialogOpen(true);
+                }}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                new roost
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
 
@@ -407,14 +423,15 @@ export default function RoostsPageClient() {
             ) : roosts.length === 0 ? (
               <EmptyStateUpload
                 machineCount={machines.length}
-                onNewRoost={() => {
+                // the header already carries the upgrade note
+                onNewRoost={roostGated ? undefined : () => {
                   setNewVersionContext(null);
                   setDistributionDialogOpen(true);
                 }}
                 onAddMachine={() => router.push('/dashboard')}
               />
             ) : (
-              <div className="divide-y divide-border">
+              <div className="cascade-rows divide-y divide-border">
                 {roosts.map((roost) => {
                   const isSelected = selectedRoostId === roost.id;
                   const versionLabel =
@@ -548,7 +565,7 @@ export default function RoostsPageClient() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setPendingDelete({ roostId: roost.id, name: roost.name })}
-                              className="cursor-pointer text-red-400 focus:text-red-300 focus:bg-red-950/30"
+                              className="cursor-pointer text-danger focus:text-danger focus:bg-danger-surface"
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
                               delete roost
@@ -594,7 +611,7 @@ export default function RoostsPageClient() {
                     machines={machines}
                     headingId="roost-detail-heading"
                     onClose={() => setSelectedRoostId(null)}
-                    onNewVersion={openNewVersionDialog}
+                    onNewVersion={roostGated ? undefined : openNewVersionDialog}
                     onResync={() => {
                       if (
                         displayRoost.currentVersionId &&
@@ -649,7 +666,7 @@ export default function RoostsPageClient() {
                 machines={machines}
                 headingId="roost-detail-heading"
                 onClose={() => setSelectedRoostId(null)}
-                onNewVersion={openNewVersionDialog}
+                onNewVersion={roostGated ? undefined : openNewVersionDialog}
                 onResync={() => {
                   if (
                     selectedRoost.currentVersionId &&
@@ -732,6 +749,6 @@ export default function RoostsPageClient() {
           }
         }}
       />
-    </div>
+    </PageCascade>
   );
 }

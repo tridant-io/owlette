@@ -1,53 +1,71 @@
 ---
 title: "pagination"
-description: "Public collection endpoints use cursor pagination. Cursors are opaque strings returned by the server; clients must round-trip them exactly and must not parse, sort, or construct them."
+description: "list endpoints use cursor pagination: page_size and page_token on the request, next_page_token on the response. cursors are opaque strings — round-trip them exactly and never parse, sort, or construct them."
+keywords: ["paging", "cursor", "next page", "page_size", "page_token", "limit", "offset"]
 ---
 
-**Last updated**: 2026-04-28
+**last updated**: 2026-10-05
 
 ---
 
 ## request parameters
 
-| parameter | status | meaning |
-|---|---|---|
-| `page_size` | canonical | Maximum items to return. Common default is 25 and common maximum is 100, but endpoint references may specify a different default or maximum. |
-| `page_token` | canonical | Opaque cursor from the previous response's `next_page_token`. Omit on the first request. |
-| `limit` | compatibility | Legacy alias for `page_size` on routes that document it. |
-| `cursor` | compatibility | Legacy alias for `page_token` on routes that document it. |
+| parameter | meaning |
+|---|---|
+| `page_size` | items to return. defaults and maximums vary by route — see the [table below](#paginated-routes) |
+| `page_token` | the previous response's `next_page_token`. omit it on the first request |
+| `limit` | alias for `page_size`, accepted on every paginated route |
+| `cursor` | alias for `page_token`, accepted on every paginated route |
 
-If both canonical and compatibility names are present, the canonical name wins.
+when both a canonical name and its alias are sent, the canonical name wins.
 
-Routes using the shared pagination helper return `400 validation_failed` for invalid `page_size`; `/api/cortex/conversations` and `/api/chat` currently clamp or default invalid values, so clients should consult the endpoint reference for validation behavior.
+a `page_size` that is not a whole number between 1 and the route's maximum is refused with `400 validation_failed`. the hoot conversation list is the exception: it clamps an out-of-range value into range instead.
 
 ---
 
 ## response fields
 
-Canonical paginated responses include:
-
-```json
-{
-  "items": [],
-  "next_page_token": ""
-}
-```
-
-The collection field name may be resource-specific, such as `sites`, `machines`, `roosts`, `versions`, `deployments`, `records`, `webhooks`, or `deliveries`.
-
-`next_page_token` is an empty string when there are no more pages. Treat `null`, a missing token, or an empty compatibility token as end-of-list only on endpoints that explicitly document that shape.
-
-During the developer-preview compatibility window, some responses also include camelCase aliases:
-
 ```json
 {
   "roosts": [],
-  "next_page_token": "eyJ...",
-  "nextPageToken": "eyJ..."
+  "next_page_token": "",
+  "nextPageToken": ""
 }
 ```
 
-New clients should read `next_page_token` first and fall back to `nextPageToken` only for compatibility routes.
+- the collection field is named for the resource — `roosts`, `versions`, `records`, `webhooks`, and so on. some routes also repeat it as `items`.
+- `next_page_token` is an empty string when there are no more pages.
+- most routes also send `nextPageToken`, a camelCase alias with the same value. read `next_page_token`; the alias exists for older clients.
+
+---
+
+## paginated routes
+
+| route | collection field | default | max |
+|---|---|---:|---:|
+| `GET /api/roosts?siteId=` | `roosts` | 20 | 100 |
+| `GET /api/roosts/{roostId}/versions` | `versions` | 20 | 100 |
+| `GET /api/roosts/{roostId}/versions/{versionRef}/files` | `files` (also `items`) | 100 | 500 |
+| `GET /api/roosts/{roostId}/deployments` | `rollouts` (also `items`) | 20 | 100 |
+| `GET /api/chunks/{digest}/referrers` | `referrers` (also `items`) | 50 | 200 |
+| `GET /api/sites/{siteId}/deployments` | `items` | 25 | 100 |
+| `GET /api/sites/{siteId}/logs` | `logs` | 50 | 200 |
+| `GET /api/sites/{siteId}/audit-log` | `records` | 50 | 200 |
+| `GET /api/sites/{siteId}/talons/{talonId}/runs` | `runs` | 20 | 100 |
+| `GET /api/webhooks?siteId=` | `webhooks` | 20 | 100 |
+| `GET /api/webhooks/{webhookId}/deliveries` | `deliveries` | 20 | 100 |
+| `GET /api/installer` | `versions` | 20 | 100 |
+| `GET /api/users` | `users` | 20 | 100 |
+| `GET /api/hoot/conversations` | `data.conversations` | 25 | 100 |
+
+shape differences to know about:
+
+- `GET /api/sites/{siteId}/deployments` returns only `next_page_token`, with no camelCase alias.
+- `GET /api/roosts/{roostId}/versions` also returns `nextCursor`, which is `null` on the last page.
+- `GET /api/hoot/conversations` nests everything under `data`: read `data.next_page_token`.
+- `GET .../versions/{versionRef}/files` uses a numeric offset internally, so its tokens look like numbers. treat them as opaque anyway — store and send back what you received, and never compute one.
+
+lists not in this table return everything in one response and take no paging parameters — for example `GET /api/sites`, `GET /api/sites/{siteId}/machines`, and `GET .../machines/{machineId}/processes` (which sends `data.nextPageToken: null`).
 
 ---
 
@@ -64,40 +82,21 @@ while true; do
   PAGE="$(curl -fsS "$URL" -H "Authorization: Bearer $OWLETTE_API_KEY")"
   echo "$PAGE" | jq '.roosts[]'
 
-  PAGE_TOKEN="$(echo "$PAGE" | jq -r '.next_page_token // .nextPageToken // ""')"
+  PAGE_TOKEN="$(echo "$PAGE" | jq -r '.next_page_token // ""')"
   [ -z "$PAGE_TOKEN" ] && break
 done
 ```
 
-Rules:
-
-- Preserve the cursor exactly.
-- Do not use cursor values as stable IDs.
-- Do not assume offset semantics.
-- Reapply the same filters when requesting the next page.
-- Stop when the next token is empty.
-
-`GET /api/roosts/{roostId}/versions/{versionRef}/files` currently uses an integer offset internally, so operators may see numeric-looking page tokens when debugging that route. Client code must still treat those tokens as opaque cursors: store and round-trip the returned token unchanged, and do not calculate, increment, or infer positions from it.
+- send the cursor back exactly as you received it, URL-encoded.
+- do not use cursors as stable IDs, and do not assume offset semantics.
+- repeat the same filters on every page.
+- stop when the next token is empty.
 
 ---
 
-## compatibility exceptions
+## validation errors
 
-Most public list routes now expose canonical `page_size`, `page_token`, and `next_page_token`. The remaining compatibility shapes are intentional during preview:
-
-| route family | current shape | client guidance |
-|---|---|---|
-| `/api/cortex/conversations` and `/api/chat` alias | Response is nested under `data` and includes both `data.next_page_token` and `data.nextPageToken`. | Prefer `data.next_page_token`; fall back to `data.nextPageToken`. |
-| `/api/sites/{siteId}/machines/{machineId}/processes` | Returns the current configured process list in one response with `data.nextPageToken: null`; no `page_size` or `page_token` query contract. | Treat as unpaged until the reference adds canonical query parameters. |
-| older SDK compatibility helpers | May expose `cursor` or `nextPageToken` in language-native APIs. | SDKs normalize to the server's canonical fields internally where supported. |
-
-The rendered endpoint reference at [`/docs/api`](/docs/api) is the source of truth for each operation's request parameters and response envelope.
-
----
-
-## related errors
-
-Pagination validation failures use the shared problem envelope:
+an invalid `page_size` uses the shared problem envelope:
 
 ```json
 {
@@ -110,8 +109,8 @@ Pagination validation failures use the shared problem envelope:
     "query.page_size": ["must be a positive integer <= 100"]
   },
   "docsUrl": "https://owlette.app/docs/api/errors#validation_failed",
-  "requestId": "req_01HYCAM5T4P9R1S3U7V8W0X2Y4"
+  "requestId": "5d7f7c5b-2ed6-4a56-9b2c-47dd7c84f957"
 }
 ```
 
-See [errors.md](/docs/api/errors) for the full envelope contract.
+when you send `limit` instead, the message and the `errors` key name `limit`. see [errors](/docs/api/errors) for the full envelope.

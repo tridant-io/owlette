@@ -358,6 +358,59 @@ export interface SeedMachineOptions {
         processName?: string;
         reason?: string;
       };
+  /**
+   * `activeHours` as the agent heartbeats it, on the machine's clock (UTC
+   * here). {@link activeHoursAroundNow} gives a window that holds, or misses,
+   * the hour the spec runs in.
+   */
+  activeHours?: { start: number; end: number; source?: 'policy' | 'mdm' | 'user' | 'default' };
+  /**
+   * Writes `capabilities.activeHoursGuard: 1` and `agent_version` 4.1.21: a
+   * windows agent that refuses restarts, shutdowns and deployments inside
+   * `activeHours`. Without it the dashboard treats the machine as an agent
+   * that guards nothing.
+   */
+  activeHoursGuard?: boolean;
+  /**
+   * `agent_version` as the agent heartbeats it. Default 2.9.0, or 4.1.21 with
+   * `activeHoursGuard`; an older one beside the guard is a machine rolled back
+   * below 4.1.21, whose old agent never clears the capability.
+   */
+  agentVersion?: string;
+  /**
+   * Unix seconds a restart waits for active hours to end: `rebootDeferredUntil`
+   * with `rebootSource: 'deferred'`, as the agent writes them.
+   */
+  rebootDeferredUntil?: number;
+}
+
+/**
+ * A window two hours wide that holds the current UTC hour (`inside`) or sits
+ * clear of it, for {@link SeedMachineOptions.activeHours}. Seeded machines run
+ * on UTC, and two hours keep a spec from straddling the window's edge.
+ */
+export function activeHoursAroundNow(inside: boolean): { start: number; end: number; source: 'policy' } {
+  const hour = new Date().getUTCHours();
+  const start = inside ? hour : (hour + 2) % 24;
+  return { start, end: (start + 2) % 24, source: 'policy' };
+}
+
+/**
+ * Set a site's swoop policy (`sites/{siteId}/settings/swoop`, merged) and return
+ * a function that puts it back exactly as it was found: site-A is shared, and
+ * the machine menu offers swoop only where the site has it on.
+ */
+export async function setSiteSwoop(
+  siteId: string,
+  patch: Record<string, unknown>,
+): Promise<() => Promise<void>> {
+  const ref = getAdminDb().doc(`sites/${siteId}/settings/swoop`);
+  const before = (await ref.get()).data();
+  await ref.set(patch, { merge: true });
+  return async () => {
+    if (before) await ref.set(before);
+    else await ref.delete();
+  };
 }
 
 /**
@@ -403,6 +456,13 @@ export async function seedMachine(
       }
     : {};
 
+  const activeHoursExtras = {
+    ...(opts.activeHours ? { activeHours: { source: 'policy', ...opts.activeHours } } : {}),
+    ...(typeof opts.rebootDeferredUntil === 'number'
+      ? { rebootDeferredUntil: opts.rebootDeferredUntil, rebootSource: 'deferred' }
+      : {}),
+  };
+
   // Status doc for useMachines. Empty `metrics` keeps the card minimal — the
   // display-panel test needs no sparkline data.
   await db
@@ -413,17 +473,21 @@ export async function seedMachine(
     .set({
       online: true,
       lastHeartbeat: heartbeat,
-      agent_version: '2.9.0',
+      agent_version: opts.agentVersion ?? (opts.activeHoursGuard ? '4.1.21' : '2.9.0'),
       machine_timezone_iana: 'UTC',
       // Without the capability handshake the recall button stays disabled on an
       // "agent too old" tooltip, breaking every recall spec.
-      capabilities: { displayRemoteApply: 1 },
+      capabilities: {
+        displayRemoteApply: 1,
+        ...(opts.activeHoursGuard ? { activeHoursGuard: 1 } : {}),
+      },
       metrics: {
         schemaVersion: 2,
         timestamp: new Date(),
       },
       ...rebootingExtras,
       ...rebootPendingExtras,
+      ...activeHoursExtras,
     });
 
   // Offset positions so DisplayCanvas has something non-trivial to render.

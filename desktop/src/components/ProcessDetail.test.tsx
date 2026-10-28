@@ -248,11 +248,11 @@ describe('the launch mode control', () => {
 
     rerender({ ...base, launch_mode: 'always' })
     expect(indicator.style.transform).toBe('translateX(100%)')
-    expect(indicator.className).toContain('bg-emerald-600')
+    expect(indicator.className).toContain('bg-success-solid')
 
     rerender({ ...base, launch_mode: 'scheduled' })
     expect(indicator.style.transform).toBe('translateX(200%)')
-    expect(indicator.className).toContain('bg-blue-600')
+    expect(indicator.className).toContain('bg-info-solid')
   })
 
   it('hangs the schedule pencil off the group, flush and outside the grid', () => {

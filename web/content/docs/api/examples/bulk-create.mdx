@@ -1,11 +1,12 @@
 ---
-title: "bulk roost creation from csv"
-description: "a node script that reads a csv of siteId,roostName,targets rows and calls POST /api/roosts for each one. every row derives a deterministic roostId from siteId and roostName, then sends that id in the create body. re-runs are safe because unchanged rows either create once or return a generic 409 conflict; on conflict, the script reads the existing roost with GET /api/roosts/{roostId}?siteId=... and records it as skipped. partial failure is the default: one bad row doesn't halt the rest, transient 5xx and 429 responses are retried with backoff, permanent 4xx responses are logged and counted as failed. the script ends with a summary of created / skipped-existing / failed counts and a non-zero exit code if anything failed."
+title: "bulk roost creation from CSV"
+description: "a Node script that reads a CSV of siteId,roostName,targets rows and calls POST /api/roosts for each one. every row derives a deterministic roostId from siteId and roostName, then sends that ID in the create body. re-runs are safe because unchanged rows either create once or return a generic 409 conflict; on conflict, the script reads the existing roost with GET /api/roosts/{roostId}?siteId=... and records it as skipped. partial failure is the default: one bad row doesn't halt the rest, transient 5xx and 429 responses are retried with backoff, permanent 4xx responses are logged and counted as failed. the script ends with a summary of created / skipped-existing / failed counts and a non-zero exit code if anything failed."
+keywords: ["import", "batch"]
 ---
 
 ## required env vars
 
-- `OWLETTE_TOKEN` - api key with `site=<site-id>:write` plus `roost=<roost-id>:read` for each deterministic roost id, or `roost=*:read` if the operator accepts wildcard roost read for the user's accessible sites.
+- `OWLETTE_TOKEN` - API key with `site=<site-id>:write` plus `roost=<roost-id>:read` for each deterministic roost ID, or `roost=*:read` if the operator accepts wildcard roost read for the user's accessible sites.
 - `OWLETTE_API_URL` - `https://owlette.app` or `https://dev.owlette.app`.
 
 ## sample input - `roosts.csv`
@@ -21,8 +22,8 @@ kiosk-fleet-02,parking-kiosk,machine-o5p6
 
 rules:
 - header row required; exact column names `siteId,roostName,targets`.
-- `targets` is pipe-separated machine ids (`|`), each optionally whitespace-padded.
-- comma inside fields is not supported (keep roost names and site ids to `[a-z0-9-]`).
+- `targets` is pipe-separated machine IDs (`|`), each optionally whitespace-padded.
+- comma inside fields is not supported (keep roost names and site IDs to `[a-z0-9-]`).
 - blank lines and `#`-prefixed comment lines are ignored.
 
 ## `bulk-create-roosts.mjs`
@@ -65,10 +66,17 @@ function roostIdFor(siteId, name) {
 function parseCsv(text) {
   const rows = [];
   const lines = text.split(/\r?\n/);
+  let sawHeader = false;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line || line.startsWith('#')) continue;
-    if (i === 0 && line.toLowerCase().startsWith('siteid')) continue; // header
+    if (!sawHeader) {
+      // the first non-comment line must be the header
+      sawHeader = true;
+      if (line.toLowerCase() === 'siteid,roostname,targets') continue;
+      rows.push({ lineNo: i + 1, error: 'missing header siteId,roostName,targets', raw: line });
+      continue;
+    }
     const [rawSiteId, rawName, rawTargets] = line.split(',');
     if (!rawSiteId || !rawName || rawTargets === undefined) {
       rows.push({ lineNo: i + 1, error: 'malformed row', raw: line });
@@ -263,13 +271,13 @@ async function main() {
 await main();
 ```
 
-the script parses the csv tolerantly (blank lines, comments, header row all handled), derives a stable `roostId` from `sha256(siteId|roostName)`, then calls `POST /api/roosts` with that id in the json body. it does not send `Idempotency-Key`: this create route does not cache mutation replays. a `201` response is recorded as `created`; a generic `409 conflict` is followed by `GET /api/roosts/{roostId}?siteId=...` and recorded as `skipped` when the existing roost can be read. `5xx` and `429` retry up to 4 times with jittered backoff capped at 30s, or `Retry-After` when the server supplies it. other `4xx` responses become `failed` entries with the server's `code`, `detail`, and `param` so the operator sees exactly which column or value was bad.
+the script parses the CSV tolerantly (blank lines, comments, header row all handled), derives a stable `roostId` from `sha256(siteId|roostName)`, then calls `POST /api/roosts` with that ID in the JSON body. it does not send `Idempotency-Key`: this create route does not cache mutation replays. a `201` response is recorded as `created`; a generic `409 conflict` is followed by `GET /api/roosts/{roostId}?siteId=...` and recorded as `skipped` when the existing roost can be read. `5xx` and `429` retry up to 4 times with jittered backoff capped at 30s, or `Retry-After` when the server supplies it. other `4xx` responses become `failed` entries with the server's `code`, `detail`, and `param` so the operator sees exactly which column or value was bad.
 
 when responses include `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset`, the script uses those live headers for pacing. if the active route or environment does not return rate-limit counters, the script still handles `429 rate_limited` through `Retry-After` and exponential backoff.
 
 ## rerun safety
 
-because the roost id is `rst_<sha256(siteId|roostName)>`, a re-run after fixing one typo targets the same document id for every unchanged row. rows that already exist return `409 conflict`; the script reads the current roost and records the row as skipped instead of treating the conflict as fatal. if you need to change `targets` for an existing roost, use the dashboard or `PATCH /api/roosts/{id}` rather than rerunning this create script.
+because the roost ID is `rst_<sha256(siteId|roostName)>`, a re-run after fixing one typo targets the same document ID for every unchanged row. rows that already exist return `409 conflict`; the script reads the current roost and records the row as skipped instead of treating the conflict as fatal. a row whose roost was soft-deleted (within its 30-day tombstone) is not a conflict: the create restores it with the row's name and targets and counts as `created`. if you need to change `targets` for an existing roost, use the dashboard or `PATCH /api/roosts/{id}` rather than rerunning this create script.
 
 ## sample output
 
@@ -308,4 +316,4 @@ because the roost id is `rst_<sha256(siteId|roostName)>`, a re-run after fixing 
 - `404 not_found` - logged to `failed[]`. same reasoning as above.
 - `429 rate_limited` - honours `Retry-After` and retries. when `RateLimit-*` response headers are present, use them for pacing instead of a hard-coded request budget.
 - `5xx` - retries up to 4 times with jittered exponential backoff.
-- malformed csv rows - recorded in `malformed[]` and counted toward the non-zero exit code, but don't halt processing of later rows.
+- malformed CSV rows - recorded in `malformed[]` and counted toward the non-zero exit code, but don't halt processing of later rows.

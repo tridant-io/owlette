@@ -8,6 +8,7 @@
  */
 
 import { open } from '@tauri-apps/plugin-dialog'
+import { launchCopy } from '@/lib/launchCopy'
 
 /**
  * Where to open the picker. The current value is offered as the starting point, but a
@@ -25,24 +26,22 @@ async function pickOne(options: Parameters<typeof open>[0]): Promise<string | nu
   return typeof picked === 'string' ? picked : null
 }
 
-/** The executable or script the service should launch. */
+/** The executable, app or script the service should launch. */
 export function pickExecutable(current?: string): Promise<string | null> {
+  const copy = launchCopy()
   return pickOne({
-    title: 'select an executable or script',
+    title: copy.pickerTitle,
     multiple: false,
     directory: false,
     defaultPath: startingPoint(current),
-    filters: [
-      { name: 'executables & scripts', extensions: ['exe', 'bat', 'cmd', 'com'] },
-      { name: 'all files', extensions: ['*'] },
-    ],
+    filters: copy.pickerFilters,
   })
 }
 
-/** A document to hand the executable — a `.toe` project, a playlist, anything. */
+/** A document to hand the launch target — a `.toe` project, a playlist, anything. */
 export function pickFile(current?: string): Promise<string | null> {
   return pickOne({
-    title: 'select a file to open with this executable',
+    title: launchCopy().filePickerTitle,
     multiple: false,
     directory: false,
     defaultPath: startingPoint(current),

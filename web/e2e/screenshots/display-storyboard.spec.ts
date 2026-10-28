@@ -13,7 +13,7 @@
  * which is what makes consecutive frames safe in one test; `cleanup()` runs
  * once in `finally` so later specs start clean.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
@@ -23,6 +23,7 @@ import {
   type ScreenshotFixture,
   type ScreenshotScenario,
 } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 test.use(roleState('admin'));
 
@@ -95,7 +96,7 @@ test('display section storyboard — three frames', async ({ page }) => {
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForTimeout(300);
 
-      await page.screenshot({ path: output, fullPage: false });
+      await page.screenshot({ path: themedPath(output), fullPage: false });
     }
   } finally {
     if (ctx) {

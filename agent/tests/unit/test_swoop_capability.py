@@ -10,18 +10,37 @@ Three contracts are pinned here:
     key, so a reader that defaults to anything else marks the whole fleet
     unknown. The default belongs to the reader — the agent never writes it as a
     stand-in for Windows.
-  * capabilities.swoop is binary presence only: the exe is there AND this OS has
-    a streamer backend. No probe, no process spawn — this runs on the 5-second
-    loop.
+  * capabilities.swoop is the exe being there AND this OS's osadapter arm
+    saying the machine can stream — on macOS, the desktop app's fresh Screen
+    Recording report. No probe, no process spawn — this runs on the 5-second
+    loop — and no exception, since the heartbeat's handler would book it as a
+    Firestore error.
 """
 
+import importlib
+import json
+import os
 import platform
 import sys
+import time
+from types import SimpleNamespace
 
 import pytest
 
+import osadapter
 import shared_utils
 import swoop_capability
+
+if sys.platform != 'win32':
+    import pwd
+
+
+darwin_only = pytest.mark.skipif(
+    sys.platform != 'darwin', reason='the macOS arm reads the app report',
+)
+
+WINDOWS_STREAMER = r'C:\ProgramData\Owlette\swoop\owlette-swoop.exe'
+MAC_STREAMER = '/Applications/owlette.app/Contents/MacOS/owlette-swoop'
 
 
 # C3 normalisation tables
@@ -100,49 +119,83 @@ class TestArch:
 
 # streamer_capable / swoop_capability_value
 
+def _the_real_arm(monkeypatch, root):
+    """Whatever osadapter.get() answers on the machine running the suite."""
+
+
+def _the_apps_report(**report):
+    """The real macOS arm, reading what the desktop app wrote about its grants
+    as the user running the suite, who stands in for the console user. No
+    fields at all is no report: the app has not written one."""
+    def arrange(monkeypatch, root):
+        darwin = importlib.import_module('osadapter.darwin')
+        monkeypatch.setattr(darwin, 'console_user', lambda: pwd.getpwuid(os.getuid()).pw_name)
+        monkeypatch.setenv(osadapter.DATA_ROOT_ENV, str(root))
+        if report:
+            path = root / 'ipc' / 'tcc.json'
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({**report, 'checked_at': time.time()}), encoding='utf-8')
+            os.chmod(path, 0o644)
+    return arrange
+
+
+def _a_stand_in_arm(answer):
+    """An arm whose streamer_capable() answers `answer`, or raises it."""
+    def streamer_capable():
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    def arrange(monkeypatch, root):
+        monkeypatch.setattr(
+            osadapter, '_adapter', SimpleNamespace(streamer_capable=streamer_capable))
+    return arrange
+
+
 class TestStreamerCapable:
-    """Local until tri-platform's Wave 4 folds it into osadapter."""
+    """This OS's osadapter arm, and False whenever asking it fails."""
 
-    def test_windows_is_capable(self, monkeypatch):
-        monkeypatch.setattr(sys, 'platform', 'win32')
+    @pytest.mark.parametrize('answer', [True, False])
+    def test_it_is_the_arms_answer(self, monkeypatch, tmp_path, answer):
+        _a_stand_in_arm(answer)(monkeypatch, tmp_path)
 
-        assert swoop_capability.streamer_capable() is True
+        assert swoop_capability.streamer_capable() is answer
 
-    @pytest.mark.parametrize('sys_platform', ['darwin', 'linux', 'freebsd14'])
-    def test_no_other_platform_is_capable_yet(self, monkeypatch, sys_platform):
-        monkeypatch.setattr(sys, 'platform', sys_platform)
+    def test_a_platform_with_no_arm_is_not_capable(self, monkeypatch):
+        """osadapter.get() raises NotImplementedError there before any arm is asked."""
+        monkeypatch.setattr(osadapter, '_ARMS', {})
+        monkeypatch.setattr(osadapter, '_adapter', None)
 
         assert swoop_capability.streamer_capable() is False
 
 
 class TestSwoopCapabilityValue:
-    """1 only when the exe exists and this OS has a backend."""
+    """1 only when the exe exists and this OS's arm says it can stream."""
 
-    @pytest.fixture(autouse=True)
-    def on_windows(self, monkeypatch):
-        monkeypatch.setattr(sys, 'platform', 'win32')
+    @pytest.mark.parametrize('arm, exe, expected', [
+        pytest.param(_the_real_arm, WINDOWS_STREAMER, 1,
+                     id='windows', marks=pytest.mark.windows),
+        pytest.param(_the_apps_report(screen_recording=True), MAC_STREAMER, 1,
+                     id='macos-granted', marks=darwin_only),
+        pytest.param(_the_apps_report(screen_recording=False), MAC_STREAMER, 0,
+                     id='macos-refused', marks=darwin_only),
+        pytest.param(_the_apps_report(), MAC_STREAMER, 0,
+                     id='macos-no-report', marks=darwin_only),
+        pytest.param(_a_stand_in_arm(True), None, 0,
+                     id='linux-x11-seat-no-binary'),
+        pytest.param(_a_stand_in_arm(OSError('report unreadable')), MAC_STREAMER, 0,
+                     id='arm-raises'),
+    ])
+    def test_the_capability_per_platform(self, monkeypatch, tmp_path, arm, exe, expected):
+        """Windows and macOS run their real arm where it runs: Windows must keep
+        answering what the fleet answers today, and a Mac follows the app's
+        report. Linux ships no streamer yet, so its arm is never reached, and
+        the raising arm is a stand-in; those two rows run everywhere.
+        """
+        arm(monkeypatch, tmp_path)
+        monkeypatch.setattr(shared_utils, 'get_swoop_exe_path', lambda: exe)
 
-    def test_one_when_installed(self, monkeypatch):
-        monkeypatch.setattr(
-            shared_utils, 'get_swoop_exe_path',
-            lambda: r'C:\ProgramData\Owlette\swoop\owlette-swoop.exe',
-        )
-
-        assert swoop_capability.swoop_capability_value() == 1
-
-    def test_zero_when_the_exe_is_absent(self, monkeypatch):
-        monkeypatch.setattr(shared_utils, 'get_swoop_exe_path', lambda: None)
-
-        assert swoop_capability.swoop_capability_value() == 0
-
-    def test_zero_when_the_platform_has_no_backend(self, monkeypatch):
-        monkeypatch.setattr(sys, 'platform', 'linux')
-        monkeypatch.setattr(
-            shared_utils, 'get_swoop_exe_path',
-            lambda: '/opt/owlette/swoop/owlette-swoop',
-        )
-
-        assert swoop_capability.swoop_capability_value() == 0
+        assert swoop_capability.swoop_capability_value() == expected
 
     def test_a_stat_failure_is_zero_not_an_exception(self, monkeypatch):
         """It must not escape into the heartbeat's handler.
@@ -157,7 +210,7 @@ class TestSwoopCapabilityValue:
 
         assert swoop_capability.swoop_capability_value() == 0
 
-    def test_does_not_spawn_the_streamer(self, monkeypatch):
+    def test_does_not_spawn_the_streamer(self, monkeypatch, tmp_path):
         """No probe on the 5-second loop."""
         import subprocess
 
@@ -166,9 +219,7 @@ class TestSwoopCapabilityValue:
 
         monkeypatch.setattr(subprocess, 'Popen', fail)
         monkeypatch.setattr(subprocess, 'run', fail)
-        monkeypatch.setattr(
-            shared_utils, 'get_swoop_exe_path',
-            lambda: r'C:\ProgramData\Owlette\swoop\owlette-swoop.exe',
-        )
+        _a_stand_in_arm(True)(monkeypatch, tmp_path)
+        monkeypatch.setattr(shared_utils, 'get_swoop_exe_path', lambda: WINDOWS_STREAMER)
 
         assert swoop_capability.swoop_capability_value() == 1

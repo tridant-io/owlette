@@ -76,16 +76,16 @@ export interface FooterState {
 }
 
 export const FOOTER_TONE_CLASS: Record<FooterTone, string> = {
-  ok: 'text-green-500',
-  warn: 'text-amber-400',
-  error: 'text-red-400',
+  ok: 'text-success',
+  warn: 'text-warning',
+  error: 'text-danger',
   muted: 'text-muted-foreground',
 }
 
 export const FOOTER_DOT_CLASS: Record<FooterTone, string> = {
-  ok: 'bg-green-500',
-  warn: 'bg-amber-400',
-  error: 'bg-red-400',
+  ok: 'bg-success',
+  warn: 'bg-warning',
+  error: 'bg-danger',
   muted: 'bg-muted-foreground/60',
 }
 

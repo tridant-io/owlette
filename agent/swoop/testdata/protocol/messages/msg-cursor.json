@@ -20,6 +20,17 @@
     {
       "t": "cshape",
       "id": 7
+    },
+    {
+      "t": "cshape",
+      "id": 8,
+      "hotX": 5,
+      "hotY": 5,
+      "w": 28,
+      "h": 40,
+      "scale": 2,
+      "dpi": 192,
+      "png": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
     }
   ]
 }

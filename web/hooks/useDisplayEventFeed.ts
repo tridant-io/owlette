@@ -41,7 +41,7 @@ const EMPTY_EVENTS: DisplayEventEntry[] = [];
  * side — the feed filters on this set server-side.
  *
  * Add new agent actions HERE or they silently never appear. Firestore caps an
- * `in` filter at 30 values; currently 15.
+ * `in` filter at 30 values; currently 16.
  */
 export const DISPLAY_EVENT_ACTIONS = [
   'display_monitor_added',
@@ -59,6 +59,7 @@ export const DISPLAY_EVENT_ACTIONS = [
   'display_auto_restore_fired',
   'display_auto_restore_skipped_unfixable',
   'display_auto_restore_circuit_breaker_tripped',
+  'display_auto_restore_parked',
 ] as const;
 
 /**

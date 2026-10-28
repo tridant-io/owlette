@@ -245,6 +245,19 @@ class _CrossProcessLock:
         self.fd = None
 
 def get_hostname():
+    """This machine's name. On macOS the kernel hostname is whatever the
+    network hands out — a router answers `Mac.localdomain` to every Mac, so two
+    of them paired onto one machine doc — and LocalHostName is the name the Mac
+    keeps unique on its LAN."""
+    if _IS_MACOS:
+        try:
+            name = subprocess.check_output(
+                ['scutil', '--get', 'LocalHostName'], text=True, timeout=5
+            ).strip()
+            if name:
+                return name
+        except (OSError, subprocess.SubprocessError) as e:
+            logging.debug(f"scutil LocalHostName failed: {e}")
     return socket.gethostname()
 
 # `(osFamily, arch)` the way the fleet spells them: the machine document's
@@ -434,6 +447,25 @@ def get_machine_id():
         return machine_id
 
 
+def retire_machine_id():
+    """Move config/machine_id aside so the next pairing seeds a fresh identity.
+
+    The identity belongs to the document a leave deletes. Renamed to
+    `machine_id.left-<epoch>` rather than removed, so a support case can still
+    read what the machine was known as; the cached identity goes with it, or
+    this process would keep answering with the old one until it restarted. No
+    persisted identity is nothing to move. Raises OSError when the rename fails.
+    """
+    global _machine_id
+    path = get_data_path(MACHINE_ID_FILE)
+    with _machine_id_lock:
+        try:
+            os.rename(path, f"{path}.left-{int(time.time())}")
+        except FileNotFoundError:
+            pass
+        _machine_id = None
+
+
 def _read_machine_id_file(path):
     """The persisted id, or None when the file is missing or empty.
 
@@ -469,6 +501,16 @@ def _seed_machine_id_file(path, machine_id):
         raise
 
 
+def _identity_hostname():
+    """The hostname an identity is taken from. macOS appends `.local`, and the
+    api's machine id rule (letters, digits, `_`, `-`) refuses the dot: a Mac
+    seeded with it pairs but can never open a swoop session."""
+    name = get_hostname()
+    if sys.platform == 'darwin' and name.lower().endswith('.local'):
+        name = name[:-len('.local')]
+    return name
+
+
 def _read_or_seed_machine_id():
     """(identity, persisted) — config/machine_id, created from the current
     hostname when it is missing.
@@ -490,13 +532,13 @@ def _read_or_seed_machine_id():
                     f"Failed to read {MACHINE_ID_FILE}: {e} — using the hostname "
                     f"for this call only"
                 )
-                return get_hostname(), False
+                return _identity_hostname(), False
             time.sleep(MACHINE_ID_READ_BACKOFF)
 
     if persisted:
         return persisted, True
 
-    machine_id = get_hostname()
+    machine_id = _identity_hostname()
     try:
         _seed_machine_id_file(path, machine_id)
         logging.info(f"Machine identity seeded from the hostname: {machine_id}")
@@ -663,6 +705,10 @@ def get_cpu_temperature():
     """
     if read_config(['temperature', 'enabled']) is False:
         return None
+    # librehardwaremonitor is a .net library over the pawnio driver, so windows
+    # only: elsewhere the read spun up a worker and logged a failure every pass.
+    if not _IS_WINDOWS:
+        return None
     try:
         import temp_sensors
 
@@ -693,31 +739,48 @@ def get_gpu_temperatures():
     if read_config(['temperature', 'enabled']) is False:
         return []
 
-    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel
+    # 1. LibreHardwareMonitor via temp_sensors — NVIDIA, AMD, Intel. windows
+    # only, as in get_cpu_temperature.
+    if _IS_WINDOWS:
+        try:
+            import temp_sensors
+            all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
+
+            if all_temps:
+                temps = []
+                for i, temp in enumerate(all_temps):
+                    if temp is not None and 0 < temp < 150:
+                        temps.append({
+                            'index': i,
+                            'temperature': float(temp)
+                        })
+                if temps:
+                    return temps
+
+        except ImportError:
+            logging.debug("[TEMP] HardwareMonitor not available")
+        except Exception as e:
+            logging.debug(f"[TEMP] sensor error: {e}")
+
+    # 2. pynvml — NVIDIA only. macos has no nvidia driver, so the read could only
+    # fail there. a machine with no nvml library (linux without the nvidia
+    # driver, a windows box on another gpu) shares get_gpus()'s backoff: one
+    # debug line, then five minutes of silence, instead of a warning every pass
+    # (26,000 lines on the kiosk vm, 2026-10-03).
+    global _nvml_retry_after
+    if _IS_MACOS or time.monotonic() < _nvml_retry_after:
+        return []
     try:
-        import temp_sensors
-        all_temps = _temp_read_with_timeout("GPU_Temps", temp_sensors.read_gpu_temperatures)
+        from pynvml import (
+            nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature,
+            nvmlShutdown, NVML_TEMPERATURE_GPU, NVMLError_DriverNotLoaded, NVMLError_LibraryNotFound,
+        )
+    except ImportError as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
+        return []
 
-        if all_temps:
-            temps = []
-            for i, temp in enumerate(all_temps):
-                if temp is not None and 0 < temp < 150:
-                    temps.append({
-                        'index': i,
-                        'temperature': float(temp)
-                    })
-            if temps:
-                return temps
-
-    except ImportError:
-        logging.debug("[TEMP] HardwareMonitor not available")
-    except Exception as e:
-        logging.debug(f"[TEMP] sensor error: {e}")
-
-    # 2. pynvml — NVIDIA only
     try:
-        from pynvml import nvmlInit, nvmlDeviceGetCount, nvmlDeviceGetHandleByIndex, nvmlDeviceGetTemperature, nvmlShutdown, NVML_TEMPERATURE_GPU
-
         temps = []
         nvmlInit()
         try:
@@ -741,10 +804,11 @@ def get_gpu_temperatures():
         if temps:
             return temps
 
-    except ImportError as e:
-        logging.warning(f"[TEMP] pynvml not installed - GPU temperature unavailable: {e}")
+    except (NVMLError_LibraryNotFound, NVMLError_DriverNotLoaded) as e:
+        _nvml_retry_after = time.monotonic() + _NVML_RETRY_BACKOFF
+        logging.debug(f"[TEMP] NVML unavailable: {e}")
     except Exception as e:
-        logging.warning(f"[TEMP] pynvml GPU temp failed: {e}")
+        _nvml_warn(f"[TEMP] pynvml GPU temp failed: {e}")
 
     return []
 
@@ -1252,6 +1316,10 @@ def get_path(filename=None):
 
     return path
 
+def get_install_root():
+    """The install root: src lives at <install>/agent/src, two levels down."""
+    return os.path.dirname(os.path.dirname(get_path()))
+
 # Where the bundled interpreter lives on each POSIX platform. Windows resolves
 # its own from the install root so a relocated install still works; the macOS
 # and Linux payloads install to a fixed prefix and there is nothing to relocate.
@@ -1275,8 +1343,7 @@ def get_python_exe_path():
             return candidate
         raise FileNotFoundError(f"Python interpreter not found at {candidate}")
 
-    # src lives at <install>\agent\src — two levels up is the install root
-    install_root = os.path.dirname(os.path.dirname(get_path()))
+    install_root = get_install_root()
 
     pythonw_path = os.path.join(install_root, 'python', 'pythonw.exe')
     if os.path.exists(pythonw_path):
@@ -1353,6 +1420,7 @@ def ensure_data_directories():
         get_data_path('ipc/results'),
         get_data_path('ipc/swoop'),
         get_data_path('ipc/requests'),
+        get_data_path('ipc/issue-attachments'),
     ]
     if not _IS_WINDOWS:
         # off windows the trio is an ordinary data-root directory; on windows
@@ -1384,8 +1452,9 @@ def ensure_data_directories():
 
 
 def grant_data_group(path):
-    """Give a file the daemon wrote in the data root to the group that reaches
-    it. A no-op on Windows, where the tree is ACL'd rather than grouped."""
+    """Give a file the daemon wrote in the data root, by path or by the
+    descriptor it holds open, to the group that reaches it. A no-op on Windows,
+    where the tree is ACL'd rather than grouped."""
     if _IS_WINDOWS:
         return
     from osadapter import posix
@@ -1598,13 +1667,63 @@ def _nvml_warn(message):
     logging.warning(message)
 
 
-def get_gpus():
-    """Live per-GPU readings, or [] when no NVIDIA GPU is visible.
+def _get_gpus_darwin():
+    """Apple GPUs from the IORegistry: name, utilisation, memory in use.
 
+    There is no NVML on a Mac and no VRAM either -- the GPU shares the
+    machine's memory, so `memoryTotal` is the unified pool and `memoryUsed`
+    is what the accelerator driver holds of it. `ioreg` needs no privilege
+    and the counters are the ones Activity Monitor's GPU history draws.
+    """
+    import plistlib
+    try:
+        out = subprocess.run(
+            ['/usr/sbin/ioreg', '-r', '-d', '1', '-c', 'IOAccelerator', '-a'],
+            capture_output=True, timeout=5, check=True,
+        ).stdout
+        entries = plistlib.loads(out) if out.strip() else []
+    except Exception as e:
+        logging.debug(f"[GPU] ioreg unavailable: {e}")
+        return []
+
+    total_mb = psutil.virtual_memory().total / (1024 ** 2)
+    gpus = []
+    for i, entry in enumerate(e for e in entries if isinstance(e, dict)):
+        stats = entry.get('PerformanceStatistics') or {}
+        name = entry.get('model') or entry.get('IOClass') or 'Apple GPU'
+        if isinstance(name, bytes):
+            name = name.decode('utf-8', 'replace').rstrip('\x00')
+        try:
+            load = float(stats.get('Device Utilization %', 0)) / 100.0
+        except (TypeError, ValueError):
+            load = 0.0
+        try:
+            used_mb = float(stats.get('In use system memory', 0)) / (1024 ** 2)
+        except (TypeError, ValueError):
+            used_mb = 0.0
+        gpus.append(GpuReading(
+            id=i,
+            # stable across ticks and reboots, which is all the profile join needs
+            uuid=f'apple-gpu-{i}',
+            name=str(name),
+            load=max(0.0, min(load, 1.0)),
+            memoryTotal=total_mb,
+            memoryUsed=used_mb,
+            memoryFree=max(0.0, total_mb - used_mb),
+        ))
+    return gpus
+
+
+def get_gpus():
+    """Live per-GPU readings, or [] when no GPU is visible.
+
+    NVIDIA through NVML everywhere it runs; Apple GPUs through the IORegistry.
     `load` is 0.0-1.0 and the three memory values are MB. Never raises: callers
     read it inline in the metrics path.
     """
     global _nvml_retry_after
+    if sys.platform == 'darwin':
+        return _get_gpus_darwin()
     if time.monotonic() < _nvml_retry_after:
         return []
     try:
@@ -1718,34 +1837,52 @@ def is_cortex_enabled(config=None):
         config = read_config()
     return bool(config.get('cortex', {}).get('enabled', False))
 
-# Swoop (remote KVM streamer) paths. The streamer is installed at
-# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service.
-SWOOP_EXE_NAME = 'owlette-swoop.exe'
+# Swoop (remote KVM streamer) paths. On Windows the streamer is installed at
+# {app}\swoop\owlette-swoop.exe by the installer and spawned by the service;
+# elsewhere it is the desktop app's sidecar, launched by the app.
+SWOOP_EXE_NAME = 'owlette-swoop.exe' if _IS_WINDOWS else 'owlette-swoop'
 # The streamer rotates this directory itself; cleanup_old_logs() is
 # deliberately non-recursive and must stay that way.
 SWOOP_LOG_DIR = get_data_path('logs/swoop')
 SWOOP_IPC_DIR = get_data_path('ipc/swoop')
 
+# Where the streamer is installed on each POSIX platform: inside the app bundle
+# on macOS, which is what lets the app launch it as its own child. Fixed
+# prefixes, like _POSIX_PYTHON_PATHS.
+_POSIX_SWOOP_PATHS = {
+    'darwin': '/Applications/owlette.app/Contents/MacOS/owlette-swoop',
+    'linux': '/opt/owlette/swoop/owlette-swoop',
+}
+
 
 def get_swoop_dir():
-    """Install directory of the swoop streamer — <install root>\\swoop.
+    """Install directory of the swoop streamer — <install root>\\swoop on
+    Windows, the directory of the platform's fixed path elsewhere (None where
+    there is none).
 
     Never creates it, and must not be made to. The installer lays it down as
     SYSTEM with a protected DACL, and that ownership is what the spawn path
     trusts; creating it here would hand that trust to whatever already sits at
     the path. Absent means swoop is not installed.
     """
+    if not _IS_WINDOWS:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+        return os.path.dirname(candidate) if candidate else None
     install_root = os.path.dirname(os.path.dirname(get_path()))
     return os.path.join(install_root, 'swoop')
 
 
 def get_swoop_exe_path():
     """Full path to the swoop streamer, or None when not installed. Resolved
-    from the install root like get_desktop_exe_path(), so a relocated install
-    works. None is how "swoop unavailable" reaches the capability heartbeat.
+    from the install root like get_desktop_exe_path() on Windows, so a
+    relocated install works. None is how "swoop unavailable" reaches the
+    capability heartbeat.
     """
-    candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
-    return candidate if os.path.exists(candidate) else None
+    if _IS_WINDOWS:
+        candidate = os.path.join(get_swoop_dir(), SWOOP_EXE_NAME)
+    else:
+        candidate = _POSIX_SWOOP_PATHS.get(sys.platform)
+    return candidate if candidate and os.path.exists(candidate) else None
 
 # LOGGING
 def get_log_level_from_config():
@@ -3344,7 +3481,11 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
 
         # GB, emitted in both snake_case and camelCase for v1 + v2 readers.
         mem = psutil.virtual_memory()
-        mem_used_gb = round(mem.used / (1024**3), 2)
+        # total - available, not psutil's `used`: on macos and linux `used`
+        # leaves out inactive and cached pages while `percent` counts them,
+        # so the pair the card draws (a bar and a figure) disagreed by half.
+        # on windows the two are the same number.
+        mem_used_gb = round((mem.total - mem.available) / (1024**3), 2)
         mem_total_gb = round(mem.total / (1024**3), 2)
         mem_percent = round(mem.percent, 1)
 

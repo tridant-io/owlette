@@ -109,7 +109,7 @@ export type MutationKind =
   | 'user_mutated' // users-api: promote / demote / assign-sites / remove-sites / delete / bootstrap
   | 'site_mutated' // sites-api: create / update / delete (security-boundary-migration wave 3.9)
   | 'site_member_mutated' // /api/sites/{siteId}/members
-  | 'installer_mutated' // installer-api: upload / set-latest / delete
+  | 'installer_mutated' // installer-api: upload / set-latest / delete / register
   | 'webhook_mutated' // webhook-api: create / update / delete / rotate-secret / delivery retry
   | 'chat_mutated' // hoot-api: new conversation / rename / soft-delete
   | 'billing_mutated' // admin billing override: extend-trial / set-tier / force-expire

@@ -79,6 +79,10 @@ class FakeProc:
         # makes every identity check raise there and nowhere else.
         return psutil.STATUS_RUNNING
 
+    def environ(self):
+        # the macOS arm reads a watched process's launchd job name off it.
+        return {}
+
 
 def install_process_table(monkeypatch, table):
     """Replace the live process view with `table` ({pid: FakeProc})."""
@@ -294,7 +298,7 @@ def test_an_attempted_relaunch_keeps_the_dead_generation_row(
     entry = install_config(monkeypatch, 'always')   # still active: relaunch runs
     svc = make_service(json.loads(state_file.read_text()))
     launched = []
-    svc.handle_process_launch = lambda process: launched.append(process) or None
+    svc.handle_process_launch = lambda process, after_crash=True: launched.append(process) or None
     # No live instance to inherit: the relaunch is the only path left.
     svc._find_running_process_by_exe = lambda exe_path, file_path=None: None
 
@@ -471,7 +475,7 @@ def test_offmode_tick_keeps_the_restarting_marker(state_file, monkeypatch):
     install_config(monkeypatch, 'off')
     svc = make_offmode_service(json.loads(state_file.read_text()))
     launched = []
-    svc.handle_process_launch = lambda process: launched.append(process) or 999
+    svc.handle_process_launch = lambda process, after_crash=True: launched.append(process) or 999
 
     svc._relaunch_if_restarting(dict(ENTRY, launch_mode='off'))
 

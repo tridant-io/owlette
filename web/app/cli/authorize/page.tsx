@@ -103,8 +103,8 @@ function CliAuthorizeInner() {
       }
     >
       {done ? (
-        <div className="space-y-3 rounded-lg border border-green-500/50 bg-green-500/5 p-6 text-center">
-          <CheckCircle2 className="mx-auto h-8 w-8 text-green-400" />
+        <div className="space-y-3 rounded-lg border border-success-border bg-success-surface p-6 text-center">
+          <CheckCircle2 className="mx-auto h-8 w-8 text-success" />
           <p className="text-sm text-foreground">cli authorised</p>
           <p className="text-xs text-muted-foreground">
             return to your terminal — the cli is polling and will pick up the key
@@ -116,7 +116,7 @@ function CliAuthorizeInner() {
           {/* items-start so the icon stays on the first line once the
               URL-supplied phrase wraps; min-w-0 + break-all so it wraps at all
               instead of setting the column's floor. */}
-          <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-300">
+          <div className="flex items-start gap-2 rounded border border-warning-border bg-warning-surface p-3 text-xs text-warning">
             <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
             <span className="min-w-0">
               pairing phrase:{' '}
@@ -185,7 +185,7 @@ function CliAuthorizeInner() {
             type="button"
             onClick={handleAuthorize}
             disabled={submitting || !code || !name.trim()}
-            className="w-full text-background cursor-pointer"
+            className="w-full cursor-pointer"
           >
             {submitting ? (
               <Loader2 className="h-4 w-4 animate-spin" />

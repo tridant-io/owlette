@@ -10,6 +10,7 @@
 
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import type { ResolvedTheme, ThemeChoice } from '@/lib/theme'
 
 /** Seam files, addressed relative to the owlette data root. */
 export const OWLETTE_FILES = {
@@ -98,7 +99,7 @@ export interface ServiceStatus {
 
 export interface ServiceCommandOutcome {
   /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop'
+  method: 'scm' | 'elevated' | 'noop' | 'systemd'
   /**
    * State before the request. An elevated start only confirms the shell
    * accepted it, so callers poll {@link serviceStatus} for the result.
@@ -106,7 +107,7 @@ export interface ServiceCommandOutcome {
   stateBefore: ServiceState
 }
 
-export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated'
+export type TerminateMethod = 'not_found' | 'wm_close' | 'terminated' | 'signaled'
 
 export interface TerminateOutcome {
   method: TerminateMethod
@@ -175,6 +176,59 @@ export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
 }
 
+/** whether owlette swoop, the viewer app, is installed where the host looks for it */
+export function swoopViewerInstalled(): Promise<boolean> {
+  return invoke<boolean>('swoop_viewer_installed')
+}
+
+/**
+ * open owlette swoop on the swoop picker of this machine's dashboard. rejects
+ * with the host's message, e.g. when it is not installed.
+ */
+export function openSwoopViewer(): Promise<void> {
+  return invoke<void>('open_swoop_viewer')
+}
+
+/** macOS's answer on Screen Recording for this app; null off macOS. */
+export function screenRecordingGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('screen_recording_granted')
+}
+
+/** Open the Screen Recording pane of System Settings (macOS). */
+export function openScreenRecordingSettings(): Promise<void> {
+  return invoke<void>('open_screen_recording_settings')
+}
+
+/** macOS's answer on Accessibility (posting input) for this app; null off macOS. */
+export function accessibilityGranted(): Promise<boolean | null> {
+  return invoke<boolean | null>('accessibility_granted')
+}
+
+/**
+ * Ask macOS for Accessibility and open its pane of System Settings. Only ever
+ * from a click: the ask can raise a system prompt.
+ */
+export function requestAccessibility(): Promise<void> {
+  return invoke<void>('request_accessibility')
+}
+
+/**
+ * macOS's answer on sharing this app's clipboard (Paste from Other Apps, since
+ * macOS 15.4); null off macOS, on an unknown answer, and true where there is
+ * no such setting.
+ */
+export function clipboardSharing(): Promise<boolean | null> {
+  return invoke<boolean | null>('clipboard_sharing')
+}
+
+/**
+ * Make one pasteboard read, which raises macOS's paste alert and lists this
+ * app under Paste from Other Apps, and open that pane. Only ever from a click.
+ */
+export function requestClipboardSharing(): Promise<void> {
+  return invoke<void>('request_clipboard_sharing')
+}
+
 /** Create or remove the run-on-login shortcut; resolves to the resulting state. */
 export function setStartupLink(enabled: boolean): Promise<boolean> {
   return invoke<boolean>('set_startup_link', { enabled })
@@ -217,6 +271,15 @@ export function serviceStart(allowElevation: boolean): Promise<ServiceCommandOut
 /** Stop OwletteService. May raise a UAC prompt; poll {@link serviceStatus}. */
 export function serviceStop(): Promise<ServiceCommandOutcome> {
   return invoke<ServiceCommandOutcome>('service_stop')
+}
+
+/**
+ * Restart the agent off windows: `systemctl restart` on linux, allowed by the
+ * packaged polkit rule, and a request to the daemon on macos. Not registered
+ * on windows, which restarts through `tmp/restart.flag`.
+ */
+export function serviceRestart(): Promise<ServiceCommandOutcome> {
+  return invoke<ServiceCommandOutcome>('service_restart')
 }
 
 /**
@@ -286,6 +349,32 @@ export function detailSections(): Promise<DetailSections> {
 /** Remember one section's open state; resolves to the value kept. */
 export function setDetailSection(section: DetailSectionKey, open: boolean): Promise<boolean> {
   return invoke<boolean>('set_detail_section', { section, open })
+}
+
+/** the stored appearance, from the per-user layout file */
+export function appearanceTheme(): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('appearance_theme')
+}
+
+/**
+ * re-theme the window and remember the choice; resolves to the value kept. the
+ * host then announces the theme to draw on {@link onResolvedAppearance}.
+ */
+export function setAppearanceTheme(theme: ThemeChoice): Promise<ThemeChoice> {
+  return invoke<ThemeChoice>('set_appearance_theme', { theme })
+}
+
+/** the theme to draw now: the pinned one, or the os's under `system` */
+export function resolvedAppearance(): Promise<ResolvedTheme> {
+  return invoke<ResolvedTheme>('resolved_appearance')
+}
+
+/** `RESOLVED_EVENT` in `src-tauri/src/window_state.rs` */
+const EVENT_APPEARANCE_RESOLVED = 'appearance-resolved'
+
+/** the theme to draw, each time a choice lands or the os changes theme under `system` */
+export function onResolvedAppearance(handler: (theme: ResolvedTheme) => void): Promise<UnlistenFn> {
+  return listen<ResolvedTheme>(EVENT_APPEARANCE_RESOLVED, (event) => handler(event.payload))
 }
 
 /** Severity accepted by {@link logEvent}; anything else is recorded as info. */

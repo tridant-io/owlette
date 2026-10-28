@@ -19,7 +19,19 @@
 //!   ([`crate::startup_link`]) rather than the service start type — no UAC
 //!   prompt, and it cannot leave the machine unsupervised.
 //! * "restart service" leaves this app running; single-instance means the
-//!   service's post-restart launch folds back into this process.
+//!   service's post-restart launch folds back into this process. On macOS the
+//!   agent is a system launchd job, so the restart is a request the daemon
+//!   carries out ([`crate::seam`]).
+//!
+//! "swoop", above "open owlette", opens owlette swoop, the viewer app, on this
+//! machine's dashboard ([`crate::viewer_launch`]). It is greyed out when the
+//! viewer is not installed, as read when the menu is built: at launch and when
+//! the health or swoop row comes or goes.
+//!
+//! on windows, "kill all swoop sessions on this machine" sits under the swoop
+//! row and exists only while it does, so it is there exactly while a session
+//! is capturing. it touches `tmp/swoop_kill.flag`, which the service reads
+//! within half a second and answers with the dashboard's kill — no elevation.
 //!
 //! Every menu action runs on its own thread: menu events arrive on the main
 //! thread and both the tray and window setters marshal back to it, so inline
@@ -37,18 +49,25 @@ use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
+#[cfg(not(target_os = "linux"))]
 use tauri_plugin_notification::NotificationExt;
 
 use crate::paths::{
-  self, AGENT_VERSION_REL, GUI_PID_REL, RESTART_FLAG_REL, SERVICE_STATUS_REL, TRAY_PID_REL,
+  self, AGENT_VERSION_REL, GUI_PID_REL, SERVICE_STATUS_REL, TRAY_PID_REL, UPDATE_MARKER_REL,
 };
+#[cfg(windows)]
+use crate::paths::{RESTART_FLAG_REL, SWOOP_KILL_FLAG_REL};
 use crate::pid_file;
 use crate::service_ctl;
 use crate::startup_link;
+use crate::viewer_launch;
 
 /// Identity of the tray icon, used to fetch it back from an app handle.
 const TRAY_ID: &str = "owlette";
 
+// not `swoop`: the live-session status row already has that id
+const ID_SWOOP: &str = "open_swoop";
+const ID_SWOOP_KILL: &str = "swoop_kill";
 const ID_OPEN: &str = "open";
 const ID_RESTART: &str = "restart";
 const ID_START_ON_LOGIN: &str = "start_on_login";
@@ -56,9 +75,21 @@ const ID_EXIT: &str = "exit";
 
 /// 64 px downsamples of `agent/icons/*.png`. Embedded rather than read from
 /// `{app}\agent\icons` so the app still has an icon with no agent tree.
+#[cfg(not(target_os = "macos"))]
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
+#[cfg(not(target_os = "macos"))]
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
+// macos tints a template (black on alpha) to match the menubar; the eye and the
+// closed eye are templates. error is the same eye glyph in flat system red, not a
+// template, so that one state shouts without breaking the menubar's style.
+#[cfg(target_os = "macos")]
+const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
+#[cfg(target_os = "macos")]
+const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
+#[cfg(target_os = "macos")]
+const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/glyph-error.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -71,6 +102,15 @@ const FLASH_PERIOD: Duration = Duration::from_millis(800);
 const NOTIFY_DELAY: Duration = Duration::from_secs(5);
 /// Silence window after launch, so a service still starting is not an incident.
 const NOTIFY_GRACE: Duration = Duration::from_secs(10);
+/// How often the start-on-login tick is re-read. Off windows the read is a
+/// `systemctl --user is-enabled` or `launchctl print-disabled`, a process per
+/// read; every poll was a process a second for the app's whole life. The
+/// menu's own toggle and the window's setter ask for a repaint, which re-reads
+/// at once, so the tick only lags a change made outside owlette.
+const LOGIN_ITEM_REREAD: Duration = Duration::from_secs(30);
+/// An update marker older than this is what a crashed update left behind, not
+/// a reason to stay quiet about a stopped service.
+const UPDATE_MARKER_MAX_AGE: Duration = Duration::from_secs(15 * 60);
 /// How long a cached status document stays usable after a failed read.
 const STATUS_CACHE_TTL: Duration = Duration::from_secs(60);
 /// How often the icon and tooltip are re-asserted even when nothing changed.
@@ -351,14 +391,21 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     start_on_login: startup_link::is_enabled(),
   };
 
+  // before the item exists: appkit reads its saved position when it is created
+  #[cfg(target_os = "macos")]
+  crate::menu_bar_position::seed(&app.config().identifier);
+
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
     .icon(icon_for(view.code))
-    .tooltip(tooltip(&root, &view))
+    .icon_as_template(icon_is_template(view.code))
+    .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
-    // window or there is no one-click way back to it.
-    .show_menu_on_left_click(false)
+    // window or there is no one-click way back to it. macOS is the other way
+    // round: a left click on a menubar icon is the menu, and "open owlette"
+    // is an item in it.
+    .show_menu_on_left_click(cfg!(target_os = "macos"))
     .build(app)?;
 
   tray.on_menu_event(|app, event| {
@@ -370,6 +417,11 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
   });
 
   tray.on_tray_icon_event(|tray, event| {
+    // On macOS the left click is the menu (above); opening the window on it
+    // as well would put the window behind the menu on every click.
+    if cfg!(target_os = "macos") {
+      return;
+    }
     if let TrayIconEvent::Click {
       button: MouseButton::Left,
       button_state: MouseButtonState::Up,
@@ -469,6 +521,23 @@ pub fn show_main_window(app: &AppHandle) {
     log::warn!("no main window to show");
     return;
   };
+  // The Dock icon appears with the window and leaves with it (lib.rs setup
+  // starts the app as an accessory).
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+  // macOS 26 shapes the window only once it carries a toolbar; the window
+  // exists by now, which it does not in setup (mac_window.rs). The tray and
+  // the single-instance handler call this off the main thread, and AppKit
+  // takes a toolbar only on it.
+  #[cfg(target_os = "macos")]
+  {
+    let shaped = window.clone();
+    if let Err(error) =
+      window.run_on_main_thread(move || crate::mac_window::adopt_system_shape(&shaped))
+    {
+      log::warn!("could not reach the main thread for the window shape: {error}");
+    }
+  }
   let _ = window.unminimize();
   let _ = window.show();
   let _ = window.set_focus();
@@ -484,6 +553,8 @@ pub fn hide_main_window(app: &AppHandle) {
   if let Some(window) = app.get_webview_window("main") {
     let _ = window.hide();
   }
+  #[cfg(target_os = "macos")]
+  let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
   pid_file::remove(&paths::data_root(), GUI_PID_REL);
 }
 
@@ -501,6 +572,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
   let mut swoop_toasted: Option<u64> = None;
   let mut paint = PaintState::new(started);
   let mut wanted_tooltip: Option<String> = None;
+  let mut start_on_login: Option<(bool, Instant)> = None;
 
   while !stop.load(Ordering::Relaxed) {
     let now = Instant::now();
@@ -513,6 +585,15 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
 
     if last_poll.map_or(true, |at| now.duration_since(at) >= POLL_INTERVAL) {
       last_poll = Some(now);
+
+      let login_item = match start_on_login {
+        Some((enabled, at)) if !asked && now.duration_since(at) < LOGIN_ITEM_REREAD => enabled,
+        _ => {
+          let enabled = startup_link::is_enabled();
+          start_on_login = Some((enabled, now));
+          enabled
+        }
+      };
 
       // Every poll, not only when the document is missing: it is the one input
       // that cannot be out of date, and the text below may not contradict it.
@@ -535,7 +616,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
         // Text, so the live document: a badge smoothed over a read that caught
         // a rename would outlive the capture it claims.
         swoop: swoop_view(&live, scm_running),
-        start_on_login: startup_link::is_enabled(),
+        start_on_login: login_item,
       };
 
       if current.as_ref() != Some(&view) {
@@ -547,7 +628,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           last_flash = now;
         }
         apply_menu(&app, &view);
-        wanted_tooltip = Some(tooltip(&root, &view));
+        wanted_tooltip = Some(tooltip(&paths::install_root(), &view));
       }
 
       // Only the Error tier toasts (narrowed 2026-08-14): a Warning is what
@@ -571,14 +652,21 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           degraded_since = None;
         }
         StatusCode::Error => {
-          let since = *degraded_since.get_or_insert(now);
-          if !degraded_notified
-            && now.duration_since(since) >= NOTIFY_DELAY
-            && now.duration_since(started) > NOTIFY_GRACE
-          {
-            degraded_notified = true;
-            let (title, body) = degraded_notification(&view);
-            notify(&app, title, body);
+          // A self-update stops the service for as long as the installer
+          // takes — a minute for the linux package — and that stop raised a
+          // "service stopped" toast on every update. The icon still shows it.
+          if update_in_progress(&root) {
+            degraded_since = None;
+          } else {
+            let since = *degraded_since.get_or_insert(now);
+            if !degraded_notified
+              && now.duration_since(since) >= NOTIFY_DELAY
+              && now.duration_since(started) > NOTIFY_GRACE
+            {
+              degraded_notified = true;
+              let (title, body) = degraded_notification(&view);
+              notify(&app, title, body);
+            }
           }
         }
       }
@@ -698,7 +786,10 @@ fn set_icon(app: &AppHandle, code: StatusCode) -> Result<(), String> {
   };
   tray
     .set_icon(Some(icon_for(code)))
-    .map_err(|error| format!("could not set the tray icon: {error}"))
+    .map_err(|error| format!("could not set the tray icon: {error}"))?;
+  tray
+    .set_icon_as_template(icon_is_template(code))
+    .map_err(|error| format!("could not set the tray icon template flag: {error}"))
 }
 
 fn set_tooltip(app: &AppHandle, text: &str) -> Result<(), String> {
@@ -716,6 +807,11 @@ fn icon_for(code: StatusCode) -> Image<'static> {
   Image::from_bytes(code.icon_bytes()).expect("embedded tray icon should decode")
 }
 
+/// Whether macos should tint the icon to the menubar: the eye and the closed
+/// eye blend in, the red error glyph keeps its colour.
+fn icon_is_template(code: StatusCode) -> bool {
+  cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
+}
 
 /// Outcome of one status evaluation.
 struct Status {
@@ -928,18 +1024,32 @@ fn swoop_view(doc: &StatusDoc, service_running: bool) -> Option<SwoopView> {
     return None;
   };
   let swoop = data.get("swoop")?;
-  if !swoop.get("active").and_then(Value::as_bool).unwrap_or(false) {
+  if !swoop
+    .get("active")
+    .and_then(Value::as_bool)
+    .unwrap_or(false)
+  {
     return None;
   }
 
   Some(SwoopView {
     line: swoop_line(
       swoop.get("viewers").and_then(Value::as_u64).unwrap_or(0),
-      swoop.get("controllers").and_then(Value::as_u64).unwrap_or(0),
+      swoop
+        .get("controllers")
+        .and_then(Value::as_u64)
+        .unwrap_or(0),
     ),
     since: swoop.get("since").and_then(Value::as_u64).unwrap_or(0),
     toast: swoop.get("indicator").and_then(Value::as_str) == Some("tray"),
   })
+}
+
+/// whether the menu carries "kill all swoop sessions on this machine": under
+/// the swoop row while there is one. windows only — off it the daemon refuses a
+/// flag the console user wrote, and the seam has no kill verb yet.
+fn offers_swoop_kill(view: &TrayView) -> bool {
+  cfg!(windows) && view.swoop.is_some()
 }
 
 fn swoop_line(viewers: u64, controllers: u64) -> String {
@@ -987,25 +1097,68 @@ fn degraded_notification(view: &TrayView) -> (&'static str, String) {
     ),
     _ => (
       "owlette — service stopped",
-      "the service is not running.\nclick 'restart service' to start it again."
-        .to_string(),
+      // macos: the restart item is a request a stopped daemon cannot hear;
+      // launchd is what brings the agent back.
+      if cfg!(target_os = "macos") {
+        "the service is not running.\nmacos starts it again on its own — if it stays down, reinstall owlette."
+      } else {
+        "the service is not running.\nclick 'restart service' to start it again."
+      }
+      .to_string(),
     ),
   }
 }
 
+/// Whether the service is updating itself: its marker is present and fresh.
+/// Freshness matters because the marker outlives an update that crashed
+/// before the new service could clear it.
+fn update_in_progress(root: &Path) -> bool {
+  update_marker_is_fresh(&root.join(UPDATE_MARKER_REL), SystemTime::now())
+}
+
+fn update_marker_is_fresh(marker: &Path, now: SystemTime) -> bool {
+  fs::metadata(marker)
+    .and_then(|meta| meta.modified())
+    .ok()
+    .and_then(|modified| now.duration_since(modified).ok())
+    .is_some_and(|age| age < UPDATE_MARKER_MAX_AGE)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn notify(app: &AppHandle, title: &str, body: String) {
   if let Err(error) = app.notification().builder().title(title).body(body).show() {
     log::warn!("could not show the tray notification: {error}");
   }
 }
 
+/// The name and icon a notification carries on linux. Named explicitly: left
+/// to the plugin, gnome titles it after the running file, which after an
+/// update in place reads "owlette-desktop (deleted)" with a generic icon.
+/// Deliberately not "owlette" and no desktop-entry hint: either one makes
+/// gnome 46 file the notification under the installed `owlette.desktop`,
+/// and from the app's user service it is then dropped without a trace —
+/// measured on the kiosk vm, 2026-10-04, along with a stock app's entry.
+#[cfg(target_os = "linux")]
+const NOTIFY_NAME: &str = "owlette-desktop";
+
+#[cfg(target_os = "linux")]
+fn notify(_app: &AppHandle, title: &str, body: String) {
+  let result = notify_rust::Notification::new()
+    .appname(NOTIFY_NAME)
+    .summary(title)
+    .body(&body)
+    .icon(NOTIFY_NAME)
+    .show();
+  if let Err(error) = result {
+    log::warn!("could not show the tray notification: {error}");
+  }
+}
 
 fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
-  let root = paths::data_root();
   let version = MenuItem::with_id(
     app,
     "version",
-    format!("owlette v{}", agent_version(&root)),
+    format!("owlette v{}", agent_version(&paths::install_root())),
     false,
     None::<&str>,
   )?;
@@ -1032,8 +1185,26 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
     )?),
     None => None,
   };
+  let swoop_kill = if offers_swoop_kill(view) {
+    Some(MenuItem::with_id(
+      app,
+      ID_SWOOP_KILL,
+      "kill all swoop sessions on this machine",
+      true,
+      None::<&str>,
+    )?)
+  } else {
+    None
+  };
 
   let separator = PredefinedMenuItem::separator(app)?;
+  let open_swoop = MenuItem::with_id(
+    app,
+    ID_SWOOP,
+    "swoop",
+    viewer_launch::viewer_installed(),
+    None::<&str>,
+  )?;
   let open = MenuItem::with_id(app, ID_OPEN, "open owlette", true, None::<&str>)?;
   let restart = MenuItem::with_id(app, ID_RESTART, "restart service", true, None::<&str>)?;
   let start_on_login = CheckMenuItem::with_id(
@@ -1054,8 +1225,12 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   if let Some(swoop) = &swoop {
     items.push(swoop);
   }
+  if let Some(swoop_kill) = &swoop_kill {
+    items.push(swoop_kill);
+  }
   items.extend([
     &separator as &dyn tauri::menu::IsMenuItem<Wry>,
+    &open_swoop,
     &open,
     &restart,
     &start_on_login,
@@ -1074,10 +1249,10 @@ fn build_menu(app: &AppHandle, view: &TrayView) -> tauri::Result<TrayMenu> {
   })
 }
 
-fn tooltip(root: &Path, view: &TrayView) -> String {
+fn tooltip(install_root: &Path, view: &TrayView) -> String {
   let mut text = format!(
     "owlette v{}\nhostname: {}\n{}\n{}",
-    agent_version(root),
+    agent_version(install_root),
     hostname(),
     view.service,
     view.status
@@ -1092,16 +1267,87 @@ fn tooltip(root: &Path, view: &TrayView) -> String {
 /// Version of the agent this app sits alongside — that, not this crate's, is
 /// what the fleet records. Falls back to the crate version on a standalone dev
 /// run with no agent tree.
-fn agent_version(root: &Path) -> String {
-  fs::read_to_string(root.join(AGENT_VERSION_REL))
+fn agent_version(install_root: &Path) -> String {
+  fs::read_to_string(install_root.join(AGENT_VERSION_REL))
     .map(|text| text.trim().to_string())
     .ok()
     .filter(|version| !version.is_empty())
     .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// The machine's name as the fleet records it, by the agent's
+/// `shared_utils.get_hostname` rule so the tray and the machine card agree:
+/// `COMPUTERNAME` on Windows, a Mac's LocalHostName (`TEC-MBA`), and the
+/// kernel's hostname on Linux and as a Mac's fallback, without a Mac's `.local`
+/// suffix. A launchd or systemd child has no `HOSTNAME` in its environment and
+/// macOS has no `/etc/hostname`, so those are fallbacks only.
 pub(crate) fn hostname() -> String {
-  std::env::var("COMPUTERNAME").unwrap_or_else(|_| "unknown".to_string())
+  let from_env = if cfg!(windows) {
+    "COMPUTERNAME"
+  } else {
+    "HOSTNAME"
+  };
+  let mac = cfg!(target_os = "macos");
+  #[cfg(target_os = "macos")]
+  if let Some(name) = mac_local_hostname() {
+    return name;
+  }
+  #[cfg(unix)]
+  if let Some(name) = unix_hostname() {
+    return identity_name(&name, mac).to_string();
+  }
+  if let Some(name) = std::env::var(from_env)
+    .ok()
+    .filter(|name| !name.trim().is_empty())
+  {
+    return identity_name(name.trim(), mac).to_string();
+  }
+  if !cfg!(windows) {
+    if let Some(name) = fs::read_to_string("/etc/hostname")
+      .ok()
+      .filter(|name| !name.trim().is_empty())
+    {
+      return name.trim().to_string();
+    }
+  }
+  "unknown".to_string()
+}
+
+/// macOS names a machine `Name.local`, and the agent takes its identity
+/// without the suffix (`shared_utils._identity_hostname`): the api's machine id
+/// rule has no dot. The menu shows the name the dashboard shows.
+fn identity_name(name: &str, mac: bool) -> &str {
+  const SUFFIX: &str = ".local";
+  let cut = name.len().saturating_sub(SUFFIX.len());
+  match name.get(cut..) {
+    Some(tail) if mac && cut > 0 && tail.eq_ignore_ascii_case(SUFFIX) => &name[..cut],
+    _ => name,
+  }
+}
+
+/// The name a Mac keeps unique on its LAN; the kernel hostname is whatever the
+/// network hands out, and a router can answer `Mac.localdomain` to every Mac.
+#[cfg(target_os = "macos")]
+fn mac_local_hostname() -> Option<String> {
+  let output = std::process::Command::new("scutil")
+    .args(["--get", "LocalHostName"])
+    .output()
+    .ok()?;
+  let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  (output.status.success() && !name.is_empty()).then_some(name)
+}
+
+#[cfg(unix)]
+fn unix_hostname() -> Option<String> {
+  let mut buf = [0u8; 256];
+  // SAFETY: the buffer outlives the call and its length is passed with it.
+  let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+  if rc != 0 {
+    return None;
+  }
+  let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+  let name = String::from_utf8_lossy(&buf[..end]).trim().to_string();
+  (!name.is_empty()).then_some(name)
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -1111,7 +1357,6 @@ fn truncate(text: &str, limit: usize) -> String {
   let head: String = text.chars().take(limit.saturating_sub(3)).collect();
   format!("{head}...")
 }
-
 
 fn spawn_action<F>(label: &'static str, action: F)
 where
@@ -1127,6 +1372,13 @@ where
 
 fn handle_menu_event(app: &AppHandle, id: &str) {
   match id {
+    ID_SWOOP => {
+      if let Err(error) = viewer_launch::open_picker() {
+        log::warn!("could not open owlette swoop: {error}");
+      }
+    }
+    #[cfg(windows)]
+    ID_SWOOP_KILL => kill_swoop_sessions(app),
     ID_OPEN => show_main_window(app),
     ID_RESTART => restart_service(app),
     ID_START_ON_LOGIN => toggle_start_on_login(app),
@@ -1137,10 +1389,32 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
   }
 }
 
+/// Off windows the daemon ignores a restart flag it did not write: linux runs
+/// `systemctl restart` under the packaged polkit rule, and macos asks the
+/// daemon through its request seam ([`service_ctl::restart`]).
+#[cfg(unix)]
+fn restart_service(app: &AppHandle) {
+  match service_ctl::restart() {
+    Ok(outcome) => {
+      log::info!("service restart issued ({})", outcome.method);
+      notify(
+        app,
+        "owlette — restarting",
+        "restarting service — will return momentarily".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not restart the service: {error}");
+      notify(app, "restart failed", error);
+    }
+  }
+}
+
 /// Restart the service without a UAC prompt: a running agent is asked to exit
 /// 42 via `tmp/restart.flag`, which owlette-host turns into a relaunch. A
 /// stopped service has no loop to read the flag, so it is started directly —
 /// the one path here that can raise an elevation prompt.
+#[cfg(windows)]
 fn restart_service(app: &AppHandle) {
   let root = paths::data_root();
   let running = service_ctl::status(&root.join(SERVICE_STATUS_REL))
@@ -1168,13 +1442,7 @@ fn restart_service(app: &AppHandle) {
   }
 
   let flag = root.join(RESTART_FLAG_REL);
-  let written = flag
-    .parent()
-    .map(fs::create_dir_all)
-    .unwrap_or(Ok(()))
-    .and_then(|()| fs::write(&flag, "restart_requested"));
-
-  match written {
+  match write_flag(&flag, "restart_requested") {
     Ok(()) => {
       log::info!("restart flag written — owlette-host will relaunch the agent");
       notify(
@@ -1186,6 +1454,39 @@ fn restart_service(app: &AppHandle) {
     Err(error) => {
       log::error!("could not write {}: {error}", flag.display());
       notify(app, "restart failed", error.to_string());
+    }
+  }
+}
+
+/// a flag the service's local watcher consumes: the seam the restart flag and the
+/// swoop kill flag share. unelevated; the directory is made if missing.
+#[cfg(windows)]
+fn write_flag(flag: &std::path::Path, body: &str) -> std::io::Result<()> {
+  flag
+    .parent()
+    .map(fs::create_dir_all)
+    .unwrap_or(Ok(()))
+    .and_then(|()| fs::write(flag, body))
+}
+
+/// ask the service to end every swoop session on this machine, through the
+/// same flag seam as the restart flag: no elevation, and the service's local
+/// watcher picks it up within half a second.
+#[cfg(windows)]
+fn kill_swoop_sessions(app: &AppHandle) {
+  let flag = paths::data_root().join(SWOOP_KILL_FLAG_REL);
+  match write_flag(&flag, "local_tray") {
+    Ok(()) => {
+      log::info!("swoop kill flag written — the service will end every swoop session");
+      notify(
+        app,
+        "owlette — swoop",
+        "ending every swoop session on this machine".to_string(),
+      );
+    }
+    Err(error) => {
+      log::error!("could not write {}: {error}", flag.display());
+      notify(app, "swoop kill failed", error.to_string());
     }
   }
 }
@@ -1210,6 +1511,7 @@ fn toggle_start_on_login(app: &AppHandle) {
       let _ = menu.start_on_login.set_checked(startup_link::is_enabled());
     }
   }
+  request_repaint(app);
 }
 
 /// Quit owlette: stop supervising the machine, then quit the app. owlette-host
@@ -1229,7 +1531,6 @@ fn exit_owlette(app: &AppHandle) {
   app.exit(0);
 }
 
-
 /// Drop both pid markers. Called on `RunEvent::Exit`.
 pub fn clear_pid_markers() {
   let root = paths::data_root();
@@ -1245,6 +1546,39 @@ mod tests {
   /// SCM says up — the precondition for the document being consulted at all.
   const RUNNING: bool = true;
   const STOPPED: bool = false;
+
+  /// A systemd child carries no HOSTNAME, so the kernel's name is what keeps
+  /// the menu from "unknown".
+  #[cfg(all(unix, not(target_os = "macos")))]
+  #[test]
+  fn the_hostname_comes_from_the_kernel_without_an_environment() {
+    std::env::remove_var("HOSTNAME");
+    let name = hostname();
+    assert_ne!(name, "unknown");
+    let kernel = unix_hostname().expect("the kernel has a hostname");
+    assert_eq!(name, identity_name(&kernel, false));
+  }
+
+  /// Two Macs on one router both had the kernel hostname `Mac.localdomain`
+  /// (Bryant Place, 2026-10-12); the menu shows the LocalHostName the agent
+  /// now takes its identity from.
+  #[cfg(target_os = "macos")]
+  #[test]
+  fn a_mac_is_named_by_its_local_hostname() {
+    let local = mac_local_hostname().expect("a mac has a LocalHostName");
+    assert_eq!(hostname(), local);
+    assert!(!local.contains('.'), "{local}");
+  }
+
+  /// The agent's rule, so the menu and the machine card show one name.
+  #[test]
+  fn a_mac_is_named_without_its_local_suffix() {
+    assert_eq!(identity_name("TEC-MBA.local", true), "TEC-MBA");
+    assert_eq!(identity_name("TEC-MBA.LOCAL", true), "TEC-MBA");
+    assert_eq!(identity_name("TEC-MBA", true), "TEC-MBA");
+    assert_eq!(identity_name(".local", true), ".local");
+    assert_eq!(identity_name("kiosk.local", false), "kiosk.local");
+  }
 
   fn fresh(value: Value) -> StatusDoc {
     StatusDoc::Fresh(value)
@@ -1597,9 +1931,11 @@ mod tests {
 
   #[test]
   fn every_embedded_icon_decodes() {
+    // 36 px is the menubar's 18 pt at 2x; the orbs are 64 px
+    let edge = if cfg!(target_os = "macos") { 36 } else { 64 };
     for code in [StatusCode::Normal, StatusCode::Warning, StatusCode::Error] {
       let image = Image::from_bytes(code.icon_bytes()).expect("icon should decode");
-      assert_eq!((image.width(), image.height()), (64, 64));
+      assert_eq!((image.width(), image.height()), (edge, edge));
     }
   }
 
@@ -1904,6 +2240,32 @@ mod tests {
     assert_eq!(title, "owlette — reconnecting");
   }
 
+  /// The update marker holds the toast only while it is fresh: a marker a
+  /// crashed update left behind must not silence a real outage for good.
+  #[test]
+  fn a_fresh_update_marker_holds_the_toast_and_a_stale_one_does_not() {
+    let dir = std::env::temp_dir().join(format!("owlette-tray-update-{}", std::process::id()));
+    fs::create_dir_all(&dir).expect("scratch");
+    let marker = dir.join("update_in_progress.json");
+    fs::write(&marker, "{}").expect("marker");
+    let written = fs::metadata(&marker)
+      .and_then(|m| m.modified())
+      .expect("mtime");
+
+    assert!(update_marker_is_fresh(
+      &marker,
+      written + Duration::from_secs(60)
+    ));
+    assert!(!update_marker_is_fresh(
+      &marker,
+      written + UPDATE_MARKER_MAX_AGE + Duration::from_secs(1)
+    ));
+    assert!(!update_marker_is_fresh(&dir.join("absent.json"), written));
+
+    let _ = fs::remove_file(&marker);
+    let _ = fs::remove_dir(&dir);
+  }
+
   #[test]
   fn the_three_ways_a_status_read_can_fail_stay_distinguishable() {
     // Collapsing these into one "absent" made a service that stopped publishing
@@ -2033,5 +2395,31 @@ mod tests {
 
     view.swoop = None;
     assert!(tooltip(&dir, &view).ends_with("status: connected to TEC"));
+  }
+
+  /// the kill item comes and goes with the swoop row, so it is offered exactly
+  /// while a session is capturing — and only where the flag seam exists
+  #[test]
+  fn the_swoop_kill_item_is_offered_only_while_a_session_is_capturing() {
+    let mut view = TrayView {
+      code: StatusCode::Normal,
+      service: "service: running".to_string(),
+      status: "status: connected to TEC".to_string(),
+      health: None,
+      swoop: swoop_view(&swoop_doc(true, 2, 1, "tray"), RUNNING),
+      start_on_login: false,
+    };
+    assert_eq!(offers_swoop_kill(&view), cfg!(windows));
+
+    // capture running with nobody counted is still a session to kill
+    view.swoop = swoop_view(&swoop_doc(true, 0, 0, "none"), RUNNING);
+    assert_eq!(offers_swoop_kill(&view), cfg!(windows));
+
+    view.swoop = swoop_view(&swoop_doc(false, 0, 0, "tray"), RUNNING);
+    assert!(!offers_swoop_kill(&view));
+    view.swoop = swoop_view(&swoop_doc(true, 1, 0, "tray"), STOPPED);
+    assert!(!offers_swoop_kill(&view));
+    view.swoop = swoop_view(&StatusDoc::Stale, RUNNING);
+    assert!(!offers_swoop_kill(&view));
   }
 }

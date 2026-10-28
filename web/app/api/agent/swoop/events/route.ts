@@ -26,6 +26,7 @@ import type { AuditOutcome } from '@/lib/auditLog.server';
 import { Capability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { recordSwoopHostEvent } from '@/lib/swoop/audit.server';
+import { MACHINE_FAILURE_REASONS } from '@/lib/swoop/machineFailure';
 import {
   endSwoopSession,
   getSwoopSession,
@@ -49,7 +50,8 @@ const REASON_PATTERN = /^[a-z0-9_]{1,48}$/;
  * It is the same closed set as `ipc::HostEventKind` in the streamer and the
  * `host_event` table in `agent/swoop/PROTOCOL.md` §6 — the agent copies the
  * streamer's `kind` straight into `type`, so a name in one and not the other
- * is a 400 for the whole batch.
+ * is a 400 for the whole batch. `session_ended` rows are the agent's own: it
+ * posts one with its refusal to spawn, or the streamer's exit reason.
  */
 const EVENT_KINDS = {
   session_started: { outcome: 'allow', capability: Capability.MACHINE_REMOTE_VIEW },
@@ -173,9 +175,10 @@ function isMirrored(event: SwoopEvent): event is MirroredEvent {
 
 /**
  * The streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
- * reason the record keeps. A stop it named nothing recognisable for is
- * `host_exit` — "the streamer said it ended" — rather than a reason invented
- * on its behalf.
+ * reason the record keeps, plus the agent's refusals and exit reasons the
+ * viewer acts on (`lib/swoop/machineFailure.ts`). A stop it named nothing
+ * recognisable for is `host_exit` — "the streamer said it ended" — rather
+ * than a reason invented on its behalf.
  */
 const HOST_END_REASONS = new Map<string, SwoopSessionEndReason>([
   ['kill', 'killed'],
@@ -183,6 +186,7 @@ const HOST_END_REASONS = new Map<string, SwoopSessionEndReason>([
   ['session_cap', 'session_cap'],
   ['signal_lost', 'signal_lost'],
   ['error', 'error'],
+  ...MACHINE_FAILURE_REASONS.map((reason): [string, SwoopSessionEndReason] => [reason, reason]),
 ]);
 
 /**
@@ -255,7 +259,7 @@ async function recordEvents(
 
     // After the audit row and never fatal. The agent re-posts a batch it got a
     // 503 for, so failing here would duplicate audit rows to fix a record the
-    // 12-hour cap and the retention sweep both close anyway.
+    // retention sweep closes anyway once its lease lapses.
     if (isMirrored(event)) {
       try {
         await mirrorSessionRecord(siteId, machineId, event);

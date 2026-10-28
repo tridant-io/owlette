@@ -14,6 +14,9 @@ import { RestartCountdown } from '@/components/RestartCountdown'
 import { SidebarDivider } from '@/components/SidebarDivider'
 import { StatusFooter } from '@/components/StatusFooter'
 import { WindowControls } from '@/components/WindowControls'
+import { PermissionBanner } from '@/components/PermissionBanner'
+import { IS_LINUX, IS_MAC } from '@/lib/platform'
+import { cn } from '@/lib/utils'
 import { InlineNotice } from '@/components/ui/inline-notice'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -38,9 +41,16 @@ import {
 import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
 import {
   ARG_PAIR,
+  accessibilityGranted,
+  clipboardSharing,
   hostname,
   serverFromArgs,
   setStartupLink,
+  openScreenRecordingSettings,
+  requestAccessibility,
+  requestClipboardSharing,
+  screenRecordingGranted,
+  serviceRestart,
   startupLinkEnabled,
   writeOwletteJson,
 } from '@/lib/ipc'
@@ -125,6 +135,31 @@ function App() {
   useEffect(() => {
     startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
   }, [])
+
+  // macOS Screen Recording and Accessibility, re-read whenever the window
+  // comes back: Screen Recording takes effect on relaunch, but the banner
+  // should at least stop showing once the user has switched it on and come back.
+  // Accessibility takes effect at once, so its notice also re-reads it on a
+  // timer while it shows.
+  const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
+  const [accessibility, setAccessibility] = useState<boolean | null>(null)
+  const readAccessibility = useCallback(() => {
+    accessibilityGranted().then(setAccessibility, () => setAccessibility(null))
+  }, [])
+  const [clipboardShared, setClipboardShared] = useState<boolean | null>(null)
+  const readClipboardSharing = useCallback(() => {
+    clipboardSharing().then(setClipboardShared, () => setClipboardShared(null))
+  }, [])
+  useEffect(() => {
+    const read = () => {
+      screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
+      readAccessibility()
+      readClipboardSharing()
+    }
+    read()
+    window.addEventListener('focus', read)
+    return () => window.removeEventListener('focus', read)
+  }, [readAccessibility, readClipboardSharing])
 
   // The webview's native menu (Back/Refresh/Print/Inspect) is browser chrome, not
   // this app. Suppressed in built apps except on editable fields; `tauri dev` keeps
@@ -423,8 +458,11 @@ function App() {
     <TooltipProvider delayDuration={400}>
       <div className="flex h-screen flex-col bg-background">
         {/*
-          The window has no native titlebar (`decorations: false`), so this row
-          is it: the drag surface, the one wordmark, and the window controls.
+          On Windows and Linux the window has no native titlebar (`decorations:
+          false`), so this row is it: the drag surface, the one wordmark, and
+          the window controls. On macOS the native traffic lights overlay the
+          top left (`tauri.macos.conf.json`: decorations on, overlay titlebar),
+          so the row leaves them room and draws no controls of its own.
           `data-tauri-drag-region` applies only to the element carrying it, so
           the controls inside stay clickable without opting out.
 
@@ -441,7 +479,15 @@ function App() {
           // pointer-events-auto beats the pointer-events:none Radix puts on <body>
           // during a modal, so the window stays draggable with a dialog up.
           // DialogContent exempts [data-titlebar] from outside-dismiss to match.
-          className="pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center gap-2.5 border-b pl-4"
+          className={cn(
+            'pointer-events-auto relative z-[60] flex shrink-0 select-none items-center gap-2.5 border-b',
+            // macos: the row is the height of the window's unified toolbar
+            // (52 pt; the toolbar is what gives the macos 26 corners, see
+            // mac_window.rs), so the whole title area stays the drag surface.
+            // macos 26 spaces the traffic lights 23 pt apart (20 before), so the
+            // green one ends at 72 pt; the wordmark starts a light's gap after it.
+            IS_MAC ? 'h-13 pl-24' : 'h-10 pl-4',
+          )}
         >
           <OwletteEye size={18} className="pointer-events-none" />
           <span className="pointer-events-none text-sm font-medium tracking-tight">owlette</span>
@@ -458,16 +504,45 @@ function App() {
               )
             }}
             onRestartService={() => {
-              // The service polls for this file each loop, exits 42, and the host
-              // relaunches it. No elevation, no dashboard flap.
-              void writeOwletteJson('tmp/restart.flag', {}).then(
+              // Windows: the service polls for this file each loop, exits 42, and
+              // the host relaunches it. Off it the daemon ignores a flag it did
+              // not write: linux runs the polkit rule's `systemctl restart`, and
+              // macos asks the daemon through its request seam. No elevation
+              // anywhere, no dashboard flap.
+              const restart =
+                IS_MAC || IS_LINUX ? serviceRestart() : writeOwletteJson('tmp/restart.flag', {})
+              void restart.then(
                 () => toast.success('restarting the owlette service'),
-                (cause: unknown) => toast.error('could not restart the service', { description: message(cause) }),
+                (cause: unknown) =>
+                  toast.error('could not restart the service', { description: message(cause) }),
               )
             }}
           />
-          <WindowControls />
+          {!IS_MAC && <WindowControls />}
         </header>
+
+        <PermissionBanner
+          screenRecording={screenRecording}
+          accessibility={accessibility}
+          onOpenScreenRecordingSettings={() => {
+            void openScreenRecordingSettings().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRequestAccessibility={() => {
+            void requestAccessibility().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRecheckAccessibility={readAccessibility}
+          clipboardSharing={clipboardShared}
+          onRequestClipboardSharing={() => {
+            void requestClipboardSharing().catch((cause: unknown) =>
+              toast.error('could not open system settings', { description: message(cause) }),
+            )
+          }}
+          onRecheckClipboardSharing={readClipboardSharing}
+        />
 
         {config.error && (
           <InlineNotice className="m-3" data-testid="config-error">
@@ -561,7 +636,8 @@ function App() {
           config={config.config}
           hostname={host}
           starting={health.starting}
-          onStart={() => void health.start()}
+          // macos: launchd keeps the agent running; this app cannot start it
+          onStart={IS_MAC ? undefined : () => void health.start()}
           onJoin={() => setMenuDialog('join')}
         />
 
@@ -586,6 +662,8 @@ function App() {
           onClose={() => setMenuDialog(null)}
           onLeft={handleLeft}
           onHold={health.hold}
+          serviceLeaves={IS_MAC || IS_LINUX}
+          onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />

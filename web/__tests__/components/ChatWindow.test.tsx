@@ -17,9 +17,19 @@
  * And per-turn targets: each assistant turn is labelled from its own stamped
  * `metadata.hoot`, not from the header selector, and a turn that moved to other
  * machines says so.
+ *
+ * And what a screen reader hears — "thinking" and an awaited approval in a status
+ * region, a reply once its turn ends — and the pasted-image lightbox's focus.
+ *
+ * And the empty chat's suggestions, which fill the composer, so they go when the
+ * plan leaves hoot out and there is no composer.
+ *
+ * And hoot's thread line, which flows beside the reply in flight and nowhere
+ * else, and the glide that follows a growing reply down until the reader takes
+ * the scroll back.
  */
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { UIMessage } from 'ai';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -549,5 +559,312 @@ describe('ChatWindow — a Claude 5 reply', () => {
 
     expect(screen.getByText('consulting Claude Opus 5...')).toBeInTheDocument();
     expect(screen.queryByText('thinking...')).toBeNull();
+  });
+});
+
+describe('ChatWindow — what a screen reader hears', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const PARTIAL = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu' }]);
+  const DONE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+
+  function rerenderChat(view: ReturnType<typeof renderChat>, props: Partial<React.ComponentProps<typeof ChatWindow>>) {
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={MESSAGES} isLoading={false} {...props} />
+      </TooltipProvider>,
+    );
+  }
+
+  it('says hoot is thinking in a status region while the reply has nothing to show', () => {
+    renderChat({ isLoading: true, messages: [ASK] });
+
+    expect(screen.getByRole('status')).toHaveTextContent('hoot is thinking');
+  });
+
+  it('keeps the regions mounted through the empty state, so the first turn is heard', () => {
+    const view = renderChat({ messages: [] });
+    const status = screen.getByRole('status');
+    const log = screen.getByRole('log', { name: 'hoot replies' });
+
+    rerenderChat(view, { isLoading: true, messages: [ASK] });
+
+    // the same nodes: a live region that arrives with its text is not announced.
+    expect(screen.getByRole('status')).toBe(status);
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBe(log);
+    expect(status).toHaveTextContent('hoot is thinking');
+  });
+
+  it('reads the reply out once its turn ends, not token by token', () => {
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+    const log = screen.getByRole('log', { name: 'hoot replies' });
+    expect(log).toBeEmptyDOMElement();
+
+    rerenderChat(view, { isLoading: false, messages: [ASK, DONE] });
+
+    expect(log).toHaveTextContent('hoot replied: the gpu is pinned at 100%.');
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('drops the markdown that only styles the reply, and keeps a command pipe', () => {
+    const styled = msg('a1', 'assistant', [
+      { type: 'text', text: '## cause\n**the gpu** is pinned:\n```powershell\nGet-Process | Sort-Object CPU\n```' },
+    ]);
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+
+    rerenderChat(view, { isLoading: false, messages: [ASK, styled] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toHaveTextContent(
+      'hoot replied: cause the gpu is pinned: Get-Process | Sort-Object CPU',
+    );
+  });
+
+  it('stays quiet about replies that were already there when the chat opened', () => {
+    renderChat({ messages: [ASK, DONE] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBeEmptyDOMElement();
+  });
+
+  it('does not read out a reply whose turn failed — the error banner speaks for it', () => {
+    const view = renderChat({ isLoading: true, messages: [ASK, PARTIAL] });
+
+    rerenderChat(view, { isLoading: false, turnErrored: true, messages: [ASK, PARTIAL] });
+
+    expect(screen.getByRole('log', { name: 'hoot replies' })).toBeEmptyDOMElement();
+  });
+
+  it('says when hoot is waiting on an approval', () => {
+    const pending = {
+      type: 'tool-run_powershell',
+      toolCallId: 'tc1',
+      state: 'approval-requested',
+      input: { command: 'hostname' },
+      approval: { id: 'ap1' },
+    };
+    renderChat({ onToolApproval: jest.fn(), messages: [ASK, msg('a1', 'assistant', [pending])] });
+
+    expect(screen.getByRole('status')).toHaveTextContent('hoot needs your approval to run run_powershell');
+  });
+});
+
+describe('ChatWindow — a pasted image', () => {
+  const PNG = 'data:image/png;base64,iVBORw0KGgo=';
+  const WITH_IMAGE = [
+    msg('u1', 'user', [
+      { type: 'text', text: 'what is on this screen?' },
+      { type: 'file', mediaType: 'image/png', url: PNG },
+    ]),
+  ];
+
+  it('opens from a named button into a modal dialog that takes focus', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+
+    await user.click(screen.getByRole('button', { name: 'view pasted image' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'pasted image' });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(screen.getByRole('button', { name: 'close image' })).toHaveFocus();
+  });
+
+  it('closes on Escape and hands focus back to the thumbnail', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+    const thumbnail = screen.getByRole('button', { name: 'view pasted image' });
+
+    await user.click(thumbnail);
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(thumbnail).toHaveFocus();
+  });
+
+  it('closes from its close button', async () => {
+    const { user } = renderChat({ messages: WITH_IMAGE });
+
+    await user.click(screen.getByRole('button', { name: 'view pasted image' }));
+    await user.click(screen.getByRole('button', { name: 'close image' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+});
+
+describe('ChatWindow — the thread line', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const DONE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+  const ASK_AGAIN = msg('u2', 'user', [{ type: 'text', text: 'what is pinning it?' }]);
+  const PARTIAL = msg('a2', 'assistant', [{ type: 'text', text: 'checking the' }]);
+  const THREAD = [ASK, DONE, ASK_AGAIN, PARTIAL];
+
+  const lines = () => screen.getAllByTestId('hoot-thread-line');
+  const flowing = (line: HTMLElement) => line.classList.contains('animate-hoot-thread');
+
+  function rerenderChat(view: ReturnType<typeof renderChat>, props: Partial<React.ComponentProps<typeof ChatWindow>>) {
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={THREAD} isLoading={false} {...props} />
+      </TooltipProvider>,
+    );
+  }
+
+  it('flows beside the reply in flight, and the finished one above stays solid', () => {
+    renderChat({ isLoading: true, messages: THREAD });
+
+    expect(lines().map(flowing)).toEqual([false, true]);
+  });
+
+  it('goes solid once the turn ends', () => {
+    const view = renderChat({ isLoading: true, messages: THREAD });
+
+    rerenderChat(view, {});
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('flows after a reload while the turn runs on, and not once it went stale', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, turnStale: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid the moment stop is pressed on a reply this tab streams', () => {
+    // stop posts to the server before it aborts the sdk's stream, so isLoading
+    // holds for that round trip
+    const view = renderChat({ isLoading: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { isLoading: true, stopRequested: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid the moment stop is pressed, while the stream doc still says running', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, stopRequested: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+
+  it('goes solid when the turn fails, before the stream doc says so', () => {
+    const view = renderChat({ turnRunning: true, messages: THREAD });
+    expect(lines().map(flowing)).toEqual([false, true]);
+
+    rerenderChat(view, { turnRunning: true, turnErrored: true });
+
+    expect(lines().map(flowing)).toEqual([false, false]);
+  });
+});
+
+describe('ChatWindow — following the reply down', () => {
+  const ASK = msg('u1', 'user', [{ type: 'text', text: 'why is the render node slow?' }]);
+  const PARTIAL = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu' }]);
+  const MORE = msg('a1', 'assistant', [{ type: 'text', text: 'the gpu is pinned at 100%.' }]);
+  const originalMatchMedia = window.matchMedia;
+  let transcriptPx = 1000;
+
+  // a 400px view over the transcript: 600px of travel to the bottom at first
+  beforeEach(() => {
+    jest.useFakeTimers();
+    transcriptPx = 1000;
+    window.matchMedia = ((query: string) => ({ matches: false, media: query })) as unknown as typeof window.matchMedia;
+    jest.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => transcriptPx);
+    jest.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(() => 400);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    jest.useRealTimers();
+    window.matchMedia = originalMatchMedia;
+  });
+
+  /** a reply streaming, with the view already caught up to its bottom */
+  function streamOn() {
+    const view = render(
+      <TooltipProvider>
+        <ChatWindow messages={[ASK, PARTIAL]} isLoading />
+      </TooltipProvider>,
+    );
+    const scroller = screen.getByTestId('hoot-transcript');
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(600);
+    // jsdom fires no scroll event for a write; a browser does, and the glide's
+    // own lands as one the reader did not make
+    fireEvent.scroll(scroller);
+    return { view, scroller };
+  }
+
+  /** the reply grows to `px` of transcript, and the chat re-renders with it */
+  function grow(view: ReturnType<typeof render>, px: number) {
+    transcriptPx = px;
+    view.rerender(
+      <TooltipProvider>
+        <ChatWindow messages={[ASK, MORE]} isLoading />
+      </TooltipProvider>,
+    );
+  }
+
+  /** the reader drags the view to `top`, as a touch or the scrollbar does */
+  function readerScrollsTo(scroller: HTMLElement, top: number) {
+    scroller.scrollTop = top;
+    fireEvent.scroll(scroller);
+  }
+
+  it('glides to the new bottom as the reply grows, rather than cutting to it', () => {
+    const { view, scroller } = streamOn();
+
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(64));
+    expect(scroller.scrollTop).toBeGreaterThan(600);
+    expect(scroller.scrollTop).toBeLessThan(900);
+
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(900);
+  });
+
+  it('lets go the moment the reader wheels up, and leaves them there as the reply grows', () => {
+    const { view, scroller } = streamOn();
+
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(64));
+    const heldAt = scroller.scrollTop;
+    fireEvent.wheel(scroller, { deltaY: -100 });
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(heldAt);
+
+    grow(view, 1600);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(heldAt);
+  });
+
+  it('leaves a reader who scrolled up where they are, and follows again once they are back down', () => {
+    const { view, scroller } = streamOn();
+
+    readerScrollsTo(scroller, 300);
+    grow(view, 1300);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(300);
+
+    readerScrollsTo(scroller, 900);
+    grow(view, 1600);
+    act(() => jest.advanceTimersByTime(300));
+    expect(scroller.scrollTop).toBe(1200);
+  });
+});
+
+describe('ChatWindow — the empty chat', () => {
+  it('offers suggestions to fill the composer', () => {
+    renderChat({ messages: [] });
+
+    expect(screen.getByRole('heading', { name: 'hoot' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button')).toHaveLength(4);
+  });
+
+  it('drops them when there is no composer to fill', () => {
+    renderChat({ messages: [], hideSuggestions: true });
+
+    expect(screen.getByRole('heading', { name: 'hoot' })).toBeInTheDocument();
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 });

@@ -26,6 +26,31 @@ SAMPLE_DESIRED = {
 
 SAMPLE_SNAPSHOT = {'paths': [], 'modes': []}
 
+# the stored layout a restore would push at a panel stuck in a fallback mode (#29)
+STUCK_DESIRED = {'monitors': [{
+    'edidHash': 'aaaaaaaa', 'primary': True, 'position': {'x': 0, 'y': 0},
+    'resolution': {'width': 2560, 'height': 2880},
+}]}
+
+
+def _live_path_pair(width, height, hz=60):
+    """One active path on real ctypes structs: source mode at ``width x height``
+    (index 0), the panel's current target timing at index 1, refresh ``hz``."""
+    path = dm.DISPLAYCONFIG_PATH_INFO()
+    path.flags = dm.DISPLAYCONFIG_PATH_ACTIVE
+    path.sourceInfo.modeInfoIdx = 0
+    path.targetInfo.modeInfoIdx = 1
+    path.targetInfo.refreshRate.Numerator = hz
+    path.targetInfo.refreshRate.Denominator = 1
+    path.targetInfo.rotation = dm.DISPLAYCONFIG_ROTATION_IDENTITY
+    source = dm.DISPLAYCONFIG_MODE_INFO()
+    source.infoType = dm.DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE
+    source.sourceMode.width = width
+    source.sourceMode.height = height
+    target = dm.DISPLAYCONFIG_MODE_INFO()
+    target.infoType = dm.DISPLAYCONFIG_MODE_INFO_TYPE_TARGET
+    return [path], [source, target]
+
 
 @pytest.fixture
 def tmp_sentinel(tmp_path):
@@ -206,6 +231,52 @@ class TestAckApply:
         assert dm._ack_event.is_set()
 
 
+class TestApplyDesiredToPathsTargetMode:
+    """The queried target mode index describes the panel's current timing. A
+    resolution or refresh change must drop it (#29: a panel stuck in a 640x480
+    fallback timing rejected every restore at SDC_VALIDATE), while a
+    position-only change keeps it."""
+
+    def _apply(self, paths, modes, **desired):
+        monitor = {'edidHash': 'aaaaaaaa', 'primary': True,
+                   'position': {'x': 0, 'y': 0}, **desired}
+        return dm._apply_desired_to_paths(
+            paths, modes, {'aaaaaaaa': monitor}, {0: 'aaaaaaaa'},
+        )
+
+    def test_resolution_change_drops_the_target_mode(self):
+        paths, modes = _live_path_pair(640, 480)
+        changes = self._apply(paths, modes, resolution={'width': 2560, 'height': 2880})
+        assert [c['field'] for c in changes] == ['resolution', 'primary']
+        assert (modes[0].sourceMode.width, modes[0].sourceMode.height) == (2560, 2880)
+        assert paths[0].targetInfo.modeInfoIdx == dm.DISPLAYCONFIG_PATH_MODE_IDX_INVALID
+
+    def test_refresh_change_drops_the_target_mode(self):
+        paths, modes = _live_path_pair(2560, 2880, hz=60)
+        changes = self._apply(
+            paths, modes, resolution={'width': 2560, 'height': 2880}, refreshHz=75,
+        )
+        assert [c['field'] for c in changes] == ['refreshHz', 'primary']
+        assert paths[0].targetInfo.refreshRate.Numerator == 75000
+        assert paths[0].targetInfo.refreshRate.Denominator == 1000
+        assert paths[0].targetInfo.modeInfoIdx == dm.DISPLAYCONFIG_PATH_MODE_IDX_INVALID
+
+    def test_position_only_change_keeps_the_target_mode(self):
+        paths, modes = _live_path_pair(2560, 2880)
+        modes[0].sourceMode.position.x = 100
+        changes = self._apply(paths, modes)
+        assert [c['field'] for c in changes] == ['position', 'primary']
+        assert paths[0].targetInfo.modeInfoIdx == 1
+
+    def test_no_change_keeps_the_target_mode(self):
+        paths, modes = _live_path_pair(2560, 2880)
+        changes = self._apply(
+            paths, modes, resolution={'width': 2560, 'height': 2880}, refreshHz=60,
+        )
+        assert [c['field'] for c in changes] == ['primary']
+        assert paths[0].targetInfo.modeInfoIdx == 1
+
+
 class TestApplyCore:
     """`_apply_core` is the shared CCD sequence — helper and S1 both call it."""
 
@@ -249,6 +320,102 @@ class TestApplyCore:
         assert 'bbbbbbbb' in result['missing']
         assert not os.path.exists(tmp_sentinel)
 
+    def _stuck_panel(self, monkeypatch, width, height, offered_modes, validate_rc, friendly=''):
+        """Live: one monitor 'aaaaaaaa' at ``width x height``; SDC_VALIDATE
+        answers ``validate_rc``; the panel's mode walk returns ``offered_modes``;
+        CCD names the panel ``friendly`` ('' = no target name)."""
+        paths, modes = _live_path_pair(width, height)
+        device = MagicMock(monitorFriendlyDeviceName=friendly) if friendly else None
+        monkeypatch.setattr(dm, '_query_active_paths_safe', lambda: (paths, modes))
+        monkeypatch.setattr(dm, '_edid_hash_for_target', lambda *a, **kw: 'aaaaaaaa')
+        monkeypatch.setattr(dm, '_SetDisplayConfig', lambda *a, **kw: validate_rc)
+        monkeypatch.setattr(dm, '_get_target_device_name', lambda *a, **kw: device)
+        monkeypatch.setattr(dm, '_get_source_device_name', lambda *a, **kw: r'\\.\DISPLAY1')
+        monkeypatch.setattr(dm, '_enum_modes_for_monitor', lambda name: offered_modes)
+
+    def test_validate_rejection_names_monitor_and_mode(self, monkeypatch, tmp_sentinel):
+        """#29: a panel stuck at 640x480 rejected every restore with a bare
+        ``rc=31``. The error must say which monitor and which mode, and whether
+        the panel offers that mode right now."""
+        self._stuck_panel(
+            monkeypatch, 640, 480, [{'w': 1920, 'h': 1080, 'hz': 60}], dm.ERROR_GEN_FAILURE,
+        )
+
+        result = dm._apply_core(STUCK_DESIRED, tmp_sentinel, 30, 'test-id')
+
+        assert result['ok'] is False
+        assert result['code'] == DisplayErrorCode.UNSUPPORTED_MODE
+        assert result['rc'] == dm.ERROR_GEN_FAILURE
+        assert result['error'] == (
+            'SDC_VALIDATE rejected config (rc=31): '
+            'monitor aaaaaaaa does not currently offer 2560x2880@60Hz'
+        )
+        assert not os.path.exists(tmp_sentinel)
+
+    def test_validate_rejection_names_the_panel_and_says_it_offers_the_mode(
+        self, monkeypatch, tmp_sentinel,
+    ):
+        """The operator never sees an edidHash anywhere else, so the panel's
+        own name goes first and the hash tells identical panels apart."""
+        self._stuck_panel(
+            monkeypatch, 640, 480, [{'w': 2560, 'h': 2880, 'hz': 60}],
+            dm.ERROR_BAD_CONFIGURATION, friendly='LG SDQHD',
+        )
+
+        result = dm._apply_core(STUCK_DESIRED, tmp_sentinel, 30, 'test-id')
+
+        assert result['error'] == (
+            'SDC_VALIDATE rejected config (rc=1610): '
+            'monitor LG SDQHD (aaaaaaaa) offers 2560x2880@60Hz'
+        )
+
+    def test_validate_rejection_says_when_the_mode_list_is_unavailable(
+        self, monkeypatch, tmp_sentinel,
+    ):
+        """The mode walk returns [] on a timeout or a missing gdi name; that
+        must not read as "the panel does not offer the mode"."""
+        self._stuck_panel(monkeypatch, 640, 480, [], dm.ERROR_GEN_FAILURE)
+
+        result = dm._apply_core(STUCK_DESIRED, tmp_sentinel, 30, 'test-id')
+
+        assert result['error'] == (
+            'SDC_VALIDATE rejected config (rc=31): '
+            'monitor aaaaaaaa asked for 2560x2880@60Hz, mode list unavailable'
+        )
+
+    def test_validate_rejection_without_a_mode_change_keeps_the_bare_rc(
+        self, monkeypatch, tmp_sentinel,
+    ):
+        """No resolution or refresh change means no mode to name, and the mode
+        walk must not run."""
+        self._stuck_panel(monkeypatch, 1920, 1080, [], 87)
+        monkeypatch.setattr(dm, '_enum_modes_for_monitor',
+                            lambda name: pytest.fail('mode walk must not run'))
+        desired = {'monitors': [{
+            'edidHash': 'aaaaaaaa', 'primary': True, 'position': {'x': 0, 'y': 0},
+        }]}
+
+        result = dm._apply_core(desired, tmp_sentinel, 30, 'test-id')
+
+        assert result['error'] == 'SDC_VALIDATE rejected config (rc=87)'
+        assert result['code'] == DisplayErrorCode.VALIDATE_REJECTED
+
+    def test_validate_rejection_keeps_the_bare_rc_when_the_description_fails(
+        self, monkeypatch, tmp_sentinel,
+    ):
+        """The description is diagnostics: a failure inside it must not turn an
+        unsupported-mode rejection into ``unexpected``."""
+        self._stuck_panel(monkeypatch, 640, 480, [], dm.ERROR_GEN_FAILURE)
+
+        def _boom(name):
+            raise RuntimeError('mode walk exploded')
+        monkeypatch.setattr(dm, '_enum_modes_for_monitor', _boom)
+
+        result = dm._apply_core(STUCK_DESIRED, tmp_sentinel, 30, 'test-id')
+
+        assert result['error'] == 'SDC_VALIDATE rejected config (rc=31)'
+        assert result['code'] == DisplayErrorCode.UNSUPPORTED_MODE
+        assert not os.path.exists(tmp_sentinel)
 
 
 class TestCcdFailureCode:
@@ -873,6 +1040,7 @@ class _FakeService:
         self._drift_pending_tick_count = 2
         self._drift_pending_key = None
         self._last_auto_restore_success_key = None
+        self._auto_restore_parked_key = None
         # Mocked so tests can assert call_args_list against real production payloads.
         self._emit_display_event = MagicMock()
 
@@ -901,6 +1069,7 @@ class TestAutoRestoreCycle:
         )
         svc._auto_restore_key_value = OwletteService._auto_restore_key_value
         svc._auto_restore_apply_was_skip = OwletteService._auto_restore_apply_was_skip
+        svc._display_monitor_summary = OwletteService._display_monitor_summary
         svc._assigned_drift_details = (
             OwletteService._assigned_drift_details.__get__(svc, OwletteService)
         )
@@ -1451,6 +1620,7 @@ class TestAutoRestoreCycle:
         monkeypatch.setattr(threading, 'Thread', _capture_thread)
 
         # Primary 'aaaaaaaa' powered off; surviving 'bbbbbbbb' drifted to primary at origin.
+        assigned_layout['monitors'][0]['friendlyName'] = 'LG SDQHD'
         live_profile = {
             'monitors': [
                 {'edidHash': 'bbbbbbbb', 'primary': True,
@@ -1467,7 +1637,54 @@ class TestAutoRestoreCycle:
         cb = config_state['displays']['autoRestore']['circuitBreaker']
         assert cb['failures'] == 0
         assert cb.get('tripped') is False
-        fake_service._emit_display_event.assert_not_called()
+        # parked once, with the stored monitor named from the stored layout
+        # (it is not live to describe itself), so the events tab can say why
+        # nothing happens (#29: a panel re-enumerated under a new id)
+        fake_service._emit_display_event.assert_called_once_with(
+            'display_auto_restore_parked', 'warning', {
+                'eventType': 'display_auto_restore_parked',
+                'severity': 'warning',
+                'reason': 'assigned_monitor_absent',
+                'monitor': {'edidHash': 'aaaaaaaa', 'friendlyName': 'LG SDQHD', 'port': ''},
+                'missingFromLive': ['aaaaaaaa'],
+            },
+        )
+
+        # same missing set on the next tick: still parked, no second event
+        fake_service._maybe_auto_restore(
+            live_profile, ['bbbbbbbb'], 'drift-key', assigned_layout,
+        )
+        assert fake_service._emit_display_event.call_count == 1
+        assert spawned == []
+
+        # the monitor returns: the gate passes, the worker runs, and the parked
+        # key clears so a later absence is reported again
+        both_live = {
+            'monitors': [
+                {'edidHash': 'aaaaaaaa', 'primary': True,
+                 'position': {'x': 0, 'y': 0}},
+                {'edidHash': 'bbbbbbbb', 'primary': False,
+                 'position': {'x': 1920, 'y': 100}},
+            ],
+        }
+        fake_service._maybe_auto_restore(
+            both_live, ['bbbbbbbb'], 'drift-key', assigned_layout,
+        )
+        assert len(spawned) == 1
+        spawned[0].join(timeout=2.0)
+        assert len(apply_calls) == 1
+        assert fake_service._auto_restore_parked_key is None
+
+        fake_service._maybe_auto_restore(
+            live_profile, ['bbbbbbbb'], 'drift-key', assigned_layout,
+        )
+        assert fake_service._emit_display_event.call_count == 2
+
+        # drift clearing ends the episode too
+        fake_service._maybe_auto_restore_assigned_drift(
+            {'monitors': assigned_layout['monitors']},
+        )
+        assert fake_service._auto_restore_parked_key is None
 
     def test_apply_was_skip_classifies_both_enum_and_helper_string_codes(
         self, fake_service,

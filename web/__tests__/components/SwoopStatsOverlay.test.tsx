@@ -23,6 +23,7 @@ const EMPTY_STATS = {
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 
 /** a `getStats()` report: a map with the `get`/`forEach` the classifier uses. */
@@ -119,6 +120,51 @@ describe('SwoopStatsOverlay path indicator', () => {
     });
   };
 
+  it('names the codec the picture arrives in, and the stages by what they measure', async () => {
+    const stats = {
+      ...EMPTY_STATS,
+      frame: {
+        frameId: 9,
+        irap: false,
+        codec: 'hevc',
+        width: 1920,
+        height: 1080,
+        tCaptureUs: 0,
+        tEncodeUs: 5_000,
+        tSendUs: 9_000,
+        arrivalMs: 100,
+        decodeMs: 0.4,
+        presentedMs: 112,
+        expectedDisplayMs: 128.6,
+        presentedFrames: 9,
+      },
+    } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('HEVC')).toBeInTheDocument();
+    // a decoded frame waiting for the next paint is not decode time.
+    expect(screen.getByText('decode')).toBeInTheDocument();
+    expect(screen.getByText('wait for paint')).toBeInTheDocument();
+    expect(screen.getByText('paint → display')).toBeInTheDocument();
+    expect(screen.queryByText('decode → present')).toBeNull();
+  });
+
+  it('counts the pictures that froze in this tab, and where the last one died', async () => {
+    const stats = { ...EMPTY_STATS, stall: { recovery: 'none', episodes: 2, kind: 'decode' } } as unknown as SwoopStats;
+    const session = sessionWith(async () => report({}));
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={stats} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('frozen pictures')).toBeInTheDocument();
+    expect(screen.getByText('2 (last: decode)')).toBeInTheDocument();
+  });
+
   it('names the path, the cap in force and why', async () => {
     const session = sessionWith(async () =>
       report({
@@ -187,5 +233,38 @@ describe('SwoopStatsOverlay path indicator', () => {
     await mount(sessionWith(getStats), false);
 
     expect(getStats).not.toHaveBeenCalled();
+  });
+});
+
+describe('SwoopStatsOverlay on a phone', () => {
+  afterEach(cleanup);
+
+  const mountGlance = async (onClose?: () => void) => {
+    await act(async () => {
+      render(
+        <div>
+          <button type="button">elsewhere</button>
+          <SwoopStatsOverlay session={sessionWith(async () => report({}))} stats={EMPTY_STATS} open onClose={onClose} />
+        </div>,
+      );
+      await Promise.resolve();
+    });
+  };
+
+  it('closes at the next tap anywhere else, and keeps a tap on itself', async () => {
+    const onClose = jest.fn();
+    await mountGlance(onClose);
+    const overlay = screen.getByRole('complementary', { name: 'latency breakdown' });
+    expect(overlay).toHaveClass('pointer-events-auto');
+
+    overlay.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).not.toHaveBeenCalled();
+    screen.getByRole('button', { name: 'elsewhere' }).dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays up, and lets the picture take its taps, without a way to close it', async () => {
+    await mountGlance();
+    expect(screen.getByRole('complementary', { name: 'latency breakdown' })).toHaveClass('pointer-events-none');
   });
 });

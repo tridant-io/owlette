@@ -1,14 +1,15 @@
 /**
- * PostToolUse hook: after a successful `git push` to dev/main touching the
- * e2e.yml path filter, inject a recipe telling Claude to watch the triggered
- * "playwright e2e" run and, on failure, diagnose and PROPOSE a fix (never
- * auto-repush — dev auto-deploys, main is protected).
+ * PostToolUse hook: after a push or PR merge lands on dev/main touching the
+ * e2e.yml path filter, tell Claude to watch the triggered "playwright e2e" run
+ * and, on failure, diagnose and PROPOSE a fix (never auto-repush — dev
+ * auto-deploys, main is protected).
  *
  * Detects only; it does NOT poll CI, because a 6-30 min `gh run watch` would
- * hang the harness. Mirrors post-push-installer.mjs.
+ * hang the harness.
  */
 
-import { execSync } from 'child_process'
+import { addContext } from './lib/hook-output.mjs'
+import { pushTarget } from './lib/push-target.mjs'
 
 // Keep in sync with .github/workflows/e2e.yml.
 const PATH_FILTER = [
@@ -26,89 +27,26 @@ for await (const chunk of process.stdin) {
 }
 
 try {
-  const data = JSON.parse(input)
-  const command = data.tool_input?.command || ''
-
-  // Skip non-push, dry-run and ref deletions.
-  if (!/\bgit\s+push\b/.test(command)) process.exit(0)
-  if (/--dry-run\b/.test(command) || /--delete\b/.test(command) || /\s:\S/.test(command)) {
-    process.exit(0)
-  }
-
-  // A failed push triggered no CI.
-  if (typeof data.tool_result?.exit_code === 'number' && data.tool_result.exit_code !== 0) {
-    process.exit(0)
-  }
-
-  // The `push:` trigger only fires on dev/main; PR branches go via pull_request.
-  const branch = getCurrentBranch()
-  if (branch !== 'dev' && branch !== 'main') process.exit(0)
-
+  const target = pushTarget(JSON.parse(input))
   // Fail open when the diff is unknowable — over-verifying beats missing a red run.
-  const { files, known } = getPushedFiles(branch)
-  if (known && !files.some(matchesFilter)) {
-    process.exit(0)
+  if (target && !(target.known && !target.files.some(matchesFilter))) {
+    const { branch, sha, files, known } = target
+    addContext('PostToolUse', [
+      `Landed on ${branch} (${sha.slice(0, 8) || 'sha unknown'}) inside the playwright e2e path filter, so the "playwright e2e" workflow (.github/workflows/e2e.yml) should run. Verify it succeeded:`,
+      '',
+      `1. Find the run: gh run list --workflow="playwright e2e" --branch ${branch}${sha ? ` --commit ${sha}` : ''} --limit 5 --json databaseId,status,conclusion`,
+      `   GitHub can lag a few seconds; if none has appeared, wait ~15s and retry once.`,
+      `2. Watch it in the BACKGROUND (cold CI can take ~30 min, target <6): gh run watch <databaseId> --exit-status`,
+      `3. On success: report green and stop.`,
+      `4. On failure: gh run view <databaseId> --log-failed (and if needed gh run download <databaseId> -n playwright-report), diagnose the root cause, then PROPOSE a fix and wait for review. Do NOT auto-fix-and-repush.`,
+      '',
+      known
+        ? `Changed files in e2e scope: ${files.filter(matchesFilter).join(', ')}`
+        : `(Could not determine the landed diff — check whether a run was actually triggered.)`,
+    ].join('\n'))
   }
-
-  const sha = getHeadSha()
-  const scopeNote = known
-    ? `Changed files in e2e scope: ${files.filter(matchesFilter).join(', ')}`
-    : `(Could not determine the pushed diff — verify whether a run was actually triggered.)`
-
-  const message = [
-    `Pushed to ${branch} (${sha.slice(0, 8)}). This touched the playwright e2e path filter, so the "playwright e2e" workflow (.github/workflows/e2e.yml) should run. Verify it succeeded:`,
-    '',
-    `1. Find the run for this push:`,
-    `   gh run list --workflow="playwright e2e" --branch ${branch} --limit 5 --json databaseId,headSha,status,conclusion,createdAt`,
-    `   Pick the run whose headSha starts with ${sha.slice(0, 8)}. If none has appeared yet, GitHub can lag a few seconds — wait ~15s and retry once.`,
-    `2. Watch it to completion (run in the BACKGROUND — cold CI can take up to ~30 min, target <6 min):`,
-    `   gh run watch <databaseId> --exit-status`,
-    `3. On SUCCESS: report green and stop.`,
-    `4. On FAILURE:`,
-    `   - gh run view <databaseId> --log-failed   # failing-step logs only`,
-    `   - if needed: gh run download <databaseId> -n playwright-report   # HTML report + traces`,
-    `   - diagnose the root cause, then PROPOSE a fix and wait for review. Do NOT auto-fix-and-repush.`,
-    '',
-    scopeNote,
-  ].join('\n')
-
-  process.stderr.write(`[post-push-e2e] ${branch} push in e2e scope — reminding Claude to watch the run\n`)
-  process.stdout.write(JSON.stringify({ message }))
 } catch (err) {
   process.stderr.write(`[post-push-e2e] Error: ${err.message}\n`)
 }
 
 process.exit(0)
-
-function getCurrentBranch() {
-  try {
-    return execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', timeout: 5000 }).trim()
-  } catch {
-    return ''
-  }
-}
-
-function getHeadSha() {
-  try {
-    return execSync('git rev-parse HEAD', { encoding: 'utf-8', timeout: 5000 }).trim()
-  } catch {
-    return ''
-  }
-}
-
-/**
- * Diff the pushed range via the remote-tracking reflog (origin/<branch>@{1} is
- * its pre-push value). `known: false` means undetermined — caller fails open.
- */
-function getPushedFiles(branch) {
-  try {
-    const out = execSync(
-      `git diff --name-only "origin/${branch}@{1}..origin/${branch}"`,
-      { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-    )
-    const files = out.split('\n').map((s) => s.trim()).filter(Boolean)
-    return { files, known: true }
-  } catch {
-    return { files: [], known: false }
-  }
-}

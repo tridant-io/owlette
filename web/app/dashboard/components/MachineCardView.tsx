@@ -3,17 +3,37 @@
  * with controls. Always used on mobile; toggleable with list view on desktop.
  */
 
+import { memo, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
+import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
+import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
-import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor } from 'lucide-react';
+import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor, Cpu, MemoryStick, HardDrive, Gpu, type LucideIcon } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { resolveMemoryTotalGb } from '@/lib/machineMemory';
+import {
+  activeHoursGuardOf,
+  insideActiveHoursNow,
+  type PowerCommandOptions,
+  type PowerCommandSent,
+} from '@/lib/activeHours';
 import { toast } from '@/lib/toast';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { getUsageColorClass } from '@/lib/usageColorUtils';
@@ -23,12 +43,13 @@ import { useMinuteTick } from '@/hooks/useMinuteTick';
 import { formatThroughput, formatThroughputShort } from '@/lib/networkUtils';
 import { DISK_IO_COLORS, formatDiskIO } from '@/lib/diskIOUtils';
 import { useAllSparklineData } from '@/hooks/useSparklineData';
-import { useDevicePrefs, type DeviceKind } from '@/hooks/useDevicePrefs';
+import { useDevicePrefs, type DeviceKind, type DeviceSelection } from '@/hooks/useDevicePrefs';
 import { useDisplayState } from '@/hooks/useDisplayState';
 import { DisplayCanvas } from '@/components/charts/DisplayCanvas';
 import { resolveDevice, shouldShowDeviceDropdown } from '@/lib/deviceResolvers';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Machine, Process, LaunchMode, ScheduleBlock } from '@/hooks/useFirestore';
+import type { SitePlan } from '@/hooks/useSitePlan';
 import type { MetricType } from '@/components/charts';
 
 interface MachineCardViewProps {
@@ -59,17 +80,34 @@ interface MachineCardViewProps {
   onConfigureSchedule?: (machineId: string, process: Process) => void;
   onRemoveMachine: (machineId: string, machineName: string, isOnline: boolean) => void;
   onMetricClick?: (machineId: string, metricType: MetricType) => void;
-  onRestart?: (machineId: string) => Promise<void>;
-  onShutdown?: (machineId: string) => Promise<void>;
+  onRestart?: (machineId: string, options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
+  onShutdown?: (machineId: string, options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onCancelRestart?: (machineId: string) => Promise<void>;
   onDismissRestartPending?: (machineId: string) => Promise<void>;
   onScreenshot?: (machineId: string) => void;
   onLiveView?: (machineId: string) => void;
   onSwoop?: (machineId: string) => void;
+  onSwoopApp?: (machineId: string) => void;
+  /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
+  swoopOff?: boolean;
+  onSiteSettings?: () => void;
+  /** the viewer's plan on this site (`useSitePlan`); unset is unrestricted. */
+  sitePlan?: SitePlan;
 }
 
+/** The view's handlers, passed to each card as-is: they take the machineId, so
+ *  the card binds it at the call site and a memoized card keeps stable props. */
+type MachineCardHandlers = Pick<
+  MachineCardViewProps,
+  | 'onToggleStats' | 'onToggleProcesses' | 'onToggleDisplays'
+  | 'onEditProcess' | 'onDuplicateProcess' | 'onCreateProcess' | 'onKillProcess' | 'onRestartProcess'
+  | 'onSetLaunchMode' | 'onConfigureSchedule' | 'onRemoveMachine' | 'onMetricClick'
+  | 'onRestart' | 'onShutdown' | 'onCancelRestart' | 'onDismissRestartPending'
+  | 'onScreenshot' | 'onLiveView' | 'onSwoop' | 'onSwoopApp' | 'onSiteSettings'
+>;
+
 /** Split out of the map so it can use hooks. */
-interface MachineCardProps {
+interface MachineCardProps extends MachineCardHandlers {
   machine: Machine;
   statsExpanded: boolean;
   processesExpanded: boolean;
@@ -80,31 +118,52 @@ interface MachineCardProps {
   schedulesFollowSiteTime?: boolean;
   userPreferences: { temperatureUnit: 'C' | 'F' };
   isSiteAdmin: boolean;
-  cardPref: { cpu?: string; disk?: string; gpu?: string; nic?: string };
-  onSetCardPref: (kind: DeviceKind, id: string | null) => void;
-  onToggleStats: () => void;
-  onToggleProcesses: () => void;
-  onToggleDisplays?: () => void;
-  onEditProcess: (process: Process) => void;
-  onDuplicateProcess?: (process: Process) => void;
-  onCreateProcess: () => void;
-  onKillProcess: (processId: string, processName: string) => void;
-  onRestartProcess: (processId: string, processName: string) => void;
-  onSetLaunchMode: (processId: string, processName: string, mode: LaunchMode, exePath: string, schedules?: ScheduleBlock[] | null) => void;
-  onConfigureSchedule?: (process: Process) => void;
-  onRemoveMachine: () => void;
-  onMetricClick?: (metricType: MetricType) => void;
-  onRestart?: () => Promise<void>;
-  onShutdown?: () => Promise<void>;
-  onCancelRestart?: () => Promise<void>;
-  onDismissRestartPending?: () => Promise<void>;
-  onScreenshot?: () => void;
-  onLiveView?: () => void;
-  onSwoop?: () => void;
+  swoopOff?: boolean;
+  cardPref: DeviceSelection;
+  onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
+  /** set when the machine falls outside the viewer's plan: the machines it covers. */
+  planLimit?: number | null;
+  controlLocked?: boolean;
+  swoopLocked?: boolean;
 }
 
-function MachineCard({
+const NO_CARD_PREF: DeviceSelection = {};
+
+/**
+ * The keyboard and screen-reader way into a clickable tile. It is a sibling of
+ * the tile's own controls (the device select), not their ancestor, so nothing
+ * interactive nests inside a button. Its click bubbles to the tile's onClick.
+ */
+function TileButton({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      className="absolute inset-0 z-[1] cursor-pointer"
+    />
+  );
+}
+
+/** in the collapsed metric row, what only fits from `sm` up. */
+const WIDE_ONLY = 'hidden sm:inline';
+
+/**
+ * a collapsed-row label: an icon below `sm`, the word from there up, and the
+ * word to a screen reader at both. two spans, not `sm:not-sr-only`, which
+ * resets white-space and let the cell wrap at the label's space.
+ */
+function RowLabel({ icon: Icon, label }: { icon?: LucideIcon; label: string }) {
+  return (
+    <>
+      {Icon && <Icon aria-hidden className="mr-px inline size-3 align-[-1px] sm:hidden" />}
+      <span className="sr-only sm:hidden">{label}</span>
+      <span className={WIDE_ONLY}>{label} </span>
+    </>
+  );
+}
+
+const MachineCard = memo(function MachineCard({
   machine,
   statsExpanded,
   processesExpanded,
@@ -115,6 +174,7 @@ function MachineCard({
   schedulesFollowSiteTime,
   userPreferences,
   isSiteAdmin,
+  swoopOff,
   cardPref,
   onSetCardPref,
   onToggleStats,
@@ -136,13 +196,38 @@ function MachineCard({
   onScreenshot,
   onLiveView,
   onSwoop,
+  onSwoopApp,
+  onSiteSettings,
   showLocalClock,
+  planLimit,
+  controlLocked,
+  swoopLocked,
 }: MachineCardProps) {
+  const machineId = machine.machineId;
   const isDemo = !!useDemoContext();
   const { userPreferences: fullPrefs } = useAuth();
-  const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
+  const isMuted = fullPrefs.mutedMachines.includes(machineId);
+  const openMetric = onMetricClick ? (metric: MetricType) => onMetricClick(machineId, metric) : undefined;
+  const planLocked = planLimit != null;
+  const activeHoursGuard = activeHoursGuardOf(machine);
+  const power = usePowerCommand(currentSiteId);
+  const [approveOpen, setApproveOpen] = useState(false);
 
-  const sparklineData = useAllSparklineData(currentSiteId, machine.machineId);
+  // approving the banner is a restart: inside active hours it asks the same
+  // question the context menu's restart does, outside it restarts at once
+  const approveRestart = async (options: PowerCommandOptions) => {
+    if (!onRestart) return;
+    const queued = await power.send({
+      machineId,
+      machineName: machineId,
+      action: 'restart',
+      options,
+      run: (opts) => onRestart(machineId, opts),
+    });
+    if (queued) setApproveOpen(false);
+  };
+
+  const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
   // Always subscribed so the COLLAPSED summary can show resolutions instead
   // of "no data". No assigned-layout sub — the drift dot reads the
@@ -150,7 +235,7 @@ function MachineCard({
   const { profile: displayProfile } = useDisplayState(
     currentSiteId,
     machine.machineId,
-    { enabled: true, subscribeAssigned: false }
+    { enabled: !planLocked, subscribeAssigned: false }
   );
   const displayMonitors = displayProfile?.monitors ?? [];
   const displayDriftCount = machine.metrics?.displayDriftCount ?? 0;
@@ -206,12 +291,8 @@ function MachineCard({
   const showGpuDropdown = shouldShowDeviceDropdown(machine.devices?.gpus);
   const showNicDropdown = shouldShowDeviceDropdown(machine.devices?.nics);
 
-  // v2 agents no longer send total_gb; recover it from usedGb / (percent/100).
   const memory = machine.metrics?.memory;
-  const memoryTotalGb =
-    memory && memory.usedGb != null && memory.percent != null && memory.percent > 0
-      ? memory.usedGb / (memory.percent / 100)
-      : null;
+  const memoryTotalGb = resolveMemoryTotalGb(memory);
 
   // Inline so they close over machine + resolved device state.
   const renderDeviceSelect = (
@@ -222,11 +303,11 @@ function MachineCard({
   ) => (
     <Select
       value={currentId ?? 'auto'}
-      onValueChange={(v) => onSetCardPref(kind, v === 'auto' ? null : v)}
+      onValueChange={(v) => onSetCardPref(machineId, kind, v === 'auto' ? null : v)}
     >
       <SelectTrigger
         size="sm"
-        className="h-5 px-1.5 py-0 text-xs border-0 bg-transparent shadow-none gap-1 text-muted-foreground hover:text-foreground focus-visible:ring-0"
+        className="hidden sm:flex h-5 px-1.5 py-0 text-xs border-0 bg-transparent shadow-none gap-1 text-muted-foreground hover:text-foreground focus-visible:ring-0"
         onClick={(e) => e.stopPropagation()}
       >
         <SelectValue />
@@ -242,55 +323,61 @@ function MachineCard({
 
   return (
     <Card data-testid="machine-card" className="border-border/60 bg-card-sunken py-0 gap-0">
-      <CardHeader className="py-3 px-4 gap-0 bg-card-header rounded-t-xl">
-        <div className="flex items-center justify-between">
+      <CardHeader className="py-3 px-4 gap-0 bg-card-header header-lit rounded-t-xl">
+        {/* min-w-0: CardHeader is a grid, and a grid item's automatic min-width is
+            its min-content, which now includes the full untruncated hostname */}
+        <div className="flex items-center justify-between min-w-0">
           <div className="flex items-center gap-2.5 min-w-0">
             {/* Display icon — quick access to the display panel, mirrors the
                 list view's per-row Monitor button (drift/breaker dots included). */}
-            <div className="relative flex-shrink-0">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onMetricClick?.('display');
-                    }}
-                    data-testid="open-display-panel"
-                    className="bg-card border border-border text-muted-foreground hover:text-white h-8 w-8 p-0"
-                    aria-label="view displays"
-                  >
-                    <Monitor className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>view displays</p>
-                </TooltipContent>
-              </Tooltip>
-              {displayDriftCount > 0 && (
-                <span
-                  className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-amber-500 pointer-events-none"
-                  role="img"
-                  aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                  title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                />
-              )}
-              {machine.displayBreakerTripped && (
-                <span
-                  className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
-                    displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
-                  }`}
-                  role="img"
-                  aria-label="auto-restore disabled — circuit breaker tripped"
-                  title="auto-restore disabled — circuit breaker tripped"
-                />
-              )}
-            </div>
+            {planLocked ? (
+              <MachinePlanLock />
+            ) : (
+              <div className="relative flex-shrink-0">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openMetric?.('display');
+                      }}
+                      data-testid="open-display-panel"
+                      className="bg-card border border-border text-muted-foreground hover:text-foreground h-8 w-8 p-0"
+                      aria-label="view displays"
+                    >
+                      <Monitor className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>view displays</p>
+                  </TooltipContent>
+                </Tooltip>
+                {displayDriftCount > 0 && (
+                  <span
+                    className="absolute -top-0.5 -right-0.5 inline-block w-2 h-2 rounded-full bg-warning-solid pointer-events-none"
+                    role="img"
+                    aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                    title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                  />
+                )}
+                {machine.displayBreakerTripped && (
+                  <span
+                    className={`absolute inline-block w-2 h-2 rounded-full bg-destructive pointer-events-none ${
+                      displayDriftCount > 0 ? '-bottom-0.5 -right-0.5' : '-top-0.5 -right-0.5'
+                    }`}
+                    role="img"
+                    aria-label="auto-restore disabled — circuit breaker tripped"
+                    title="auto-restore disabled — circuit breaker tripped"
+                  />
+                )}
+              </div>
+            )}
             <div className="flex flex-col min-w-0">
-              <CardTitle className="text-xl font-semibold text-white select-text flex items-center gap-1.5">
-                {machine.machineId}
-                {isMuted && <span title="alerts muted"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
+              <CardTitle className="text-xl font-semibold text-foreground select-text flex items-center gap-1.5 min-w-0">
+                <span className="truncate" title={machineId}>{machineId}</span>
+                {isMuted && <span title="alerts muted" className="flex-shrink-0"><BellOff className="h-3.5 w-3.5 text-muted-foreground" /></span>}
               </CardTitle>
               {subtitle && (showLocalClock && clockTooltip ? (
                 <Tooltip>
@@ -308,7 +395,7 @@ function MachineCard({
                       <p className="max-w-xs mt-1">{clockTooltip.scheduleLine}</p>
                     )}
                     {clockTooltip.advisory && (
-                      <p className="max-w-xs mt-1 text-amber-400">{clockTooltip.advisory}</p>
+                      <p className="max-w-xs mt-1 text-warning-solid dark:text-warning">{clockTooltip.advisory}</p>
                     )}
                   </TooltipContent>
                 </Tooltip>
@@ -329,13 +416,15 @@ function MachineCard({
               shuttingDown={machine.shuttingDown}
               rebootScheduledAt={machine.rebootScheduledAt}
               shutdownScheduledAt={machine.shutdownScheduledAt}
+              rebootDeferredUntil={machine.rebootDeferredUntil}
+              machineTimezone={machine.machineTimezone}
               isSiteAdmin={isSiteAdmin}
-              onCancel={onCancelRestart}
+              onCancel={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
             />
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
-                  className={`text-xs tabular-nums flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-red-400' : 'text-foreground/80'}`}
+                  className={`text-xs tabular-nums flex items-center gap-1 select-none cursor-help ${heartbeat.isStale ? 'text-danger' : 'text-foreground/80'}`}
                 >
                   <Clock className="h-3 w-3" />
                   {heartbeat.display}
@@ -352,69 +441,85 @@ function MachineCard({
             </Tooltip>
             {!isDemo && (
               <MachineContextMenu
-                machineId={machine.machineId}
-                machineName={machine.machineId}
+                machineId={machineId}
+                machineName={machineId}
                 machineTimezone={machine.machineTimezone}
                 siteId={currentSiteId}
                 isOnline={machine.online}
                 rebooting={machine.rebooting}
                 shuttingDown={machine.shuttingDown}
+                rebootDeferredUntil={machine.rebootDeferredUntil}
                 isSiteAdmin={isSiteAdmin}
-                onRemoveMachine={onRemoveMachine}
-                onRestart={onRestart}
-                onShutdown={onShutdown}
-                onCancelRestart={onCancelRestart}
-                onScreenshot={onScreenshot}
-                onLiveView={onLiveView}
+                onRemoveMachine={() => onRemoveMachine(machineId, machineId, machine.online)}
+                onRestart={onRestart ? (options) => onRestart(machineId, options) : undefined}
+                onShutdown={onShutdown ? (options) => onShutdown(machineId, options) : undefined}
+                activeHoursGuard={activeHoursGuard}
+                onCancelRestart={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
+                onScreenshot={onScreenshot ? () => onScreenshot(machineId) : undefined}
+                onLiveView={onLiveView ? () => onLiveView(machineId) : undefined}
                 swoopCapable={machine.capabilities?.swoop === 1}
-                onSwoop={onSwoop}
-                onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
+                swoopViewers={machine.swoopViewers}
+                onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
+                onSwoopApp={onSwoopApp ? () => onSwoopApp(machineId) : undefined}
+                swoopOff={swoopOff}
+                onSiteSettings={onSiteSettings}
+                onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
+                planLocked={planLocked}
+                controlLocked={controlLocked}
+                swoopLocked={swoopLocked}
               />
             )}
           </div>
         </div>
       </CardHeader>
+      {/* outside the plan, the notice stands in for everything below the header.
+          flex-1: a grid row stretches the card to its neighbour's height, and the
+          notice fills it instead of leaving an empty card under a short one. */}
+      {planLimit != null && (
+        <MachinePlanNotice
+          limit={planLimit}
+          className="flex-1 flex-col justify-center border-t border-border/50 px-4 py-4 text-center"
+        />
+      )}
       {/* Restart Pending Banner. The flag is agent-written and only the agent's
           next service start clears it locally, so it outlives an unreachable
           machine — still worth showing (the operator wants to know it is set),
           but not as a live alarm. `machine.online` is the derived flag from
           `isMachineOnline`: the same 5-minute heartbeat rule as
           `isHeartbeatStale`, plus the agent's own flag. */}
-      {machine.rebootPending?.active && (
+      {!planLocked && machine.rebootPending?.active && (
         <div
           data-testid="reboot-pending-banner"
           className={`mx-4 mb-2 p-3 rounded-lg border ${
-            machine.online ? 'border-amber-600/30 bg-amber-950/20' : 'border-border/60 bg-muted/20'
+            machine.online ? 'border-warning-border/60 bg-warning-surface dark:bg-warning-surface/50' : 'border-border/60 bg-muted/20'
           }`}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
-              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-amber-400' : 'text-muted-foreground'}`} />
-              <span className={`text-sm truncate ${machine.online ? 'text-amber-300' : 'text-muted-foreground'}`}>
+              <AlertTriangle className={`h-4 w-4 flex-shrink-0 ${machine.online ? 'text-warning' : 'text-muted-foreground'}`} />
+              <span className={`text-sm truncate ${machine.online ? 'text-warning' : 'text-muted-foreground'}`}>
                 restart pending: {machine.rebootPending.reason || 'process crashed'}
                 {!machine.online && ' — machine offline, cannot restart'}
               </span>
             </div>
             {isSiteAdmin && (
               <div className="flex items-center gap-1.5 flex-shrink-0">
-                {/* No approve while offline: the command would 409 machine_offline. */}
-                {machine.online && (
+                {/* No approve while offline: the command would 409 machine_offline.
+                    nor without control: approving is a restart command. */}
+                {machine.online && !controlLocked && (
                   <Button
                     variant="ghost"
                     size="sm"
                     data-testid="reboot-pending-approve"
-                    className="h-7 px-2.5 text-xs bg-amber-600 hover:bg-amber-700 text-white cursor-pointer"
-                    onClick={async (e) => {
+                    className="h-7 px-2.5 text-xs bg-warning-solid text-warning-solid-foreground hover:text-warning-solid-foreground cursor-pointer"
+                    disabled={power.sending}
+                    onClick={(e) => {
                       e.stopPropagation();
-                      if (!onRestart) return;
-                      try {
-                        await onRestart();
-                        toast.success('restart approved');
-                      } catch (error: unknown) {
-                        toast.error('could not send the restart command', {
-                          description: error instanceof Error ? error.message : 'unknown error',
-                        });
+                      if (activeHoursGuard && insideActiveHoursNow(activeHoursGuard) !== false) {
+                        setApproveOpen(true);
+                      } else {
+                        void approveRestart({});
                       }
                     }}
                   >
@@ -428,12 +533,12 @@ function MachineCard({
                   variant="ghost"
                   size="sm"
                   data-testid="reboot-pending-dismiss"
-                  className="h-7 px-2.5 text-xs text-muted-foreground hover:text-white hover:bg-accent cursor-pointer"
+                  className="h-7 px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
                   onClick={async (e) => {
                     e.stopPropagation();
                     if (!onDismissRestartPending) return;
                     try {
-                      await onDismissRestartPending();
+                      await onDismissRestartPending(machineId);
                       toast.success('restart pending dismissed');
                     } catch (error: unknown) {
                       toast.error('could not dismiss the pending restart', {
@@ -450,8 +555,18 @@ function MachineCard({
           </div>
         </div>
       )}
+      {/* outside the banner: it stays mounted to hear the agent's answer after the banner goes */}
+      <MachinePowerConfirm
+        action="restart"
+        open={approveOpen}
+        onOpenChange={setApproveOpen}
+        machineName={machineId}
+        guard={activeHoursGuard}
+        sending={power.sending}
+        onConfirm={(options) => void approveRestart(options)}
+      />
 
-      {machine.metrics && (
+      {!planLocked && machine.metrics && (
         <Collapsible open={statsExpanded} onOpenChange={onToggleStats}>
           {!statsExpanded && (
             <CollapsibleTrigger asChild>
@@ -463,12 +578,16 @@ function MachineCard({
                       as columns rather than five different ragged rows.
                       text-left: this is a button's content, and a button centres
                       its text, which floated each label to the middle of its cell */}
-                  <div className="grid grid-cols-5 gap-x-2 flex-1 min-w-0 text-left text-sm text-muted-foreground/70">
+                  {/* below `sm` the row is 12px with an icon for each label, and net gets
+                      two cells' room, so the worst case (four cells at "100%", net at 1023K each way)
+                      still fits one line at 390px with room to spare on linux, which ci measured
+                      about 2px wider per cell than windows. the extras are in the expanded view. */}
+                  <div className="grid grid-cols-[repeat(4,minmax(0,1fr))_minmax(0,2fr)] gap-x-1 flex-1 min-w-0 text-left text-xs text-muted-foreground sm:grid-cols-5 sm:gap-x-2 sm:text-sm">
                     <span className="min-w-0 truncate tabular-nums">
                       {cpuDevice && cpuDevice.percent != null && (
-                        <>cpu <span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
+                        <><RowLabel icon={Cpu} label="cpu" /><span className="text-foreground font-medium">{Math.round(cpuDevice.percent)}%</span>
                           {cpuDevice.temperature != null && (
-                            <span className={`ml-1 ${getTemperatureColorClass(cpuDevice.temperature)}`}>
+                            <span className={`ml-1 ${WIDE_ONLY} ${getTemperatureColorClass(cpuDevice.temperature)}`}>
                               {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
@@ -477,21 +596,21 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {memory?.percent != null && (
-                        <>mem <span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
+                        <><RowLabel icon={MemoryStick} label="mem" /><span className="text-foreground font-medium">{Math.round(memory.percent)}%</span></>
                       )}
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {diskDevice && diskDevice.percent != null && (() => {
                         const io = machine.metrics?.diskio?.[diskDevice.id];
                         return (
-                          <>disk <span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
+                          <><RowLabel icon={HardDrive} label="disk" /><span className="text-foreground font-medium">{Math.round(diskDevice.percent)}%</span>
                             {io && io.readBps > 0 && (
-                              <span className="ml-1" style={{ color: DISK_IO_COLORS.read }}>
+                              <span className={`ml-1 ${WIDE_ONLY}`} style={{ color: DISK_IO_COLORS.read }}>
                                 r {formatThroughputShort(io.readBps)}
                               </span>
                             )}
                             {io && io.writeBps > 0 && (
-                              <span className="ml-1" style={{ color: DISK_IO_COLORS.write }}>
+                              <span className={`ml-1 ${WIDE_ONLY}`} style={{ color: DISK_IO_COLORS.write }}>
                                 w {formatThroughputShort(io.writeBps)}
                               </span>
                             )}
@@ -501,9 +620,9 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {gpuDevice && gpuDevice.usagePercent != null && (
-                        <>gpu <span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
+                        <><RowLabel icon={Gpu} label="gpu" /><span className="text-foreground font-medium">{Math.round(gpuDevice.usagePercent)}%</span>
                           {gpuDevice.temperature != null && (
-                            <span className={`ml-1 ${getTemperatureColorClass(gpuDevice.temperature)}`}>
+                            <span className={`ml-1 ${WIDE_ONLY} ${getTemperatureColorClass(gpuDevice.temperature)}`}>
                               {formatTemperature(gpuDevice.temperature, userPreferences.temperatureUnit, 0)}
                             </span>
                           )}
@@ -512,10 +631,11 @@ function MachineCard({
                     </span>
                     <span className="min-w-0 truncate tabular-nums">
                       {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (
-                        <>net <span className="text-orange-400">{'\u2191 '}{formatThroughputShort(nicDevice.txBps)}</span>
-                          <span className="ml-1 text-green-400">{'\u2193 '}{formatThroughputShort(nicDevice.rxBps)}</span>
+                        // the arrows are net's icon
+                        <><RowLabel label="net" /><span className="text-[var(--series-nic-tx-1)]">{'\u2191'}{formatThroughputShort(nicDevice.txBps)}</span>
+                          <span className="ml-px sm:ml-1 text-[var(--series-nic-rx-1)]">{'\u2193'}{formatThroughputShort(nicDevice.rxBps)}</span>
                           {(machine.metrics.network?.packetLossPct ?? 0) > 0 && (
-                            <span className="ml-1 text-red-400">{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
+                            <span className={`ml-1 ${WIDE_ONLY} text-danger`}>{Math.round(machine.metrics.network?.packetLossPct ?? 0)}% loss</span>
                           )}
                         </>
                       )}
@@ -527,23 +647,27 @@ function MachineCard({
           )}
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
         <CollapsibleTrigger asChild>
-          <div className="border-t border-border/50 relative cursor-pointer group">
-            <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-            <div className="relative flex items-center px-4 py-1.5 select-none">
+          <button type="button" aria-label="collapse metrics" className="block w-full border-t border-border/50 relative cursor-pointer group">
+            <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+            <span className="relative flex items-center px-4 py-1.5 select-none">
               <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
-            </div>
-          </div>
+            </span>
+          </button>
         </CollapsibleTrigger>
         <CardContent className="select-none pt-0 pb-4">
           {/* Section enclosure: one surface holding the metric rows, separated by
-              hairline dividers instead of dark gaps. */}
-          <div className="overflow-hidden rounded-lg border border-border/30 bg-card divide-y divide-border/60">
+              hairline dividers instead of dark gaps. -ml-px: the rows' accent
+              bars sit inside the enclosure's border, so this puts the bars, the
+              edge the eye reads, under the chevron's centre, where the displays
+              enclosure's own edge already is. */}
+          <div className="-ml-px overflow-hidden rounded-lg border border-border/30 bg-card divide-y divide-border/60">
           {/* CPU Metric */}
           {cpuDevice && cpuDevice.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
-              onClick={onMetricClick ? () => onMetricClick('cpu') : undefined}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
+              onClick={openMetric ? () => openMetric('cpu') : undefined}
             >
+              {openMetric && <TileButton label={`open cpu history for ${machineId}`} />}
               {/* Sparkline background */}
               <div className="absolute inset-0 opacity-80">
                 <SparklineChart data={sparklineData.cpu} color="cpu" height={52} loading={sparklineData.loading} />
@@ -565,7 +689,7 @@ function MachineCard({
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="text-lg font-bold text-white tabular-nums">{cpuDevice.percent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{cpuDevice.percent}%</span>
                   {cpuDevice.temperature != null && (
                     <span className={`text-sm font-medium ${getTemperatureColorClass(cpuDevice.temperature)}`}>
                       {formatTemperature(cpuDevice.temperature, userPreferences.temperatureUnit)}
@@ -579,9 +703,10 @@ function MachineCard({
           {/* Memory Metric */}
           {memory?.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
-              onClick={onMetricClick ? () => onMetricClick('memory') : undefined}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
+              onClick={openMetric ? () => openMetric('memory') : undefined}
             >
+              {openMetric && <TileButton label={`open ram history for ${machineId}`} />}
               {/* Sparkline background */}
               <div className="absolute inset-0 opacity-80">
                 <SparklineChart data={sparklineData.memory} color="memory" height={52} loading={sparklineData.loading} />
@@ -598,7 +723,7 @@ function MachineCard({
                     </span>
                   )}
                 </div>
-                <span className="text-lg font-bold text-white tabular-nums">{memory.percent}%</span>
+                <span className="text-lg font-bold text-foreground tabular-nums">{memory.percent}%</span>
               </div>
             </div>
           )}
@@ -606,9 +731,10 @@ function MachineCard({
           {/* Disk Metric */}
           {diskDevice && diskDevice.percent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
-              onClick={onMetricClick ? () => onMetricClick('disk') : undefined}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
+              onClick={openMetric ? () => openMetric('disk') : undefined}
             >
+              {openMetric && <TileButton label={`open disk history for ${machineId}`} />}
               {/* Sparkline background */}
               <div className="absolute inset-0 opacity-80">
                 <SparklineChart data={sparklineData.disk} color="disk" height={52} loading={sparklineData.loading} />
@@ -646,7 +772,7 @@ function MachineCard({
                       </div>
                     );
                   })()}
-                  <span className="text-lg font-bold text-white tabular-nums">{diskDevice.percent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{diskDevice.percent}%</span>
                 </div>
               </div>
             </div>
@@ -655,9 +781,10 @@ function MachineCard({
           {/* GPU Metric */}
           {gpuDevice && gpuDevice.usagePercent != null && (
             <div
-              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
-              onClick={onMetricClick ? () => onMetricClick('gpu') : undefined}
+              className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
+              onClick={openMetric ? () => openMetric('gpu') : undefined}
             >
+              {openMetric && <TileButton label={`open gpu history for ${machineId}`} />}
               {/* Sparkline background */}
               {sparklineData.gpu.length > 0 && (
                 <div className="absolute inset-0 opacity-80">
@@ -681,7 +808,7 @@ function MachineCard({
                   )}
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="text-lg font-bold text-white tabular-nums">{gpuDevice.usagePercent}%</span>
+                  <span className="text-lg font-bold text-foreground tabular-nums">{gpuDevice.usagePercent}%</span>
                   {gpuDevice.vramUsedGb != null && gpuDevice.vramTotalGb != null && gpuDevice.vramTotalGb > 0 && (
                     <span className="text-xs text-muted-foreground hidden md:block">
                       {gpuDevice.vramUsedGb.toFixed(1)}/{gpuDevice.vramTotalGb.toFixed(1)}GB
@@ -700,11 +827,13 @@ function MachineCard({
           {/* Network Metric */}
           {nicDevice && nicDevice.txBps != null && nicDevice.rxBps != null && (() => {
             const maxUtil = Math.max(nicDevice.txUtil ?? 0, nicDevice.rxUtil ?? 0);
+            const lossPct = machine.metrics?.network?.packetLossPct ?? 0;
             return (
               <div
-                className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-secondary/25`}
-                onClick={onMetricClick ? () => onMetricClick(`${nicDevice.id}_tx_util` as MetricType) : undefined}
+                className={`relative overflow-hidden cursor-pointer transition-colors group after:pointer-events-none after:absolute after:inset-0 after:content-[''] after:transition-colors hover:after:bg-[var(--surface-hover)] dark:hover:after:bg-secondary/25`}
+                onClick={openMetric ? () => openMetric(`${nicDevice.id}_tx_util` as MetricType) : undefined}
               >
+                {openMetric && <TileButton label={`open network history for ${machineId}`} />}
                 <div className={`absolute left-0 top-0 bottom-0 w-1 ${getUsageColorClass(maxUtil)}`} />
                 <div className="relative z-10 flex items-center justify-between px-3 py-2.5 pl-4">
                   <div className="flex items-center gap-3 min-w-0">
@@ -717,8 +846,10 @@ function MachineCard({
                     )}
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
-                    <span className="text-xs font-medium text-orange-400">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
-                    <span className="text-xs font-medium text-green-400">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
+                    {/* here too: a phone's collapsed row has no room for it */}
+                    {lossPct > 0 && <span className="text-xs font-medium text-danger">{Math.round(lossPct)}% loss</span>}
+                    <span className="text-xs font-medium text-[var(--series-nic-tx-1)]">{'\u2191 '}{formatThroughput(nicDevice.txBps)}</span>
+                    <span className="text-xs font-medium text-[var(--series-nic-rx-1)]">{'\u2193 '}{formatThroughput(nicDevice.rxBps)}</span>
                   </div>
                 </div>
               </div>
@@ -731,111 +862,114 @@ function MachineCard({
       )}
 
       {/* Displays Collapsible */}
-      <Collapsible open={effectiveDisplaysExpanded} onOpenChange={onToggleDisplays}>
-        {!effectiveDisplaysExpanded && (
-          <CollapsibleTrigger asChild>
-            <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
-              <div className="flex items-center gap-2 w-full select-none">
-                <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                {displayMonitors.length > 0 ? (
-                  <div className="flex items-center gap-2.5 text-sm text-muted-foreground/70 overflow-hidden min-w-0">
-                    <span className="tabular-nums flex-shrink-0">
-                      <span className="text-foreground font-medium">{displayMonitors.length}</span> display{displayMonitors.length === 1 ? '' : 's'}
-                    </span>
-                    <span className="text-border/60 flex-shrink-0">|</span>
-                    <span className="truncate tabular-nums">
-                      {displayMonitors.map((m, i) => {
-                        const rotated = m.rotation === 90 || m.rotation === 270;
-                        const w = rotated ? m.resolution.height : m.resolution.width;
-                        const h = rotated ? m.resolution.width : m.resolution.height;
-                        return (
-                          <span key={m.id}>
-                            {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
-                            <span className={m.primary ? 'text-foreground font-medium' : ''}>{w}x{h}</span>
-                          </span>
-                        );
-                      })}
-                    </span>
-                    {displayDriftCount > 0 && (
-                      <span
-                        className="inline-block w-2 h-2 rounded-full bg-amber-500 ml-2 flex-shrink-0"
-                        role="img"
-                        aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                        title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
-                      />
-                    )}
-                    {machine.displayBreakerTripped && (
-                      <span
-                        className="inline-block w-2 h-2 rounded-full bg-destructive ml-1 flex-shrink-0"
-                        role="img"
-                        aria-label="auto-restore disabled — circuit breaker tripped"
-                        title="auto-restore disabled — circuit breaker tripped"
-                      />
-                    )}
+      {!planLocked && (
+        <Collapsible open={effectiveDisplaysExpanded} onOpenChange={onToggleDisplays}>
+          {!effectiveDisplaysExpanded && (
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" className="w-full border-t border-border/50 rounded-none cursor-pointer px-4 py-2.5 h-auto">
+                <div className="flex items-center gap-2 w-full select-none">
+                  <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                  {displayMonitors.length > 0 ? (
+                    <div className="flex items-center gap-2.5 text-sm text-muted-foreground overflow-hidden min-w-0">
+                      <span className="tabular-nums flex-shrink-0">
+                        <span className="text-foreground font-medium">{displayMonitors.length}</span> display{displayMonitors.length === 1 ? '' : 's'}
+                      </span>
+                      <span className="text-border/60 flex-shrink-0">|</span>
+                      <span className="truncate tabular-nums">
+                        {displayMonitors.map((m, i) => {
+                          const rotated = m.rotation === 90 || m.rotation === 270;
+                          const w = rotated ? m.resolution.height : m.resolution.width;
+                          const h = rotated ? m.resolution.width : m.resolution.height;
+                          return (
+                            <span key={m.id}>
+                              {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
+                              <span className={m.primary ? 'text-foreground font-medium' : ''}>{w}x{h}</span>
+                            </span>
+                          );
+                        })}
+                      </span>
+                      {displayDriftCount > 0 && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full bg-warning-solid ml-2 flex-shrink-0"
+                          role="img"
+                          aria-label={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                          title={`${displayDriftCount} display change${displayDriftCount === 1 ? '' : 's'} from assigned`}
+                        />
+                      )}
+                      {machine.displayBreakerTripped && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full bg-destructive ml-1 flex-shrink-0"
+                          role="img"
+                          aria-label="auto-restore disabled — circuit breaker tripped"
+                          title="auto-restore disabled — circuit breaker tripped"
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-muted-foreground text-sm">displays: no data</span>
+                  )}
+                </div>
+              </Button>
+            </CollapsibleTrigger>
+          )}
+          <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
+            <CollapsibleTrigger asChild>
+              <button type="button" aria-label="collapse displays" className="block w-full border-t border-border/50 relative cursor-pointer group">
+                <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="relative flex items-center px-4 py-1.5 select-none">
+                  <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
+                </span>
+              </button>
+            </CollapsibleTrigger>
+            <div
+              className={`relative px-6 pb-4 pt-2 ${openMetric ? 'cursor-pointer hover:bg-[var(--surface-hover)] transition-colors' : ''}`}
+              onClick={openMetric ? (e) => { e.stopPropagation(); openMetric('display'); } : undefined}
+            >
+              {openMetric && <TileButton label={`open display layout for ${machineId}`} />}
+              {displayMonitors.length > 0 ? (
+                /* One column below sm: the monitor list's nowrap rows (name +
+                   resolution + primary star) demand ~200px of min-content each,
+                   and a two-`fr` split doubles that demand into the card's
+                   intrinsically-sized grid track — which is what pushed the
+                   document past 390px. Stacked, the panes share one track and the
+                   shared enclosure rounds top/bottom instead of left/right. */
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
+                  <div className="min-w-0 h-[160px] border border-border/30 bg-card border-b-0 sm:border-b rounded-t-lg sm:rounded-tr-none sm:rounded-bl-lg md:border-r-0 overflow-hidden">
+                    <DisplayCanvas
+                      monitors={displayMonitors}
+                      mosaicGrids={displayProfile?.mosaicGrids}
+                      labelMode="indexOnly"
+                      className="h-[160px]"
+                    />
                   </div>
-                ) : (
-                  <span className="text-muted-foreground text-sm">displays: no data</span>
-                )}
-              </div>
-            </Button>
-          </CollapsibleTrigger>
-        )}
-        <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
-          <CollapsibleTrigger asChild>
-            <div className="border-t border-border/50 relative cursor-pointer group">
-              <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-              <div className="relative flex items-center px-4 py-1.5 select-none">
-                <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
-              </div>
+                  <div className="h-[160px] border border-border/30 bg-card rounded-b-lg sm:rounded-bl-none sm:rounded-tr-lg overflow-hidden flex flex-col justify-center gap-1.5 px-3 text-xs text-muted-foreground">
+                    {displayMonitors.map((m, i) => {
+                      // Post-rotation dims, matching Windows and the canvas
+                      // rect: a 4K panel at 270° reads 2160×3840.
+                      const isPortrait = m.rotation === 90 || m.rotation === 270;
+                      const effW = isPortrait ? m.resolution.height : m.resolution.width;
+                      const effH = isPortrait ? m.resolution.width : m.resolution.height;
+                      return (
+                        <div key={m.id} className="flex items-center gap-2 min-w-0">
+                          <span className="font-mono text-muted-foreground shrink-0">{i + 1}</span>
+                          <span className="text-foreground font-medium truncate">{m.friendlyName || m.id}</span>
+                          <span className="text-muted-foreground shrink-0 tabular-nums">{effW}×{effH}</span>
+                          {m.primary && <span className="text-accent-warm shrink-0" role="img" aria-label="primary">★</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground py-4 text-center">no display data reported</div>
+              )}
             </div>
-          </CollapsibleTrigger>
-          <div
-            className={`px-6 pb-4 pt-2 ${onMetricClick ? 'cursor-pointer hover:bg-[var(--surface-hover)] transition-colors' : ''}`}
-            onClick={onMetricClick ? (e) => { e.stopPropagation(); onMetricClick('display'); } : undefined}
-          >
-            {displayMonitors.length > 0 ? (
-              /* One column below sm: the monitor list's nowrap rows (name +
-                 resolution + primary star) demand ~200px of min-content each,
-                 and a two-`fr` split doubles that demand into the card's
-                 intrinsically-sized grid track — which is what pushed the
-                 document past 390px. Stacked, the panes share one track and the
-                 shared enclosure rounds top/bottom instead of left/right. */
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-0">
-                <div className="min-w-0 h-[160px] border border-border/30 bg-card border-b-0 sm:border-b rounded-t-lg sm:rounded-tr-none sm:rounded-bl-lg md:border-r-0 overflow-hidden">
-                  <DisplayCanvas
-                    monitors={displayMonitors}
-                    mosaicGrids={displayProfile?.mosaicGrids}
-                    labelMode="indexOnly"
-                    className="h-[160px]"
-                  />
-                </div>
-                <div className="h-[160px] border border-border/30 bg-card rounded-b-lg sm:rounded-bl-none sm:rounded-tr-lg overflow-hidden flex flex-col justify-center gap-1.5 px-3 text-xs text-muted-foreground">
-                  {displayMonitors.map((m, i) => {
-                    // Post-rotation dims, matching Windows and the canvas
-                    // rect: a 4K panel at 270° reads 2160×3840.
-                    const isPortrait = m.rotation === 90 || m.rotation === 270;
-                    const effW = isPortrait ? m.resolution.height : m.resolution.width;
-                    const effH = isPortrait ? m.resolution.width : m.resolution.height;
-                    return (
-                      <div key={m.id} className="flex items-center gap-2 min-w-0">
-                        <span className="font-mono text-muted-foreground shrink-0">{i + 1}</span>
-                        <span className="text-foreground font-medium truncate">{m.friendlyName || m.id}</span>
-                        <span className="text-muted-foreground shrink-0 tabular-nums">{effW}×{effH}</span>
-                        {m.primary && <span className="text-amber-500 shrink-0" role="img" aria-label="primary">★</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="text-xs text-muted-foreground py-4 text-center">no display data reported</div>
-            )}
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Expandable Process List */}
-      {machine.processes && machine.processes.length > 0 && (
+      {!planLocked && machine.processes && machine.processes.length > 0 && (
         <Collapsible open={processesExpanded} onOpenChange={onToggleProcesses}>
           {!processesExpanded && (
             <CollapsibleTrigger asChild>
@@ -844,7 +978,7 @@ function MachineCard({
                     the three labels share a left edge */}
                 <div className="flex items-center gap-2 w-full select-none overflow-hidden">
                   <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                  <span className="text-sm flex-shrink-0 text-muted-foreground/70">
+                  <span className="text-sm flex-shrink-0 text-muted-foreground">
                     <span className="text-foreground font-medium">{machine.processes.length}</span> process{machine.processes.length > 1 ? 'es' : ''}
                   </span>
                   <span className="text-border/60 flex-shrink-0">|</span>
@@ -854,10 +988,10 @@ function MachineCard({
                         {i > 0 && <span className="mx-1.5 text-border/60">·</span>}
                         <span className={`mr-1.5 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${
                           !machine.online ? 'bg-muted-foreground/40' :
-                          proc.status === 'RUNNING' ? 'bg-green-500' :
-                          proc.status === 'INACTIVE' ? 'bg-slate-500' :
-                          proc.status === 'LAUNCH_FAILED' || proc.status === 'STOPPED' || proc.status === 'KILLED' ? 'bg-red-500' :
-                          'bg-yellow-500'
+                          proc.status === 'RUNNING' ? 'bg-success' :
+                          proc.status === 'INACTIVE' ? 'bg-muted-foreground/70' :
+                          proc.status === 'LAUNCH_FAILED' || proc.status === 'STOPPED' || proc.status === 'KILLED' ? 'bg-danger' :
+                          'bg-warning'
                         }`} />
                         <span className="text-sm text-muted-foreground truncate max-w-[160px]" title={proc.name}>{proc.name}</span>
                       </span>
@@ -869,12 +1003,12 @@ function MachineCard({
           )}
           <CollapsibleContent className="overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up">
             <CollapsibleTrigger asChild>
-              <div className="border-t border-border/50 relative cursor-pointer group">
-                <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-                <div className="relative flex items-center px-4 py-2 select-none">
+              <button type="button" aria-label="collapse processes" className="block w-full border-t border-border/50 relative cursor-pointer group">
+                <span className="absolute inset-0 bg-gradient-to-b from-[var(--surface-hover)] to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                <span className="relative flex items-center px-4 py-2 select-none">
                   <ChevronUp className="h-4 w-4 text-muted-foreground group-hover:text-foreground transition-colors flex-shrink-0" />
-                </div>
-              </div>
+                </span>
+              </button>
             </CollapsibleTrigger>
             <div className="relative px-6 pb-2 pt-0 md:pb-4 md:pt-0">
               <div className="overflow-hidden rounded-lg border border-border/30 bg-card divide-y divide-border/60">
@@ -887,8 +1021,8 @@ function MachineCard({
                             flex-1 name contributes nothing, never wraps, and
                             gets squeezed to 0px by the shrink-0 action cluster */}
                         <div className="flex-1 min-w-40 flex items-center gap-2">
-                          <span className="text-sm md:text-base text-white font-medium truncate select-text">{process.name}</span>
-                          <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-green-600' : process.status === 'INACTIVE' ? 'bg-slate-600 text-slate-200' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-red-600 text-white' : 'bg-yellow-600'}`}>
+                          <span className="text-sm md:text-base text-foreground font-medium truncate select-text">{process.name}</span>
+                          <Badge className={`text-xs flex-shrink-0 select-none ${!machine.online ? 'bg-muted text-muted-foreground' : process.status === 'RUNNING' ? 'bg-success-solid text-success-solid-foreground' : process.status === 'INACTIVE' ? 'bg-muted-foreground/40 text-foreground' : process.status === 'LAUNCH_FAILED' || process.status === 'STOPPED' || process.status === 'KILLED' ? 'bg-danger-solid text-danger-solid-foreground' : 'bg-warning-solid text-warning-solid-foreground'}`}>
                             {(!machine.online ? 'unknown' : process.status === 'LAUNCH_FAILED' ? 'failed' : process.status).toLowerCase()}
                           </Badge>
                         </div>
@@ -900,95 +1034,149 @@ function MachineCard({
                           {(() => {
                             const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as LaunchMode;
                             const modeLabels = { off: 'off', always: 'always on', scheduled: 'scheduled' } as const;
+                            const modeColor = currentMode === 'always'
+                              ? 'text-success border-success-border'
+                              : currentMode === 'scheduled'
+                              ? 'text-info border-info-border'
+                              : 'text-muted-foreground border-border/50';
                             // Non-admins: static pill, since the toggle would 403.
                             if (!isSiteAdmin) {
-                              const readOnlyColor = currentMode === 'always'
-                                ? 'text-emerald-400 border-emerald-600/40'
-                                : currentMode === 'scheduled'
-                                ? 'text-blue-400 border-blue-600/40'
-                                : 'text-muted-foreground border-border/50';
                               return (
-                                <div className="hidden md:flex items-center h-8">
-                                  <span className={`flex items-center px-3 text-sm font-medium rounded-md border bg-card ${readOnlyColor}`}>
+                                <div className="flex items-center h-8">
+                                  <span className={`flex items-center px-2.5 md:px-3 text-xs md:text-sm font-medium rounded-md border bg-card ${modeColor}`}>
                                     {modeLabels[currentMode]}
                                   </span>
                                 </div>
                               );
                             }
                             return (
-                              <div className="hidden md:flex items-stretch rounded-md overflow-hidden border border-border/50 h-8">
-                                {(['off', 'always', 'scheduled'] as const).map((mode) => {
-                                  const isActive = currentMode === mode;
-                                  const labels = { off: 'off', always: 'always on', scheduled: 'scheduled' };
-                                  const activeColors = {
-                                    off: 'bg-muted text-foreground',
-                                    always: 'bg-emerald-600 text-white',
-                                    scheduled: 'bg-blue-600 text-white',
-                                  };
-
-                                  if (mode === 'scheduled') {
-                                    return (
-                                      <span key={mode} className={`flex items-stretch ${isActive ? 'bg-blue-600 text-white' : 'bg-card text-muted-foreground'}`}>
-                                        <button
-                                          onClick={() => !isActive && onSetLaunchMode(process.id, process.name, mode, process.exe_path)}
-                                          className={`px-3 text-sm font-medium ${isActive ? 'cursor-default' : 'hover:bg-accent/50 cursor-pointer'} transition-colors`}
-                                        >
-                                          {labels[mode]}
-                                        </button>
-                                        <span className={`w-px ${isActive ? 'bg-blue-400/50' : 'bg-border'}`} />
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            {/* Icon-only: the label lives in the
-                                                tooltip portal, which does not
-                                                surface as an accessible name
-                                                until the pointer hovers, so
-                                                role+name can never resolve it. */}
-                                            <button
-                                              onClick={() => onConfigureSchedule?.(process)}
-                                              data-testid="process-row-configure-schedule"
-                                              className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-blue-500' : 'hover:bg-accent/50'}`}
-                                            >
-                                              <Settings2 className="h-3.5 w-3.5" />
-                                            </button>
-                                          </TooltipTrigger>
-                                          <TooltipContent>
-                                            <p>configure schedule</p>
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      </span>
-                                    );
-                                  }
-
-                                  return (
-                                    <button
-                                      key={mode}
-                                      onClick={() => onSetLaunchMode(process.id, process.name, mode, process.exe_path)}
-                                      className={`px-3 text-sm font-medium transition-all duration-500 cursor-pointer ${isActive ? activeColors[mode] : 'bg-card text-muted-foreground hover:bg-accent/50'}`}
+                              <>
+                                {/* Below md the segmented control does not fit beside
+                                    the row actions, so the mode becomes a menu: the
+                                    list view's compact controls, with the current
+                                    mode on the trigger rather than behind a bare icon. */}
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      aria-label={`launch mode for ${process.name}: ${modeLabels[currentMode]}`}
+                                      className={`md:hidden h-8 px-2.5 text-xs font-medium border bg-card ${modeColor}`}
                                     >
-                                      {labels[mode]}
-                                    </button>
-                                  );
-                                })}
-                              </div>
+                                      {modeLabels[currentMode]}
+                                      <ChevronDown className="h-3 w-3" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="start" className="border-border bg-raised w-52">
+                                    <DropdownMenuLabel className="text-muted-foreground text-xs">
+                                      launch mode
+                                    </DropdownMenuLabel>
+                                    <DropdownMenuRadioGroup
+                                      value={currentMode}
+                                      onValueChange={(value) => {
+                                        if (value !== currentMode) {
+                                          onSetLaunchMode(machineId, process.id, process.name, value as LaunchMode, process.exe_path);
+                                        }
+                                      }}
+                                    >
+                                      <DropdownMenuRadioItem value="off" className="cursor-pointer">
+                                        off
+                                      </DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="always" className="text-success cursor-pointer">
+                                        always on
+                                      </DropdownMenuRadioItem>
+                                      <DropdownMenuRadioItem value="scheduled" className="text-info cursor-pointer">
+                                        scheduled
+                                      </DropdownMenuRadioItem>
+                                    </DropdownMenuRadioGroup>
+                                    <DropdownMenuItem
+                                      onClick={() => onConfigureSchedule?.(machineId, process)}
+                                      className="text-info focus:bg-info-surface focus:text-info cursor-pointer pl-8"
+                                    >
+                                      <Settings2 className="mr-2 h-3.5 w-3.5" />
+                                      configure schedule
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                                <div
+                                  role="group"
+                                  aria-label={`launch mode for ${process.name}`}
+                                  className="hidden md:flex items-stretch rounded-md overflow-hidden border border-border/50 h-8"
+                                >
+                                  {(['off', 'always', 'scheduled'] as const).map((mode) => {
+                                    const isActive = currentMode === mode;
+                                    const activeColors = {
+                                      off: 'bg-muted text-foreground',
+                                      always: 'bg-success-solid text-success-solid-foreground',
+                                      scheduled: 'bg-info-solid text-info-solid-foreground',
+                                    };
+
+                                    if (mode === 'scheduled') {
+                                      return (
+                                        <span key={mode} className={`flex items-stretch ${isActive ? 'bg-info-solid text-info-solid-foreground' : 'bg-card text-muted-foreground'}`}>
+                                          <button
+                                            type="button"
+                                            aria-pressed={isActive}
+                                            onClick={() => !isActive && onSetLaunchMode(machineId, process.id, process.name, mode, process.exe_path)}
+                                            className={`px-3 text-sm font-medium ${isActive ? 'cursor-default' : 'hover:bg-accent/50 cursor-pointer'} transition-colors`}
+                                          >
+                                            {modeLabels[mode]}
+                                          </button>
+                                          <span className={`w-px ${isActive ? 'bg-info-solid-foreground/30' : 'bg-border'}`} />
+                                          <Tooltip>
+                                            <TooltipTrigger asChild>
+                                              <button
+                                                type="button"
+                                                onClick={() => onConfigureSchedule?.(machineId, process)}
+                                                aria-label={`configure schedule for ${process.name}`}
+                                                data-testid="process-row-configure-schedule"
+                                                className={`px-1.5 transition-colors cursor-pointer flex items-center ${isActive ? 'hover:bg-info-solid-foreground/15' : 'hover:bg-accent/50'}`}
+                                              >
+                                                <Settings2 className="h-3.5 w-3.5" />
+                                              </button>
+                                            </TooltipTrigger>
+                                            <TooltipContent>
+                                              <p>configure schedule</p>
+                                            </TooltipContent>
+                                          </Tooltip>
+                                        </span>
+                                      );
+                                    }
+
+                                    return (
+                                      <button
+                                        key={mode}
+                                        type="button"
+                                        aria-pressed={isActive}
+                                        onClick={() => onSetLaunchMode(machineId, process.id, process.name, mode, process.exe_path)}
+                                        className={`px-3 text-sm font-medium transition-all duration-500 cursor-pointer ${isActive ? activeColors[mode] : 'bg-card text-muted-foreground hover:bg-accent/50'}`}
+                                      >
+                                        {modeLabels[mode]}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </>
                             );
                           })()}
                           {isSiteAdmin && (
                             <>
-                              <Button
+                              <IconButton
+                                label={`edit ${process.name}`}
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => onEditProcess(process)}
+                                onClick={() => onEditProcess(machineId, process)}
                                 className="bg-card border border-border/50 text-foreground p-2"
                               >
                                 <Pencil className="h-3 w-3" />
-                              </Button>
+                              </IconButton>
                               {onDuplicateProcess && (
                                 <Tooltip>
                                   <TooltipTrigger asChild>
                                     <Button
                                       variant="ghost"
                                       size="sm"
-                                      onClick={() => onDuplicateProcess(process)}
+                                      onClick={() => onDuplicateProcess(machineId, process)}
                                       aria-label={`duplicate ${process.name}`}
                                       className="bg-card border border-border/50 text-foreground p-2"
                                     >
@@ -1004,40 +1192,46 @@ function MachineCard({
                                   configuration actions — a mis-click here
                                   interrupts a live process */}
                               <div className="ml-auto flex items-center gap-2 md:gap-3">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onRestartProcess(process.id, process.name)}
-                                    aria-label={`restart ${process.name}`}
-                                    className="bg-card border border-border/50 text-foreground disabled:cursor-not-allowed disabled:opacity-50 p-2"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <RotateCcw className="h-3 w-3" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>restart process</p>
-                                </TooltipContent>
-                              </Tooltip>
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onKillProcess(process.id, process.name)}
-                                    aria-label={`kill ${process.name}`}
-                                    className="bg-card border border-border/50 text-red-400 hover:bg-red-950/50 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50 p-2"
-                                    disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
-                                  >
-                                    <Square className="h-3 w-3" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>
-                                  <p>kill process</p>
-                                </TooltipContent>
-                              </Tooltip>
+                              {controlLocked ? (
+                                <ControlUpgradeLink label="restart and kill are part of core" />
+                              ) : (
+                                <>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onRestartProcess(machineId, process.id, process.name)}
+                                        aria-label={`restart ${process.name}`}
+                                        className="bg-card border border-border/50 text-foreground disabled:cursor-not-allowed disabled:opacity-50 p-2"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <RotateCcw className="h-3 w-3" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>restart process</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => onKillProcess(machineId, process.id, process.name)}
+                                        aria-label={`kill ${process.name}`}
+                                        className="bg-card border border-border/50 text-danger hover:bg-danger-surface hover:text-danger disabled:cursor-not-allowed disabled:opacity-50 p-2"
+                                        disabled={process.status !== 'RUNNING' && process.status !== 'LAUNCHING' && process.status !== 'STALLED'}
+                                      >
+                                        <Square className="h-3 w-3" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>kill process</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </>
+                              )}
                               </div>
                             </>
                           )}
@@ -1051,7 +1245,7 @@ function MachineCard({
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={onCreateProcess}
+                      onClick={() => onCreateProcess(machineId)}
                       className="bg-card border border-border/50 text-accent-cyan hover:bg-accent-cyan/15 hover:text-accent-cyan"
                     >
                       <Plus className="h-3 w-3 mr-1" />
@@ -1065,12 +1259,12 @@ function MachineCard({
       )}
 
       {/* add process button for machines with no processes — admin-only */}
-      {isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
+      {!planLocked && isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
         <div className="border-t border-border/50 flex justify-center p-3">
           <Button
             variant="ghost"
             size="sm"
-            onClick={onCreateProcess}
+            onClick={() => onCreateProcess(machineId)}
             className="bg-card border border-border/50 text-accent-cyan hover:bg-accent-cyan/15 hover:text-accent-cyan"
           >
             <Plus className="h-3 w-3 mr-1" />
@@ -1080,40 +1274,28 @@ function MachineCard({
       )}
     </Card>
   );
-}
+});
 
 export function MachineCardView({
   machines,
   statsExpanded,
   processesExpanded,
   displaysExpanded,
-  onToggleStats,
-  onToggleProcesses,
-  onToggleDisplays,
   currentSiteId,
   siteTimezone = 'UTC',
   siteTimeFormat = '12h',
-  onEditProcess,
-  onDuplicateProcess,
-  onCreateProcess,
-  onKillProcess,
-  onRestartProcess,
-  onSetLaunchMode,
-  onConfigureSchedule,
-  onRemoveMachine,
-  onMetricClick,
-  onRestart,
-  onShutdown,
-  onCancelRestart,
-  onDismissRestartPending,
-  onScreenshot,
-  onLiveView,
-  onSwoop,
   schedulesFollowSiteTime,
+  swoopOff,
+  sitePlan,
+  ...handlers
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
   const { prefs, setCardPref } = useDevicePrefs();
+  const temperaturePrefs = useMemo(
+    () => ({ temperatureUnit: userPreferences.temperatureUnit }),
+    [userPreferences.temperatureUnit],
+  );
   const uniqueTimezones = new Set(machines.map(m => m.machineTimezone).filter(Boolean));
   const showLocalClock = uniqueTimezones.size > 1;
 
@@ -1125,10 +1307,11 @@ export function MachineCardView({
     // `grid-cols-1` is load-bearing below md: an implicit `auto` track sizes to
     // min-content, so any nowrap label or nested fr split drags it past the
     // viewport and scrolls the page sideways. minmax(0, 1fr) pins it.
-    <div className="machines-grid grid grid-cols-1 gap-4 md:grid-cols-2">
+    <div className="machines-grid cascade-rows grid grid-cols-1 gap-4 md:grid-cols-2">
       {machines.map((machine) => (
         <MachineCard
           key={machine.machineId}
+          {...handlers}
           machine={machine}
           statsExpanded={statsExpanded}
           processesExpanded={processesExpanded}
@@ -1136,33 +1319,16 @@ export function MachineCardView({
           currentSiteId={currentSiteId}
           siteTimezone={siteTimezone}
           siteTimeFormat={siteTimeFormat}
-          userPreferences={userPreferences}
+          userPreferences={temperaturePrefs}
           isSiteAdmin={canSiteAdmin}
-          cardPref={prefs.cardView[machine.machineId] ?? {}}
-          onSetCardPref={(kind, id) => setCardPref(machine.machineId, kind, id)}
-          onToggleStats={onToggleStats}
-          onToggleProcesses={onToggleProcesses}
-          onToggleDisplays={onToggleDisplays}
-          onEditProcess={(process) => onEditProcess(machine.machineId, process)}
-          onDuplicateProcess={onDuplicateProcess ? (process) => onDuplicateProcess(machine.machineId, process) : undefined}
-          onCreateProcess={() => onCreateProcess(machine.machineId)}
-          onKillProcess={(processId, processName) => onKillProcess(machine.machineId, processId, processName)}
-          onRestartProcess={(processId, processName) => onRestartProcess(machine.machineId, processId, processName)}
-          onSetLaunchMode={(processId, processName, mode, exePath, schedules) =>
-            onSetLaunchMode(machine.machineId, processId, processName, mode, exePath, schedules)
-          }
-          onConfigureSchedule={onConfigureSchedule ? (process) => onConfigureSchedule(machine.machineId, process) : undefined}
-          onRemoveMachine={() => onRemoveMachine(machine.machineId, machine.machineId, machine.online)}
-          onMetricClick={onMetricClick ? (metricType) => onMetricClick(machine.machineId, metricType) : undefined}
-          onRestart={onRestart ? () => onRestart(machine.machineId) : undefined}
-          onShutdown={onShutdown ? () => onShutdown(machine.machineId) : undefined}
-          onCancelRestart={onCancelRestart ? () => onCancelRestart(machine.machineId) : undefined}
-          onDismissRestartPending={onDismissRestartPending ? () => onDismissRestartPending(machine.machineId) : undefined}
-          onScreenshot={onScreenshot ? () => onScreenshot(machine.machineId) : undefined}
-          onLiveView={onLiveView ? () => onLiveView(machine.machineId) : undefined}
-          onSwoop={onSwoop ? () => onSwoop(machine.machineId) : undefined}
+          swoopOff={swoopOff}
+          cardPref={prefs.cardView[machine.machineId] ?? NO_CARD_PREF}
+          onSetCardPref={setCardPref}
           schedulesFollowSiteTime={schedulesFollowSiteTime}
           showLocalClock={showLocalClock}
+          planLimit={sitePlan?.machineLimitFor(machine.machineId)}
+          controlLocked={sitePlan?.controlLocked}
+          swoopLocked={sitePlan?.swoopLocked}
         />
       ))}
     </div>

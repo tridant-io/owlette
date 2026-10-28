@@ -32,17 +32,20 @@ interface Harness {
 
 /**
  * a 16:9 picture letterboxed inside a taller stage — the case that catches
- * anyone normalising against the element rect.
+ * anyone normalising against the element rect. its frame is 1000 px wide
+ * unless `picture` is false, a session still connecting.
  */
-function harness(): Harness {
+function harness(options: { picture?: boolean } = {}): Harness {
   const handlers = new Map<string, (data: unknown) => void>();
   const stage = document.createElement('div');
   stage.getBoundingClientRect = () => rect(0, 0, 1000, 800);
+  const video = document.createElement('video');
+  if (options.picture !== false) Object.defineProperty(video, 'videoWidth', { get: () => 1000 });
 
   const session = {
     viewerId: 'viewer-me',
     stage,
-    video: document.createElement('video'),
+    video,
     contentRect: () => rect(0, 81, 1000, 638),
     onChannelMessage: (label: string, incoming: (data: unknown) => void) => {
       handlers.set(label, incoming);
@@ -101,6 +104,16 @@ describe('SwoopPresence', () => {
     // convention is the one the rust injection side matches.
     expect(cursor?.style.left).toBe(`${0.5 * 999}px`);
     expect(cursor?.style.top).toBe(`${81 + 0.5 * 637}px`);
+    h.detach();
+  });
+
+  it('places no cursor before the first frame, with no picture to place it on', () => {
+    const h = harness({ picture: false });
+    const { container } = render(<SwoopPresence session={h.session} />);
+    h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
+    h.cursor(JSON.stringify({ t: 'vpos', viewer: 'viewer-a', x: 0.5, y: 0.5, tsUs: 2 }));
+    expect(screen.getByLabelText('viewers')).toBeInTheDocument();
+    expect(container.querySelector('div[aria-hidden]')).toBeNull();
     h.detach();
   });
 

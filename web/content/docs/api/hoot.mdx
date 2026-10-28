@@ -1,86 +1,190 @@
 ---
 title: "hoot conversations"
-description: "The canonical public hoot API is the /api/hoot/conversations route family. The /api/cortex/* and /api/chat/* routes still work as compatibility aliases — the shipped CLI and SDKs currently call the cortex ones — but new clients should target /api/hoot/*."
+description: "the public hoot API is the /api/hoot/conversations route family: list, create, send a message and stream the reply, rename, and soft-delete. API-key callers are capped to read-only tools, and every reply spends the LLM key of the user who owns the credential."
+keywords: ["chat", "ai assistant", "llm", "cortex", "conversation", "streaming", "diagnostics"]
 ---
 
-## scopes
+a hoot conversation is a persisted chat pinned either to one machine or to a whole site. you create it, send user messages into it, and each send streams the assistant's reply back on the same response.
 
-Use `chat=<siteId>:read` to list conversations and `chat=<siteId>:write` to create, rename, soft-delete, or send a message.
+| method | path | API-key scope | `Idempotency-Key` |
+|---|---|---|---|
+| `GET` | `/api/hoot/conversations` | `chat=<siteId>:read` (filters the list) | not used |
+| `POST` | `/api/hoot/conversations` | `chat=<siteId>:write` | required |
+| `POST` | `/api/hoot/conversations/{conversationId}` | `chat=<siteId>:write` | required |
+| `PATCH` | `/api/hoot/conversations/{conversationId}` | `chat=<siteId>:write` | optional |
+| `DELETE` | `/api/hoot/conversations/{conversationId}` | `chat=<siteId>:write` | optional |
 
-API-key callers are intentionally capped to read-only hoot tools during streamed replies. A `chat` key can ask hoot to inspect state, but it cannot inherit the owning user's admin role to dispatch destructive machine, process, or deployment tools. Use the dashboard/session flow for operator-approved destructive tool execution until per-tool API-key scopes are introduced.
+there is no route that reads one conversation back. the create response carries the conversation with its messages, and the list returns summaries.
+
+---
+
+## access
+
+- **scopes.** the URL of the per-conversation routes carries only the conversation ID, so the site comes from the conversation itself and the key needs `chat=` on that site. `chat=*` covers every site the key's owner can access.
+- **ownership.** conversations are private to the user who created them. the list returns only your own, and sending to, renaming, or deleting someone else's conversation answers `404`, the same as one that does not exist. a superadmin is the exception: they can act on any conversation, and `owner=all` lists every owner's conversations on the sites the superadmin is a member or owner of.
+- **tool tier.** an API-key caller is held to tier-1 (read-only) tools for the whole reply, whatever the key owner's role. a `chat` key can ask hoot to inspect state, but it cannot restart processes, change config, deploy, or run shell commands. use the dashboard for anything that needs higher tiers or tier-3 approval. see [tool tiers](/docs/dashboard/hoot#tool-tiers).
+- **LLM key.** every reply spends the LLM provider key of the user behind the credential — for an API key, the key's owner. that key is set in the dashboard under [account settings → hoot](/docs/dashboard/hoot#your-key); the settings routes take a dashboard session only, so an API key cannot set or change it. with no key saved, the stream carries an error frame instead of a reply.
+
+---
 
 ## list
 
 ```bash
 curl -fsS "$OWLETTE_API_URL/api/hoot/conversations?siteId=$SITE_ID&page_size=20" \
-  -H "Authorization: Bearer $OWLETTE_TOKEN"
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-Response:
+| query parameter | meaning |
+|---|---|
+| `siteId` | narrow the page to one site. omit it to list every site the caller can read |
+| `page_size` | items per page, default 25, maximum 100. `limit` is accepted as an alias. out-of-range values are clamped, not rejected |
+| `page_token` | the previous page's `next_page_token`. `cursor` is accepted as an alias |
+| `includeDeleted` | `true` to include soft-deleted conversations |
+| `owner` | `all` lists every owner's conversations. superadmin only; for anyone else it is ignored |
+
+an API key only sees sites it holds `chat=<siteId>:read` (or `chat=*:read`) on. a key with no matching scope gets an empty page, not an error.
 
 ```json
 {
   "ok": true,
   "data": {
-    "conversations": [],
+    "conversations": [
+      {
+        "conversationId": "conv_Yb3kQ9mT2xWv8LpR4nZa1cHd",
+        "title": "diagnostics",
+        "siteId": "kiosk-fleet-01",
+        "machineId": "lobby-01",
+        "ownerUid": "user_01HWABCD",
+        "createdAt": "2026-10-01T09:12:44.000Z",
+        "updatedAt": "2026-10-01T09:14:02.000Z",
+        "messageCount": 4
+      }
+    ],
     "next_page_token": "",
     "nextPageToken": ""
   }
 }
 ```
 
+`machineId` is absent on a site-wide conversation, and `deletedAt` appears only on a soft-deleted one. `nextPageToken` is a compatibility alias of `next_page_token`; an empty string means there are no more pages.
+
+---
+
 ## create
 
 ```bash
 curl -fsS -X POST "$OWLETTE_API_URL/api/hoot/conversations" \
-  -H "Authorization: Bearer $OWLETTE_TOKEN" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d "{\"siteId\":\"$SITE_ID\",\"machineId\":\"$MACHINE_ID\",\"title\":\"diagnostics\"}"
 ```
 
-`machineId` is optional. Omit it for a site-wide conversation. `initial_message`, when supplied, must use `role: "user"`.
+| field | required | meaning |
+|---|---|---|
+| `siteId` | yes | the site the conversation belongs to |
+| `machineId` | no | pin every turn to this machine. omit it for a site-wide conversation, whose tools fan out across the site's online machines that have hoot switched on |
+| `title` | no | trimmed and cut to 100 characters. defaults to `untitled chat` |
+| `initial_message` | no | `{ "role": "user", "content": "..." }`. stored as the first message; it does not trigger a reply. `role` must be `user` |
+
+the response is `201` with the conversation, including `messages` (each `{ role, content, timestamp }`). a caller without access to `siteId` gets `404 not_found`, and a key without `chat=<siteId>:write` gets `403 scope_insufficient`.
+
+---
 
 ## send
 
 ```bash
 curl -fsS -N -X POST "$OWLETTE_API_URL/api/hoot/conversations/$CONVERSATION_ID" \
-  -H "Authorization: Bearer $OWLETTE_TOKEN" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
   -H "Content-Type: application/json" \
   -H "Idempotency-Key: $(uuidgen)" \
   -d '{"role":"user","content":"summarize the current machine health"}'
 ```
 
-The response is `text/plain; charset=utf-8` with `X-Vercel-AI-Data-Stream: v1`. Frames follow the AI SDK line-prefixed protocol:
+the body takes exactly `role` (always `user`) and `content`. any other field is refused with `400 forbidden_field`, so a send cannot retarget a conversation: create a new one pinned to the machine you want. the user message is saved before the model runs, so a failed reply still leaves the prompt in the conversation.
 
-- `0:"text"`: assistant text delta
-- `d:{...}`: stream completion metadata
-- `3:"message"`: upstream hoot error
+### stream format
 
-Public send accepts only `role` and `content`. To change machines, create a new conversation pinned to the desired machine instead of overriding a conversation target mid-stream.
+once the checks below pass, the response is `200` with `Content-Type: text/plain; charset=utf-8` and `X-Vercel-AI-Data-Stream: v1` — but the body's framing depends on where the turn runs:
+
+- **server-side** — every API-key caller, and any caller not on local hoot. the body is the AI SDK UI message stream: one `data: {json}` line per part, a blank line between parts, ending with `data: [DONE]`. text arrives in `text-delta` parts, and an error during the reply arrives as an `error` part with `errorText`. tool calls and step boundaries arrive as their own part types, which you can skip.
+
+  ```text
+  data: {"type":"start"}
+
+  data: {"type":"start-step"}
+
+  data: {"type":"text-start","id":"0"}
+
+  data: {"type":"text-delta","id":"0","delta":"lobby-01 is online"}
+
+  data: {"type":"text-end","id":"0"}
+
+  data: {"type":"finish-step"}
+
+  data: {"type":"finish","finishReason":"stop"}
+
+  data: [DONE]
+  ```
+
+- **local hoot** — a session or Firebase ID token caller, on a single-machine conversation, when the caller is a site admin, the site's tier-3 approval gate is off, and local hoot is healthy on the machine (see [local hoot](/docs/dashboard/hoot#local-hoot-public-conversations-api-only)). the body uses line-prefixed frames: `0:"delta"` for text, `d:{"finishReason":"stop"}` at the end, and `3:"message"` for an error. a local turn that has not finished after 60 seconds ends with `3:"hoot response timed out"`.
+
+a failure before the model starts — no LLM key saved, a key the server can no longer decrypt — arrives on either path as a single `3:"message"` line inside the `200`. a client that reads both framings, the `error` part, and the `3:` line covers every case; [`owlette chat send`](/docs/cli/reference/chat#send) does exactly that.
+
+### errors before the stream
+
+| status | code | cause |
+|---|---|---|
+| `400` | `validation_failed` | `role` is not `user`, or `content` is empty |
+| `400` | `forbidden_field` | the body has a field other than `role` and `content` |
+| `400` | `idempotency_key_required` | the `Idempotency-Key` header is missing |
+| `404` | `not_found` | the conversation does not exist, is deleted, or is not yours |
+| `503` | `cortex_unavailable` | the pinned machine is offline, or no machine in the site is online |
+| `423` | `cortex_unavailable` | hoot is switched off on the pinned machine, or on every online machine in the site |
+
+the `code` keeps the pre-rename `cortex` spelling; it is a stable identifier.
+
+---
 
 ## rename
 
 ```bash
 curl -fsS -X PATCH "$OWLETTE_API_URL/api/hoot/conversations/$CONVERSATION_ID" \
-  -H "Authorization: Bearer $OWLETTE_TOKEN" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
   -H "Content-Type: application/json" \
-  -H "Idempotency-Key: $(uuidgen)" \
   -d '{"title":"morning diagnostics"}'
 ```
 
-Only `title` is mutable.
+only `title` is mutable; anything else is `400 forbidden_field`. the title must be a non-empty string and is cut to 100 characters. the response is `{ "ok": true, "data": { "conversationId": "...", "title": "..." } }`.
+
+---
 
 ## delete
 
 ```bash
 curl -fsS -X DELETE "$OWLETTE_API_URL/api/hoot/conversations/$CONVERSATION_ID" \
-  -H "Authorization: Bearer $OWLETTE_TOKEN" \
-  -H "Idempotency-Key: $(uuidgen)"
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-Delete is a soft delete. A repeated delete returns success with `alreadyDeleted: true`.
+delete is a soft delete and is safe to repeat: a second delete returns `200` with `alreadyDeleted: true`. a deleted conversation drops out of the list unless you pass `includeDeleted=true`, and sending to or renaming it answers `404`.
 
-## internal routes
+---
 
-`/api/hoot/categorize`, `/api/hoot/provision-key`, `/api/hoot/autonomous`, and `/api/hoot/escalation` are dashboard, agent, or scheduler internals. They are not public API surfaces. Each also answers on its `/api/cortex/*` alias, which is what fleet agents and the shipped clients still call.
+## compatibility aliases
+
+| alias | serves |
+|---|---|
+| `/api/cortex/conversations`, `/api/cortex/conversations/{conversationId}` | the same handlers as `/api/hoot/conversations/*`. documented in the reference as deprecated |
+| `/api/chat` (`GET`), `/api/chat/new` (`POST`), `/api/chat/{conversationId}` (`POST`, `PATCH`, `DELETE`) | list, create, and the per-conversation verbs, with the same behavior. not in the reference |
+
+older CLI and SDK builds call the aliases, which is why they stay. the current CLI and both SDKs call `/api/hoot/*`, and so should new clients.
+
+---
+
+## not public
+
+these routes exist but are not part of the public contract; their request shapes belong to the dashboard, agent, or scheduler and change with them:
+
+- `/api/hoot` (the dashboard chat), `/api/hoot/stop`, `/api/hoot/cancel-tool`, `/api/hoot/categorize`, `/api/hoot/provision-key`, `/api/hoot/autonomous`, `/api/hoot/escalation`, and their `/api/cortex/*` aliases, which fleet agents still call.
+- `/api/hoot/chats/{chatId}/shares` and `/api/hoot/followups/{followupId}` — share links and scheduled follow-ups for dashboard chats.
+- `/api/settings/llm-key` and `/api/settings/llm-models` — the LLM key settings. dashboard session only.

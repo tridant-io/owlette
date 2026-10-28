@@ -1,14 +1,19 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
 import { LazyAuthProvider } from "@/components/LazyAuthProvider";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { FALLBACK_THEME } from "@/lib/theme";
 import { Toaster } from "@/components/ui/sonner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Footer } from "@/components/Footer";
 import SentryInit from "@/components/SentryInit";
 import { SecurityVersionBanner } from "@/components/SecurityVersionBanner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { BAR_POSITION_BOOT_SCRIPT } from '@/lib/swoop/barPosition';
+import { viewerAppHasNativeKeys, viewerAppPlatform, viewerAppVersion } from '@/lib/swoop/viewerApp';
+import { ViewerAppProvider } from '@/contexts/ViewerAppContext';
 
 const geist = Geist({
   variable: "--font-geist",
@@ -26,7 +31,7 @@ const siteUrl = process.env.RAILWAY_PUBLIC_DOMAIN
 
 export const metadata: Metadata = {
   title: {
-    default: "owlette — keep every windows machine running",
+    default: "owlette — keep every machine running",
     // Every app route sets a short lowercase name (the nav label) and gets
     // "owlette - <name>" in the tab.
     //
@@ -36,15 +41,15 @@ export const metadata: Metadata = {
     // is what gives them "owlette - Getting Started" instead of a brandless tab.
     template: "owlette - %s",
   },
-  description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+  description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
   icons: {
     icon: '/icon.svg',
     shortcut: '/icon.svg',
     apple: '/owlette-icon.png',
   },
   openGraph: {
-    title: "owlette — keep every windows machine running",
-    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+    title: "owlette — keep every machine running",
+    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
     url: siteUrl,
     siteName: "owlette",
     images: [
@@ -60,8 +65,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: 'summary_large_image',
-    title: "owlette — keep every windows machine running",
-    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows machines.",
+    title: "owlette — keep every machine running",
+    description: "owlette keeps your installations running 24/7 — remote monitoring, auto-recovery, and AI-powered fleet management for Windows, macOS and Linux machines.",
     images: ['/og-image.png'],
   },
   metadataBase: new URL(siteUrl),
@@ -72,9 +77,13 @@ export const metadata: Metadata = {
       'text/plain': '/llms.txt',
     },
   },
-  other: {
-    'theme-color': '#0a0f1a',
-  },
+};
+
+export const viewport: Viewport = {
+  themeColor: [
+    { media: '(prefers-color-scheme: dark)', color: '#0a0f1a' },
+    { media: '(prefers-color-scheme: light)', color: '#f4f7fb' },
+  ],
 };
 
 export default async function RootLayout({
@@ -83,16 +92,23 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   // Reading request headers opts the app into per-request rendering so the
-  // proxy CSP nonce can be applied to Next.js framework inline scripts.
-  await headers();
+  // proxy CSP nonce can be applied to Next.js framework inline scripts, and
+  // to the theme script, which strict-dynamic blocks without it.
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get('x-nonce') ?? undefined;
+  // owlette swoop is told apart here, from its ua token, so its pages are the
+  // app's in the server's html instead of turning into them after hydration
+  const userAgent = requestHeaders.get('user-agent') ?? '';
   // Validate Firebase environment variables
   // In development: logs warnings
   // In production: throws error if misconfigured
   // TEMPORARILY DISABLED for initial Railway deployment
   // validateEnvironmentOrThrow();
 
+  // the theme script swaps the server's fallback class before first paint, so
+  // <html> never matches what was rendered
   return (
-    <html lang="en" className="dark scroll-smooth">
+    <html lang="en" className={`${FALLBACK_THEME} scroll-smooth`} suppressHydrationWarning>
       <body
         className={`${geist.variable} ${geistMono.variable} font-sans antialiased text-foreground`}
       >
@@ -134,17 +150,27 @@ export default async function RootLayout({
 
 
 -->` }} style={{ display: 'none' }} />
-        <SentryInit />
-        <SecurityVersionBanner />
-        <ErrorBoundary>
-          <LazyAuthProvider>
-            <TooltipProvider delayDuration={300}>
-              {children}
-              <Footer />
-              <Toaster theme="dark" />
-            </TooltipProvider>
-          </LazyAuthProvider>
-        </ErrorBoundary>
+        {/* the swoop bar's side, before a session page's first paint; a no-op on every other path */}
+        <script nonce={nonce} suppressHydrationWarning dangerouslySetInnerHTML={{ __html: BAR_POSITION_BOOT_SCRIPT }} />
+        <ThemeProvider nonce={nonce}>
+          <SentryInit />
+          <SecurityVersionBanner />
+          <ViewerAppProvider
+            platform={viewerAppPlatform(userAgent)}
+            nativeKeys={viewerAppHasNativeKeys(userAgent)}
+            version={viewerAppVersion(userAgent)}
+          >
+            <ErrorBoundary>
+              <LazyAuthProvider>
+                <TooltipProvider delayDuration={300}>
+                  {children}
+                  <Footer />
+                  <Toaster />
+                </TooltipProvider>
+              </LazyAuthProvider>
+            </ErrorBoundary>
+          </ViewerAppProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

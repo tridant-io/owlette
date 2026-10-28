@@ -293,6 +293,14 @@
         { "fieldPath": "siteId", "order": "ASCENDING" },
         { "fieldPath": "state", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "bug_reports",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

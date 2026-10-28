@@ -2,7 +2,7 @@
 
 /**
  * Unit tests for `web/lib/actions/executeMachineCommand.server.ts`: allowlist
- * enforcement, input validation, machine-doc gating (404/409), command write
+ * enforcement, the plan gate, input validation, machine-doc gating (404/409), command write
  * shape, correlationId propagation, audit payload.
  *
  * Authorization (capability + scope + idempotency) lives in the route shim /
@@ -12,21 +12,35 @@
 
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
+// only the plan resolver reads through getAdminDb (the action core takes an
+// injected db): the site, for its payer, and the payer's user doc.
+const mockAdminCollection = jest.fn((name: string) => ({
+  doc: () => ({
+    get: async () => ({ data: () => (name === 'sites' ? { owner: 'payer_1' } : { role: 'member' }) }),
+  }),
+}));
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => ({ collection: () => ({ doc: () => ({}) }) }),
+  getAdminDb: () => ({ collection: mockAdminCollection }),
 }));
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
+}));
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 import {
   executeMachineCommand,
   ExecuteMachineCommandError,
   ALLOWED_COMMAND_TYPES,
+  parseActiveHoursOverride,
+  resolveActiveHoursOverride,
   type ExecuteMachineCommandContext,
 } from '@/lib/actions/executeMachineCommand.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 
 const mockedEmit = emitMutation as jest.MockedFunction<typeof emitMutation>;
 
@@ -298,6 +312,49 @@ describe('executeMachineCommand — machine doc gating', () => {
     expect(mockedEmit).not.toHaveBeenCalled();
   });
 
+  describe('a restart held until active hours end', () => {
+    const HELD = { type: 'reboot_machine', payload: { when: 'after_active_hours' } };
+
+    it.each([
+      ['an agent older than the guard', { online: true, capabilities: { swoop: 1 } }],
+      ['a machine with no capabilities', { online: true }],
+      ['a capability that is not 1', { online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: true } }],
+      ['a Mac, which has no active hours', { online: true, osFamily: 'macos', capabilities: { keepAwake: 1 } }],
+      // the old agent never clears the 1 its newer self wrote
+      ['a machine rolled back to 3.3.7', { online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } }],
+      ['a capability with no agent version', { online: true, capabilities: { activeHoursGuard: 1 } }],
+    ])('throws 409 held_restart_unsupported on %s, before anything is queued', async (_label, machine) => {
+      const fake = buildFakeDb(machine);
+      await expect(executeMachineCommand(ctxFor(), HELD, { db: fake.db })).rejects.toMatchObject({
+        status: 409,
+        code: 'held_restart_unsupported',
+        // the neutral reason: api and CLI readers get no advice meant for a model.
+        detail: expect.stringMatching(/older than owlette 4\.1\.21.*so nothing was sent\.$/),
+      });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+
+    it('queues it on an agent that holds it', async () => {
+      const fake = buildFakeDb({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } });
+      await executeMachineCommand(ctxFor(), HELD, { db: fake.db, now: () => 1 });
+      const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+      expect(entry).toMatchObject({ type: 'reboot_machine', when: 'after_active_hours' });
+    });
+
+    it('leaves a restart now, and a shutdown, to every agent', async () => {
+      const fake = buildFakeDb({ online: true });
+      for (const input of [
+        { type: 'reboot_machine', payload: { when: 'now' } },
+        { type: 'reboot_machine', payload: {} },
+        { type: 'shutdown_machine', payload: {} },
+      ]) {
+        await executeMachineCommand(ctxFor(), input, { db: fake.db });
+      }
+      expect(fake.setCalls).toHaveLength(3);
+    });
+  });
+
   it('writes when machine.online is missing (legacy docs without the field)', async () => {
     // `online === false` is the gate; an absent field means online, so legacy
     // pre-heartbeat machine docs still accept commands.
@@ -395,6 +452,47 @@ describe('executeMachineCommand — command write shape', () => {
     expect(entry.siteId).toBe(SITE);
     expect(entry.machineId).toBe(MACHINE);
     expect(entry.delay_seconds).toBe(5);
+  });
+
+  // only the server grants an active-hours override, from a typed option; a
+  // caller's payload can never carry one onto the command.
+  const OVERRIDE_NAMES = ['activeHoursOverride', 'active_hours_override', 'override_active_hours', 'override_reason'];
+  const overrideBag = () => ({
+    activeHoursOverride: { reason: 'show is over', approvedBy: 'user:attacker' },
+    active_hours_override: { reason: 'show is over' },
+    override_active_hours: true,
+    override_reason: 'show is over',
+  });
+
+  it('strips every active-hours override name from the payload', async () => {
+    const fake = buildFakeDb({ online: true, agent_version: '4.1.21', capabilities: { activeHoursGuard: 1 } });
+    await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: { ...overrideBag(), delay_seconds: 5, when: 'after_active_hours' } },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    for (const name of OVERRIDE_NAMES) expect(entry).not.toHaveProperty(name);
+    expect(entry.delay_seconds).toBe(5);
+    // deferral is not privileged, so it is not reserved.
+    expect(entry.when).toBe('after_active_hours');
+  });
+
+  it('strips every active-hours override name from mcp_tool_call tool_params', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      {
+        type: 'mcp_tool_call',
+        payload: {
+          tool_name: 'manage_windows_update',
+          tool_params: { ...overrideBag(), action: 'set_active_hours', start_hour: 9 },
+        },
+      },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    expect(entry.tool_params).toEqual({ action: 'set_active_hours', start_hour: 9 });
   });
 
   it('stamps auditCorrelationId when ctx.correlationId is set', async () => {
@@ -595,5 +693,291 @@ describe('executeMachineCommand — audit emission', () => {
       ),
     ).rejects.toThrow(ExecuteMachineCommandError);
     expect(mockedEmit).not.toHaveBeenCalled();
+  });
+});
+
+// active-hours override (active-hours-guard task 2.3)
+
+describe('executeMachineCommand — active-hours override', () => {
+  function entryOf(fake: FakeDb): Record<string, unknown> {
+    return Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+  }
+
+  it('writes the trimmed reason with approvedBy = the user actor, and audits it', async () => {
+    const fake = buildFakeDb();
+    const result = await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: '  show is over  ' } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({
+      reason: 'show is over',
+      approvedBy: 'user:user_42',
+    });
+    expect(mockedEmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: result.commandId,
+        attributes: expect.objectContaining({
+          activeHoursOverride: true,
+          activeHoursOverrideReason: 'show is over',
+        }),
+      }),
+    );
+  });
+
+  it('uses the apiKey actor as approvedBy', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor({ auditActor: 'apiKey:key_test_1' }),
+      { type: 'shutdown_machine', payload: {}, activeHoursOverride: { reason: 'maintenance' } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({
+      reason: 'maintenance',
+      approvedBy: 'apiKey:key_test_1',
+    });
+  });
+
+  it('the typed override wins over one smuggled in the payload', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      {
+        type: 'reboot_machine',
+        payload: { activeHoursOverride: { reason: 'x', approvedBy: 'user:attacker' } },
+        activeHoursOverride: { reason: 'mine' },
+      },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake).activeHoursOverride).toEqual({ reason: 'mine', approvedBy: 'user:user_42' });
+  });
+
+  it.each(['system:hoot', 'system:talon', ''])(
+    'refuses an override from the %p actor and writes nothing',
+    async (auditActor) => {
+      const fake = buildFakeDb();
+      await expect(
+        executeMachineCommand(
+          ctxFor({ auditActor }),
+          { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: 'show is over' } },
+          { db: fake.db },
+        ),
+      ).rejects.toMatchObject({ status: 400, code: 'active_hours_override_not_allowed' });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['an empty reason', { reason: '' }],
+    ['a blank reason', { reason: '   ' }],
+    ['an over-long reason', { reason: 'x'.repeat(501) }],
+    ['a non-string reason', { reason: 42 }],
+    ['an unknown key', { reason: 'ok', approvedBy: 'user:attacker' }],
+  ])('rejects %s with 400 and writes nothing', async (_label, override) => {
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(
+        ctxFor(),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        { type: 'reboot_machine', payload: {}, activeHoursOverride: override as any },
+        { db: fake.db },
+      ),
+    ).rejects.toMatchObject({ status: 400, code: 'validation_failed' });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('accepts a 500-character reason', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor(),
+      { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: 'x'.repeat(500) } },
+      { db: fake.db, now: () => 1 },
+    );
+    expect((entryOf(fake).activeHoursOverride as { reason: string }).reason).toHaveLength(500);
+  });
+
+  it('without an override the envelope and the audit carry none', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(
+      ctxFor({ auditActor: 'system:hoot' }),
+      { type: 'reboot_machine', payload: {} },
+      { db: fake.db, now: () => 1 },
+    );
+    expect(entryOf(fake)).not.toHaveProperty('activeHoursOverride');
+    const attributes = mockedEmit.mock.calls[0][0].attributes;
+    expect(attributes).not.toHaveProperty('activeHoursOverride');
+    expect(attributes).not.toHaveProperty('activeHoursOverrideReason');
+  });
+});
+
+describe('parseActiveHoursOverride', () => {
+  it('treats undefined and null as no override', () => {
+    expect(parseActiveHoursOverride(undefined)).toEqual({ ok: true });
+    expect(parseActiveHoursOverride(null)).toEqual({ ok: true });
+  });
+
+  it('trims the reason', () => {
+    expect(parseActiveHoursOverride({ reason: ' late show ' })).toEqual({
+      ok: true,
+      override: { reason: 'late show' },
+    });
+  });
+
+  it.each([true, 'reason', 1, ['reason']])('rejects the non-object %p', (value) => {
+    expect(parseActiveHoursOverride(value)).toMatchObject({ ok: false });
+  });
+});
+
+describe('resolveActiveHoursOverride', () => {
+  it('stamps the approving person on the trimmed reason', () => {
+    expect(resolveActiveHoursOverride({ reason: ' late show ' }, 'user:u1')).toEqual({
+      ok: true,
+      override: { reason: 'late show', approvedBy: 'user:u1' },
+    });
+    expect(resolveActiveHoursOverride({ reason: 'late show' }, 'apiKey:k1')).toEqual({
+      ok: true,
+      override: { reason: 'late show', approvedBy: 'apiKey:k1' },
+    });
+  });
+
+  it.each(['system:hoot', 'system:talon', 'user:', ''])('refuses an override from the %p actor', (actor) => {
+    expect(resolveActiveHoursOverride({ reason: 'late show' }, actor)).toMatchObject({
+      ok: false,
+      code: 'active_hours_override_not_allowed',
+    });
+  });
+
+  it('needs no person when there is no override', () => {
+    expect(resolveActiveHoursOverride(undefined, 'system:hoot')).toEqual({ ok: true });
+    expect(resolveActiveHoursOverride(null, 'system:hoot')).toEqual({ ok: true });
+  });
+
+  it('reports a malformed override as a validation error, whoever sent it', () => {
+    expect(resolveActiveHoursOverride({ reason: '  ' }, 'system:hoot')).toMatchObject({
+      ok: false,
+      code: 'validation_failed',
+    });
+  });
+});
+
+// plan gate (plan.md decision 7)
+
+describe('executeMachineCommand — plan gate', () => {
+  const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
+  const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
+  const FREE = {
+    ok: true,
+    resolved: false,
+    standing: 'expired',
+    inGoodStanding: false,
+    ent: { 'owlette.machines': '1', 'owlette.sites': '1', 'owlette.control': '0', 'owlette.hoot': '0' },
+    epoch: 0,
+  };
+  const CORE = { ...FREE, resolved: true, standing: 'active', ent: { ...FREE.ent, 'owlette.control': '1' } };
+  const PLAN_FREE_TYPES = ['update_owlette', 'cancel_reboot', 'dismiss_reboot_pending', 'stop_live_view', 'cancel_mcp_tool'];
+
+  function enforce(): void {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.TRIDANT_API_URL = 'https://tridant.test';
+    process.env.TRIDANT_LICENSE_KEY = 'test-key';
+  }
+
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    mockGetEntitlements.mockResolvedValue(FREE);
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it('enforcement off: queues a gated type without reading anything for the plan', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockAdminCollection).not.toHaveBeenCalled();
+  });
+
+  for (const type of [...ALLOWED_COMMAND_TYPES].filter((t) => !PLAN_FREE_TYPES.includes(t)).sort()) {
+    it(`free: refuses ${type} with 402 plan_required and writes nothing`, async () => {
+      enforce();
+      const fake = buildFakeDb();
+      // hoot's tool calls are hoot's (pro); every other gated type is control (core).
+      const entitlement = type === 'mcp_tool_call' ? 'owlette.hoot' : 'owlette.control';
+      await expect(
+        executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db }),
+      ).rejects.toMatchObject({
+        name: 'ExecuteMachineCommandError',
+        status: 402,
+        code: 'plan_required',
+        detail: PLAN_REQUIRED_DETAIL[entitlement],
+        entitlement,
+      });
+      expect(mockGetEntitlements).toHaveBeenCalledWith('payer_1');
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const type of PLAN_FREE_TYPES) {
+    it(`free: still queues ${type}`, async () => {
+      enforce();
+      const fake = buildFakeDb();
+      const result = await executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db });
+      expect(result.commandId).toMatch(/^cmd_/);
+      expect(fake.setCalls).toHaveLength(1);
+      expect(mockGetEntitlements).not.toHaveBeenCalled();
+    });
+  }
+
+  it('core: queues a control type', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue(CORE);
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('core: refuses a hoot tool call on owlette.hoot', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue(CORE);
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db }),
+    ).rejects.toMatchObject({ status: 402, code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('pro: queues a hoot tool call', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.hoot': '1' } });
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('fails open when tridant is unreachable', async () => {
+    enforce();
+    mockGetEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('validates the input before resolving the plan', async () => {
+    enforce();
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(ctxFor(), { type: 'format_drive', payload: {} }, { db: fake.db }),
+    ).rejects.toMatchObject({ status: 400, code: 'unsupported_command_type' });
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });

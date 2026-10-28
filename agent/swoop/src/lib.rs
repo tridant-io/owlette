@@ -5,10 +5,11 @@
 //! comment names the task that fills it.
 //!
 //! Layout rule, applied from the start so the crate stays checkable on a macOS
-//! or Linux host and so Wave 9's platform seams are cheap: **traits and wire
-//! types are portable, Win32 backends are `#[cfg(windows)]`**. A module that is
+//! or Linux host and so the platform seams are cheap: **traits and wire types
+//! are portable, Win32 backends are `#[cfg(windows)]`**. A module that is
 //! nothing but Win32 is gated here; a module that defines a trait keeps its
-//! backend gated inside.
+//! backend gated inside. The session loop reaches a backend only through
+//! [`platform`]'s names, so it compiles on every OS.
 
 pub mod audio;
 pub mod bundle;

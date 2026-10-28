@@ -15,12 +15,20 @@ import { Timestamp, FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
 import { createModel, buildAutonomousSystemPrompt } from '@/lib/llm';
-import { getToolsByTier, EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
+import {
+  getToolsByTier,
+  withoutActiveHoursOverride,
+  EXISTING_COMMAND_MAPPINGS,
+  type McpToolDefinition,
+} from '@/lib/mcp-tools';
 import {
   resolveLlmConfig,
   resolveSiteKeyOwner,
   isMachineOnline,
   isHootEnabled,
+  getMachineSummary,
+  heldRestartRefusal,
+  HELD_RESTART_AUTONOMOUS_DETAIL,
   executeServerSideTool,
   SERVER_SIDE_TOOLS,
   type BuildExecutableToolsOptions,
@@ -33,6 +41,7 @@ import { escalate } from '@/lib/hoot-escalation.server';
 import { emitSecurityBoundaryMetric } from '@/lib/securityBoundaryMetrics.server';
 import { hootInternalSecret } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { requireEntitlement } from '@/lib/plan.server';
 
 const MAX_STEPS = 15;
 const MAX_CONCURRENT_SESSIONS = 3;
@@ -109,7 +118,9 @@ function buildAutonomousTools(
   machineId: string,
   chatId: string,
   eventId: string,
-  toolDefs: McpToolDefinition[]
+  toolDefs: McpToolDefinition[],
+  /** the machine's agent has the guard (`hasActiveHoursGuard`: the capability on 4.1.21 or later), so it can hold a restart. */
+  activeHoursGuard: boolean,
 ) {
   const dispatchCtx = { db, siteId, machineId, chatId, eventId };
   // No chatId/userId — an autonomous run has no session, so server-side
@@ -126,7 +137,9 @@ function buildAutonomousTools(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     tools[toolName] = tool<any, any, any>({
       description: def.description,
-      inputSchema: jsonSchema(def.parameters as Record<string, unknown>),
+      // nobody approves an unattended call, so it is never offered an
+      // active-hours override; `when: after_active_hours` stays.
+      inputSchema: jsonSchema(withoutActiveHoursOverride(def).parameters as Record<string, unknown>),
       execute: async (params) => {
         if (SERVER_SIDE_TOOLS.has(toolName)) {
           return executeServerSideTool(
@@ -140,6 +153,8 @@ function buildAutonomousTools(
         }
         const existingCmd = EXISTING_COMMAND_MAPPINGS[toolName];
         if (existingCmd) {
+          const refusal = heldRestartRefusal(toolName, params, activeHoursGuard, HELD_RESTART_AUTONOMOUS_DETAIL);
+          if (refusal) return refusal;
           return dispatchExistingCommandAsSystem(
             dispatchCtx,
             existingCmd,
@@ -179,6 +194,11 @@ export async function POST(request: NextRequest) {
 
     if (!settings.autonomousEnabled) {
       return NextResponse.json({ accepted: false, reason: 'autonomous_disabled' });
+    }
+
+    if (await requireEntitlement(siteId, 'owlette.hoot')) {
+      console.log(`[hoot/autonomous] Skipped ${sanitizeForLog(machineId)}:${sanitizeForLog(processName)}: the site's plan does not include owlette.hoot`);
+      return NextResponse.json({ accepted: false, reason: 'plan_required' });
     }
 
     // Dedup on machine+process within the cooldown window, and on nonce when
@@ -358,10 +378,13 @@ async function runAutonomousInvestigation(
     // No shared site key exists and a machine-triggered run has no author, so
     // it spends the SITE OWNER's key — the one uid durable for the site's life.
     const llmConfig = await resolveLlmConfig(db, await resolveSiteKeyOwner(db, siteId));
+    // a failed read is no reason to drop the investigation: utc, and a machine that holds nothing.
+    const machine = await getMachineSummary(db, siteId, machineId).catch(() => null);
+    const activeHoursGuard = machine?.activeHoursGuard === true;
 
     const maxTier = settings.maxTier ?? 2;
     const toolDefs = getToolsByTier(maxTier as 1 | 2 | 3);
-    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs);
+    const tools = buildAutonomousTools(db, siteId, machineId, chatId, eventId, toolDefs, activeHoursGuard);
 
     const eventLabel = eventType === 'process_start_failed' ? 'failed to start' : 'crashed';
     const eventContext = [
@@ -372,7 +395,9 @@ async function runAutonomousInvestigation(
     const systemPrompt = buildAutonomousSystemPrompt(
       machineName,
       settings.directive || '',
-      eventContext
+      eventContext,
+      machine?.timezone,
+      activeHoursGuard,
     );
 
     const model = createModel(llmConfig);

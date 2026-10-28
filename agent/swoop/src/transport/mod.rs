@@ -15,7 +15,7 @@ pub mod governor;
 pub mod ice_policy;
 pub mod pacer;
 pub mod rtc;
-#[cfg(feature = "turn")]
+pub mod stun;
 pub mod turn;
 
 /// One viewer's video path.

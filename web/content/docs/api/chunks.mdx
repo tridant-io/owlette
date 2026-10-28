@@ -1,27 +1,30 @@
 ---
-title: "chunks - the content-addressed data plane"
-description: "chunks are the atomic unit of storage in roost. every file in a version is a list of chunk digests; every chunk is an immutable blob of bytes keyed by its sha-256 hash. this doc is the end-to-end contract for chunking, hash format, storage layout, upload flow, download flow, cross-roost mount, referrer lookup, retry behavior, and error taxonomy."
+title: "roost chunks"
+description: "chunks are the unit of storage in roost: every file in a version is a list of 4 MiB blocks, each stored once per site under its SHA-256 hash. this page covers the chunk format, storage layout, the check, upload and download flow, cross-roost mounts, referrer lookup, retries and errors."
+keywords: ["projects", "project distribution", "assets", "blob storage"]
 ---
 
-**Last updated**: 2026-05-01
-**Status**: normative for all roost v2 uploads, downloads, gc, and rollback paths.
+**last updated**: 2026-10-05
+
+a chunk is an immutable block of bytes addressed by its SHA-256 hash. a [version](/docs/api/versions) lists its files, and each file lists the hashes of its chunks in order. you upload a chunk once per site; every later version that contains the same bytes reuses it.
 
 related:
-- [`versions.md`](/docs/api/versions) - version publish schema; chunks are embedded in `version.files[].chunks[]` as `{ hash, size }`.
-- `web/openapi.yaml` - rendered route reference.
-- [`quickstart.md`](/docs/api/quickstart) - first public API smoke workflow before you move on to roost publishing.
+- [versions](/docs/api/versions) - the version body that embeds chunks as `files[].chunks[]` entries of `{ hash, size }`.
+- [API reference](/docs/api) - the rendered route reference.
+- [quickstart](/docs/api/quickstart) - a first API smoke test before you publish roost content.
+
+the examples use `$OWLETTE_API_URL` (`https://owlette.app`) and `$OWLETTE_API_KEY`, set up as in the [quickstart](/docs/api/quickstart).
 
 ---
 
-## 1. chunk shape
+## chunk shape
 
-- **fixed size**: every chunk is exactly **4 MiB (4,194,304 bytes)** except the last chunk of each file, which may be **1..4,194,304 bytes**.
-- **algorithm**: sha-256 only in v1. content-defined chunking (fastcdc / rabin) is explicitly deferred to v3.
-- **hash encoding**: lowercase hex, exactly 64 chars, matching `^[0-9a-f]{64}$`.
-- **wire format**: every public chunk endpoint accepts and returns the bare 64-hex digest. do not add an algorithm prefix in request bodies, query strings, or path parameters.
-- **version format**: the same bare 64-hex digest is stored in `version.files[].chunks[].hash`.
-- **zero-byte files** have `chunks: []` and `size: 0`. the empty chunk is never stored in r2.
-- **ordering**: chunks within a file are ordered by file offset. concatenation in order reproduces the file exactly; no gaps, no overlaps.
+- **fixed size**: the reference chunkers cut every file into **4 MiB (4,194,304 byte)** blocks; the last block of a file is **1 to 4,194,304 bytes**. the server does not check chunk sizes, so other sizes still upload and publish, but they will not dedup against content chunked the standard way.
+- **algorithm**: SHA-256 only. content-defined chunking (FastCDC, Rabin) is not supported.
+- **hash format**: lowercase hex, exactly 64 characters, matching `^[0-9a-f]{64}$`. every chunk endpoint takes and returns the bare digest; do not add a `sha256:` prefix in bodies, query strings or paths.
+- **in a version**: the same bare digest goes in `version.files[].chunks[].hash`.
+- **zero-byte files** have `size: 0` and `chunks: []`. nothing is stored for them.
+- **ordering**: chunks in a file are listed in file-offset order. concatenating them in order reproduces the file exactly.
 
 ```
 file bytes  --------------------------------------------------------------->
@@ -30,9 +33,9 @@ file bytes  --------------------------------------------------------------->
             |  64-hex hash |  64-hex hash |  64-hex hash |  64-hex hash |
 ```
 
-## 2. storage layout
+## storage layout
 
-chunks are stored in cloudflare r2 at a per-site, sharded, content-addressed key:
+chunks live in a Cloudflare R2 bucket (`owlette-prod-content` for owlette.app) under a per-site, sharded key:
 
 ```
 project-content/{siteId}/{hash[0:2]}/{hash}
@@ -40,10 +43,10 @@ project-content/{siteId}/{hash[0:2]}/{hash}
 
 | segment | source | purpose |
 |---|---|---|
-| `project-content` | fixed bucket prefix | separates chunks from version bodies |
-| `{siteId}` | owlette site that owns the chunk | tenant isolation |
-| `{hash[0:2]}` | first two hex chars of the chunk hash | avoids hot prefixes in r2's keyspace |
-| `{hash}` | full 64-hex sha-256 | the content address |
+| `project-content` | fixed key prefix | separates chunks from version bodies |
+| `{siteId}` | the site that owns the chunk | tenant isolation |
+| `{hash[0:2]}` | first two hex characters of the hash | spreads keys across prefixes |
+| `{hash}` | full 64-character SHA-256 | the content address |
 
 example:
 
@@ -51,41 +54,58 @@ example:
 project-content/kiosk-fleet-01/4e/4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce
 ```
 
-chunk paths never appear inside the version. the agent reconstructs them from `siteId` and `hash`. third-party clients normally do not construct them at all; they receive signed urls that embed the full path.
+you never build these keys yourself: the API hands you signed URLs that already contain them.
 
-## 3. per-site isolation
+## per-site isolation
 
-chunks are scoped to the `siteId` they were uploaded under. two different sites cannot dedup against each other's content, even if they independently upload byte-identical files. this is enforced at the storage-key level (`{siteId}` is part of the r2 path) and at the api level.
+chunks belong to the site they were uploaded under. two sites never dedup against each other, even for byte-identical files: the site ID is part of the storage key, and every chunk endpoint takes a `siteId` and checks that you can access that site. the question the API answers is always "does site X have this chunk?", never "does roost have it?".
 
-the client never asks "does roost have this chunk?". it asks "does site X have this chunk?". every chunk-plane endpoint takes `siteId` in the body or query string. a missing or malformed `siteId` is `validation_failed`.
+a missing or malformed `siteId` (1 to 128 letters, digits, `_` or `-`) is `400 validation_failed`. a site you cannot access is `404 not_found`, whether or not it exists.
 
-## 4. dedup flow (upload)
+## authentication and scopes
 
-the chunker never ships bytes the server already has. the upload dance is a three-step round trip per batch:
+send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also works). chunk routes are authorized against the site, so the key needs a `site=<siteId>` scope; a `roost=` scope does not cover them.
 
-1. `POST /api/chunks/check` finds missing hashes for a site.
-2. `POST /api/chunks/upload-urls` mints signed r2 `PUT` urls for those missing hashes.
-3. the client uploads each chunk directly to r2.
+| route | API-key scope | also requires |
+|---|---|---|
+| `POST /api/chunks/check` | `site=<siteId>:write` | membership of the site |
+| `POST /api/chunks/upload-urls` | `site=<siteId>:write` | site admin or owner role |
+| `GET` or `POST /api/chunks/download-urls` | `site=<siteId>:read` | membership of the site; an agent token for the same site also works |
+| `POST /api/chunks/{digest}/mount` | `site=<siteId>:write` | site admin or owner role |
+| `GET /api/chunks/{digest}/referrers` | `site=<siteId>:read` | membership of the site |
 
-### step 1 - batch existence check
+a key without the scope gets `403 scope_insufficient`. a member without the admin or owner role gets `403 forbidden` (`capability not granted`) on upload-urls and mount. see [authentication](/docs/api/authentication) for scope syntax.
 
+every chunk route also accepts the optional `Roost-Version: 2026-04-22` header. leave it out and the response carries `X-Roost-Version-Missing: true`; send an unsupported date and you get `400 unsupported_version`.
+
+## upload flow
+
+the client never sends bytes the site already has. each batch is three steps:
+
+1. `POST /api/chunks/check` returns the hashes the site is missing.
+2. `POST /api/chunks/upload-urls` mints signed R2 `PUT` URLs for those hashes.
+3. you `PUT` each chunk straight to R2.
+
+then publish the version with `POST /api/roosts/{roostId}/versions`; see [publish](/docs/api/versions#publish).
+
+### step 1 - check which chunks are missing
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/chunks/check" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "kiosk-fleet-01",
+    "hashes": [
+      "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
+      "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+    ]
+  }'
 ```
-POST /api/chunks/check
-content-type: application/json
 
-{
-  "siteId": "kiosk-fleet-01",
-  "hashes": [
-    "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
-    "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4",
-    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
-  ]
-}
-```
-
-- scope: `site:<siteId>:write`.
-- up to **1000 hashes per call**; larger batches are rejected with `validation_failed`.
-- response lists only the digests missing from the site's cas namespace. everything else is already reusable.
+- `hashes` must be a non-empty array of **at most 1000** digests; anything else is `400 validation_failed`.
+- the response lists only the hashes not stored for the site. a stored object of zero bytes counts as missing.
 
 ```json
 {
@@ -95,107 +115,108 @@ content-type: application/json
 }
 ```
 
-### step 2 - mint signed put urls for the missing set
+### step 2 - mint upload URLs for the missing hashes
 
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/chunks/upload-urls" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "kiosk-fleet-01",
+    "hashes": [
+      "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
+    ]
+  }'
 ```
-POST /api/chunks/upload-urls
-content-type: application/json
 
-{
-  "siteId": "kiosk-fleet-01",
-  "hashes": [
-    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce"
-  ]
-}
-```
-
-- scope: `site:<siteId>:write`.
-- signed urls carry a **60-minute ttl**. the expiry is returned as `expiresAt` in rfc 3339 utc form.
-- urls are per-hash. one request can mint many urls at once, capped at 1000 hashes.
-- this route does not implement a response cache. retry by requesting fresh signed urls for the hashes that still need uploading.
+- one URL per hash, up to 1000 hashes per call.
+- the URLs are valid for **60 minutes**. `expiresAt` is the expiry as an ISO 8601 UTC timestamp.
+- the route keeps no replay cache and ignores `Idempotency-Key`; to retry, mint fresh URLs for the hashes you still need.
 
 ```json
 {
   "urls": {
-    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce": "https://owlette-prod.r2.cloudflarestorage.com/project-content/kiosk-fleet-01/4e/4e0740856...?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=..."
+    "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce": "https://<account-id>.r2.cloudflarestorage.com/owlette-prod-content/project-content/kiosk-fleet-01/4e/4e0740856...?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=..."
   },
   "expiresAt": "2026-04-22T16:30:00.000Z"
 }
 ```
 
-### step 3 - put the bytes directly to r2
+### step 3 - put the bytes to R2
 
-```
-PUT <signed url>
-content-type: application/octet-stream
-
-<exactly size bytes of chunk content>
-```
-
-- bytes travel client to r2 with no roost intermediary.
-- retry policy is per-chunk. if the `PUT` fails, retry that single chunk. if the signed url has expired, re-mint only that hash via `POST /api/chunks/upload-urls`.
-- clients should upload chunks concurrently. 8-16 parallel `PUT`s is typical.
-
-## 5. download flow
-
-```
-POST /api/chunks/download-urls
-content-type: application/json
-
-{
-  "siteId": "kiosk-fleet-01",
-  "hashes": [
-    "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
-    "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4"
-  ]
-}
+```bash
+curl -fsS --upload-file chunk.bin \
+  -H "Content-Type: application/octet-stream" \
+  "$SIGNED_URL"
 ```
 
-for small batches, use the GET form with repeated `hash` query parameters:
+- bytes go from you to R2 directly; roost never sees them.
+- R2 does not check that the bytes match the hash in the key. agents re-hash every chunk they download and reject a mismatch, so upload exactly the bytes you hashed.
+- retry per chunk. if a `PUT` fails, retry that chunk; if its URL has expired, mint a new one for that hash only.
+- upload in parallel; 8 to 16 concurrent `PUT`s is typical.
 
-```
-GET /api/chunks/download-urls?siteId=kiosk-fleet-01&hash=2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6&hash=18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4
+## download flow
+
+agents fetch chunks this way when they sync a version; you can use it to pull content too.
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/chunks/download-urls" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "kiosk-fleet-01",
+    "hashes": [
+      "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6",
+      "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4"
+    ]
+  }'
 ```
 
-- scope: agent token for the same site, or `site:<siteId>:read`.
-- signed urls carry a **15-minute ttl**.
-- cross-site requests are rejected by the site auth and scope checks. there is no out-of-band way to resolve a digest to another tenant's storage key.
+for small batches you can use `GET` with one `hash` query parameter per digest:
+
+```bash
+curl -fsS "$OWLETTE_API_URL/api/chunks/download-urls?siteId=kiosk-fleet-01&hash=2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6&hash=18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+- up to 1000 hashes per call, in either form.
+- the URLs are valid for **15 minutes**.
+- the server signs a URL for every hash you send without checking that the chunk exists; fetching the URL of a missing chunk returns an R2 error. run `check` first if you are not sure.
 
 ```json
 {
   "urls": {
-    "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6": "https://owlette-prod.r2.cloudflarestorage.com/project-content/kiosk-fleet-01/2e/2e7d2c03...?X-Amz-Algorithm=AWS4-HMAC-SHA256&...",
-    "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4": "https://owlette-prod.r2.cloudflarestorage.com/project-content/kiosk-fleet-01/18/18ac3e73...?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
+    "2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6": "https://<account-id>.r2.cloudflarestorage.com/owlette-prod-content/project-content/kiosk-fleet-01/2e/2e7d2c03...?X-Amz-Algorithm=AWS4-HMAC-SHA256&...",
+    "18ac3e7343f016890c510e93f935261169d9e3f565436429830faf0934f4f8e4": "https://<account-id>.r2.cloudflarestorage.com/owlette-prod-content/project-content/kiosk-fleet-01/18/18ac3e73...?X-Amz-Algorithm=AWS4-HMAC-SHA256&..."
   },
   "expiresAt": "2026-04-22T15:45:00.000Z"
 }
 ```
 
-clients then issue `GET` against each signed url. the agent re-verifies each chunk's sha-256 as it writes to the local content store; a mismatch aborts the sync and the chunk is fetched again.
+then `GET` each signed URL. agents re-hash every chunk as they write it; a chunk whose hash does not match is discarded and fetched again, up to 5 attempts, and a chunk that still fails stops the sync.
 
-## 6. cross-roost mount
+## cross-roost mount
 
-`POST /api/chunks/{digest}/mount` records a cross-roost chunk reference without moving bytes. `{digest}` is the bare 64-hex chunk hash.
+`POST /api/chunks/{digest}/mount` records that a chunk is shared from one roost to another. `{digest}` is the bare 64-character hash. no bytes move.
 
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6/mount" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "kiosk-fleet-01",
+    "from": "roost_lobby_td",
+    "to": "roost_lobby_td_v2"
+  }'
 ```
-POST /api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6/mount
-content-type: application/json
 
-{
-  "siteId": "kiosk-fleet-01",
-  "from": "roost_lobby_td",
-  "to": "roost_lobby_td_v2"
-}
-```
+- send `siteId`, `from` and `to` in the JSON body or as query parameters. when a value is in both, the query parameter wins.
+- `from` and `to` are roost IDs (8 to 64 letters, digits, `_` or `-`) on the same site, and must differ.
+- the chunk must already be stored for the site, and both roosts must exist; otherwise `404 not_found`.
+- the route writes the referrer entry `mount_{from}_{to}` for the chunk. repeating the same mount overwrites that entry, so it is safe to retry; there is no `Idempotency-Key` replay.
+- a mount is bookkeeping only. chunks are already shared by every roost on the site, so a version in `to` can list the chunk without mounting it first, and a mount does not keep a chunk from being garbage collected.
 
-- scope: `site:<siteId>:write`.
-- `siteId`, `from`, and `to` can be supplied in the JSON body. query parameters with the same names are also accepted.
-- `from` and `to` must be different roost ids in the same site.
-- the chunk must already exist under `project-content/{siteId}/...` and both roost documents must exist.
-- bytes moved: zero. firestore records or updates `sites/{siteId}/chunk_referrers/{digest}/entries/mount_{from}_{to}`.
-- retry behavior: the same `(digest, siteId, from, to)` upserts the same referrer entry; it is retry-safe but not backed by a request replay cache.
-
-successful mounts return `201`:
+a successful mount returns `201 Created`:
 
 ```json
 {
@@ -208,12 +229,13 @@ successful mounts return `201`:
 }
 ```
 
-## 7. referrer query
+## referrer lookup
 
-`GET /api/chunks/{digest}/referrers` returns recorded mount and version-publish referrers for a chunk.
+`GET /api/chunks/{digest}/referrers` lists what references a chunk: a `mount` entry for each mount, and a `version` entry for each new version that included the chunk.
 
-```
-GET /api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6/referrers?siteId=kiosk-fleet-01&page_size=25
+```bash
+curl -fsS "$OWLETTE_API_URL/api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6/referrers?siteId=kiosk-fleet-01&page_size=25" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
 ```json
@@ -236,7 +258,7 @@ GET /api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6
       "createdAt": null,
       "createdBy": null,
       "mountedAt": "2026-04-22T15:30:00.000Z",
-      "mountedBy": "user_123"
+      "mountedBy": "uid_123"
     }
   ],
   "items": [
@@ -255,7 +277,7 @@ GET /api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6
       "createdAt": null,
       "createdBy": null,
       "mountedAt": "2026-04-22T15:30:00.000Z",
-      "mountedBy": "user_123"
+      "mountedBy": "uid_123"
     }
   ],
   "next_page_token": "",
@@ -263,24 +285,38 @@ GET /api/chunks/2e7d2c03a9507ae265ecf5b5356885a53393a2029d241394997265a1a25aefc6
 }
 ```
 
-- canonical pagination parameters are `page_size` and `page_token`; legacy aliases `limit` and `cursor` are also accepted.
-- default page size is 50 and max page size is 200.
+the two entry types fill different fields:
 
-## 8. retry behavior
+| field | `mount` entry | `version` entry |
+|---|---|---|
+| `entryId` | `mount_{from}_{to}` | `version_{roostId}_{versionId}` |
+| `fromRoostId`, `toRoostId`, `mountedBy` | set | `null` |
+| `roostId`, `versionId`, `versionNumber`, `createdBy` | `null` | set |
+| `fileCount`, `pathCount` | `null` | number of files in the version that contain the chunk (the two are equal) |
+| `totalBytes` | `null` | bytes the chunk contributes to the version |
+| `referencedAt`, `mountedAt` | time of the latest mount | publish time |
+
+- entries are newest first. `items` repeats `referrers` for clients that expect the generic list key.
+- paginate with `page_size` (default 50, maximum 200; a larger value is `400 validation_failed`) and `page_token`; the legacy `limit` and `cursor` aliases still work. `next_page_token` is `""` on the last page. see [pagination](/docs/api/pagination).
+- version entries are written only when a publish creates a new version, after it commits. treat the index as a lookup aid: garbage collection reads the version bodies themselves.
+
+## retries
 
 | operation | retry behavior |
 |---|---|
-| `POST /api/chunks/check` | safe to retry; it recomputes missing hashes from r2 metadata. |
-| `POST /api/chunks/upload-urls` | safe to retry by minting fresh signed urls. the route does not cache request replays. |
-| `PUT <signed r2 url>` | safe to retry with the same bytes while the signed url is valid; otherwise mint a new url. |
-| `POST` or `GET /api/chunks/download-urls` | safe to retry; it mints fresh signed download urls. |
-| `POST /api/chunks/{digest}/mount` | retry-safe for the same `(digest, siteId, from, to)` because the referrer entry id is deterministic. |
+| `POST /api/chunks/check` | safe to retry; it re-reads R2 every time. |
+| `POST /api/chunks/upload-urls` | safe to retry; each call mints fresh URLs. there is no replay cache. |
+| `PUT <signed url>` | safe to retry with the same bytes while the URL is valid; after that, mint a new URL. |
+| `POST` or `GET /api/chunks/download-urls` | safe to retry; each call mints fresh URLs. |
+| `POST /api/chunks/{digest}/mount` | safe to retry; the same `from` and `to` always write the same entry. |
 
-## 9. reference chunker - pseudocode
+the API does not rate-limit chunk routes today. back off exponentially on `5xx` from the API or from R2, and treat a `429` or `503` from R2 the same way.
 
-both snippets below stream-read a file in fixed 4-MiB blocks, compute sha-256 per block, and yield `(hash, size, offset)`. neither loads the file into memory.
+## reference chunker
 
-### python (cpython 3.9+)
+both versions read a file in 4 MiB blocks, hash each block with SHA-256, and yield `(hash, size, offset)` without loading the whole file into memory.
+
+### Python (3.9+)
 
 ```python
 import hashlib
@@ -315,7 +351,7 @@ def file_to_version_entry(path: Path, rel_path: str) -> dict:
     }
 ```
 
-### node (20+)
+### Node (20+, ES module)
 
 ```js
 import { createReadStream } from 'node:fs';
@@ -362,26 +398,31 @@ export async function fileToVersionEntry(path, relPath) {
 }
 ```
 
-notes applicable to both implementations:
+notes for both:
 
-- read buffers must be at least 4 MiB, or the reader must accumulate smaller reads until it has a full chunk.
-- the final chunk is whatever remains at eof.
-- hashing and i/o must not be interleaved with other writers on the same file; take a read lock or copy the file first.
-- the version's `files[].size` should equal `sum(chunks[].size)`. current agents reject mismatches when parsing versions, but the publish API does not currently enforce this invariant.
+- read in blocks of at least 4 MiB, or accumulate smaller reads until you have a full chunk.
+- the final chunk is whatever remains at end of file.
+- do not chunk a file while something else is writing it; lock it or copy it first.
+- keep `files[].size` equal to the sum of `chunks[].size`. the publish API does not check this, but agents reject a version where they differ.
 
-## 10. error taxonomy
+## errors
 
-every error response follows rfc 7807 `application/problem+json` with standard extensions (`code`, `docsUrl`, `requestId`, and optional field-level `errors`). the `code` field is the stable contract; match on that, not on `detail` prose.
+errors are RFC 7807 `application/problem+json` with `code`, `docsUrl`, `requestId` and, for validation errors, a field-level `errors` map. branch on `code`, not on `detail`. see [errors](/docs/api/errors).
 
-| code | status | endpoints | meaning |
-|---|---|---|---|
-| `validation_failed` | 400 | all chunk routes | malformed bare digest, missing or invalid `siteId`, empty `hashes[]`, more than 1000 hashes, invalid `from` / `to`, `from` equal to `to`, or invalid pagination. |
-| `not_found` | 404 | auth/site guard, `POST /api/chunks/{digest}/mount` | site not found or not accessible; mount digest is not stored for the site; source or target roost does not exist. |
-| `precondition_failed` | 412 | chunk-dependent publish/finalize paths | a version references chunk hashes that are not present in the site's r2 namespace. upload the missing chunks and retry the publish. |
+| code | status | when |
+|---|---|---|
+| `validation_failed` | 400 | invalid JSON body; malformed digest; missing or invalid `siteId`; empty `hashes`, more than 1000 hashes, or a malformed hash; missing, invalid or identical `from` and `to`; invalid pagination. |
+| `unsupported_version` | 400 | the `Roost-Version` header names a date the API does not support. |
+| `unauthorized` / `token_expired` | 401 | no valid credential, or an expired API key. |
+| `forbidden` | 403 | your account is inactive, or you lack the site admin or owner role on upload-urls or mount. |
+| `scope_insufficient` | 403 | the API key has no matching `site=<siteId>` scope. |
+| `not_found` | 404 | the site does not exist or you cannot access it; for mount, the chunk is not stored for the site or a roost does not exist. |
+| `service_unavailable` | 503 | roost is switched off for this site. |
+| `internal_error` | 500 | unexpected server error; quote the `requestId`. |
 
-universal errors (`unauthorized` 401, `token_expired` 401, `scope_insufficient` 403, `rate_limited` 429, `internal_error` 500) are documented in the top-level api conventions and are not repeated here.
+publishing a version that lists chunks the site does not have fails on the version route with `412 precondition_failed`; see [version errors](/docs/api/versions#errors).
 
-example `validation_failed` for a malformed digest:
+example `validation_failed` for a malformed hash:
 
 ```json
 {
@@ -389,20 +430,19 @@ example `validation_failed` for a malformed digest:
   "title": "validation failed",
   "status": 400,
   "detail": "field hashes contains malformed hash entries (must be lowercase 64-char hex sha-256)",
-  "code": "validation_failed",
   "errors": {
     "hashes": [
-      "malformed entries: bad-digest..."
+      "malformed entries: bad-digest…"
     ]
   },
+  "code": "validation_failed",
   "docsUrl": "https://owlette.app/docs/api/errors#validation_failed",
-  "requestId": "req_01HW..."
+  "requestId": "3b0c3f0e-5d7a-4a9e-9c55-0f6f2a8e1d42"
 }
 ```
 
-## 11. operational notes
+## operational notes
 
-- signed-url expiry is enforced by r2, not roost. clients should trust `expiresAt` from the api response, not local time.
-- retries during the upload session should respect `Retry-After` on 429 and use exponential backoff on 5xx from r2.
-- partial uploads are not representable. r2 `PUT` is atomic per object; retry the whole chunk.
-- a chunk with zero referrers across all roosts in a site becomes eligible for deletion after the gc grace period. during that window, a mount can still resurrect it.
+- R2 enforces URL expiry, not roost. trust `expiresAt` from the response, not your local clock.
+- an R2 `PUT` is atomic per object; there are no partial uploads. retry the whole chunk.
+- garbage collection runs nightly per site and keeps every chunk that some version body on the site lists, current or historical, in any roost. a chunk no version lists is marked and becomes eligible for deletion 30 days later if it is still unlisted; publishing a version that lists it within that window keeps it. mount entries do not protect a chunk, and neither does a finished upload: publish within 30 days of uploading.

@@ -1,11 +1,16 @@
 ---
-title: "Distribution"
-description: "The public API distribution surface is the project-distribution endpoints; the package release checklist below is retained as launch status, not endpoint reference."
+title: "SDK and CLI distribution"
+description: "release status of the owlette CLI, Node SDK and Python SDK: registry targets, the release workflows, dry-run checks, the launch gate and install verification. none of the three packages is on a public registry yet."
+keywords: ["download"]
 ---
 
-**Last updated**: 2026-04-29
+**last updated**: 2026-10-05
 
-No registry publish should be run from a local shell unless a package owner explicitly approves the release, the target version, and the registry account in use.
+this page tracks how the CLI and SDKs reach public package registries. it is release status, not an endpoint reference: the API itself is live at owlette.app whether or not these packages are published.
+
+until a package is published, install it from a checkout of the repository (see the [CLI overview](/docs/cli/overview), [Node SDK](/docs/api/sdk-node) and [Python SDK](/docs/api/sdk-python)).
+
+do not publish to a registry from a local shell unless a package owner has approved the release, the version and the registry account in use.
 
 ---
 
@@ -13,37 +18,40 @@ No registry publish should be run from a local shell unless a package owner expl
 
 | channel | package | target version | current status |
 |---|---|---:|---|
-| npm CLI | `@owlette/cli` | `1.0.0-rc.0` | metadata prepared; publish pending |
-| npm SDK | `@owlette/sdk` | `1.0.0-rc.1` | metadata prepared; publish pending |
-| PyPI SDK | `owlette-sdk` | `1.0.0rc0` | metadata prepared; publish pending |
-| Homebrew | `owlette` | `1.0.0-rc.0` | blocked until release artifact URL and checksum exist |
-| Scoop | `owlette` | `1.0.0-rc.0` | blocked until release artifact URL and checksum exist |
+| npm CLI | `@owlette/cli` | `1.0.0-rc.0` | not published; release workflow ready |
+| npm SDK | `@owlette/sdk` | `1.0.0-rc.1` | not published; release workflow ready |
+| PyPI SDK | `owlette-sdk` | `1.0.0rc0` | not published; release workflow ready |
+| Homebrew | `owlette` | `1.0.0-rc.0` | blocked until a release artifact URL and checksum exist |
+| Scoop | `owlette` | `1.0.0-rc.0` | blocked until a release artifact URL and checksum exist |
 | winget | `Owlette.CLI` | `1.0.0-rc.0` | blocked until the Windows install shape and checksum are final |
 
-Python uses the PEP 440 spelling `1.0.0rc0`. Release notes can describe this as the same RC family as `1.0.0-rc.0`.
+the Python package uses the PEP 440 spelling `1.0.0rc0`; it is the same release candidate family as `1.0.0-rc.0`. the Homebrew, Scoop and winget names are targets; no manifests exist in the repository yet.
 
 ---
 
-## launch gate
+## release workflows
 
-5.3 is externally complete when:
+each package has a GitHub Actions workflow that builds, tests and publishes it with OIDC trusted publishing, so no registry token is stored in the repository. every run first passes the security gate, and a real publish refuses to run unless the tag matches the package version.
 
-- npm and PyPI package ownership, two-factor authentication, and recovery access are verified
-- package-local license files are present in the CLI, Node SDK, and Python SDK artifacts
-- dry-run package builds pass from a clean checkout
-- `@owlette/cli` and `@owlette/sdk` publish under the npm `rc` dist-tag
-- `owlette-sdk` publishes to TestPyPI, then PyPI, as a pre-release
-- clean-machine install smoke tests pass for npm and PyPI
-- Homebrew, Scoop, and winget install commands work from the intended public channels or have an approved launch waiver
-- docs are updated from "release target" wording to "published package" wording
+| package | workflow | release tag | dist-tag or target |
+|---|---|---|---|
+| `@owlette/cli` | `.github/workflows/cli-publish.yml` | `cli-vX.Y.Z` or `cli-vX.Y.Z-pre` | prerelease versions publish under the matching dist-tag (`rc` for `1.0.0-rc.0`); stable versions under `latest` |
+| `@owlette/sdk` | `.github/workflows/node-sdk-publish.yml` | `node-sdk-vX.Y.Z` or `node-sdk-vX.Y.Z-pre` | same rule as the CLI |
+| `owlette-sdk` | `.github/workflows/py-sdk-publish.yml` | `py-sdk-v<version>`, for example `py-sdk-v1.0.0rc0` | a tag push publishes to PyPI |
+
+- npm publishes carry provenance attestations. npm only lets you attach a trusted publisher to a package that already exists, so the first publish of each npm package must be done once with a token or a local `npm publish`; every later release goes through the workflow.
+- PyPI supports a pending trusted publisher, so the first Python release can go through the workflow. configure the publisher on PyPI (project `owlette-sdk`, workflow `py-sdk-publish.yml`, no environment) and push the tag promptly: a pending publisher does not reserve the name.
+- a manual run defaults to a dry run. the Python workflow also offers `target=testpypi`, which needs a matching pending publisher on TestPyPI.
+
+if a local bootstrap or emergency publish is approved, record the operator, registry account, package, version and reason in the release notes.
 
 ---
 
 ## dry-run checks
 
-Run these before requesting the registry publish.
+run these from the repository root before requesting a publish. they work in any shell.
 
-```powershell
+```bash
 cd cli
 npm ci
 npm run build
@@ -51,7 +59,7 @@ npm test
 npm pack --dry-run
 ```
 
-```powershell
+```bash
 cd sdks/node
 npm ci
 npm run build
@@ -59,60 +67,81 @@ npm test
 npm pack --dry-run
 ```
 
-```powershell
+```bash
 cd sdks/python
+python -m pip install --upgrade pip build twine
+python -m pip install -e ".[dev]"
+python -m pytest
 python -m build --sdist --wheel
 python -m twine check dist/*
 ```
 
-Do not commit generated `dist/`, `.egg-info/`, or package archive files. They are release artifacts, not source.
+do not commit generated `dist/`, `.egg-info/` or package archives. they are release artifacts, not source.
 
 ---
 
-## publish sequence
+## local bootstrap publish
 
-Prefer a release workflow with npm provenance and PyPI trusted publishing. If a local emergency publish is approved, record the operator, registry account, package, version, and reason in the sprint log.
+only for the first publish of each npm package, with an approved owner and account:
 
-```powershell
+```bash
 cd cli
 npm publish --tag rc --access public
 ```
 
-```powershell
+```bash
 cd sdks/node
 npm publish --tag rc --access public
 ```
 
-```powershell
-cd sdks/python
-python -m build --sdist --wheel
-python -m twine upload --repository testpypi dist/*
-python -m twine upload dist/*
-```
+then attach the trusted publisher on npmjs.com and confirm the `rc` tag points at the intended version:
 
-After npm publishes, confirm the `rc` tag points at the intended version:
-
-```powershell
+```bash
 npm view @owlette/cli dist-tags
 npm view @owlette/sdk dist-tags
 ```
 
 ---
 
+## launch gate
+
+the packages are externally released when:
+
+- npm and PyPI package ownership, two-factor authentication and recovery access are verified
+- the license file is present in the CLI, Node SDK and Python SDK artifacts (each package directory ships one)
+- the dry-run checks above pass from a clean checkout
+- `@owlette/cli` and `@owlette/sdk` are published under the npm `rc` dist-tag
+- `owlette-sdk` is published to TestPyPI, then PyPI, as a pre-release
+- the install checks below pass on a clean machine for npm and PyPI
+- the Homebrew, Scoop and winget install commands work from their public channels, or have an approved launch waiver
+
+---
+
 ## install verification
 
-Run install tests in a clean temporary directory or disposable VM.
+run these in a clean temporary directory or a disposable VM. the CLI and both SDKs need Node.js 20 or later and Python 3.10 or later.
 
-```powershell
+```bash
 npm install -g @owlette/cli@rc
 owlette --version
 owlette roost --help
 ```
 
-```powershell
+```bash
 npm install @owlette/sdk@rc
 node -e "const { VERSION } = require('@owlette/sdk'); console.log(VERSION)"
 ```
+
+on macOS or Linux:
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install --pre owlette-sdk==1.0.0rc0
+.venv/bin/python -c "import roost; print(roost.__version__)"
+```
+
+on Windows (PowerShell):
 
 ```powershell
 python -m venv .venv
@@ -121,18 +150,16 @@ python -m venv .venv
 .\.venv\Scripts\python -c "import roost; print(roost.__version__)"
 ```
 
-Package-manager channel checks:
+package-manager channels, once they exist:
 
-```powershell
-brew install owlette
-scoop install owlette
-winget install Owlette.CLI
+```bash
+brew install owlette        # macOS, linux
+scoop install owlette       # Windows
+winget install Owlette.CLI  # Windows
 ```
-
-Homebrew, Scoop, and winget remain blocked until there is a stable release artifact URL and published SHA-256 checksum for each manifest.
 
 ---
 
 ## current status
 
-The repository is prepared for RC package dry-runs, but no registry publish has been executed from this sprint environment. Until npm, PyPI, Homebrew, Scoop, and winget installs work or receive an explicit launch waiver, 5.3 remains launch-blocked and not externally complete.
+as of 2026-10-05, `@owlette/cli`, `@owlette/sdk` and `owlette-sdk` are not on npm or PyPI, and no Homebrew, Scoop or winget manifest exists. the release workflows are in place; the launch gate above is open until the registry publishes and install checks pass, or a waiver is approved.

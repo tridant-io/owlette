@@ -5,7 +5,9 @@
 //! without it. So the encoded frames carry no cursor at all and the viewer has
 //! to composite one from the messages this module emits — which is what
 //! [`CursorMetadata::pointer_in_frame`] says on the wire, and why it is `false`
-//! and stays `false` for this backend.
+//! and stays `false` for this backend. The one exception is a window move or
+//! resize, when the system paints the pointer into the picture itself: see
+//! [`with_painted`].
 //!
 //! Every number below is a measurement from spike 0.8 (Windows 11 23H2
 //! 22631.6199, two attached outputs), over 500 frames / 25 s:
@@ -33,9 +35,20 @@
 //!
 //! `hotX`/`hotY` are in pixels of the PNG that goes with them, so every scaling
 //! step this module applies has to move the hotspot with it or the I-beam
-//! selects from its corner. The scaling step is per-monitor DPI: the same
-//! pointer is a 64x64 bitmap on a 200% output and a 32x32 one at 100%, and it
-//! is 32 css px either way. [`fit_for_css`] is the only place that resizes.
+//! selects from its corner. [`fit_for_wire`] is the only place that resizes,
+//! and it resizes for the byte cap alone, so a shrink only ever costs detail
+//! (B4A, 2026-09-24: a 64 px pointer shrunk to the css ceiling came back at
+//! the right size and blocky).
+//!
+//! # Size
+//!
+//! A shape is drawn in the output's pixels, at its dpi: a 2x mac's arrow is
+//! 56x80 pixels for 28x40 points (sent as 28x40 at `scale` 2), windows' at
+//! 150% is 48 for 32. The dpi goes with every upload, and the viewer draws a
+//! shape at `width * scale * 96 / dpi` css pixels: the pointer at the
+//! machine's own size, the size of the viewer's own, whatever the picture is
+//! scaled to (2026-10-20: the app drew the mac's arrow at its pixels, twice
+//! its size).
 //!
 //! Hardware tests are `#[ignore]`d. With the working directory `agent/swoop`:
 //!
@@ -49,24 +62,23 @@
 use base64::prelude::{Engine as _, BASE64_STANDARD};
 use serde::Serialize;
 
-use crate::capture::{Rect, Rotation};
+use crate::capture::{OutputInfo, Rect, Rotation};
 use crate::input::PointerSpace;
 use crate::signal::messages::channel::Cursor;
 
 /// 96 dpi is 100% scaling — `USER_DEFAULT_SCREEN_DPI`.
 pub const DEFAULT_DPI: u32 = 96;
 
-/// §5: a css cursor larger than this is presented as an overlay by the viewer,
-/// and browsers ignore one above 128x128 outright. Shapes are downscaled to
-/// fit rather than sent at a size that may be silently dropped.
+/// §5: the viewer puts a shape up to this many css pixels on its own pointer
+/// and presents anything larger as an overlay (browsers ignore a css cursor
+/// above 128x128 outright). Advertised in [`CursorMetadata`]; nothing here
+/// shrinks to it.
 pub const MAX_CSS_SIZE: u32 = 32;
 
-/// Hard ceiling on the emitted bitmap, in image pixels.
-///
-/// [`MAX_CSS_SIZE`] alone does not bound the bytes: at 400% scaling a 32 css px
-/// pointer is a 128x128 bitmap, which is 65 KiB of RGBA and — with the stored
-/// deflate blocks [`encode_png`] writes — more than §2's 64 KiB frame cap once
-/// base64'd. 64 px keeps the worst case near 22 KiB.
+/// Hard ceiling on the emitted bitmap, in image pixels: a 128x128 pointer is
+/// 65 KiB of RGBA and — with the stored deflate blocks [`encode_png`] writes —
+/// more than §2's 64 KiB frame cap once base64'd. 64 px keeps the worst case
+/// near 22 KiB, and a shape shrunk to it says so with `scale`.
 pub const MAX_IMAGE_SIZE: u32 = 64;
 
 /// Anything larger is refused rather than decoded: the largest cursor Windows
@@ -179,6 +191,12 @@ pub struct CursorImage {
     pub height: u32,
     pub hot_x: u32,
     pub hot_y: u32,
+    /// Machine pixels per image pixel: 1 for a shape as captured, the factor
+    /// after [`fit_for_wire`] shrank it for the wire. The viewer draws the
+    /// shape at `width * scale` machine pixels — without this a 64 px pointer
+    /// (pointer size 2, or 200% scaling) went over as 32 px and was drawn at
+    /// half its size (B4A, 2026-09-24).
+    pub scale: u32,
     pub rgba: Vec<u8>,
 }
 
@@ -189,6 +207,51 @@ pub struct PointerPosition {
     pub x: i32,
     pub y: i32,
     pub visible: bool,
+}
+
+/// What one capture step knows about the pointer, handed to the capture
+/// source's observer while the frame it came with is still held.
+///
+/// Portable so the session's cursor path reads the same thing on every OS:
+/// Desktop Duplication builds it from the frame info and its own pointer
+/// reader, and a platform whose pointer is not on the frame asks a
+/// [`PointerSampler`] instead.
+pub struct PointerSample<'a> {
+    /// `None`: this sample carries no pointer news.
+    pub position: Option<PointerPosition>,
+    /// `platform::clock` ticks.
+    pub ts_ticks: i64,
+    /// `Some` only when the shape changed.
+    pub shape: Option<(ShapeInfo, &'a [u8])>,
+}
+
+/// A pointer source for a capture backend whose frames carry no pointer data.
+pub trait PointerSampler: Send {
+    fn sample(&mut self) -> PointerSample<'_>;
+}
+
+/// The pointer a viewer is told about for one capture step.
+///
+/// During a window move or resize Windows paints the pointer into the picture
+/// itself, and Desktop Duplication reports it hidden at 0,0 for the whole
+/// drag (TEC-A4D, 2026-10-26: the foreground thread is then in its move/size
+/// loop, and an app hiding the pointer never is). The painted pointer is the
+/// picture's size, so a viewer that stopped drawing its own showed the pointer
+/// shrink for the drag. `painted` is where the system has it then, in
+/// virtual-desktop pixels; on this output it is reported shown there, and a
+/// viewer keeps drawing it at its own size, over the painted one.
+pub fn with_painted(
+    sampled: Option<PointerPosition>,
+    painted: impl FnOnce() -> Option<(i32, i32)>,
+    geometry: &OutputGeometry,
+) -> Option<PointerPosition> {
+    if matches!(sampled, Some(PointerPosition { visible: true, .. })) {
+        return sampled;
+    }
+    match painted().and_then(|at| geometry.texture_from_desktop(at)) {
+        Some((x, y)) => Some(PointerPosition { x, y, visible: true }),
+        None => sampled,
+    }
 }
 
 /// One output's geometry, as the cursor path needs it.
@@ -208,13 +271,39 @@ pub struct OutputGeometry {
 }
 
 impl OutputGeometry {
+    /// `texture` is the acquired texture's size, which on a rotated output
+    /// is not the mode's — see [`crate::capture::Rotation::swap_axes`].
+    pub fn for_output(output: &OutputInfo, texture: (u32, u32)) -> Self {
+        Self {
+            desktop_rect: output.desktop_rect,
+            rotation: output.rotation,
+            texture,
+            dpi: crate::platform::dpi_for_rect(&output.desktop_rect),
+        }
+    }
+
+    /// This geometry with the output's dpi read again. A scaling change moves
+    /// no pixels, so nothing rebuilds the capture for it, and the pointer is
+    /// drawn at the new dpi from the next shape on.
+    pub fn at_current_dpi(&self) -> Self {
+        Self {
+            dpi: crate::platform::dpi_for_rect(&self.desktop_rect),
+            ..*self
+        }
+    }
+
+    /// The dpi the output is drawn at: 0 is one that could not be read, and
+    /// is taken as 100%.
+    pub fn effective_dpi(&self) -> u32 {
+        match self.dpi {
+            0 => DEFAULT_DPI,
+            dpi => dpi,
+        }
+    }
+
     /// Host pixels per css pixel on this output.
     pub fn scale(&self) -> f64 {
-        if self.dpi == 0 {
-            1.0
-        } else {
-            f64::from(self.dpi) / f64::from(DEFAULT_DPI)
-        }
+        f64::from(self.effective_dpi()) / f64::from(DEFAULT_DPI)
     }
 
     /// An output-local pointer position, normalised over the texture the
@@ -246,6 +335,16 @@ impl OutputGeometry {
             rect: self.desktop_rect,
             rotation: self.rotation,
         }
+    }
+
+    /// A virtual-desktop pixel as a pointer position on this output, in the
+    /// texture's pixels: [`OutputGeometry::pointer_space`] run backwards.
+    /// `None` off this output.
+    pub fn texture_from_desktop(&self, at: (i32, i32)) -> Option<(i32, i32)> {
+        let (u, v) = self.pointer_space().from_desktop(at)?;
+        let texel =
+            |n: f64, size: u32| (n * f64::from(size.saturating_sub(1).max(1))).round() as i32;
+        Some((texel(u, self.texture.0), texel(v, self.texture.1)))
     }
 }
 
@@ -329,6 +428,7 @@ pub fn decode(info: &ShapeInfo, buf: &[u8]) -> Result<CursorImage, CursorError> 
         width: info.width,
         height,
         hot_x: info.hot_x,
+        scale: 1,
         hot_y: info.hot_y,
         rgba,
     })
@@ -339,24 +439,50 @@ fn mask_bit(row: &[u8], x: usize) -> bool {
     (row[x / 8] >> (7 - (x % 8))) & 1 == 1
 }
 
-/// Downscale a decoded shape until the browser will take it, moving the hotspot
-/// with it.
-///
-/// Two ceilings: [`MAX_CSS_SIZE`] in css pixels, which depends on the output's
-/// dpi because a 200% output delivers a bitmap of twice the pixels for the same
-/// cursor, and [`MAX_IMAGE_SIZE`] in image pixels, which bounds the message.
-pub fn fit_for_css(image: CursorImage, dpi: u32) -> CursorImage {
+/// Downscale a decoded shape until it fits the message, moving the hotspot
+/// with it and recording the factor in `scale` so the viewer draws it at its
+/// true size. One ceiling: [`MAX_IMAGE_SIZE`]. The output's dpi is not read
+/// here: it goes beside the shape, and the viewer divides by it.
+pub fn fit_for_wire(image: CursorImage) -> CursorImage {
     let longest = image.width.max(image.height);
-    let dpi = if dpi == 0 { DEFAULT_DPI } else { dpi };
-    let css = (u64::from(longest) * u64::from(DEFAULT_DPI)).div_ceil(u64::from(dpi)) as u32;
-    let factor = css
-        .div_ceil(MAX_CSS_SIZE)
-        .max(longest.div_ceil(MAX_IMAGE_SIZE))
-        .max(1);
+    let factor = longest.div_ceil(MAX_IMAGE_SIZE).max(1);
     if factor == 1 {
         return image;
     }
     downscale(&image, factor)
+}
+
+#[cfg(test)]
+mod true_size_tests {
+    use super::*;
+
+    fn captured(side: u32) -> CursorImage {
+        CursorImage {
+            width: side,
+            height: side,
+            hot_x: 10,
+            hot_y: 12,
+            scale: 1,
+            rgba: vec![0xff; (side * side * 4) as usize],
+        }
+    }
+
+    #[test]
+    fn a_shape_within_the_cap_goes_whole_at_scale_one() {
+        let fitted = fit_for_wire(captured(32));
+        assert_eq!((fitted.width, fitted.scale), (32, 1));
+        // pointer size 2 at 100%, or 200% scaling: 64 machine pixels, sent as
+        // 64 — the css ceiling is the viewer's business, not a shrink target.
+        let fitted = fit_for_wire(captured(64));
+        assert_eq!((fitted.width, fitted.scale), (64, 1));
+    }
+
+    #[test]
+    fn a_shape_past_the_cap_is_shrunk_and_remembers_its_true_size() {
+        let fitted = fit_for_wire(captured(128));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 2));
+        assert_eq!((fitted.hot_x, fitted.hot_y), (5, 6), "the hotspot moves with the pixels");
+    }
 }
 
 /// Box filter by an integer factor, averaging in premultiplied alpha so a
@@ -394,6 +520,7 @@ fn downscale(src: &CursorImage, factor: u32) -> CursorImage {
         height,
         hot_x: src.hot_x / factor,
         hot_y: src.hot_y / factor,
+        scale: src.scale * factor,
         rgba,
     }
 }
@@ -412,6 +539,9 @@ pub struct CursorTracker {
 struct CachedShape {
     id: u32,
     image: CursorImage,
+    /// What the shape was drawn at: the same bitmap at another dpi is another
+    /// size on the viewer, so another shape.
+    dpi: u32,
     png: String,
 }
 
@@ -423,6 +553,8 @@ impl CachedShape {
             hot_y: Some(self.image.hot_y as u16),
             w: Some(self.image.width as u16),
             h: Some(self.image.height as u16),
+            scale: (self.image.scale > 1).then_some(self.image.scale as u16),
+            dpi: Some(self.dpi as u16),
             png: Some(self.png.clone()),
         }
     }
@@ -445,7 +577,8 @@ impl CursorTracker {
         }
     }
 
-    /// A new shape buffer from `GetFramePointerShape`.
+    /// A new shape buffer from `GetFramePointerShape`, or a mac's system
+    /// cursor, drawn on `geometry`'s output at its dpi.
     ///
     /// `Ok(None)` when the decoded shape is the one the viewer is already
     /// drawing — the common case, 142 updates for 11 shapes.
@@ -453,19 +586,18 @@ impl CursorTracker {
         &mut self,
         info: &ShapeInfo,
         buf: &[u8],
-        dpi: u32,
+        geometry: &OutputGeometry,
     ) -> Result<Option<Cursor>, CursorError> {
-        let image = fit_for_css(decode(info, buf)?, dpi);
+        let image = fit_for_wire(decode(info, buf)?);
+        // a viewer refuses a shape that names a dpi of 0.
+        let dpi = geometry.effective_dpi();
+        let same = |s: &CachedShape| s.image == image && s.dpi == dpi;
         if let Some(current) = self.current {
-            if self
-                .shapes
-                .iter()
-                .any(|s| s.id == current && s.image == image)
-            {
+            if self.shapes.iter().any(|s| s.id == current && same(s)) {
                 return Ok(None);
             }
         }
-        if let Some(cached) = self.shapes.iter().find(|s| s.image == image) {
+        if let Some(cached) = self.shapes.iter().find(|s| same(s)) {
             let id = cached.id;
             self.current = Some(id);
             return Ok(Some(Cursor::Cshape {
@@ -474,6 +606,8 @@ impl CursorTracker {
                 hot_y: None,
                 w: None,
                 h: None,
+                scale: None,
+                dpi: None,
                 png: None,
             }));
         }
@@ -481,7 +615,7 @@ impl CursorTracker {
         let id = self.next_id;
         self.next_id += 1;
         let png = BASE64_STANDARD.encode(encode_png(&image));
-        self.shapes.push(CachedShape { id, image, png });
+        self.shapes.push(CachedShape { id, image, dpi, png });
         if self.shapes.len() > MAX_CACHED_SHAPES {
             self.shapes.remove(0);
         }
@@ -626,11 +760,30 @@ mod win32 {
     };
     use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
     use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-
-    use super::{
-        OutputGeometry, PointerPosition, Rect, ShapeInfo, ShapeKind, DEFAULT_DPI,
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetCursorPos, GetGUIThreadInfo, GUITHREADINFO, GUI_INMOVESIZE,
     };
-    use crate::capture::OutputInfo;
+
+    use super::{PointerPosition, Rect, ShapeInfo, ShapeKind, DEFAULT_DPI};
+
+    /// Where the pointer is while the system paints it into the picture: a
+    /// window move or resize, the foreground thread's move/size loop. Desktop
+    /// pixels, made physical like Desktop Duplication's by the per-monitor dpi
+    /// awareness capture sets on the process. `None` any other time, when
+    /// the duplication's own report stands (see [`super::with_painted`]).
+    pub fn painted_pointer() -> Option<(i32, i32)> {
+        let mut gui = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        unsafe { GetGUIThreadInfo(0, &mut gui) }.ok()?;
+        if gui.flags.0 & GUI_INMOVESIZE.0 == 0 {
+            return None;
+        }
+        let mut at = POINT::default();
+        unsafe { GetCursorPos(&mut at) }.ok()?;
+        Some((at.x, at.y))
+    }
 
     /// The pointer position a frame carries, or `None` when it carries none.
     ///
@@ -664,24 +817,10 @@ mod win32 {
         }
     }
 
-    impl OutputGeometry {
-        /// `texture` is the acquired texture's size, which on a rotated output
-        /// is not the mode's — see [`crate::capture::Rotation::swap_axes`].
-        pub fn for_output(output: &OutputInfo, texture: (u32, u32)) -> Self {
-            Self {
-                desktop_rect: output.desktop_rect,
-                rotation: output.rotation,
-                texture,
-                dpi: dpi_for_rect(&output.desktop_rect),
-            }
-        }
-    }
-
     /// Reads pointer shapes off a duplication, reusing one buffer.
     ///
-    /// The duplication is passed in rather than held: there is one per output
-    /// and it belongs to [`crate::capture::Duplication`], which acquires the
-    /// frame this shape came with.
+    /// The duplication is passed in rather than held: [`crate::capture::Duplication`]
+    /// owns both, and only it holds the frame this shape came with.
     #[derive(Debug, Default)]
     pub struct PointerReader {
         buffer: Vec<u8>,
@@ -734,7 +873,12 @@ mod win32 {
 }
 
 #[cfg(windows)]
-pub use win32::{dpi_for_rect, pointer_position, PointerReader};
+pub use win32::{dpi_for_rect, painted_pointer, pointer_position, PointerReader};
+
+// The arithmetic half of the macOS sampler is portable, so the Windows suite
+// runs its tests too; the sampler itself is macOS only.
+#[cfg(any(target_os = "macos", test))]
+pub mod mac;
 
 #[cfg(test)]
 mod tests {
@@ -877,6 +1021,7 @@ mod tests {
             height,
             hot_x: hot.0,
             hot_y: hot.1,
+            scale: 1,
             rgba: vec![255; (width * height * 4) as usize],
         }
     }
@@ -912,26 +1057,22 @@ mod tests {
     }
 
     #[test]
-    fn the_hotspot_follows_the_bitmap_through_the_per_monitor_dpi_fit() {
+    fn the_wire_fit_ignores_the_output_dpi_and_moves_the_hotspot_with_the_pixels() {
         let (hidpi, standard) = mixed_dpi_layout();
         assert_eq!(hidpi.scale(), 2.0);
         assert_eq!(standard.scale(), 1.0);
 
-        // The same pointer: 64x64 of bitmap either way, but 32 css px on the
-        // 200% output and 64 on the 100% one.
-        let fitted = fit_for_css(solid(64, 64, (32, 32)), hidpi.dpi);
-        assert_eq!((fitted.width, fitted.height), (64, 64));
+        // The same 64x64 pointer on either output goes whole: the viewer
+        // scales it by the picture, so dpi is nothing to the wire.
+        let fitted = fit_for_wire(solid(64, 64, (32, 32)));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 1));
+        assert_eq!((fitted.hot_x, fitted.hot_y), (32, 32));
+
+        let fitted = fit_for_wire(solid(128, 128, (64, 64)));
+        assert_eq!((fitted.width, fitted.height, fitted.scale), (64, 64, 2));
         assert_eq!(
             (fitted.hot_x, fitted.hot_y),
             (32, 32),
-            "32 css px already fits, so nothing moves"
-        );
-
-        let fitted = fit_for_css(solid(64, 64, (32, 32)), standard.dpi);
-        assert_eq!((fitted.width, fitted.height), (32, 32));
-        assert_eq!(
-            (fitted.hot_x, fitted.hot_y),
-            (16, 16),
             "halving the bitmap without halving the hotspot is the i-beam bug"
         );
     }
@@ -983,6 +1124,61 @@ mod tests {
         assert_eq!(round_trip(&geometry, (0, 2159)), (-1, 2701));
     }
 
+    /// The rotate270 4K panel of the test above.
+    fn portrait_panel() -> OutputGeometry {
+        OutputGeometry {
+            desktop_rect: Rect {
+                left: -2160,
+                top: -1138,
+                right: 0,
+                bottom: 2702,
+            },
+            rotation: Rotation::Rotate270,
+            texture: (3840, 2160),
+            dpi: 96,
+        }
+    }
+
+    #[test]
+    fn a_desktop_pixel_maps_back_to_the_texel_that_drew_it() {
+        let geometry = portrait_panel();
+        for texel in [(0, 0), (3839, 0), (0, 2159), (3839, 2159), (1200, 700)] {
+            let desktop = round_trip(&geometry, texel);
+            assert_eq!(
+                geometry.texture_from_desktop(desktop),
+                Some(texel),
+                "{texel:?} via {desktop:?}"
+            );
+        }
+        // the neighbouring monitor is not this output
+        assert_eq!(geometry.texture_from_desktop((0, 100)), None);
+    }
+
+    #[test]
+    fn a_pointer_painted_into_a_window_drag_is_reported_shown_where_it_is() {
+        let geometry = portrait_panel();
+        let hidden = Some(PointerPosition { x: 0, y: 0, visible: false });
+        let shown = Some(PointerPosition { x: 10, y: 20, visible: true });
+        let painted = round_trip(&geometry, (1200, 700));
+
+        // a drag: hidden at 0,0 by the duplication, painted where it is
+        assert_eq!(
+            with_painted(hidden, || Some(painted), &geometry),
+            Some(PointerPosition { x: 1200, y: 700, visible: true })
+        );
+        // a frame with no pointer news mid-drag still says where it went
+        assert_eq!(
+            with_painted(None, || Some(painted), &geometry),
+            Some(PointerPosition { x: 1200, y: 700, visible: true })
+        );
+        // a program hid it, or it is on another output: the duplication's word stands
+        assert_eq!(with_painted(hidden, || None, &geometry), hidden);
+        assert_eq!(with_painted(hidden, || Some((0, 100)), &geometry), hidden);
+        assert_eq!(with_painted(None, || None, &geometry), None);
+        // a shown pointer is never second-guessed, nor the system asked
+        assert_eq!(with_painted(shown, || unreachable!(), &geometry), shown);
+    }
+
     #[test]
     fn a_shape_larger_than_the_message_cap_is_downscaled_and_averaged() {
         let mut image = solid(128, 128, (64, 64));
@@ -997,11 +1193,11 @@ mod tests {
                 image.rgba[i + 3] = 0;
             }
         }
-        let fitted = fit_for_css(image, 384);
+        let fitted = fit_for_wire(image);
         assert_eq!(
-            (fitted.width, fitted.height),
-            (64, 64),
-            "128 px is 32 css px at 400%, so only the image cap applies"
+            (fitted.width, fitted.height, fitted.scale),
+            (64, 64, 2),
+            "128 px is past the image cap, so it is halved and says so"
         );
         assert_eq!((fitted.hot_x, fitted.hot_y), (32, 32));
         // The first column is fully transparent, the last fully white.
@@ -1026,11 +1222,12 @@ mod tests {
 
     #[test]
     fn an_unchanged_shape_produces_no_message_and_a_return_to_a_cached_one_is_an_id() {
+        let (_, standard) = mixed_dpi_layout();
         let mut tracker = CursorTracker::new();
         let (arrow, arrow_bits) = mono([0xf0, 0x00, 0xcc, 0xa0]);
         let (beam, beam_bits) = mono([0x00, 0xff, 0x18, 0x18]);
 
-        let first = tracker.on_shape(&arrow, &arrow_bits, 96).expect("decode");
+        let first = tracker.on_shape(&arrow, &arrow_bits, &standard).expect("decode");
         let Some(Cursor::Cshape { id, png, w, h, .. }) = first else {
             panic!("the first shape must carry its bitmap");
         };
@@ -1039,25 +1236,27 @@ mod tests {
         assert!(png.is_some_and(|p| !p.is_empty()));
 
         // 141 of spike 0.8's 142 shape updates were this case.
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, 96), Ok(None));
-        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, 96), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, &standard), Ok(None));
+        assert_eq!(tracker.on_shape(&arrow, &arrow_bits, &standard), Ok(None));
 
-        let second = tracker.on_shape(&beam, &beam_bits, 96).expect("decode");
+        let second = tracker.on_shape(&beam, &beam_bits, &standard).expect("decode");
         assert!(matches!(
             second,
             Some(Cursor::Cshape { id: 2, png: Some(_), .. })
         ));
-        assert_eq!(tracker.on_shape(&beam, &beam_bits, 96), Ok(None));
+        assert_eq!(tracker.on_shape(&beam, &beam_bits, &standard), Ok(None));
 
         // Back to the arrow: cached, so an id and nothing else.
         assert_eq!(
-            tracker.on_shape(&arrow, &arrow_bits, 96),
+            tracker.on_shape(&arrow, &arrow_bits, &standard),
             Ok(Some(Cursor::Cshape {
                 id: 1,
                 hot_x: None,
                 hot_y: None,
                 w: None,
                 h: None,
+                scale: None,
+                dpi: None,
                 png: None,
             }))
         );
@@ -1069,6 +1268,65 @@ mod tests {
         };
         assert_eq!(id, 1);
         assert!(png.is_some());
+    }
+
+    #[test]
+    fn every_upload_names_the_dpi_it_was_drawn_at_and_another_dpi_is_another_shape() {
+        let (hidpi, standard) = mixed_dpi_layout();
+        let mut tracker = CursorTracker::new();
+        let (arrow, arrow_bits) = mono([0xf0, 0x00, 0xcc, 0xa0]);
+
+        let first = tracker.on_shape(&arrow, &arrow_bits, &hidpi).expect("decode");
+        assert!(matches!(first, Some(Cursor::Cshape { id: 1, dpi: Some(192), .. })));
+        let wire = serde_json::to_value(&first).expect("it serialises");
+        assert_eq!(wire["dpi"], 192, "the viewer reads it off the wire");
+
+        // The same bitmap on the 100% output draws at twice the css size, so
+        // it is a new upload rather than the 192 dpi id.
+        let moved = tracker.on_shape(&arrow, &arrow_bits, &standard).expect("decode");
+        assert!(matches!(
+            moved,
+            Some(Cursor::Cshape { id: 2, dpi: Some(96), png: Some(_), .. })
+        ));
+        let back = tracker.on_shape(&arrow, &arrow_bits, &hidpi).expect("decode");
+        assert!(matches!(back, Some(Cursor::Cshape { id: 1, dpi: None, png: None, .. })));
+        assert!(matches!(
+            tracker.current_shape(),
+            Some(Cursor::Cshape { id: 1, dpi: Some(192), .. })
+        ));
+
+        // An unread dpi is 100%, as `OutputGeometry::scale` takes it.
+        let unread = OutputGeometry { dpi: 0, ..standard };
+        let mut tracker = CursorTracker::new();
+        assert!(matches!(
+            tracker.on_shape(&arrow, &arrow_bits, &unread),
+            Ok(Some(Cursor::Cshape { dpi: Some(96), .. }))
+        ));
+    }
+
+    #[test]
+    fn the_largest_upload_fits_one_message() {
+        let (hidpi, _) = mixed_dpi_layout();
+        let side = MAX_IMAGE_SIZE;
+        let info = ShapeInfo {
+            kind: ShapeKind::Color,
+            width: side,
+            height: side,
+            pitch: side * 4,
+            hot_x: side - 1,
+            hot_y: side - 1,
+        };
+        let buf = vec![0xab; (side * side * 4) as usize];
+        let upload = CursorTracker::new()
+            .on_shape(&info, &buf, &hidpi)
+            .expect("decode")
+            .expect("a first shape is an upload");
+        assert!(matches!(upload, Cursor::Cshape { scale: None, .. }), "sent whole");
+        let bytes = serde_json::to_vec(&upload).expect("it serialises").len();
+        assert!(
+            bytes < crate::signal::messages::MAX_MESSAGE_BYTES,
+            "a {side} px upload is {bytes} bytes"
+        );
     }
 
     #[test]
@@ -1126,6 +1384,7 @@ mod tests {
             height: 2,
             hot_x: 0,
             hot_y: 0,
+            scale: 1,
             rgba: expect(&["rw", ".b"]),
         };
         let png = encode_png(&image);
@@ -1176,7 +1435,6 @@ mod tests {
         let output = outputs.first().expect("an attached output");
         let mut source = Duplication::open(output, RebuildSignal::new()).expect("duplicate output");
 
-        let mut reader = PointerReader::new();
         let mut tracker = CursorTracker::new();
         let (mut acquired, mut no_update, mut positions) = (0u32, 0u32, 0u32);
         let (mut shape_updates, mut shape_messages) = (0u32, 0u32);
@@ -1187,9 +1445,9 @@ mod tests {
             // has been emitted, and the pointer arrives before that.
             let geometry = OutputGeometry::for_output(source.output(), source.size());
             source
-                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |dup, info| {
+                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
                     acquired += 1;
-                    match pointer_position(info) {
+                    match sample.position {
                         None => no_update += 1,
                         Some(at) => {
                             if tracker.on_position(at, &geometry, 0).is_some() {
@@ -1197,10 +1455,10 @@ mod tests {
                             }
                         }
                     }
-                    if let Some((shape, bytes)) = reader.shape(dup, info).expect("read shape") {
+                    if let Some((shape, bytes)) = sample.shape {
                         shape_updates += 1;
                         if tracker
-                            .on_shape(&shape, bytes, geometry.dpi)
+                            .on_shape(&shape, bytes, &geometry)
                             .expect("decode shape")
                             .is_some()
                         {
@@ -1236,5 +1494,50 @@ mod tests {
             shape_messages <= shape_updates,
             "the cache must never emit more than it is given"
         );
+    }
+
+    /// Live window drag. With the working directory `agent/swoop`:
+    ///
+    /// ```text
+    /// cargo test -- --ignored --nocapture cursor::tests::live_window_drag
+    /// ```
+    ///
+    /// Drag a window on the first output by its title bar while it runs: the
+    /// duplication reports the pointer hidden for the drag, and every one of
+    /// those reports goes out shown, where the pointer is.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "needs a real desktop and a window dragged on it"]
+    fn live_window_drag_keeps_the_pointer_shown() {
+        use crate::capture::{Duplication, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
+
+        let outputs = crate::capture::enumerate_outputs().expect("enumerate outputs");
+        let output = outputs.first().expect("an attached output");
+        let mut source = Duplication::open(output, RebuildSignal::new()).expect("duplicate output");
+        let mut tracker = CursorTracker::new();
+        let (mut painted, mut hidden_sent) = (0u32, 0u32);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+        while std::time::Instant::now() < deadline {
+            let geometry = OutputGeometry::for_output(source.output(), source.size());
+            source
+                .next_frame_with(ACQUIRE_TIMEOUT_MS, &mut |sample| {
+                    let position = with_painted(sample.position, painted_pointer, &geometry);
+                    let duplication_shown =
+                        matches!(sample.position, Some(PointerPosition { visible: true, .. }));
+                    if position.is_some_and(|at| at.visible) && !duplication_shown {
+                        painted += 1;
+                    }
+                    if let Some(Cursor::Cpos { visible: false, .. }) =
+                        position.and_then(|at| tracker.on_position(at, &geometry, 0))
+                    {
+                        hidden_sent += 1;
+                    }
+                })
+                .expect("acquire");
+        }
+
+        println!("painted={painted} hidden_cpos={hidden_sent}");
+        assert!(painted > 0, "no painted pointer seen - drag a window by its title bar");
     }
 }

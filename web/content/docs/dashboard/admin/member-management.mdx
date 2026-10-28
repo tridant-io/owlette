@@ -1,13 +1,14 @@
 ---
 title: "member management"
-description: "Add and remove the people who can reach one site, and see who owns it. Site admins manage membership for the sites they belong to from Admin Panel -> members."
+description: "add and remove the people who can reach a site, see who owns it, and change a member's role on it. site owners and admins manage membership from admin panel → members, one site at a time."
+keywords: ["invite", "invite user", "add user", "team", "share site", "remove user", "revoke access", "make admin", "promote", "demote", "site access", "colleague", "transfer ownership"]
 ---
 
-**Location**: admin panel -> members (`/admin/members`)
+**location**: admin panel → members (`/admin/members`)
 
-<Callout type="info" title={"Permissions"}>
+<Callout type="info" title={"permissions"}>
 
-Site admins can open this page. It only ever acts on one site at a time, and the site selector offers only the sites you belong to. Adding and removing members requires the site-scoped `SITE_MEMBER_MANAGE` capability. Members do not see the page.
+the page opens for anyone who is an owner or admin on at least one site. it acts on one site at a time. its site selector lists every site you belong to, but on a site where you are only a member the list is refused. every change needs `SITE_MEMBER_MANAGE` on that site, which owners and admins hold.
 
 </Callout>
 
@@ -15,77 +16,91 @@ Site admins can open this page. It only ever acts on one site at a time, and the
 
 ## the member list
 
-The page lists everyone who can reach the selected site — accounts that have the site in their membership, plus the site owner. Header chips show the total member count and how many of them are admins.
+the header shows **total members** and **admins** (the owner is not counted as an admin).
 
-| column | description |
-|--------|-------------|
-| **member** | Display name when present, email address, and a `you` badge on your own row |
-| **role** | Role on this site: `owner`, `admin`, or `member` |
-| **actions** | Row menu; shows `—` when no action is available on that row |
+| column | what it shows |
+|---|---|
+| **member** | the display name if there is one, the email address, and a `you` badge on your own row |
+| **role** | `owner`, `admin` or `member`, on this site |
+| **actions** | the row menu, or `—` when there is nothing you can do to that row |
 
-The list is scoped to the selected site by design. It never shows which other sites a member belongs to, and it never lists accounts that are not on this site.
+the list is the site's active member rows whose accounts still exist and are not deleted. the owner appears through their own row with the `owner` badge. the page never shows which other sites a member belongs to, and never lists anyone who is not on this site.
 
 ---
 
 ## what the roles mean
 
 | role | on this site |
-|------|--------------|
-| **owner** | Created or was handed the site. Has admin rights on it and cannot be removed from the member list. |
-| **admin** | Write access: machine commands and configuration, deployments, roosts, talons, webhooks, logs, and membership. |
-| **member** | Read-only: view machines, capture screenshots, open live view. No commands, no configuration edits. |
+|---|---|
+| **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch. no commands, no configuration |
+| **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, schedule presets, enrolling machines, revoking agent tokens, and managing members |
+| **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one |
 
-Roles are **per site**. The same person can own one site, administer a second and be a plain member of a third, and their account-level role grants nothing on any of them. Only a platform superadmin reaches every site.
+roles are **per site**. the same person can own one site, administer a second and be a plain member of a third, and their account-level role grants nothing on any of them. the [capability matrix](/docs/dashboard/admin#capability-matrix) lists every capability each role holds.
 
 ---
 
 ## adding a member
 
-The person must already have an owlette account; this page adds an existing account to a site, it does not send invitations.
+the person must already have an owlette account: this page adds an existing account to a site and sends no invitation.
 
-1. Click **add member**.
-2. Enter their email address.
-3. Choose **member** or **admin**.
-4. Click **add member**.
+1. click **add member**.
+2. enter their **email**.
+3. choose a **role**: **member** or **admin**.
+4. click **add member**.
 
-If no account matches the address, the page says so — ask them to register first, then add them.
+if no account has that address, the page says **no account found for that email**: ask them to sign up first, then add them.
 
-### asking for admin
+the role you pick is written for this site only and changes nothing about their account or any other site. the dialog still shows an old hint when you pick **admin**, "admin is an account-level role…"; it no longer applies, and the person joins as an admin.
 
-Choosing **admin** adds them as an admin of this site immediately. It is a role on this site only — it changes nothing about their account and gives them nothing on any other site.
+someone who is already on the site is left as they are. the request succeeds without changing their role, even though the toast says they now have the role you picked; to change it, see [changing a role](#changing-a-role). the site owner cannot be added again (`target_is_owner`), and a deleted account cannot be added.
 
 ---
 
 ## removing a member
 
-1. Open the row menu.
-2. Select `remove...`.
-3. Read the confirmation dialog, then click **remove member**.
+1. open the row menu.
+2. select `remove...`.
+3. read the dialog, then click **remove member**.
 
-Removal takes the site out of that account's membership. The account itself and any other sites they belong to are untouched, and the change is immediate.
+removal takes away their access to this site at once. any [swoop](/docs/dashboard/swoop) session they are in on the site ends within seconds. their account and any other sites they belong to are untouched.
 
-Two rows cannot be removed:
+two rows cannot be removed:
 
-- **the site owner** — ownership transfer is a separate account-level operation; transfer the site first, then remove them.
-- **yourself** — ask another admin on the site to remove your access.
+- **the site owner** has no remove action. transfer ownership first (below), then remove them
+- **yourself**: the page says **cannot remove yourself**, and the server refuses it too (`cannot_modify_own_membership`). ask another admin on the site
 
 ### talon reassignment
 
-Talons belong to the site, but every run re-checks the **author's** access to it. An author who has just been removed cannot run their own automations, so those talons fail silently.
+talons belong to the site, but a talon with a hoot output or a visual check re-checks its **author's** access on every run. once its author has been removed, it switches itself off on its next run.
 
-When the person you are removing authored talons on this site, the dialog says how many (naming the first five), and offers a successor picker before you confirm. Candidates are the admins on this site; a member cannot inherit a talon, because authoring one requires `TALON_MANAGE`. Choosing a successor rewrites authorship before the membership change lands, and the page confirms how many talons moved.
+when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker. choosing a successor moves authorship before the membership change; the page then says how many talons moved. if the server refuses the successor, nothing is removed.
 
-Reassignment is never automatic. If you leave the picker empty, the removal still goes through and the talons are left with an author who can no longer run them — reassign or delete them yourself afterwards.
+the server accepts only a successor who is an owner or admin on this site. the picker filters on account-level role instead, so it can list someone the server will refuse and leave out a site admin who would qualify.
+
+reassignment is never automatic. leave the picker empty and the removal still goes through, leaving the talons with an author who can no longer run them: reassign or delete them afterwards.
 
 ---
 
 ## changing a role
 
-Use the role control on the member's row. The change applies to **this site only** — the same person keeps whatever role they hold elsewhere, and their account is untouched.
+a role change applies to **this site only**. the server call is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "role": "admin" }` or `{ "role": "member" }`, from a signed-in session or an API key holding both `write` and `admin` on the site; the CLI equivalent is [`owlette site set-role`](/docs/cli/reference/site#set-role).
 
-Two rules the server enforces:
+the server enforces:
 
-- An **owner** cannot be demoted here. Transfer ownership first; a site is never left without one.
-- Only `admin` and `member` can be assigned. Ownership moves solely through transfer, so it cannot be granted as a side effect of editing a role.
+- the **owner's** role cannot change (`409 cannot_change_owner_role`). ownership moves only by transfer, so a site is never left without one
+- only `admin` and `member` can be assigned
+- you cannot change your **own** role (`403 cannot_modify_own_membership`)
+- the person must already be on the site (`404`)
 
-To narrow someone's access instead, remove them from the sites they should not reach.
+demoting someone to member ends any swoop session in which they hold control. a session they are still allowed to watch carries on.
+
+the dashboard does not offer this to site owners and admins yet: the row menu's `change role...` is shown only to owlette's own operators. use the API or the CLI. the dialog behind that menu item also says "this changes the account, not just this site", which is wrong, and shows the account-level role as the current one.
+
+to narrow someone's access instead, remove them from the sites they should not reach.
+
+---
+
+## transferring ownership
+
+`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it. the new owner does not have to be on the site already; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.

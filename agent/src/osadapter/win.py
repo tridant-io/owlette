@@ -14,17 +14,31 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 import uuid
 import winreg
 
+import pywintypes
+import win32api
+import win32con
+import win32event
+import win32process
 import win32service
 import win32serviceutil
 import win32ts
 import winerror
 
-from . import NotSupportedHere, resolve_data_root
+from . import NotSupportedHere, keep_exit_code, resolve_data_root
 
 logger = logging.getLogger(__name__)
+
+# The service is not a managed process's parent (a helper in the user's session
+# launches it and exits), so its exit code is readable only through a handle
+# taken while it runs. Handles of the ones that ended are traded for their code
+# at the next read or watch.
+_watched = {}
+_exits = {}
+_watch_lock = threading.Lock()
 
 # Agent modules are imported inside the operation that uses them so the
 # adapter's import graph stays one-way: everything under agent/src can import
@@ -102,6 +116,28 @@ def launch_managed_process(spec: dict) -> int | None:
     )
 
 
+def watch_exit(pid: int) -> None:
+    """Hold a handle on `pid` so its exit code can be read once it ends."""
+    with _watch_lock:
+        if pid in _watched:
+            return
+        _collect_exits()
+        _exits.pop(pid, None)
+        try:
+            _watched[pid] = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_LIMITED_INFORMATION | win32con.SYNCHRONIZE,
+                False, pid)
+        except pywintypes.error as e:
+            logger.debug(f"Cannot watch PID {pid} for its exit: {e}")
+
+
+def exit_code(pid: int) -> int | None:
+    """The exit code of a watched process that has ended, read once."""
+    with _watch_lock:
+        _collect_exits()
+        return _exits.pop(pid, None)
+
+
 def stable_machine_id() -> str:
     """The Windows MachineGuid — stable across reboots and user contexts."""
     return _machine_guid()
@@ -160,6 +196,64 @@ def pending_reboot() -> dict:
     import mcp_tools
 
     return mcp_tools.check_pending_reboot({}, None)
+
+
+# where windows keeps each active-hours window, under HKLM, read here and by
+# tools_windows, which manages windows update through the same keys. group
+# policy goes before mdm unless mdm is set to win: the mdm nodes name the policy
+# key as the one that blocks them, and MDMWinsOverGP defaults to 0.
+WU_POLICY_KEY = r'SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+MDM_UPDATE_KEY = r'SOFTWARE\Microsoft\PolicyManager\current\device\Update'
+_MDM_CONFLICT_KEY = r'SOFTWARE\Microsoft\PolicyManager\current\device\ControlPolicyConflict'
+WU_UX_KEY = r'SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'
+
+
+def active_hours() -> dict | None:
+    """The window Windows holds its own restarts off in, and who set it.
+
+    Group policy, then MDM, then the user's choice in Settings, then Windows'
+    default of 8 to 17; MDM goes first when it is set to win over group
+    policy. A source whose window is incomplete, outside 0-23 or empty is
+    passed over. The user's window is read without `IsActiveHoursEnabled`:
+    the value is undocumented and usually absent, and Windows keeps active
+    hours either way.
+    """
+    policy = hklm_values(WU_POLICY_KEY, 'SetActiveHours', 'ActiveHoursStart', 'ActiveHoursEnd')
+    # the policy window counts only once SetActiveHours turns it on
+    ranked = [('policy', policy if policy['SetActiveHours'] == 1 else {}),
+              ('mdm', hklm_values(MDM_UPDATE_KEY, 'ActiveHoursStart', 'ActiveHoursEnd'))]
+    if 1 in mdm_conflict().values():
+        ranked.reverse()
+    ranked.append(('user', hklm_values(WU_UX_KEY, 'ActiveHoursStart', 'ActiveHoursEnd')))
+
+    for source, window in ranked:
+        start, end = window.get('ActiveHoursStart'), window.get('ActiveHoursEnd')
+        if _is_hour(start) and _is_hour(end) and start != end:
+            return {'start': start, 'end': end, 'source': source}
+    return {'start': 8, 'end': 17, 'source': 'default'}
+
+
+def mdm_conflict() -> dict:
+    """The two switches that put MDM over every group-policy value, active
+    hours included: MDMWinsOverGP and IgnoreWindowsUpdateGroupPolicies."""
+    return {**hklm_values(_MDM_CONFLICT_KEY, 'MDMWinsOverGP'),
+            **hklm_values(MDM_UPDATE_KEY, 'IgnoreWindowsUpdateGroupPolicies')}
+
+
+def hklm_values(path: str, *names: str) -> dict:
+    """Each named value under HKLM\\`path`, None for one that is absent, and
+    for all of them when the key is absent or cannot be opened."""
+    found = dict.fromkeys(names)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+            for name in names:
+                try:
+                    found[name] = winreg.QueryValueEx(key, name)[0]
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return found
 
 
 def reboot(delay: int, message: str | None = None) -> None:
@@ -246,6 +340,19 @@ print(f'monitors={{monitors_count}} size={{len(png_bytes)}}')
 """
 
 
+def _collect_exits() -> None:
+    """Trade the handle of every watched process that has ended for its code.
+
+    Closing it releases the pid for reuse, so it is closed only once the
+    process has ended and its code is kept.
+    """
+    for pid, handle in list(_watched.items()):
+        if win32event.WaitForSingleObject(handle, 0) == win32event.WAIT_OBJECT_0:
+            keep_exit_code(_exits, pid, win32process.GetExitCodeProcess(handle))
+            handle.Close()
+            del _watched[pid]
+
+
 def _machine_guid() -> str:
     """MachineGuid from the registry, falling back to uuid.getnode()."""
     try:
@@ -259,6 +366,11 @@ def _machine_guid() -> str:
     except OSError as e:
         logger.warning(f"Failed to read MachineGuid from the registry: {e}")
     return str(uuid.getnode())
+
+
+def _is_hour(value) -> bool:
+    """A DWORD naming an hour of the day."""
+    return isinstance(value, int) and 0 <= value <= 23
 
 
 def _issue_shutdown(flag: str, delay: int, message: str | None) -> None:

@@ -12,6 +12,7 @@
  *   - talon authoring / enable-toggle tools are excluded entirely (an unattended run
  *     must not author automations)
  *   - the Opus 5 advisor is offered with its per-reply cap, or not at all
+ *   - a payer without hoot is skipped with a quiet 200, before anything starts
  */
 
 import { NextRequest } from 'next/server';
@@ -46,9 +47,11 @@ jest.mock('firebase-admin/firestore', () => ({
 
 /* hoot collaborators */
 
+const mockBuildAutonomousSystemPrompt = jest.fn((..._args: unknown[]) => 'system prompt');
+
 jest.mock('@/lib/llm', () => ({
   createModel: jest.fn(() => ({ id: 'test-model' })),
-  buildAutonomousSystemPrompt: jest.fn(() => 'system prompt'),
+  buildAutonomousSystemPrompt: (...args: unknown[]) => mockBuildAutonomousSystemPrompt(...args),
 }));
 
 const mockExecuteServerSideTool = jest.fn();
@@ -56,6 +59,7 @@ const mockResolveLlmConfig = jest.fn();
 const mockResolveSiteKeyOwner = jest.fn();
 const mockIsMachineOnline = jest.fn();
 const mockIsHootEnabled = jest.fn();
+const mockGetMachineSummary = jest.fn();
 
 jest.mock('@/lib/hoot-utils.server', () => ({
   // Real membership: the branch under test keys off this exact set, so the
@@ -66,6 +70,10 @@ jest.mock('@/lib/hoot-utils.server', () => ({
   resolveSiteKeyOwner: (...args: unknown[]) => mockResolveSiteKeyOwner(...args),
   isMachineOnline: (...args: unknown[]) => mockIsMachineOnline(...args),
   isHootEnabled: (...args: unknown[]) => mockIsHootEnabled(...args),
+  getMachineSummary: (...args: unknown[]) => mockGetMachineSummary(...args),
+  // the real refusal and wording, so the route is checked against what it actually returns.
+  heldRestartRefusal: jest.requireActual('@/lib/hoot-utils.server').heldRestartRefusal,
+  HELD_RESTART_AUTONOMOUS_DETAIL: jest.requireActual('@/lib/hoot-utils.server').HELD_RESTART_AUTONOMOUS_DETAIL,
 }));
 
 const mockDispatchToolCall = jest.fn();
@@ -80,6 +88,13 @@ jest.mock('@/lib/hoot-escalation.server', () => ({ escalate: jest.fn() }));
 
 jest.mock('@/lib/securityBoundaryMetrics.server', () => ({
   emitSecurityBoundaryMetric: jest.fn(),
+}));
+
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...args: unknown[]) => mockRequireEntitlement(...args),
 }));
 
 const mockGetToolsByTier = jest.fn();
@@ -154,8 +169,12 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import { POST } from '@/app/api/hoot/autonomous/route';
+import { problemPlanRequired } from '@/lib/apiErrors';
 import { SERVER_SIDE_TOOLS } from '@/lib/hoot-utils.server';
 import type { McpToolDefinition } from '@/lib/mcp-tools';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
 
 const { getToolsByTier: realGetToolsByTier } = jest.requireActual('@/lib/mcp-tools') as {
   getToolsByTier: (maxTier: 1 | 2 | 3) => McpToolDefinition[];
@@ -224,6 +243,7 @@ beforeEach(() => {
 
   mockIsMachineOnline.mockResolvedValue(true);
   mockIsHootEnabled.mockResolvedValue(true);
+  mockGetMachineSummary.mockResolvedValue({ id: MACHINE, online: true, hootEnabled: true, activeHoursGuard: false });
   // An unattended investigation has no author, so it spends the SITE OWNER's
   // key — there is no shared site key scope any more.
   mockResolveSiteKeyOwner.mockResolvedValue('owner-uid');
@@ -232,6 +252,7 @@ beforeEach(() => {
   mockExecuteServerSideTool.mockResolvedValue({ ok: true });
   mockDispatchToolCall.mockResolvedValue({ ok: true });
   mockDispatchExistingCommand.mockResolvedValue({ status: 'success' });
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
 });
 
 afterEach(() => {
@@ -239,6 +260,37 @@ afterEach(() => {
 });
 
 /* tests */
+
+describe('autonomous and the payer plan', () => {
+  it('skips quietly with a 200 when the payer lacks hoot', async () => {
+    mockRequireEntitlement.mockResolvedValue(
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
+    );
+
+    const res = await POST(request());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ accepted: false, reason: 'plan_required' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    // no event, no session slot: nothing was started that could need cleaning up.
+    expect([...docStore.keys()]).toEqual([`sites/${SITE}/settings/cortex`]);
+  });
+
+  it('looks no plan up for a site with autonomous mode off', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: false });
+
+    const res = await POST(request());
+
+    expect(await res.json()).toEqual({ accepted: false, reason: 'autonomous_disabled' });
+    expect(mockRequireEntitlement).not.toHaveBeenCalled();
+  });
+
+  it('accepts as before with enforcement off', async () => {
+    await buildTools();
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+  });
+});
 
 describe('autonomous advisor', () => {
   it('offers the default Claude model the Opus 5 advisor, capped per reply', async () => {
@@ -357,6 +409,143 @@ describe('autonomous tool set exclusions', () => {
 
     expect(Object.keys(tools)).not.toContain('create_talon');
     expect(Object.keys(tools).length).toBeGreaterThan(0);
+  });
+});
+
+describe('autonomous and active hours', () => {
+  const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
+
+  it("builds the prompt with the machine's timezone and whether its agent holds restarts, from one read", async () => {
+    mockGetMachineSummary.mockResolvedValue({
+      id: MACHINE,
+      online: true,
+      hootEnabled: true,
+      timezone: 'America/New_York',
+      activeHoursGuard: true,
+    });
+    await buildTools();
+
+    expect(mockGetMachineSummary).toHaveBeenCalledTimes(1);
+    expect(mockGetMachineSummary).toHaveBeenCalledWith(mockDb, SITE, MACHINE);
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
+      'Lobby PC',
+      '',
+      expect.stringContaining('TouchDesigner'),
+      'America/New_York',
+      true,
+    );
+  });
+
+  it.each([
+    ['a machine with no doc', () => Promise.resolve(null)],
+    // the read failing is no reason to drop the investigation: utc, and nothing held, as before.
+    ['a machine read that fails', () => Promise.reject(new Error('unavailable'))],
+  ])('tells the prompt that %s holds nothing, and investigates anyway', async (_label, summary) => {
+    mockGetMachineSummary.mockImplementation(summary);
+    await buildTools();
+
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
+      'Lobby PC',
+      '',
+      expect.any(String),
+      undefined,
+      false,
+    );
+  });
+
+  it('refuses a held restart its agent cannot hold, and sends nothing', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    const result = await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+    const { detail } = result as { detail: string };
+    expect(detail).toMatch(/older than owlette 4\.1\.21/);
+    // nobody is there to ask, so it never reads as licence to restart now.
+    expect(detail).toMatch(/nothing was sent\. don't restart it; report it in your summary\.$/);
+    expect(detail).not.toMatch(/ask them/);
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
+  });
+
+  it('refuses a held restart on a machine rolled back below 4.1.21 that still carries the capability', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    // the real summary over the machine doc, so the stale capability is judged as in production
+    const { getMachineSummary } = jest.requireActual('@/lib/hoot-utils.server');
+    const machineDoc = { online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } };
+    const machineDb = {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({
+        get: async () => ({ exists: true, data: () => machineDoc }),
+      }) }) }) }),
+    };
+    mockGetMachineSummary.mockImplementation((_db: unknown, siteId: string, machineId: string) =>
+      getMachineSummary(machineDb, siteId, machineId),
+    );
+    const tools = await buildTools();
+
+    const result = await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(result).toMatchObject({ ok: false, error: 'held_restart_unsupported' });
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
+  });
+
+  it('sends a held restart to an agent that holds it', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    mockGetMachineSummary.mockResolvedValue({ id: MACHINE, online: true, hootEnabled: true, activeHoursGuard: true });
+    const tools = await buildTools();
+
+    await tools.reboot_machine.execute({ when: 'after_active_hours' });
+
+    expect(mockDispatchExistingCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: SITE, machineId: MACHINE }),
+      'reboot_machine',
+      { when: 'after_active_hours' },
+    );
+  });
+
+  /** Each tool's schema as the investigator's model is offered it. */
+  async function offeredProperties(): Promise<Record<string, Record<string, unknown>>> {
+    // Tier 3, so the reboot, shutdown and deploy tools are on offer at all.
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = (await buildTools()) as unknown as Record<
+      string,
+      { inputSchema: { properties: Record<string, unknown> } }
+    >;
+    return Object.fromEntries(
+      OVERRIDE_TOOLS.map((name) => [name, tools[name].inputSchema.properties]),
+    );
+  }
+
+  it('offers no active-hours override: nobody is there to approve one', async () => {
+    const offered = await offeredProperties();
+
+    for (const name of OVERRIDE_TOOLS) {
+      expect(offered[name]).not.toHaveProperty('override_active_hours');
+      expect(offered[name]).not.toHaveProperty('reason');
+    }
+  });
+
+  it('still offers a reboot that waits for active hours to end', async () => {
+    const offered = await offeredProperties();
+
+    expect(offered.reboot_machine).toHaveProperty('when');
+  });
+
+  it('runs a deployment with no envelope option, so it can never carry an override', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    await tools.deploy_software.execute({ software_name: 'Player', override_active_hours: true, reason: 'now' });
+
+    // The system actor and nothing else: no command envelope argument at all.
+    expect(mockExecuteServerSideTool).toHaveBeenCalledWith(
+      mockDb,
+      SITE,
+      [MACHINE],
+      'deploy_software',
+      expect.any(Object),
+      { systemActor: 'cortex_autonomous' },
+    );
   });
 });
 

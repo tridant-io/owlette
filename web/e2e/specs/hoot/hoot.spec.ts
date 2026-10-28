@@ -1,4 +1,6 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
+import { FieldValue } from 'firebase-admin/firestore';
+import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/seed';
 import {
@@ -93,6 +95,56 @@ test.describe('hoot conversations and controls', () => {
     await page.getByRole('button', { name: /delete Deployment RCA/i }).click();
     await page.getByRole('button', { name: /confirm delete Deployment RCA/i }).click();
     await expect(page.getByText('Deployment RCA')).toHaveCount(0);
+  });
+
+  test('a group collapsed last visit opens collapsed, never expanded first', async ({ page }) => {
+    const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
+    await prefs.set({ cortexCollapsedGroups: ['Operations'] }, { merge: true });
+    try {
+      // the collapsed group's conversations unmount, so any frame that shows
+      // them is the list rendering before the saved state reached it
+      await page.addInitScript(() => {
+        const w = window as unknown as { __shown?: boolean };
+        new MutationObserver(() => {
+          if (document.body?.textContent?.includes('Deployment triage')) w.__shown = true;
+        }).observe(document, { childList: true, subtree: true, characterData: true });
+      });
+      await page.goto('/hoot');
+      await expect(page.getByText('Nightly auto investigation')).toBeVisible();
+      await expect(page.getByRole('button', { name: /^operations/i })).toBeVisible();
+
+      expect(await page.evaluate(() => (window as unknown as { __shown?: boolean }).__shown ?? false)).toBe(false);
+      await expect(page.getByText('Deployment triage')).toHaveCount(0);
+    } finally {
+      await prefs.set({ cortexCollapsedGroups: FieldValue.delete() }, { merge: true });
+    }
+  });
+
+  test('the conversation groups fade in one after another as the page opens', async ({ page }) => {
+    // read the delays as the groups mount: by the time a locator resolves, the
+    // opening window may already have closed
+    await page.addInitScript(() => {
+      const w = window as unknown as { __groups?: string[] };
+      new MutationObserver((_, observer) => {
+        const rows = document.querySelectorAll('.page-cascade-opening .cascade-rows > *');
+        if (rows.length < 2) return;
+        w.__groups = [...rows].slice(0, 2).map((el) => getComputedStyle(el).animationDelay);
+        observer.disconnect();
+      }).observe(document, { childList: true, subtree: true });
+    });
+    await page.goto('/hoot');
+    await expect(page.getByRole('button', { name: /^operations/i })).toBeVisible();
+
+    expect(await page.evaluate(() => (window as unknown as { __groups?: string[] }).__groups)).toEqual(['0s', '0.07s']);
+  });
+
+  test('names the page and keeps a reply log for screen readers', async ({ page }) => {
+    await page.goto('/hoot');
+    await expect(page.getByLabel('chat message')).toBeVisible();
+
+    await expect(page.getByRole('heading', { level: 1, name: 'hoot' })).toBeAttached();
+    // replies are read out from here once a turn ends, never token by token.
+    await expect(page.getByRole('log', { name: 'hoot replies' })).toBeAttached();
   });
 
   test('narrows the target to one machine and surfaces offline warnings', async ({ page }) => {
@@ -225,6 +277,248 @@ test.describe('hoot conversations and controls', () => {
     await expect(approvalCard).not.toContainText(HOOT_FIXTURE_OFFLINE_MACHINE_ID);
     await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
     await expect(approvalCard.getByRole('button', { name: /^deny$/i })).toBeVisible();
+  });
+
+  test('an approval that overrides active hours shows its reason without expanding', async ({ page }) => {
+    // Its own chat, written and removed here: the shared fixture's approval card
+    // is a plain tier-3 call, and the other specs read it as one.
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-override-${TEST_USERS.admin.uid}`);
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Early restart',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [
+        {
+          id: 'm-override-user-1',
+          role: 'user',
+          parts: [{ type: 'text', text: 'restart it now, the show ended early' }],
+        },
+        {
+          id: 'm-override-assistant-1',
+          role: 'assistant',
+          metadata: {
+            hoot: {
+              turnId: 'e2e-cortex-override-turn-1',
+              machineIds: [HOOT_FIXTURE_MACHINE_ID],
+              via: 'chat',
+              skipped: { offline: [], disabled: [] },
+            },
+          },
+          parts: [
+            {
+              type: 'tool-reboot_machine',
+              toolCallId: 'tool-override-1',
+              state: 'approval-requested',
+              approval: { id: 'approval-override-1' },
+              input: { override_active_hours: true, reason: 'the show ended early' },
+            },
+          ],
+        },
+      ],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+
+      const approvalCard = page
+        .locator('div.rounded-lg.border.overflow-hidden')
+        .filter({ hasText: 'hoot wants to run the privileged' })
+        .first();
+      await expect(approvalCard).toContainText('override active hours: the show ended early');
+      // Still collapsed: the input block mounts only once the card is expanded.
+      await expect(approvalCard.getByText('input', { exact: true })).toHaveCount(0);
+      await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
+    } finally {
+      await chat.delete();
+    }
+  });
+
+  test('the line beside a reply in flight flows, and goes solid once the turn ends', async ({ page }) => {
+    // a turn the runner is still writing, as a reload finds it: the stream doc
+    // says running and carries the reply so far.
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-live-${TEST_USERS.admin.uid}`);
+    const stream = chat.collection('stream').doc('current');
+    const ask = { id: 'm-live-user-1', role: 'user', parts: [{ type: 'text', text: 'why is the render node slow?' }] };
+    const reply = {
+      id: 'm-live-assistant-1',
+      role: 'assistant',
+      parts: [{ type: 'text', text: 'checking the render node now' }],
+    };
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Render node',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [ask],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    await stream.set({
+      status: 'running',
+      turnId: 'e2e-live-turn-1',
+      updatedAt: FieldValue.serverTimestamp(),
+      message: reply,
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+      await expect(page.getByText('checking the render node now')).toBeVisible();
+
+      const line = page.getByTestId('hoot-thread-line');
+      // the keyframe itself, so a class that lost its css fails here too
+      const flow = () => line.evaluate((el) => getComputedStyle(el, '::after').animationName);
+      await expect(line).toHaveClass(/animate-hoot-thread/);
+      expect(await flow()).toBe('hoot-thread');
+
+      // reduced motion keeps the line marked and still
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      expect(await flow()).toBe('none');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+
+      // the runner persists the reply and marks the turn done
+      await chat.update({ messages: [ask, reply] });
+      await stream.set({ status: 'complete', turnId: 'e2e-live-turn-1', updatedAt: FieldValue.serverTimestamp() });
+      await expect(line).not.toHaveClass(/animate-hoot-thread/);
+      expect(await flow()).toBe('none');
+    } finally {
+      await stream.delete();
+      await chat.delete();
+    }
+  });
+
+  test('a growing reply is followed down from the bottom, and a reader who scrolled up stays put', async ({ page }) => {
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-follow-${TEST_USERS.admin.uid}`);
+    const stream = chat.collection('stream').doc('current');
+    const ask = { id: 'm-follow-user-1', role: 'user', parts: [{ type: 'text', text: 'walk me through last night’s render' }] };
+    const step = (n: number) =>
+      `step ${n}: the gpu clock dropped to idle while the scene loaded textures from the network share, ` +
+      'so the frame took longer than the ones either side of it.';
+    // the runner rewrites the reply so far into the stream doc as it grows
+    const writeReply = (steps: number) =>
+      stream.set({
+        status: 'running',
+        turnId: 'e2e-follow-turn-1',
+        updatedAt: FieldValue.serverTimestamp(),
+        message: {
+          id: 'm-follow-assistant-1',
+          role: 'assistant',
+          parts: [{ type: 'text', text: Array.from({ length: steps }, (_, i) => step(i + 1)).join('\n\n') }],
+        },
+      });
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Render walkthrough',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [ask],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    await writeReply(10);
+
+    try {
+      // a short window, so the reply runs well past it
+      await page.setViewportSize({ width: 1280, height: 600 });
+      await page.goto(`/hoot/${chat.id}`);
+      await expect(page.getByText(/^step 10:/)).toBeAttached();
+      const transcript = page.getByTestId('hoot-transcript');
+      const fromBottom = () => transcript.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight);
+      const top = () => transcript.evaluate((el) => el.scrollTop);
+
+      // at the bottom: the reply is followed down as it grows
+      await expect.poll(fromBottom).toBeLessThan(2);
+      const heightBefore = await transcript.evaluate((el) => el.scrollHeight);
+      await writeReply(12);
+      await expect(page.getByText(/^step 12:/)).toBeAttached();
+      expect(await transcript.evaluate((el) => el.scrollHeight)).toBeGreaterThan(heightBefore);
+      await expect.poll(fromBottom).toBeLessThan(2);
+
+      // scrolled up past 100px: the next growth leaves the reader where they were
+      await transcript.hover();
+      await page.mouse.wheel(0, -400);
+      await expect.poll(fromBottom).toBeGreaterThan(100);
+      // the wheel's own smooth scroll settles first
+      let readerAt = await top();
+      await expect
+        .poll(async () => {
+          const settled = (await top()) === readerAt;
+          readerAt = await top();
+          return settled;
+        })
+        .toBe(true);
+      await writeReply(14);
+      await expect(page.getByText(/^step 14:/)).toBeAttached();
+      // longer than a glide, so one that started would have moved by now
+      await page.waitForTimeout(600);
+      expect(await top()).toBe(readerAt);
+    } finally {
+      await stream.delete();
+      await chat.delete();
+    }
+  });
+
+  test('"new hoot" puts the caret in the message box, and opening a chat does not', async ({ page }) => {
+    await page.goto('/hoot');
+    await page.getByText('Deployment triage').click();
+    await expect(page).toHaveURL(new RegExp(`/hoot/${LEGACY_CHAT_ID}$`));
+    const composer = page.getByLabel('chat message');
+    await expect(composer).toBeVisible();
+    await expect(composer).not.toBeFocused();
+
+    await page.getByRole('button', { name: 'new hoot', exact: true }).click();
+    await expect(page).toHaveURL(/\/hoot$/);
+    await expect(composer).toBeFocused();
+    await page.keyboard.type('is the render node up?');
+    await expect(composer).toHaveValue('is the render node up?');
+  });
+
+  test('on a phone, "new hoot" in the conversations sheet hands the caret to the message box', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/hoot');
+    await page.getByRole('button', { name: 'conversations', exact: true }).click();
+    const sheet = page.getByRole('dialog', { name: 'conversations' });
+    await sheet.getByRole('button', { name: 'new hoot', exact: true }).click();
+
+    // the sheet's close must not hand focus back to the button that opened it
+    await expect(sheet).toBeHidden();
+    await expect(page.getByLabel('chat message')).toBeFocused();
+  });
+
+  test('with the sidebar collapsed, the chat sits the same distance from both page edges', async ({ page }) => {
+    const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
+    await prefs.set({ cortexSidebarOpen: false }, { merge: true });
+    try {
+      await page.goto('/hoot');
+      await expect(page.getByRole('button', { name: 'show hoot sidebar' })).toBeVisible();
+
+      const chat = page.locator('main').filter({ has: page.getByRole('heading', { level: 1, name: 'hoot' }) });
+      // left gap minus right gap, polled: the collapse settles after the prefs land
+      await expect
+        .poll(() =>
+          chat.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            return Math.round(box.left - (document.documentElement.clientWidth - box.right));
+          }),
+        )
+        .toBe(0);
+    } finally {
+      await prefs.set({ cortexSidebarOpen: FieldValue.delete() }, { merge: true });
+    }
   });
 
   test('resizes the conversation sidebar and remembers the width and the collapsed state', async ({ page }) => {
