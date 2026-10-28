@@ -11,6 +11,19 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — display auto-restore on a panel stuck in a fallback mode
+
+A panel that had fallen back to 640x480 rejected every restore at Windows's
+validate step with a bare `rc=31`, three times over, and the breaker tripped.
+The restore kept the panel's current timing in the layout it asked Windows to
+apply; it now lets Windows pick the timing for the requested size and refresh.
+When Windows still refuses, the error names the monitor and the mode, and says
+whether the panel offers that mode right now. And when auto-restore is waiting
+on a stored monitor that is not connected, it logs
+`display_auto_restore_parked` once, naming the monitor, instead of saying
+nothing; a panel that came back under a new identity after a reboot had left
+the dashboard showing drift with no explanation.
+
 ### fixed — the changelog's list of releases opens at once on a phone
 
 The changelog's "on this page" list held every heading on the page, about 470

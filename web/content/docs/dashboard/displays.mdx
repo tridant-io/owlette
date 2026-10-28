@@ -95,7 +95,7 @@ the agent checks displays every 30 seconds and acts only when all of these hold:
 2. auto-restore is on for the machine
 3. the circuit breaker has not tripped
 4. no manual restore is in flight; it never races an operator
-5. every stored monitor is connected. a stored monitor that is powered off makes it wait, silently, until it is back
+5. every stored monitor is connected. a stored monitor that is not makes it wait until the monitor is back, and logs `display_auto_restore_parked` once so the events tab says why nothing happens. a panel that came back under a new identity, which identical panels can do when they re-enumerate, never clears this on its own: store the layout again
 6. the same drift was seen on two checks in a row, so a cable wiggle cannot set it off
 7. at least 10 seconds have passed since the last apply
 
@@ -103,7 +103,7 @@ it compares only monitors that are in the stored layout, and leaves scale out, s
 
 ### the circuit breaker
 
-three failed applies in a row trip the breaker, and auto-restore stops on that machine. the panel shows "auto-restore paused — 3 attempts failed. last error: …" with **reset**, which only admins see, and the card shows the red dot. a skipped attempt, such as a monitor being off, does not count, and a success sets the count back to zero.
+three failed applies in a row trip the breaker, and auto-restore stops on that machine. the panel shows "auto-restore paused — 3 attempts failed. last error: …" with **reset**, which only admins see, and the card shows the red dot. when Windows refuses the layout, the error names the monitor and the mode it asked for, and says whether the panel offers that mode right now. a skipped attempt, such as a monitor being off, does not count, and a success sets the count back to zero.
 
 fix the cause, then **reset**. the agent picks the reset up on its next config sync.
 
@@ -130,5 +130,6 @@ the events tab and [activity logs](/docs/dashboard/activity-logs) carry the same
 | `display_auto_restore_fired` | info | auto-restore corrected drift |
 | `display_auto_restore_skipped_unfixable` | info | meant for drift on a monitor the stored layout lacks. the current agent leaves such a monitor out of the comparison instead, so it does not log this |
 | `display_auto_restore_circuit_breaker_tripped` | error | the third failure in a row; auto-restore paused |
+| `display_auto_restore_parked` | warning | auto-restore is waiting on a stored monitor that is not connected; logged once per episode, naming the monitor |
 
 `display_monitor_removed`, `display_apply_failed`, `display_auto_revert_fired` and `display_sync_lost` are also emailed to everyone on the site with **display events** on in [account settings](/docs/dashboard/account-settings#alerts): a removed monitor and an auto-revert at once, the other two in a digest. changes in the moments after an apply are logged but not emailed. most of these events can also start an [event talon](/docs/dashboard/talons#triggers).

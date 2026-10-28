@@ -42,8 +42,9 @@ SHUTDOWN_REQUEST_TIMEOUT = 3.0
 # "log-only", never a bad write.
 # Excluded on purpose — display_auto_restore_fired, display_apply_acked,
 # display_revert_deferred, display_auto_restore_skipped_unfixable,
-# display_auto_restore_circuit_breaker_tripped: no routing entry, so they hit the
-# endpoint's generic branch and duplicate the log doc the agent already wrote.
+# display_auto_restore_circuit_breaker_tripped, display_auto_restore_parked: no
+# routing entry, so they hit the endpoint's generic branch and duplicate the log
+# doc the agent already wrote.
 DISPLAY_ALERT_EVENT_TYPES = frozenset({
     # email + webhook
     'display_monitor_removed',

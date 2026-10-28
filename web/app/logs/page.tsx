@@ -214,6 +214,7 @@ const ACTION_TYPE_GROUPS: { group: string | null; options: { value: string; labe
       { value: 'display_auto_restore_fired', label: 'display auto-restored' },
       { value: 'display_auto_restore_skipped_unfixable', label: 'display auto-restore skipped' },
       { value: 'display_auto_restore_circuit_breaker_tripped', label: 'display auto-restore disabled' },
+      { value: 'display_auto_restore_parked', label: 'display auto-restore waiting' },
     ],
   },
   {
