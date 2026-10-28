@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.24] - 2026-10-27
+
 ### fixed — display auto-restore on a panel stuck in a fallback mode
 
 A panel that had fallen back to 640x480 rejected every restore at Windows's
