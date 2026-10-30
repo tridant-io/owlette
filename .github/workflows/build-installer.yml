@@ -268,7 +268,7 @@ jobs:
     # verification model resolves the tag itself; pinning to a commit SHA makes
     # slsa-verifier reject the provenance. This is the one deliberate
     # exception to the pin-everything policy.
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0 # zizmor: ignore[unpinned-uses]
     with:
       # base64-encoded `sha256sum` line for the installer (built in the digest
       # step). The generator base64-decodes this, so it must NOT be raw hex.
