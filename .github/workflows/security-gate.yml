@@ -45,8 +45,8 @@ jobs:
       - name: resolve open alerts against the ref being shipped
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A tag build's GITHUB_REF is refs/tags/vX.Y.Z, which code scanning
-          # has no alerts for. Grade the default branch's analysis instead —
-          # a tag is cut from a branch, and its SAST posture is that branch's.
-          GITHUB_REF: refs/heads/${{ github.event.repository.default_branch }}
+          # code scanning has no analysis for a tag, and a step's env cannot
+          # override GITHUB_REF. tags are cut from dev, so dev's analysis is
+          # theirs. exit: point this elsewhere if tags stop being cut from dev.
+          GATE_REF: refs/heads/dev
         run: node scripts/check-security-alerts.mjs

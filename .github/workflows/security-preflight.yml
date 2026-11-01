@@ -41,7 +41,7 @@ on:
 # cancelled run reads as neither pass nor fail, which is the one outcome a gate
 # must never produce.
 concurrency:
-  group: security-preflight-${{ github.ref }}-${{ github.event_name }}
+  group: security-preflight-${{ inputs.ref || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -80,12 +80,6 @@ jobs:
       - name: resolve open alerts against this checkout
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # A scheduled run checks out `dev`, so the code-scanning feed must be
-          # asked about `dev` too — GITHUB_REF would still say `main` here.
-          GITHUB_REF: >-
-            ${{ github.event_name == 'schedule' && 'refs/heads/dev'
-                || (inputs.ref && format('refs/heads/{0}', inputs.ref))
-                || github.ref }}
         # Standing waivers (currently just the Linux-only glib transitive) live
         # in .github/security-acks.json, where they are reviewable in a PR and
         # expire on a date. The script reads that file itself.

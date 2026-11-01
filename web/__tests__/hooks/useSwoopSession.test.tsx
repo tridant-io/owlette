@@ -9,7 +9,9 @@
  */
 
 import { useEffect } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopPeerOptions } from '@/lib/swoop/peer';
 import type { SwoopSignalingOptions } from '@/lib/swoop/signaling';
@@ -21,7 +23,9 @@ const wired: {
   session: SwoopSession | null;
   /** what the hook told the peer about the signalling socket, in order. */
   signalOpen: boolean[];
-} = { peer: null, signaling: null, session: null, signalOpen: [] };
+  /** what the faked peer answers about the path under its channels. */
+  linkUp: boolean;
+} = { peer: null, signaling: null, session: null, signalOpen: [], linkUp: true };
 
 /**
  * what the faked receiver reports: the host's records, rvfc, and `getStats()`
@@ -56,7 +60,7 @@ jest.mock('@/lib/swoop/peer', () => ({
       handleSignal: async () => undefined,
       channel: () => null,
       signalOpen: (open: boolean) => wired.signalOpen.push(open),
-      linkUp: () => true,
+      linkUp: () => wired.linkUp,
       connection: { addEventListener: () => undefined, removeEventListener: () => undefined },
     };
   },
@@ -205,6 +209,7 @@ beforeEach(() => {
   wired.signaling = null;
   wired.session = null;
   wired.signalOpen = [];
+  wired.linkUp = true;
   (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 });
 
@@ -492,6 +497,108 @@ describe('useSwoopSession — how a session ends', () => {
     act(() => wired.signaling!.onStatus!('reconnecting'));
     act(() => wired.signaling!.onStatus!('open'));
     expect(wired.signalOpen).toEqual([false, true]);
+  });
+
+  /**
+   * tec-b4a rebooting, 2026-10-31: the last frame stayed up under "poor
+   * connection" for minutes. a path that is gone is not a slow one.
+   */
+  it('a machine that went away with the picture up reads as lost, not as a poor connection', async () => {
+    await open();
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+    expect(swoop.state).toBe('connected');
+
+    wired.linkUp = false;
+    act(() => wired.signaling!.onStatus!('reconnecting'));
+    await advance(5 * 60_000);
+
+    render(
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId={MACHINE}
+          state={swoop.state}
+          error={swoop.error}
+          stats={swoop.stats}
+          retryIn={swoop.retryIn}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId('session-badge')).toHaveTextContent('connection lost');
+  });
+
+  it('a machine that said it is restarting keeps saying so until its picture is back', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    expect(swoop.state).toBe('ended');
+    expect(swoop.restarting).toBe(true);
+    expect(swoop.retryIn).not.toBeNull();
+
+    // the next session finds nobody home while it boots.
+    await advance(30_000);
+    expect(mints()).toHaveLength(2);
+    act(() => wired.peer!.onError!('host_silent'));
+    expect(swoop.restarting).toBe(true);
+    expect(swoop.retryIn).not.toBeNull();
+
+    await advance(30_000);
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+    expect(swoop.state).toBe('connected');
+    expect(swoop.restarting).toBe(false);
+  });
+
+  it('an offline machine stops reading as restarting after ten minutes, and the api says what it is', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    mint = { status: 409, body: { detail: 'this machine is offline', code: 'machine_offline' } };
+
+    await advance(9 * 60_000);
+    expect(swoop.restarting).toBe(true);
+    await advance(60_000);
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.error).toBe('this machine is offline');
+    expect(swoop.retryIn).not.toBeNull();
+  });
+
+  it('a lapsed login during a restart asks to sign in, instead of waiting on the machine', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    mint = { status: 401, body: {} };
+    await advance(30_000);
+
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.error).toBe('sign in again to resume.');
+  });
+
+  it('a picture that is still coming has no link to lose', async () => {
+    wired.linkUp = false;
+    await open();
+    await advance(2_000);
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.linkUp).toBe(true);
+  });
+
+  it('a machine that never came back from a restart stops saying it is restarting', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    await advance(30_000);
+    act(() => wired.peer!.onError!('host_silent'));
+    await advance(30_000);
+    jest.setSystemTime(Date.now() + 10 * 60_000);
+    act(() => wired.peer!.onError!('host_silent'));
+
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toMatch(/has not answered for ten minutes/);
+    expect(swoop.restarting).toBe(false);
   });
 
   describe('owlette swoop closing the window', () => {

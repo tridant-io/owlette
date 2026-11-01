@@ -13,12 +13,12 @@ rust-version = "1.77.2"
 name = "owlette_swoop_viewer_lib"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 # the same tauri as desktop/src-tauri; this app is a window manager for
 # owlette.app and has no tray, so none of the desktop app's features
 [dependencies]
-tauri = { version = "2.11.3", features = [] }
+tauri = { version = "2.12.5", features = [] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 # receives owlette-swoop:// links (owner ok 2026-10-09): the registry keys,

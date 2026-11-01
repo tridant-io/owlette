@@ -55,7 +55,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } =
+  const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
     useSwoopSession(siteId, machineId);
   const { isSiteAdmin, isSiteOwner } = useAuth();
   // the keyboard follows the machine's system. no hook reads one machine
@@ -150,6 +150,8 @@ export default function SwoopPage({
           state={state}
           error={error}
           retryIn={retryIn}
+          restarting={restarting}
+          linkLost={!stats.linkUp}
           refusal={refusal}
           settingsHref={isSiteAdmin(siteId) ? `/dashboard?settings=${encodeURIComponent(siteId)}` : null}
           // a site runs on its owner's plan, so only the owner is sent to upgrade it

@@ -41,6 +41,7 @@ const mockStats = {
   feedback: null,
   frame: null,
   leaseExpiresAt: 0,
+  linkUp: true,
   stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 const mockVideoRef = createRef<HTMLVideoElement>();

@@ -42,6 +42,10 @@ export interface SwoopStageProps {
   error?: string | null;
   /** seconds until the next automatic reconnect, while one is scheduled. */
   retryIn?: number | null;
+  /** the machine said it is restarting or updating; this speaks for the stage until its picture is back. */
+  restarting?: boolean;
+  /** the path under a session with a picture is down, so what shows is its last frame. */
+  linkLost?: boolean;
   /**
    * the api's code for a refusal that is final; `swoop_disabled` says where to
    * turn swoop on, `plan_required` where to upgrade.
@@ -138,6 +142,8 @@ export function SwoopStage({
   state,
   error = null,
   retryIn = null,
+  restarting = false,
+  linkLost = false,
   refusal = null,
   settingsHref = null,
   upgradeHref = null,
@@ -223,6 +229,8 @@ export function SwoopStage({
   const recovering = stall === 'reattaching' || stall === 'reconnecting';
   // an ended or failed session is not connecting: it says why, and the way on.
   const settled = state === 'ended' || state === 'error';
+  // a machine that said it is restarting speaks for the stage, unless the network is the problem.
+  const restartNotice = restarting && !noPath && state !== 'connected' && stall === 'none';
   const swoopOff = refusal === 'swoop_disabled';
   // the site's plan leaves swoop out, so its switch would not help and an upgrade would.
   const planLocked = refusal === 'plan_required';
@@ -269,7 +277,21 @@ export function SwoopStage({
           </span>
         </p>
       )}
-      {state !== 'connected' && !settled && stall === 'none' && (
+      {restartNotice && (
+        <p role="status" className={NOTICE}>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          machine is restarting
+          <span className={NOTICE_DETAIL}>swoop reconnects when it&apos;s back.</span>
+        </p>
+      )}
+      {linkLost && state === 'connected' && stall === 'none' && (
+        <p role="status" className={washed}>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          connection lost
+          <span className={NOTICE_DETAIL}>trying to reach this machine again.</span>
+        </p>
+      )}
+      {!restartNotice && state !== 'connected' && !settled && stall === 'none' && (
         <p className={NOTICE}>
           <Loader2 className="size-6 animate-spin" aria-hidden />
           {noPath ? "can't reach this machine from your network" : 'connecting'}
@@ -278,7 +300,7 @@ export function SwoopStage({
           )}
         </p>
       )}
-      {settled && stall === 'none' && (
+      {!restartNotice && settled && stall === 'none' && (
         <p role="alert" className={`${NOTICE} px-4 text-center`}>
           {state === 'ended' ? 'session ended' : error}
           {state === 'ended' && error && <span className={NOTICE_DETAIL}>{error}</span>}

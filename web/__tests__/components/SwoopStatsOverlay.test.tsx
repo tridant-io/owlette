@@ -23,6 +23,7 @@ const EMPTY_STATS = {
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  linkUp: true,
   stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 
