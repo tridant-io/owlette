@@ -11,6 +11,27 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — path / args reach the program as written
+
+On Windows the agent ran every `path / args` value through its path check, so
+arguments came out rewritten: `--fullscreen --display 2` reached the program as
+`<agent folder>\--fullscreen --display 2`, `/S` as `C:\S`, and a quoted path got
+the agent folder in front of it. A value is now a file when the whole string is
+one and arguments otherwise, and arguments go through unchanged.
+
+This changes what some saved values do at their next launch. Slashes in arguments
+now reach the program unflipped. A saved value the old rewriting broke, like
+`cmd.exe` with `/c ...` or `powershell.exe` with `-Command ...`, now runs.
+
+The agent refuses a value that is, as a whole, quoted or not, a network path or a
+symbolic link, and a value that opens with a network path and goes on to
+arguments. Everything else passes as written, including `--project \\server\...`,
+`file://...` and `"C:\link.toe" --flag`.
+
+Finding a running process by its `path / args` now ignores quote marks, so a
+quoted value still matches the process it started. A process already running
+keeps its old command line until it next launches.
+
 ### added — the desktop app warns about a path owlette can't launch from
 
 Entering a launch target, a path or a working directory now says so as soon as it's

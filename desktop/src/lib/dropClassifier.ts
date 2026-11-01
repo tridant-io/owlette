@@ -257,9 +257,7 @@ async function classifyExecutable(path: string, fs: FsProbe): Promise<DropResult
 
 /**
  * `.bat`/`.cmd` go in as the executable, never as an arg to cmd.exe: the launcher
- * already wraps batch files (`process_launcher.py:170-174`), and `/c "<script>"`
- * in `file_path` gets mangled by the service's abspath validator
- * (`owlette_service.py:1902-1910`).
+ * already wraps batch files (`process_launcher.py`).
  */
 function classifyBatchScript(path: string): DropResult {
   return {
