@@ -171,6 +171,17 @@ export function hostname(): Promise<string> {
   return invoke<string>('hostname')
 }
 
+export type PathStatus = 'file' | 'folder' | 'missing' | 'unknown' | 'file-link' | 'folder-link' | 'broken-link'
+
+/** whether a path is on this machine; anything that keeps it from saying is `unknown`, never `missing`. */
+export async function pathStatus(path: string): Promise<PathStatus> {
+  try {
+    return await invoke<PathStatus>('path_status', { path })
+  } catch {
+    return 'unknown'
+  }
+}
+
 /** Whether the run-on-login startup shortcut exists. */
 export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
