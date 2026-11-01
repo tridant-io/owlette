@@ -268,6 +268,7 @@ describe('SwoopToolbar', () => {
         referenceMinUs: null,
         referenceSamples: 0,
       },
+      linkUp: true,
       stall: { recovery: 'none', episodes: 0, kind: null },
     });
     const bar = (rttUs: number) => (
@@ -289,6 +290,32 @@ describe('SwoopToolbar', () => {
     expect(screen.queryByTestId('session-badge')).toBeNull();
     rerender(bar(400_000));
     expect(screen.getByTestId('session-badge')).toHaveTextContent('poor connection');
+  });
+
+  it('a path that is gone reads as lost, whatever the last round trip measured', () => {
+    render(
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          stats={
+            {
+              signal: 'open',
+              feedback: { rttUs: 400_000 },
+              linkUp: false,
+              stall: { recovery: 'none', episodes: 0, kind: null },
+            } as unknown as SwoopStats
+          }
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId('session-badge')).toHaveTextContent('connection lost');
   });
 });
 

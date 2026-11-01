@@ -157,6 +157,8 @@ export interface SwoopStats {
   feedback: SwoopFeedbackDiagnostics | null;
   /** when the lease currently held lapses; 0 before one exists. */
   leaseExpiresAt: number;
+  /** whether the path under the session is up. the feedback above is its last word when it is not. */
+  linkUp: boolean;
   stall: SwoopStallStats;
 }
 
@@ -200,6 +202,8 @@ export interface UseSwoopSession {
   retryIn: number | null;
   /** set while connecting finds no media path between this browser and the machine; see `NO_PATH_MS`. */
   noPath: SwoopNoPath | null;
+  /** the machine said it is restarting or updating, and the reconnects are waiting for it. */
+  restarting: boolean;
 }
 
 interface SessionGrant {
@@ -247,6 +251,7 @@ const EMPTY_STATS: SwoopStats = {
   frame: null,
   feedback: null,
   leaseExpiresAt: 0,
+  linkUp: true,
   stall: { recovery: 'none', episodes: 0, kind: null },
 };
 
@@ -317,6 +322,8 @@ export function useSwoopSession(
   const stallReconnectsRef = useRef<number[]>([]);
   // when the machine first left an offer unanswered since its last picture; see `HOST_SILENT_LIMIT_MS`.
   const silentSinceRef = useRef<number | null>(null);
+  // the machine said it was going away to come back, and no picture has shown since.
+  const [restarting, setRestarting] = useState(false);
 
   const setStall = useCallback((patch: Partial<SwoopStallStats>) => {
     setStats((prev) => ({ ...prev, stall: { ...prev.stall, ...patch } }));
@@ -341,6 +348,7 @@ export function useSwoopSession(
 
   const cancel = useCallback(() => {
     stoppedRef.current = true;
+    setRestarting(false);
     setStepUpRequired(false);
     setState('ended');
   }, []);
@@ -439,6 +447,7 @@ export function useSwoopSession(
           return;
         }
         stoppedRef.current = true;
+        setRestarting(false);
         setRefusal(reason);
         setError(why);
         setState('error');
@@ -459,6 +468,14 @@ export function useSwoopSession(
     window.addEventListener('owlette:close', end);
     return () => window.removeEventListener('owlette:close', end);
   }, [end]);
+
+  // a machine still gone after this long is not restarting, and an offline one
+  // is retried forever without ever reaching the silent limit that would say so.
+  useEffect(() => {
+    if (!restarting) return;
+    const timer = setTimeout(() => setRestarting(false), HOST_SILENT_LIMIT_MS);
+    return () => clearTimeout(timer);
+  }, [restarting]);
 
   // the countdown the page shows, once a second.
   useEffect(() => {
@@ -563,6 +580,7 @@ export function useSwoopSession(
         scheduleReconnect();
       } else {
         stoppedRef.current = true;
+        setRestarting(false);
         clearRetry();
       }
     };
@@ -683,6 +701,8 @@ export function useSwoopSession(
         // or a bad moment may all come back, and the ladder waits them out.
         const final = isWithdrawal(res.status, code) || res.status === 400 || res.status === 404;
         if (final && !disposed) setRefusal(code);
+        // the operator has something to do, which a restart notice would hide.
+        if (res.status === 401 && !disposed) setRestarting(false);
         fail(res.status === 401 ? 'sign in again to resume.' : detail, !final);
         return null;
       }
@@ -814,6 +834,7 @@ export function useSwoopSession(
             if (disposed) return;
             connected = true;
             silentSinceRef.current = null;
+            setRestarting(false);
             setState('connected');
             // a picture clears the machine's record: the next failure is a first one
             lastMachineFailureRef.current = null;
@@ -865,6 +886,7 @@ export function useSwoopSession(
             finish('same_machine', "you're on this machine. swoop opens other computers, not the one you're using.");
             return;
           }
+          if (reason === 'restart') setRestarting(true);
           // a host that let this viewer go, a service going away to come back,
           // or a streamer that exited on its own: no decision, so the next
           // session finds it back.
@@ -1120,6 +1142,8 @@ export function useSwoopSession(
           frame: latestFrame,
           feedback: swoopFeedback(live)?.diagnostics() ?? null,
           leaseExpiresAt,
+          // only a session with a picture has a link to lose.
+          linkUp: !connected || (peer?.linkUp() ?? true),
         }));
       }, STATS_INTERVAL_MS);
     };
@@ -1136,5 +1160,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath };
+  return { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting };
 }

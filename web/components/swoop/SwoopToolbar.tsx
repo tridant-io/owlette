@@ -95,6 +95,8 @@ function badgeFor(
       : { label: `reconnecting in ${retryIn} s`, tone: 'secondary' };
   }
   if (state !== 'connected' || !stats) return null;
+  // the round trip below is the last one measured, so this comes first.
+  if (!stats.linkUp) return { label: 'connection lost', tone: 'destructive' };
   if (stats.signal === 'reconnecting') return { label: 'poor connection', tone: 'secondary' };
   const feedback = stats.feedback;
   if (feedback && ((feedback.rttUs ?? 0) > POOR_RTT_US || (feedback.delayRiseUs ?? 0) > POOR_DELAY_RISE_US)) {
