@@ -3932,14 +3932,18 @@ class OwletteService:
 
         file_path = process.get('file_path', '')
         if file_path:
-            file_path = file_path.replace('/', '\\')
+            # a file when the whole value is one, arguments otherwise, and
+            # arguments reach the program unchanged. quotes and padding come off
+            # only for this check, or quoting a network path or a link would
+            # carry it past the refusal as "arguments".
+            candidate = file_path.strip(' \t\r\n"').replace('/', '\\')
             try:
-                file_path = self._validate_path(file_path, "File path")
+                resolved = self._validate_path(candidate, "File path")
             except ValueError as e:
                 logging.error(f'Error: {e}')
                 return None
-        # If file path exists, leave as-is (could be file or cmd args)
-        file_path = f"{file_path}" if os.path.isfile(file_path) else file_path
+            if os.path.isfile(resolved):
+                file_path = resolved
         logging.info(f"Starting {exe_path}{' ' if file_path else ''}{file_path}...")
 
         cwd = process.get('cwd', None)
