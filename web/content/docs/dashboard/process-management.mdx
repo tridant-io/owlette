@@ -1,7 +1,7 @@
 ---
 title: "process management"
 description: "add, configure and control the processes owlette keeps running, from the web dashboard. changes reach the agent within a second or two."
-keywords: ["copy a process", "clone a process", "crash loop", "stop a process", "add an app", "app path", "program path", "executable path", "mac app", "linux program"]
+keywords: ["copy a process", "clone a process", "crash loop", "stop a process", "add an app", "app path", "program path", "executable path", "mac app", "linux program", "path not found", "browse the machine"]
 ---
 
 ![process management controls](/docs-screens/process-management.png)
@@ -53,6 +53,8 @@ restart and kill send commands to the agent. create, edit, delete, launch-mode a
 when a process goes from `off` to `scheduled`, the agent clears stale killed and cooldown markers at once. if the current time is outside the schedule, the process stays stopped until the next window opens, then launches normally.
 
 if the configured path no longer exists, the agent aborts the launch and the process shows `STOPPED` (`INACTIVE` means the launch mode is `off`, not a missing file). the dashboard shows an error toast — *executable not found for …*, or *app* or *program* on a Mac or Linux machine. when the agent finds likely sibling paths, the toast lists up to two, and its **use path** action opens the edit dialog with the first one filled in.
+
+after you save a changed path, the dashboard asks the machine about it. if it isn't there, or owlette would refuse it (a folder as the launch target, a file as the working directory, a symbolic link, a network path), a warning names the process and field and offers **ok**, which leaves it as you typed it, and **browse**, which opens a folder browser on the machine at the closest folder that exists; picking a file saves it to that process and keeps any arguments after the path. the save is never held up, moving on to another process doesn't lose the warning, and an offline machine or an agent at 4.1.24 or older gives no warning. browsing needs the same `MACHINE_CONFIG_WRITE` as editing, and API keys can't use it.
 
 ---
 

@@ -6,13 +6,8 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import {
-  problem,
-  problemFromError,
-  problemPlanRequired,
-  problemValidation,
-  ProblemType,
-} from '@/lib/apiErrors';
+import { problemFromError, problemValidation } from '@/lib/apiErrors';
+import { commandErrorToProblem, unsupportedCommandType } from '@/lib/machineCommandProblem';
 import { applyAuthDeprecations, readAndParseJsonBody } from '../../../../../_shared';
 import { withIdempotency } from '@/lib/idempotency';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
@@ -56,18 +51,6 @@ const ACTIVE_HOURS_GUARDED_TYPES: ReadonlySet<string> = new Set<string>([
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function unsupportedCommandType(cmdType: string): NextResponse {
-  return problem({
-    type: ProblemType.ValidationFailed,
-    title: 'unsupported command type',
-    status: 400,
-    detail:
-      `command type '${cmdType}' is not accepted on this endpoint. ` +
-      `allowed types: ${[...ALLOWED_COMMAND_TYPES].sort().join(', ')}`,
-    code: 'unsupported_command_type',
-  });
 }
 
 function copyOptionalString(
@@ -374,39 +357,6 @@ function normalizeCommandBody(body: CommandBody): NormalizedCommand {
   }
 
   return { ok: true, type: cmdType, payload, activeHoursOverride: override.override };
-}
-
-function commandErrorToProblem(err: ExecuteMachineCommandError): NextResponse {
-  if (err.code === 'unsupported_command_type') {
-    return unsupportedCommandType(err.detail.match(/'([^']+)'/)?.[1] ?? 'unknown');
-  }
-  if (err.entitlement) {
-    return problemPlanRequired(err.detail, err.entitlement);
-  }
-  if (err.code === 'machine_offline' || err.code === 'held_restart_unsupported') {
-    return problem({
-      type: ProblemType.Conflict,
-      title: err.code === 'machine_offline' ? 'machine offline' : 'held restart unsupported',
-      status: 409,
-      detail: err.detail,
-      code: err.code,
-    });
-  }
-  if (err.status === 404) {
-    return problem({
-      type: ProblemType.NotFound,
-      title: 'machine not found',
-      status: 404,
-      detail: err.detail,
-    });
-  }
-  return problem({
-    type: ProblemType.ValidationFailed,
-    title: 'validation failed',
-    status: err.status,
-    detail: err.detail,
-    code: err.code,
-  });
 }
 
 /**

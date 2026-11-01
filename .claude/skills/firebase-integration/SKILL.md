@@ -90,7 +90,7 @@ Agent poller picks it up → executes → writes completed[cmdId] and deletes th
 Web listener sees completion → updates UI
 ```
 
-Command types the web sends: process control (`restart_process`, `start_process`, `stop_process`, `kill_process`, `set_launch_mode`), machine (`reboot_machine`, `shutdown_machine`, `cancel_reboot`, `dismiss_reboot_pending`, `capture_screenshot`, `start_live_view`, `stop_live_view`, `update_owlette`, display topology), deployments (`install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall`), roost (`sync_pull`), swoop (`swoop_*`), hoot (`mcp_tool_call`, `cancel_mcp_tool`, `provision_cortex_key`). The allowlist for the machine-command API is `ALLOWED_COMMAND_TYPES` in `web/lib/actions/executeMachineCommand.server.ts`.
+Command types the web sends: process control (`restart_process`, `start_process`, `stop_process`, `kill_process`, `set_launch_mode`), machine (`reboot_machine`, `shutdown_machine`, `cancel_reboot`, `dismiss_reboot_pending`, `capture_screenshot`, `start_live_view`, `stop_live_view`, `update_owlette`, display topology), deployments (`install_software`, `cancel_installation`, `uninstall_software`, `cancel_uninstall`), roost (`sync_pull`), swoop (`swoop_*`), hoot (`mcp_tool_call`, `cancel_mcp_tool`, `provision_cortex_key`), the process editor (`check_path`, session-only, ADR 0014). The allowlist for the machine-command API is `ALLOWED_COMMAND_TYPES` in `web/lib/actions/executeMachineCommand.server.ts`.
 
 ---
 

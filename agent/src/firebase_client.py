@@ -215,6 +215,9 @@ class FirebaseClient:
         # Takes a reason; the service leaves the site with it. See _on_removed_from_site.
         self.removed_callback: Optional[Callable[[str], None]] = None
 
+        self._check_path_answers: list = []
+        self._check_path_answers_lock = threading.Lock()
+
         # Slow-command queue (installs/uninstalls/updates — serialised).
         # Worker starts in start(), after self.running = True.
         self._slow_command_queue: queue.Queue = queue.Queue(maxsize=50)
@@ -720,6 +723,8 @@ class FirebaseClient:
                 self.logger.debug(f"Pre-populated {len(self._seen_commands)} seen commands from completed doc")
 
                 for cmd_id, entry in completed_data.items():
+                    if isinstance(entry, dict) and entry.get('type') == 'check_path':
+                        self._check_path_answers.append(cmd_id)
                     if isinstance(entry, dict) and entry.get('status') == 'running':
                         self.logger.warning(f"Command {cmd_id} was interrupted by service restart — marking failed")
                         self._mark_command_failed(
@@ -1616,7 +1621,13 @@ class FirebaseClient:
         'site_settings_refresh',
         # a revoke must not wait behind an install
         'unpair',
+        # read-only and bounded; the dashboard stops listening after seconds
+        'check_path',
     })
+
+    # see _drop_old_check_path_answers; with path_commands.MAX_ANSWER_BYTES this is
+    # the most check_path can ever hold of the completed doc.
+    _CHECK_PATH_ANSWERS_KEPT = 8
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
         """Dispatch a command to its execution lane.
@@ -1722,6 +1733,11 @@ class FirebaseClient:
         else:
             self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
 
+        # read-only, so nothing on the dashboard moved and no metrics push is owed.
+        if cmd_type == 'check_path':
+            self._drop_old_check_path_answers(cmd_id)
+            return
+
         # Deployment lifecycle → site logs (audit trail)
         deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
         if cmd_type in deployment_cmd_types and deployment_id:
@@ -1743,6 +1759,34 @@ class FirebaseClient:
             self.logger.debug(f"Immediate metrics push after command {cmd_id}")
         except Exception as me:
             self.logger.warning(f"Post-command metrics push failed: {me}")
+
+    def _drop_old_check_path_answers(self, cmd_id: str):
+        """keep the newest check_path answers and delete the rest from the doc.
+
+        a listing can run to tens of KB and the doc holds every command's result
+        for 24 hours, so a few minutes of browsing could reach firestore's 1 MiB,
+        and then every terminal write on this machine fails. an answer is only read
+        by the dashboard listening for it, within seconds, so keeping a handful
+        leaves room for one save's fields and a browser's clicks to be read.
+        """
+        with self._check_path_answers_lock:
+            self._check_path_answers.append(cmd_id)
+            # chunked: REST API URL length limit
+            stale = self._check_path_answers[:-self._CHECK_PATH_ANSWERS_KEPT][:50]
+        if not stale:
+            return
+        try:
+            self.db.collection('sites').document(self.site_id)\
+                .collection('machines').document(self.machine_id)\
+                .collection('commands').document('completed')\
+                .update({stale_id: DELETE_FIELD for stale_id in stale})
+        except Exception as e:
+            # still listed, so the next check tries them again.
+            self.logger.warning(f"Could not drop old check_path answers: {e}")
+            return
+        with self._check_path_answers_lock:
+            dropped = set(stale)
+            self._check_path_answers = [kept for kept in self._check_path_answers if kept not in dropped]
 
     def _handle_cancel_mcp_tool(self, cmd_data: Dict[str, Any]) -> str:
         """Cancel an in-flight mcp_tool_call subprocess (Cortex cancel button).

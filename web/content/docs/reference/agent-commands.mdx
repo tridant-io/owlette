@@ -39,7 +39,7 @@ besides `type`, `status: "pending"` and the command's own fields, an entry carri
 
 ### lanes
 
-the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh` and `site_settings_refresh`.
+the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh` and `check_path`.
 
 everything else goes through **one worker**, one command at a time, so installs, updates and roost syncs never overlap. that includes process control and reboots: a `restart_process` queued behind an install waits for it. the worker's queue holds 50 commands; one that arrives to a full queue is failed with `Command queue full — too many pending installs`.
 
@@ -47,7 +47,7 @@ everything else goes through **one worker**, one command at a time, so installs,
 
 the agent refuses a second command of the same type for the same process within 5 seconds. the key is the type plus `process_id`, `processId` or `process_name`, so commands that name no process share one key per type. the refusal, `Error: rate limited - <type> executed too recently, try again in a few seconds`, is recorded as failed.
 
-exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types and `site_settings_refresh`. `cancel_mcp_tool` never reaches the check.
+exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types, `site_settings_refresh` and `check_path`. `cancel_mcp_tool` never reaches the check.
 
 ### active hours
 
@@ -90,6 +90,7 @@ an `mcp_tool_call` whose tool failed is `completed` too: the tool's own error, `
 
 - a `running` marker that survives a service restart is turned into `failed` with `interrupted by service restart`. the ID is already handled, so the command never runs twice
 - periodically the agent deletes pending entries whose `timestamp` is more than an hour old, and completed entries more than 24 hours old, by `completedAt`, `startedAt` or `timestamp`. an entry with no `timestamp`, such as every `sync_pull`, is never aged out of pending
+- `check_path` answers don't wait for that: only the newest 8 stay in `completed`, and the agent deletes older ones as it finishes each check. a folder listing can run to tens of KB, and when the document reaches Firestore's 1 MiB limit every terminal write on the machine fails
 
 ### progress
 
@@ -149,6 +150,12 @@ every process command finds the configured process by ID or by name.
 | `set_launch_mode` | `process_id`, `processId` or `process_name`; `mode`; `schedules` | saves `launch_mode` and any `schedules` to the machine's config and derives the legacy `autolaunch`. a change from `off` to `always` launches the process now; a change to `off` stops supervising it and leaves it running. the agent does not check `mode` against `off`, `always` and `scheduled` | same |
 | `toggle_autolaunch` | ID or name; `autolaunch` | legacy: sets `launch_mode` to `always` or `off`. nothing queues it any more | same |
 | `update_config` | `config` | overwrites `config.json` with `config`, keeping the local `firebase` section. nothing queues it any more | same |
+
+### checking a path
+
+`check_path` is read-only and names no process. it takes `field`, one of `exe_path`, `file_path`, `cwd` or `folder`, and `value`, up to 1,024 characters. the process editor queues it after a save changes a path, and its folder browser queues it with `field: "folder"` for each folder it opens. the agent reads the value the way the launchers do, under a 3-second limit, and answers a JSON string with `status` (`file`, `folder`, `missing` or `unknown`), `warning`, `path`, `rest` and `nearest`. `warning` is null, `missing`, `not_absolute`, `network`, `refused`, `folder`, `file` or `link`. a path it can't read is `unknown`, never `missing`, and a value starting with two slashes on Windows is refused without touching it.
+
+for `folder`, a folder that can be read also answers `parent`, `folders`, `files` and `truncated`: names only, with no sizes, dates or contents, capped at 200 entries and 16 KiB of names. an agent at 4.1.24 or older answers `Unknown command type: check_path`, and the dashboard says nothing. see [process management](/docs/dashboard/process-management).
 
 ---
 
@@ -269,6 +276,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 | the roost fan-out and rollout functions, and the rollback route | `sync_pull` |
 | `requestSwoopSession` | `swoop_session_requested`, `swoop_kill`, `swoop_refresh` |
 | `PATCH /api/sites/{siteId}/display-settings` | `site_settings_refresh` |
+| `POST /api/sites/{siteId}/machines/{machineId}/path-check`, session only: it refuses API keys, and the type is not in [the public list](#queuing-through-the-api) | `check_path` |
 | nothing | `update_config`, `toggle_autolaunch`, `refresh_software_inventory`, `cancel_sync`, `rollback_to_version`. the agent still accepts them |
 
 ---
@@ -308,6 +316,6 @@ the process routes, `POST /api/sites/{siteId}/machines/{machineId}/processes/{pr
 
 ## where the handlers live
 
-the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types) and `site_commands.py` (`site_settings_refresh`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
+the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types), `site_commands.py` (`site_settings_refresh`) and `path_commands.py` (`check_path`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
 
 a handler module that fails to import at service start leaves its types unregistered. `restart_process` then falls back to the chain's branch, shared with `start_process`; every other router type answers `Unknown command type`, recorded as completed.
