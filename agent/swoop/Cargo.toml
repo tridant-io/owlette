@@ -77,7 +77,7 @@ testhooks = []
 # The bundle, the stdin/stdout event lines, the signaling messages and `probe`
 # output are all JSON. `derive` because every one of those is a struct.
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = "=1.0.154"
 
 # Typed errors per module (thiserror) with one anyhow chain at the process
 # boundary, so a failure maps onto an exit code instead of a panic.
@@ -93,7 +93,7 @@ hex = "=0.4.3"
 # fingerprint + sid with it. One RustCrypto generation across all three or the
 # digest traits do not line up.
 hmac = "=0.13.0"
-sha2 = "=0.11.0"
+sha2 = "=0.11.1"
 hkdf = "=0.13.0"
 
 # The streamer verifies viewer JWTs itself (EdDSA), independently of the Worker,
@@ -102,7 +102,7 @@ ed25519-dalek = "=3.0.0"
 
 # Bundle secrets and derived keys are wiped on drop; `derive` for the
 # ZeroizeOnDrop the bundle types need.
-zeroize = { version = "=1.9.0", features = ["derive"] }
+zeroize = { version = "=1.9.1", features = ["derive"] }
 
 # Single-use `jti` values and DTLS/ICE nonces.
 rand = "=0.10.3"
@@ -114,7 +114,7 @@ crossbeam-channel = "=0.5.17"
 # Logging facade only: the one sink is the size-capped rotating writer in
 # src/log.rs. No env_logger — the streamer has no console to log to. `std`
 # because `set_boxed_logger` is gated behind it.
-log = { version = "=0.4.34", features = ["std"] }
+log = { version = "=0.4.35", features = ["std"] }
 # str0m logs its ice checks and dtls state through `tracing`, which the log
 # above never saw: a session that never connects left nothing in the host log
 # between "encoding" and "failed" (2026-09-23). the `log` feature forwards
@@ -152,7 +152,7 @@ tungstenite = { version = "=0.30.0", default-features = false, features = [
 # proxies are not all on 1.3. Exit condition: rustls 0.24, which moves the
 # provider out of the crate's features and is a deliberate re-pin rather than a
 # version bump.
-rustls = { version = "=0.23.45", default-features = false, features = [
+rustls = { version = "=0.23.46", default-features = false, features = [
     "ring",
     "std",
     "tls12",
@@ -167,7 +167,7 @@ rustls = { version = "=0.23.45", default-features = false, features = [
 # exactly what a compiled-in list cannot see; it also makes a root rotation an
 # os update rather than an agent release. Exit condition: the standing
 # dependency-currency review.
-rustls-native-certs = "=0.8.4"
+rustls-native-certs = "=0.8.5"
 
 # Opus, behind the non-default `audio-opus` feature. 0.3.0-rc.0 rather than
 # 0.2.0 (the "max stable") because 0.2.0 is a 2019 release against audiopus_sys
@@ -303,10 +303,10 @@ str0m = { version = "=0.23.1", default-features = false, features = ["rust-crypt
 
 [target.'cfg(unix)'.dependencies]
 # Direct for the POSIX clock (`clock_gettime`, swoop-macos Task 2.1) and the
-# interface walk (`getifaddrs`, Task 4.7). 0.2.189 is what Cargo.lock already
+# interface walk (`getifaddrs`, Task 4.7). 0.2.191 is what Cargo.lock already
 # resolved through the rest of the graph, so this adds no version. Exit condition: the standing
 # dependency-currency review; libc 1.0 is a deliberate re-pin, not a bump.
-libc = "=0.2.189"
+libc = "=0.2.191"
 
 # The macOS backends (dev/active/swoop-macos): ScreenCaptureKit captures the
 # picture and the system audio, VideoToolbox encodes and scales, CoreGraphics
@@ -321,10 +321,10 @@ libc = "=0.2.189"
 # not line up, the way the RustCrypto trio above does. Default features on
 # purpose: each framework crate's defaults enable every header it has, so no
 # later task edits this manifest for a missing one. The newest release of each
-# on 2026-09-28. Exit condition: the standing dependency-currency review,
+# on 2026-11-01. Exit condition: the standing dependency-currency review,
 # moving the set as one.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "=0.6.4"
+objc2 = "=0.6.5"
 objc2-foundation = "=0.3.2"
 objc2-core-foundation = "=0.3.2"
 objc2-core-graphics = "=0.3.2"
@@ -340,7 +340,7 @@ dispatch2 = "=0.3.1"
 # Embeds the VERSIONINFO resource and icon (see build.rs). Same crate agent/host
 # and the Tauri desktop build already use, so it is not new to this repo.
 # Exit condition: the standing dependency-currency review.
-winresource = "=0.1.31"
+winresource = "=0.1.34"
 
 [profile.release]
 # Copied from agent/host/Cargo.toml with its comment, because the reason is the
