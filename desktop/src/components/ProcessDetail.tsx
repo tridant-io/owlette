@@ -18,7 +18,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useScrollFade } from '@/hooks/useScrollFade'
 import { launchCopy } from '@/lib/launchCopy'
-import { pickDirectory, pickExecutable, pickFile } from '@/lib/pickers'
+import { PATH_FIELDS, type PathField } from '@/lib/missingPath'
+import { pickPath } from '@/lib/pickers'
 import {
   coerceForm,
   formFromProcess,
@@ -116,6 +117,9 @@ interface ProcessDetailProps {
   startedAt?: number | null
   /** Persist the seven text fields. Already coerced; the caller only writes. */
   onSave: (form: ProcessForm) => void
+  /** the path fields a save just changed. owned above: this pane remounts per
+   *  process, and the check they start can outlast it. */
+  onPathsEntered?: (processId: string, entries: [PathField, string][]) => void
   onLaunchMode: (mode: LaunchMode) => void
   /** Persist the schedule windows authored in the editor. */
   onSchedules: (schedules: ScheduleBlock[]) => void
@@ -151,6 +155,7 @@ export function ProcessDetail({
   status,
   startedAt = null,
   onSave,
+  onPathsEntered,
   onLaunchMode,
   onSchedules,
   scheduleTimezone = '',
@@ -247,9 +252,13 @@ export function ProcessDetail({
       seeded.current = coerced
       setDraft(coerced)
       onSave(coerced)
+      const entries = PATH_FIELDS.filter((name) => coerced[name] !== onDisk[name]).map(
+        (name): [PathField, string] => [name, coerced[name]],
+      )
+      if (entries.length > 0) onPathsEntered?.(latest.current.id, entries)
       return true
     },
-    [onSave],
+    [onSave, onPathsEntered],
   )
 
   const handleBlur = useCallback(() => {
@@ -272,15 +281,9 @@ export function ProcessDetail({
   }, [draft, pendingRefresh, save])
 
   const browse = useCallback(
-    async (field: 'exe_path' | 'file_path' | 'cwd') => {
+    async (field: PathField) => {
       try {
-        const picked =
-          field === 'exe_path'
-            ? await pickExecutable(draft.exe_path)
-            : field === 'file_path'
-              ? await pickFile(draft.file_path)
-              : await pickDirectory(draft.cwd)
-
+        const picked = await pickPath(field, draft[field])
         if (picked === null) return
         const next = { ...draft, [field]: picked }
         setDraft(next)
