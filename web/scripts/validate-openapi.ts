@@ -68,6 +68,8 @@ const INTERNAL_ROUTES = new Set([
   // Site-admin-only hoot policy toggle (session surface, no api-key scope) + alias.
   '/api/sites/{siteId}/hoot-settings',
   '/api/sites/{siteId}/cortex-settings',
+  // the process editor's check_path, session only: it refuses every api key (ADR 0014).
+  '/api/sites/{siteId}/machines/{machineId}/path-check',
   '/api/cron/display-alerts',
   '/api/cron/status-ping',
   '/api/settings/llm-key',

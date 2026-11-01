@@ -8,6 +8,19 @@ tocDepth: 2
 
 ## [Unreleased]
 
+### added — the dashboard warns when a saved path won't launch
+
+After a save changes a path in the process editor, the dashboard asks the machine
+about it. If it isn't there, or owlette would refuse it (a folder as the launch
+target, a file as the working directory, a symbolic link, a network path), a warning
+names the process and field and offers **ok**, which leaves it as typed, and
+**browse**, which opens a folder browser on the machine at the closest folder that
+exists; picking a file saves it to that process and keeps any arguments after the
+path. The save is never held up, and moving on to another process doesn't lose the
+warning. It needs an agent newer than 4.1.24: an older agent, an offline
+machine or no answer in 15 seconds means no warning. Site admins and owners only, as
+for editing the process; API keys can't use it.
+
 ### security — re2js, glob and minimatch
 
 re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.

@@ -46,6 +46,13 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',
 ]);
 
+/**
+ * queued only by a route that passes `dashboardOnly`, never through the allowlist
+ * above: that one also serves api keys, talon outputs and the like, and these
+ * tell a caller what is on a machine's disk.
+ */
+const DASHBOARD_ONLY_COMMAND_TYPES: ReadonlySet<string> = new Set<string>(['check_path']);
+
 // the types every plan may queue (plan.md decision 7): every plan keeps
 // updating, and anything already running can always be stopped.
 // dismissing a pending reboot also resets the relaunch counters crash-restart needs.
@@ -77,6 +84,8 @@ export interface ExecuteMachineCommandInput {
    * refused for any actor but `user:` and `apiKey:`.
    */
   activeHoursOverride?: { reason: string };
+  /** added to the `machine_command_dispatched` audit row. */
+  auditAttributes?: Record<string, unknown>;
 }
 
 export interface ExecuteMachineCommandResult {
@@ -228,6 +237,8 @@ export interface ExecuteMachineCommandOptions {
   db?: ReturnType<typeof getAdminDb>;
   /** Override the wall-clock `now` — unit tests use this for deterministic command ids. */
   now?: () => number;
+  /** the caller is a session-only dashboard route, and may queue `DASHBOARD_ONLY_COMMAND_TYPES`. */
+  dashboardOnly?: boolean;
 }
 
 export async function executeMachineCommand(
@@ -258,7 +269,10 @@ export async function executeMachineCommand(
     );
   }
   const cmdType = input.type.trim();
-  if (!ALLOWED_COMMAND_TYPES.has(cmdType)) {
+  if (
+    !ALLOWED_COMMAND_TYPES.has(cmdType) &&
+    !(options.dashboardOnly && DASHBOARD_ONLY_COMMAND_TYPES.has(cmdType))
+  ) {
     throw new ExecuteMachineCommandError(
       400,
       'unsupported_command_type',
@@ -363,6 +377,7 @@ export async function executeMachineCommand(
       ...(activeHoursOverride
         ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
         : {}),
+      ...input.auditAttributes,
     },
   });
 

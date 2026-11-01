@@ -6803,7 +6803,9 @@ paths:
         `start_live_view` and `stop_live_view` need MACHINE_VIEW (any site
         member); every other type needs MACHINE_EXEC_COMMAND (site admin or
         owner; superadmin anywhere). API keys need `machine=<machineId>:write`
-        for every type. 60/min per caller.
+        for every type. 60/min per caller. The dashboard's read-only
+        `check_path` command is not on this allowlist, for any caller: it has a
+        session-only route of its own and refuses API keys.
 
         Returns 409 `machine_offline` if `machines/{machineId}.online`
         is `false` — the command is NOT queued.

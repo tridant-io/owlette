@@ -42,6 +42,9 @@ import { unionIds } from '@/lib/deviceResolvers';
 import { nextDuplicateName } from '@/lib/processNaming';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
+import { MissingPathDialog } from './components/MissingPathDialog';
+import { usePathCheck, type PathWarning } from '@/hooks/usePathCheck';
+import { PATH_FIELDS, withArgs, type PathField } from '@/lib/pathCheck';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
 import { usePlan } from '@/hooks/usePlan';
 import { useSitePlan } from '@/hooks/useSitePlan';
@@ -187,6 +190,9 @@ export default function DashboardPage() {
     launch_mode: 'off',
     schedules: null,
   });
+  // the path fields as the editor opened with them: a save asks the machine only about what it changed.
+  const openedPaths = useRef<Record<PathField, string>>({ exe_path: '', file_path: '', cwd: '' });
+  const pathCheck = usePathCheck(currentSiteId);
   // The schedule is editable in every launch mode (matching the desktop app): from
   // off/always this pre-configures windows without changing the mode. In `scheduled` the
   // section is pinned open, so this flag only drives the other two.
@@ -547,6 +553,11 @@ export default function DashboardPage() {
   };
 
   const openEditProcessDialog = (machineId: string, process: Process) => {
+    openedPaths.current = {
+      exe_path: process.exe_path?.trim() ?? '',
+      file_path: process.file_path?.trim() ?? '',
+      cwd: process.cwd?.trim() ?? '',
+    };
     setProcessDialogMode('edit');
     setEditingMachineId(machineId);
     setEditingProcessId(process.id);
@@ -585,6 +596,7 @@ export default function DashboardPage() {
   };
 
   const openCreateProcessDialog = (machineId: string) => {
+    openedPaths.current = { exe_path: '', file_path: '', cwd: '' };
     setProcessDialogMode('create');
     setEditingMachineId(machineId);
     setEditingProcessId(''); // No process ID for new process
@@ -638,17 +650,39 @@ export default function DashboardPage() {
     }
 
     try {
+      let savedProcessId = editingProcessId;
       if (processDialogMode === 'create') {
-        await createProcess(editingMachineId, editProcessForm);
+        savedProcessId = await createProcess(editingMachineId, editProcessForm);
         toast.success(`Process "${editProcessForm.name}" created successfully!`);
       } else {
         await updateProcess(editingMachineId, editingProcessId, editProcessForm);
         toast.success(`Process "${editProcessForm.name}" updated successfully!`);
       }
       setProcessDialogOpen(false);
+      pathCheck.check(
+        editingMachineId,
+        savedProcessId,
+        editProcessForm.name,
+        PATH_FIELDS.map((field) => ({ field, value: editProcessForm[field].trim() })).filter(
+          ({ field, value }) => value && value !== openedPaths.current[field],
+        ),
+      );
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : `Failed to ${processDialogMode} process`;
       toast.error(msg);
+    }
+  };
+
+  const handlePickMissingPath = async (warning: PathWarning, picked: string) => {
+    try {
+      await updateProcess(warning.machineId, warning.processId, {
+        [warning.field]: withArgs(picked, warning.rest),
+      });
+      toast.success('path updated');
+      pathCheck.dismiss(warning);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'failed to update the path');
+      throw error;
     }
   };
 
@@ -980,6 +1014,7 @@ export default function DashboardPage() {
 
   const currentSite = sites.find(s => s.id === currentSiteId);
   const editLaunchCopy = launchCopyOf(editingMachineId);
+  const pathWarning = pathCheck.warning;
 
   return (
     <PageCascade className="relative min-h-screen pb-24">
@@ -1687,6 +1722,17 @@ export default function DashboardPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {pathWarning && (
+        <MissingPathDialog
+          key={`${pathWarning.machineId}:${pathWarning.processId}:${pathWarning.field}`}
+          warning={pathWarning}
+          launch={launchCopyOf(pathWarning.machineId)}
+          onOk={() => pathCheck.dismiss(pathWarning)}
+          onPick={(picked) => handlePickMissingPath(pathWarning, picked)}
+          listFolder={pathCheck.listFolder}
+        />
+      )}
 
       {/* Delete Process Confirmation Dialog */}
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>

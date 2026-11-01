@@ -24,7 +24,7 @@ harness, at the source-run tier.
 
 | Tier | Spec | Needs the desktop app? | Status |
 |---|---|---|---|
-| 0 | `tier0-spike.spec.ts` | no | **executed, green** |
+| 0 | `tier0-spike.spec.ts`, `tier0-check-path.spec.ts` | no | **executed, green** |
 | 1 | `desktop-to-web.spec.ts`, `web-to-desktop.spec.ts` | yes | code-complete, **not executed** |
 
 Tier 0 stands in for the desktop app by writing `config.json` exactly the way the

@@ -1348,6 +1348,13 @@ class OwletteService:
         except Exception as e:
             logging.warning(f"Failed to register pairing handlers: {e}")
 
+        # check_path: is a path saved in the dashboard on this machine?
+        try:
+            from path_commands import register_handlers as _register_path_handlers
+            _register_path_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register path handlers: {e}")
+
         self.firebase_client = None
 
         # install-tree hardening: main() does the start-up repair and sets
@@ -5719,10 +5726,13 @@ class OwletteService:
             # enablement toggle inside five seconds would be refused and
             # recorded as a failed command. site_settings_refresh is exempt for
             # the same reason: an admin flipping a site switch twice inside five
-            # seconds must land the second flip too.
+            # seconds must land the second flip too. check_path too: one save asks
+            # about up to three fields, and each folder opened in the browser is one
+            # more, with the route's rate limit and path_commands' slots as the bound.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
-                                'swoop_refresh', 'site_settings_refresh'):
+                                'swoop_refresh', 'site_settings_refresh',
+                                'check_path'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
