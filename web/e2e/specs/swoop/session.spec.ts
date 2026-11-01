@@ -592,6 +592,28 @@ test.describe('through a host', () => {
       await host.stop();
     }
   });
+
+  test('a machine that says it is restarting is reported as that, and the page finds it back', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: LIVE_ID });
+    try {
+      await signIn(page, watcher);
+      const first = nextGrant(page, LIVE_ID);
+      await page.goto(`/swoop/${SITE_ID}/${LIVE_ID}`);
+      await first;
+      await expectHostPicture(page);
+
+      const second = nextGrant(page, LIVE_ID);
+      await host.restart();
+      await expect(page.getByText('machine is restarting')).toBeVisible({ timeout: 20_000 });
+
+      await second;
+      await expectHostPicture(page);
+      await expect(page.getByText('machine is restarting')).toHaveCount(0);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
 });
 
 test.describe('through a host, inside owlette swoop', () => {
