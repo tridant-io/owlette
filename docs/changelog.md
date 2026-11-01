@@ -17,6 +17,11 @@ re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.
 glob and minimatch in functions and the cli and sdk workspace move to their fixed
 majors. Three web packages nothing imported are gone.
 
+### security — rustls 0.23.46 and tauri 2.12.5
+
+rustls in the swoop streamer moves to 0.23.46, which fixes four advisories. Tauri
+moves to 2.12.5 with its plugins, in the desktop app and in owlette swoop.
+
 ## [4.1.24] - 2026-10-27
 
 ### fixed — display auto-restore on a panel stuck in a fallback mode
