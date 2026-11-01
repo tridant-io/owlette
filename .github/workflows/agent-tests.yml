@@ -124,7 +124,7 @@ jobs:
           # imports pytest-mock / pytest-asyncio / responses / freezegun, and
           # black + flake8 are a lint toolchain this job does not run. The
           # version matches the requirements-dev.txt pin.
-          python -m pip install pytest==9.1.1
+          python -m pip install pytest==9.2.0
 
       # Mirrors the local invocation. Run from the repo root so pytest's
       # rootdir resolves to agent/ and agent/pytest.ini applies (strict
