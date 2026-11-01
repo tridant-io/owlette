@@ -33,11 +33,9 @@ jobs:
   playwright:
     name: run suite against firebase emulators
     runs-on: ubuntu-latest
-    # Local steady-state is ~45s after the first build. CI has cold caches
-    # on first run plus a pre-build step (next start requires a built .next
-    # dir) — 15 minutes gives a comfortable ceiling for the target
-    # <6 min wall-clock once caches warm.
-    timeout-minutes: 30
+    # the suite alone takes about 27 minutes on a hosted runner (measured
+    # 2026-11-01, 608 tests), before the functions suite that follows it.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
