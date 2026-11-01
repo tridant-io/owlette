@@ -456,3 +456,34 @@ describe('SwoopStage — a picture that froze', () => {
     expect(screen.queryByText(/picture stalled|picture froze/)).toBeNull();
   });
 });
+
+describe('SwoopStage — a machine that went away', () => {
+  it.each(['ended', 'connecting', 'error'] as const)('a restart speaks for the stage while the session is %s', (state) => {
+    renderStage({ state, restarting: true, retryIn: 4, error: 'this machine did not answer.' });
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('machine is restarting');
+    expect(notice.querySelector('.animate-spin')).not.toBeNull();
+    expect(screen.queryByText('session ended')).toBeNull();
+    expect(screen.queryByText('connecting')).toBeNull();
+    expect(screen.queryByText('this machine did not answer.')).toBeNull();
+  });
+
+  it('a restart gives way to a network the machine cannot be reached from', () => {
+    renderStage({ state: 'ended', restarting: true, noPath: 'no_candidates' as never });
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('a link that is down says so over the last frame, with a spinner', () => {
+    renderStage({ state: 'connected', linkLost: true });
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('connection lost');
+    expect(notice.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('a live picture says neither', () => {
+    renderStage({ state: 'connected' });
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.queryByText('connection lost')).toBeNull();
+  });
+});

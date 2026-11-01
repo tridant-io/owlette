@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — swoop says when a machine is gone or restarting
+
+A machine that went away left its last frame up under "poor connection". A path
+that is down now reads "connection lost" over that frame. A machine whose agent
+says it is going away to come back shows "machine is restarting" with a spinner
+through the reconnects, until its picture is back or ten minutes pass.
+
 ## [4.1.24] - 2026-10-27
 
 ### fixed — display auto-restore on a panel stuck in a fallback mode

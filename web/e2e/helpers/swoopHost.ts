@@ -514,6 +514,11 @@ export class FakeSwoopHost {
     if (this.hostSid && (!sid || sid === this.hostSid)) await this.endSession('kill');
   }
 
+  /** a service going away to come back: its viewers are told `restart`, and may ask again. */
+  async restart(): Promise<void> {
+    await this.endSession('restart');
+  }
+
   private async endSession(reason: string): Promise<void> {
     for (const viewer of this.admitted) this.toViewers({ type: 'bye', to: viewer, reason });
     await this.hostPage.evaluate(() => (window as unknown as HostWindow).swoopHost.close());
