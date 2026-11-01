@@ -3252,9 +3252,15 @@ def update_process_status_in_json(pid, new_status, firebase_client=None, process
         return
     write_json_to_file(data, RESULT_FILE_PATH)
 
+def _cmdline_key(text):
+    # argv parsing consumes quotes, so a configured `--name "a b"` runs as
+    # `--name a b` and a live command line never shows them.
+    return normalize_exe_path(text).replace('"', '')
+
+
 def _normalized_cmdline(proc):
     """A live command line in the spelling the configured paths compare in."""
-    return normalize_exe_path(' '.join(proc.cmdline()))
+    return _cmdline_key(' '.join(proc.cmdline()))
 
 def find_running_process_by_exe(exe_path, file_path=None, strict=False,
                                 expected_cmdline=None):
@@ -3301,10 +3307,10 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
     try:
         exe_key = normalize_exe_path(resolve_exec_target(exe_path))
         exe_basename = os.path.basename(exe_key)
-        file_path_key = normalize_exe_path(file_path) if file_path else None
+        file_path_key = _cmdline_key(file_path) if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence
         # compares exactly regardless of slash direction or case.
-        expected_key = (normalize_exe_path(expected_cmdline)
+        expected_key = (_cmdline_key(expected_cmdline)
                         if expected_cmdline else None)
         is_script = exe_key.endswith(('.bat', '.cmd'))
         candidates = []      # (pid, full_match, cmdline-or-None) -- exe targets
