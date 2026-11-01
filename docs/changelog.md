@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### security — re2js, glob and minimatch
+
+re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.
+glob and minimatch in functions and the cli and sdk workspace move to their fixed
+majors. Three web packages nothing imported are gone.
+
 ## [4.1.24] - 2026-10-27
 
 ### fixed — display auto-restore on a panel stuck in a fallback mode
