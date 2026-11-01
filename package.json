@@ -29,5 +29,9 @@
     "test:cli": "npm test --workspace @owlette/cli",
     "build:sdk": "npm run build --workspace @owlette/sdk",
     "test:sdk": "npm test --workspace @owlette/sdk"
+  },
+  "overrides": {
+    "minimatch": "^11.0.1",
+    "glob": "^14.0.2"
   }
 }
