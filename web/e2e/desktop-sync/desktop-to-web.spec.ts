@@ -17,8 +17,8 @@
  *   3. the dashboard — `launch_mode` overlays live from the config doc, so it
  *      moves on the fast path while the text field waits for the status doc.
  *
- * NOT EXECUTED as part of the change that introduced it: running this kills the
- * operator's tray (the app is single-instance). See README.md.
+ * the app is single-instance, so this needs its own build beside a live install,
+ * and refuses to run otherwise. see README.md.
  */
 
 import { expect as playwrightExpect } from '@playwright/test'

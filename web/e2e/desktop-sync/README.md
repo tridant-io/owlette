@@ -24,8 +24,8 @@ harness, at the source-run tier.
 
 | Tier | Spec | Needs the desktop app? | Status |
 |---|---|---|---|
-| 0 | `tier0-spike.spec.ts`, `tier0-check-path.spec.ts` | no | **executed, green** |
-| 1 | `desktop-to-web.spec.ts`, `web-to-desktop.spec.ts` | yes | code-complete, **not executed** |
+| 0 | `tier0-spike.spec.ts`, `tier0-rig-safety.spec.ts`, `tier0-check-path.spec.ts` | no | passed, each on its own branch 2026-11-01 on Windows: spike and rig-safety 4 tests, spike and check-path 10 tests |
+| 1 | `desktop-to-web.spec.ts`, `web-to-desktop.spec.ts`, `missing-path-warning.spec.ts` | yes | 12 tests passed, last run 2026-11-01 on Windows, by hand, on an isolated build beside the live app and service. Not run on a plain build, on macOS or Linux, or in CI |
 
 Tier 0 stands in for the desktop app by writing `config.json` exactly the way the
 app does — scratch file, then rename — which is all the agent can observe (it
@@ -36,13 +36,13 @@ for that reason.
 Tier 1 `test.skip`s with an explanatory message when `OWLETTE_DESKTOP_EXE` is
 unset, so a run without a desktop build is a clean skip, not a failure.
 
-### Why tier 1 was not executed
+### Why tier 1 takes a deliberate run
 
-The desktop app is **single-instance**. Driving it means killing the operator's
-running tray and taking over the single-instance lock. On a developer machine
-that is destructive to a live session, so tier 1 is written to be run
-deliberately — on a spare machine, or after stopping the live service — never as
-a side effect of someone running the suite.
+The desktop app is **single-instance**, and a running copy has to go before a launch.
+The suite only ever stops a copy it started. Any other process with the named exe's
+file name stops the run with an error, because that may be the operator's own window,
+and `tier0-rig-safety.spec.ts` holds it to that. So name an isolated build (below), or
+close the app and stop the live service yourself first.
 
 ---
 
@@ -111,7 +111,33 @@ JSON
 npx tsc -p tsconfig.e2e-check.json && rm tsconfig.e2e-check.json
 ```
 
-### Tier 1 (drives the desktop app — DESTRUCTIVE to a live session)
+### Tier 1 beside a live session (the operator's app and service keep running)
+
+Two things keep a test build apart from the installed app. Its own **identifier**
+gives it its own single-instance lock (the plugin names the mutex after it) and its
+own `%APPDATA%` and `%LOCALAPPDATA%` folders, so a launch cannot fold into the
+operator's window or write their `layout.json`. Its own **file name** is what lets the
+suite tell it from the operator's `owlette-desktop.exe`. Its window and tray icon do
+show on the desktop for the length of the run. A renamed build that keeps the plain
+identifier fails the run, but raises the operator's window once on its way out.
+
+```bash
+# a json file, because shells disagree on quoting it inline
+echo '{ "identifier": "app.owlette.desktop.e2e" }' > "$SCRATCH/tauri-isolate.json"
+cd desktop && npx tauri build --no-bundle --config "$SCRATCH/tauri-isolate.json"
+cp src-tauri/target/release/owlette-desktop.exe "$SCRATCH/owlette-desktop-e2e.exe"
+
+export OWLETTE_DESKTOP_EXE="$SCRATCH/owlette-desktop-e2e.exe"
+export SESSION_SECRET='ci-e2e-emulator-session-secret-do-not-reuse-in-prod'
+cd ../web && npm run e2e:desktop-sync:nobuild
+```
+
+`OWLETTE_E2E_KEEP_SCRATCH=1` leaves the sandbox and WebView2 profile in the temp dir
+instead of recursively deleting them, and prints their paths.
+`E2E_DESKTOP_SYNC_OUTPUT_DIR` and `E2E_DESKTOP_SYNC_REPORT_DIR` move what Playwright
+clears at the start of a run.
+
+### Tier 1 on a plain build (only with the live app closed)
 
 1. Build the app:
    ```bash
@@ -124,7 +150,8 @@ npx tsc -p tsconfig.e2e-check.json && rm tsconfig.e2e-check.json
    powershell -Command "Start-Process cmd -ArgumentList '/c net stop OwletteService' -Verb RunAs -Wait"
    ```
    Close the desktop app too — kill the pid in
-   `C:\ProgramData\Owlette\tmp\tray.pid`, **by pid, never by image name**.
+   `C:\ProgramData\Owlette\tmp\tray.pid`, **by pid, never by image name**. The suite
+   refuses to run while it is up.
 3. Point the suite at the build and run it:
    ```bash
    export OWLETTE_DESKTOP_EXE="$PWD/desktop/src-tauri/target/release/owlette-desktop.exe"

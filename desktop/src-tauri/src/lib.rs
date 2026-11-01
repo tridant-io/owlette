@@ -9,6 +9,7 @@ mod json_io;
 mod mac_window;
 #[cfg(target_os = "macos")]
 mod menu_bar_position;
+mod path_status;
 mod paths;
 mod pid_file;
 mod process_ctl;
@@ -91,6 +92,7 @@ pub fn run() {
       commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
+      path_status::path_status,
       commands::screen_recording_granted,
       commands::open_screen_recording_settings,
       commands::accessibility_granted,
