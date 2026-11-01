@@ -29,6 +29,16 @@ Finding a running process by its `path / args` now ignores quote marks, so a
 quoted value still matches the process it started. A process already running
 keeps its old command line until it next launches.
 
+### added — the desktop app warns about a path owlette can't launch from
+
+Entering a launch target, a path or a working directory now says so as soon as it's
+saved if it won't launch: it isn't on the machine, it's a folder where a file belongs
+(a macOS `.app` is fine) or a file where a folder belongs, it's a network path on
+Windows, or it's a symbolic link. The value stays as typed: "ok" keeps it, and "browse"
+opens the picker in the nearest folder on the way up that exists. The warning names its
+process and still arrives if you've moved to another one while a slow path was checked;
+browse saves to the process it's about. Arguments and relative paths are left alone.
+
 ### fixed — swoop says when a machine is gone or restarting
 
 A machine that went away left its last frame up under "poor connection". A path

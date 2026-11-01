@@ -9,6 +9,7 @@
 
 import { open } from '@tauri-apps/plugin-dialog'
 import { launchCopy } from '@/lib/launchCopy'
+import type { PathField } from '@/lib/missingPath'
 
 /**
  * Where to open the picker. The current value is offered as the starting point, but a
@@ -56,4 +57,10 @@ export function pickDirectory(current?: string): Promise<string | null> {
     directory: true,
     defaultPath: startingPoint(current),
   })
+}
+
+/** the picker for a path field of the detail form. */
+export function pickPath(field: PathField, current?: string): Promise<string | null> {
+  if (field === 'exe_path') return pickExecutable(current)
+  return field === 'file_path' ? pickFile(current) : pickDirectory(current)
 }

@@ -9,7 +9,9 @@ updates:
   # weekly PR. Dependabot bumps version tags today; once actions are pinned to
   # SHAs it bumps the SHA and its trailing "# vX" comment together.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/owlette-roost-deploy
     target-branch: dev
     schedule:
       interval: weekly

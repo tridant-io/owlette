@@ -7,6 +7,7 @@ import { DropOverlay } from '@/components/DropOverlay'
 import { JoinSiteDialog } from '@/components/JoinSiteDialog'
 import { OwletteEye } from '@/components/landing/OwletteEye'
 import { LeaveSiteDialog } from '@/components/LeaveSiteDialog'
+import { MissingPathDialog } from '@/components/MissingPathDialog'
 import { ProcessDetail } from '@/components/ProcessDetail'
 import { ProcessList, type ProcessAction } from '@/components/ProcessList'
 import { ReportIssueDialog } from '@/components/ReportIssueDialog'
@@ -24,6 +25,7 @@ import { useAppStates } from '@/hooks/useAppStates'
 import { useDetailSections } from '@/hooks/useDetailSections'
 import { useFileDrop } from '@/hooks/useFileDrop'
 import { useLaunchFlag } from '@/hooks/useLaunchFlag'
+import { useMissingPath, type MissingPathWarning } from '@/hooks/useMissingPath'
 import { useOwletteConfig } from '@/hooks/useOwletteConfig'
 import { useRestartPrompt } from '@/hooks/useRestartPrompt'
 import { useServiceHealth } from '@/hooks/useServiceHealth'
@@ -39,6 +41,8 @@ import {
   type DropCard,
 } from '@/lib/dropQueue'
 import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
+import { withArgs } from '@/lib/missingPath'
+import { pickPath } from '@/lib/pickers'
 import {
   ARG_PAIR,
   accessibilityGranted,
@@ -117,6 +121,9 @@ function App() {
   // (`key={selected.id}`), so the disclosures would shut themselves when
   // comparing two entries. Persisted per user beside the window layout.
   const detailSections = useDetailSections()
+  // here for the same reason: a check can take seconds, and the operator may have
+  // moved to another process, or removed this one, by the time it answers.
+  const { warnings: pathWarnings, check: checkPaths, dismiss: dismissPathWarning } = useMissingPath()
 
   // Guarded on purpose: closing the dialog calls `pairLaunch.dismiss()`, which
   // flips `armed` back to false and re-runs this effect. Without the `if`, that
@@ -333,6 +340,38 @@ function App() {
       editSelected('could not save the process', (process) => applyForm(process, form))
     },
     [editSelected],
+  )
+
+  // a warning stays current only while its process still holds the value it is about.
+  const pathWarning =
+    pathWarnings.find((warning) => {
+      const value = processes.find((process) => process.id === warning.subject)?.[warning.field]
+      return typeof value === 'string' && value.trim() === warning.value
+    }) ?? null
+
+  /**
+   * browse from a warning writes to the process the warning came from, which may
+   * not be the one selected, and only the one field: `edit` re-reads the rest.
+   */
+  const handlePathWarningBrowse = useCallback(
+    async (warning: MissingPathWarning) => {
+      dismissPathWarning(warning)
+      let picked: string | null
+      try {
+        picked = await pickPath(warning.field, warning.folder ?? undefined)
+      } catch (cause) {
+        toast.error('could not open the file picker', { description: message(cause) })
+        return
+      }
+      if (picked === null) return
+
+      const value = withArgs(picked, warning.rest)
+      const written = await edit('could not save the process', (document) =>
+        updateProcess(document, warning.subject, (process) => ({ ...process, [warning.field]: value })),
+      )
+      if (written) checkPaths(warning.subject, [[warning.field, value]])
+    },
+    [checkPaths, dismissPathWarning, edit],
   )
 
   /**
@@ -600,6 +639,7 @@ function App() {
                 sections={detailSections.sections}
                 onSectionToggle={detailSections.toggle}
                 onSave={handleSaveForm}
+                onPathsEntered={checkPaths}
                 onLaunchMode={handleLaunchMode}
                 onSchedules={(schedules: ScheduleBlock[]) =>
                   editSelected('could not save the schedule', (process) =>
@@ -669,6 +709,12 @@ function App() {
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />
 
         <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+        <MissingPathDialog
+          missing={pathWarning}
+          processName={String(processes.find((process) => process.id === pathWarning?.subject)?.name ?? '')}
+          onClose={() => pathWarning && dismissPathWarning(pathWarning)}
+          onBrowse={(warning) => void handlePathWarningBrowse(warning)}
+        />
         <DropConfirm
           card={dropCard}
           remaining={dropped.length}
