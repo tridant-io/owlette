@@ -24,7 +24,7 @@ harness, at the source-run tier.
 
 | Tier | Spec | Needs the desktop app? | Status |
 |---|---|---|---|
-| 0 | `tier0-spike.spec.ts`, `tier0-rig-safety.spec.ts` | no | 4 tests passed, last run 2026-11-01 on Windows |
+| 0 | `tier0-spike.spec.ts`, `tier0-rig-safety.spec.ts`, `tier0-check-path.spec.ts` | no | passed, each on its own branch 2026-11-01 on Windows: spike and rig-safety 4 tests, spike and check-path 10 tests |
 | 1 | `desktop-to-web.spec.ts`, `web-to-desktop.spec.ts`, `missing-path-warning.spec.ts` | yes | 12 tests passed, last run 2026-11-01 on Windows, by hand, on an isolated build beside the live app and service. Not run on a plain build, on macOS or Linux, or in CI |
 
 Tier 0 stands in for the desktop app by writing `config.json` exactly the way the

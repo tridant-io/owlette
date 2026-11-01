@@ -30,9 +30,53 @@ interface InternalState {
 const INITIAL_STATE: InternalState = { commandId: null, outcome: null };
 
 /**
+ * calls back once with the command's outcome and closes its listener; the returned
+ * function closes it sooner. a completed command that recorded no result reads as
+ * 'no result', and a failed one with no error as 'no error'.
+ */
+export function watchCommandOutcome(
+  siteId: string,
+  machineId: string,
+  commandId: string,
+  onOutcome: (outcome: CommandOutcome) => void,
+): () => void {
+  if (!db) return () => undefined;
+
+  const ref = doc(
+    db, 'sites', siteId, 'machines', machineId, 'commands', 'completed',
+  );
+  const unsubscribe = onSnapshot(
+    ref,
+    (snap) => {
+      if (!snap.exists()) return;
+      const entry = snap.data()[commandId] as
+        | { status?: string; result?: unknown; error?: unknown }
+        | undefined;
+      if (entry?.status === 'completed') {
+        onOutcome({
+          status: 'completed',
+          result: typeof entry.result === 'string' ? entry.result : 'no result',
+        });
+      } else if (entry?.status === 'failed') {
+        onOutcome({
+          status: 'failed',
+          error: typeof entry.error === 'string' ? entry.error : 'no error',
+        });
+      } else {
+        return;
+      }
+      unsubscribe();
+    },
+    (err) => {
+      console.error('Error subscribing to command result:', err);
+    },
+  );
+  return unsubscribe;
+}
+
+/**
  * The command's outcome once the agent marks it completed or failed, or null
- * while it is still pending. A completed command that recorded no result reads
- * as 'no result', and a failed one with no error as 'no error'.
+ * while it is still pending.
  */
 export function useCommandOutcome(
   siteId: string,
@@ -42,44 +86,10 @@ export function useCommandOutcome(
   const [state, setState] = useState<InternalState>(INITIAL_STATE);
 
   useEffect(() => {
-    if (!db || !siteId || !machineId || !commandId) return;
-
-    const ref = doc(
-      db, 'sites', siteId, 'machines', machineId, 'commands', 'completed',
-    );
-    const unsubscribe = onSnapshot(
-      ref,
-      (snap) => {
-        if (!snap.exists()) return;
-        const entry = snap.data()[commandId] as
-          | { status?: string; result?: unknown; error?: unknown }
-          | undefined;
-        if (entry?.status === 'completed') {
-          setState({
-            commandId,
-            outcome: {
-              status: 'completed',
-              result: typeof entry.result === 'string' ? entry.result : 'no result',
-            },
-          });
-        } else if (entry?.status === 'failed') {
-          setState({
-            commandId,
-            outcome: {
-              status: 'failed',
-              error: typeof entry.error === 'string' ? entry.error : 'no error',
-            },
-          });
-        } else {
-          return;
-        }
-        unsubscribe();
-      },
-      (err) => {
-        console.error('Error subscribing to command result:', err);
-      },
-    );
-    return () => unsubscribe();
+    if (!siteId || !machineId || !commandId) return;
+    return watchCommandOutcome(siteId, machineId, commandId, (outcome) => {
+      setState({ commandId, outcome });
+    });
   }, [siteId, machineId, commandId]);
 
   // Render-time derivation, matching useDisplayModes: a stale stamp reads as
