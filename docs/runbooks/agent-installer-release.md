@@ -165,7 +165,7 @@ Jobs:
 - `build-linux`: `ubuntu-24.04`; runs `agent/build/linux/build.sh`; uploads artifact `installer-linux`.
 - `digest`: one `sha256sum` line per file, base64-encoded as the SLSA subject list.
 - `provenance`: uses `slsa-framework/slsa-github-generator`; creates one in-toto attestation over the three files; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
-- `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
+- `release`, tag-only: uses `softprops/action-gh-release@v3` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
 - `verify`, tag-only: downloads the three installers and the provenance, then runs `slsa-verifier verify-artifact` over all of them.
 
 CI does not push the installers to storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
