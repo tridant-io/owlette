@@ -11,6 +11,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### security — re2js, glob and minimatch
+
+re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.
+glob and minimatch in functions and the cli and sdk workspace move to their fixed
+majors. Three web packages nothing imported are gone.
+
 ### security — rustls 0.23.46 and tauri 2.12.5
 
 rustls in the swoop streamer moves to 0.23.46, which fixes four advisories. Tauri
