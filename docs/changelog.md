@@ -11,6 +11,11 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### security — rustls 0.23.46 and tauri 2.12.5
+
+rustls in the swoop streamer moves to 0.23.46, which fixes four advisories. Tauri
+moves to 2.12.5 with its plugins, in the desktop app and in owlette swoop.
+
 ## [4.1.24] - 2026-10-27
 
 ### fixed — display auto-restore on a panel stuck in a fallback mode

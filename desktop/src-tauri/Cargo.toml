@@ -17,7 +17,7 @@ name = "owlette_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 # `preserve_order` is load-bearing: without it serde_json sorts object keys and
@@ -28,7 +28,7 @@ serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 # `tray-icon` builds the notification-area icon that replaces pystray;
 # `image-png` is what lets `Image::from_bytes` decode the embedded tray icons.
-tauri = { version = "2.11.3", features = ["tray-icon", "image-png"] }
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png"] }
 tauri-plugin-log = "2"
 tauri-plugin-single-instance = "2"
 # Native file/folder pickers for the process detail form — the same Win32 common

@@ -69,12 +69,13 @@ updates:
       - dependency-name: "eslint-config-next"
         versions: [">=16.4.0"]
 
-  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
-  # the swoop remote-desktop host crate.
+  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, the
+  # swoop viewer app, and the swoop remote-desktop host crate.
   - package-ecosystem: cargo
     directories:
       - /agent/host
       - /desktop/src-tauri
+      - /desktop/viewer
       - /agent/swoop
     target-branch: dev
     schedule:
