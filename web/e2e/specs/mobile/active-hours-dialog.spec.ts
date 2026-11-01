@@ -24,6 +24,9 @@ async function openConfirm(page: Page, itemTestId: string, title: string) {
   await page.goto('/dashboard');
   const card = page.getByTestId('machine-card').filter({ hasText: MACHINE_ID });
   await expect(card).toBeVisible();
+  // display docs land after the cards do and grow them: a menu opened before that
+  // follows its trigger off screen. the text is 1920x1080 collapsed, 1920×1080 expanded.
+  await expect(card.getByText(/^1920[x×]1080$/).first()).toBeVisible();
   await card.getByTestId('machine-context-menu-trigger').click();
   await page.getByRole('menu').getByTestId(itemTestId).click();
   const dialog = page.getByRole('dialog', { name: title });
