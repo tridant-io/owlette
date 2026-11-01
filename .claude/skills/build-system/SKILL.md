@@ -85,7 +85,8 @@ So the raw list mixes "still shipping" with "fixed on dev weeks ago".
 - **BLOCKING:** an alert whose vulnerable version is still pinned here (`LIVE`),
   an alert this checkout cannot resolve (`UNRESOLVED`), any open code-scanning
   or secret-scanning alert, a draft/triage advisory, or a Dependabot PR left
-  open past 30 days. A check that cannot run is itself a blocker.
+  open past 30 days whose title names a package with an alert this branch cannot
+  show is safe. A check that cannot run is itself a blocker.
 - **Exit 1 = STOP.** Each blocker gets fixed, dismissed on GitHub with a written
   reason, or explicitly accepted by the user — then re-run with
   `--ack "<key>=<why>"` using only the keys the user named. Every ack requires a
