@@ -11,6 +11,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.25] - 2026-11-02
+
 ### added — the Windows installer is signed by Tridant, Inc.
 
 The installer, its uninstaller and owlette's own programs now carry a verified
