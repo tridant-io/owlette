@@ -63,6 +63,10 @@ if "%OWLETTE_SIGN%"=="1" (
     )
 )
 
+:: ci builds in two jobs so that only the one that signs is given an azure
+:: token: "payload" stops after step 8, "compile" goes straight to step 9.
+if /i "%~1"=="compile" goto :compile
+
 :: ============================================================================
 :: Step 1: Clean previous builds
 :: ============================================================================
@@ -503,6 +507,12 @@ echo Copying installation scripts...
 copy /Y scripts\install.bat build\installer_package\scripts\ >nul
 copy /Y scripts\uninstall.bat build\installer_package\scripts\ >nul
 
+if /i "%~1"=="payload" (
+    echo Package ready: build\installer_package
+    exit /b 0
+)
+
+:compile
 :: ============================================================================
 :: Step 9: Compile with Inno Setup
 :: ============================================================================

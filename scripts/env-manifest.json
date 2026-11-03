@@ -57,7 +57,7 @@
     }
   },
   "github-repo-secrets": {
-    "$note": "GitHub Actions secrets the release workflow (.github/workflows/build-installer.yml, jobs build-macos and build-windows) reads from the `release` environment, which the owner creates on GitHub restricted to `v*` tags. Nothing under web/ reads them and they must never exist on railway-dev, railway-prod or vercel-prod, so like `never-set` they stay OUT of `vars`. Names only, never values. This block is documentation: `sync-env.mjs` ignores it. The names are deliberately NOT the ones the Tauri bundler reads (APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD, APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH) — those would make the desktop build import or notarize on its own.",
+    "$note": "GitHub Actions secrets the release workflow (.github/workflows/build-installer.yml, jobs build-macos and package-windows) reads from the `release` environment, which the owner creates on GitHub restricted to `v*` tags. Nothing under web/ reads them and they must never exist on railway-dev, railway-prod or vercel-prod, so like `never-set` they stay OUT of `vars`. Names only, never values. This block is documentation: `sync-env.mjs` ignores it. The names are deliberately NOT the ones the Tauri bundler reads (APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD, APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_PATH) — those would make the desktop build import or notarize on its own.",
     "keys": {
       "APPLE_CERT_P12_BASE64": "Developer ID Application certificate + private key, a base64 .p12. Signs the Tauri app and every mach-o in the runtime (APPLE_SIGNING_IDENTITY in agent/build/macos/build.sh).",
       "APPLE_CERT_PASSWORD": "Password the APPLE_CERT_P12_BASE64 .p12 was exported with.",
@@ -67,7 +67,7 @@
       "APPLE_API_KEY_ID": "App Store Connect API key id (build.sh --notary-key-id).",
       "APPLE_API_ISSUER_ID": "App Store Connect issuer id (build.sh --notary-issuer).",
       "APPLE_API_KEY_BASE64": "App Store Connect API private key, the .p8 as base64. Decoded to $RUNNER_TEMP for notarytool (build.sh --notary-key) and removed when the job ends.",
-      "AZURE_CLIENT_ID": "Client id of the Entra app owlette-ci-signing, which build-windows signs as over GitHub OIDC. Set by scripts/setup-ci-signing.sh. There is no client secret.",
+      "AZURE_CLIENT_ID": "Client id of the Entra app owlette-ci-signing, which package-windows signs as over GitHub OIDC. Set by scripts/setup-ci-signing.sh. There is no client secret.",
       "AZURE_TENANT_ID": "Entra tenant holding owlette-ci-signing and the tridantsigning account. Set by scripts/setup-ci-signing.sh."
     }
   },

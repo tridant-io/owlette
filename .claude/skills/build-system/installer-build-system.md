@@ -43,6 +43,8 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 [9/9] Compile with Inno Setup → Owlette-Installer-v{VERSION}.exe
 ```
 
+CI runs it in two jobs: `payload` stops after step 8, and `compile` runs step 0 then step 9, so only the job that signs gets the Azure token. With no argument it runs every step.
+
 ### Package Structure (what gets bundled)
 ```
 build/installer_package/
