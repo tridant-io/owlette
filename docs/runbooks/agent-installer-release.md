@@ -163,7 +163,8 @@ Triggers:
 
 Jobs:
 
-- `build-windows`: `windows-latest`; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`, signed on a `v*` tag through the `release` GitHub environment and unsigned on a branch dispatch; uploads artifact `installer-windows`; retains it for 7 days.
+- `build-windows`: `windows-latest`; pins Python 3.11 with `setup-python`; runs `build_installer_full.bat payload`, which stops before the Inno compile; uploads the payload as artifact `windows-payload` for a day. It holds no credential.
+- `package-windows`: `windows-latest`; the only job with an Azure token; uses the runner's preinstalled Inno Setup 6 and fails if it is missing; runs `build_installer_full.bat compile` on the payload, signed on a `v*` tag through the `release` GitHub environment and unsigned on a branch dispatch; uploads artifact `installer-windows`; retains it for 7 days.
 - `build-macos`: `macos-15`, in the tag-restricted `release` GitHub environment that holds the eight `APPLE_*` secrets; imports the Developer ID certificates into a temporary keychain, runs `agent/build/macos/build.sh` to sign, notarize and staple the pkg, validates the staple, then removes the keychain and notary key; uploads artifact `installer-macos`. A dispatch run without the secrets stops here and nothing is attested.
 - `build-linux`: `ubuntu-24.04`; runs `agent/build/linux/build.sh`; uploads artifact `installer-linux`.
 - `digest`: one `sha256sum` line per file, base64-encoded as the SLSA subject list.
@@ -397,7 +398,7 @@ Practical sequence:
 
 A local Windows build signs when `OWLETTE_SIGN=1` is set; without it the installer is unsigned. CI's Windows build signs on a `v*` tag and stays unsigned on a branch dispatch. The macOS pkg is Developer ID signed, notarized and stapled by the CI `build-macos` job; a local `agent/build/macos/build.sh` run without the signing identities produces an unsigned pkg.
 
-`scripts/sign.ps1` does the signing, with Azure Artifact Signing and the metadata in `agent/artifact-signing.json`. The publisher is `Tridant, Inc.`. The build checks it can sign before the slow steps, signs `owlette-host`, `owlette-swoop`, `owlette-desktop` and `owlette-swoop-viewer` before Inno packs them, and Inno signs setup and its uninstaller. Upload the file the build produced: the sha256 agents check is of the signed bytes, so signing anything after the upload breaks self-update.
+`scripts/sign.ps1` does the signing, with Azure Artifact Signing and the metadata in `agent/artifact-signing.json`. The publisher is `Tridant, Inc.`. A local build checks it can sign before the slow steps (in CI, `package-windows` checks after the payload is built), signs `owlette-host`, `owlette-swoop`, `owlette-desktop` and `owlette-swoop-viewer` before Inno packs them, and Inno signs setup and its uninstaller. Upload the file the build produced: the sha256 agents check is of the signed bytes, so signing anything after the upload breaks self-update.
 
 The machine needs SignTool 10.0.22621.755 or newer (Windows SDK), the NuGet package `Microsoft.ArtifactSigning.Client` under `%USERPROFILE%\.nuget\packages`, the .NET 8 runtime, and `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as user variables. TEC-A4D and TEC-B4A have them. The account's 5,000 signatures a month are shared with Moonshine; a build uses six.
 
@@ -409,9 +410,11 @@ signtool verify /pa /v Owlette-Installer-vX.Y.Z.exe
 
 The certificate behind a signature lasts three days. The timestamp `sign.ps1` adds is what keeps the signature valid after that.
 
-CI holds no signing secret. The `build-windows` job gets a GitHub OIDC token, and `sign.ps1` uses it to sign in to Azure as the Entra app `owlette-ci-signing`, which holds only the signer role and trusts only this repo's `release` environment. `scripts/setup-ci-signing.sh` creates all of that, needs an owner's Azure sign-in, and is safe to re-run.
+CI holds no signing secret. The `package-windows` job gets a GitHub OIDC token, and `sign.ps1` uses it to sign in to Azure as the Entra app `owlette-ci-signing`, which holds only the signer role and trusts only this repo's `release` environment. `scripts/setup-ci-signing.sh` creates all of that, needs an owner's Azure sign-in, and is safe to re-run.
 
-Two accepted risks come with that. The `release` environment admits `v*` tags, so anyone with write access who pushes such a tag gets a build signed as Tridant. And `id-token: write` covers the whole job, so a compromised build dependency on a tagged run could sign other files as Tridant; it could already poison the installer, and the added harm is signatures that outlive the run. Moving signing to its own job would close the second one, but Inno signs setup as it compiles, so the compile would have to move too.
+The token never reaches the job that runs pip, npm and cargo dependencies. One certificate profile signs every Tridant product, so a token in a compromised dependency's hands could sign anything as Tridant, and a revoked profile would stop every product's signing. `build-windows` builds the payload with no credential; `package-windows` runs only our scripts, SignTool and the runner's own Inno on it, and fails rather than install Inno itself. So a compromised dependency can no longer use the token or sign arbitrary files. It can still replace any of the four executables in the payload, and on a tag run that replacement is signed as Tridant and published; nothing short of building without third-party code closes that.
+
+One accepted risk remains: the `release` environment admits `v*` tags, so anyone with write access who pushes such a tag gets a build signed as Tridant.
 
 CI-built installers ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`. SLSA provenance is not Windows publisher signing.
 

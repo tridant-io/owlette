@@ -8,11 +8,12 @@ name: build installer (slsa l3)
 # slsa-verifier can prove every file was built from this repo at this commit
 # by this trusted workflow, not by a human on a laptop.
 #
-# Job graph: security-gate → build-windows / build-macos / build-linux (in
-# parallel) → digest (one `sha256sum` line per file, base64) → provenance →
-# release → verify. Everything past the builds needs all three, so a dispatch
-# run without the Apple secrets stops at build-macos and nothing is attested;
-# build-windows and build-linux still produce their artifacts.
+# Job graph: security-gate → build-windows → package-windows, and build-macos /
+# build-linux in parallel with them → digest (one `sha256sum` line per file,
+# base64) → provenance → release → verify. Everything past the builds needs all
+# three installers, so a dispatch run without the Apple secrets stops at
+# build-macos and nothing is attested; package-windows and build-linux still
+# produce their artifacts.
 #
 # Level 3 requires:
 #   - build runs on a trusted CI system (✅ github-hosted runner)
@@ -31,13 +32,20 @@ name: build installer (slsa l3)
 # auto-creates it unrestricted and empty, and the job's first step fails on
 # the missing names.
 #
-# build-windows signs on a tag only (OWLETTE_SIGN=1, scripts/sign.ps1), with no
-# secret: it signs in to Azure over GitHub OIDC as the Entra app
-# owlette-ci-signing, whose federated credential names the `release`
-# environment (scripts/setup-ci-signing.sh). A dispatch on a branch builds
-# unsigned. Two points from the older plan, both load-bearing:
+# build-windows builds the payload with no credential and hands it to
+# package-windows, the only job with `id-token: write`, which signs our four
+# executables and compiles the installer (Inno signs setup and its
+# uninstaller). One certificate profile signs every Tridant product, so the
+# token stays out of the job that runs pip, npm and cargo dependencies: a
+# compromised one could otherwise sign anything as Tridant, and a revoked
+# profile stops every product's signing. package-windows signs on a tag only
+# (OWLETTE_SIGN=1, scripts/sign.ps1), with no secret: it signs in to Azure over
+# GitHub OIDC as the Entra app owlette-ci-signing, whose federated credential
+# names the `release` environment (scripts/setup-ci-signing.sh). A dispatch on
+# a branch compiles unsigned. Two points from the older plan, both
+# load-bearing:
 #
-#   1. Signing must happen inside the build job, BEFORE the digest job hashes
+#   1. Signing must happen in package-windows, BEFORE the digest job hashes
 #      the file, not after provenance is sealed. The digest job hashes the
 #      installer bytes into the attested subject, and the verify job re-hashes
 #      the released asset against it. Signing mutates the bytes, so signing
@@ -93,22 +101,17 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   build-windows:
-    name: build installer on windows-latest
+    name: build installer payload on windows-latest
     needs: [security-gate]
     runs-on: windows-latest
-    # the azure ids live here, and azure trusts only this environment's token.
-    # a branch dispatch stays out of it, or github would refuse the job.
-    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
     # Three cargo crates now (desktop, host, swoop). On a cold cache the swoop
     # streamer's graph alone is the longest single compile in the build, and 30
     # was already close on a warm one.
     timeout-minutes: 60
     outputs:
-      artifact-name: ${{ steps.build.outputs.artifact-name }}
       version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
-      id-token: write # azure sign-in for signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -144,21 +147,6 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "building installer version $v"
 
-      - name: install Inno Setup 6
-        shell: pwsh
-        run: |
-          # The windows-latest image now ships Inno Setup pre-installed (6.7.x),
-          # so `choco install innosetup --version=6.2.2` fails with "a newer
-          # version is already installed" (exit 1). build_installer_full.bat
-          # locates ISCC at the standard path / PATH and works with any 6.x, so:
-          # skip when already present, otherwise install the current version.
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if ((Test-Path $iscc) -or (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
-            Write-Host "Inno Setup 6 already present — skipping choco install"
-          } else {
-            choco install innosetup -y --no-progress
-          }
-
       - name: pin Python toolchain version
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -188,6 +176,60 @@ jobs:
             desktop/viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: build the installer payload
+        # zizmor: ignore[misfeature] — cmd is deliberate: this step drives
+        # build_installer_full.bat, and rewriting the driver shell in a
+        # release-critical hermetic SLSA build trades real regression risk for
+        # an analysis-only benefit. Context values still arrive via env.
+        shell: cmd # zizmor: ignore[misfeature]
+        working-directory: agent
+        env:
+          OWLETTE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          :: The batch file reads agent/VERSION; write our resolved version in
+          :: case the checkout didn't match the tag (belt-and-suspenders).
+          echo %OWLETTE_VERSION%> VERSION
+          call build_installer_full.bat payload
+          if errorlevel 1 exit /b 1
+
+      # hidden files too: the payload is a python tree, and a dot-file left out
+      # here would be missing from the installer with no error anywhere.
+      - name: upload the installer payload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-payload
+          path: agent/build/installer_package
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  package-windows:
+    name: sign and compile the windows installer
+    needs: [build-windows]
+    runs-on: windows-latest
+    # the azure ids live here, and azure trusts only this environment's token.
+    # a branch dispatch stays out of it, or github would refuse the job.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # azure sign-in for signing; the only job that has it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: check for Inno Setup 6
+        shell: pwsh
+        run: |
+          # the windows-latest image ships Inno Setup 6, and build_installer_full.bat
+          # finds ISCC at the standard path or on PATH. no chocolatey fallback:
+          # this job holds the azure token, so it installs nothing third-party.
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc) -and !(Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
+            throw "Inno Setup 6 is not on this runner image"
+          }
+
       - name: install the artifact signing dlib
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
@@ -199,27 +241,35 @@ jobs:
           }
           Expand-Archive $zip (Join-Path $env:USERPROFILE ".nuget\packages\microsoft.artifactsigning.client\1.0.146")
 
-      - name: build installer
-        id: build
-        # zizmor: ignore[misfeature] — cmd is deliberate: this step drives
-        # build_installer_full.bat, and rewriting the driver shell in a
-        # release-critical hermetic SLSA build trades real regression risk for
-        # an analysis-only benefit. Context values still arrive via env.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-payload
+          path: agent/build/installer_package
+
+      # the version comes from the job that runs third-party code, and cmd
+      # expands it as text, so it is checked again where the token is.
+      - name: check the version
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          if ($env:VERSION -notmatch '\A\d+\.\d+\.\d+\z') {
+            throw "refusing to sign: version '$env:VERSION' must be X.Y.Z semver"
+          }
+
+      - name: sign and compile the installer
+        # cmd for the same reason as the payload step in build-windows.
         shell: cmd # zizmor: ignore[misfeature]
         working-directory: agent
         env:
-          OWLETTE_VERSION: ${{ steps.version.outputs.version }}
+          OWLETTE_VERSION: ${{ needs.build-windows.outputs.version }}
           OWLETTE_SIGN: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '' }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
-          :: The batch file reads agent/VERSION; write our resolved version in
-          :: case the checkout didn't match the tag (belt-and-suspenders).
           echo %OWLETTE_VERSION%> VERSION
-          call build_installer_full.bat
+          call build_installer_full.bat compile
           if errorlevel 1 exit /b 1
-          :: output artifact name for downstream jobs
-          echo artifact-name=Owlette-Installer-v%OWLETTE_VERSION%.exe>> %GITHUB_OUTPUT%
 
       # Runs after the build and BEFORE the digest job, so a detection stops
       # the release instead of being attested. owlette-swoop.exe is a small,
@@ -263,7 +313,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-windows
-          path: agent/build/installer_output/Owlette-Installer-v${{ steps.version.outputs.version }}.exe
+          path: agent/build/installer_output/Owlette-Installer-v${{ needs.build-windows.outputs.version }}.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -523,7 +573,7 @@ jobs:
   # ----------------------------------------------------------------------
   digest:
     name: sha256 subjects
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, package-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: read
