@@ -111,7 +111,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 4. Cloudflare R2 → run `/scripts/provision-r2.mjs` (buckets + CORS), mint the S3 access keys in the Cloudflare dashboard, and configure the env vars
 5. Cloud Functions secrets → `functions/.env.<projectId>` per [manual-infrastructure.md](runbooks/manual-infrastructure.md)
 6. npm publishing needs no token — `cli-publish.yml` and `node-sdk-publish.yml` use npm OIDC trusted publishing
-7. Agent installer code signing — not in place; installers ship unsigned with SmartScreen warnings (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
+7. Windows installer signing — Azure Artifact Signing on a local build with `OWLETTE_SIGN=1` and on CI's tagged builds; `scripts/setup-ci-signing.sh` sets up the CI side (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
 
 ## machine-bound state — do not copy across machines
 
@@ -119,7 +119,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 
 ## known portability gaps (open work)
 
-- Code signing is deferred as a business decision ([runbooks/index.md](runbooks/index.md))
+- Local Windows signing needs the machine setup in [agent-installer-release.md](runbooks/agent-installer-release.md)
 - See [docs/changelog.md](changelog.md) for completed portability fixes
 
 ## runbooks

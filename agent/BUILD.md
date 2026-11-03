@@ -33,6 +33,8 @@ The script ends with `pause`, and pauses on every error. From a non-interactive 
 cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 ```
 
+Set `OWLETTE_SIGN=1` first for a signed build, which every release needs: see "code signing context" in `docs/runbooks/agent-installer-release.md`.
+
 **What it does:**
 0. Reads the version from `VERSION`
 1. Cleans `build/` (the `downloads/` cache is kept)

@@ -117,6 +117,13 @@ DisableProgramGroupPage=yes
 ; Silent mode enhancements - prevent ALL prompts when run as SYSTEM
 AlwaysShowDirOnReadyPage=no
 DisableWelcomePage=yes
+; Signed only by a build with OWLETTE_SIGN=1, which defines Sign and the
+; `artifact` sign tool (scripts/sign.ps1, Azure Artifact Signing). Inno signs
+; setup and, since SignedUninstaller defaults to yes once a SignTool is set, the
+; uninstaller.
+#ifdef Sign
+SignTool=artifact
+#endif
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

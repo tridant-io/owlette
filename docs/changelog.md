@@ -11,6 +11,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### added — the Windows installer is signed by Tridant, Inc.
+
+The installer, its uninstaller and owlette's own programs now carry a verified
+publisher, so Windows names Tridant, Inc. instead of an unknown publisher.
+SmartScreen can still warn until that name has built reputation. Nothing changes
+in how owlette installs or updates.
+
 ### added — the dashboard warns when a saved path won't launch
 
 After a save changes a path in the process editor, the dashboard asks the machine
