@@ -104,11 +104,10 @@ Expected output: `PASSED: Verified SLSA provenance` for each file. Any failure (
 ## Known caveats
 
 - **First tag run**: The first release after this workflow lands may fail the `verify` job if the SLSA rekor transparency log is slow to ingest the attestation (rare, but possible). Re-running the verify job 60 s later typically resolves it.
-- **Not authenticode**: This doesn't solve Windows SmartScreen warnings — end users still see "unrecognised publisher" until wave 5.9 lands with the EV cert from wave 0.7.
+- **Not authenticode**: Provenance doesn't name a publisher in Windows. Signing does that separately, with Azure Artifact Signing, inside the build job and before the digest job hashes the file (see "code signing context" in `docs/runbooks/agent-installer-release.md`).
 - **Runner time**: The Windows build takes ~15–20 minutes (Python embedded download, Inno Setup compile, dependency unpacking); the macOS build adds `notarytool --wait` on top of a cold Tauri build. The three run in parallel under a 60-minute cap each. Plan release windows accordingly.
 
 ## Follow-ups
 
-- Wave 5.9 (authenticode) wraps the signed installer with a windows-trusted signature for SmartScreen
 - Vendor Inno Setup as a build asset to remove the `choco install` supply-chain link
 - Add a scheduled verify job that re-checks the latest release's provenance weekly (catches sigstore-side regressions in rekor)

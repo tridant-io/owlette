@@ -126,14 +126,17 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # means the .exe is built; check the log on failure.
 #
 #   powershell (foreground/background):
-#     cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
+#     $env:OWLETTE_SIGN = '1'; cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 #
 #   bash:
-#     cd <repo>/agent && cmd //c "build_installer_full.bat" < /dev/null > "$TEMP/installer-build.log" 2>&1
+#     cd <repo>/agent && OWLETTE_SIGN=1 cmd //c "build_installer_full.bat" < /dev/null > "$TEMP/installer-build.log" 2>&1
 #     # (if //c gets mangled by Git Bash, fall back to the powershell cmd /c form above)
 #
 # DO NOT use `cd agent && powershell -Command "& './build_installer_full.bat'"` —
 # the trailing pause will hang non-interactive shells indefinitely.
+# OWLETTE_SIGN=1 is what signs a release (TEC-A4D and TEC-B4A can sign). Without it the
+# build still exits 0 unsigned, and step 4's upload refuses the file. The quick build
+# never signs.
 # Output: agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
 # The .pkg and .deb come from their own build hosts (above), or download all
 # three from the v* tag's GitHub Release — CI never uploads to Owlette.

@@ -7,7 +7,7 @@
  * carries them all.
  *
  * Usage:
- *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…
+ *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…
  *
  *   <file>   Owlette-Installer-vX.Y.Z.exe | .pkg | .deb — the platform is the
  *            extension (windows_x64 / macos_arm64 / linux_x64), one file each.
@@ -18,6 +18,9 @@
  *                  and registers it with tridant id.
  *   --key-tag      appended to the idempotency keys, to publish a version again
  *                  within 24h (e.g. moving it from firebase storage to R2).
+ *   --allow-unsigned  uploads an .exe without a valid Windows signature, which is
+ *                  otherwise refused: an unsigned build exits 0, so nothing else
+ *                  catches a release built without OWLETTE_SIGN=1.
  *
  * Credentials (auto-loaded from web/.env.local, .claude/.env.local, scripts/.env.local):
  *   dev:  OWLETTE_API_KEY       + OWLETTE_DEV_API_URL
@@ -28,6 +31,7 @@
  * refuses the key if the body changed — use a new version, a --key-tag, or wait it out.
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
@@ -42,14 +46,14 @@ const EXTENSIONS = Object.keys(PLATFORM_BY_EXT).join(', ');
 function usage(message) {
   console.error(`error: ${message}\n`);
   console.error(
-    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…',
+    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…',
   );
   process.exit(1);
 }
 
 // --- arguments ----------------------------------------------------------------
 const args = process.argv.slice(2);
-const options = { env: undefined, version: undefined, notes: undefined, setLatest: false, keyTag: '' };
+const options = { env: undefined, version: undefined, notes: undefined, setLatest: false, keyTag: '', allowUnsigned: false };
 const paths = [];
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
@@ -70,6 +74,7 @@ for (let i = 0; i < args.length; i += 1) {
   else if (name === 'notes') options.notes = value();
   else if (name === 'set-latest') options.setLatest = true;
   else if (name === 'key-tag') options.keyTag = value();
+  else if (name === 'allow-unsigned') options.allowUnsigned = true;
   else usage(`unknown option --${name}`);
 }
 
@@ -104,6 +109,24 @@ for (const target of targets) {
     usage(`two files map to ${target.platform}; give one file per platform`);
   }
 }
+
+/** Refuses a Windows installer without a valid signature. Only Windows can read one, so elsewhere it warns. */
+function checkWindowsSignature({ path, fileName, platform }) {
+  if (platform !== 'windows_x64' || options.allowUnsigned) return;
+  if (process.platform !== 'win32') {
+    console.warn(`warning: cannot check the signature of ${fileName} on this OS`);
+    return;
+  }
+  const status = execFileSync(
+    'powershell',
+    ['-NoProfile', '-Command', '(Get-AuthenticodeSignature -LiteralPath $env:OWLETTE_UPLOAD_FILE).Status'],
+    { env: { ...process.env, OWLETTE_UPLOAD_FILE: path }, encoding: 'utf8' },
+  ).trim();
+  if (status !== 'Valid') {
+    usage(`${fileName}: signature status is ${status}. Build it with OWLETTE_SIGN=1, or pass --allow-unsigned`);
+  }
+}
+targets.forEach(checkWindowsSignature);
 
 // --- credentials ----------------------------------------------------------------
 function loadEnvFile(path) {

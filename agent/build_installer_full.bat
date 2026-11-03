@@ -53,6 +53,16 @@ if "%OWLETTE_VERSION%"=="" (
 echo Building Owlette version: %OWLETTE_VERSION%
 echo.
 
+:: A signed build finds out now, not after the slow steps, that it cannot sign.
+if "%OWLETTE_SIGN%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "..\scripts\sign.ps1" -DryRun
+    if errorlevel 1 (
+        echo ERROR: OWLETTE_SIGN=1 but this machine cannot sign.
+        pause
+        exit /b 1
+    )
+)
+
 :: ============================================================================
 :: Step 1: Clean previous builds
 :: ============================================================================
@@ -544,7 +554,24 @@ if not exist "build\installer_package\swoop\owlette-swoop.exe" (
 :: cannot be satisfied by a stale exe left behind by an earlier aborted run.
 if exist "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe" del /q "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe"
 
-"%INNO_PATH%" owlette_installer.iss
+:: Our own executables are signed here, before Inno packs them; Inno then signs
+:: setup and its uninstaller itself. The embedded python and vendor installers
+:: are not ours to sign.
+set "SIGN_SCRIPT=%CD%\..\scripts\sign.ps1"
+set "SIGN_ARGS="
+if "%OWLETTE_SIGN%"=="1" (
+    for %%F in (tools\owlette-host.exe swoop\owlette-swoop.exe app\owlette-desktop.exe app\owlette-swoop-viewer.exe) do (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%SIGN_SCRIPT%" -Path "build\installer_package\%%F"
+        if errorlevel 1 (
+            echo ERROR: signing %%F failed.
+            pause
+            exit /b 1
+        )
+    )
+    set SIGN_ARGS=/DSign "/Sartifact=powershell -NoProfile -ExecutionPolicy Bypass -File $q%SIGN_SCRIPT%$q -Path $f"
+)
+
+"%INNO_PATH%" !SIGN_ARGS! owlette_installer.iss
 
 :: Every other error branch in this script pauses and exits 1. This one used
 :: to print a WARNING and fall through to exit 0, so a failed compile reported

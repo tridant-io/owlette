@@ -1,0 +1,2 @@
+# run from git bash on windows, where a crlf checkout would stop it on its first line
+scripts/setup-ci-signing.sh text eol=lf

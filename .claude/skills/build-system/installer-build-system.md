@@ -23,6 +23,8 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 
 **Prerequisites**: Inno Setup 6 (found via `%ISCC%`, then `iscc.exe` on PATH, then `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`), Node 22 + npm, rustup, MSVC C++ build tools, cmake.
 
+**Signing**: a full build with `OWLETTE_SIGN=1` signs; every release uses it, and `upload-installer.mjs` refuses an unsigned `.exe`. It checks it can sign at step 0, signs our four executables before ISCC at step 9, and Inno signs setup and its uninstaller through `scripts/sign.ps1`. The quick build refuses `OWLETTE_SIGN=1`. Machine setup: "code signing context" in `docs/runbooks/agent-installer-release.md`.
+
 ---
 
 ## Full Build Steps (`build_installer_full.bat`)

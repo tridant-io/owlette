@@ -8,7 +8,7 @@ This runbook is for maintainers shipping the Owlette agent installers: one versi
 
 It covers both supported artifact paths: a local maintainer build and a CI build with SLSA L3 provenance.
 
-It also covers the 3-step API upload that rolls a version out to agents, plus operational concerns around `setAsLatest`, demotion, smoke testing, and unsigned installer UX.
+It also covers the 3-step API upload that rolls a version out to agents, plus operational concerns around `setAsLatest`, demotion, smoke testing, and Windows signing.
 
 This document is only for the installer surface. For non-installer deploys, use `/docs/runbooks/production-deploy.md`.
 
@@ -16,6 +16,7 @@ This document is only for the installer surface. For non-installer deploys, use 
 
 - Windows machine with admin rights, for the `.exe`.
 - Inno Setup 6.x installed, or `%ISCC%` set to the compiler path.
+- The signing setup in "code signing context" below. TEC-A4D and TEC-B4A have it.
 - Node.js 22 + npm, and the Rust toolchain (rustup) with the MSVC C++ build tools — the full build compiles the desktop app.
 - The `.pkg` and `.deb`: from the CI release (path b), or `agent/build/macos/build.sh` on a Mac and `agent/build/linux/build.sh` on Ubuntu 24.04.
 - `/.claude/.env.local` containing `OWLETTE_API_KEY`.
@@ -102,10 +103,12 @@ Commit the changelog and version changes, then push to `dev` or the appropriate 
 `build_installer_full.bat` ends with `pause` and pauses on every error branch, so run it with stdin redirected from `NUL` and invoke it by full path, or it hangs a non-interactive shell:
 
 ```powershell
-cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
+$env:OWLETTE_SIGN = '1'; cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 ```
 
 Exit code 0 means the `.exe` was built; read the log on failure. Do not use `powershell -Command "& './build_installer_full.bat'"`, which hangs on the trailing `pause`.
+
+`OWLETTE_SIGN=1` is what signs a release. Without it the build still exits 0 and the installer is unsigned; `upload-installer.mjs` then refuses the file unless you pass `--allow-unsigned`. The quick build never signs. See "code signing context" below.
 
 Expected runtime is about 5 minutes.
 
@@ -160,7 +163,7 @@ Triggers:
 
 Jobs:
 
-- `build-windows`: `windows-latest`; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; uploads artifact `installer-windows`; retains it for 7 days.
+- `build-windows`: `windows-latest`; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`, signed on a `v*` tag through the `release` GitHub environment and unsigned on a branch dispatch; uploads artifact `installer-windows`; retains it for 7 days.
 - `build-macos`: `macos-15`, in the tag-restricted `release` GitHub environment that holds the eight `APPLE_*` secrets; imports the Developer ID certificates into a temporary keychain, runs `agent/build/macos/build.sh` to sign, notarize and staple the pkg, validates the staple, then removes the keychain and notary key; uploads artifact `installer-macos`. A dispatch run without the secrets stops here and nothing is attested.
 - `build-linux`: `ubuntu-24.04`; runs `agent/build/linux/build.sh`; uploads artifact `installer-linux`.
 - `digest`: one `sha256sum` line per file, base64-encoded as the SLSA subject list.
@@ -309,6 +312,7 @@ If omitted, the server computes the checksum.
 - [ ] `/web/content/docs/changelog.mdx` has the SAME entry — this is the one customers read.
 - [ ] Agent docs screenshots recaptured against THIS build: `node scripts/refresh-docs-screens.mjs`, and `node scripts/refresh-docs-screens.mjs --check` exits 0. NOT the bare `npm run screenshots:desktop` — that photographs whatever version is already installed.
 - [ ] Changelog is updated before `build_installer_full.bat`.
+- [ ] The build ran with `OWLETTE_SIGN=1`.
 - [ ] `node scripts/sync-versions.js X.Y.Z` has been run.
 - [ ] `/VERSION` is bumped.
 - [ ] `/agent/VERSION` is bumped.
@@ -391,17 +395,27 @@ Practical sequence:
 
 ## code signing context
 
-The Windows installer is not Authenticode-signed today. The macOS pkg is Developer ID signed, notarized and stapled by the CI `build-macos` job; a local `agent/build/macos/build.sh` run without the signing identities produces an unsigned pkg.
+A local Windows build signs when `OWLETTE_SIGN=1` is set; without it the installer is unsigned. CI's Windows build signs on a `v*` tag and stays unsigned on a branch dispatch. The macOS pkg is Developer ID signed, notarized and stapled by the CI `build-macos` job; a local `agent/build/macos/build.sh` run without the signing identities produces an unsigned pkg.
 
-CI-built installers do ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`.
+`scripts/sign.ps1` does the signing, with Azure Artifact Signing and the metadata in `agent/artifact-signing.json`. The publisher is `Tridant, Inc.`. The build checks it can sign before the slow steps, signs `owlette-host`, `owlette-swoop`, `owlette-desktop` and `owlette-swoop-viewer` before Inno packs them, and Inno signs setup and its uninstaller. Upload the file the build produced: the sha256 agents check is of the signed bytes, so signing anything after the upload breaks self-update.
 
-SLSA provenance is not Windows publisher signing.
+The machine needs SignTool 10.0.22621.755 or newer (Windows SDK), the NuGet package `Microsoft.ArtifactSigning.Client` under `%USERPROFILE%\.nuget\packages`, the .NET 8 runtime, and `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as user variables. TEC-A4D and TEC-B4A have them. The account's 5,000 signatures a month are shared with Moonshine; a build uses six.
 
-Current install UX: Windows SmartScreen can warn `Unknown publisher`, users may need to click through the warning, and enterprise environments may treat unsigned installers differently.
+Check a signed file:
 
-Approximate signing costs: EV Authenticode certificate about `$300-700/year`; OV Authenticode certificate about `$100-300/year`; SignPath signing-as-a-service about `$240/year` base.
+```powershell
+signtool verify /pa /v Owlette-Installer-vX.Y.Z.exe
+```
 
-The signing decision is deferred. Treat it as a business and product call, not a missing runbook step.
+The certificate behind a signature lasts three days. The timestamp `sign.ps1` adds is what keeps the signature valid after that.
+
+CI holds no signing secret. The `build-windows` job gets a GitHub OIDC token, and `sign.ps1` uses it to sign in to Azure as the Entra app `owlette-ci-signing`, which holds only the signer role and trusts only this repo's `release` environment. `scripts/setup-ci-signing.sh` creates all of that, needs an owner's Azure sign-in, and is safe to re-run.
+
+Two accepted risks come with that. The `release` environment admits `v*` tags, so anyone with write access who pushes such a tag gets a build signed as Tridant. And `id-token: write` covers the whole job, so a compromised build dependency on a tagged run could sign other files as Tridant; it could already poison the installer, and the added harm is signatures that outlive the run. Moving signing to its own job would close the second one, but Inno signs setup as it compiles, so the compile would have to move too.
+
+CI-built installers ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`. SLSA provenance is not Windows publisher signing.
+
+Signing shows a verified publisher, not day-one trust: SmartScreen can still warn until the publisher has built reputation. An unsigned installer shows `Unknown publisher`, and enterprise environments may treat it differently.
 
 ## known caveats
 

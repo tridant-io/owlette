@@ -9,6 +9,14 @@ echo.
 
 cd /d "%~dp0"
 
+:: Signing lives in the full build. Exiting 0 here would hand back an unsigned
+:: installer under the same file name to someone who asked for a signed one.
+if "%OWLETTE_SIGN%"=="1" (
+    echo ERROR: the quick build cannot sign. Use build_installer_full.bat with OWLETTE_SIGN=1.
+    pause
+    exit /b 1
+)
+
 echo [1/3] Reading VERSION file...
 
 REM Read version from VERSION file using temporary file approach

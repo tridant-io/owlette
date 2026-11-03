@@ -92,7 +92,7 @@ The runbooks are not exhaustive.
 Specific gaps each acknowledges:
 
 - production-deploy: functions/rules/storage deploys are manual.
-- agent-installer-release: code-signing cert procedure deferred (business decision; about $300-700/year EV); demote-to-older-version may require re-running 3-step finalize.
+- agent-installer-release: Windows builds sign only with `OWLETTE_SIGN=1` or on a CI tag, not by default; demote-to-older-version may require re-running 3-step finalize.
 - hotfix-rollback: many specific gaps listed inline, including cherry-pick playbook and agent fleet self-update kill switch.
 - dev-to-prod-workflow: tag discipline lapsed; branch protection unknown.
 
