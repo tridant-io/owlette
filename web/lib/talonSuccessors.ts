@@ -34,8 +34,12 @@ export interface EligibleSuccessorOptions {
   excludeUid?: string;
 }
 
-function label(user: TalonSuccessorUser): string {
+function label(user: { uid: string; email?: string | null; displayName?: string | null }): string {
   return user.email || user.displayName || user.uid;
+}
+
+function byLabel(a: TalonSuccessorOption, b: TalonSuccessorOption): number {
+  return a.label.localeCompare(b.label, undefined, { sensitivity: 'base' });
 }
 
 export function eligibleTalonSuccessors(
@@ -52,5 +56,25 @@ export function eligibleTalonSuccessors(
       return Array.isArray(user.sites) && user.sites.includes(siteId);
     })
     .map((user) => ({ uid: user.uid, label: label(user) }))
-    .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
+    .sort(byLabel);
+}
+
+/**
+ * a site's owners and admins, from its member rows. the server re-resolves
+ * `hasCapability(successor, TALON_MANAGE, siteId)` from the successor's member
+ * row, so the site role is the axis that agrees with it. `eligibleTalonSuccessors`
+ * reads the global role, for /admin/users, which lists accounts rather than a
+ * site's member rows.
+ */
+export function siteTalonSuccessors(
+  members: readonly { uid: string; email: string | null; displayName: string | null; role: string }[],
+  excludeUid?: string,
+): TalonSuccessorOption[] {
+  return members
+    .filter((member) => {
+      if (member.uid === excludeUid) return false;
+      return member.role === 'owner' || member.role === 'admin';
+    })
+    .map((member) => ({ uid: member.uid, label: label(member) }))
+    .sort(byLabel);
 }
