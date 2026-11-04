@@ -1297,6 +1297,15 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       return (body.data as { viewers: Array<Record<string, unknown>> }).viewers;
     };
 
+    /** `uid`'s seat in the session, holding control or only watching. */
+    const seatHolds = (uid: string, ctl: boolean): void => {
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: Array<Record<string, unknown>> };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: record.viewers.map((viewer) => (viewer.uid === uid ? { ...viewer, ctl } : viewer)),
+      });
+    };
+
     it('names everyone in it to a member who is in it, with no email', async () => {
       const viewers = await viewersAs(MEMBER);
 
@@ -1346,6 +1355,44 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       ]);
       for (const viewer of viewers) expect(viewer).toHaveProperty('email');
       expect(viewers.at(-1)?.email).toBe(`${SUPER}@example.test`);
+    });
+
+    // a swoop mode changes watch and control and nothing else, so emails still follow the site role
+    it('gives a member set to control no email, even while in control', async () => {
+      seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+      // members may not watch here by default, so the row's own mode is what lets this member in
+      staged.set(`sites/${SITE}/settings/swoop`, { enabled: true, membersMayWatch: false });
+      seatHolds(MEMBER, true);
+
+      const viewers = await viewersAs(MEMBER);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+    });
+
+    it('POSITIVE CONTROL: still gives an admin held to watch every email', async () => {
+      seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+      seatHolds(ADMIN, false);
+
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => [viewer.displayName, viewer.email])).toEqual([
+        ['Ada Lovelace', `${ADMIN}@example.test`],
+        ['Bob Watcher', `${MEMBER}@example.test`],
+        ['Olive Owner', `${SITE_OWNER}@example.test`],
+        [null, null],
+      ]);
+      // the hold is in force: the same admin may not take control
+      const { status, body } = await parseResponse(
+        await POST(createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }), routeContext()),
+      );
+      expect(status).toBe(403);
+      expect(body.code).toBe('capability_missing');
     });
 
     it.each([

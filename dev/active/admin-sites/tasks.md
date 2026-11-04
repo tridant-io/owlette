@@ -1322,3 +1322,8 @@ Every spec that seeds a site or a row releases it in its hooks (`releaseFixtureS
     - Rerun, one session: 02, 14 and 17 passed (14.1 min).
     - For the re-record (question 8): scene 02 leaves its day-zero user on site-A, so 14's members table films an extra "E2E member day-zero-totp-…" row.
   - Every listed file passed in one clean run after its last fix. Scene 14's fix touches only the video suite, so the chromium, mobile and theme runs before it stand.
+- Task 4.3, the viewer-pill email gate, after 4.1.26 merged in (366f39db):
+  - The gate is `withEmail` in the GET of `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route.ts`; its test file is `web/__tests__/api/swoop/sessions.test.ts` ("naming the people in it"). The pills (`SwoopToolbar.tsx`, `hooks/useSwoopViewerNames.ts`) show only what that read sends.
+  - Before this task it already keyed on the site role: `ctx.actor.siteRoles[ctx.siteId]` owner or admin, or `ctx.actor.role` superadmin. Never `ctl` or MACHINE_REMOTE_CONTROL, so the route is unchanged.
+  - Added: a member set to control, whose seat holds control, gets names and no email. The site has `membersMayWatch` off, so only that mode lets them in. POSITIVE CONTROL: an admin held to watch gets every email, and the same admin's control ask is refused with 403 `capability_missing`.
+  - Proof the tests can fail: re-keying the gate on MACHINE_REMOTE_CONTROL or on the caller's seat `ctl` fails both, and dropping either fixture's mode fails its test. jest 95/95.
