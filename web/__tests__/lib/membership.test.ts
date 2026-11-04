@@ -55,6 +55,18 @@ function collection(name: string, parent = ''): unknown {
 
 const db = {
   collection: (name: string) => collection(name),
+  // an equality `where` across every `{parent}/{name}/{id}` document in `docs`
+  collectionGroup: (name: string) => ({
+    where: (field: string, _op: string, value: unknown) => ({
+      get: async () => ({
+        docs: [...docs].flatMap(([path, data]) => {
+          const [parentId, group] = path.split('/').slice(-3, -1);
+          if (group !== name || data?.[field] !== value) return [];
+          return [{ ref: { parent: { parent: { id: parentId } } }, data: () => data ?? undefined }];
+        }),
+      }),
+    }),
+  }),
   batch: () => ({
     create: (r: unknown, data: unknown) => batchOps.push({ op: 'create', path: pathOf(r), data }),
     set: (r: unknown, data: unknown) => batchOps.push({ op: 'set', path: pathOf(r), data }),
@@ -99,6 +111,7 @@ import {
   updateMember,
   removeMember,
   addOwnerToBatch,
+  listUserSiteIds,
   ASSIGNABLE_ROLES,
 } from '@/lib/membership.server';
 
@@ -403,5 +416,15 @@ describe('addOwnerToBatch', () => {
     ]);
     // Nothing applied — createSite's own commit is what makes it atomic.
     expect(docs.has(memberPath(ALICE))).toBe(false);
+  });
+});
+
+describe('listUserSiteIds', () => {
+  it('lists a site only where the row grants a site role, as every gate reads it', async () => {
+    docs.set(`sites/site-admin/members/${ALICE}`, { uid: ALICE, role: 'admin', status: 'active' });
+    docs.set(`sites/site-viewer/members/${ALICE}`, { uid: ALICE, role: 'viewer', status: 'active' });
+    docs.set(`sites/site-invited/members/${ALICE}`, { uid: ALICE, role: 'admin', status: 'invited' });
+
+    expect(await listUserSiteIds(ALICE)).toEqual(['site-admin']);
   });
 });

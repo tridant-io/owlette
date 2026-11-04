@@ -24,6 +24,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { listUserStanding } from '@/lib/sitePolicy.server';
 import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 
 /** Stored per-site role. `owner` is written only by ownership transfer. */
@@ -79,7 +80,8 @@ function memberRef(db: FirebaseFirestore.Firestore, siteId: string, uid: string)
  * job; this module trusts the uid and re-checks only the invariants above.
  */
 /**
- * Every site id the user holds an ACTIVE member row for.
+ * every site id where the user's member row grants a site role, read as every
+ * gate reads it: an inactive row or a malformed role lists nothing.
  *
  * The read counterpart to this module's writes, and the replacement for
  * `getUserSiteIds` (which reads the legacy `users/{uid}.sites[]` array). Anything
@@ -87,26 +89,10 @@ function memberRef(db: FirebaseFirestore.Firestore, siteId: string, uid: string)
  * — an empty 200, not an error — which is why the two hoot/chat callers had to
  * move before the migration could run.
  *
- * `status` is filtered in memory rather than added as a second `where`: a
- * composite (uid, status) collection-group index does not exist and this query
- * is per-user, so the row count is small. The single-field `members.uid`
- * COLLECTION_GROUP override in `firestore.indexes.json` is what makes this legal
- * — automatic single-field indexing does NOT extend to collection-group scope,
- * and the emulator will not tell you when it is missing.
+ * the query and its index note are `listUserStanding`'s, in sitePolicy.server.ts.
  */
 export async function listUserSiteIds(userId: string): Promise<string[]> {
-  const snap = await getAdminDb()
-    .collectionGroup('members')
-    .where('uid', '==', userId)
-    .get();
-
-  const siteIds = new Set<string>();
-  for (const doc of snap.docs) {
-    if ((doc.data() ?? {}).status !== 'active') continue;
-    const siteId = doc.ref.parent.parent?.id;
-    if (siteId) siteIds.add(siteId);
-  }
-  return [...siteIds];
+  return Object.keys(await listUserStanding(userId));
 }
 
 export async function addMember(input: {
