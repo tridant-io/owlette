@@ -4,7 +4,7 @@
  *
  * the site settings page's danger zone. the delete waits for the server inside
  * its own dialog, which stays open when it fails, and the copy says what the
- * cascade takes instead of the old "machine data may remain".
+ * cascade takes without claiming any data is left behind.
  */
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';

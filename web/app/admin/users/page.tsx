@@ -199,7 +199,7 @@ export default function UserManagementPage() {
     };
   }, []);
 
-  const handleOpenManageSites = (userId: string, email: string, role: UserRole, sites: string[]) => {
+  const handleOpenManageSiteAccess = (userId: string, email: string, role: UserRole, sites: string[]) => {
     setSelectedUser({ uid: userId, email, role, sites });
     setManageSiteAccessOpen(true);
   };
@@ -610,7 +610,7 @@ export default function UserManagementPage() {
                           </Tooltip>
                           <DropdownMenuContent align="end" className="bg-card border-border">
                             <DropdownMenuItem
-                              onClick={() => handleOpenManageSites(user.uid, user.email, user.role, user.sites || [])}
+                              onClick={() => handleOpenManageSiteAccess(user.uid, user.email, user.role, user.sites || [])}
                               className="text-foreground hover:bg-accent cursor-pointer focus:bg-accent focus:text-foreground"
                             >
                               <Settings className="h-4 w-4 mr-2" />
@@ -794,7 +794,7 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* Manage Sites Dialog */}
+      {/* manage site access dialog */}
       {selectedUser && (
         <ManageUserSitesDialog
           open={manageSiteAccessOpen}

@@ -683,9 +683,9 @@ export function useSwoopSession(
         const detail = badMachineId
           ? "this machine's id is not one swoop can use. leave the site from its tray, then pair it again."
           : problem.detail || problem.error || 'this swoop session could not be started.';
-        // a member holds the view capability only: the control ask is refused
-        // before swoop's own gate, and the watch ask is the one to make. once,
-        // and only for that refusal.
+        // the control ask is refused with `capability_missing` when the
+        // person's site role or swoop mode does not include control, and the
+        // viewer then asks to watch. once, and only for that refusal.
         if (wantControl && controlRefusedForCapability(res.status, code, detail)) {
           return createSession(fp, false);
         }

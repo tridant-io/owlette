@@ -6,7 +6,7 @@
  * pick adds by uid and a typed full email adds by email, with the role and an
  * optional swoop mode. an untouched dialog writes no swoop field, the toast
  * says when the person was already on the site, a 404 keeps the dialog open,
- * and the old "admin is an account-level role" hint is gone.
+ * and the copy never calls either role account-level.
  */
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
