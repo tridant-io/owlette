@@ -89,13 +89,13 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
 
     // the people in it are named to the people in it, so a member who may
     // watch learns no name until they are in the room. an email goes only to
-    // a site owner or admin, by role and not by capability: what someone may
-    // do in swoop is not the same question as whose address they may see.
+    // a site owner or admin by role, or a superadmin, never by capability: what
+    // someone may do in swoop is not the same question as whose address they may see.
     const names = session.viewers.some((viewer) => viewer.uid === ctx.actor.userId)
       ? await viewerNames([session])
       : null;
     const siteRole = ctx.actor.siteRoles[ctx.siteId];
-    const withEmail = siteRole === 'owner' || siteRole === 'admin';
+    const withEmail = ctx.actor.role === 'superadmin' || siteRole === 'owner' || siteRole === 'admin';
 
     return applyAuthDeprecations(
       NextResponse.json({

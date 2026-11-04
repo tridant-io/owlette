@@ -1324,8 +1324,8 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       ]);
     });
 
-    // the email goes by role on the site, and a superadmin holds none there
-    it('gives a superadmin in it the names and no email', async () => {
+    // a superadmin holds no site role and sees every email, as the admin list does
+    it('gives a superadmin in it the names and every email', async () => {
       const SUPER = 'user-super';
       held.set(SUPER, mocks.userDocs.get(SUPER));
       mocks.userDocs.set(SUPER, { email: `${SUPER}@example.test`, role: 'superadmin', sites: [], displayName: 'Sam Super' });
@@ -1344,7 +1344,8 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
         null,
         'Sam Super',
       ]);
-      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+      for (const viewer of viewers) expect(viewer).toHaveProperty('email');
+      expect(viewers.at(-1)?.email).toBe(`${SUPER}@example.test`);
     });
 
     it.each([
