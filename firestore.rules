@@ -1,16 +1,18 @@
 rules_version = '2';
 
 // Owlette Firestore Security Rules
-// Version: 2.11.0 - webhook documents are site-admin read (they can still carry a legacy
-//                   in-document signing secret); 2.10.0 moved site access onto
-//                   `sites/{siteId}/members/{uid}`
-// Last Updated: 2026-09-06
+// Version: 2.12.0 - a member row may carry machineIds: that member reaches only those
+//                   machines (canAccessMachine) and nothing site-wide
+//                   (canAccessWholeSite); 2.11.0 made webhook documents site-admin read
+// Last Updated: 2026-11-04
 //
 // Security Model:
 // - Global roles: superadmin (platform-wide) | everyone else (no implicit site privilege)
 // - Per-site roles: owner | admin | member, held on sites/{siteId}/members/{uid}
 // - Site access is membership: a global `admin` grants NOTHING on a site it has no row for
 // - Superadmins reach every site by global role and hold no member rows
+// - A member row may list machineIds: that member reaches only those machines, and
+//   nothing site-wide
 // - Agents use custom tokens (OAuth) with site-scoped permissions
 // - Agents can ONLY access their assigned site and machine (strict isolation)
 // - Trusted server APIs manage control-plane writes
@@ -22,7 +24,8 @@ rules_version = '2';
 // - Admin Panel: User management, site assignment, installer version management
 // - Public Downloads: Anyone can download agent installers
 // - Site Access: membership only — an ACTIVE `sites/{siteId}/members/{uid}`
-//   row, or global superadmin. A global `admin` role grants NOTHING.
+//   row, or global superadmin. A global `admin` role grants NOTHING. A row
+//   with machineIds reaches only those machines.
 // - Command System: Bidirectional communication with agents
 //
 // Custom Token Claims (for agents):
@@ -106,6 +109,9 @@ service cloud.firestore {
     //     sites/{siteId}/members/{uid}   1   isActiveMember() and siteMemberRole()
     //                                        share it — same document
     //
+    // memberIsWholeSite() and memberHoldsMachine() read the same member document,
+    // so per-machine reads still cost 2, and chat messages and stream 3.
+    //
     // `get(sites/{siteId})` is deliberately GONE from the auth path: site access
     // no longer depends on reading the site document at all.
     //
@@ -148,6 +154,12 @@ service cloud.firestore {
              request.auth.token.machine_id == machineId;
     }
 
+    // canAccessSite admits a machine-scoped member. it gates only documents that say nothing
+    // about other machines: the site document, settings/{swoop,display,cortex}, and the
+    // schedule and reboot presets. a block that spans machines takes canAccessWholeSite; a
+    // block under one machine takes canAccessMachine. a new block written with canAccessSite
+    // hands every scoped member the whole collection.
+    //
     // Check if user has access to a site.
     // Access is granted to:
     //   - superadmins (platform god-mode — every site, holding no member rows)
@@ -176,7 +188,36 @@ service cloud.firestore {
       return isAuthenticated() &&
              isNotDeletedUser() &&
              (isSuperadmin() ||
-              (isActiveMember(siteId) && siteMemberRole(siteId) in ['owner', 'admin']));
+              (isActiveMember(siteId) &&
+               siteMemberRole(siteId) in ['owner', 'admin'] &&
+               memberIsWholeSite(siteId)));
+    }
+
+    // ---- machine scope (2.12.0) ----
+    // a member row may carry machineIds: [<machineId>, ...]. absent = whole site (every row
+    // before 2.12.0, every owner). present = only those machines and nothing site-wide.
+    // fails closed: [] reaches nothing; null or a non-list makes `in` an evaluation error,
+    // which denies. widening is a field delete, never null. both helpers read the member
+    // document isActiveMember() already reads, so no access is added. call them only
+    // behind isActiveMember(siteId).
+    function memberIsWholeSite(siteId) {
+      return !('machineIds' in get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data);
+    }
+    function memberHoldsMachine(siteId, machineId) {
+      return machineId in get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.machineIds;
+    }
+    // site-wide reach: every collection that spans machines.
+    function canAccessWholeSite(siteId) {
+      return isAuthenticated() && isNotDeletedUser() &&
+             (isSuperadmin() || (isActiveMember(siteId) && memberIsWholeSite(siteId)));
+    }
+    // one machine. rules are not filters: a list is provable only when the query pins the
+    // id (documentId() ==/in, or a machineId field ==/in) to values all in the scope.
+    function canAccessMachine(siteId, machineId) {
+      return isAuthenticated() && isNotDeletedUser() &&
+             (isSuperadmin() ||
+              (isActiveMember(siteId) &&
+               (memberIsWholeSite(siteId) || memberHoldsMachine(siteId, machineId))));
     }
 
     // Validate that required fields are present in write operations
@@ -279,7 +320,7 @@ service cloud.firestore {
         // Agents write heartbeats, metrics, and process status
         // Web dashboard reads machine status; control-plane writes go through API routes
         // OAuth agents can ONLY access their own machine (strict isolation)
-        allow read: if canAccessSite(siteId) ||
+        allow read: if canAccessMachine(siteId, machineId) ||
                        isServiceAccount() ||
                        agentCanAccessMachine(siteId, machineId);
 
@@ -301,7 +342,7 @@ service cloud.firestore {
         // Agents read pending and write completed
         // OAuth agents can ONLY access commands for their own machine
         match /commands/{commandDoc} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
           allow write: if isServiceAccount() ||
@@ -314,7 +355,7 @@ service cloud.firestore {
         // Server-side API writes history entries (admin SDK bypasses rules)
         // Web dashboard reads to display screenshot history gallery
         match /screenshots/{screenshotId} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount();
         }
 
@@ -323,12 +364,12 @@ service cloud.firestore {
         // Web dashboard reads to display installed software
         // OAuth agents can ONLY write to their own machine's inventory
         match /installed_software/{softwareId} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
           allow write: if isServiceAccount() ||
                           agentCanAccessMachine(siteId, machineId); // Only agents can write inventory
-          allow delete: if canAccessSite(siteId) ||
+          allow delete: if canAccessMachine(siteId, machineId) ||
                            isServiceAccount() ||
                            agentCanAccessMachine(siteId, machineId); // Allow cleanup
         }
@@ -341,7 +382,7 @@ service cloud.firestore {
         // Web dashboard reads to display hardware details
         // OAuth agents can ONLY write to their own machine's hardware profile
         match /hardware/{docId} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
           allow write: if isServiceAccount() ||
@@ -357,7 +398,7 @@ service cloud.firestore {
         // render the chat panel; the agent writes status / response chunks.
         // OAuth agents can ONLY access their own machine's cortex docs.
         match /cortex/{docId} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
           allow write: if isServiceAccount() ||
@@ -373,7 +414,7 @@ service cloud.firestore {
         // output that's filtered per machine for the dashboard's log view.
         // Agents append-only; deletion / retention is server-mediated.
         match /logs/{logId} {
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
           allow create: if isServiceAccount() ||
@@ -391,7 +432,7 @@ service cloud.firestore {
 
         match /metrics_history/{bucketId} {
           // Web dashboard reads historical metrics for charts
-          allow read: if canAccessSite(siteId) ||
+          allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
 
@@ -413,7 +454,7 @@ service cloud.firestore {
       match /deployments/{deploymentId} {
         // Software installation deployments
         // Server APIs create and manage deployments
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         allow create, update, delete: if isServiceAccount();
       }
 
@@ -424,7 +465,7 @@ service cloud.firestore {
       match /installer_templates/{templateId} {
         // Reusable installer templates
         // Server APIs manage templates
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         allow create, update, delete: if isServiceAccount();
       }
 
@@ -435,7 +476,7 @@ service cloud.firestore {
       match /project_templates/{templateId} {
         // Reusable project distribution templates
         // Server APIs manage templates
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         allow create, update, delete: if isServiceAccount();
       }
 
@@ -459,7 +500,7 @@ service cloud.firestore {
       // immutability guard covers both names.
 
       match /roosts/{roostId} {
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         // WRITE: trusted server APIs only.
         //
         // These three were previously `canAccessSite(siteId)` — membership with
@@ -489,8 +530,8 @@ service cloud.firestore {
         // (reported by agent).
 
         match /target_state/{machineId} {
-          // READ: any site member can see reported target state.
-          allow read: if canAccessSite(siteId);
+          // READ: any whole-site member can see reported target state.
+          allow read: if canAccessWholeSite(siteId);
           // CREATE/UPDATE: ONLY the agent for this specific machine. Web
           // users cannot spoof an agent's reported state (would let a
           // malicious teammate hide pending rollouts by marking a machine
@@ -498,10 +539,10 @@ service cloud.firestore {
           allow create, update: if isAgent() &&
                                   request.auth.token.site_id == siteId &&
                                   request.auth.token.machine_id == machineId;
-          // DELETE: site members can clear stale state (manual cleanup
+          // DELETE: whole-site members can clear stale state (manual cleanup
           // when an agent is decommissioned). Agents do not delete their
           // own state — they update it.
-          allow delete: if canAccessSite(siteId);
+          allow delete: if canAccessWholeSite(siteId);
         }
 
         // ------------------------------------------
@@ -513,8 +554,8 @@ service cloud.firestore {
         // history dropdown.
 
         match /versions/{versionId} {
-          // READ: any site member can list version history (for rollback ui).
-          allow read: if canAccessSite(siteId);
+          // READ: any whole-site member can list version history (for rollback ui).
+          allow read: if canAccessWholeSite(siteId);
           // CREATE: forbidden client-side. Versions are written ONLY by
           // /api/roosts/.../versions using the admin SDK, after the
           // chunk-presence check + r2 version body upload + transactional
@@ -579,7 +620,9 @@ service cloud.firestore {
         // Web dashboard reads logs for monitoring
         // Users can read logs for their sites. Agents and trusted server APIs
         // write logs; clearing logs is server-mediated.
-        allow read: if canAccessSite(siteId) ||
+        // a scoped member reads only their machines' rows, so their list must pin
+        // machineId (== or in). a row without a machineId is whole-site only.
+        allow read: if canAccessMachine(siteId, resource.data.machineId) ||
                        isServiceAccount() ||
                        agentCanAccessSite(siteId);
         allow create: if (isServiceAccount() ||
@@ -599,7 +642,7 @@ service cloud.firestore {
       // Agents can only create events for their own site (token claim).
       // Updates / deletes are server-mediated.
       match /cortex-events/{eventId} {
-        allow read: if canAccessSite(siteId) ||
+        allow read: if canAccessWholeSite(siteId) ||
                        isServiceAccount();
 
         // Create: agent must claim its own machineId on the doc (or omit
@@ -652,17 +695,17 @@ service cloud.firestore {
       // transactional nextRunAt claim can't be sidestepped.
 
       match /talons/{talonId} {
-        // READ: any site member can list/inspect talons for the site.
+        // READ: any whole-site member can list/inspect talons for the site.
         // WRITE: server APIs only (admin SDK bypasses rules).
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         allow write: if false;
       }
 
       match /talon_runs/{runId} {
-        // READ: any site member can review run history.
+        // READ: any whole-site member can review run history.
         // WRITE: written only by the runner (admin SDK); run records are
         // an audit surface and must not be client-editable.
-        allow read: if canAccessSite(siteId);
+        allow read: if canAccessWholeSite(siteId);
         allow write: if false;
       }
 
@@ -685,7 +728,7 @@ service cloud.firestore {
       // Server APIs write config updates
       // Agents read config and write initial config on first startup
       // OAuth agents can ONLY access config for their own machine
-      allow read: if canAccessSite(siteId) ||
+      allow read: if canAccessMachine(siteId, machineId) ||
                      isServiceAccount() ||
                      agentCanAccessMachine(siteId, machineId);
       allow write: if isServiceAccount() ||
@@ -710,15 +753,15 @@ service cloud.firestore {
 
     match /config/{siteId}/project_distribution_presets/{presetId} {
       // Project distribution presets shared across a site
-      // Users with site access can read presets; server APIs manage them
-      allow read: if canAccessSite(siteId);
+      // Users with whole-site access can read presets; server APIs manage them
+      allow read: if canAccessWholeSite(siteId);
       allow write, delete: if isServiceAccount();
     }
 
     match /config/{siteId}/talon_presets/{presetId} {
       // Reusable talon templates shared across a site
-      // Users with site access can read presets; server APIs manage them
-      allow read: if canAccessSite(siteId);
+      // Users with whole-site access can read presets; server APIs manage them
+      allow read: if canAccessWholeSite(siteId);
       allow write, delete: if isServiceAccount();
     }
 
@@ -853,7 +896,10 @@ service cloud.firestore {
       // Site-level settings (e.g., shared LLM API keys)
       // Trusted server APIs manage site-level settings
       // Regular users can read (to check if site key exists)
-      allow read: if canAccessSite(siteId);
+      // a scoped member still reads swoop, display and cortex: useSwoopSettings reads
+      // a denial as enabled:false, which would hide swoop. alerts stays whole site.
+      allow read: if canAccessWholeSite(siteId) ||
+                     (canAccessSite(siteId) && settingId in ['swoop', 'display', 'cortex']);
       allow write: if isServiceAccount();
     }
 
@@ -863,11 +909,13 @@ service cloud.firestore {
 
     match /chats/{chatId} {
       // AI chat conversations
-      // Users can read their own chats OR autonomous chats for sites they have access to
+      // Users can read their own chats OR autonomous chats for sites they have whole-site access to
+      // a scoped member sees no autonomous chat: showing the ones about their machines
+      // would take a targetMachineId index and a filtered list query.
       allow read: if isAuthenticated() &&
                      (resource.data.userId == request.auth.uid ||
                       (resource.data.source == 'autonomous' &&
-                       canAccessSite(resource.data.siteId)));
+                       canAccessWholeSite(resource.data.siteId)));
       allow create: if isAuthenticated() &&
                      request.resource.data.userId == request.auth.uid;
       allow update, delete: if isAuthenticated() &&
@@ -875,23 +923,23 @@ service cloud.firestore {
 
       match /messages/{messageId} {
         // Chat messages within a conversation
-        // Access controlled by parent chat ownership OR autonomous chat site access
+        // Access controlled by parent chat ownership OR autonomous chat whole-site access
         allow read: if isAuthenticated() &&
                        (get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid ||
                         (get(/databases/$(database)/documents/chats/$(chatId)).data.source == 'autonomous' &&
-                         canAccessSite(get(/databases/$(database)/documents/chats/$(chatId)).data.siteId)));
+                         canAccessWholeSite(get(/databases/$(database)/documents/chats/$(chatId)).data.siteId)));
         allow write: if isAuthenticated() &&
                         get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid;
       }
 
       match /stream/{docId} {
         // Live turn snapshots for async Cortex turns (stream/current)
-        // Read access mirrors messages: parent chat ownership OR autonomous chat site access
+        // Read access mirrors messages: parent chat ownership OR autonomous chat whole-site access
         // Written only by the server-side turn runner via Admin SDK (no client writes)
         allow read: if isAuthenticated() &&
                        (get(/databases/$(database)/documents/chats/$(chatId)).data.userId == request.auth.uid ||
                         (get(/databases/$(database)/documents/chats/$(chatId)).data.source == 'autonomous' &&
-                         canAccessSite(get(/databases/$(database)/documents/chats/$(chatId)).data.siteId)));
+                         canAccessWholeSite(get(/databases/$(database)/documents/chats/$(chatId)).data.siteId)));
       }
     }
 
