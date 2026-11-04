@@ -13,15 +13,15 @@
  * forced click for an off-screen control: that greens a test for something a
  * thumb cannot do.
  *
- * isolation: the seeded site, its member row and every site created here are
- * released in afterAll.
+ * isolation: the seeded site, its member row and its machine, and every site
+ * created here, are released in afterAll.
  */
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { getAdminDb } from '../../helpers/emulator';
 import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
-import { TEST_USERS, grantMembership, releaseFixtureSite, seedSite } from '../../helpers/seed';
+import { TEST_USERS, grantMembership, releaseFixtureSite, seedMachine, seedSite } from '../../helpers/seed';
 
 // all lowercase: the create dialog downcases what is typed, so the baseline's
 // site-A and site-B can never collide
@@ -32,6 +32,9 @@ const TAKEN_SITE_NAME = 'Mobile Taken Site';
 // signs in as it, and a fixture that did could open the dashboard on this site,
 // which sorts first by name
 const ROW_USER = TEST_USERS.owner;
+// seeded with no name, so the machines section lists it by its id
+const MACHINE_ID = 'e2e-mobile-sites-machine';
+const MACHINE_VERSION = '2.9.0';
 const SECTIONS = ['general', 'members', 'machines', 'swoop & screens', 'danger zone'];
 
 /** site ids created by this file, released in afterAll. */
@@ -42,10 +45,13 @@ test.use(roleState('superadmin'));
 test.beforeAll(async () => {
   await seedSite({ id: TAKEN_SITE_ID, name: TAKEN_SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
   await grantMembership(TAKEN_SITE_ID, ROW_USER.uid, 'member');
+  // no monitors, so no display subdocument outlives afterAll's delete
+  await seedMachine(TAKEN_SITE_ID, MACHINE_ID, { agentVersion: MACHINE_VERSION, monitorCount: 0 });
 });
 
 test.afterAll(async () => {
   await Promise.all([
+    getAdminDb().collection('sites').doc(TAKEN_SITE_ID).collection('machines').doc(MACHINE_ID).delete(),
     releaseFixtureSite(TAKEN_SITE_ID, ROW_USER.uid),
     ...createdSiteIds.map((id) => releaseFixtureSite(id, TEST_USERS.superadmin.uid)),
   ]);
@@ -161,6 +167,21 @@ test("a site's settings fit, section by section", async ({ page }) => {
   );
   // a member with no mode of their own, on a site whose members watch by default
   await expectFullyWithinViewport(page, row.getByText('watch', { exact: true }), 'the row swoop label');
+  await assertNoHorizontalOverflow(page);
+
+  await sections.getByRole('button', { name: 'machines', exact: true }).tap();
+  const machine = page.getByRole('listitem').filter({ hasText: MACHINE_ID });
+  for (const action of ['restart', 'remove']) {
+    await expectFullyWithinViewport(
+      page,
+      machine.getByRole('button', { name: `${action} ${MACHINE_ID}`, exact: true }),
+      `the machine ${action} button`,
+    );
+  }
+  // the version column shows from sm up
+  const version = machine.getByText(`v${MACHINE_VERSION}`, { exact: true });
+  await expect(version).toBeAttached();
+  await expect(version).toBeHidden();
   await assertNoHorizontalOverflow(page);
 
   await sections.getByRole('button', { name: 'danger zone', exact: true }).tap();
