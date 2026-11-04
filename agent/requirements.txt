@@ -67,8 +67,8 @@ websocket-client==1.9.2
 # lands, or hoot keeps fetching the old CLI.
 # Only pin a release that ships a win_amd64 wheel: 0.2.157 and 0.2.160-0.2.163
 # ship none, and pip then builds the sdist, which has no CLI, and exits 0.
-claude-agent-sdk==0.2.159
-mcp==2.2.0
+claude-agent-sdk==0.2.174
+mcp==2.3.0
 
 # Error monitoring (optional — only active when DSN configured in config.json)
 sentry-sdk==2.73.0
