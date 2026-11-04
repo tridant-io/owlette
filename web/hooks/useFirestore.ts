@@ -149,6 +149,48 @@ async function apiJson<T>(
   return body as T;
 }
 
+export async function createSite(
+  siteId: string,
+  name: string,
+  timezone?: string,
+  schedulesFollowSiteTime?: boolean,
+): Promise<string> {
+  if (!db) throw new Error('Firebase not configured');
+
+  const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
+  if (!isValid) {
+    throw new Error(error);
+  }
+
+  // No pre-read existence check: non-owners get permission-denied on getDoc.
+  // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
+  // availability is checked in CreateSiteDialog.
+  try {
+    await apiJson('/api/sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteId,
+        name,
+        timezone: timezone || 'UTC',
+        // Omitted, never `false`, when the caller states nothing. The field is
+        // three-state and an absent flag means "never asked" — sending `false`
+        // would spend that state at creation and permanently suppress the
+        // opt-in banner for a site nobody ever asked.
+        ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
+      }),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('already exists')) {
+      throw new Error(`site ID "${siteId}" is already taken. choose a different one.`);
+    }
+    throw err;
+  }
+
+  return siteId;
+}
+
 function makeIdempotencyKey(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
@@ -935,53 +977,10 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
     }
   }, [userId, userSites, isSuperadmin]);
 
-  const createSite = async (
-    siteId: string,
-    name: string,
-    _userId: string,
-    timezone?: string,
-    schedulesFollowSiteTime?: boolean,
-  ): Promise<string> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      throw new Error(error);
-    }
-
-    // No pre-read existence check: non-owners get permission-denied on getDoc.
-    // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
-    // availability is checked in CreateSiteDialog.
-    try {
-      await apiJson('/api/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteId,
-          name,
-          timezone: timezone || 'UTC',
-          // Omitted, never `false`, when the caller states nothing. The field is
-          // three-state and an absent flag means "never asked" — sending `false`
-          // would spend that state at creation and permanently suppress the
-          // opt-in banner for a site nobody ever asked.
-          ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
-        }),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('already exists')) {
-        throw new Error(`Site ID "${siteId}" is already taken. Please choose a different ID.`);
-      }
-      throw err;
-    }
-
-    return siteId;
-  };
-
   const updateSite = async (siteId: string, updates: { name?: string; timezone?: string; timeFormat?: '12h' | '24h'; schedulesFollowSiteTime?: boolean }) => {
     if (!db) throw new Error('Firebase not configured');
     if (updates.name !== undefined && !updates.name.trim()) {
-      throw new Error('Site name cannot be empty');
+      throw new Error('site name cannot be empty');
     }
 
     const updateData: Record<string, string | boolean> = {};
@@ -1007,16 +1006,11 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const deleteSite = async (siteId: string) => {
     if (!db) throw new Error('Firebase not configured');
 
-    // Firestore does not cascade-delete the machines subcollection.
     await apiJson(`/api/sites/${encodeURIComponent(siteId)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     });
-
-    // TODO: arrayRemove this siteId from every user's `sites`. Until then admins
-    // clean up orphans via the Manage Site Access dialog.
-    logger.info(`Site ${siteId} deleted. Note: User references may need manual cleanup.`);
   };
 
   const checkSiteIdAvailability = async (siteId: string): Promise<boolean> => {
