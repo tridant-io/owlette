@@ -30,7 +30,7 @@ import {
   ExecuteMachineCommandError,
 } from '@/lib/actions/executeMachineCommand.server';
 import { getUserIdFromSession, withRateLimit } from '@/lib/withRateLimit';
-import type { Actor, Role } from '@/lib/capabilities';
+import { siteStanding, type Actor, type Role } from '@/lib/capabilities';
 
 /** `stream/current.toolCommands`: toolCallId → machineId → { commandId }. Declared locally
  * to keep this route off the server-only turn store's type surface. */
@@ -181,7 +181,7 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
       role,
       // Per-site standing from the same access check above; the global `role`
       // beside it grants nothing on a site.
-      siteRoles: access.siteRole ? { [siteId]: access.siteRole } : {},
+      ...siteStanding({ [siteId]: { role: access.siteRole, swoopMode: access.swoopMode } }),
     };
 
     let queued;

@@ -28,7 +28,15 @@ import {
 } from '@/lib/actions/executeMachineCommand.server';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
-import { Capability, hasCapability, type Actor, type Role, type SystemActorName } from '@/lib/capabilities';
+import {
+  Capability,
+  hasCapability,
+  siteStanding,
+  type Actor,
+  type Role,
+  type SystemActorName,
+} from '@/lib/capabilities';
+import type { SwoopMode } from '@/lib/swoopMode';
 import { timestampToIso } from '@/lib/firestoreTime.server';
 import {
   cancelFollowup,
@@ -128,6 +136,8 @@ export interface BuildExecutableToolsOptions {
   userRole?: string | null;
   /** PER-SITE standing. Omit it and every site-scoped tool denies. */
   userSiteRole?: MembershipRole;
+  /** the member row's swoop mode, carried beside `userSiteRole`. absent or null, the site role decides. */
+  userSwoopMode?: SwoopMode | null;
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
@@ -222,7 +232,9 @@ function actionContextForHoot(
     // belonged to the site without ever checking, so the global role alone
     // decided what the tools could do. The real standing is resolved by
     // `verifyUserSiteAccess` and threaded in; absent, nothing site-scoped runs.
-    siteRoles: options.userSiteRole ? { [siteId]: options.userSiteRole } : {},
+    ...siteStanding({
+      [siteId]: { role: options.userSiteRole ?? null, swoopMode: options.userSwoopMode ?? null },
+    }),
   };
   return {
     siteId,
@@ -373,6 +385,12 @@ export interface SiteAccessLevel {
    * must pass this through, or every site-scoped capability denies.
    */
   siteRole: MembershipRole;
+  /**
+   * the member row's swoop mode, null when it carries none. callers building a
+   * `UserActor` pass it to `siteStanding` with `siteRole`: dropped, an admin held
+   * to view would control again.
+   */
+  swoopMode: SwoopMode | null;
   isSuperadmin: boolean;
   isSiteAdmin: boolean;
   isSiteOwner: boolean;
@@ -461,6 +479,7 @@ export async function verifyUserSiteAccess(
   return {
     role: facts.rawRole,
     siteRole: facts.membershipRole,
+    swoopMode: facts.swoopMode,
     isSuperadmin,
     isSiteAdmin,
     isSiteOwner,

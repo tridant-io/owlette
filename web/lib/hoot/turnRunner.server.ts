@@ -622,6 +622,7 @@ export function startTurn(
           userId: params.userId,
           userRole: params.access.role,
           userSiteRole: params.access.siteRole,
+          userSwoopMode: params.access.swoopMode,
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),

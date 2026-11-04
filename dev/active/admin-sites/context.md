@@ -194,10 +194,10 @@ The trigger: Slawek, on another owlette account, can only watch TEC-B4A, not con
     - `hasCapability` applies an explicit mode to MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL only, never on an owner row. Both stay in BYPASS_EXEMPT_CAPABILITIES, so a held-back admin stays held back during the break-glass.
     - `evaluateSwoopAccess` skips `members_may_not_watch` when the row carries a mode.
     - The capability matrix still states the role defaults, and a test pins that `grantedSwoopMode` agrees with it.
-23. **One builder of standing.** `siteStanding` (capabilities.ts) turns member rows into `siteRoles` and `swoopModes`, and every builder from a member row uses it: the wrapper, `_shared`'s `requireSiteCapability`, `assertUserHasSiteCapability`, and the candidates listing (`listUserStanding`).
+23. **One builder of standing.** `siteStanding` (capabilities.ts) turns member rows into `siteRoles` and `swoopModes`, and every builder from a member row uses it, hoot and talons included: the wrapper, `_shared`'s `requireSiteCapability`, `assertUserHasSiteCapability`, the candidates listing (`listUserStanding`), hoot's tool actor and its cancel-tool and provision-key routes, and the talon successor (`loadSuccessorActor`).
+    - Hoot reads the row through `verifyUserSiteAccess`, which returns `swoopMode` beside `siteRole`; the turn runner hands both to the tools. `loadSuccessorActor` reads the row itself, through `deriveMembership` and `deriveSwoopMode`.
     - It returns `swoopModes` only when some site has a mode, so an actor built from untouched rows is exactly today's actor (`authorizedHandler.test.ts:295`).
     - Today only the wrapper's routes ask for the swoop capabilities. Carrying the mode everywhere stops a later route from handing a held-back admin control through a builder that dropped it.
-    - Builders that never read a member row (hoot, talons, users/me) are untouched.
 24. **The wrapper's refusal of a swoop capability carries `code: 'capability_missing'`.** Only for BYPASS_EXEMPT capabilities: every other refusal keeps code `forbidden`, so no public API contract changes outside swoop.
     - The viewer already ends on that code (`backoff.ts` WITHDRAWALS) and already steps a control ask down to a watch ask on it (`intent.ts`).
     - The stage says "you can't use swoop on this site".
