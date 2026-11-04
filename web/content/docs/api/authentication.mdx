@@ -165,6 +165,7 @@ some surfaces need a person, not a key:
 - **key management.** `/api/keys/*` takes a session or Firebase ID token only.
 - **swoop.** every swoop session route, the site swoop list, and `swoop-settings` refuse a key with `403 api_key_not_permitted` — swoop is a human-in-the-loop surface and a key has no second factor. see [swoop](/docs/dashboard/swoop).
 - **display settings.** `GET`/`PATCH /api/sites/{siteId}/display-settings` refuse a key the same way.
+- **member candidates.** `GET /api/sites/{siteId}/member-candidates` refuses a key the same way: a key scoped to one site must not read the rosters of its owner's other sites.
 - **hoot tools.** a key can hold conversations, but every reply is capped at read-only tools. see [hoot](/docs/api/hoot#access).
 
 ---

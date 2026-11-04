@@ -7971,7 +7971,7 @@ paths:
         surface, and a key has no second factor to present. The standard
         authorization checks run first, so a key lacking the route's scope is
         refused earlier with `scope_insufficient`, and one whose user lacks the
-        route's capability with `forbidden`.
+        route's capability with `capability_missing`.
       security:
         - firebaseIdToken: []
       requestBody:
@@ -8750,7 +8750,15 @@ paths:
                   ok: { type: boolean }
                   data: { $ref: '#/components/schemas/SwoopSiteSettings' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing: a site owner or admin
+            is needed), or `api_key_not_permitted` (an api key called this
+            route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -8803,7 +8811,15 @@ paths:
                         description: How many machines the change was fanned out to.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing: a site owner or admin
+            is needed), or `api_key_not_permitted` (an api key called this
+            route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }

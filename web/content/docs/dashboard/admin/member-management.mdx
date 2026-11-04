@@ -57,7 +57,7 @@ it changes swoop and nothing else. a member set to control takes control, after 
 - a member set to control cannot kill sessions or see the site's session list on [admin → swoop](/docs/dashboard/swoop#admin--swoop); an admin held to watch still can
 - it applies only while the site has swoop on
 
-lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in.
+lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once.
 
 set it when you [add someone](#adding-a-member), and change it later with `change access...` (see [changing a role](#changing-a-role)). the API equivalent is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "swoop": "control" }`. the values are `none`, `view` and `control`, and `null` goes back to by role.
 
@@ -89,7 +89,7 @@ the role and swoop mode you pick are written for this site only, and change noth
 2. select `remove...`.
 3. read the dialog, then click **remove member**.
 
-removal takes away their access to this site at once. any [swoop](/docs/dashboard/swoop) session they are in on the site ends within seconds. their account and any other sites they belong to are untouched.
+removal takes away their access to this site at once, and ends every [swoop](/docs/dashboard/swoop) session they are in on the site. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once. their account and any other sites they belong to are untouched.
 
 two rows cannot be removed:
 
@@ -119,7 +119,7 @@ the server enforces:
 - you cannot change your **own** role (`403 cannot_modify_own_membership`)
 - the person must already be on the site (`404`)
 
-demoting someone to member ends any swoop session in which they hold control, unless their swoop mode keeps control. a session they are still allowed to watch carries on. a role change leaves their swoop mode as it was.
+demoting someone to member ends any swoop session in which they hold control, unless their swoop mode keeps control. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once. a session they are still allowed to watch carries on. a role change leaves their swoop mode as it was.
 
 to narrow someone's access instead, remove them from the sites they should not reach.
 
