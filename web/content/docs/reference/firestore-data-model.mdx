@@ -163,7 +163,7 @@ security-boundary audit records. **access**: site admins read; client writes are
 | `target` | map | `{ kind, id, ... }`. |
 | `outcome` | string | `allow`, `deny` or `error`. |
 | `timestamp` | timestamp | |
-| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started`, `session_ended`, `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), `step_up_network_check` (the network a control request came from: `mode`, `key`, `prefix`, `viaEdge`, `match`, `windowNetwork`; always outcome `allow`, the decision's own row says what happened), and host events. |
+| `metadata` | map | optional. swoop records name their event here, in `metadata.event`: `session_started` (`metadata.joined: true` for a viewer who joined a session already running), `session_ended` (`metadata.left: true` for a viewer who left one that goes on), `session_denied`, `lease_denied`, `step_up_failed`, `step_up_opened` (a step-up the sign-in's own second factor stood in for, `metadata.reason: fresh_sign_in`), `step_up_network_check` (the network a control request came from: `mode`, `key`, `prefix`, `viaEdge`, `match`, `windowNetwork`; always outcome `allow`, the decision's own row says what happened), and host events. |
 | `denyReason`, `errorCode`, `enforcementBypassed` | string, string, boolean | optional. |
 
 hash-chained records from the `recordAuditEvent` function land in the same collection under their hash, with `sites/{siteId}/audit_log_meta/head` (`{ hash, recordedAt }`, server only) as the chain head.
@@ -348,7 +348,7 @@ the web writes `pendingMessage`, `chatId`, `machineName`, `messages[]` (`{ role,
 
 ### `.../swoop_sessions/{sid}`
 
-one swoop session. `sid` is a 32-character hex ID. **access**: server only — the rules deny every role, and a rules test asserts it. no key, token or relay credential is ever stored here.
+one swoop session: one streamer's time on the machine, which every viewer of the machine shares. `sid` is a 32-character hex ID. **access**: server only — the rules deny every role, and a rules test asserts it. no key, token or relay credential is ever stored here.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -357,10 +357,11 @@ one swoop session. `sid` is a 32-character hex ID. **access**: server only — t
 | `createdBy` | string | `user:<uid>`. |
 | `startedAt` | number | ms. |
 | `createdAt`, `updatedAt` | timestamp | |
-| `viewers` | array | `{ viewerId, uid, ctl, joinedAt, leaseExpiresAt }`; `ctl` is whether that viewer holds control. |
-| `continuityHash`, `continuityUsedAt` | string, timestamp | reconnect continuity. |
-| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked` or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
+| `viewers` | array | `{ viewerId, uid, ctl, joinedAt, leaseExpiresAt, renewedAt? }`, one per viewer in the session; `ctl` is whether that viewer holds control, and `renewedAt` is absent until its first lease renewal. |
+| `continuity` | map | reconnect continuity, by viewer ID: `{ uid, hash, usedAt? }` for each control viewer. |
+| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked`, `machine_removed` (the machine was removed from the site) or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
 | `viewerReason`, `endedAt` | string, timestamp | the page's own reason for ending, and when. |
+| `endedFor` | string | the uid a `revoked` end was for. removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own. |
 
 a daily cron (`/api/cron/swoop-retention`) closes sessions whose leases have expired and deletes sessions older than 30 days.
 

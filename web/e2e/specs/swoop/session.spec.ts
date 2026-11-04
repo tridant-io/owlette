@@ -49,6 +49,10 @@ const KILLED_ID = `mach-killed-${SUFFIX}`;
 const CURSOR_ID = `mach-cursor-${SUFFIX}`;
 const FIT_ID = `mach-fit-${SUFFIX}`;
 const PHONE_ID = `mach-phone-${SUFFIX}`;
+const SHARED_ID = `mach-shared-${SUFFIX}`;
+const REVOKED_ID = `mach-revoked-${SUFFIX}`;
+const DEMOTED_ID = `mach-demoted-${SUFFIX}`;
+const LEFT_ID = `mach-left-${SUFFIX}`;
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
 /** a real png, so the drawn pointer is an image the page lays out. */
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -71,6 +75,19 @@ let fitOperator: TestUser;
 let fitOperatorSecret = '';
 let phoneOperator: TestUser;
 let phoneOperatorSecret = '';
+let sharedOperator: TestUser;
+let sharedOperatorSecret = '';
+let revokingOperator: TestUser;
+let revokingOperatorSecret = '';
+let leavingOperator: TestUser;
+let leavingOperatorSecret = '';
+let demotingOperator: TestUser;
+let demotingOperatorSecret = '';
+// an admin until the demotion spec makes them a member
+let demotable: TestUser;
+let demotableSecret = '';
+// a member of the site only until the revocation spec removes them
+let removable: TestUser;
 
 async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
   const user = await seedDedicatedUser(dedicatedUser('member', suffix));
@@ -154,12 +171,18 @@ interface ApiReply {
  * browser context answered "no valid session" where the page's own fetch
  * did not, so the page's is the one used.
  */
-async function apiCall(page: Page, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<ApiReply> {
+async function apiCall(
+  page: Page,
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): Promise<ApiReply> {
   return page.evaluate(
-    async ([m, p, b]) => {
+    async ([m, p, b, h]) => {
       const res = await fetch(p as string, {
         method: m as string,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(h as Record<string, string>) },
         body: b === undefined ? undefined : JSON.stringify(b),
       });
       const text = await res.text();
@@ -171,7 +194,7 @@ async function apiCall(page: Page, method: 'GET' | 'POST' | 'DELETE', path: stri
       }
       return { status: res.status, body: parsed };
     },
-    [method, path, body] as const,
+    [method, path, body, headers] as const,
   );
 }
 
@@ -205,6 +228,10 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, CURSOR_ID, { displayName: `cursor box ${SUFFIX}` });
   await seedMachine(SITE_ID, FIT_ID, { displayName: `fit box ${SUFFIX}` });
   await seedMachine(SITE_ID, PHONE_ID, { displayName: `phone box ${SUFFIX}` });
+  await seedMachine(SITE_ID, SHARED_ID, { displayName: `shared box ${SUFFIX}` });
+  await seedMachine(SITE_ID, REVOKED_ID, { displayName: `revoked box ${SUFFIX}` });
+  await seedMachine(SITE_ID, DEMOTED_ID, { displayName: `demoted box ${SUFFIX}` });
+  await seedMachine(SITE_ID, LEFT_ID, { displayName: `left box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -228,12 +255,40 @@ test.beforeAll(async () => {
   phoneOperatorSecret = phoneSeeded.secret;
   await grantMembership(SITE_ID, phoneOperator.uid, 'admin');
 
+  const sharedSeeded = await seedTotpUser(`swoop-shared-${SUFFIX}`);
+  sharedOperator = sharedSeeded.user;
+  sharedOperatorSecret = sharedSeeded.secret;
+  await grantMembership(SITE_ID, sharedOperator.uid, 'admin');
+
+  const revokingSeeded = await seedTotpUser(`swoop-revoking-${SUFFIX}`);
+  revokingOperator = revokingSeeded.user;
+  revokingOperatorSecret = revokingSeeded.secret;
+  await grantMembership(SITE_ID, revokingOperator.uid, 'admin');
+
+  const leavingSeeded = await seedTotpUser(`swoop-leaving-${SUFFIX}`);
+  leavingOperator = leavingSeeded.user;
+  leavingOperatorSecret = leavingSeeded.secret;
+  await grantMembership(SITE_ID, leavingOperator.uid, 'admin');
+
+  const demotingSeeded = await seedTotpUser(`swoop-demoting-${SUFFIX}`);
+  demotingOperator = demotingSeeded.user;
+  demotingOperatorSecret = demotingSeeded.secret;
+  await grantMembership(SITE_ID, demotingOperator.uid, 'admin');
+
+  const demotableSeeded = await seedTotpUser(`swoop-demotable-${SUFFIX}`);
+  demotable = demotableSeeded.user;
+  demotableSecret = demotableSeeded.secret;
+  await grantMembership(SITE_ID, demotable.uid, 'admin');
+
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
-  await getAdminDb()
-    .collection('users')
-    .doc(watcher.uid)
-    .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
-  await grantMembership(SITE_ID, watcher.uid, 'member');
+  removable = await seedDedicatedUser(dedicatedUser('member', `swoop-removable-${SUFFIX}`));
+  for (const member of [watcher, removable]) {
+    await getAdminDb()
+      .collection('users')
+      .doc(member.uid)
+      .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
+    await grantMembership(SITE_ID, member.uid, 'member');
+  }
 });
 
 test.describe('the viewer page', () => {
@@ -611,6 +666,212 @@ test.describe('through a host', () => {
       await expect(page.getByText('machine is restarting')).toHaveCount(0);
       expect(host.problems).toEqual([]);
     } finally {
+      await host.stop();
+    }
+  });
+
+  // removing a machine unpairs its agent, whose service stops and byes its
+  // viewers `restart`, as an update does: the page used to say the machine was
+  // restarting, and then showed the api's bare "machine not found".
+  test('a machine removed from the site says it has left, not that it is restarting', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: LEFT_ID });
+    try {
+      await signIn(page, leavingOperator, leavingOperatorSecret, { fresh: true });
+      const granted = nextGrant(page, LEFT_ID);
+      await page.goto(`/swoop/${SITE_ID}/${LEFT_ID}`);
+      const grant = await granted;
+      await expectHostPicture(page);
+
+      const removed = await apiCall(page, 'DELETE', `/api/sites/${SITE_ID}/machines/${LEFT_ID}`, undefined, {
+        'Idempotency-Key': `swoop-left-${SUFFIX}`,
+      });
+      expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+      await host.restart();
+
+      await expect(page.getByText('this machine has left the site.')).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByText('machine is restarting')).toHaveCount(0);
+      await expect(page.getByText(/reconnecting in/)).toHaveCount(0);
+      const record = await readSession(page, grant.sid, LEFT_ID);
+      expect([record.state, record.endReason]).toEqual(['ended', 'machine_removed']);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  // the owner's bug (2026-11-04, TEC-B4A): a second person opening swoop on the
+  // machine minted a session of its own, and the machine ended the first one's.
+  test('a second person opening the machine joins the session there: both see it, and the first is not ended', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: SHARED_ID });
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await host.addViewer(other);
+      await signIn(page, sharedOperator, sharedOperatorSecret, { fresh: true });
+      await signIn(other, watcher);
+
+      const firstGrant = nextGrant(page, SHARED_ID);
+      await page.goto(`/swoop/${SITE_ID}/${SHARED_ID}`);
+      const first = await firstGrant;
+      expect(first.ctl).toBe(true);
+      await expectHostPicture(page);
+
+      const joinGrant = nextGrant(other, SHARED_ID);
+      await other.goto(`/swoop/${SITE_ID}/${SHARED_ID}`);
+      const joined = await joinGrant;
+      // the same session, with a viewer of its own
+      expect(joined.sid).toBe(first.sid);
+      expect(joined.viewerId).not.toBe(first.viewerId);
+      await expectHostPicture(other);
+
+      // nobody told the first viewer to go, and its picture still moves
+      await expectHostPicture(page);
+      await expect(page.getByText('this session was ended from elsewhere.')).toHaveCount(0);
+      const record = await readSession(page, first.sid, SHARED_ID);
+      expect(record.state).not.toBe('ended');
+      expect((record.viewers as Array<{ viewerId: string }>).map((v) => v.viewerId).sort()).toEqual(
+        [first.viewerId, joined.viewerId].sort(),
+      );
+      // the host verified each one's own token on the one sid
+      expect(host.leases).toEqual(
+        expect.arrayContaining([
+          { viewer: first.viewerId, sid: first.sid, uid: sharedOperator.uid, ctl: true },
+          { viewer: joined.viewerId, sid: first.sid, uid: watcher.uid, ctl: false },
+        ]),
+      );
+
+      // the second ending theirs takes out only their own seat
+      const left = other.waitForResponse(
+        (r) => r.url().includes(`/swoop/sessions/${first.sid}`) && r.request().method() === 'DELETE',
+      );
+      await other.getByRole('button', { name: /end session/i }).click();
+      expect((await left).status()).toBe(200);
+      await expectHostPicture(page);
+      const after = await readSession(page, first.sid, SHARED_ID);
+      expect(after.state).not.toBe('ended');
+      expect((after.viewers as Array<{ viewerId: string }>).map((v) => v.viewerId)).toEqual([first.viewerId]);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await otherContext.close();
+      await host.stop();
+    }
+  });
+});
+
+test.describe('through a host, a member removed mid-session', () => {
+  // the machine has one streamer for the whole session and no way to drop one
+  // viewer, so a member removed from the site ends it for everyone at once
+  // rather than staying in it for a lease; everyone comes back on their own,
+  // and the api decides what each may do now.
+  test('ends the session for everyone at once: the member is told their access went, and the other comes back in control', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: REVOKED_ID });
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await host.addViewer(other);
+      await signIn(page, revokingOperator, revokingOperatorSecret, { fresh: true });
+      await signIn(other, removable);
+
+      const firstGrant = nextGrant(page, REVOKED_ID);
+      await page.goto(`/swoop/${SITE_ID}/${REVOKED_ID}`);
+      const first = await firstGrant;
+      expect(first.ctl).toBe(true);
+      await expectHostPicture(page);
+      const joinGrant = nextGrant(other, REVOKED_ID);
+      await other.goto(`/swoop/${SITE_ID}/${REVOKED_ID}`);
+      expect((await joinGrant).sid).toBe(first.sid);
+      await expectHostPicture(other);
+
+      const rejoined = nextGrant(page, REVOKED_ID);
+      // the removed member comes back on the ladder like everyone else, and the site turns them away
+      const refused = other.waitForResponse(
+        (r) => r.url().endsWith(`/machines/${REVOKED_ID}/swoop/sessions`) && r.request().method() === 'POST',
+        { timeout: 45_000 },
+      );
+      const removed = await apiCall(page, 'DELETE', `/api/sites/${SITE_ID}/members/${removable.uid}`, undefined, {
+        'Idempotency-Key': `swoop-revoke-${SUFFIX}`,
+      });
+      expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+
+      // no worker here, so the kill reaches the machine as its queued command
+      expect((await refused).status()).toBe(404);
+      await expect(other.getByText('your access to this machine was removed.')).toBeVisible({ timeout: 20_000 });
+      const record = await readSession(page, first.sid, REVOKED_ID);
+      expect([record.state, record.endReason, record.endedFor]).toEqual(['ended', 'revoked', removable.uid]);
+
+      // the operator was not the one removed: a new session, control and all, with no dialog and no final notice
+      const next = await rejoined;
+      expect(next.sid).not.toBe(first.sid);
+      expect(next.ctl).toBe(true);
+      await expectHostPicture(page);
+      await expect(page.getByText('this session was ended from elsewhere.')).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(other.getByText('your access to this machine was removed.')).toBeVisible();
+    } finally {
+      await otherContext.close();
+      await host.stop();
+    }
+  });
+});
+
+test.describe('through a host, an admin demoted mid-session', () => {
+  // taking someone's control ends the session for everyone in it, as a removal
+  // does, and everyone comes back: the api decides what each may do now.
+  test('ends it for everyone: the demoted one comes back watching with no notice, and the other keeps control', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: DEMOTED_ID });
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await host.addViewer(other);
+      await signIn(page, demotingOperator, demotingOperatorSecret, { fresh: true });
+      await signIn(other, demotable, demotableSecret, { fresh: true });
+
+      const firstGrant = nextGrant(page, DEMOTED_ID);
+      await page.goto(`/swoop/${SITE_ID}/${DEMOTED_ID}`);
+      const first = await firstGrant;
+      expect(first.ctl).toBe(true);
+      await expectHostPicture(page);
+      const joinGrant = nextGrant(other, DEMOTED_ID);
+      await other.goto(`/swoop/${SITE_ID}/${DEMOTED_ID}`);
+      const joined = await joinGrant;
+      expect([joined.sid, joined.ctl]).toEqual([first.sid, true]);
+      await expectHostPicture(other);
+
+      const operatorBack = nextGrant(page, DEMOTED_ID);
+      const demotedBack = nextGrant(other, DEMOTED_ID);
+      const demoted = await apiCall(
+        page,
+        'PATCH',
+        `/api/sites/${SITE_ID}/members/${demotable.uid}`,
+        { role: 'member' },
+        { 'Idempotency-Key': `swoop-demote-${SUFFIX}` },
+      );
+      expect(demoted.status, JSON.stringify(demoted.body)).toBe(200);
+
+      // both come back into one new session: the operator in control, the demoted one watching
+      const [back, watching] = await Promise.all([operatorBack, demotedBack]);
+      expect(back.sid).not.toBe(first.sid);
+      expect(watching.sid).toBe(back.sid);
+      expect([back.ctl, watching.ctl]).toEqual([true, false]);
+      await expectHostPicture(other);
+      await expect(other.getByText(/view only/i)).toBeVisible();
+      await expect(other.getByText('your access to this machine was removed.')).toHaveCount(0);
+      await expect(other.getByRole('dialog')).toHaveCount(0);
+      await expectHostPicture(page);
+      await expect(page.getByText('this session was ended from elsewhere.')).toHaveCount(0);
+      const record = await readSession(page, first.sid, DEMOTED_ID);
+      expect([record.state, record.endReason, record.endedFor]).toEqual(['ended', 'revoked', demotable.uid]);
+    } finally {
+      await otherContext.close();
       await host.stop();
     }
   });
@@ -997,7 +1258,11 @@ test.describe('through a host, on a phone', () => {
 });
 
 test.describe('two viewers on one machine, over the api', () => {
-  test('each holds a lease of its own, and one kill ends every session', async ({ page, browser }) => {
+
+  test('the second joins the first one’s session, each holds a lease of its own, and one kill ends it', async ({
+    page,
+    browser,
+  }) => {
     const operatorPage = page;
     const watcherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const watcherPage = await watcherContext.newPage();
@@ -1025,6 +1290,24 @@ test.describe('two viewers on one machine, over the api', () => {
     // it is what lets the same tab reconnect after hours without a new code.
     expect(control.continuity).toMatch(new RegExp(`^${control.sid}\\.[A-Za-z0-9_-]{43}$`));
 
+    // one streamer serves every viewer of a machine: the watcher joins the
+    // operator's session, with a viewer of its own, and the operator stays in it.
+    const watchRes = await apiCall(watcherPage, 'POST', SESSIONS, {
+      control: false,
+      fp: fingerprint(2),
+      clientCaps: CLIENT_CAPS,
+    });
+    expect(watchRes.status, JSON.stringify(watchRes.body)).toBe(201);
+    const watch = watchRes.body.data as { sid: string; viewerId: string; ctl: boolean; joined: boolean };
+    expect([watch.sid, watch.ctl, watch.joined]).toEqual([control.sid, false, true]);
+    expect(watch.viewerId).not.toBe(control.viewerId);
+    const shared = await readSession(operatorPage, control.sid);
+    expect(shared.state).not.toBe('ended');
+    expect((shared.viewers as Array<{ uid: string; ctl: boolean }>).map((v) => [v.uid, v.ctl])).toEqual([
+      [operator.uid, true],
+      [watcher.uid, false],
+    ]);
+
     // an offline machine is refused once the gate and the ceremony have passed.
     const offline = await apiCall(operatorPage, 'POST', `/api/sites/${SITE_ID}/machines/${OFFLINE_ID}/swoop/sessions`, {
       control: true,
@@ -1035,16 +1318,6 @@ test.describe('two viewers on one machine, over the api', () => {
       mfaProof: { code: await freshTotp(operatorPage, operatorSecret, spent) },
     });
     expect(offline.status, JSON.stringify(offline.body)).toBe(409);
-
-    const watchRes = await apiCall(watcherPage, 'POST', SESSIONS, {
-      control: false,
-      fp: fingerprint(2),
-      clientCaps: CLIENT_CAPS,
-    });
-    expect(watchRes.status, JSON.stringify(watchRes.body)).toBe(201);
-    const watch = watchRes.body.data as { sid: string; viewerId: string; ctl: boolean };
-    expect(watch.ctl).toBe(false);
-    expect(watch.sid).not.toBe(control.sid);
 
     // a lease renews for its own viewer, bound to the fingerprint it was
     // minted with, and for nobody else's session.
@@ -1076,21 +1349,20 @@ test.describe('two viewers on one machine, over the api', () => {
     });
     expect(notMine.status).toBeGreaterThanOrEqual(400);
 
-    // a watcher cannot kill; the operator's kill ends both sessions.
+    // a watcher cannot kill; the operator's kill ends the session for both.
     const watcherKill = await apiCall(watcherPage, 'POST', KILL, {});
     expect(watcherKill.status).toBe(403);
     const kill = await apiCall(operatorPage, 'POST', KILL, {});
     expect(kill.status, JSON.stringify(kill.body)).toBe(200);
 
-    for (const sid of [control.sid, watch.sid]) {
-      const record = await readSession(operatorPage, sid);
-      expect(record.state).toBe('ended');
+    expect((await readSession(operatorPage, control.sid)).state).toBe('ended');
+    for (const [viewerPage, viewerId, fp] of [
+      [operatorPage, control.viewerId, fingerprint(1)],
+      [watcherPage, watch.viewerId, fingerprint(2)],
+    ] as const) {
+      const afterKill = await apiCall(viewerPage, 'POST', `${SESSIONS}/${control.sid}/lease`, { viewerId, fp });
+      expect(afterKill.status).toBeGreaterThanOrEqual(400);
     }
-    const afterKill = await apiCall(operatorPage, 'POST', `${SESSIONS}/${control.sid}/lease`, {
-      viewerId: control.viewerId,
-      fp: fingerprint(1),
-    });
-    expect(afterKill.status).toBeGreaterThanOrEqual(400);
 
     await watcherContext.close();
   });

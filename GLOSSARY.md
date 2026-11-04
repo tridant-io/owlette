@@ -176,7 +176,7 @@ The older screenshot slideshow that swoop replaces on machines that can stream. 
 _Avoid_: using it as a synonym for swoop
 
 **Session**:
-One viewer's swoop connection to one machine, from a browser tab or an owlette swoop window, with its own ID and audit trail. It lasts as long as that tab or window and ends on end, kill or a refused lease.
+One streamer's time on one machine, shared by everyone viewing that machine: a browser tab or owlette swoop window that opens swoop on a machine already in a session joins it, with a viewer ID, lease and audit rows of its own, rather than starting another. It lasts while anyone is in it. A viewer's end, closed tab or refused lease takes only that viewer out; a kill ends it for everyone, and so does removing someone in it from the site or taking their control, after which everyone in it reconnects on their own as what they may now do.
 _Avoid_: stream, connection, call
 
 **Viewer**:
@@ -193,7 +193,7 @@ _Avoid_: token, timeout
 
 **Kill**:
 A site owner's or admin's stop of every swoop session on a machine. It also closes every step-up window on that machine. The desktop app's tray item "kill all swoop sessions on this machine" (Windows) is a local stop any user at the machine can click: it ends the sessions through the streamer but closes no step-up window.
-_Avoid_: end (which only leaves your own session), disconnect
+_Avoid_: end (which only takes you out of the session), disconnect
 
 **Doorbell**:
 The idle WebSocket each agent holds to the swoop signalling worker, through which a new session rings the machine to start its streamer.

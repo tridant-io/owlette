@@ -9,11 +9,12 @@
  */
 
 import React from 'react';
-import { act, render, screen, cleanup } from '@testing-library/react';
+import { act, render, screen, cleanup, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import type { SwoopSession } from '@/lib/swoop/features';
+import { attach as attachPresence } from '@/lib/swoop/presence';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 
@@ -316,6 +317,130 @@ describe('SwoopToolbar', () => {
       </TooltipProvider>,
     );
     expect(screen.getByTestId('session-badge')).toHaveTextContent('connection lost');
+  });
+});
+
+/**
+ * who is in the session sits beside the machine's name: a pill per viewer, as
+ * the session route names them. the route sends an email only to a site owner
+ * or admin (its own tests hold that line); the bar shows what it was sent.
+ */
+describe('SwoopToolbar with others in the session', () => {
+  const fetchMock = jest.fn();
+  beforeEach(() => {
+    (globalThis as unknown as { fetch: unknown }).fetch = fetchMock;
+  });
+  afterEach(() => {
+    delete (globalThis as unknown as { fetch?: unknown }).fetch;
+    fetchMock.mockReset();
+  });
+
+  /**
+   * a live session the streamer has sent a roster on, the caller's own line in
+   * control as an admin's is or watching as a member's is, with the names the
+   * session route answers that caller.
+   */
+  function renderShared({ admin, alone = false }: { admin: boolean; alone?: boolean }) {
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          viewers: [
+            { viewerId: 'viewer-ada', uid: 'uid_ada', displayName: 'Ada Lovelace', ...(admin ? { email: 'ada@example.test' } : {}) },
+            { viewerId: 'viewer-me', uid: 'uid_me', displayName: 'Bob Watcher', ...(admin ? { email: 'bob@example.test' } : {}) },
+          ],
+        },
+      }),
+    });
+    const handlers = new Map<string, (data: unknown) => void>();
+    const session = {
+      siteId: 'site-a',
+      machineId: 'TEC-B4A',
+      sid: 'sid-1',
+      viewerId: 'viewer-me',
+      ctl: admin,
+      stage: document.createElement('div'),
+      onChannelMessage: (label: string, incoming: (data: unknown) => void) => {
+        handlers.set(label, incoming);
+        return () => handlers.delete(label);
+      },
+    } as unknown as SwoopSession;
+    attachPresence(session);
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SwoopToolbar
+          session={session}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    const me = { id: 'viewer-me', name: 'uid_me', ctl: admin };
+    const ada = { id: 'viewer-ada', name: 'uid_ada', ctl: !admin };
+    act(() =>
+      handlers.get('swoop-control')?.(JSON.stringify({ t: 'roster', viewers: alone ? [me] : [ada, me], tsUs: 1 })),
+    );
+  }
+
+  it('shows a pill per viewer right after the machine name, this tab marked', async () => {
+    renderShared({ admin: true });
+
+    const ada = await screen.findByRole('button', { name: /^Ada L\./ });
+    expect(screen.getByRole('button', { name: /^Bob W\. \(you\)/ })).toBeInTheDocument();
+    const pills = screen.getByRole('list', { name: 'in this session' });
+    expect(pills).toContainElement(ada);
+    expect(screen.getByText('TEC-B4A').nextElementSibling).toBe(pills);
+    // a watcher's pill says so, to a screen reader as its eye does on screen
+    expect(ada).toHaveAccessibleName('Ada L., view only');
+    // the one people button is a compact bar's
+    expect(screen.queryByRole('button', { name: /in this session$/ })).toBeNull();
+  });
+
+  it('shows your own pill while you are alone in the session', async () => {
+    renderShared({ admin: true, alone: true });
+
+    const pills = await screen.findByRole('list', { name: 'in this session' });
+    await waitFor(() => expect(pills).toHaveTextContent(/^Bob W\. \(you\)$/));
+  });
+
+  it('on a phone folds the pills into one button with the count, whose list names each in full', async () => {
+    narrowWindow();
+    renderShared({ admin: false });
+
+    const people = await screen.findByRole('button', { name: '2 in this session' });
+    expect(people).toHaveTextContent('2');
+    expect(screen.queryByRole('list', { name: 'in this session' })).toBeNull();
+
+    await userEvent.click(people);
+    const list = await screen.findByRole('list', { name: 'in this session' });
+    expect(screen.getByRole('dialog')).toContainElement(list);
+    await screen.findByText('Ada Lovelace');
+    expect(list).toHaveTextContent('Bob Watcher (you)');
+    // a watcher's eye says so to a screen reader
+    expect(within(list).getByRole('img', { name: 'view only' })).toBeInTheDocument();
+  });
+
+  it('shows a member the full name on hover, and nothing else', async () => {
+    renderShared({ admin: false });
+
+    await userEvent.hover(await screen.findByRole('button', { name: /^Ada L\./ }));
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent(/^Ada Lovelace$/);
+  });
+
+  it('shows an admin the email beside the full name on hover', async () => {
+    renderShared({ admin: true });
+
+    await userEvent.hover(await screen.findByRole('button', { name: /^Ada L\./ }));
+    const tip = await screen.findByRole('tooltip');
+    expect(tip).toHaveTextContent('Ada Lovelace');
+    expect(tip).toHaveTextContent('ada@example.test');
   });
 });
 

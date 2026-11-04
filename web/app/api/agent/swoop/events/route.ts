@@ -30,7 +30,7 @@ import { MACHINE_FAILURE_REASONS } from '@/lib/swoop/machineFailure';
 import {
   endSwoopSession,
   getSwoopSession,
-  removeSwoopViewer,
+  removeSwoopViewers,
   setSwoopSessionState,
   type SwoopSessionEndReason,
 } from '@/lib/swoop/sessionStore.server';
@@ -217,8 +217,9 @@ async function mirrorSessionRecord(
       await setSwoopSessionState(siteId, machineId, event.sid, 'live');
       return;
     case 'viewer_left':
+      // the host's word on one viewer, which may come back: its continuity stays.
       if (event.viewerId) {
-        await removeSwoopViewer({ siteId, machineId, sid: event.sid, viewerId: event.viewerId });
+        await removeSwoopViewers({ siteId, machineId, sid: event.sid, viewerIds: [event.viewerId] });
       }
       return;
     case 'session_ended':

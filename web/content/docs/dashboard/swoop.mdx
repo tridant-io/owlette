@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina"]
+keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -105,8 +105,8 @@ the toolbar carries the session state, an **end** button, and:
 - **quality**: see [quality](#quality) below
 - **audio**: off unless you ask for it
 - **special keys**: the combinations your browser, or your own computer, will not let through
-- **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name runs vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser, or in owlette swoop
-- **presence**: who else is in the session
+- **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name and the people in the session run vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser, or in owlette swoop
+- **who is in the session**: a pill for each viewer sits beside the machine's name, with their first name and last initial: yours says (you), and an eye marks anyone who only watches. a second tab or window of your own is a viewer of its own, so it gets a pill too. hover one for the full name; a site owner or admin, or a superadmin, also sees the email. the pointer of anyone else in control is drawn on the picture with their name, which is what says who is there in fullscreen, where the bar is hidden
 
 outside fullscreen, every key you press while the picture has focus goes to the machine, `tab` included. press `esc` twice to hand the keyboard back to the page: focus moves to the toolbar.
 
@@ -120,7 +120,7 @@ the machine's pointer is drawn at the size it is on the machine, which is the si
 
 ### on a phone
 
-on a phone or a tablet, or in any window narrower than a tablet, the bar keeps one row: the back arrow, the machine's name, a warning as an icon you can tap to read, and one button with three dots that opens every other control, each with its name under it. an iPhone has no fullscreen for a page, so it is left out there. on a touch screen **latency stats** is a glance: it opens clear of the menu and closes at your next tap elsewhere. the machine's pointer is always drawn, since a touch screen has no pointer of its own, and your finger drives it. as with a mouse, nothing you do on the dark bars around the picture reaches the machine:
+on a phone or a tablet, or in any window narrower than a tablet, the bar keeps one row: the back arrow, the machine's name, a button with a count of the people in the session, which lists them with their full names, a warning as an icon you can tap to read, and one button with three dots that opens every other control, each with its name under it. an iPhone has no fullscreen for a page, so it is left out there. on a touch screen **latency stats** is a glance: it opens clear of the menu and closes at your next tap elsewhere. the machine's pointer is always drawn, since a touch screen has no pointer of its own, and your finger drives it. as with a mouse, nothing you do on the dark bars around the picture reaches the machine:
 
 | gesture | does |
 |---|---|
@@ -231,10 +231,12 @@ the app keeps its own sign-in, apart from your browser's, and you rarely meet it
 
 ## how long a session lasts
 
-- a session has **no time limit**: it lasts as long as the tab or owlette swoop window that started it
+- a session has **no time limit**: it lasts as long as anyone is in it
+- **several people can be in a machine at once**, and so can a second tab or window of your own: opening swoop on a machine already in a session joins that session, with a lease of your own, and disconnects nobody. a machine serves four viewers at once: a fifth person is told so, and let in when someone leaves
 - a dropped network does not end it. after a short drop the same session picks up where it was; after a longer one, a sleeping laptop or a machine that stops answering, the viewer starts a new session on its own, on a growing delay (up to 30 seconds between attempts), and says so while it waits. a machine that leaves every attempt unanswered for ten minutes, with no picture in between, stops the retries; **reconnect** starts them again
 - an update or restart of the machine's agent sends the viewer to reconnect too, once the agent is back. agents older than 4.0.4 end the session instead, and so does the update from one of them
-- what does end it: the **end** button, closing the tab or the window, an admin's kill, another tab or device opening swoop on the same machine, or the lease check below refusing
+- a machine removed from the site, or one that leaves it from its own tray, ends the session: the viewer says the machine has left the site, with the way back, rather than waiting for it
+- who ends what: the **end** button, or closing the tab or the window, takes only you out, and the session ends when the last one in it leaves. an admin's kill ends it for everyone. so does removing someone in it from the site, or taking control from someone who holds it: the machine has one streamer for the whole session and cannot drop one viewer, so the session ends at once. everyone in it then reconnects on their own, in a few seconds and without the second factor again, as what they may now do: the person removed is refused and told their access was removed, and someone whose control was taken comes back watching. the lease check below refusing takes out only the viewer it refuses
 - a viewer holds a **5-minute lease**, renewed silently while the tab or window is open. the lease is the point at which authorisation is re-checked. a removed member, a revoked capability, a machine added to `excludedMachineIds`, or a site that turns swoop off all take effect within one lease rather than at the next sign-in
 
 ### when the picture freezes
@@ -263,7 +265,7 @@ swoop connects the browser to the machine directly. on the same network that alw
 
 ## ending and killing
 
-ending your own session is the **end** button in the toolbar. anyone who may be in the room may leave it.
+leaving a session is the **end** button in the toolbar. anyone who may be in the room may leave it, and it takes out only them: anyone else in the session stays.
 
 a site owner or admin can also stop **whatever anyone is running** on a machine, from **admin** → **swoop** (below) or with `POST …/swoop/kill`. a kill is deliberately not gated on the site's swoop settings: stopping a stream has to work after the feature has been switched off, which is exactly when an operator wants it most. a kill also closes every second-factor window on that machine, so anyone it cut off, a tab that was reconnecting at the time included, confirms again before taking control.
 
@@ -273,7 +275,7 @@ on a Windows machine, the owlette app's tray menu has **kill all swoop sessions 
 
 ## what is recorded
 
-every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. a session whose audit row cannot be written is not started (`audit_unavailable`). a step-up that your sign-in's second factor stood in for gets a row of its own (`step_up_opened`, reason `fresh_sign_in`), written before the window opens. every control request also records the network it came from and whether you had verified it (`step_up_network_check`).
+every session start, every refusal and every end is written to the session's own audit trail, with the actor, the machine and whether control was held. so is each person joining a session already running (`joined`) and leaving one that goes on (`left`). a session whose audit row cannot be written is not started (`audit_unavailable`). a step-up that your sign-in's second factor stood in for gets a row of its own (`step_up_opened`, reason `fresh_sign_in`), written before the window opens. every control request also records the network it came from and whether you had verified it (`step_up_network_check`).
 
 ---
 

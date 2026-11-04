@@ -65,6 +65,14 @@ export const SWOOP_LEASE_SECONDS = 300;
 export const SWOOP_LEASE_GRACE_SECONDS = 30;
 
 /**
+ * Concurrent viewers of one machine. A bundle field rather than a site setting
+ * because the streamer is what enforces it; it becomes a setting the day an
+ * operator asks for a different number. The session route reads it too, to
+ * turn a person away with a reason rather than leave them on "connecting".
+ */
+export const SWOOP_MAX_VIEWERS = 4;
+
+/**
  * How long one live ceremony authorises control for, measured from the
  * ceremony. A week (owner, 2026-10-10, as the balance of security and
  * convenience), up from a working day, itself up from 10 minutes that made

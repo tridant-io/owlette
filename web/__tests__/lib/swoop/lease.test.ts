@@ -19,11 +19,15 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 const listUnendedSwoopSessionsForUser = jest.fn();
-const endSwoopSession = jest.fn(async () => undefined);
+const endSwoopSession = jest.fn(async (..._a: unknown[]) => undefined);
 jest.mock('@/lib/swoop/sessionStore.server', () => ({
   listUnendedSwoopSessionsForUser: (...a: unknown[]) => listUnendedSwoopSessionsForUser(...a),
   endSwoopSession: (...a: unknown[]) => endSwoopSession(...a),
 }));
+
+/** `sid` ended for everyone in it, naming the person it was ended for. */
+const endedFor = (sid: string, uid: string) =>
+  expect(endSwoopSession).toHaveBeenCalledWith(expect.objectContaining({ sid, endReason: 'revoked', endedFor: uid }));
 
 const killSession = jest.fn(async () => ({ ok: true }));
 jest.mock('@/lib/swoop/signal.server', () => ({
@@ -254,9 +258,7 @@ describe('revokeSwoopSessionsForUser', () => {
     const result = await revoke();
 
     expect(result.revokedSids).toEqual(['sid-control', 'sid-watch']);
-    expect(endSwoopSession).toHaveBeenCalledWith(
-      expect.objectContaining({ sid: 'sid-control', endReason: 'revoked' }),
-    );
+    endedFor('sid-control', UID);
     expect(killSession).toHaveBeenCalledWith({
       siteId: SITE,
       machineId: 'machine-1',
@@ -298,6 +300,7 @@ describe('revokeSwoopSessionsForUser', () => {
     expect(result.revokedSids).toEqual(['sid-control']);
     // the record is ended regardless: the lease route refuses the next renewal.
     expect(endSwoopSession).toHaveBeenCalledTimes(1);
+    endedFor('sid-control', UID);
     // and the polled command, the last resort, goes in the broadcast's place.
     expect(requestSwoopSession).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'swoop_kill', sid: 'sid-control' }),
@@ -308,5 +311,65 @@ describe('revokeSwoopSessionsForUser', () => {
     listUnendedSwoopSessionsForUser.mockRejectedValue(new Error('index missing'));
 
     await expect(revoke()).resolves.toEqual({ revokedSids: [] });
+  });
+
+  /**
+   * several viewers share a session, and the kill ends a whole sid: there is no
+   * way to drop one viewer (PROTOCOL.md §10), and a seat taken out of the record
+   * left a removed member watching, in control if they held it, for up to a
+   * lease. so the session ends for everyone in it, and the record names whom it
+   * was ended for, so everyone else starts the next one on their own.
+   */
+  describe('in a session someone else is still in', () => {
+    const otherSeat = { viewerId: 'v-other', uid: 'user-other', ctl: true, joinedAt: NOW, leaseExpiresAt: NOW };
+    const shared = { ...controlSession, viewers: [...controlSession.viewers, otherSeat] };
+
+    it('ends it at once for everyone, stops the streamer and names whom it was ended for', async () => {
+      listUnendedSwoopSessionsForUser.mockResolvedValue([shared]);
+
+      const result = await revoke();
+
+      expect(result.revokedSids).toEqual(['sid-control']);
+      endedFor('sid-control', UID);
+      expect(killSession).toHaveBeenCalledWith({ siteId: SITE, machineId: 'machine-1', sid: 'sid-control' });
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-control', endReason: 'member_removed' }),
+      );
+    });
+
+    it('a demotion ends one the user holds control in, though they watch in it too', async () => {
+      const watchSeat = { viewerId: 'v1-watch', uid: UID, ctl: false, joinedAt: NOW, leaseExpiresAt: NOW };
+      listUnendedSwoopSessionsForUser.mockResolvedValue([{ ...shared, viewers: [...shared.viewers, watchSeat] }]);
+
+      await revoke({ reason: 'role_changed', controlOnly: true });
+
+      endedFor('sid-control', UID);
+      expect(killSession).toHaveBeenCalledTimes(1);
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-control', endReason: 'role_changed' }),
+      );
+    });
+
+    it('a demotion leaves one the user only watches in alone', async () => {
+      const watchSeat = { viewerId: 'v1-watch', uid: UID, ctl: false, joinedAt: NOW, leaseExpiresAt: NOW };
+      listUnendedSwoopSessionsForUser.mockResolvedValue([{ ...controlSession, viewers: [watchSeat, otherSeat] }]);
+
+      const result = await revoke({ reason: 'role_changed', controlOnly: true });
+
+      expect(result.revokedSids).toEqual([]);
+      expect(endSwoopSession).not.toHaveBeenCalled();
+      expect(killSession).not.toHaveBeenCalled();
+    });
+
+    // a session they started and left goes on: they are not in it to be dropped.
+    it('leaves one the user started but is no longer in alone', async () => {
+      listUnendedSwoopSessionsForUser.mockResolvedValue([{ ...controlSession, viewers: [otherSeat] }]);
+
+      const result = await revoke();
+
+      expect(result.revokedSids).toEqual([]);
+      expect(endSwoopSession).not.toHaveBeenCalled();
+      expect(killSession).not.toHaveBeenCalled();
+    });
   });
 });

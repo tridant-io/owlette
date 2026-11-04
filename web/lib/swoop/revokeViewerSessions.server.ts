@@ -19,11 +19,7 @@ import type { Actor } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
-import {
-  endSwoopSession,
-  listUnendedSwoopSessionsForUser,
-  type SwoopSession,
-} from '@/lib/swoop/sessionStore.server';
+import { endSwoopSession, listUnendedSwoopSessionsForUser } from '@/lib/swoop/sessionStore.server';
 import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 
 export interface RevokeSwoopSessionsArgs {
@@ -49,18 +45,20 @@ export interface RevokeSwoopSessionsResult {
   revokedSids: string[];
 }
 
-function holdsControl(session: SwoopSession, uid: string): boolean {
-  return session.viewers.some((viewer) => viewer.uid === uid && viewer.ctl);
-}
-
 /**
- * Ends every unended session this user is in, then stops the streamer the way
- * the session DELETE does: the Worker broadcast (authoritative, <= 2 s), and
- * the polled `swoop_kill` command only when that did not land.
+ * Ends every unended session this user holds a seat in, then stops the
+ * streamer the way the session DELETE does: the Worker broadcast
+ * (authoritative, <= 2 s), and the polled `swoop_kill` command only when that
+ * did not land.
  *
- * The kill is sid-scoped, so a session with other viewers in it ends for them
- * too. That is the protocol's only per-session stop — §10 has no "evict one
- * viewer" — and ending a stream is never the dangerous direction.
+ * Several viewers share a session, and the kill is sid-scoped — the protocol's
+ * only per-session stop, §10 has no "evict one viewer" — so it ends for
+ * everyone in it. Taking out the user's seat alone would leave them in it, in
+ * control if they held it, until the host drops them a lease later. So the
+ * record names whom it was ended for (`endedFor`), and everyone in it starts
+ * the next session on their own, where the api decides what each may do now:
+ * the person removed is refused, the person demoted watches. Step-up windows
+ * are untouched, which only the kill route closes.
  */
 export async function revokeSwoopSessionsForUser(
   args: RevokeSwoopSessionsArgs,
@@ -71,17 +69,20 @@ export async function revokeSwoopSessionsForUser(
       siteId: args.siteId,
       uid: args.uid,
     });
-    const targets = args.controlOnly
-      ? sessions.filter((session) => holdsControl(session, args.uid))
-      : sessions;
 
-    for (const session of targets) {
+    for (const session of sessions) {
       const { machineId, sid } = session;
+      // a session they started and left goes on without them, and a demotion
+      // costs control and nothing else: a watch they are still entitled to survives it.
+      const seated = session.viewers.some((viewer) => viewer.uid === args.uid && (!args.controlOnly || viewer.ctl));
+      if (!seated) continue;
+
       await endSwoopSession({
         siteId: args.siteId,
         machineId,
         sid,
         endReason: 'revoked',
+        endedFor: args.uid,
       });
       revokedSids.push(sid);
 
