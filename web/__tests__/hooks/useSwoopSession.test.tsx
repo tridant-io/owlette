@@ -140,7 +140,8 @@ interface Reply {
   body?: unknown;
 }
 
-let mint: Reply;
+/** the create's answer, or one per ask: control first, then the watch it steps down to. */
+let mint: Reply | ((ask: { control?: unknown }) => Reply);
 let lease: Reply;
 /** the session record, read when a retry is due. */
 let record: Reply;
@@ -153,7 +154,9 @@ const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
         ? lease
         : url === `${SESSIONS}/${GRANT.sid}`
           ? record
-          : mint;
+          : typeof mint === 'function'
+            ? mint(JSON.parse(String(init?.body ?? '{}')) as { control?: unknown })
+            : mint;
   return { ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response;
 });
 
@@ -365,23 +368,80 @@ describe('useSwoopSession — how a session ends', () => {
     expect(deletes()).toHaveLength(0);
   });
 
-  it.each([
-    ['the record names this user', ended('revoked', 'user-me')],
-    // a removed member may no longer read the record at all
-    ['the record is no longer this user’s to read', { status: 404, body: { code: 'not_found' } }],
-    ['the record is refused to this user', { status: 403, body: { code: 'members_may_not_watch' } }],
-  ])('a kill where %s is final, and says their access went', async (_what, reply) => {
-    await open();
-    record = reply;
+  /**
+   * the one a revocation was for comes back on the same ladder, and the api
+   * decides what they may do now: a removed member's ask is refused, which is
+   * what says their access went; someone whose control was taken watches.
+   */
+  describe('a revocation of this user', () => {
+    /** the asks this page made, control or watch, in order. */
+    const asks = () => mints().map(([, init]) => (JSON.parse(String(init?.body)) as { control?: unknown }).control);
+    const CAPABILITY_REFUSAL: Reply = { status: 403, body: { code: 'forbidden', detail: 'capability not granted' } };
 
-    act(() => wired.peer!.onClosed!('kill'));
-    await flush();
-    expect(swoop.state).toBe('error');
-    expect(swoop.refusal).toBe('revoked');
-    expect(swoop.error).toBe('your access to this machine was removed.');
-    expect(swoop.retryIn).toBeNull();
-    await advance(60_000);
-    expect(mints()).toHaveLength(1);
+    it.each([
+      ['the record names this user', ended('revoked', 'user-me')],
+      // a removed member may no longer read the record at all
+      ['the record is no longer this user’s to read', { status: 404, body: { code: 'not_found' } }],
+    ])('rejoins on the ladder like everyone else, where %s, and the api refusing the ask says their access went', async (_what, reply) => {
+      await open();
+      record = reply;
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 404, body: { code: 'not_found', detail: 'site not found or no access' } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('revoked');
+      expect(swoop.error).toBe('your access to this machine was removed.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('comes back watching after a demotion, with no notice', async () => {
+      await open();
+      record = ended('revoked', 'user-me');
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+
+      mint = (ask) =>
+        ask.control === true ? CAPABILITY_REFUSAL : { status: 201, body: { data: { ...GRANT, sid: 'sid-2', ctl: false } } };
+      await advance(30_000);
+      // the control ask is refused for the capability they lost, and the watch ask follows at once
+      expect(asks()).toEqual([true, true, false]);
+      expect(swoop.state).toBe('connecting');
+      expect(swoop.error).toBeNull();
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.retryIn).toBeNull();
+    });
+
+    it('is refused at the watch ask where members may not watch, which says their access went', async () => {
+      await open();
+      record = ended('revoked', 'user-me');
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+
+      mint = (ask) =>
+        ask.control === true
+          ? CAPABILITY_REFUSAL
+          : { status: 403, body: { code: 'members_may_not_watch', detail: 'this site does not let members watch.' } };
+      await advance(30_000);
+      expect(asks()).toEqual([true, true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toBe('your access to this machine was removed.');
+    });
+
+    it('is the only refusal that says so: one with no revocation behind it says what the api said', async () => {
+      mint = { status: 404, body: { code: 'not_found', detail: 'site not found or no access' } };
+      await open();
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toBe('site not found or no access');
+    });
   });
 
   describe('while a kill’s record is read', () => {
@@ -903,6 +963,16 @@ describe('useSwoopSession — control across a reload of the tab', () => {
     await flush();
 
     await open();
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('this user’s own revocation forgets it', async () => {
+    await open();
+    record = ended('revoked', 'user-me');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
     expect(mintBody(1).continuity).toBeUndefined();
   });
 

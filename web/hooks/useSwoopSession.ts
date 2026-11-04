@@ -104,7 +104,7 @@ const HOST_SILENT_LIMIT_MS = 10 * 60 * 1000;
 const HOST_SILENT_FINAL =
   'this machine has not answered for ten minutes, so swoop stopped trying. check that it is on the network; on a Mac, the owlette app must be running and macOS may be asking someone to allow screen recording.';
 
-/** what a member removed from the site, or one whose control was taken, is told when the kill reaches them. */
+/** what someone a revocation was for is told when the api refuses their way back in. */
 const ACCESS_REMOVED = 'your access to this machine was removed.';
 
 /** a machine removed from the site, or one that left it from its own tray: there is nothing to reconnect to. */
@@ -219,9 +219,10 @@ interface RecordedEnd {
 }
 
 /**
- * what the api answers a member when the record read is refused because their
- * own access went: removed from the site (the site wrapper's 404), an account
- * deleted, or a demotion where plain members may not watch.
+ * what the api answers someone whose own access went, to a record read or to
+ * the ask that would bring them back: removed from the site (the site
+ * wrapper's 404), an account deleted, or a demotion where plain members may
+ * not watch.
  */
 const REVOKED_REFUSALS: ReadonlySet<string> = new Set(['not_found', 'user_inactive', 'members_may_not_watch']);
 
@@ -229,8 +230,8 @@ const REVOKED_REFUSALS: ReadonlySet<string> = new Set(['not_found', 'user_inacti
  * whom a kill was for, read off its record. one streamer serves everyone on the
  * machine and cannot drop one viewer, so a revocation ends the session for all
  * of them, and the record names whom it was for. a record this user may no
- * longer read is their own access gone with the kill. a record that names
- * nobody is the decision a kill always was.
+ * longer read is a revocation of them. a record that names nobody is the
+ * decision a kill always was.
  */
 function killedFor(ended: RecordedEnd | 'refused' | null, uid: string | null): 'me' | 'another' | 'nobody' {
   if (ended === 'refused') return 'me';
@@ -364,6 +365,9 @@ export function useSwoopSession(
   // the session the ladder is retrying from: its record says whether the
   // machine ended it for a reason a retry cannot fix.
   const lastSidRef = useRef<string | null>(null);
+  // the last session was ended by a revocation of this user, so the api
+  // refusing the ask that would bring them back is that, said plainly.
+  const revokedRef = useRef(false);
   // bumped whenever the ladder is cleared, so a record read still in flight
   // when the operator reconnects or ends cannot act on a run it no longer owns.
   const retryGenRef = useRef(0);
@@ -787,6 +791,11 @@ export function useSwoopSession(
         if (wantControl && controlRefusedForCapability(res.status, code, detail)) {
           return createSession(fp, false);
         }
+        if (revokedRef.current && code !== null && REVOKED_REFUSALS.has(code)) {
+          if (!disposed) setRefusal('revoked');
+          fail(ACCESS_REMOVED, false);
+          return null;
+        }
         // a machine that left the site from its own tray, or a stale link, is
         // answered for here; one removed from the dashboard says so on its record.
         if (res.status === 404 && code === 'machine_not_found') {
@@ -812,6 +821,7 @@ export function useSwoopSession(
         return null;
       }
       const body = (await res.json()) as { data: SessionGrant };
+      revokedRef.current = false;
       // a fresh token per session; a watch grant carries none and clears it.
       writeContinuity(siteId, machineId, body.data.continuity ?? null);
       return body.data;
@@ -976,27 +986,30 @@ export function useSwoopSession(
         onClosed: (reason) => {
           if (disposed) return;
           if (reason === 'kill') {
-            // an admin's kill, a stop from the machine itself, or a member's
-            // access withdrawn: decisions, which a retry would undo, unless the
-            // record says the revocation was someone else's (`killedFor`):
-            // this viewer then comes back on the ladder, continuity and all.
+            // an admin's kill or a stop from the machine itself: decisions,
+            // which a retry would undo. a revocation is not one of them for
+            // anybody (`killedFor`): it ends the session for everyone in it,
+            // and everyone comes back on the ladder, where the api decides
+            // what each may do now. a removed member is refused, which says
+            // so, and someone whose control was taken comes back watching.
             // another tab or device opening the machine joins this session
             // rather than replacing it. a 4.0.x service stop or update byes
             // its viewers this way too; later agents say `restart`, below.
             settleBye(sid, (ended) => {
               const whom = killedFor(ended, uidRef.current);
-              if (whom === 'another') {
-                finish('host_gone');
+              if (whom === 'nobody') {
+                // a decision: the next session from this tab asks again.
+                writeContinuity(siteId, machineId, null);
+                finish('kill', 'this session was ended from elsewhere.');
                 return;
               }
-              // a decision: the next session from this tab asks again.
-              writeContinuity(siteId, machineId, null);
+              // the one it was for has nothing left to carry over, and the
+              // api's word on the way back is theirs to read as the revocation.
               if (whom === 'me') {
-                setRefusal('revoked');
-                fail(ACCESS_REMOVED, false);
-              } else {
-                finish('kill', 'this session was ended from elsewhere.');
+                revokedRef.current = true;
+                writeContinuity(siteId, machineId, null);
               }
+              finish('host_gone');
             });
             return;
           }

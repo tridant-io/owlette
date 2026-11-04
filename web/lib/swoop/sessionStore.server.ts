@@ -107,7 +107,8 @@ export interface SwoopSession {
   endedAt?: number;
   /**
    * the uid a `revoked` end was for (`revokeViewerSessions.server.ts`): it ends
-   * the session for everyone in it, and everyone else comes back on their own.
+   * the session for everyone in it, and everyone comes back on their own as
+   * what the api now lets them be.
    */
   endedFor?: string;
   /**

@@ -55,9 +55,10 @@ export interface RevokeSwoopSessionsResult {
  * only per-session stop, §10 has no "evict one viewer" — so it ends for
  * everyone in it. Taking out the user's seat alone would leave them in it, in
  * control if they held it, until the host drops them a lease later. So the
- * record names whom it was ended for (`endedFor`), and everyone else in it
- * starts the next session on their own; their step-up windows are untouched,
- * which only the kill route closes.
+ * record names whom it was ended for (`endedFor`), and everyone in it starts
+ * the next session on their own, where the api decides what each may do now:
+ * the person removed is refused, the person demoted watches. Step-up windows
+ * are untouched, which only the kill route closes.
  */
 export async function revokeSwoopSessionsForUser(
   args: RevokeSwoopSessionsArgs,

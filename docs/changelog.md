@@ -18,8 +18,9 @@ and the machine ended theirs. Everyone who opens a machine now joins the session
 running there, with a lease of their own: ending yours or closing the tab takes
 only you out, and an admin's kill still ends it for everyone. Two people
 opening it at the same moment land in the same session too. Removing someone
-from the site ends their session at once, and everyone else in it reconnects on
-their own. Nothing to update on the machine.
+from the site, or taking their control, ends the session at once: everyone in
+it reconnects on their own, the removed member to a notice that their access
+was removed, and the demoted one to watching. Nothing to update on the machine.
 
 ### fixed — swoop says a machine has left the site instead of "machine is restarting"
 
