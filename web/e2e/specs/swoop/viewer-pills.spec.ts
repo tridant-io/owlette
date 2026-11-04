@@ -130,6 +130,10 @@ test('two people on one machine each see both on the bar, and only the admin is 
     expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
     await test.info().attach('admin bar', { body: await page.screenshot(), contentType: 'image/png' });
     await test.info().attach('member bar', { body: await other.screenshot(), contentType: 'image/png' });
+    // a picture, not an assertion: class names cannot show which way the pointer and the eye face in a turned pill
+    const sideIcons = test.info().outputPath('pills-side-icon', 'left-bar.png');
+    await memberBar.screenshot({ path: sideIcons, animations: 'disabled' });
+    await test.info().attach('pills on a left bar', { path: sideIcons, contentType: 'image/png' });
 
     // the admin is shown the member's email beside their name
     await adminBar.getByRole('button', { name: 'Bob W., view only', exact: true }).hover();

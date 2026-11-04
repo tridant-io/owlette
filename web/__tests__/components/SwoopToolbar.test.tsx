@@ -442,6 +442,33 @@ describe('SwoopToolbar with others in the session', () => {
     expect(tip).toHaveTextContent('Ada Lovelace');
     expect(tip).toHaveTextContent('ada@example.test');
   });
+
+  it('keeps the pointer and the eye in a pill upright on a side bar, where the pill turns', async () => {
+    renderShared({ admin: true });
+
+    // this tab controls, so its pill has the pointer; ada watches, so hers has the eye
+    const pointer = (await screen.findByRole('button', { name: 'Bob W. (you)' })).querySelector('svg');
+    const eye = screen.getByRole('button', { name: 'Ada L., view only' }).querySelector('svg');
+    expect(pointer).toHaveClass('lucide-mouse-pointer-2');
+    expect(eye).toHaveClass('lucide-eye');
+    for (const icon of [pointer!, eye!]) {
+      // the pill's text runs down a right bar and, turned half round, up a left one
+      expect(icon.parentElement).toHaveClass('md:bar-side:[writing-mode:vertical-rl]', 'md:bar-left:rotate-180');
+      // writing-mode leaves an svg upright, so a right bar needs nothing and a left bar's half turn is undone
+      expect([...icon.classList].filter((name) => /rotate|writing-mode/.test(name))).toEqual(['md:bar-left:rotate-180']);
+    }
+  });
+
+  it('leaves the icons in the compact list unturned, as the list itself is', async () => {
+    narrowWindow();
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: '2 in this session' }));
+    const icons = (await screen.findByRole('list', { name: 'in this session' })).querySelectorAll('svg');
+    expect(icons).toHaveLength(2);
+    // the list opens in a portal under the same <html>, where a left bar's variant would still turn them
+    for (const icon of icons) expect(icon).not.toHaveClass('md:bar-left:rotate-180');
+  });
 });
 
 /**

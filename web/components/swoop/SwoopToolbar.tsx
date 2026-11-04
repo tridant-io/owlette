@@ -128,6 +128,13 @@ const nothingHeld = (): boolean => false;
 /** vertical text on a side bar, turned so it reads toward the picture. */
 const VERTICAL = 'md:bar-side:[writing-mode:vertical-rl] md:bar-left:rotate-180';
 
+/**
+ * a pill's icon on a side bar: the pill's text is turned to read toward the
+ * picture, but an arrow has a direction of its own. writing-mode leaves an svg
+ * upright, so only a left bar's half turn is undone.
+ */
+const UPRIGHT = 'md:bar-left:rotate-180';
+
 /** a sentence in a wide top bar; on a side or a phone, an icon that says it on hover or tap. */
 function Notice({ text, testId }: { text: string; testId?: string }) {
   return (
@@ -225,7 +232,7 @@ function ViewerPills({ session, compact }: { session: SwoopSession | null; compa
                 // what it shows, and what its eye says on screen
                 aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}`}
               >
-                <ViewerIcon viewer={viewer} />
+                <ViewerIcon viewer={viewer} className={UPRIGHT} />
                 {viewer.short}
                 {viewer.you && ' (you)'}
               </button>
