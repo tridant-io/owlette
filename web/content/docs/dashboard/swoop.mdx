@@ -91,7 +91,7 @@ control is also tied to the networks you verified. every second factor you pass,
 
 in the owlette swoop desktop app, the prompt offers **verify in your browser** in place of a passkey: it opens a page in your browser, where your password manager's passkeys work, and the app takes control once you pass the check there. it is the same window, 7 days for you and that machine. it works only if the app's own sign-in passed a second factor; if that sign-in skipped it because the browser was remembered, the app says so, and an authenticator or backup code in the app does the job.
 
-an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, an owner or admin in that state cannot open the viewer to watch either.
+an account with no passkey and no authenticator app cannot take control, and backup codes alone do not count. signing in with Google or a password is not a second factor. the viewer says so, offers only **cancel**, and links to two-factor setup; add a factor there or under [account settings](/docs/dashboard/account-settings#security) → security, then start the session again. because the viewer asks for control first, anyone in that state whose site role or swoop mode includes control cannot open the viewer to watch either. anyone else who may watch, an admin held to watch included, is never asked for a second factor: the viewer falls back to watching, which needs none.
 
 ---
 
