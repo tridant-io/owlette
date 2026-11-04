@@ -102,11 +102,13 @@ const listHandler: SiteRouteHandler<SiteSwoopSessionsParams> = async (_request, 
 };
 
 /**
- * Site admin/owner. The page this feeds exists to end other people's sessions,
- * so seeing them takes the same capability the kill does.
+ * site owner or admin. seeing everyone in the site's sessions, with their
+ * email, administers the site's swoop; it is not watching or controlling, so
+ * it takes the swoop-settings capability, as the kill does, whatever the
+ * caller's own swoop mode.
  */
 export const GET = authorizedSiteHandler<SiteSwoopSessionsParams>({
-  capability: Capability.MACHINE_REMOTE_CONTROL,
+  capability: Capability.SWOOP_SETTINGS_MANAGE,
   siteIdParam: 'path',
   apiKeyPermission: 'read',
 })(listHandler);
