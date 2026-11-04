@@ -13,11 +13,9 @@ import { Loader2, Plus, Zap } from 'lucide-react';
 import { PageCascade } from '@/components/PageCascade';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
@@ -47,11 +45,7 @@ export default function TalonsPage() {
     sitesLoading,
     currentSiteId,
     currentSite,
-    createSite,
-    updateSite,
-    deleteSite,
     selectSite,
-    pickSite,
   } = useCurrentSite();
   const siteOwner = currentSite?.owner ?? null;
   const talonsGated = usePlanGated('talons', siteOwner);
@@ -65,9 +59,6 @@ export default function TalonsPage() {
     updatePreset: updateTalonPreset,
   } = useTalonPresets(currentSiteId || null);
 
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   // The talon the editor is opened on. `null` = create mode.
@@ -163,42 +154,8 @@ export default function TalonsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={() => {
-          setManageEditSiteId(currentSiteId);
-          setManageDialogOpen(true);
-        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter((s) => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       <AccountSettingsDialog open={accountSettingsOpen} onOpenChange={setAccountSettingsOpen} />
