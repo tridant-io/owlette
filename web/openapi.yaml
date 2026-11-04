@@ -7943,6 +7943,14 @@ paths:
         session key is never returned, and no secret is ever placed in a URL —
         the room URL names a room and nothing else.
 
+        One streamer on a machine serves every viewer, so when the machine is
+        already in a session — someone in it still holds a lease they have
+        renewed, or it started under a minute ago — the caller joins it
+        instead (`joined: true`): the same `sid`, with a viewer id, JWT, key
+        and lease of its own, and nobody already in it is disconnected. A
+        machine serves four viewers at once: a fifth person is refused with
+        `409 session_full` until someone leaves.
+
         `control: true` asks for input control, which additionally requires an
         open step-up window. Send a live second-factor `mfaProof` in the same
         request to open one, or this tab's `continuity` token from its previous
@@ -8036,6 +8044,9 @@ paths:
                         description: |
                           Epoch milliseconds at which the lease must have been
                           renewed — not the JWT expiry.
+                      joined:
+                        type: boolean
+                        description: Whether this viewer joined the session already running on the machine rather than starting one.
                       continuity:
                         type: string
                         description: Control sessions only. Send it as `continuity` on this tab's next control session to skip the step-up ceremony once.
@@ -8076,7 +8087,10 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '409':
-          description: '`code: machine_offline` — the machine document does not read `online: true`.'
+          description: |
+            `code: machine_offline` — the machine document does not read `online: true`.
+            `code: session_full` — four other people are already in the machine's
+            session; a seat comes back when one of them leaves.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8140,6 +8154,7 @@ paths:
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }
+                            renewedAt: { type: integer, description: When this viewer last renewed its lease; absent until it first has. }
                       endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
         '400': { $ref: '#/components/responses/Problem400' }
@@ -8160,12 +8175,17 @@ paths:
     delete:
       operationId: endSwoopSession
       tags: [Machines]
-      summary: end a swoop session
+      summary: leave or end a swoop session
       description: |
-        Ends the session record and stops the streamer through the signalling
+        Takes the caller's own viewer out of the session: the one `viewerId`
+        names, or every one of the caller's when it names none. While anyone
+        else is still in the session it goes on for them (`left: true`), and a
+        `viewerId` that is not the caller's answers `404`. The last one out
+        ends the session record and stops the streamer through the signalling
         broadcast, queueing a polled command only when the broadcast does not
         land. Neither failing withholds the `200`: the record is already ended,
-        and a streamer that survives both is stopped by its own lease.
+        and a streamer that survives both is stopped by its own lease. Ending
+        a session for everyone in it is `POST …/swoop/kill`.
 
         `endReason` is optional and may only be one a caller may claim:
         `closed` (the default), `killed`, or `revoked`. The machine-side
@@ -8189,9 +8209,12 @@ paths:
                   type: string
                   enum: [closed, unmounted, kill, lease_expired, lease_refused, host_gone, signal_lost, peer_failed, start_failed, refused, same_machine, picture_stalled]
                   description: The page's own reason, recorded in the audit trail beside `endReason`.
+                viewerId:
+                  type: string
+                  description: The caller's viewer, as the session was started or joined with.
       responses:
         '200':
-          description: Session ended.
+          description: The caller left the session, or, as the last one out, ended it.
           content:
             application/json:
               schema:
@@ -8202,7 +8225,8 @@ paths:
                     type: object
                     properties:
                       sid: { type: string }
-                      state: { type: string, enum: [ended] }
+                      state: { type: string, enum: [pending, live, ended] }
+                      left: { type: boolean, description: The session goes on for the others in it. }
                       endReason: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }

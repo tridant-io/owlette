@@ -172,9 +172,9 @@ const killHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
 };
 
 /**
- * Site admin/owner. Ending your OWN session sits on the watch bar
- * (`sessions/{sid}` DELETE), but this one ends whatever anyone is running on
- * the machine, so it takes the control capability.
+ * Site admin/owner. Leaving a session sits on the watch bar (`sessions/{sid}`
+ * DELETE), but this one ends whatever anyone is running on the machine, for
+ * everyone in it, so it takes the control capability.
  */
 export const POST = authorizedSiteHandler<SwoopRouteParams>({
   capability: Capability.MACHINE_REMOTE_CONTROL,

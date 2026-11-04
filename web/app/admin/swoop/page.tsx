@@ -273,7 +273,7 @@ export default function SwoopPage() {
             <DialogHeader>
               <DialogTitle>end this session?</DialogTitle>
               <DialogDescription className="text-muted-foreground">
-                the viewer is disconnected at once. this also closes every pending second-factor window on{' '}
+                everyone in it is disconnected at once. this also closes every pending second-factor window on{' '}
                 <span className="font-mono">{sessionToKill?.machineId}</span>.
               </DialogDescription>
             </DialogHeader>

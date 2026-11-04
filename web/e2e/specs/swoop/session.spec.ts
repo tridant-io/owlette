@@ -49,6 +49,7 @@ const KILLED_ID = `mach-killed-${SUFFIX}`;
 const CURSOR_ID = `mach-cursor-${SUFFIX}`;
 const FIT_ID = `mach-fit-${SUFFIX}`;
 const PHONE_ID = `mach-phone-${SUFFIX}`;
+const SHARED_ID = `mach-shared-${SUFFIX}`;
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
 /** a real png, so the drawn pointer is an image the page lays out. */
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -71,6 +72,8 @@ let fitOperator: TestUser;
 let fitOperatorSecret = '';
 let phoneOperator: TestUser;
 let phoneOperatorSecret = '';
+let sharedOperator: TestUser;
+let sharedOperatorSecret = '';
 
 async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: string }> {
   const user = await seedDedicatedUser(dedicatedUser('member', suffix));
@@ -205,6 +208,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, CURSOR_ID, { displayName: `cursor box ${SUFFIX}` });
   await seedMachine(SITE_ID, FIT_ID, { displayName: `fit box ${SUFFIX}` });
   await seedMachine(SITE_ID, PHONE_ID, { displayName: `phone box ${SUFFIX}` });
+  await seedMachine(SITE_ID, SHARED_ID, { displayName: `shared box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -227,6 +231,11 @@ test.beforeAll(async () => {
   phoneOperator = phoneSeeded.user;
   phoneOperatorSecret = phoneSeeded.secret;
   await grantMembership(SITE_ID, phoneOperator.uid, 'admin');
+
+  const sharedSeeded = await seedTotpUser(`swoop-shared-${SUFFIX}`);
+  sharedOperator = sharedSeeded.user;
+  sharedOperatorSecret = sharedSeeded.secret;
+  await grantMembership(SITE_ID, sharedOperator.uid, 'admin');
 
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
   await getAdminDb()
@@ -614,6 +623,67 @@ test.describe('through a host', () => {
       await host.stop();
     }
   });
+
+  // the owner's bug (2026-11-04, TEC-B4A): a second person opening swoop on the
+  // machine minted a session of its own, and the machine ended the first one's.
+  test('a second person opening the machine joins the session there: both see it, and the first is not ended', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: SHARED_ID });
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await host.addViewer(other);
+      await signIn(page, sharedOperator, sharedOperatorSecret, { fresh: true });
+      await signIn(other, watcher);
+
+      const firstGrant = nextGrant(page, SHARED_ID);
+      await page.goto(`/swoop/${SITE_ID}/${SHARED_ID}`);
+      const first = await firstGrant;
+      expect(first.ctl).toBe(true);
+      await expectHostPicture(page);
+
+      const joinGrant = nextGrant(other, SHARED_ID);
+      await other.goto(`/swoop/${SITE_ID}/${SHARED_ID}`);
+      const joined = await joinGrant;
+      // the same session, with a viewer of its own
+      expect(joined.sid).toBe(first.sid);
+      expect(joined.viewerId).not.toBe(first.viewerId);
+      await expectHostPicture(other);
+
+      // nobody told the first viewer to go, and its picture still moves
+      await expectHostPicture(page);
+      await expect(page.getByText('this session was ended from elsewhere.')).toHaveCount(0);
+      const record = await readSession(page, first.sid, SHARED_ID);
+      expect(record.state).not.toBe('ended');
+      expect((record.viewers as Array<{ viewerId: string }>).map((v) => v.viewerId).sort()).toEqual(
+        [first.viewerId, joined.viewerId].sort(),
+      );
+      // the host verified each one's own token on the one sid
+      expect(host.leases).toEqual(
+        expect.arrayContaining([
+          { viewer: first.viewerId, sid: first.sid, uid: sharedOperator.uid, ctl: true },
+          { viewer: joined.viewerId, sid: first.sid, uid: watcher.uid, ctl: false },
+        ]),
+      );
+
+      // the second ending theirs takes out only their own seat
+      const left = other.waitForResponse(
+        (r) => r.url().includes(`/swoop/sessions/${first.sid}`) && r.request().method() === 'DELETE',
+      );
+      await other.getByRole('button', { name: /end session/i }).click();
+      expect((await left).status()).toBe(200);
+      await expectHostPicture(page);
+      const after = await readSession(page, first.sid, SHARED_ID);
+      expect(after.state).not.toBe('ended');
+      expect((after.viewers as Array<{ viewerId: string }>).map((v) => v.viewerId)).toEqual([first.viewerId]);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await otherContext.close();
+      await host.stop();
+    }
+  });
 });
 
 test.describe('through a host, inside owlette swoop', () => {
@@ -997,7 +1067,10 @@ test.describe('through a host, on a phone', () => {
 });
 
 test.describe('two viewers on one machine, over the api', () => {
-  test('each holds a lease of its own, and one kill ends every session', async ({ page, browser }) => {
+  test('the second joins the first one’s session, each holds a lease of its own, and one kill ends it', async ({
+    page,
+    browser,
+  }) => {
     const operatorPage = page;
     const watcherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const watcherPage = await watcherContext.newPage();
@@ -1025,6 +1098,24 @@ test.describe('two viewers on one machine, over the api', () => {
     // it is what lets the same tab reconnect after hours without a new code.
     expect(control.continuity).toMatch(new RegExp(`^${control.sid}\\.[A-Za-z0-9_-]{43}$`));
 
+    // one streamer serves every viewer of a machine: the watcher joins the
+    // operator's session, with a viewer of its own, and the operator stays in it.
+    const watchRes = await apiCall(watcherPage, 'POST', SESSIONS, {
+      control: false,
+      fp: fingerprint(2),
+      clientCaps: CLIENT_CAPS,
+    });
+    expect(watchRes.status, JSON.stringify(watchRes.body)).toBe(201);
+    const watch = watchRes.body.data as { sid: string; viewerId: string; ctl: boolean; joined: boolean };
+    expect([watch.sid, watch.ctl, watch.joined]).toEqual([control.sid, false, true]);
+    expect(watch.viewerId).not.toBe(control.viewerId);
+    const shared = await readSession(operatorPage, control.sid);
+    expect(shared.state).not.toBe('ended');
+    expect((shared.viewers as Array<{ uid: string; ctl: boolean }>).map((v) => [v.uid, v.ctl])).toEqual([
+      [operator.uid, true],
+      [watcher.uid, false],
+    ]);
+
     // an offline machine is refused once the gate and the ceremony have passed.
     const offline = await apiCall(operatorPage, 'POST', `/api/sites/${SITE_ID}/machines/${OFFLINE_ID}/swoop/sessions`, {
       control: true,
@@ -1035,16 +1126,6 @@ test.describe('two viewers on one machine, over the api', () => {
       mfaProof: { code: await freshTotp(operatorPage, operatorSecret, spent) },
     });
     expect(offline.status, JSON.stringify(offline.body)).toBe(409);
-
-    const watchRes = await apiCall(watcherPage, 'POST', SESSIONS, {
-      control: false,
-      fp: fingerprint(2),
-      clientCaps: CLIENT_CAPS,
-    });
-    expect(watchRes.status, JSON.stringify(watchRes.body)).toBe(201);
-    const watch = watchRes.body.data as { sid: string; viewerId: string; ctl: boolean };
-    expect(watch.ctl).toBe(false);
-    expect(watch.sid).not.toBe(control.sid);
 
     // a lease renews for its own viewer, bound to the fingerprint it was
     // minted with, and for nobody else's session.
@@ -1076,21 +1157,20 @@ test.describe('two viewers on one machine, over the api', () => {
     });
     expect(notMine.status).toBeGreaterThanOrEqual(400);
 
-    // a watcher cannot kill; the operator's kill ends both sessions.
+    // a watcher cannot kill; the operator's kill ends the session for both.
     const watcherKill = await apiCall(watcherPage, 'POST', KILL, {});
     expect(watcherKill.status).toBe(403);
     const kill = await apiCall(operatorPage, 'POST', KILL, {});
     expect(kill.status, JSON.stringify(kill.body)).toBe(200);
 
-    for (const sid of [control.sid, watch.sid]) {
-      const record = await readSession(operatorPage, sid);
-      expect(record.state).toBe('ended');
+    expect((await readSession(operatorPage, control.sid)).state).toBe('ended');
+    for (const [viewerPage, viewerId, fp] of [
+      [operatorPage, control.viewerId, fingerprint(1)],
+      [watcherPage, watch.viewerId, fingerprint(2)],
+    ] as const) {
+      const afterKill = await apiCall(viewerPage, 'POST', `${SESSIONS}/${control.sid}/lease`, { viewerId, fp });
+      expect(afterKill.status).toBeGreaterThanOrEqual(400);
     }
-    const afterKill = await apiCall(operatorPage, 'POST', `${SESSIONS}/${control.sid}/lease`, {
-      viewerId: control.viewerId,
-      fp: fingerprint(1),
-    });
-    expect(afterKill.status).toBeGreaterThanOrEqual(400);
 
     await watcherContext.close();
   });

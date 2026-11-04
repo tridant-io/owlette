@@ -4,19 +4,22 @@
  *
  * owner ruling (2026-09-24): coming back to a tab after hours must not land on
  * the passkey screen. so a control grant carries a continuity token — a random
- * secret bound to that session — which the tab keeps in memory only and
- * presents on its next mint instead of a proof. the server honours it when the
- * session it names was this user's control session on this machine, its
- * secret matches, it has not been spent, the session did not end by a kill, a
- * deliberate close or a revocation, and no kill on the machine has come since
- * it started. a new tab has no token and asks as before; closing the tab
- * forgets it.
+ * secret bound to that viewer of that session — which the tab keeps in memory
+ * only and presents on its next mint instead of a proof. the server honours it
+ * when the grant it matches is this user's, it has not been spent, the session
+ * did not end by a kill, a deliberate close or a revocation, and no kill on the
+ * machine has come since it started. a new tab has no token and asks as
+ * before; closing the tab forgets it.
+ *
+ * several viewers share one session, so a grant is the viewer's, never the
+ * session's: one viewer's token can never stand in for another's step-up, and
+ * spending one spends no other.
  *
  * what is stored is the secret's sha-256, never the secret, so a read of the
  * session record gives nothing to present. spending is one-shot: the mint
- * that inherits marks the old record, and the new session carries a fresh
- * token, so a captured token buys at most one reconnect and only before the
- * tab itself uses it.
+ * that inherits marks the grant, and the new viewer carries a fresh token, so
+ * a captured token buys at most one reconnect and only before the tab itself
+ * uses it.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -54,8 +57,13 @@ export function parseContinuity(token: unknown): { sid: string; hash: string } |
 }
 
 export type ContinuityVerdict =
-  | { ok: true }
+  /** `viewerId` names the grant that matched: the one the mint that inherits spends. */
+  | { ok: true; viewerId: string }
   | { ok: false; reason: 'no_session' | 'not_yours' | 'secret_mismatch' | 'spent' | 'killed' | 'ended_for_good' };
+
+function sameHash(stored: string, hash: string): boolean {
+  return stored.length === hash.length && timingSafeEqual(Buffer.from(stored), Buffer.from(hash));
+}
 
 /**
  * whether a presented token lets this user skip the ceremony for a new control
@@ -70,17 +78,16 @@ export function continuityInherits(args: {
 }): ContinuityVerdict {
   const { record, userId, hash, revokedAt } = args;
   if (!record) return { ok: false, reason: 'no_session' };
-  if (record.createdBy !== `user:${userId}`) return { ok: false, reason: 'not_yours' };
   // only a control grant is ever given a hash, so the secret matching is what proves
-  // this was the user's control session: the viewer rows are gone once it ends.
-  const stored = record.continuityHash;
-  if (!stored || stored.length !== hash.length || !timingSafeEqual(Buffer.from(stored), Buffer.from(hash))) {
-    return { ok: false, reason: 'secret_mismatch' };
-  }
-  if (record.continuityUsedAt !== undefined) return { ok: false, reason: 'spent' };
+  // this was a control viewer of the session: the viewer rows are gone once it ends.
+  const match = Object.entries(record.continuity ?? {}).find(([, grant]) => sameHash(grant.hash, hash));
+  if (!match) return { ok: false, reason: 'secret_mismatch' };
+  const [viewerId, grant] = match;
+  if (grant.uid !== userId) return { ok: false, reason: 'not_yours' };
+  if (grant.usedAt !== undefined) return { ok: false, reason: 'spent' };
   // a kill closes only the records still open: one that had already ended for a
   // transient reason is reached through the kill's own timestamp instead.
   if (revokedAt >= record.startedAt) return { ok: false, reason: 'killed' };
   if (record.endReason && FINAL_ENDS.has(record.endReason)) return { ok: false, reason: 'ended_for_good' };
-  return { ok: true };
+  return { ok: true, viewerId };
 }

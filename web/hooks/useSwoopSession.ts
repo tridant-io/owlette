@@ -380,9 +380,9 @@ export function useSwoopSession(
 
   /**
    * the operator's reconnect. it may come from a live session whose picture
-   * kept freezing, which is let go of first without a DELETE: that would end
-   * the record this tab's continuity names, and the new session would ask for
-   * the second factor again. it is a fresh start, so the stall cap is too.
+   * kept freezing, which is let go of first without a DELETE: that would spend
+   * this tab's continuity, and the new session would ask for the second factor
+   * again. it is a fresh start, so the stall cap is too.
    */
   const reconnect = useCallback(() => {
     stallReconnectsRef.current = [];
@@ -546,20 +546,21 @@ export function useSwoopSession(
       peer?.close();
       signaling?.close(1000, reason);
       // only a deliberate end tells the server. a DELETE fans out into kills
-      // that can land on the next session, and ends the record this tab's
-      // continuity token names, so a path that may come back sends none.
+      // that can land on the next session, and spends this tab's continuity,
+      // so a path that may come back sends none.
       if (grant && (reason === 'closed' || reason === 'unmounted')) {
-        // best effort: the record ends server-side and the streamer is stopped
-        // over two independent paths, so a lost beacon costs the user nothing.
-        // `viewerReason` is why this page ended it — a caller cannot claim a
-        // host-recorded `endReason`, but the audit trail needs the page's own.
+        // best effort: this viewer's seat goes server-side, and the last one out
+        // ends the record and stops the streamer over two independent paths, so
+        // a lost beacon costs the user nothing. `viewerReason` is why this page
+        // ended it — a caller cannot claim a host-recorded `endReason`, but the
+        // audit trail needs the page's own.
         void fetch(
           `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(grant.sid)}`,
           {
             method: 'DELETE',
             keepalive: true,
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ endReason: 'closed', viewerReason: reason }),
+            body: JSON.stringify({ endReason: 'closed', viewerReason: reason, viewerId: grant.viewerId }),
           },
         ).catch(() => undefined);
       }
@@ -871,10 +872,11 @@ export function useSwoopSession(
         onClosed: (reason) => {
           if (disposed) return;
           if (reason === 'kill') {
-            // an admin's kill, or another tab or device taking the machine
-            // over: a retry would take it back, and the two would trade it
-            // forever. a 4.0.x service stop or update byes its viewers this
-            // way too; later agents say `restart`, which lands below.
+            // an admin's kill, or a stop from the machine itself: a decision,
+            // which a retry would undo. another tab or device opening the
+            // machine joins this session rather than replacing it. a 4.0.x
+            // service stop or update byes its viewers this way too; later
+            // agents say `restart`, which lands below.
             writeContinuity(siteId, machineId, null);
             finish('kill', 'this session was ended from elsewhere.');
             return;
@@ -934,9 +936,9 @@ export function useSwoopSession(
         leaseExpiresAt: () => leaseExpiresAt,
         end: finish,
         restart: () => {
-          // torn down on a reason that sends no DELETE first: a DELETE ends the
-          // record this tab's continuity names, and the next session would ask
-          // for the second factor again.
+          // torn down on a reason that sends no DELETE first: a DELETE spends
+          // this tab's continuity, and the next session would ask for the
+          // second factor again.
           teardown('restart');
           startNext();
         },

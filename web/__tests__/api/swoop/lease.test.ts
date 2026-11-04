@@ -26,8 +26,17 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => mockDbFactory(),
+  getAdminDb: () => ({
+    ...mockDbFactory(),
+    // the renewal reads and writes the session in a transaction, on the same doc mocks
+    runTransaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        get: (ref: MockTxRef) => ref.get(),
+        set: (ref: MockTxRef, ...a: unknown[]) => ref.set(...a),
+      }),
+  }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
 }));
 

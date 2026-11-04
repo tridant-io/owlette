@@ -309,8 +309,7 @@ export class FakeSwoopHost {
     await hostPage.exposeFunction('swoopHostOut', (message: HostOut) => host.fromHostPage(message));
     await hostPage.evaluate(installHostPage, [HOST_COLOUR, 'swoopHostOut'] as [readonly number[], string]);
 
-    const room = `${E2E_SWOOP_SIGNAL_URL.replace(/^https/, 'wss')}/v1/room/`;
-    await args.viewer.routeWebSocket((url) => url.href.startsWith(room), (ws) => host.join(ws));
+    await host.addViewer(args.viewer);
 
     const commands = getAdminDb().doc(`sites/${args.siteId}/machines/${args.machineId}/commands/pending`);
     host.unsubscribe = commands.onSnapshot(
@@ -318,6 +317,12 @@ export class FakeSwoopHost {
       (err) => host.problems.push(`commands: ${err.message}`),
     );
     return host;
+  }
+
+  /** another viewer page into the same room: every viewer of the machine shares its one host. */
+  async addViewer(viewer: Page): Promise<void> {
+    const room = `${E2E_SWOOP_SIGNAL_URL.replace(/^https/, 'wss')}/v1/room/`;
+    await viewer.routeWebSocket((url) => url.href.startsWith(room), (ws) => this.join(ws));
   }
 
   /** a `swoop-cursor` message to one viewer; dropped while its channel is not open, as on the wire. */
@@ -428,8 +433,13 @@ export class FakeSwoopHost {
     }
   }
 
-  /** the streamer for `sid` dials in, and the room replays the joins it missed. */
+  /**
+   * the streamer for `sid` dials in, and the room replays the joins it missed.
+   * a request for the sid it is already serving is a viewer joining it, which
+   * the agent answers with nothing at all.
+   */
   private async startSession(sid: string): Promise<void> {
+    if (sid === this.hostSid) return;
     if (this.hostSid) await this.endSession('restart');
     this.hostSid = sid;
     for (const socket of this.sockets) this.onViewerJoin(socket);

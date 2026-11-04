@@ -17,7 +17,7 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { problemValidation } from '@/lib/apiErrors';
 import logger from '@/lib/logger';
 import { sessionKeyForBundle } from '@/lib/swoop/keys.server';
-import { SWOOP_LEASE_SECONDS, loadSwoopSettings } from '@/lib/swoop/policy.server';
+import { SWOOP_LEASE_SECONDS, SWOOP_MAX_VIEWERS, loadSwoopSettings } from '@/lib/swoop/policy.server';
 import { SWOOP_PROTOCOL_VERSION } from '@/lib/swoop/protocol';
 import { getSwoopSession } from '@/lib/swoop/sessionStore.server';
 import { mintHostToken, swoopJwtPublicKeys, type SwoopJwtKeyEntry } from '@/lib/swoop/tokens.server';
@@ -25,13 +25,6 @@ import { STUN_ONLY, mintTurnCredentials, type SwoopIceServer } from '@/lib/swoop
 import { SWOOP_MIN_AGENT_VERSION, compareVersions, isValidVersion } from '@/lib/versionUtils';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { NO_STORE, SWOOP_ID_PATTERN, requireSwoopAgent, swoopRoomUrl } from '../_shared';
-
-/**
- * Concurrent viewers of one machine. A bundle field rather than a site setting
- * because the streamer is what enforces it; it becomes a setting the day an
- * operator asks for a different number.
- */
-const SWOOP_MAX_VIEWERS = 4;
 
 /**
  * a hundred years, which no session reaches: a session lives as long as its tab

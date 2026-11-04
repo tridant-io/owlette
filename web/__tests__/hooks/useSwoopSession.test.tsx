@@ -326,7 +326,12 @@ describe('useSwoopSession — how a session ends', () => {
     expect(deletes()).toHaveLength(1);
     const [url, init] = deletes()[0];
     expect(url).toBe(`${SESSIONS}/${GRANT.sid}`);
-    expect(JSON.parse(String(init?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+    // its own seat, named: other viewers of the session stay in it.
+    expect(JSON.parse(String(init?.body))).toEqual({
+      endReason: 'closed',
+      viewerReason: 'closed',
+      viewerId: GRANT.viewerId,
+    });
     expect(mints()).toHaveLength(1);
   });
 
@@ -624,7 +629,11 @@ describe('useSwoopSession — how a session ends', () => {
       await advance(60_000);
 
       expect(deletes()).toHaveLength(1);
-      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({
+        endReason: 'closed',
+        viewerReason: 'closed',
+        viewerId: GRANT.viewerId,
+      });
     });
 
     it('does nothing in a browser', async () => {

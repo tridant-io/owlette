@@ -1,6 +1,13 @@
 /**
  * POST /api/sites/{siteId}/machines/{machineId}/swoop/sessions — start a swoop
- * session and hand the browser everything it needs to connect.
+ * session, or join the one already running on the machine, and hand the
+ * browser everything it needs to connect.
+ *
+ * One streamer per machine serves every viewer (PROTOCOL.md §6, §11), so a
+ * second person, or a second tab, joins the running session with a viewer, a
+ * lease, a token and a key of its own. A new sid would end the session for
+ * everyone in it: the agent replaces the session it serves with the one it is
+ * asked for.
  *
  * The response carries the viewer's own JWT and its per-viewer key `k`. It
  * NEVER carries `K_session`, and nothing secret is ever put in a url — the
@@ -31,6 +38,7 @@ import {
   stepUpRevokedAt,
   stepUpWindowState,
   SWOOP_LEASE_SECONDS,
+  SWOOP_MAX_VIEWERS,
   type SwoopIntent,
 } from '@/lib/swoop/policy.server';
 import {
@@ -51,8 +59,12 @@ import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop
 import {
   createSwoopSession,
   getSwoopSession,
+  joinSwoopSession,
+  listUnendedSwoopSessionsForMachine,
+  liveSessionToJoin,
   markSwoopContinuityUsed,
-  upsertSwoopViewer,
+  removeSwoopViewers,
+  type SwoopSessionViewer,
 } from '@/lib/swoop/sessionStore.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import {
@@ -169,7 +181,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     // same user on the same machine, unless that session was killed, closed
     // or revoked, or a kill on the machine came after it started. A last
     // factor removed since still closes the door.
-    let inheritedFrom: string | null = null;
+    let inheritedFrom: { sid: string; viewerId: string } | null = null;
     if (
       !decision.ok &&
       decision.code === 'step_up_required' &&
@@ -186,7 +198,7 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
           })
         : null;
       if (presented && verdict?.ok) {
-        inheritedFrom = presented.sid;
+        inheritedFrom = { sid: presented.sid, viewerId: verdict.viewerId };
         decision = evaluateSwoopAccess({ ...gate, stepUpOpen: true });
       } else {
         recordSwoopDenied({
@@ -251,16 +263,59 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       });
     }
 
-    const sid = mintSwoopId();
+    const now = Date.now();
     const viewerId = mintSwoopId();
-    const startedAt = Date.now();
-    const leaseExpiresAt = startedAt + SWOOP_LEASE_SECONDS * 1000;
+    const viewer: SwoopSessionViewer = {
+      viewerId,
+      uid: userId,
+      ctl: decision.ctl,
+      joinedAt: now,
+      leaseExpiresAt: now + SWOOP_LEASE_SECONDS * 1000,
+    };
 
-    // Blocking and BEFORE the session exists: a control session that starts
-    // unrecorded is the failure this trail exists to prevent, so an audit that
-    // cannot be written refuses the session instead.
+    // A machine already in a session is joined, never replaced: the agent ends
+    // the session it serves for a new sid, for everyone in it. Two first
+    // viewers inside the same moment still start two, and the later one wins.
+    const live = liveSessionToJoin(await listUnendedSwoopSessionsForMachine({ siteId, machineId }), now);
+    let sid = live?.sid ?? mintSwoopId();
+    // Only a control session carries continuity: a watch session has no
+    // ceremony to carry, and a token for it would inherit nothing.
+    let continuity = decision.ctl ? mintContinuity(sid) : null;
+    let joined = false;
+    if (live) {
+      const seat = await joinSwoopSession({
+        siteId,
+        machineId,
+        sid,
+        viewer,
+        ...(continuity ? { continuityHash: continuity.hash } : {}),
+        nowMs: now,
+      });
+      if (seat === 'full') {
+        recordSwoopDenied({ ...auditBase, event: 'session_denied', denyReason: 'session_full', ctl: decision.ctl });
+        // a 409, which the page waits out on its reconnect ladder: a seat comes back when someone leaves.
+        return problem({
+          type: ProblemType.Conflict,
+          title: 'session full',
+          status: 409,
+          detail: `${SWOOP_MAX_VIEWERS} people are already in this machine's swoop session, the most it serves at once. you'll be let in when one of them leaves.`,
+          code: 'session_full',
+        });
+      }
+      joined = seat === 'joined';
+      if (!joined) {
+        // it ended between the read and the seat: this viewer starts the next one.
+        sid = mintSwoopId();
+        continuity = decision.ctl ? mintContinuity(sid) : null;
+      }
+    }
+
+    // Blocking, and before this viewer is handed anything that admits it — its
+    // token, a new session's record, the machine's notification: a control
+    // session that starts unrecorded is the failure this trail exists to
+    // prevent, so an audit that cannot be written refuses the session instead.
     try {
-      await recordSwoopSessionStarted({ ...auditBase, sid, viewerId, ctl: decision.ctl });
+      await recordSwoopSessionStarted({ ...auditBase, sid, viewerId, ctl: decision.ctl, joined });
     } catch (err) {
       logger.error('[swoop/sessions] session audit write failed; refusing to start', {
         context: 'swoop/sessions',
@@ -270,6 +325,15 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
           err: err instanceof Error ? err.message : String(err),
         },
       });
+      // the seat taken above admits nobody yet, and is given up again.
+      if (joined) {
+        await removeSwoopViewers({ siteId, machineId, sid, viewerIds: [viewerId] }).catch((cleanup: unknown) => {
+          logger.warn('[swoop/sessions] the unrecorded seat could not be given up; its lease ends it', {
+            context: 'swoop/sessions',
+            data: { siteId, machineId, err: cleanup instanceof Error ? cleanup.message : String(cleanup) },
+          });
+        });
+      }
       return problem({
         type: ProblemType.ServiceUnavailable,
         title: 'service unavailable',
@@ -279,33 +343,27 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       });
     }
 
-    // Only a control session carries continuity: a watch session has no
-    // ceremony to carry, and a token for it would inherit nothing.
-    const continuity = decision.ctl ? mintContinuity(sid) : null;
     if (inheritedFrom) {
       // spent here and no earlier: a machine that read offline or an audit that
       // could not be written refused the request, and the page retries it with
       // the same token.
-      await markSwoopContinuityUsed(siteId, machineId, inheritedFrom, Date.now());
+      await markSwoopContinuityUsed(siteId, machineId, inheritedFrom.sid, inheritedFrom.viewerId, Date.now());
       logger.info('[swoop/sessions] step-up inherited from the tab\'s previous session', {
         context: 'swoop/sessions',
-        data: { siteId, machineId, sid, from: inheritedFrom },
+        data: { siteId, machineId, sid, from: inheritedFrom.sid },
       });
     }
-    await createSwoopSession({
-      siteId,
-      machineId,
-      sid,
-      createdBy: `user:${userId}`,
-      startedAt,
-      ...(continuity ? { continuityHash: continuity.hash } : {}),
-    });
-    await upsertSwoopViewer({
-      siteId,
-      machineId,
-      sid,
-      viewer: { viewerId, uid: userId, ctl: decision.ctl, joinedAt: startedAt, leaseExpiresAt },
-    });
+    if (!joined) {
+      await createSwoopSession({
+        siteId,
+        machineId,
+        sid,
+        createdBy: `user:${userId}`,
+        startedAt: now,
+        viewer,
+        ...(continuity ? { continuityHash: continuity.hash } : {}),
+      });
+    }
 
     const viewerToken = mintViewerToken({
       uid: userId,
@@ -327,7 +385,10 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
 
     // Both notifications carry the sid alone, and both are best effort: the
     // ring is the fast path and the queued command is the 2-5 s fallback, so
-    // one failing still leaves the other (plan.md D11).
+    // one failing still leaves the other (plan.md D11). A join sends them too.
+    // The agent returns at once for the sid it is running, and an agent that
+    // restarted under the session, an update, has no streamer for the sid its
+    // viewers come back to until it is asked.
     const [ring, queued] = await Promise.allSettled([
       ringDoorbell({ siteId, machineId, sid }),
       requestSwoopSession({
@@ -372,7 +433,9 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
             // When the lease must be renewed, not when the jwt lapses — the
             // token is spent once at connect, the lease is what keeps the
             // session alive (PROTOCOL.md §10).
-            expiresAt: leaseExpiresAt,
+            expiresAt: viewer.leaseExpiresAt,
+            // whether this viewer joined a session already running on the machine.
+            joined,
             ...(continuity ? { continuity: continuity.token } : {}),
           },
         },
