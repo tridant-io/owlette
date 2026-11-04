@@ -1086,12 +1086,10 @@ input[type="week"] {
   contain-intrinsic-size: auto 360px;
 }
 
-/* Manage-sites list virtualisation — each site row opts into
- * `content-visibility: auto` so a list of dozens/hundreds only lays out and
- * paints the rows in (or near) the scrollport. `contain-intrinsic-size`
- * reserves an estimated row height for off-screen rows so the scrollbar stays
- * stable. The active editor row is always on-screen (you just clicked it), so
- * its taller height renders normally. */
+/* the site list on /admin/sites: each row opts into `content-visibility: auto`,
+ * so a long list (a superadmin sees every site) only lays out and paints the
+ * rows in or near the viewport. `contain-intrinsic-size` reserves an estimated
+ * row height for off-screen rows, so the scrollbar stays stable. */
 .site-row-cv {
   content-visibility: auto;
   contain-intrinsic-size: auto 44px;
