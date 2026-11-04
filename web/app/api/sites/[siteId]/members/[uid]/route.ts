@@ -16,7 +16,7 @@
  * Idempotent: a non-member returns 200 with `wasMember: false`.
  * Auth: `requireSiteAuthAndScope(req, siteId, 'admin')`, plus the self-guard in
  * `refuseSelfMembershipChange` — a caller cannot remove their own row — and
- * SITE_MEMBER_MANAGE re-checked in the handler by `refuseWithoutMemberManage`.
+ * SITE_MEMBER_MANAGE re-checked in the handler by `refuseWithoutSiteMemberManage`.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
@@ -42,6 +42,7 @@ import { talonStoreProblem } from '../../talons/route';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
+  refuseWithoutSiteMemberManage,
 } from '../../../../_shared';
 import { removeMember, updateMember } from '@/lib/membership.server';
 import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
@@ -100,33 +101,6 @@ function refuseSelfMembershipChange(
   });
 }
 
-/**
- * SITE_MEMBER_MANAGE, re-checked in the handler for the reason the members POST
- * comment gives (`members/route.ts`): the wrapper skips its capability check
- * while `capability_enforcement` is off, and this capability is not exempt, so
- * a plain member reached both handlers here during the break-glass. the swoop
- * mode makes PATCH a second way to hand out MACHINE_REMOTE_CONTROL.
- */
-function refuseWithoutMemberManage(
-  ctx: SiteHandlerContext,
-  siteId: string,
-  uid: string,
-  action: 'change' | 'remove',
-): NextResponse | null {
-  if (hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId)) return null;
-  return problem({
-    type: ProblemType.Forbidden,
-    title: 'forbidden',
-    status: 403,
-    detail:
-      action === 'remove'
-        ? 'removing a member requires the SITE_MEMBER_MANAGE capability on this site'
-        : 'changing a member requires the SITE_MEMBER_MANAGE capability on this site',
-    instance: `/api/sites/${siteId}/members/${uid}`,
-    code: 'site_member_manage_required',
-  });
-}
-
 export const DELETE = authorizedSiteHandler<RouteParams>({
   capability: 'SITE_MEMBER_MANAGE',
   siteIdParam: 'path',
@@ -154,7 +128,12 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
     // idempotency key and replayed at a legitimate later call.
     const selfRefusal = refuseSelfMembershipChange(ctx, siteId, uid, 'remove');
     if (selfRefusal) return selfRefusal;
-    const manageRefusal = refuseWithoutMemberManage(ctx, siteId, uid, 'remove');
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'removing a member',
+      `/api/sites/${siteId}/members/${uid}`,
+    );
     if (manageRefusal) return manageRefusal;
 
     const talonSuccessorUid = request.nextUrl.searchParams.get('talonSuccessorUid');
@@ -375,7 +354,7 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
  *
  * Auth: `requireSiteAuthAndScope(req, siteId, 'admin')`, capability
  * SITE_MEMBER_MANAGE — the same gate the sibling DELETE takes, and re-checked in
- * the handler as DELETE's is, by `refuseWithoutMemberManage`.
+ * the handler as DELETE's is, by `refuseWithoutSiteMemberManage`.
  */
 export const PATCH = authorizedSiteHandler<RouteParams>({
   capability: 'SITE_MEMBER_MANAGE',
@@ -398,7 +377,12 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
     // Same placement as the sibling DELETE, and for the same reasons.
     const selfRefusal = refuseSelfMembershipChange(ctx, siteId, uid, 'change');
     if (selfRefusal) return selfRefusal;
-    const manageRefusal = refuseWithoutMemberManage(ctx, siteId, uid, 'change');
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'changing a member',
+      `/api/sites/${siteId}/members/${uid}`,
+    );
     if (manageRefusal) return manageRefusal;
 
     const parsed = await readAndParseJsonBody(request);

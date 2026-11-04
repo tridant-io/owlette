@@ -218,7 +218,11 @@ describe('GET /api/sites/{siteId}/member-candidates', () => {
       const { status, body } = await list();
 
       expect(status).toBe(403);
-      expect(body.code).toBe('site_member_manage_required');
+      expect(body).toMatchObject({
+        code: 'site_member_manage_required',
+        detail: 'listing member candidates requires the SITE_MEMBER_MANAGE capability on this site',
+        instance: `/api/sites/${TARGET}/member-candidates`,
+      });
       expect(mockReads).not.toHaveBeenCalled();
       expect(mockListUserStanding).not.toHaveBeenCalled();
     });

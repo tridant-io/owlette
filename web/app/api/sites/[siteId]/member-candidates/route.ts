@@ -26,7 +26,7 @@
 
 import { NextResponse } from 'next/server';
 import { problem, problemFromError, ProblemType } from '@/lib/apiErrors';
-import { applyAuthDeprecations } from '@/app/api/_shared';
+import { applyAuthDeprecations, refuseWithoutSiteMemberManage } from '@/app/api/_shared';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { Capability, hasCapability, siteStanding } from '@/lib/capabilities';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -79,20 +79,13 @@ export const GET = authorizedSiteHandler<{ siteId: string }>({
       });
     }
 
-    // re-checked here, because the wrapper skips its capability check while
-    // `capability_enforcement` is off and SITE_MEMBER_MANAGE is not exempt. the
-    // list is worked out against this site's roster, which a plain member may
-    // not read, so it stays closed to them during the break-glass too. the same
-    // reasoning as members POST.
-    if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, ctx.siteId)) {
-      return problem({
-        type: ProblemType.Forbidden,
-        title: 'forbidden',
-        status: 403,
-        code: 'site_member_manage_required',
-        detail: 'listing member candidates requires the SITE_MEMBER_MANAGE capability on this site',
-      });
-    }
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      ctx.siteId,
+      'listing member candidates',
+      `/api/sites/${ctx.siteId}/member-candidates`,
+    );
+    if (manageRefusal) return manageRefusal;
 
     const db = getAdminDb();
     const onTarget = await activeMemberIds(db, ctx.siteId);

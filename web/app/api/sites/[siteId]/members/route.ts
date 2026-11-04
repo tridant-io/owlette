@@ -22,7 +22,8 @@
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
  * POST. Site access is membership — a global `admin` role grants nothing here.
  * POST additionally re-checks the capability IN the handler, where the
- * `capability_enforcement` kill switch cannot skip it — see the comment there.
+ * `capability_enforcement` kill switch cannot skip it — see
+ * `refuseWithoutSiteMemberManage` in `_shared.ts`.
  *
  * api-sprint wave 3 track 3B (users-api / site-members).
  */
@@ -39,10 +40,10 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
-import { Capability, hasCapability } from '@/lib/capabilities';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
+  refuseWithoutSiteMemberManage,
 } from '../../../_shared';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
 import { deriveSwoopMode } from '@/lib/sitePolicy.server';
@@ -168,37 +169,17 @@ export const POST = authorizedSiteHandler<RouteParams>({
   try {
     const { siteId } = await routeContext.params;
 
-    // CAPABILITY, RE-CHECKED IN THE HANDLER — deliberately not a duplicate of
-    // the wrapper's check, because the wrapper's is SKIPPED while
-    // `capability_enforcement` is false (the 4h operator break-glass in
-    // `global/security_config`) and SITE_MEMBER_MANAGE is not in
-    // BYPASS_EXEMPT_CAPABILITIES. Browser sessions never reach `requireScope`
-    // either, so during that window a plain site `member` reached this handler
-    // and could write a membership row for any account at any role. Nothing
-    // below stopped it: the owner guard refuses only the OWNER as a target, and
-    // `addMember`'s create() refuses only a target that ALREADY has a row.
-    //
-    // What makes that worse than an ordinary bypass is that the grant OUTLIVES
-    // the window. The added account is a site admin on merit, so it keeps
-    // MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE once the switch is back
-    // on, and can then promote the original caller through the sibling PATCH
-    // with enforcement fully restored. Time-boxed break-glass, permanent admin.
-    //
     // Placed before the body read and before `withIdempotency`: the decision
     // depends on nothing but actor and site, and `withIdempotency` saves
     // whatever the handler returns — a 403 stored under a key would be replayed
     // at a legitimate later call.
-    if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId)) {
-      return problem({
-        type: ProblemType.Forbidden,
-        title: 'forbidden',
-        status: 403,
-        detail:
-          'adding a member requires the SITE_MEMBER_MANAGE capability on this site',
-        instance: `/api/sites/${siteId}/members`,
-        code: 'site_member_manage_required',
-      });
-    }
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'adding a member',
+      `/api/sites/${siteId}/members`,
+    );
+    if (manageRefusal) return manageRefusal;
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
