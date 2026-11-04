@@ -11,6 +11,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site
 
 A site's owners and admins can now set each person to no swoop, watch or
