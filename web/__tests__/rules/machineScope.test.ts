@@ -150,7 +150,7 @@ async function seedMember(
   siteId: string,
   uid: string,
   role: 'admin' | 'member',
-  machineIds?: string[] | null,
+  machineIds?: unknown,
 ): Promise<void> {
   await seedAsAdmin(async (db) => {
     await setDoc(doc(db, 'sites', siteId, 'members', uid), {
@@ -169,14 +169,14 @@ async function seedMember(
 async function asMember(
   uid: string,
   role: 'admin' | 'member',
-  machineIds?: string[] | null,
+  machineIds?: unknown,
 ): Promise<Firestore> {
   const db = await asUser(uid, role, []);
   await seedMember(SITE, uid, role, machineIds);
   return db;
 }
 
-const asScoped = (machineIds: string[] | null = [IN]) => asMember(SCOPED, 'member', machineIds);
+const asScoped = (machineIds: unknown = [IN]) => asMember(SCOPED, 'member', machineIds);
 const asScopedAdmin = () => asMember('scoped-admin-1', 'admin', [IN]);
 const asWholeSite = () => asMember('member-1', 'member');
 const asSuperadmin = () => asUser('super-1', 'superadmin', []);
@@ -379,15 +379,29 @@ describe('a scoped admin', () => {
   });
 });
 
-const failClosed: Array<[label: string, machineIds: string[] | null]> = [
+// a console edit can leave any value here, and the server reads a non-list as no
+// machines. `in` on a map tests its keys, so only `is list` keeps the map row off IN
+const failClosed: Array<[label: string, machineIds: unknown]> = [
   ['[]', []],
   ['null', null],
+  ['{ IN: true }', { [IN]: true }],
+  ["'IN'", IN],
 ];
 
 describe.each(failClosed)('a row with machineIds: %s', (_label, machineIds) => {
   it('is refused machines/IN', async () => {
     const db = await asScoped(machineIds);
     await assertFails(getDoc(doc(db, 'sites', SITE, 'machines', IN)));
+  });
+
+  it('is refused config/machines/IN', async () => {
+    const db = await asScoped(machineIds);
+    await assertFails(getDoc(doc(db, 'config', SITE, 'machines', IN)));
+  });
+
+  it('is refused machines where documentId() in [IN]', async () => {
+    const db = await asScoped(machineIds);
+    await assertFails(getDocs(query(collection(db, 'sites', SITE, 'machines'), where(documentId(), 'in', [IN]))));
   });
 
   it('is refused deployments', async () => {

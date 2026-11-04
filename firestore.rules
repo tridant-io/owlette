@@ -196,15 +196,16 @@ service cloud.firestore {
     // ---- machine scope (2.12.0) ----
     // a member row may carry machineIds: [<machineId>, ...]. absent = whole site (every row
     // before 2.12.0, every owner). present = only those machines and nothing site-wide.
-    // fails closed: [] reaches nothing; null or a non-list makes `in` an evaluation error,
-    // which denies. widening is a field delete, never null. both helpers read the member
-    // document isActiveMember() already reads, so no access is added. call them only
-    // behind isActiveMember(siteId).
+    // fails closed: [] reaches nothing, and a value that is not a list (a map, a string,
+    // null) reaches nothing either. `in` alone would test a map's keys. widening is a
+    // field delete, never null. both helpers read the member document isActiveMember()
+    // already reads, so no access is added. call them only behind isActiveMember(siteId).
     function memberIsWholeSite(siteId) {
       return !('machineIds' in get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data);
     }
     function memberHoldsMachine(siteId, machineId) {
-      return machineId in get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.machineIds;
+      return get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.machineIds is list &&
+             machineId in get(/databases/$(database)/documents/sites/$(siteId)/members/$(request.auth.uid)).data.machineIds;
     }
     // site-wide reach: every collection that spans machines.
     function canAccessWholeSite(siteId) {
