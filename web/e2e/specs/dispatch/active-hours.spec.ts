@@ -26,7 +26,6 @@ import { activeHoursRefusal, failCommand, getPendingCommandIds } from '../../hel
 test.use(roleState('admin'));
 
 const SITE_ID = 'site-A';
-const SITE_NAME = 'Site A (Assigned)';
 const MACHINE_ID = 'e2e-active-hours-target';
 const REASON = 'venue closed for the day';
 
@@ -152,13 +151,9 @@ test.describe('inside active hours on a guarded windows agent', () => {
     expect(await pendingOfType('reboot_machine')).toHaveLength(0);
   });
 
-  test('the manage-sites machine list asks the same question', async ({ page }) => {
-    await page.goto('/dashboard');
-    await page.getByTestId('site-switcher-trigger').click();
-    await page.getByRole('menuitem', { name: /manage sites/i }).click();
-    const manage = page.getByRole('dialog', { name: /manage sites/i });
-    await manage.getByRole('button', { name: `machines on ${SITE_NAME}` }).click();
-    await manage.getByRole('button', { name: `restart ${MACHINE_ID}` }).click();
+  test('the site settings machine list asks the same question', async ({ page }) => {
+    await page.goto(`/admin/sites/${SITE_ID}?section=machines`);
+    await page.getByRole('button', { name: `restart ${MACHINE_ID}` }).click();
 
     const dialog = page.getByRole('dialog', { name: `restart ${MACHINE_ID}?` });
     await expect(dialog.getByTestId('active-hours-notice')).toHaveText(
