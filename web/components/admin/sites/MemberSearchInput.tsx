@@ -185,16 +185,23 @@ export function MemberSearchInput({
                   // a mousedown would move focus off the input the list belongs to
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => pick(candidate)}
+                  // over the active row's accent fill in dark, the muted small print (4.40:1) and
+                  // the cyan marks (3.58:1) miss aa, so that row alone takes the stronger tone
                   className={cn(
                     'cursor-pointer rounded-sm px-2 py-1.5 text-foreground',
-                    isActive && 'bg-accent',
+                    isActive && 'bg-accent dark:[&_mark]:text-accent-foreground',
                   )}
                 >
                   <div className="text-sm wrap-anywhere">
                     {highlightMatch(candidate.displayName || candidate.email || 'unnamed account', text)}
                   </div>
                   {candidate.displayName && candidate.email && (
-                    <div className="text-xs text-muted-foreground wrap-anywhere">
+                    <div
+                      className={cn(
+                        'text-xs wrap-anywhere',
+                        isActive ? 'text-accent-foreground/80' : 'text-muted-foreground',
+                      )}
+                    >
                       {highlightMatch(candidate.email, text)}
                     </div>
                   )}
