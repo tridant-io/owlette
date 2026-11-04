@@ -37,11 +37,11 @@ let memberDoc: { exists: boolean; data: () => unknown } = {
   data: () => undefined,
 };
 
-/** Give the caller per-site standing. */
-function setMember(role: 'owner' | 'admin' | 'member'): void {
+/** Give the caller per-site standing; `extra` adds fields to the row, such as `swoop`. */
+function setMember(role: 'owner' | 'admin' | 'member', extra?: Record<string, unknown>): void {
   memberDoc = {
     exists: true,
-    data: () => ({ uid: 'uid_alice', role, status: 'active', addedAt: new Date(0), addedBy: 'system:test' }),
+    data: () => ({ uid: 'uid_alice', role, status: 'active', addedAt: new Date(0), addedBy: 'system:test', ...extra }),
   };
 }
 
@@ -507,6 +507,84 @@ describe('authorizedSiteHandler — swoop capabilities are exempt from the capab
     expect(allow).toBeDefined();
     expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBeUndefined();
     expect(allow!.payload.enforcementBypassed).toBe(false);
+  });
+});
+
+// owner rulings 13-14. the mode is read off the member row and holds on both
+// sides of the kill switch, because the swoop capabilities are bypass-exempt.
+describe.each([
+  ['on', true],
+  ['off', false],
+])("authorizedSiteHandler — a member row's swoop mode, capability enforcement %s", (_label, enforcement) => {
+  beforeEach(() => {
+    configResult = { ...configResult, capability_enforcement: enforcement };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+  });
+
+  async function call(capability: 'MACHINE_REMOTE_CONTROL' | 'MACHINE_REMOTE_VIEW') {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+    return { res, handler };
+  }
+
+  function denyReason(): string | undefined {
+    const deny = setCalls.find((c) => (c.payload as { outcome?: string }).outcome === 'deny');
+    return (deny?.payload as { denyReason?: string } | undefined)?.denyReason;
+  }
+
+  it('refuses an admin held to view MACHINE_REMOTE_CONTROL, with code capability_missing', async () => {
+    setMember('admin', { swoop: 'view' });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'capability_missing', detail: 'capability not granted' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(denyReason()).toBe('capability_missing');
+  });
+
+  it('grants a member set to control MACHINE_REMOTE_CONTROL', async () => {
+    setMember('member', { swoop: 'control' });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][1].actor.swoopModes).toEqual({ ['site-a']: 'control' });
+  });
+
+  it('refuses a member set to none MACHINE_REMOTE_VIEW, with code capability_missing', async () => {
+    setMember('member', { swoop: 'none' });
+    const { res, handler } = await call('MACHINE_REMOTE_VIEW');
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(handler).not.toHaveBeenCalled();
+    expect(denyReason()).toBe('capability_missing');
+  });
+
+  it('positive control: grants an admin with no mode MACHINE_REMOTE_CONTROL', async () => {
+    setMember('admin');
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('authorizedSiteHandler — a swoop mode reaches nothing outside swoop', () => {
+  // with the kill switch off this capability bypasses, and a member is waved
+  // through ('same switch, same member' above), so the control runs with it on.
+  it('positive control: a member set to control is refused MACHINE_EXEC_COMMAND with code forbidden', async () => {
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+    setMember('member', { swoop: 'control' });
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_EXEC_COMMAND', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
+    expect(handler).not.toHaveBeenCalled();
   });
 });
 

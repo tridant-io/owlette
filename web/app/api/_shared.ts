@@ -30,6 +30,7 @@ import type { ApiKeyPermission, ApiKeyResource } from '@/lib/apiKeyTypes';
 import {
   Capability,
   hasCapability,
+  siteStanding,
   type UserActor,
 } from '@/lib/capabilities';
 import { checkRoostVersion } from '@/lib/versionHeader';
@@ -377,9 +378,9 @@ async function requireSiteCapability(
     role: outcome.facts.globalRole,
     // A superadmin legitimately holds no membership; their capabilities
     // short-circuit on the global role before this map is consulted.
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding({
+      [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode },
+    }),
   };
 
   if (!hasCapability(actor, capability, siteId)) {

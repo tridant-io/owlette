@@ -62,7 +62,9 @@ import {
   type SiteRole,
   type UserActor,
   hasCapability,
+  siteStanding,
 } from '@/lib/capabilities';
+import type { SwoopMode } from '@/lib/swoopMode';
 import {
   generateCorrelationId,
   writeAuditEntry,
@@ -242,22 +244,23 @@ function toPermissionList(
 }
 
 /**
- * `siteRoles` carries the caller's standing on the site this request names, and
- * is `{}` on platform routes where no site was resolved. An empty map denies
- * every site-scoped capability, which is the correct default: a route that never
- * resolved membership must not be able to act on a site.
+ * `standing` carries the caller's site role and swoop mode on the site this
+ * request names, built by `siteStanding`, and is `{ siteRoles: {} }` on platform
+ * routes where no site was resolved. an empty map denies every site-scoped
+ * capability, which is the correct default: a route that never resolved
+ * membership must not be able to act on a site.
  */
 function authToActor(
   auth: ResolvedAuth,
   role: Role,
-  siteRoles: Record<string, SiteRole>,
+  standing: { siteRoles: Record<string, SiteRole>; swoopModes?: Record<string, SwoopMode> },
 ): UserActor {
   return {
     type: 'user',
     userId: auth.userId,
     ...(auth.keyContext ? { apiKeyId: auth.keyContext.keyId } : {}),
     role,
-    siteRoles,
+    ...standing,
   };
 }
 
@@ -276,7 +279,7 @@ async function loadUserActor(auth: ResolvedAuth): Promise<UserActor> {
   const role: Role = rawRole === 'superadmin' || rawRole === 'admin' ? rawRole : 'member';
   // No site is in scope on this path, so no per-site standing is resolved and
   // every site-scoped capability denies. Platform routes are the only callers.
-  return authToActor(auth, role, {});
+  return authToActor(auth, role, { siteRoles: {} });
 }
 
 function authErrorToResponse(err: ApiAuthError): NextResponse {
@@ -614,9 +617,9 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         outcome.facts.globalRole,
         // Reached only when the outcome is ok, so a superadmin may legitimately
         // have no membership; their capabilities short-circuit on global role.
-        outcome.facts.membershipRole
-          ? { [siteId]: outcome.facts.membershipRole }
-          : {},
+        siteStanding({
+          [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode },
+        }),
       );
 
       // 5. Read kill-switch config.
@@ -691,6 +694,19 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
             denyReason: 'capability_missing',
             metadata: { route: request.nextUrl.pathname, method: request.method },
           });
+          // swoop's viewer and lease end only on a coded refusal (`isWithdrawal`,
+          // lib/swoop/backoff.ts). a bare 403 reads as an edge in front of the
+          // app, so a person set to none would retry every 30 s for the life of
+          // the tab and write a deny audit row each time.
+          if (capabilityExempt) {
+            return problem({
+              type: ProblemType.Forbidden,
+              title: 'forbidden',
+              status: 403,
+              detail: 'capability not granted',
+              code: 'capability_missing',
+            });
+          }
           return problemForbidden('capability not granted');
         }
       }

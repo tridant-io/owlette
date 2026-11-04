@@ -8,12 +8,15 @@ import {
   SystemCapabilityMatrix,
   hasCapability,
   isSiteScopedCapability,
+  siteStanding,
   type Actor,
+  type MemberStanding,
   type SiteRole,
   type SystemActorName,
   type UserActor,
   type SystemActor,
 } from '@/lib/capabilities';
+import { grantedSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 
 const ALL_CAPABILITIES: Capability[] = Object.values(Capability);
 
@@ -557,5 +560,180 @@ describe('hasCapability — discriminated union routing', () => {
       siteId: 'site_a',
     };
     expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a')).toBe(true);
+  });
+});
+
+const VIEW = Capability.MACHINE_REMOTE_VIEW;
+const CONTROL = Capability.MACHINE_REMOTE_CONTROL;
+
+/** a map whose one own key is `key`, which a literal cannot spell for `__proto__`. */
+function ownKeyMap<T>(key: string, value: T): Record<string, T> {
+  const map: Record<string, T> = Object.create(null);
+  map[key] = value;
+  return map;
+}
+
+describe("hasCapability — a person's swoop mode (owner rulings 13-14)", () => {
+  const MODES: Array<SwoopMode | null> = [null, 'none', 'view', 'control'];
+
+  function withMode(siteRole: SiteRole, mode: SwoopMode | null): UserActor {
+    return userActor({
+      role: 'member',
+      siteRoles: { site_a: siteRole },
+      ...(mode === null ? {} : { swoopModes: { site_a: mode } }),
+    });
+  }
+
+  for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+    for (const mode of MODES) {
+      const granted = grantedSwoopMode(siteRole, mode);
+
+      it(`${siteRole} with mode ${mode ?? 'absent'} — watch=${granted !== 'none'}, control=${granted === 'control'}`, () => {
+        const actor = withMode(siteRole, mode);
+        expect(hasCapability(actor, VIEW, 'site_a')).toBe(granted !== 'none');
+        expect(hasCapability(actor, CONTROL, 'site_a')).toBe(granted === 'control');
+      });
+    }
+  }
+
+  it('the role defaults agree with the matrix', () => {
+    for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+      const granted = grantedSwoopMode(siteRole, null);
+      expect(SiteRoleCapabilityMatrix[siteRole].includes(CONTROL)).toBe(granted === 'control');
+      expect(SiteRoleCapabilityMatrix[siteRole].includes(VIEW)).toBe(granted !== 'none');
+    }
+  });
+
+  it('a member set to control gains control and nothing else', () => {
+    const actor = withMode('member', 'control');
+    for (const cap of [
+      Capability.MACHINE_EXEC_COMMAND,
+      Capability.MACHINE_CONFIG_WRITE,
+      Capability.SWOOP_SETTINGS_MANAGE,
+      Capability.SITE_MEMBER_MANAGE,
+      Capability.MACHINE_ENROLL,
+    ]) {
+      expect(hasCapability(actor, cap, 'site_a')).toBe(false);
+    }
+  });
+
+  it('an admin held to view or none keeps running the site, and loses control', () => {
+    for (const mode of ['view', 'none'] as SwoopMode[]) {
+      const actor = withMode('admin', mode);
+      expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, 'site_a')).toBe(true);
+      expect(hasCapability(actor, Capability.SWOOP_SETTINGS_MANAGE, 'site_a')).toBe(true);
+      expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a')).toBe(true);
+      expect(hasCapability(actor, CONTROL, 'site_a')).toBe(false);
+      expect(hasCapability(actor, VIEW, 'site_a')).toBe(mode === 'view');
+    }
+  });
+
+  it('an owner with a mode in a hand-built actor still holds both', () => {
+    for (const mode of ['none', 'view'] as SwoopMode[]) {
+      const actor = withMode('owner', mode);
+      expect(hasCapability(actor, VIEW, 'site_a')).toBe(true);
+      expect(hasCapability(actor, CONTROL, 'site_a')).toBe(true);
+    }
+  });
+
+  it('a mode on site_a says nothing about site_b', () => {
+    const heldBack = userActor({
+      siteRoles: { site_a: 'admin', site_b: 'admin' },
+      swoopModes: { site_a: 'none' },
+    });
+    expect(hasCapability(heldBack, CONTROL, 'site_a')).toBe(false);
+    expect(hasCapability(heldBack, CONTROL, 'site_b')).toBe(true);
+    expect(hasCapability(heldBack, VIEW, 'site_b')).toBe(true);
+
+    const raised = userActor({
+      siteRoles: { site_a: 'member', site_b: 'member' },
+      swoopModes: { site_a: 'control' },
+    });
+    expect(hasCapability(raised, CONTROL, 'site_a')).toBe(true);
+    expect(hasCapability(raised, CONTROL, 'site_b')).toBe(false);
+
+    // a mode for a site the person is not on grants nothing there
+    const stray = userActor({ siteRoles: { site_a: 'member' }, swoopModes: { site_b: 'control' } });
+    expect(hasCapability(stray, VIEW, 'site_b')).toBe(false);
+    expect(hasCapability(stray, CONTROL, 'site_b')).toBe(false);
+  });
+
+  it('a swoopModes keyed constructor or __proto__ never throws or grants', () => {
+    for (const key of ['constructor', '__proto__']) {
+      const stranger = userActor({ siteRoles: { site_a: 'member' }, swoopModes: ownKeyMap<SwoopMode>(key, 'control') });
+      for (const cap of [VIEW, CONTROL]) {
+        expect(() => hasCapability(stranger, cap, key)).not.toThrow();
+        expect(hasCapability(stranger, cap, key)).toBe(false);
+      }
+
+      // an inherited name on a plain map is no mode, so the role decides
+      const admin = userActor({ siteRoles: ownKeyMap<SiteRole>(key, 'admin'), swoopModes: { site_a: 'none' } });
+      expect(() => hasCapability(admin, CONTROL, key)).not.toThrow();
+      expect(hasCapability(admin, CONTROL, key)).toBe(true);
+      const member = userActor({ siteRoles: ownKeyMap<SiteRole>(key, 'member'), swoopModes: { site_a: 'control' } });
+      expect(hasCapability(member, CONTROL, key)).toBe(false);
+    }
+  });
+
+  it('superadmin is unchanged by a mode', () => {
+    const actor = userActor({
+      role: 'superadmin',
+      siteRoles: { site_a: 'member' },
+      swoopModes: { site_a: 'none' },
+    });
+    expect(hasCapability(actor, VIEW, 'site_a')).toBe(true);
+    expect(hasCapability(actor, CONTROL, 'site_a')).toBe(true);
+    expect(hasCapability(actor, CONTROL, 'site_b')).toBe(true);
+  });
+});
+
+describe('siteStanding', () => {
+  it('carries each site role, and a mode only where the row has one', () => {
+    expect(
+      siteStanding({
+        site_a: { role: 'member', swoopMode: 'control' },
+        site_b: { role: 'admin', swoopMode: null },
+      }),
+    ).toEqual({
+      siteRoles: { site_a: 'member', site_b: 'admin' },
+      swoopModes: { site_a: 'control' },
+    });
+  });
+
+  it('skips a site with no role, and its mode with it', () => {
+    expect(siteStanding({ site_a: { role: null, swoopMode: 'control' } })).toEqual({ siteRoles: {} });
+  });
+
+  it("drops an owner's mode", () => {
+    expect(siteStanding({ site_a: { role: 'owner', swoopMode: 'none' } })).toEqual({
+      siteRoles: { site_a: 'owner' },
+    });
+  });
+
+  it('returns no swoopModes key when no site has a mode', () => {
+    const standing = siteStanding({
+      site_a: { role: 'member', swoopMode: null },
+      site_b: { role: 'owner', swoopMode: 'view' },
+      site_c: { role: null, swoopMode: 'control' },
+    });
+    expect(Object.keys(standing)).toEqual(['siteRoles']);
+  });
+
+  it('keeps __proto__ as an own key, and leaves Object.prototype untouched', () => {
+    const prototypeBefore = Object.getOwnPropertyNames(Object.prototype).sort();
+    const standing = siteStanding(ownKeyMap<MemberStanding>('__proto__', { role: 'admin', swoopMode: 'view' }));
+
+    expect(Object.prototype.hasOwnProperty.call(standing.siteRoles, '__proto__')).toBe(true);
+    expect(standing.siteRoles['__proto__']).toBe('admin');
+    expect(Object.prototype.hasOwnProperty.call(standing.swoopModes, '__proto__')).toBe(true);
+    expect(standing.swoopModes?.['__proto__']).toBe('view');
+    expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(prototypeBefore);
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+
+    // and the gate reads the site it names
+    const actor = userActor(standing);
+    expect(hasCapability(actor, VIEW, '__proto__')).toBe(true);
+    expect(hasCapability(actor, CONTROL, '__proto__')).toBe(false);
+    expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, '__proto__')).toBe(true);
   });
 });
