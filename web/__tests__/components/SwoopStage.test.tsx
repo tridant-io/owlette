@@ -398,7 +398,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: 'swoop is excluded on this machine.',
       refusal: 'machine_excluded',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/sites/site-1?section=swoop',
     });
     expect(screen.queryByText(/turn it on/)).toBeNull();
     expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
@@ -409,7 +409,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/sites/site-1?section=swoop',
       upgradeHref: '/settings/plan',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
@@ -423,7 +423,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/sites/site-1?section=swoop',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
     expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();

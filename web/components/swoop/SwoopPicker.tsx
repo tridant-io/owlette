@@ -30,6 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopWindowControls, TRAFFIC_LIGHTS_INSET_PX, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 import { cn } from '@/lib/utils';
@@ -396,7 +397,7 @@ function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string
         <>
           swoop is off for this site ·{' '}
           {canEnable ? (
-            <Link href={`/dashboard?settings=${encodeURIComponent(siteId)}`} className="hl-link text-accent-cyan">
+            <Link href={siteSettingsPath(siteId, 'swoop')} className="hl-link text-accent-cyan">
               open site settings
             </Link>
           ) : (
