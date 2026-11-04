@@ -42,6 +42,7 @@ import {
 import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopDenied, recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
+import { NO_NAME, viewerNames } from '@/lib/swoop/viewerNames.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -86,6 +87,16 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
       });
     }
 
+    // the people in it are named to the people in it, so a member who may
+    // watch learns no name until they are in the room. an email goes only to
+    // a site owner or admin, by role and not by capability: what someone may
+    // do in swoop is not the same question as whose address they may see.
+    const names = session.viewers.some((viewer) => viewer.uid === ctx.actor.userId)
+      ? await viewerNames([session])
+      : null;
+    const siteRole = ctx.actor.siteRoles[ctx.siteId];
+    const withEmail = siteRole === 'owner' || siteRole === 'admin';
+
     return applyAuthDeprecations(
       NextResponse.json({
         ok: true,
@@ -94,7 +105,12 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
           state: session.state,
           createdBy: session.createdBy,
           startedAt: session.startedAt,
-          viewers: session.viewers,
+          viewers: names
+            ? session.viewers.map((viewer) => {
+                const { displayName, email } = names.get(viewer.uid) ?? NO_NAME;
+                return { ...viewer, displayName, ...(withEmail ? { email } : {}) };
+              })
+            : session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
           // whom a revocation ended it for: everyone else in it comes back on their own.

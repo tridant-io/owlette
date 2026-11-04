@@ -8129,6 +8129,11 @@ paths:
         Returns the live state of one session and its viewers. The session
         record holds no key material by construction.
 
+        A caller who is in the session gets each viewer's `displayName`, and a
+        caller whose role on the site is owner or admin gets each viewer's
+        `email` too. A caller who is not in the session gets neither, whatever
+        their role.
+
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
       security:
@@ -8156,6 +8161,14 @@ paths:
                           properties:
                             viewerId: { type: string }
                             uid: { type: string }
+                            displayName:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session. Null when the viewer's account has no name, or is gone.
+                            email:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session and their role on the site is owner or admin; a superadmin with no role on the site gets none. Null when the viewer's account is gone.
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }

@@ -21,7 +21,8 @@
  *
  * what it is not: capture, the encoder's tuning, audio, the rate governor or
  * `swoop-meta` records, and its pointer is whatever a spec has it send on
- * `swoop-cursor` (`cursor`). input it keeps rather than injects: every
+ * `swoop-cursor` (`cursor`), its roster only what a spec has it publish
+ * (`roster`). input it keeps rather than injects: every
  * `swoop-input` message a viewer sends lands in `inputs`. the picture is h.264 because the real
  * host's is, and because playwright's bundled chrome encodes and decodes it
  * headless (spike 2.12 section 8b); never hevc, which headless cannot decode.
@@ -323,6 +324,15 @@ export class FakeSwoopHost {
   async addViewer(viewer: Page): Promise<void> {
     const room = `${E2E_SWOOP_SIGNAL_URL.replace(/^https/, 'wss')}/v1/room/`;
     await viewer.routeWebSocket((url) => url.href.startsWith(room), (ws) => this.join(ws));
+  }
+
+  /** the roster on `swoop-control` to each viewer whose lease it checked, each named by its token's uid as the streamer names it. */
+  async roster(): Promise<void> {
+    const lines = new Map(this.leases.map(({ viewer, uid, ctl }) => [viewer, { id: viewer, name: uid, ctl }]));
+    const message = JSON.stringify({ t: 'roster', viewers: [...lines.values()], tsUs: Date.now() * 1000 });
+    for (const viewer of lines.keys()) {
+      await this.hostPage.evaluate(([v, m]) => (window as unknown as HostWindow).swoopHost.control(v, m), [viewer, message] as const);
+    }
   }
 
   /** a `swoop-cursor` message to one viewer; dropped while its channel is not open, as on the wire. */

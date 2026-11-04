@@ -1253,6 +1253,120 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect(body.code).toBe('session_not_found');
   });
 
+  // the bar names who is in the session (owner ruling 2026-11-04).
+  describe('naming the people in it', () => {
+    const ADMIN_SEAT = 'viewer0000000000000000000000b';
+    const MEMBER_SEAT = 'viewer0000000000000000000000c';
+    const OWNER_SEAT = 'viewer0000000000000000000000d';
+    const GONE = 'user-gone';
+    const NAMES: Record<string, string> = { [ADMIN]: 'Ada Lovelace', [MEMBER]: 'Bob Watcher', [SITE_OWNER]: 'Olive Owner' };
+    // `seedMember` keeps these accounts for the whole file, and a later test reads the admin's email
+    const held = new Map<string, Record<string, unknown> | null | undefined>();
+
+    beforeEach(() => {
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        sid: SID,
+        state: 'live',
+        createdBy: `user:${ADMIN}`,
+        startedAt: Date.now() - 600_000,
+        viewers: [
+          seat(ADMIN, { viewerId: ADMIN_SEAT, ctl: true }),
+          seat(MEMBER, { viewerId: MEMBER_SEAT }),
+          seat(SITE_OWNER, { viewerId: OWNER_SEAT }),
+          seat(GONE, { viewerId: 'viewer0000000000000000000000e' }),
+        ],
+      });
+      for (const [uid, displayName] of Object.entries(NAMES)) {
+        held.set(uid, mocks.userDocs.get(uid));
+        mocks.userDocs.set(uid, { email: `${uid}@example.test`, role: 'member', sites: [], displayName });
+      }
+    });
+
+    afterEach(() => {
+      for (const [uid, doc] of held) {
+        if (doc === undefined) mocks.userDocs.delete(uid);
+        else mocks.userDocs.set(uid, doc);
+      }
+      held.clear();
+    });
+
+    const viewersAs = async (userId: string): Promise<Array<Record<string, unknown>>> => {
+      signIn(userId);
+      const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+      expect(status).toBe(200);
+      return (body.data as { viewers: Array<Record<string, unknown>> }).viewers;
+    };
+
+    it('names everyone in it to a member who is in it, with no email', async () => {
+      const viewers = await viewersAs(MEMBER);
+
+      expect(viewers.map((viewer) => [viewer.viewerId, viewer.displayName])).toEqual([
+        [ADMIN_SEAT, 'Ada Lovelace'],
+        [MEMBER_SEAT, 'Bob Watcher'],
+        [OWNER_SEAT, 'Olive Owner'],
+        // an account that is gone keeps its seat, with no name
+        ['viewer0000000000000000000000e', null],
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+    });
+
+    it.each([
+      ['an admin', ADMIN],
+      ['the owner', SITE_OWNER],
+    ])('gives %s in it every email too', async (_who, userId) => {
+      const viewers = await viewersAs(userId);
+
+      expect(viewers.map((viewer) => [viewer.displayName, viewer.email])).toEqual([
+        ['Ada Lovelace', `${ADMIN}@example.test`],
+        ['Bob Watcher', `${MEMBER}@example.test`],
+        ['Olive Owner', `${SITE_OWNER}@example.test`],
+        [null, null],
+      ]);
+    });
+
+    // the email goes by role on the site, and a superadmin holds none there
+    it('gives a superadmin in it the names and no email', async () => {
+      const SUPER = 'user-super';
+      held.set(SUPER, mocks.userDocs.get(SUPER));
+      mocks.userDocs.set(SUPER, { email: `${SUPER}@example.test`, role: 'superadmin', sites: [], displayName: 'Sam Super' });
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: unknown[] };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: [...record.viewers, seat(SUPER, { viewerId: 'viewer0000000000000000000000f' })],
+      });
+
+      const viewers = await viewersAs(SUPER);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+        'Sam Super',
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+    });
+
+    it.each([
+      ['a member', MEMBER],
+      ['an admin', ADMIN],
+    ])('names nobody to %s who is not in it', async (_who, userId) => {
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: Array<{ uid: string }> };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: record.viewers.filter((viewer) => viewer.uid !== userId),
+      });
+
+      const viewers = await viewersAs(userId);
+
+      expect(viewers).toHaveLength(3);
+      for (const viewer of viewers) {
+        expect(viewer).not.toHaveProperty('displayName');
+        expect(viewer).not.toHaveProperty('email');
+      }
+    });
+  });
+
   it('ends a session with the caller endReason and broadcasts the kill', async () => {
     const res = await DELETE(
       createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
