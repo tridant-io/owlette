@@ -7,7 +7,7 @@
 
 import {
   Users,
-  UserPlus,
+  Building2,
   Package,
   Settings,
   Mail,
@@ -48,10 +48,10 @@ const NAV_ITEMS: AdminNavItem[] = [
     group: 'people',
   },
   {
-    name: 'members',
-    href: '/admin/members',
-    icon: UserPlus,
-    description: 'manage site members',
+    name: 'sites',
+    href: '/admin/sites',
+    icon: Building2,
+    description: 'your sites, their members and settings',
     minRole: 'admin',
     group: 'people',
   },
