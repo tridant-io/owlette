@@ -11,6 +11,7 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+## [4.1.26] - 2026-11-04
 ### added — swoop's bar shows who is in the session
 
 The bar now shows a pill for each viewer in a swoop session, beside the machine's
