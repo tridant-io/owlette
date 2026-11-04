@@ -35,16 +35,16 @@ the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one:
 
 swoop is **off** until a site turns it on: that is the default, and it is per site.
 
-a site owner or admin flips it in **site settings** (in the site switcher, or **manage sites** → the site's pencil) → the **swoop** switch, beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; it is not part of the panel's save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+a site owner or admin flips the **swoop** switch on the site's settings page → **swoop & screens** (the site switcher's **site settings**, or admin panel → **sites** → the site's gear), beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
 
-while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens site settings, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime.
+while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens that section, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime.
 
-the rest of the policy has no dashboard control yet. it is set with `PATCH /api/sites/{siteId}/swoop-settings` from a signed-in session as a site owner or admin; an API key is refused here too.
+the rest of the site policy is still API-only: `PATCH /api/sites/{siteId}/swoop-settings`, from a signed-in session as a site owner or admin; an API key is refused here too. a person's own swoop mode is set in the site's [members section](/docs/dashboard/admin/member-management#swoop-mode).
 
 | setting | default | what it does |
 |---|---|---|
 | `enabled` | `false` | the site-wide switch, the one the dashboard exposes |
-| `membersMayWatch` | `true` | whether a plain site member may watch. control always needs more than membership |
+| `membersMayWatch` | `true` | whether a site member with no swoop mode of their own may watch |
 | `excludedMachineIds` | `[]` | up to 1,000 machines swoop may never reach, whatever the rest of the policy says |
 | `indicator` | `banner` | how the machine signals a live session: `banner`, `tray` or `none`. today the owlette app's menu shows a swoop row with the viewer count during every session, and `tray` also raises a notification when one starts |
 
@@ -64,12 +64,14 @@ swoop does not open the machine you are sitting at. a browser cannot tell which 
 
 ## watching versus control
 
-| | who | what it takes |
+| | who, by default | what it takes |
 |---|---|---|
-| watch | site members, owners and admins | site membership. a member also needs `membersMayWatch` on |
-| control | site owners and admins | the machine remote-control capability **and** a live second factor |
+| watch | site members, owners and admins | site membership, unless your swoop mode is **no swoop**. a member with no swoop mode of their own also needs `membersMayWatch` on |
+| control | site owners and admins | a site role or swoop mode that includes control, **and** a live second factor |
 
-the viewer always asks for control when your role allows it, and falls back to watching only when it does not.
+a site owner or admin can give anyone else on the site a [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) of their own: **no swoop**, **watch** or **control**. it changes swoop and nothing else. a member set to control takes control after the second factor and still has no commands or configuration; an admin held to watch keeps everything else an admin does. the owner always controls.
+
+the viewer always asks for control when your site role or swoop mode allows it, and falls back to watching only when it does not.
 
 a viewer that started watch-only stays watch-only. renewing its lease cannot promote it.
 
@@ -309,7 +311,7 @@ without Accessibility you can still watch: the picture, the cursor, the audio an
 
 ## admin → swoop
 
-**admin** → **swoop** (`/admin/swoop`) lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. a plain member does not get the page. see the [admin panel](/docs/dashboard/admin).
+**admin** → **swoop** (`/admin/swoop`) lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. the page and **kill** are for site owners and admins, whatever their own swoop mode: a member set to control gets neither. see the [admin panel](/docs/dashboard/admin).
 
 **kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
 
@@ -345,9 +347,9 @@ a refused session arrives as a [problem](/docs/api/errors) with a `code`. the vi
 | `api_key_not_permitted` | 403 | the caller used an API key | stops |
 | `swoop_disabled` | 403 | the site has swoop off | stops, and offers a site owner or admin **open site settings**; a member is told to ask one |
 | `machine_excluded` | 403 | the machine is in `excludedMachineIds` | stops |
-| `forbidden` | 403 | your role on the site does not include the capability, as when a member asks for control. the detail reads "capability not granted" | asks to watch instead |
+| `capability_missing` | 403 | at the start of a session: your site role or swoop mode doesn't include what was asked. a control ask then asks to watch instead; a watch ask stops, and the viewer says **you can't use swoop on this site** | asks to watch instead, then stops |
 | `capability_missing` | 403 | the same, caught at a lease renewal: you lost control or access during the session | stops |
-| `members_may_not_watch` | 403 | you are a member and `membersMayWatch` is off | stops |
+| `members_may_not_watch` | 403 | you are a member with no swoop mode of your own, and `membersMayWatch` is off | stops |
 | `step_up_required` | 401 | control needs a second factor and no window is open, or your account has none enrolled | opens the second-factor prompt |
 | `machine_offline` | 409 | the machine is not connected | retries until it is |
 | `swoop_not_configured` | 503 | the deployment has no signalling server (`SWOOP_SIGNAL_URL` unset) | retries |

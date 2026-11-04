@@ -117,6 +117,7 @@ the row that grants site access. `canAccessSite()` and `isSiteAdmin()` resolve e
 | --- | --- | --- |
 | `uid` | string | duplicated as a field, not only as the document ID, so the collection-group query can prove the rule. |
 | `role` | string | `owner`, `admin` or `member`. `owner` is written only at site creation and by ownership transfer. |
+| `swoop` | string | optional. `none`, `view` or `control`: the person's own swoop mode. absent means the role decides; never on the owner's row. any other value reads as `none`. |
 | `status` | string | `active`. |
 | `addedAt` | timestamp | |
 | `addedBy` | string | uid of whoever granted access. |
