@@ -133,6 +133,12 @@ export interface InputCapture {
   /** called whenever `pointerSent` changes; returns the unsubscribe. */
   onPointerSentChange(listener: () => void): () => void;
   /**
+   * called with each move and each button press the host is sent, absolute or
+   * relative, mouse or touch: what lights this viewer's own pill in the bar.
+   * returns the unsubscribe.
+   */
+  onPointerInput(listener: (kind: 'move' | 'press') => void): () => void;
+  /**
    * the keyboard's way off the stage, which otherwise sends every key — tab
    * included — to the host. a second tap of escape within half a second, with
    * nothing fullscreen, is not sent: what is held is released and the listener
@@ -314,6 +320,10 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
   // whether `heldButtons` has anything in it, for the page.
   const held = watched(false);
   const sent = watched<{ x: number; y: number } | null>(null);
+  const pointerInputListeners = new Set<(kind: 'move' | 'press') => void>();
+  const pointerInput = (kind: 'move' | 'press'): void => {
+    for (const listener of pointerInputListeners) listener(kind);
+  };
 
   /** a client point in the picture's `0..1`, or null while there is no picture box. */
   const onPicture = (clientX: number, clientY: number): { x: number; y: number } | null => {
@@ -563,12 +573,14 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     const at = { x: clamp01(point.x), y: clamp01(point.y) };
     sent.set(at);
     enqueue({ t: 'm', ...at, tsUs });
+    pointerInput('move');
   };
 
   const pressButton = (button: number): void => {
     heldButtons.add(button);
     held.set(true);
     enqueueNow({ t: 'b', button, down: true, tsUs: nowUs() });
+    pointerInput('press');
   };
 
   /** false for a button the host was never sent, or was already sent the release of. */
@@ -596,6 +608,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       }
       if (dx === 0 && dy === 0) return;
       enqueue({ t: 'mr', dx, dy, tsUs });
+      pointerInput('move');
       return;
     }
 
@@ -756,6 +769,13 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       return sent.get();
     },
     onPointerSentChange: sent.subscribe,
+
+    onPointerInput(listener: (kind: 'move' | 'press') => void): () => void {
+      pointerInputListeners.add(listener);
+      return () => {
+        pointerInputListeners.delete(listener);
+      };
+    },
 
     onEscapeTwice(listener: () => void): () => void {
       escapeTwiceListeners.add(listener);

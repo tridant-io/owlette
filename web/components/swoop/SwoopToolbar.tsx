@@ -74,6 +74,7 @@ import {
   TRAFFIC_LIGHTS_INSET_PX,
   dragRegion,
 } from '@/components/swoop/SwoopWindowControls';
+import type { SwoopViewerActivity } from '@/lib/swoop/activity';
 import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
@@ -84,6 +85,7 @@ import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { useSwoopCompactBar } from '@/hooks/useSwoopCompactBar';
 import { useSwoopViewerNames, type SwoopNamedViewer } from '@/hooks/useSwoopViewerNames';
+import { useSwoopViewerActivity } from '@/hooks/useSwoopViewerActivity';
 const subscribeNever = (): (() => void) => () => {};
 const mouseFree = (): boolean => false;
 
@@ -135,6 +137,9 @@ const VERTICAL = 'md:bar-side:[writing-mode:vertical-rl] md:bar-left:rotate-180'
  */
 const UPRIGHT = 'md:bar-left:rotate-180';
 
+/** behind a viewer while they click: a pill's fill, or a row's in the phone's list. */
+const CLICK_FILL = 'bg-accent-cyan/20';
+
 /** a sentence in a wide top bar; on a side or a phone, an icon that says it on hover or tap. */
 function Notice({ text, testId }: { text: string; testId?: string }) {
   return (
@@ -156,14 +161,32 @@ function Notice({ text, testId }: { text: string; testId?: string }) {
   );
 }
 
-/** a pointer for one in control, an eye for one who only watches, in the tint their pointer has on the picture. */
-function ViewerIcon({ viewer, className }: { viewer: SwoopNamedViewer; className?: string }) {
+/**
+ * a pointer for one in control, an eye for one who only watches, in the tint
+ * their pointer has on the picture; cyan while they move it, and in the
+ * pill's own ink on its fill while they click.
+ */
+function ViewerIcon({
+  viewer,
+  activity,
+  className,
+}: {
+  viewer: SwoopNamedViewer;
+  activity: SwoopViewerActivity;
+  className?: string;
+}) {
   // our own pointer is the real one, drawn in no tint
-  const tint = cn(viewer.you ? 'text-foreground' : tintOf(viewer.id), className);
-  return viewer.ctl ? (
+  const resting = viewer.you ? 'text-foreground' : tintOf(viewer.id);
+  const tint = cn(
+    activity === 'moving' ? 'text-accent-cyan' : activity === 'clicking' ? 'text-foreground' : resting,
+    className,
+  );
+  if (!viewer.ctl) return <Eye role="img" aria-label="view only" className={tint} />;
+  // the phone's list names no row, so there a lit pointer says it to a screen reader
+  return activity === 'idle' ? (
     <MousePointer2 aria-hidden className={tint} />
   ) : (
-    <Eye role="img" aria-label="view only" className={tint} />
+    <MousePointer2 role="img" aria-label={activity} className={tint} />
   );
 }
 
@@ -184,7 +207,9 @@ function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: strin
  * who is in the session, beside the machine's name: a pill per viewer, this
  * tab's own marked "(you)", hovering one names them in full. the session route
  * sends an email to a site owner or admin only, and the pill shows what it was
- * sent.
+ * sent. a pill's edge turns cyan while its viewer moves the pointer, and it
+ * fills in while they click: only this tab's own clicks, as nothing the host
+ * sends says when anyone else's button is down.
  *
  * a compact bar has no room for a row of them and a touch screen no hover, so
  * there one button with the count opens the same list. a pill is a button so
@@ -192,8 +217,10 @@ function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: strin
  */
 function ViewerPills({ session, compact }: { session: SwoopSession | null; compact: boolean }) {
   const viewers = useSwoopViewerNames(session);
+  const activities = useSwoopViewerActivity(session);
   const placement = useBarMenuPlacement();
   if (viewers.length === 0) return null;
+  const activityOf = (viewer: SwoopNamedViewer): SwoopViewerActivity => activities.get(viewer.id) ?? 'idle';
 
   if (compact) {
     return (
@@ -207,8 +234,12 @@ function ViewerPills({ session, compact }: { session: SwoopSession | null; compa
         <PopoverContent {...placement} align="start" className="w-auto max-w-[calc(100vw-1rem)] p-3">
           <ul aria-label="in this session" className="space-y-2 text-sm">
             {viewers.map((viewer) => (
-              <li key={viewer.id} className="flex items-start gap-2">
-                <ViewerIcon viewer={viewer} className="mt-0.5 size-4 shrink-0" />
+              <li
+                key={viewer.id}
+                // the fill reaches into the popover's padding, so it clears the text and the row stays put
+                className={cn('-mx-1 flex items-start gap-2 rounded-sm px-1', activityOf(viewer) === 'clicking' && CLICK_FILL)}
+              >
+                <ViewerIcon viewer={viewer} activity={activityOf(viewer)} className="mt-0.5 size-4 shrink-0" />
                 <ViewerLines viewer={viewer} muted="text-muted-foreground" />
               </li>
             ))}
@@ -220,26 +251,38 @@ function ViewerPills({ session, compact }: { session: SwoopSession | null; compa
 
   return (
     <ul aria-label="in this session" className="flex shrink-0 items-center gap-1 md:bar-side:flex-col">
-      {viewers.map((viewer) => (
-        <li key={viewer.id} className="flex">
-          <BarTooltip
-            // the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink
-            label={<ViewerLines viewer={viewer} muted="text-tooltip-foreground/70 dark:text-muted-foreground" />}
-          >
-            <Badge asChild variant="outline" className={cn('cursor-default', VERTICAL)}>
-              <button
-                type="button"
-                // what it shows, and what its eye says on screen
-                aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}`}
+      {viewers.map((viewer) => {
+        const activity = activityOf(viewer);
+        return (
+          <li key={viewer.id} className="flex">
+            <BarTooltip
+              // the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink
+              label={<ViewerLines viewer={viewer} muted="text-tooltip-foreground/70 dark:text-muted-foreground" />}
+            >
+              <Badge
+                asChild
+                variant="outline"
+                className={cn(
+                  'cursor-default',
+                  VERTICAL,
+                  activity !== 'idle' && 'border-accent-cyan',
+                  activity === 'clicking' && CLICK_FILL,
+                )}
               >
-                <ViewerIcon viewer={viewer} className={UPRIGHT} />
-                {viewer.short}
-                {viewer.you && ' (you)'}
-              </button>
-            </Badge>
-          </BarTooltip>
-        </li>
-      ))}
+                <button
+                  type="button"
+                  // what it shows, and what its eye and its light say on screen
+                  aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}${activity === 'idle' ? '' : `, ${activity}`}`}
+                >
+                  <ViewerIcon viewer={viewer} activity={activity} className={UPRIGHT} />
+                  {viewer.short}
+                  {viewer.you && ' (you)'}
+                </button>
+              </Badge>
+            </BarTooltip>
+          </li>
+        );
+      })}
     </ul>
   );
 }

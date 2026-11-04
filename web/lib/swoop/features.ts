@@ -35,6 +35,7 @@ import { attach as attachLease } from '@/lib/swoop/lease';
 import { attach as attachClipboard } from '@/lib/swoop/clipboard';
 import { attach as attachAudio } from '@/lib/swoop/audio';
 import { attach as attachDisplays } from '@/lib/swoop/displays';
+import { attach as attachActivity } from '@/lib/swoop/activity';
 import { attach as attachPresence } from '@/lib/swoop/presence';
 import { attach as attachCursor } from '@/lib/swoop/cursor';
 import { attach as attachWakeLock } from '@/lib/swoop/wakeLock';
@@ -128,8 +129,8 @@ export interface SwoopFeature {
  * constructors — `attachInputCapture(options)` and `createSwoopFeedback(options)`
  * — because both are used directly by their own tests and neither should know
  * what a `SwoopSession` is. the adapters below are the whole of the coupling.
- * a third, `touch`, is adapted in the list itself: its attach takes the input
- * capture as well as the session, which is null for a watcher.
+ * two more, `touch` and `activity`, are adapted in the list itself: each attach
+ * takes the input capture as well as the session, which is null for a watcher.
  *
  * the handles they produce are kept here, keyed weakly by session, because the
  * toolbar and the overlay need them and the `attach` contract only hands back a
@@ -221,6 +222,8 @@ export const SWOOP_FEATURES: readonly SwoopFeature[] = [
   { name: 'clipboard', attach: attachClipboard },
   { name: 'audio', attach: attachAudio },
   { name: 'displays', attach: attachDisplays },
+  // before presence, which lights it with the others' moves; the capture lights this viewer's own
+  { name: 'activity', attach: (session) => attachActivity(session, swoopInputCapture(session)) },
   { name: 'presence', attach: attachPresence },
   { name: 'cursor', attach: attachCursor },
   { name: 'wake-lock', attach: attachWakeLock },

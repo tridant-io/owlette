@@ -11,10 +11,14 @@
  * fold into one button. `storageState` is emptied and each page signs in
  * itself, as in `session.spec.ts`: the admin asks for control, and a second
  * factor passed at sign-in moments ago is the step-up for it.
+ *
+ * a pill lights while its viewer moves the pointer: the admin's own from the
+ * admin's own mouse, which lights a click too, and the admin's on the member's
+ * list from a `vpos`, which the fake host sends only when a spec tells it to.
  */
 
 import crypto from 'crypto';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -176,6 +180,47 @@ test('two people on one machine each see both on the bar, and only the admin is 
     await expect(list).toContainText('Bob Watcher (you)');
     await expect(list).not.toContainText('@');
     await test.info().attach('member on a phone', { body: await other.screenshot(), contentType: 'image/png' });
+
+    // a light lasts 400 ms after the last move, so each try moves again, and the picture kept is
+    // one the light was on for from before it was taken until after
+    const whileLit = async (label: string, snap: () => Promise<Buffer>, act: () => Promise<void>, light: Locator) => {
+      let shot: Buffer = Buffer.alloc(0);
+      await expect(async () => {
+        await act();
+        await expect(light).toBeVisible({ timeout: 200 });
+        shot = await snap();
+        expect(await light.isVisible()).toBe(true);
+      }).toPass({ timeout: 15_000 });
+      await test.info().attach(label, { body: shot, contentType: 'image/png' });
+    };
+    const adminTop = () => page.screenshot({ clip: barTop });
+    // over the picture, below the bar
+    let x = 600;
+    const adminMoves = async () => {
+      await page.mouse.move((x += 3), 420);
+    };
+    const adminClicks = async () => {
+      await page.mouse.down();
+      await page.mouse.up();
+    };
+    const moving = adminBar.getByRole('button', { name: 'Ada L. (you), moving', exact: true });
+    const clicking = adminBar.getByRole('button', { name: 'Ada L. (you), clicking', exact: true });
+    // the focused pill's tooltip would cover the others in the pictures
+    await pills(page).first().blur();
+    // the admin's page is still in the light theme from the focus step
+    await whileLit('your pill while you move, light', adminTop, adminMoves, moving);
+    await whileLit('your pill while you click, light', adminTop, adminClicks, clicking);
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+    await whileLit('your pill while you move, dark', adminTop, adminMoves, moving);
+    await whileLit('your pill while you click, dark', adminTop, adminClicks, clicking);
+
+    // the streamer sends the others a `vpos` for each move it takes from a controller
+    const viewerOf = (user: TestUser) => host.leases.filter((lease) => lease.uid === user.uid).at(-1)!.viewer;
+    const vpos = () => JSON.stringify({ t: 'vpos', viewer: viewerOf(admin), x: 0.5, y: 0.5, tsUs: Date.now() * 1000 });
+    const adminPoints = () => host.cursor(viewerOf(member), vpos());
+    const adminLit = list.getByRole('img', { name: 'moving' });
+    await whileLit("the admin moving, on the member's phone", () => other.screenshot(), adminPoints, adminLit);
 
     expect(host.problems).toEqual([]);
   } finally {

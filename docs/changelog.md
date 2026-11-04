@@ -43,6 +43,14 @@ ones you own or administer, who are not on this site yet. A full email still
 adds anyone with an owlette account. owlette never searches every account for
 you, so someone who is on none of your sites is added by their email.
 
+### added — a pill lights up while its viewer moves the pointer
+
+In swoop's bar, a person's pill now lights up while they move the pointer on
+the picture: its edge and its pointer turn cyan, so everyone in the session can
+see who is working the machine. Your own pill also fills in while you click;
+others' clicks light up in a later agent release. Nothing to update on the
+machine.
+
 ### changed — site owners and admins change roles in the dashboard
 
 A site's owners and admins can now make a member an admin, or an admin a
