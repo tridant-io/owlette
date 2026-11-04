@@ -28,8 +28,6 @@ interface SiteMachine {
 
 interface SiteMachinesListProps {
   siteId: string;
-  /** Report the fetched machine count so the parent row can display it. */
-  onCountLoaded?: (siteId: string, count: number) => void;
 }
 
 /**
@@ -39,7 +37,7 @@ interface SiteMachinesListProps {
  * rather than a client Firestore listener, so superadmins can inspect sites
  * they aren't members of without loosening rules.
  */
-export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProps) {
+export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
   const [machines, setMachines] = useState<SiteMachine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // the target outlives the dialog's close, so its closing frames keep the same machine and choice
@@ -56,11 +54,10 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
       if (!response.ok) throw new Error(`failed to load machines (${response.status})`);
       const body = (await response.json()) as { machines: SiteMachine[] };
       setMachines(body.machines);
-      onCountLoaded?.(siteId, body.machines.length);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'failed to load machines');
     }
-  }, [siteId, onCountLoaded]);
+  }, [siteId]);
 
   useEffect(() => {
     void fetchMachines();

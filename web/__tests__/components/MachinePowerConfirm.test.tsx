@@ -3,7 +3,7 @@
  * @jest-environment jsdom
  *
  * The one restart and shutdown confirm the context menu, the card's approve
- * button and the manage-sites machine list share.
+ * button and the machines section of a site's settings share.
  *
  * Inside a guarded machine's active hours the agent refuses a restart or a
  * shutdown that carries no override, and a refused restart still counts

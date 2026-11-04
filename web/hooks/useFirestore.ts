@@ -6,7 +6,6 @@ import {
   collectionGroup,
   onSnapshot,
   doc,
-  getDoc,
   query,
   where,
   Timestamp,
@@ -839,7 +838,11 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // loading is set synchronously in this effect by design (it re-arms on every
+    // access change, below); the rule reports only the first such call, so the
+    // one suppression covers them all.
     if (!db) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       setError('Firebase not configured');
       return;
@@ -1013,30 +1016,7 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
     });
   };
 
-  const checkSiteIdAvailability = async (siteId: string): Promise<boolean> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    if (!siteId || siteId.trim() === '') {
-      return false;
-    }
-
-    const { isValid } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      return false;
-    }
-
-    // A live site OR a tombstone from a deleted one makes the id unavailable —
-    // createSite refuses retired ids, so reporting them as free would send the
-    // user through the form only to 409 on submit.
-    const [siteSnap, tombstoneSnap] = await Promise.all([
-      getDoc(doc(db, 'sites', siteId)),
-      getDoc(doc(db, 'site_ids', siteId)),
-    ]);
-
-    return !siteSnap.exists() && !tombstoneSnap.exists();
-  };
-
-  return { sites, loading, error, createSite, updateSite, deleteSite, checkSiteIdAvailability };
+  return { sites, loading, error, createSite, updateSite, deleteSite };
 }
 
 // Module-level so consumers' memo/effect deps don't churn on a fresh [] each render.

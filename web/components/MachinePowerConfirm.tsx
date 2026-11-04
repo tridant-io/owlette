@@ -2,8 +2,8 @@
 
 /**
  * The restart and shutdown confirm, shared by the machine context menu, the
- * card's approve button and the manage-sites machine list, plus the hook that
- * sends the command and reports what the agent did with it.
+ * card's approve button and the machines section of a site's settings, plus
+ * the hook that sends the command and reports what the agent did with it.
  *
  * Inside a guarded machine's active hours the agent refuses a command without
  * an override, and a refused restart still counts against its 5 s rate limit,

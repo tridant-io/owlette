@@ -366,8 +366,9 @@ describe('GET /api/sites/{siteId}/machines', () => {
     ]);
   });
 
-  // the manage-sites machine list asks before restarting inside active hours,
-  // which it can only do with the window, the guard and the machine's clock.
+  // the machines section of a site's settings asks before restarting inside
+  // active hours, which it can only do with the window, the guard and the
+  // machine's clock.
   it('carries active hours, the agent capabilities and the machine timezone', async () => {
     seedSite();
     authedKey([siteScope('read')]);

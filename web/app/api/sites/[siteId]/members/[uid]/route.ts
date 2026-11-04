@@ -73,8 +73,9 @@ type RouteParams = { siteId: string; uid: string };
  * POST /api/sites/{siteId}/transfer-ownership, and `updateMember`/`removeMember`
  * refuse an owner outright either way. No self-service flow breaks — there is no
  * "leave site", and the members UI already refuses "remove yourself"
- * client-side (`app/admin/members/page.tsx`); this is that rule's missing server
- * half, matching the self-guard on `users/{uid}/mfa-reset`.
+ * client-side (`components/admin/sites/SiteMembersSection.tsx`); this is that
+ * rule's missing server half, matching the self-guard on
+ * `users/{uid}/mfa-reset`.
  *
  * Api-key callers are refused on the KEY OWNER's row for the same reason: a key
  * is the user's credential and must not reach what their session cannot.

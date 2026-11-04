@@ -119,6 +119,12 @@ const nextConfig: NextConfig = {
         destination: '/docs/:path*',
         permanent: true,
       },
+      // old bookmarks and links; a 307 until the release reaches prod, so a revert is not cached in browsers.
+      {
+        source: '/admin/members',
+        destination: '/admin/sites',
+        permanent: false,
+      },
     ];
   },
   async headers() {
