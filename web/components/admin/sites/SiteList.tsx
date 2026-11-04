@@ -9,13 +9,13 @@ import { useCurrentSite } from '@/hooks/useCurrentSite';
 import { createSite, type Site } from '@/hooks/useFirestore';
 import { useUserManagement } from '@/hooks/useUserManagement';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
-import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { StatChip } from '@/components/admin/StatChip';
 import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
+import { CopySiteIdButton } from './CopySiteIdButton';
 import { highlightMatch } from './highlightMatch';
 
 function SkeletonRows() {
@@ -32,15 +32,6 @@ function SkeletonRows() {
       ))}
     </ul>
   );
-}
-
-async function copySiteId(siteId: string) {
-  try {
-    await navigator.clipboard.writeText(siteId);
-    toast.success('site ID copied');
-  } catch {
-    toast.error('could not copy the site ID');
-  }
 }
 
 // one grid, two shapes, as the issue list. a phone: the name and the gear on the
@@ -74,14 +65,9 @@ function SiteRow({
         )}
       </div>
       <div className="col-[1/3] row-[2] flex min-w-0 flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground md:contents">
-        <button
-          type="button"
-          onClick={() => void copySiteId(site.id)}
-          aria-label={`copy site ID ${site.id}`}
-          className="min-w-0 max-w-full cursor-pointer truncate text-left font-mono hover:text-accent-cyan md:col-[2] md:row-[1] md:justify-self-start"
-        >
+        <CopySiteIdButton siteId={site.id} className="min-w-0 truncate md:col-[2] md:row-[1] md:justify-self-start">
           {highlightMatch(site.id, query)}
-        </button>
+        </CopySiteIdButton>
         <span aria-hidden="true" className="md:hidden">·</span>
         <span className="min-w-0 truncate md:col-[3] md:row-[1]">{highlightMatch(site.timezone || 'UTC', query)}</span>
         <span aria-hidden="true" className="md:hidden">·</span>

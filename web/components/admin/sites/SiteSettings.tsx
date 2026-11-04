@@ -5,25 +5,16 @@ import { SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites, type Site } from '@/hooks/useFirestore';
 import { SITE_SECTIONS, SITE_SECTION_LABELS, type SiteSection } from '@/lib/siteSettingsPath';
-import { toast } from '@/lib/toast';
 import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
 import { Panel } from '@/components/admin/Panel';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
+import { CopySiteIdButton } from '@/components/admin/sites/CopySiteIdButton';
 import { SiteDangerZone } from '@/components/admin/sites/SiteDangerZone';
 import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
 import { SiteSwitches } from '@/components/admin/sites/SiteSwitches';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
 import { Badge } from '@/components/ui/badge';
-
-async function copySiteId(siteId: string) {
-  try {
-    await navigator.clipboard.writeText(siteId);
-    toast.success('site ID copied');
-  } catch {
-    toast.error('could not copy the site ID');
-  }
-}
 
 /**
  * one site's settings, a section at a time. it holds no router: the caller owns
@@ -96,14 +87,7 @@ export function SiteSettings({
       <header className="mb-4 md:mb-6">
         {title}
         <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-          <button
-            type="button"
-            onClick={() => void copySiteId(site.id)}
-            aria-label={`copy site ID ${site.id}`}
-            className="max-w-full cursor-pointer text-left font-mono text-sm text-muted-foreground wrap-anywhere hover:text-accent-cyan"
-          >
-            {site.id}
-          </button>
+          <CopySiteIdButton siteId={site.id} className="text-sm wrap-anywhere" />
           {!isSuperadmin && <Badge variant="outline">{owner ? 'owner' : 'admin'}</Badge>}
         </div>
       </header>

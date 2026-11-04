@@ -5,14 +5,13 @@
  * admin panel → sites: the caller's sites with a gear on each one they
  * administer, the owner column for superadmins, the current site first, the
  * filter, "new site" (which opens the new site's settings and leaves the
- * dashboard's site alone) and copying a site ID.
+ * dashboard's site alone) and each row's site ID button.
  */
 
 import React from 'react';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { toast } from '@/lib/toast';
 import { createSite, type Site } from '@/hooks/useFirestore';
 import { SiteList } from '@/components/admin/sites/SiteList';
 import SitesPage from '@/app/admin/sites/page';
@@ -66,10 +65,6 @@ jest.mock('@/components/CreateSiteDialog', () => ({
     mockDialog = props;
     return props.open ? <div role="dialog" aria-label="create new site" /> : null;
   },
-}));
-
-jest.mock('@/lib/toast', () => ({
-  toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
 function site(id: string, name: string, extra: Partial<Site> = {}): Site {
@@ -335,27 +330,14 @@ describe('new site', () => {
   });
 });
 
-describe('copying a site ID', () => {
-  it('copies the id and says so', async () => {
-    const user = renderList();
+describe('the site ID', () => {
+  it("is a copy button on each site's row", () => {
+    renderList();
 
-    await user.click(screen.getByRole('button', { name: 'copy site ID site-a' }));
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('site ID copied'));
-    expect(await navigator.clipboard.readText()).toBe('site-a');
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('says when the clipboard refuses', async () => {
-    const user = renderList();
-    jest
-      .spyOn(navigator.clipboard, 'writeText')
-      .mockRejectedValue(new DOMException('clipboard refused', 'NotAllowedError'));
-
-    await user.click(screen.getByRole('button', { name: 'copy site ID site-a' }));
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('could not copy the site ID'));
-    expect(toast.success).not.toHaveBeenCalled();
+    for (const s of [ALPHA, BRAVO, CHARLIE]) {
+      const row = rows().find((r) => within(r).queryByText(s.name));
+      expect(within(row!).getByRole('button', { name: `copy site ID ${s.id}` })).toHaveTextContent(s.id);
+    }
   });
 });
 

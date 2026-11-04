@@ -9,9 +9,8 @@
  */
 
 import React from 'react';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { toast } from '@/lib/toast';
 import type { Site } from '@/hooks/useFirestore';
 import type { SiteSection } from '@/lib/siteSettingsPath';
 import { SiteSettings } from '@/components/admin/sites/SiteSettings';
@@ -84,10 +83,6 @@ let mockSearch = '';
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ replace: mockReplace, push: jest.fn() }),
   useSearchParams: () => new URLSearchParams(mockSearch),
-}));
-
-jest.mock('@/lib/toast', () => ({
-  toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
 function site(id: string, name: string, extra: Partial<Site> = {}): Site {
@@ -211,27 +206,6 @@ describe('the header', () => {
     expect(screen.queryByText('owner')).toBeNull();
     expect(screen.queryByText('admin')).toBeNull();
     expect(sectionNames()).toEqual(['general', 'members', 'machines', 'swoop & screens', 'danger zone']);
-  });
-
-  it('copies the site ID and says so', async () => {
-    const { user } = renderSettings('site-a');
-
-    await user.click(screen.getByRole('button', { name: 'copy site ID site-a' }));
-
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('site ID copied'));
-    expect(await navigator.clipboard.readText()).toBe('site-a');
-  });
-
-  it('says when the clipboard refuses', async () => {
-    const { user } = renderSettings('site-a');
-    jest
-      .spyOn(navigator.clipboard, 'writeText')
-      .mockRejectedValue(new DOMException('clipboard refused', 'NotAllowedError'));
-
-    await user.click(screen.getByRole('button', { name: 'copy site ID site-a' }));
-
-    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('could not copy the site ID'));
-    expect(toast.success).not.toHaveBeenCalled();
   });
 });
 
