@@ -381,6 +381,38 @@ describe('useSwoopSession — how a session ends', () => {
     expect(mints()).toHaveLength(1);
   });
 
+  describe('a person with no swoop', () => {
+    /** what each session POST asked for: control first, then the watch ask it steps down to. */
+    const asks = () => mints().map(([, init]) => (JSON.parse(String(init?.body)) as { control: boolean }).control);
+
+    it('is refused on the control ask and then the watch ask, and the viewer stops there', async () => {
+      mint = { status: 403, body: { code: 'capability_missing', detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('capability_missing');
+      expect(swoop.retryIn).toBeNull();
+
+      await advance(60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('a watch ask refused with no code is still retried on the ladder', async () => {
+      // the same sentence without the api's code: the control ask still steps down on it
+      mint = { status: 403, body: { detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(3);
+      expect(wired.session).not.toBeNull();
+    });
+  });
+
   it('a plan refusal on a renewal ends the session for good, and names the plan', async () => {
     await open();
     const mintToken = wired.signaling!.mintToken;

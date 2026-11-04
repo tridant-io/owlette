@@ -232,6 +232,8 @@ export function SwoopStage({
   // a machine that said it is restarting speaks for the stage, unless the network is the problem.
   const restartNotice = restarting && !noPath && state !== 'connected' && stall === 'none';
   const swoopOff = refusal === 'swoop_disabled';
+  // only a refused create sets this (a refused lease ends as ended, on its own sentence): the session never started.
+  const noSwoopAccess = refusal === 'capability_missing';
   // the site's plan leaves swoop out, so its switch would not help and an upgrade would.
   const planLocked = refusal === 'plan_required';
   // the picture behind a stall notice is the frozen frame, so it sits on a wash of the stage.
@@ -302,7 +304,7 @@ export function SwoopStage({
       )}
       {!restartNotice && settled && stall === 'none' && (
         <p role="alert" className={`${NOTICE} px-4 text-center`}>
-          {state === 'ended' ? 'session ended' : error}
+          {state === 'ended' ? 'session ended' : noSwoopAccess ? "you can't use swoop on this site" : error}
           {state === 'ended' && error && <span className={NOTICE_DETAIL}>{error}</span>}
           {/* a session that failed after finding no path keeps saying which network to look at */}
           {noPath && <span className={NOTICE_DETAIL}>{noPathDetail(noPath)}</span>}
@@ -316,6 +318,9 @@ export function SwoopStage({
             <span className={NOTICE_DETAIL}>
               {upgradeHref ? 'swoop is part of pro.' : 'swoop is part of pro. ask the site owner to upgrade.'}
             </span>
+          )}
+          {noSwoopAccess && (
+            <span className={NOTICE_DETAIL}>a site owner or admin sets who can watch and control. ask one of them.</span>
           )}
           {/* text lines carry leading above and below their ink and the buttons' edge does not,
               so the same gap reads 7px tighter there; measured at these sizes */}
