@@ -29,7 +29,7 @@
 import { test, expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminAuth, getAdminDb, E2E_BASE_URL } from '../helpers/emulator';
-import { TEST_USERS, seedUser } from '../helpers/seed';
+import { TEST_USERS, seedMemberRow, seedUser } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from '../screenshots/fixtures';
 import {
   recordScene,
@@ -44,6 +44,15 @@ import {
 
 test('episode 14 — team & alerts', async ({ browser }) => {
   const ctx = await seedScreenshotFixtures('automate-schedule-editor');
+  // b03's tokens, out here so the finally can delete them: episode 17's ledger
+  // counts every live token on the site
+  const tokenMachines = [
+    ['mainstage-led', 26 * 24],
+    ['media-server-stage', 19 * 24],
+    ['td-control-room', 11 * 24],
+    ['touring-rig-04', 6 * 24],
+    ['unreal-render-1', 2 * 24],
+  ] as const;
   try {
     // Pin the RECORDING admin to the seeded site so per-site selectors find
     // data. The admin is a member of the site (fixtures assign it), but the
@@ -53,10 +62,9 @@ test('episode 14 — team & alerts', async ({ browser }) => {
       .collection('users')
       .doc(TEST_USERS.admin.uid)
       .set({ lastSiteId: ctx.siteId }, { merge: true });
-    await getAdminDb()
-      .collection('sites')
-      .doc(ctx.siteId)
-      .set({ owner: TEST_USERS.superadmin.uid }, { merge: true });
+    // the crown comes from an owner member row: the members list reads member
+    // rows, never the site doc's `owner` field. the finally takes it off again
+    await seedMemberRow(ctx.siteId, TEST_USERS.superadmin.uid, 'owner');
     // The owner row renders the account's display name — "E2E Superadmin"
     // would put the internal role word on camera, so the owner films as a
     // person. Both stores, because the members API reads the users doc and
@@ -85,13 +93,6 @@ test('episode 14 — team & alerts', async ({ browser }) => {
     // doc per machine (no supersededAt/expiresAt = live; shape mirrors what
     // the pairing flow writes, read back by /api/sites/{id}/agent-tokens).
     const hoursAgo = (h: number) => new Date(FIXED_NOW_MS - h * 3_600_000);
-    const tokenMachines = [
-      ['mainstage-led', 26 * 24],
-      ['media-server-stage', 19 * 24],
-      ['td-control-room', 11 * 24],
-      ['touring-rig-04', 6 * 24],
-      ['unreal-render-1', 2 * 24],
-    ] as const;
     for (const [machineId, ageHours] of tokenMachines) {
       await getAdminDb()
         .collection('agent_refresh_tokens')
@@ -393,6 +394,11 @@ test('episode 14 — team & alerts', async ({ browser }) => {
       },
     );
   } finally {
+    const db = getAdminDb();
+    await db.doc(`sites/${ctx.siteId}/members/${TEST_USERS.superadmin.uid}`).delete().catch(() => undefined);
+    for (const [machineId] of tokenMachines) {
+      await db.collection('agent_refresh_tokens').doc(`e2e-token-${machineId}`).delete().catch(() => undefined);
+    }
     await ctx.cleanup();
   }
 });
