@@ -43,7 +43,7 @@ const picture = {
 };
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 } }),
+  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, user: { uid: 'user-me' } }),
 }));
 
 jest.mock('@/lib/swoop/clientCaps', () => ({
@@ -160,6 +160,11 @@ const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
 const deletes = () => fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE');
 const mints = () => fetchMock.mock.calls.filter(([url]) => url === SESSIONS);
 const recordReads = () => fetchMock.mock.calls.filter(([url, init]) => url === `${SESSIONS}/${GRANT.sid}` && !init?.method);
+
+/** the record as the GET answers it once the session ended, for `endReason` and, on a revocation, `endedFor`. */
+function ended(endReason: string, endedFor?: string): Reply {
+  return { status: 200, body: { data: { sid: GRANT.sid, state: 'ended', endReason, ...(endedFor ? { endedFor } : {}) } } };
+}
 
 let swoop: UseSwoopSession;
 
@@ -301,8 +306,10 @@ describe('useSwoopSession — how a session ends', () => {
   it('a kill is final, and the silence it leaves behind does not bring it back', async () => {
     await open();
     const killed = wired.session!;
+    record = ended('killed');
 
     act(() => wired.peer!.onClosed!('kill'));
+    await flush();
     expect(swoop.state).toBe('ended');
     expect(swoop.error).toBe('this session was ended from elsewhere.');
     expect(swoop.retryIn).toBeNull();
@@ -312,6 +319,157 @@ describe('useSwoopSession — how a session ends', () => {
     await advance(60_000);
     expect(mints()).toHaveLength(1);
     expect(deletes()).toHaveLength(0);
+  });
+
+  it.each([
+    ['a record that cannot be read', { status: 503 }],
+    ['a refusal that is not the api’s own', { status: 403 }],
+    ['no record at all', { status: 404, body: { code: 'session_not_found' } }],
+    ['a refusal a revocation does not cause', { status: 403, body: { code: 'swoop_disabled' } }],
+    ['a revocation that names nobody', ended('revoked')],
+    ['a record the machine has not ended yet', { status: 200, body: { data: { sid: GRANT.sid, state: 'live' } } }],
+  ])('a kill with %s is final, as it always was', async (_what, reply) => {
+    await open();
+    record = reply;
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    expect(swoop.state).toBe('ended');
+    expect(swoop.error).toBe('this session was ended from elsewhere.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  /**
+   * one streamer serves everyone on the machine and has no way to drop one
+   * viewer, so removing a member, or taking control from them, ends the session
+   * for all of them. the record names whom it was for: everyone else starts the
+   * next session on the ladder, as after any end that was not a decision.
+   */
+  it('someone else’s revocation ends it for this viewer too, which comes back on its own', async () => {
+    await open();
+    record = ended('revoked', 'user-other');
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    expect(recordReads()).toHaveLength(1);
+    // never disconnected on the way, which would give fullscreen back
+    expect(swoop.state).toBe('ended');
+    expect(swoop.error).toBeNull();
+    expect(swoop.retryIn).not.toBeNull();
+
+    await advance(30_000);
+    expect(mints()).toHaveLength(2);
+    expect(swoop.state).toBe('connecting');
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it.each([
+    ['the record names this user', ended('revoked', 'user-me')],
+    // a removed member may no longer read the record at all
+    ['the record is no longer this user’s to read', { status: 404, body: { code: 'not_found' } }],
+    ['the record is refused to this user', { status: 403, body: { code: 'members_may_not_watch' } }],
+  ])('a kill where %s is final, and says their access went', async (_what, reply) => {
+    await open();
+    record = reply;
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('revoked');
+    expect(swoop.error).toBe('your access to this machine was removed.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  describe('while a kill’s record is read', () => {
+    /** the next record read waits for `answer`. */
+    function holdRecord(): (reply: Reply) => void {
+      let answer: (reply: Reply) => void = () => {};
+      fetchMock.mockImplementationOnce(
+        async () =>
+          new Promise<Response>((resolve) => {
+            answer = (reply) =>
+              resolve({ ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response);
+          }),
+      );
+      return (reply) => answer(reply);
+    }
+
+    it('the session has not ended yet: nothing disconnects before the record says how', async () => {
+      await open();
+      act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+      await flush();
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('connected');
+
+      answer(ended('revoked', 'user-other'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('what the killed run notices meanwhile ends nothing', async () => {
+      await open();
+      const killed = wired.session!;
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      act(() => killed.end('peer_failed'));
+      await flush();
+      expect(swoop.retryIn).toBeNull();
+
+      answer(ended('killed'));
+      await flush();
+      expect(swoop.error).toBe('this session was ended from elsewhere.');
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+    });
+
+    it('the operator can still end it', async () => {
+      await open();
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      act(() => swoop.end());
+      expect(swoop.state).toBe('ended');
+      // a kill already ended it: there is nothing left to leave
+      expect(deletes()).toHaveLength(0);
+
+      answer(ended('revoked', 'user-other'));
+      await flush();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+      expect(swoop.retryIn).toBeNull();
+    });
+  });
+
+  it('the operator reconnecting while a kill’s record is read keeps the session it started', async () => {
+    await open();
+    let answer: (reply: Reply) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      async () =>
+        new Promise<Response>((resolve) => {
+          answer = (reply) =>
+            resolve({ ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response);
+        }),
+    );
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    act(() => swoop.reconnect());
+    await flush();
+    expect(mints()).toHaveLength(2);
+
+    answer(ended('revoked', 'user-me'));
+    await flush();
+    expect(swoop.state).toBe('connecting');
+    expect(swoop.error).toBeNull();
   });
 
   it('the operator’s end sends exactly one DELETE, saying closed', async () => {
@@ -676,10 +834,22 @@ describe('useSwoopSession — control across a reload of the tab', () => {
 
   it('a kill forgets it', async () => {
     await open();
+    record = ended('killed');
     act(() => wired.peer!.onClosed!('kill'));
+    await flush();
 
     await open();
     expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('someone else’s revocation keeps it, so this viewer comes back in control', async () => {
+    await open();
+    record = ended('revoked', 'user-other');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
+    expect(mintBody(1).continuity).toBe('continuity-1');
   });
 });
 
@@ -954,6 +1124,8 @@ describe('useSwoopSession — a picture that froze', () => {
     await freeze(5);
     expect(swoop.stats.stall.recovery).toBe('reattaching');
     act(() => endIt());
+    // a kill ends the run once its record is read
+    await flush();
     expect(swoop.state).toBe('ended');
     expect(swoop.stats.stall.recovery).toBe('none');
     await advance(5000);

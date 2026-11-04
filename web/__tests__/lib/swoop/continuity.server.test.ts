@@ -77,6 +77,20 @@ describe('swoop continuity', () => {
     }
   });
 
+  // removing one person ends the session for everyone in it, because one
+  // streamer serves them all: everyone else comes back with their control.
+  it('a revocation is final only for the person it was ended for', () => {
+    const minted = mintContinuity('sid-1');
+    const { hash } = parseContinuity(minted.token)!;
+    const revoked = (endedFor?: string) =>
+      record({ continuity: alicesGrant(minted.hash), endReason: 'revoked', ...(endedFor ? { endedFor } : {}) });
+
+    expect(verdict(revoked('bob'), hash)).toEqual({ ok: true, viewerId: 'v-alice' });
+    expect(verdict(revoked('alice'), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
+    // a record that names nobody ended for everyone
+    expect(verdict(revoked(), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
+  });
+
   // a kill closes only the records still open, and a tab's last one may already
   // have ended for a transient reason: the kill's own timestamp is what reaches it.
   it('never inherits from a session a kill on the machine came after', () => {

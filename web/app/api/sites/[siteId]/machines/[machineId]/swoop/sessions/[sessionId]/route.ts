@@ -22,9 +22,11 @@
 
 import { NextResponse } from 'next/server';
 import {
+  problem,
   problemFromError,
   problemNotFound,
   problemValidation,
+  ProblemType,
 } from '@/lib/apiErrors';
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
@@ -72,7 +74,17 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
     if (!decision.ok) return decisionProblem(decision);
 
     const session = await getSwoopSession(ctx.siteId, machineId, sessionId);
-    if (!session) return problemNotFound('session not found');
+    // its own code, apart from the site wrapper's `not_found` for a member no
+    // longer in the site, which the page reads as its access gone with a kill.
+    if (!session) {
+      return problem({
+        type: ProblemType.NotFound,
+        title: 'not found',
+        status: 404,
+        detail: 'session not found',
+        code: 'session_not_found',
+      });
+    }
 
     return applyAuthDeprecations(
       NextResponse.json({
@@ -85,6 +97,8 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
           viewers: session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
+          // whom a revocation ended it for: everyone else in it comes back on their own.
+          ...(session.endedFor ? { endedFor: session.endedFor } : {}),
         },
       }),
       ctx.scopeCheck,

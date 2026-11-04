@@ -7,9 +7,9 @@
  * secret bound to that viewer of that session — which the tab keeps in memory
  * only and presents on its next mint instead of a proof. the server honours it
  * when the grant it matches is this user's, it has not been spent, the session
- * did not end by a kill, a deliberate close or a revocation, and no kill on the
- * machine has come since it started. a new tab has no token and asks as
- * before; closing the tab forgets it.
+ * did not end by a kill, a deliberate close or a revocation of this user, and
+ * no kill on the machine has come since it started. a new tab has no token and
+ * asks as before; closing the tab forgets it.
  *
  * several viewers share one session, so a grant is the viewer's, never the
  * session's: one viewer's token can never stand in for another's step-up, and
@@ -88,6 +88,12 @@ export function continuityInherits(args: {
   // a kill closes only the records still open: one that had already ended for a
   // transient reason is reached through the kill's own timestamp instead.
   if (revokedAt >= record.startedAt) return { ok: false, reason: 'killed' };
-  if (record.endReason && FINAL_ENDS.has(record.endReason)) return { ok: false, reason: 'ended_for_good' };
+  // a revocation ends the session for everyone in it, and is final only for the
+  // person it was for: the rest come back on their own (`revokeViewerSessions.server.ts`).
+  const revokedForAnother =
+    record.endReason === 'revoked' && record.endedFor !== undefined && record.endedFor !== grant.uid;
+  if (record.endReason && FINAL_ENDS.has(record.endReason) && !revokedForAnother) {
+    return { ok: false, reason: 'ended_for_good' };
+  }
   return { ok: true, viewerId };
 }

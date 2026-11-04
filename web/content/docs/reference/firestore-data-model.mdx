@@ -361,6 +361,7 @@ one swoop session: one streamer's time on the machine, which every viewer of the
 | `continuity` | map | reconnect continuity, by viewer ID: `{ uid, hash, usedAt? }` for each control viewer. |
 | `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked` or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
 | `viewerReason`, `endedAt` | string, timestamp | the page's own reason for ending, and when. |
+| `endedFor` | string | the uid a `revoked` end was for. removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own. |
 
 a daily cron (`/api/cron/swoop-retention`) closes sessions whose leases have expired and deletes sessions older than 30 days.
 

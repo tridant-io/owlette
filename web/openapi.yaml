@@ -8157,6 +8157,9 @@ paths:
                             renewedAt: { type: integer, description: When this viewer last renewed its lease; absent until it first has. }
                       endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
+                      endedFor:
+                        type: string
+                        description: The uid a `revoked` end was for. Removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
@@ -8168,7 +8171,14 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
-        '404': { $ref: '#/components/responses/Problem404' }
+        '404':
+          description: |
+            `code: not_found` when the site does not exist or the caller is not
+            in it, `code: session_not_found` when the machine has no session
+            with this id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }

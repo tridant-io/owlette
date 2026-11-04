@@ -1181,11 +1181,31 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect((body.data as Record<string, unknown>).state).toBe('live');
   });
 
-  it('404s an unknown session', async () => {
+  // everyone else in a session a revocation ended reads whom it was for, and comes back.
+  it('names whom a revocation ended it for', async () => {
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
+      sid: SID,
+      state: 'ended',
+      createdBy: `user:${ADMIN}`,
+      startedAt: Date.now() - 60_000,
+      viewers: [],
+      endReason: 'revoked',
+      endedFor: MEMBER,
+      endedAt: Date.now(),
+    });
+
+    const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+
+    expect(status).toBe(200);
+    expect(body.data).toMatchObject({ state: 'ended', endReason: 'revoked', endedFor: MEMBER });
+  });
+
+  it('404s an unknown session, with a code of its own', async () => {
     staged.delete(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`);
 
-    const res = await GET(createMockRequest(url(`/${SID}`)), routeContext(SID));
-    expect(res.status).toBe(404);
+    const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+    expect(status).toBe(404);
+    expect(body.code).toBe('session_not_found');
   });
 
   it('ends a session with the caller endReason and broadcasts the kill', async () => {

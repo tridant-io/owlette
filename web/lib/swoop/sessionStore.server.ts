@@ -104,6 +104,11 @@ export interface SwoopSession {
   viewerReason?: string;
   endedAt?: number;
   /**
+   * the uid a `revoked` end was for (`revokeViewerSessions.server.ts`): it ends
+   * the session for everyone in it, and everyone else comes back on their own.
+   */
+  endedFor?: string;
+  /**
    * each control viewer's continuity grant, by viewer id. A grant outlives its
    * viewer's row, which is what lets the tab's next session inherit it after a
    * drop; a watch viewer has none.
@@ -293,6 +298,7 @@ function parseSession(
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
     ...(typeof data.viewerReason === 'string' ? { viewerReason: data.viewerReason } : {}),
     ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
+    ...(typeof data.endedFor === 'string' ? { endedFor: data.endedFor } : {}),
     ...(Object.keys(continuity).length > 0 ? { continuity } : {}),
   };
 }
@@ -609,11 +615,11 @@ export async function joinSwoopSession(args: {
 
 /**
  * Take viewers out of a session and answer who is still in it: the rows whose
- * lease, with the grace, has not run out. The host's `viewer_left`, a viewer
- * leaving its own seat and a revoked member all come through here.
- * `spendContinuity` is for a departure that was a decision, a leave or a
- * revocation: as a deliberate close always did, it voids the departing
- * viewers' continuity. `endWhenEmpty` ends the record in the same write when
+ * lease, with the grace, has not run out. The host's `viewer_left` and a viewer
+ * leaving its own seat both come through here; a revocation ends the whole
+ * session instead (`revokeViewerSessions.server.ts`). `spendContinuity` is for
+ * a departure that was a decision, a leave: as a deliberate close always did,
+ * it voids the departing viewers' continuity. `endWhenEmpty` ends the record in the same write when
  * nobody is left, so no join can land between the last one out and the end;
  * a record already ended keeps the reason it ended for. Null when there is no
  * such session.
@@ -696,11 +702,13 @@ export async function endSwoopSession(args: {
   endReason: SwoopSessionEndReason;
   viewerReason?: string;
   endedAt?: number;
+  endedFor?: string;
 }): Promise<void> {
   await writeSession(args.siteId, args.machineId, args.sid, {
     state: 'ended' satisfies SwoopSessionState,
     endReason: args.endReason,
     ...(args.viewerReason !== undefined ? { viewerReason: args.viewerReason } : {}),
+    ...(args.endedFor !== undefined ? { endedFor: args.endedFor } : {}),
     endedAt: args.endedAt ?? Date.now(),
     viewers: [],
   });

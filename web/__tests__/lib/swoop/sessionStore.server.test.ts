@@ -189,6 +189,15 @@ describe('writes', () => {
     });
   });
 
+  it('names whom a revocation ended it for, and reads it back', async () => {
+    await endSwoopSession({ siteId: SITE, machineId: MACHINE, sid: SID, endReason: 'revoked', endedFor: 'uid-removed' });
+    const written = mockSet.mock.calls[0][0] as Record<string, unknown>;
+    expect(written).toMatchObject({ state: 'ended', endReason: 'revoked', endedFor: 'uid-removed' });
+
+    mockGet.mockResolvedValue({ exists: true, data: () => ({ ...sessionDoc(SID, 'ended', []), ...written }) });
+    expect(await getSwoopSession(SITE, MACHINE, SID)).toMatchObject({ endReason: 'revoked', endedFor: 'uid-removed' });
+  });
+
   it('refuses a write that would carry key material', async () => {
     mockGet.mockResolvedValue({
       exists: true,
