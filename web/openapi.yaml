@@ -4787,10 +4787,14 @@ paths:
       tags: [Sites]
       summary: delete a site
       description: |
-        Deletes the top-level site document. The caller must be the site
+        Deletes the site and everything under it. The caller must be the site
         **owner** or a superadmin — a site admin who does not own the site is
-        refused. The id is tombstoned on delete and cannot be reused.
-        Subcollection cascade cleanup is deferred from the MVP surface.
+        refused. In order, it writes the audit row to the platform's own log
+        (the site's log goes with the site), retires the id so it cannot be
+        reused, revokes the site's agent refresh tokens, clears the site from
+        every member's legacy `users/{uid}.sites[]`, and deletes the site
+        document and every subcollection: machines and their history, roosts,
+        talons, webhooks, settings and member rows.
 
         ### Authentication and scopes
 
@@ -8072,11 +8076,13 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`. A passkey challenge
-            issued to someone else answers plain `{ error, code:
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own). A passkey challenge issued to
+            someone else answers plain `{ error, code:
             challenge_user_mismatch }` JSON.
           content:
             application/problem+json:
@@ -8161,10 +8167,12 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8232,10 +8240,12 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8311,12 +8321,13 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`, or
-            `capability_missing` when a control viewer has lost the
-            remote-control capability.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own), or `capability_missing` when a
+            control viewer has lost the remote-control capability.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8417,11 +8428,13 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`: `scope_insufficient` or `forbidden` (the capability is
-            missing) and `api_key_not_permitted` (an api key called this
-            route) before the body is read; then, once the body has passed
-            the `400` checks, swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`: `scope_insufficient` or `capability_missing` (the
+            capability gate: your site role or swoop mode does not include
+            what was asked) and `api_key_not_permitted` (an api key called
+            this route) before the body is read; then, once the body has
+            passed the `400` checks, swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8450,10 +8463,10 @@ paths:
       summary: stop whatever swoop is streaming on a machine
       description: |
         Ending your own session is the `DELETE` above; this one ends whatever
-        anyone is running on the machine, so it takes the machine
-        remote-control capability. Omit `sid` to mean "kill whatever is
-        running", which is what a revocation wants when it does not know the
-        live session.
+        anyone is running on the machine, so it requires the swoop-settings
+        capability (site admin or owner), whatever the caller's own swoop
+        mode. Omit `sid` to mean "kill whatever is running", which is what a
+        revocation wants when it does not know the live session.
 
         Deliberately not gated on the site's swoop settings: stopping a stream
         has to work after the feature has been switched off, which is exactly
@@ -8498,8 +8511,8 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            machine remote-control capability is missing), or
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing), or
             `api_key_not_permitted` (an api key called this route).
           content:
             application/problem+json:
@@ -8625,11 +8638,13 @@ paths:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`. A passkey challenge
-            issued to someone else answers plain `{ error, code:
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own). A passkey challenge issued to
+            someone else answers plain `{ error, code:
             challenge_user_mismatch }` JSON.
           content:
             application/problem+json:
@@ -8657,8 +8672,8 @@ paths:
         through `swoop/kill` with the session's `sid`.
 
         A viewer whose account is gone keeps their row, with `email` and
-        `displayName` null. Requires the machine remote-control capability
-        (site admin or owner).
+        `displayName` null. Requires the swoop-settings capability (site
+        admin or owner), whatever the caller's own swoop mode.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -8698,8 +8713,8 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            machine remote-control capability is missing), or
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing), or
             `api_key_not_permitted` (an api key called this route).
           content:
             application/problem+json:
@@ -10281,6 +10296,7 @@ paths:
                     type: array
                     items:
                       type: object
+                      required: [swoop]
                       properties:
                         uid: { type: string }
                         email: { type: string, nullable: true }
@@ -10291,6 +10307,15 @@ paths:
                           type: string
                           enum: [user, member, admin, superadmin]
                         displayName: { type: string, nullable: true }
+                        swoop:
+                          type: [string, 'null']
+                          enum: [none, view, control, null]
+                          description: |
+                            The person's own swoop mode on this site. `null`
+                            means the site role decides: members watch where
+                            the site lets members watch, admins and owners
+                            control. Always `null` on the owner's row. A stored
+                            value that is not one of the three reads as `none`.
         '401': { description: Unauthorized }
         '403': { description: Forbidden (not site admin) }
         '404': { description: Site not found or no access }
@@ -10310,10 +10335,15 @@ paths:
 
         `roleHonored` says whether the row was actually written at the
         requested role. Adding someone who is ALREADY a member is a 200
-        no-op — nothing is overwritten and their existing role stands — and
-        answers `roleHonored: false`. Use
+        no-op — nothing is overwritten, the swoop mode included, and their
+        existing role stands — and answers `roleHonored: false`. Use
         `PATCH /api/sites/{siteId}/members/{uid}` to change an existing
-        member's role.
+        member's role or swoop mode.
+
+        `swoop` optionally sets the new member's own swoop mode: `none`,
+        `view` or `control`. Leave it out and the site role decides: members
+        watch where the site lets members watch, admins control. `null` is a
+        `400` here.
 
         Identify the target by **exactly one** of `uid` or `email`.
         `email` is trimmed and lowercased, then resolved to a uid through
@@ -10342,6 +10372,10 @@ paths:
                 uid: { type: string }
                 email: { type: string, format: email, maxLength: 254 }
                 role: { type: string, enum: [admin, member] }
+                swoop:
+                  type: string
+                  enum: [none, view, control]
+                  description: The new member's own swoop mode. Omit it to let the site role decide.
               oneOf:
                 - required: [uid]
                 - required: [email]
@@ -10364,6 +10398,75 @@ paths:
         '403': { description: "Forbidden (not site admin — `site_member_manage_required`)" }
         '404': { description: User or site not found }
         '409': { description: "`target_is_owner` — the target already owns this site" }
+        '503': { $ref: '#/components/responses/Problem503' }
+
+  /api/sites/{siteId}/member-candidates:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: listSiteMemberCandidates
+      tags: [Site Members]
+      summary: list people who can be added to a site
+      description: |
+        The people the dashboard's add-member search may offer for this site.
+        A site owner or admin is offered the active members of the other sites
+        where they hold SITE_MEMBER_MANAGE, minus the people already on this
+        site: rosters they can already read through
+        `GET /api/sites/{siteId}/members`. It never lists every account for
+        them, because anyone can create a site and become its owner. A
+        superadmin is offered every account except this site's members.
+        Soft-deleted accounts and superadmin accounts are never offered.
+
+        Each candidate carries only `uid`, `email` and `displayName`: no site
+        role, global role, swoop mode or site list. This route never resolves
+        an email; adding someone by their exact email is
+        `POST /api/sites/{siteId}/members` with `{ email }`. There is no
+        search parameter: the list is fetched once and filtered in the
+        browser.
+
+        ### Authentication and scopes
+
+        A signed-in user session or Firebase ID token only. Requires
+        SITE_MEMBER_MANAGE on the site (site owner or admin; superadmin
+        anywhere), re-checked in the handler, so switching
+        `capability_enforcement` off does not open it.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`. It shares the 30/min SITE_MEMBER_MANAGE
+        budget with adding, removing and changing members.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The candidates, sorted by display name, else email, ignoring case.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates]
+                properties:
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                      required: [uid, email, displayName]
+                      properties:
+                        uid: { type: string }
+                        email: { type: [string, 'null'] }
+                        displayName: { type: [string, 'null'] }
+              example:
+                candidates:
+                  - uid: k3Vq8ZtN1cWb7RpYx2LmHs9JdFa4
+                    email: dana@example.com
+                    displayName: Dana Okafor
+                  - uid: P7eGu2nXo5TjQw0iBy6KcMr3SvLh
+                    email: lee@example.com
+                    displayName: null
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
 
   /api/sites/{siteId}/transfer-ownership:
@@ -10451,31 +10554,43 @@ paths:
         schema: { type: string }
     patch:
       tags: [Site Members]
-      summary: change a member's per-site role
+      summary: change a member's per-site role or swoop mode
       description: |
-        Sets the member's role on THIS site only, leaving their global role
-        untouched. Before this endpoint existed there was no per-site role to
+        Sets the member's role, their swoop mode, or both, on THIS site only,
+        leaving their global role untouched. Send at least one of `role` and
+        `swoop`. Before this endpoint existed there was no per-site role to
         change — it was derived from the global role at read time, so making
         someone an admin on one site meant promoting them globally, on every
         site they belong to. That is the leak per-site roles close.
 
+        `swoop` is the person's own swoop mode: `none`, `view` or `control`.
+        `null` clears it, so the site role decides again: members watch where
+        the site lets members watch, admins control. A role change keeps an
+        explicit mode, so an admin set to `control` who is made a `member`
+        keeps control.
+
         `owner` is not assignable here. Ownership moves only through
         `POST /api/sites/{siteId}/transfer-ownership`, and the owner is refused
         as a target as well, so an admin can neither promote themselves into
-        ownership (`400`) nor demote the owner out of it
+        ownership (`400`) nor change the owner's role or swoop mode
         (`409 cannot_change_owner_role`). Both are enforced inside the
         transaction that performs the write.
 
-        A caller may never change their OWN row
+        A caller may never change their OWN row, swoop mode included
         (`403 cannot_modify_own_membership`), whatever their role and whatever
         the platform's `capability_enforcement` setting: the row is what decides
         what they may do. Ask another admin on the site.
 
-        Demoting a member to `member` also ends any swoop session in which they
-        hold control; a watch they may still hold survives.
+        A change that takes away control takes the person out of every swoop
+        session in which they hold control; a watch they still hold survives.
+        One that takes away swoop altogether takes them out of every session
+        they are in.
 
-        Requires SITE_MEMBER_MANAGE on the site. API keys need BOTH
-        `site=<siteId>:write` and `site=<siteId>:admin`.
+        Requires SITE_MEMBER_MANAGE on the site, whatever
+        `capability_enforcement` is set to: without it the answer is `403`,
+        `site_member_manage_required` (or `forbidden` from the capability
+        gate). API keys need BOTH `site=<siteId>:write` and
+        `site=<siteId>:admin`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -10486,22 +10601,30 @@ paths:
           application/json:
             schema:
               type: object
-              required: [role]
+              minProperties: 1
               properties:
                 role: { type: string, enum: [admin, member] }
+                swoop:
+                  type: [string, 'null']
+                  enum: [none, view, control, null]
+                  description: The person's own swoop mode on this site. `null` returns them to the site role's default.
       responses:
         '200':
-          description: Role changed
+          description: Role or swoop mode changed
           content:
             application/json:
               schema:
                 type: object
-                required: [siteId, uid, role]
+                required: [siteId, uid, role, swoop]
                 properties:
                   siteId: { type: string }
                   uid: { type: string }
                   role: { type: string, enum: [admin, member] }
-        '400': { description: Validation failure (including role=owner) }
+                  swoop:
+                    type: [string, 'null']
+                    enum: [none, view, control, null]
+                    description: The member's swoop mode after the change. `null` means the site role decides.
+        '400': { description: "Validation failure (neither `role` nor `swoop`, `role=owner`, or a `swoop` that is not one of the three or `null`)" }
         '401': { description: Unauthorized }
         '403': { description: "Forbidden (not site admin, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User is not a member of this site }
@@ -10533,9 +10656,10 @@ paths:
         (`403 cannot_modify_own_membership`), whatever their role — ask another
         admin on the site. Same rule as the sibling `PATCH`.
 
-        Requires SITE_MEMBER_MANAGE on the site; reassignment additionally
-        requires `TALON_MANAGE` (`403 talon_manage_required`). API keys need
-        BOTH `site=<siteId>:write` and `site=<siteId>:admin`. An unsupported
+        Requires SITE_MEMBER_MANAGE on the site, checked whatever
+        `capability_enforcement` is set to; reassignment additionally requires
+        `TALON_MANAGE` (`403 talon_manage_required`). API keys need BOTH
+        `site=<siteId>:write` and `site=<siteId>:admin`. An unsupported
         `Roost-Version` header is `400 unsupported_version`.
       security:
         - apiKey: []

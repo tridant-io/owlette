@@ -8,6 +8,66 @@ tocDepth: 2
 
 ## [Unreleased]
 
+### added — each person's swoop on a site
+
+A site's owners and admins can now set each person to no swoop, watch or
+control in the site's members section, without changing their site role. A
+member set to control takes control after a second factor and gets nothing
+else: no commands, no configuration, nothing site-wide. An admin held to watch
+keeps the rest of what an admin does. Without a mode of their own, the site
+role decides as before: members watch, and owners and admins control. The
+site's members-may-watch setting (`membersMayWatch`) is now the default for
+members without a mode, and a member's own mode wins over it. Kill and the
+admin panel's swoop page stay with the site's owners and admins, whatever their
+own swoop mode.
+
+### added — each site has a settings page
+
+A new page, **admin panel → sites**, lists your sites, with a gear on each one
+you own or administer; owlette's superadmins see every site. The gear opens the
+site's settings page, one section at a time: general (its name and timezone),
+members, machines, swoop & screens (the swoop and keep screens awake switches)
+and danger zone, which only the site's owner and owlette's superadmins see. The
+site switcher offers **site settings** (the current site's page) to that site's
+owners and admins, **manage sites** (the list) to anyone who administers a
+site, and **new site** to people who administer none yet.
+
+### added — finding someone to add
+
+Adding a member now suggests people as you type: those on your other sites, the
+ones you own or administer, who are not on this site yet. A full email still
+adds anyone with an owlette account. owlette never searches every account for
+you, so someone who is on none of your sites is added by their email.
+
+### changed — site owners and admins change roles in the dashboard
+
+A site's owners and admins can now make a member an admin, or an admin a
+member, with **change access...** on the person's row in the members section,
+which sets their swoop mode too. It changes that site only. Nobody changes
+their own access or the owner's; the owner's role moves only with a transfer of
+ownership.
+
+### fixed
+
+- The role dialog no longer says a role is account-wide. A role is for one
+  site, and the dialog says so.
+- Removing a member who wrote talons offers this site's owners and admins to
+  take them over, rather than people picked by their account role.
+- Adding someone who is already on the site says it changed nothing, instead of
+  "member added".
+- The swoop switch's description says members watch by default; it used to name
+  only admins.
+- Deleting a site says what goes with it: its machines lose their agent tokens
+  and stop reporting, and its ID can't be used again. It used to say machine
+  data might remain.
+- A site admin who opens an admin page in a fresh tab is no longer sent away
+  with "access denied" before their sites have loaded.
+
+### removed — the manage sites dialog and /admin/members
+
+The header's manage sites dialog is gone: admin panel → sites and each site's
+settings page do what it did. `/admin/members` now redirects to `/admin/sites`.
+
 ### fixed — a second viewer no longer ends the first viewer's swoop session
 
 Opening swoop on a machine someone was already in started a session of its own,
