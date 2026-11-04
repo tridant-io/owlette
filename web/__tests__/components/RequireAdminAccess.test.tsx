@@ -159,6 +159,32 @@ describe('RequireAdminAccess', () => {
     expect(push).not.toHaveBeenCalled();
     expect(toastError).not.toHaveBeenCalled();
   });
+
+  it('standing lost after admission redirects without a toast', async () => {
+    // deleting the last site you administer removes your own admin row before the delete answers
+    setAuth('member', { administersAnySite: true });
+    const { rerender } = renderGuard('admin');
+    expect(screen.getByText('admin panel')).toBeInTheDocument();
+
+    setAuth('member', { administersAnySite: false });
+    rerender(guard('admin'));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard'));
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('a user denied on first render still gets the toast exactly once', async () => {
+    setAuth('member', { administersAnySite: false });
+    renderGuard('admin');
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith('/dashboard'));
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith('access denied', {
+      description: 'you do not have permission to access this page.',
+    });
+    expect(push).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('navItemMatches', () => {
