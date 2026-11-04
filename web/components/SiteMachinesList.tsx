@@ -33,12 +33,11 @@ interface SiteMachinesListProps {
 }
 
 /**
- * Expanded machine list for one site row in the manage-sites dialog.
+ * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
  *
- * Uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
+ * uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
  * rather than a client Firestore listener, so superadmins can inspect sites
- * they aren't members of without loosening rules. Mounted only while expanded,
- * so collapsing unmounts and re-expanding refetches.
+ * they aren't members of without loosening rules.
  */
 export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProps) {
   const [machines, setMachines] = useState<SiteMachine[] | null>(null);
@@ -100,11 +99,12 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
     if (!removeTarget) return;
     try {
       await removeMachineFromSite(removeTarget.id);
-      toast.success(`Machine "${removeTarget.name}" removed from site successfully!`);
+      toast.success('machine removed', { description: `${removeTarget.name} is no longer on this site.` });
       setRemoveTarget(null);
       await fetchMachines();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'failed to remove machine');
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error('could not remove the machine', { description: message });
     }
   };
 
@@ -152,8 +152,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         {machines.map((m) => (
           <li
             key={m.id}
-            className="grid items-center gap-3 px-3 py-1.5"
-            style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.3fr) minmax(0,1fr) 64px' }}
+            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_64px]"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span
@@ -171,7 +170,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
             <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
             </span>
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+            <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
               {m.agentVersion ? `v${m.agentVersion}` : '—'}
             </span>
             <span className="flex items-center justify-end gap-0.5">
