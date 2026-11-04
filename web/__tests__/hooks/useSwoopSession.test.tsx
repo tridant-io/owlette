@@ -431,6 +431,21 @@ describe('useSwoopSession — how a session ends', () => {
       expect(mints()).toHaveLength(1);
     });
 
+    it('gives up on a read that hangs, and ends as a kill always did', async () => {
+      await open();
+      fetchMock.mockImplementationOnce(
+        async (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await advance(5_000);
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBe('this session was ended from elsewhere.');
+    });
+
     it('the operator can still end it', async () => {
       await open();
       const answer = holdRecord();
@@ -698,6 +713,7 @@ describe('useSwoopSession — how a session ends', () => {
   it('a machine that said it is restarting keeps saying so until its picture is back', async () => {
     await open();
     act(() => wired.peer!.onClosed!('restart'));
+    await flush();
     expect(swoop.state).toBe('ended');
     expect(swoop.restarting).toBe(true);
     expect(swoop.retryIn).not.toBeNull();
@@ -719,6 +735,8 @@ describe('useSwoopSession — how a session ends', () => {
   it('an offline machine stops reading as restarting after ten minutes, and the api says what it is', async () => {
     await open();
     act(() => wired.peer!.onClosed!('restart'));
+    // the ten minutes run from the record saying it is a restart
+    await flush();
     mint = { status: 409, body: { detail: 'this machine is offline', code: 'machine_offline' } };
 
     await advance(9 * 60_000);
@@ -737,6 +755,52 @@ describe('useSwoopSession — how a session ends', () => {
 
     expect(swoop.restarting).toBe(false);
     expect(swoop.error).toBe('sign in again to resume.');
+  });
+
+  /**
+   * a machine removed from the site ends its sessions as `machine_removed`, and
+   * its agent byes its viewers `restart` as it unpairs, as for any service stop.
+   * the record says which, so the page says the machine left instead of waiting
+   * on it to come back.
+   */
+  it('a machine that left the site says so at its restart, and stops', async () => {
+    await open();
+    record = ended('machine_removed');
+
+    act(() => wired.peer!.onClosed!('restart'));
+    await flush();
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('machine_removed');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a retry whose record says the machine left the site stops there, and says so', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('timeout'));
+    record = ended('machine_removed');
+
+    await advance(30_000);
+    expect(mints()).toHaveLength(1);
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+  });
+
+  // the backstop for a leave the server never saw: the tray's own, or a stale link
+  it('a mint the api answers machine_not_found says the machine left the site, and stops', async () => {
+    mint = { status: 404, body: { code: 'machine_not_found', detail: 'machine not found' } };
+    await open();
+
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('machine_removed');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
   });
 
   it('a picture that is still coming has no link to lose', async () => {
@@ -1129,6 +1193,19 @@ describe('useSwoopSession — a picture that froze', () => {
     expect(swoop.state).toBe('ended');
     expect(swoop.stats.stall.recovery).toBe('none');
     await advance(5000);
+    expect(swoop.stats.stall.recovery).toBe('none');
+  });
+
+  it('a machine that left the site while its picture was being replaced says so, with no stall notice over it', async () => {
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reconnecting');
+
+    record = ended('machine_removed');
+    await advance(30_000);
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('this machine has left the site.');
     expect(swoop.stats.stall.recovery).toBe('none');
   });
 

@@ -463,6 +463,21 @@ describe('POST swoop/sessions', () => {
     expect(mockRing).not.toHaveBeenCalled();
   });
 
+  // the page's backstop for a machine that left the site: from its own tray, or a stale link.
+  it('refuses a machine that is not in the site with 404 machine_not_found, and never rings it', async () => {
+    staged.delete(`sites/${SITE}/machines/${MACHINE}`);
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(404);
+    expect(body.code).toBe('machine_not_found');
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
   it('reads the request body exactly once and never through a clone', async () => {
     // production saw "could not read request body" now and then: the route
     // peeked at `control` on a clone and the handler read the original again,

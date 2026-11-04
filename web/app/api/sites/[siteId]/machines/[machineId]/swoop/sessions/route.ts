@@ -23,7 +23,6 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import {
   problem,
   problemFromError,
-  problemNotFound,
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
@@ -252,7 +251,17 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       .collection('machines')
       .doc(machineId)
       .get();
-    if (!machineSnap.exists) return problemNotFound('machine not found');
+    // removed from the site, or left it from its own tray: the page says the
+    // machine has left on this code, rather than retrying or echoing the sentence.
+    if (!machineSnap.exists) {
+      return problem({
+        type: ProblemType.NotFound,
+        title: 'not found',
+        status: 404,
+        detail: 'machine not found',
+        code: 'machine_not_found',
+      });
+    }
     if (machineSnap.data()?.online !== true) {
       return problem({
         type: ProblemType.Conflict,

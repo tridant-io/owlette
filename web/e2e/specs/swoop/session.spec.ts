@@ -51,6 +51,7 @@ const FIT_ID = `mach-fit-${SUFFIX}`;
 const PHONE_ID = `mach-phone-${SUFFIX}`;
 const SHARED_ID = `mach-shared-${SUFFIX}`;
 const REVOKED_ID = `mach-revoked-${SUFFIX}`;
+const LEFT_ID = `mach-left-${SUFFIX}`;
 const APP_UA = `${devices['Desktop Chrome'].userAgent} owlette-swoop-viewer/0.0.0`;
 /** a real png, so the drawn pointer is an image the page lays out. */
 const ONE_PIXEL_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -77,6 +78,8 @@ let sharedOperator: TestUser;
 let sharedOperatorSecret = '';
 let revokingOperator: TestUser;
 let revokingOperatorSecret = '';
+let leavingOperator: TestUser;
+let leavingOperatorSecret = '';
 // a member of the site only until the revocation spec removes them
 let removable: TestUser;
 
@@ -221,6 +224,7 @@ test.beforeAll(async () => {
   await seedMachine(SITE_ID, PHONE_ID, { displayName: `phone box ${SUFFIX}` });
   await seedMachine(SITE_ID, SHARED_ID, { displayName: `shared box ${SUFFIX}` });
   await seedMachine(SITE_ID, REVOKED_ID, { displayName: `revoked box ${SUFFIX}` });
+  await seedMachine(SITE_ID, LEFT_ID, { displayName: `left box ${SUFFIX}` });
   await getAdminDb().doc(`sites/${SITE_ID}/machines/${RETURNING_ID}`).set({ online: false }, { merge: true });
   await swoopSettings({ enabled: true, excludedMachineIds: [EXCLUDED_ID], membersMayWatch: true, indicator: 'banner' });
 
@@ -253,6 +257,11 @@ test.beforeAll(async () => {
   revokingOperator = revokingSeeded.user;
   revokingOperatorSecret = revokingSeeded.secret;
   await grantMembership(SITE_ID, revokingOperator.uid, 'admin');
+
+  const leavingSeeded = await seedTotpUser(`swoop-leaving-${SUFFIX}`);
+  leavingOperator = leavingSeeded.user;
+  leavingOperatorSecret = leavingSeeded.secret;
+  await grantMembership(SITE_ID, leavingOperator.uid, 'admin');
 
   watcher = await seedDedicatedUser(dedicatedUser('member', `swoop-watcher-${SUFFIX}`));
   removable = await seedDedicatedUser(dedicatedUser('member', `swoop-removable-${SUFFIX}`));
@@ -638,6 +647,35 @@ test.describe('through a host', () => {
       await second;
       await expectHostPicture(page);
       await expect(page.getByText('machine is restarting')).toHaveCount(0);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  // removing a machine unpairs its agent, whose service stops and byes its
+  // viewers `restart`, as an update does: the page used to say the machine was
+  // restarting, and then showed the api's bare "machine not found".
+  test('a machine removed from the site says it has left, not that it is restarting', async ({ page, browser }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: LEFT_ID });
+    try {
+      await signIn(page, leavingOperator, leavingOperatorSecret, { fresh: true });
+      const granted = nextGrant(page, LEFT_ID);
+      await page.goto(`/swoop/${SITE_ID}/${LEFT_ID}`);
+      const grant = await granted;
+      await expectHostPicture(page);
+
+      const removed = await apiCall(page, 'DELETE', `/api/sites/${SITE_ID}/machines/${LEFT_ID}`, undefined, {
+        'Idempotency-Key': `swoop-left-${SUFFIX}`,
+      });
+      expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+      await host.restart();
+
+      await expect(page.getByText('this machine has left the site.')).toBeVisible({ timeout: 20_000 });
+      await expect(page.getByText('machine is restarting')).toHaveCount(0);
+      await expect(page.getByText(/reconnecting in/)).toHaveCount(0);
+      const record = await readSession(page, grant.sid, LEFT_ID);
+      expect([record.state, record.endReason]).toEqual(['ended', 'machine_removed']);
       expect(host.problems).toEqual([]);
     } finally {
       await host.stop();

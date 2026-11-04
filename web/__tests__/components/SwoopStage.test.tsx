@@ -15,7 +15,7 @@
  */
 
 import React from 'react';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, within } from '@testing-library/react';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { setMouseCapture } from '@/lib/swoop/mouseCapture';
 
@@ -466,6 +466,15 @@ describe('SwoopStage — a machine that went away', () => {
     expect(screen.queryByText('session ended')).toBeNull();
     expect(screen.queryByText('connecting')).toBeNull();
     expect(screen.queryByText('this machine did not answer.')).toBeNull();
+  });
+
+  it('a machine that left the site says so, with the way back, and no restart notice', () => {
+    renderStage({ state: 'error', refusal: 'machine_removed', error: 'this machine has left the site.' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine has left the site.');
+    expect(within(alert).getByRole('link', { name: 'back to dashboard' })).toBeInTheDocument();
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.queryByText(/reconnecting in/)).toBeNull();
   });
 
   it('a restart gives way to a network the machine cannot be reached from', () => {

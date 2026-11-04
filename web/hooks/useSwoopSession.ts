@@ -107,6 +107,9 @@ const HOST_SILENT_FINAL =
 /** what a member removed from the site, or one whose control was taken, is told when the kill reaches them. */
 const ACCESS_REMOVED = 'your access to this machine was removed.';
 
+/** a machine removed from the site, or one that left it from its own tray: there is nothing to reconnect to. */
+const LEFT_SITE = 'this machine has left the site.';
+
 /**
  * a frozen picture is replaced with a new session on its own at most this
  * often. past it a new session has not held, so the session stays up and the
@@ -235,6 +238,14 @@ function killedFor(ended: RecordedEnd | 'refused' | null, uid: string | null): '
   return ended.endedFor === uid ? 'me' : 'another';
 }
 
+/**
+ * whether the record says the machine left the site: its removal ends its
+ * sessions as `machine_removed`, and its agent byes its viewers as it unpairs,
+ * the way a service stopping to come back does.
+ */
+const leftTheSite = (ended: RecordedEnd | 'refused' | null): boolean =>
+  ended !== null && ended !== 'refused' && ended.reason === 'machine_removed';
+
 interface SessionGrant {
   sid: string;
   viewerId: string;
@@ -283,6 +294,12 @@ const EMPTY_STATS: SwoopStats = {
   linkUp: true,
   stall: { recovery: 'none', episodes: 0, kind: null },
 };
+
+/**
+ * how long a session record read may take. a bye is settled off it before the
+ * run ends, so a read that hangs must not leave the page on a frozen picture.
+ */
+const RECORD_READ_MS = 5_000;
 
 /** how often the overlay's numbers are resampled. */
 const STATS_INTERVAL_MS = 1000;
@@ -438,9 +455,12 @@ export function useSwoopSession(
   const recordedEnd = useCallback(
     async (sid: string | null): Promise<RecordedEnd | 'refused' | null> => {
       if (sid === null) return null;
+      const reading = new AbortController();
+      const timer = setTimeout(() => reading.abort(), RECORD_READ_MS);
       try {
         const res = await fetch(
           `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(machineId)}/swoop/sessions/${encodeURIComponent(sid)}`,
+          { signal: reading.signal },
         );
         if (res.status === 403 || res.status === 404) {
           const problem = (await res.json().catch(() => ({}))) as { code?: unknown };
@@ -454,6 +474,8 @@ export function useSwoopSession(
           : null;
       } catch {
         return null;
+      } finally {
+        clearTimeout(timer);
       }
     },
     [siteId, machineId],
@@ -484,19 +506,24 @@ export function useSwoopSession(
         const reason = ended === null || ended === 'refused' ? null : ended.reason;
         const previous = lastMachineFailureRef.current;
         lastMachineFailureRef.current = reason;
-        const why = reason !== null && machineFailureStops(reason, previous) ? machineFailureCopy(reason) : null;
+        const why = leftTheSite(ended)
+          ? LEFT_SITE
+          : reason !== null && machineFailureStops(reason, previous)
+            ? machineFailureCopy(reason)
+            : null;
         if (reason === null || why === null) {
           startNext();
           return;
         }
         stoppedRef.current = true;
         setRestarting(false);
+        setStall({ recovery: 'none' });
         setRefusal(reason);
         setError(why);
         setState('error');
       });
     }, delay);
-  }, [recordedEnd, startNext]);
+  }, [recordedEnd, startNext, setStall]);
 
   const end = useCallback(() => {
     clearRetry();
@@ -556,10 +583,10 @@ export function useSwoopSession(
     let pendingJwt: string | null = null;
     // this run ends on an unanswered offer; any other end starts `HOST_SILENT_LIMIT_MS` again.
     let silentEnd = false;
-    // a kill's bye is read off the record before the run ends on it, and until
-    // then only the operator's own end may end it: a run that left first would
-    // say it was over, fullscreen and owlette swoop's window with it, before
-    // it knew whether this viewer comes back.
+    // a kill's bye, or a restart's, is read off the record before the run ends
+    // on it, and until then only the operator's own end may end it: a run that
+    // left first would say how it ended, fullscreen and owlette swoop's window
+    // with it, before it knew.
     let settling = false;
 
     const detachers: SwoopDetach[] = [];
@@ -595,8 +622,8 @@ export function useSwoopSession(
       signaling?.close(1000, reason);
       // only a deliberate end tells the server. a DELETE fans out into kills
       // that can land on the next session, and spends this tab's continuity,
-      // so a path that may come back sends none, and nor does a session a
-      // kill has already ended.
+      // so a path that may come back sends none, and nor does a run settling
+      // a bye: the machine ended it.
       if (grant && !settling && (reason === 'closed' || reason === 'unmounted')) {
         // best effort: this viewer's seat goes server-side, and the last one out
         // ends the record and stops the streamer over two independent paths, so
@@ -640,6 +667,28 @@ export function useSwoopSession(
     // the operator.
     const fail = (message: string, transient: boolean) =>
       leave(transient ? 'start_failed' : 'refused', 'error', message);
+
+    // the machine is no longer in the site: nothing will come back to reconnect to.
+    const stopForMachineLeft = () => {
+      if (!disposed) setRefusal('machine_removed');
+      fail(LEFT_SITE, false);
+    };
+
+    /**
+     * a bye that needs the record to say what it was: the run waits on the read
+     * (`settling`) and goes on unless it ended meanwhile, and a record that says
+     * the machine left the site stops it whatever the bye said.
+     */
+    const settleBye = (sid: string, then: (ended: RecordedEnd | 'refused' | null) => void) => {
+      settling = true;
+      void recordedEnd(sid).then((ended) => {
+        // the operator ended, reconnected or left while it was read
+        if (disposed) return;
+        settling = false;
+        if (leftTheSite(ended)) stopForMachineLeft();
+        else then(ended);
+      });
+    };
 
     const finish = (reason: string, message?: string) => leave(reason, 'ended', message);
     endRef.current = finish;
@@ -737,6 +786,12 @@ export function useSwoopSession(
         // and only for that refusal.
         if (wantControl && controlRefusedForCapability(res.status, code, detail)) {
           return createSession(fp, false);
+        }
+        // a machine that left the site from its own tray, or a stale link, is
+        // answered for here; one removed from the dashboard says so on its record.
+        if (res.status === 404 && code === 'machine_not_found') {
+          stopForMachineLeft();
+          return null;
         }
         if (res.status === 401 && code === 'step_up_required') {
           if (!disposed) {
@@ -928,11 +983,7 @@ export function useSwoopSession(
             // another tab or device opening the machine joins this session
             // rather than replacing it. a 4.0.x service stop or update byes
             // its viewers this way too; later agents say `restart`, below.
-            settling = true;
-            void recordedEnd(sid).then((ended) => {
-              // the operator ended, reconnected or left while it was read
-              if (disposed) return;
-              settling = false;
+            settleBye(sid, (ended) => {
               const whom = killedFor(ended, uidRef.current);
               if (whom === 'another') {
                 finish('host_gone');
@@ -956,10 +1007,18 @@ export function useSwoopSession(
             finish('same_machine', "you're on this machine. swoop opens other computers, not the one you're using.");
             return;
           }
-          if (reason === 'restart') setRestarting(true);
-          // a host that let this viewer go, a service going away to come back,
-          // or a streamer that exited on its own: no decision, so the next
-          // session finds it back.
+          if (reason === 'restart') {
+            // a service stopping to come back, and one stopping as its machine
+            // leaves the site, both bye this way: the record says which, before
+            // the page says the machine is restarting.
+            settleBye(sid, () => {
+              setRestarting(true);
+              finish('host_gone');
+            });
+            return;
+          }
+          // a host that let this viewer go, or a streamer that exited on its
+          // own: no decision, so the next session finds it back.
           finish('host_gone');
         },
       });

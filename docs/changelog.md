@@ -20,6 +20,14 @@ only you out, and an admin's kill still ends it for everyone. Removing someone
 from the site ends their session at once, and everyone else in it reconnects on
 their own. Nothing to update on the machine.
 
+### fixed — swoop says a machine has left the site instead of "machine is restarting"
+
+A machine removed from the site, or one that left it from its own tray, told
+everyone watching it that it was restarting, and then showed a bare "machine
+not found". Removing a machine now ends its swoop sessions, and the viewer says
+the machine has left the site, with the way back. Nothing to update on the
+machine.
+
 ## [4.1.25] - 2026-11-02
 
 ### added — the Windows installer is signed by Tridant, Inc.

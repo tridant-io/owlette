@@ -43,10 +43,11 @@ import {
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
 
 /**
- * Why a session stopped. `closed`, `killed` and `revoked` are ours; the rest
- * are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
- * host reports it, plus `host_exit` for a stop it named no reason for, and
- * the agent's own refusals and exit reasons the page can act on
+ * Why a session stopped. `closed`, `killed`, `revoked` and `machine_removed`
+ * (the machine was removed from the site, `removeMachine.server.ts`) are ours;
+ * the rest are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6)
+ * as the host reports it, plus `host_exit` for a stop it named no reason for,
+ * and the agent's own refusals and exit reasons the page can act on
  * (`machineFailure.ts`).
  */
 export type SwoopSessionEndReason =
@@ -58,6 +59,7 @@ export type SwoopSessionEndReason =
   | 'signal_lost'
   | 'host_exit'
   | 'revoked'
+  | 'machine_removed'
   | 'error'
   | SwoopMachineFailureReason;
 
