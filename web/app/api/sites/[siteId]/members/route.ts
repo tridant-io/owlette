@@ -3,7 +3,9 @@
  *      that actually grant access, and derives each person's role FROM THE ROW.
  *      It used to query `users where sites array-contains {siteId}` and compute
  *      the per-site role from the GLOBAL role, which reported a real site-admin
- *      as a plain member forever.
+ *      as a plain member forever. each member also carries `swoop`, their own
+ *      swoop mode: null when the role decides (always, on the owner's row), and
+ *      `none` for a malformed value, so a hand edit never reads as a grant.
  *
  * POST /api/sites/{siteId}/members  `{uid | email, role}` — writes the member
  *      row through `addMember`, so the requested role is STORED rather than
@@ -12,7 +14,9 @@
  *      knows a colleague's address, not their uid) and resolves through Admin
  *      Auth to the same uid path. Idempotency-Key required. `roleHonored` says
  *      whether the row was actually written at the requested role — adding an
- *      existing member is a 200 no-op, not a promotion.
+ *      existing member is a 200 no-op, not a promotion. the body may also carry
+ *      `swoop` (`none`, `view` or `control`), written on a new row only; the
+ *      no-op writes no mode either.
  *
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
@@ -41,6 +45,8 @@ import {
   readAndParseJsonBody,
 } from '../../../_shared';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
+import { deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { SWOOP_MODES, type SwoopMode } from '@/lib/swoopMode';
 
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
 const VALID_ADD_ROLES = new Set(['member', 'admin']);
@@ -53,6 +59,7 @@ interface AddMemberBody {
   uid?: unknown;
   email?: unknown;
   role?: unknown;
+  swoop?: unknown;
 }
 
 /** Which identifier the caller supplied; resolved to a uid before any write. */
@@ -108,6 +115,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
       role: MemberRole;
       globalRole: string;
       displayName: string | null;
+      swoop: SwoopMode | null;
     }> = [];
 
     const activeRows = memberRowsSnap.docs.filter(
@@ -135,6 +143,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
         globalRole: typeof data.role === 'string' ? data.role : 'member',
         displayName:
           typeof data.displayName === 'string' ? data.displayName : null,
+        swoop: deriveSwoopMode(row.data() ?? null, rowRole),
       });
     });
 
@@ -252,6 +261,14 @@ export const POST = authorizedSiteHandler<RouteParams>({
           );
         }
 
+        // a new row has no mode to clear, so null is a bad value here, unlike on PATCH
+        const requestedSwoop = SWOOP_MODES.find((mode) => mode === body.swoop);
+        if (body.swoop !== undefined && requestedSwoop === undefined) {
+          return problemValidation('swoop must be none, view or control', {
+            'body.swoop': ['must be one of: none, view, control'],
+          });
+        }
+
         // An email is only an alias for a uid — resolve it through Admin Auth,
         // then every downstream step is the uid path unchanged.
         let targetUid: string;
@@ -324,6 +341,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           siteId,
           uid: targetUid,
           role: assignableRole,
+          swoop: requestedSwoop,
           addedBy: ctx.actor.userId,
         });
         if (!added.ok && added.failure.kind !== 'already_member') {
@@ -365,6 +383,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             method: 'POST',
             verb: 'member_added',
             requestedRole,
+            ...(requestedSwoop !== undefined ? { requestedSwoop } : {}),
             roleHonored,
             globalRole: targetGlobalRole,
           },

@@ -15,6 +15,7 @@ jest.mock('firebase-admin/firestore', () => ({
   FieldValue: {
     arrayUnion: (...v: unknown[]) => ({ __arrayUnion: v }),
     arrayRemove: (...v: unknown[]) => ({ __arrayRemove: v }),
+    delete: () => ({ __delete: true }),
   },
 }));
 
@@ -95,7 +96,7 @@ jest.mock('@/lib/firebase-admin', () => ({ getAdminDb: () => db }));
 
 import {
   addMember,
-  changeRole,
+  updateMember,
   removeMember,
   addOwnerToBatch,
   ASSIGNABLE_ROLES,
@@ -177,27 +178,61 @@ describe('addMember', () => {
       addMember({ siteId: SITE, uid: ALICE, role: 'member', addedBy: OWNER, now: () => NOW }),
     ).rejects.toThrow('network down');
   });
+
+  it('writes the swoop mode it is given', async () => {
+    const res = await addMember({
+      siteId: SITE,
+      uid: ALICE,
+      role: 'member',
+      swoop: 'control',
+      addedBy: OWNER,
+      now: () => NOW,
+    });
+
+    expect(res.ok).toBe(true);
+    expect(docs.get(memberPath(ALICE))).toEqual({
+      uid: ALICE,
+      role: 'member',
+      status: 'active',
+      addedAt: NOW,
+      addedBy: OWNER,
+      swoop: 'control',
+    });
+  });
+
+  it('without a swoop mode writes exactly the five fields, so the role decides', async () => {
+    await addMember({ siteId: SITE, uid: ALICE, role: 'admin', addedBy: OWNER, now: () => NOW });
+
+    // keys, not toEqual: toEqual passes a `swoop: undefined` that firestore would refuse
+    expect(Object.keys(docs.get(memberPath(ALICE)) ?? {}).sort()).toEqual([
+      'addedAt',
+      'addedBy',
+      'role',
+      'status',
+      'uid',
+    ]);
+  });
 });
 
-describe('changeRole', () => {
+describe('updateMember', () => {
   beforeEach(() => {
     docs.set(memberPath(ALICE), { uid: ALICE, role: 'member', status: 'active' });
   });
 
   it('promotes a member to admin', async () => {
-    const res = await changeRole({ siteId: SITE, uid: ALICE, role: 'admin' });
+    const res = await updateMember({ siteId: SITE, uid: ALICE, role: 'admin' });
     expect(res.ok).toBe(true);
     expect(txOps).toEqual([{ op: 'update', path: memberPath(ALICE), data: { role: 'admin' } }]);
   });
 
   it('refuses to demote the OWNER (admin-demotes-owner)', async () => {
-    const res = await changeRole({ siteId: SITE, uid: OWNER, role: 'member' });
+    const res = await updateMember({ siteId: SITE, uid: OWNER, role: 'member' });
     expect(res).toEqual({ ok: false, failure: { kind: 'is_owner' } });
     expect(txOps).toHaveLength(0);
   });
 
   it('cannot assign owner — the admin-promotes-self-to-owner path', async () => {
-    const res = await changeRole({
+    const res = await updateMember({
       siteId: SITE,
       uid: ALICE,
       role: 'owner' as unknown as 'admin',
@@ -206,17 +241,95 @@ describe('changeRole', () => {
     expect(txOps).toHaveLength(0);
     // NEGATIVE CONTROL: the same call with a legal role does write, so the
     // refusal above is about the role and not a blanket failure.
-    const ok = await changeRole({ siteId: SITE, uid: ALICE, role: 'admin' });
+    const ok = await updateMember({ siteId: SITE, uid: ALICE, role: 'admin' });
     expect(ok.ok).toBe(true);
   });
 
   it('refuses a uid that is not a member', async () => {
-    const res = await changeRole({ siteId: SITE, uid: 'uid_stranger', role: 'admin' });
+    const res = await updateMember({ siteId: SITE, uid: 'uid_stranger', role: 'admin' });
     expect(res).toEqual({ ok: false, failure: { kind: 'not_member' } });
   });
 
   it('exports exactly admin and member as assignable', () => {
     expect([...ASSIGNABLE_ROLES]).toEqual(['admin', 'member']);
+  });
+
+  it('sets a swoop mode, and null deletes the field rather than storing null', async () => {
+    const set = await updateMember({ siteId: SITE, uid: ALICE, swoop: 'control' });
+    expect(set.ok).toBe(true);
+    expect(txOps).toEqual([{ op: 'update', path: memberPath(ALICE), data: { swoop: 'control' } }]);
+
+    txOps.length = 0;
+    const cleared = await updateMember({ siteId: SITE, uid: ALICE, swoop: null });
+    expect(cleared.ok).toBe(true);
+    expect(txOps).toEqual([
+      { op: 'update', path: memberPath(ALICE), data: { swoop: FieldValue.delete() } },
+    ]);
+  });
+
+  it('a role-only change keeps an existing swoop mode', async () => {
+    docs.set(memberPath(ALICE), { uid: ALICE, role: 'admin', status: 'active', swoop: 'control' });
+
+    const res = await updateMember({ siteId: SITE, uid: ALICE, role: 'member' });
+
+    // the write names the role alone, so the stored mode is left where it was
+    expect(txOps).toEqual([{ op: 'update', path: memberPath(ALICE), data: { role: 'member' } }]);
+    expect(res).toEqual({
+      ok: true,
+      value: {
+        before: { role: 'admin', swoop: 'control' },
+        after: { role: 'member', swoop: 'control' },
+      },
+    });
+  });
+
+  it('returns the access before and after the write', async () => {
+    const res = await updateMember({ siteId: SITE, uid: ALICE, role: 'admin', swoop: 'view' });
+
+    expect(res).toEqual({
+      ok: true,
+      value: {
+        before: { role: 'member', swoop: null },
+        after: { role: 'admin', swoop: 'view' },
+      },
+    });
+    expect(txOps).toEqual([
+      { op: 'update', path: memberPath(ALICE), data: { role: 'admin', swoop: 'view' } },
+    ]);
+  });
+
+  it('writes nothing when given neither field', async () => {
+    docs.set(memberPath(ALICE), { uid: ALICE, role: 'member', status: 'active', swoop: 'view' });
+
+    const res = await updateMember({ siteId: SITE, uid: ALICE });
+
+    expect(res).toEqual({
+      ok: true,
+      value: {
+        before: { role: 'member', swoop: 'view' },
+        after: { role: 'member', swoop: 'view' },
+      },
+    });
+    expect(txOps).toHaveLength(0);
+  });
+
+  it('refuses the owner row whatever is sent', async () => {
+    const changes = [
+      { role: 'member' },
+      { role: 'admin' },
+      { swoop: 'none' },
+      { swoop: 'control' },
+      { swoop: null },
+      { role: 'member', swoop: 'none' },
+      {},
+    ] as const;
+
+    for (const change of changes) {
+      const res = await updateMember({ siteId: SITE, uid: OWNER, ...change });
+      expect(res).toEqual({ ok: false, failure: { kind: 'is_owner' } });
+    }
+    expect(txOps).toHaveLength(0);
+    expect(docs.get(memberPath(OWNER))).toEqual({ uid: OWNER, role: 'owner', status: 'active' });
   });
 });
 

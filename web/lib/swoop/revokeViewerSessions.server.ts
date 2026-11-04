@@ -31,7 +31,7 @@ export interface RevokeSwoopSessionsArgs {
   /** `user:<uid>` / `apiKey:<keyId>`, for the command envelope. */
   auditActor: string;
   /** Why, for the audit row. A reason code, never prose. */
-  reason: 'member_removed' | 'role_changed';
+  reason: 'member_removed' | 'role_changed' | 'swoop_changed';
   /**
    * Only sessions in which this user holds CONTROL. A demotion costs them
    * `MACHINE_REMOTE_CONTROL` and nothing else, so a watch they are still
