@@ -148,9 +148,11 @@ const CAPTURES: Capture[] = [
   { slug: 'add-machine', path: '/add?code=silver-compass-drift', role: 'admin', scenario: 'dashboard-mixed-states' },
   // admin panel
   { slug: 'admin-installers-seeded', path: '/admin/installers', role: 'superadmin', scenario: 'dashboard-mixed-states', seed: seedInstallers },
-  ...(['installers', 'presets', 'members', 'users', 'tokens', 'schedules', 'alerts', 'webhooks', 'email'] as const).map(
+  ...(['installers', 'presets', 'sites', 'users', 'tokens', 'schedules', 'alerts', 'webhooks', 'email'] as const).map(
     (page): Capture => ({ slug: `admin-${page}`, path: `/admin/${page}`, role: 'superadmin', scenario: 'dashboard-mixed-states' }),
   ),
+  { slug: 'admin-site-settings', path: (siteId) => `/admin/sites/${siteId}?section=members`, role: 'superadmin', scenario: 'dashboard-mixed-states' },
+  { slug: 'admin-site-swoop', path: (siteId) => `/admin/sites/${siteId}?section=swoop`, role: 'superadmin', scenario: 'dashboard-mixed-states' },
 ];
 
 /** releases as the field has them: the newest on every platform, an old one windows-only */

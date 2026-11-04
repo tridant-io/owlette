@@ -11,7 +11,8 @@ import { roleState } from '../../helpers/roles';
 
 /** Site-scoped destinations: global role `admin` and above. */
 const SITE_SCOPED_ROUTES = [
-  '/admin/members',
+  '/admin/sites',
+  '/admin/sites/site-A',
   '/admin/webhooks',
   '/admin/alerts',
   '/admin/tokens',
@@ -71,6 +72,11 @@ test.describe('route guards — admin (site-scoped, NOT platform)', () => {
       await expect(page).not.toHaveURL(new RegExp(`${route}$`), { timeout: 10_000 });
     });
   }
+
+  test('visiting /admin/members ends on /admin/sites', async ({ page }) => {
+    await page.goto('/admin/members');
+    await expect(page).toHaveURL(/\/admin\/sites$/, { timeout: 10_000 });
+  });
 });
 
 test.describe('route guards — superadmin', () => {
