@@ -666,8 +666,12 @@ test.describe('through a host', () => {
       await expect(page.getByText(/view only/i)).toBeVisible();
 
       // the host let in the viewer its token names, bound to the certificate
-      // the page offered with, and watch-only as the api decided.
-      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: watcher.uid, ctl: false }]);
+      // the page offered with, and watch-only as the api decided. polled, here
+      // and below: the page mints its lease before presenting it, so the host
+      // can record it after the picture is up.
+      await expect
+        .poll(() => host.leases)
+        .toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: watcher.uid, ctl: false }]);
       expect(await host.sentCodecs()).toEqual(['video/H264']);
       expect(host.problems).toEqual([]);
 
@@ -691,7 +695,9 @@ test.describe('through a host', () => {
       const grant = await granted;
       expect(grant.ctl).toBe(true);
       await expectHostPicture(page);
-      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: operator.uid, ctl: true }]);
+      await expect
+        .poll(() => host.leases)
+        .toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: operator.uid, ctl: true }]);
 
       // no signal worker here, so the kill reaches the machine as its queued
       // command, which the host takes the way the agent does.
@@ -771,7 +777,7 @@ test.describe('through a host', () => {
         [first.viewerId, joined.viewerId].sort(),
       );
       // the host verified each one's own token on the one sid
-      expect(host.leases).toEqual(
+      await expect.poll(() => host.leases).toEqual(
         expect.arrayContaining([
           { viewer: first.viewerId, sid: first.sid, uid: sharedOperator.uid, ctl: true },
           { viewer: joined.viewerId, sid: first.sid, uid: watcher.uid, ctl: false },
