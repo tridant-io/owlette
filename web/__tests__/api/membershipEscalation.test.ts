@@ -270,7 +270,29 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminStorage: () => ({ bucket: () => ({}) }),
 }));
 
+// the double has no collectionGroup, so the listing of a caller's sites reads
+// the seeded member rows here, through the real row readers. the rest of
+// sitePolicy, resolveSiteAccess included, is the real module.
+const MEMBER_ROW_PATH = /^sites\/([^/]+)\/members\/([^/]+)$/;
+const mockListUserStanding = jest.fn(async (uid: string) => {
+  const bySite: Record<string, MemberStanding> = Object.create(null);
+  for (const [path, row] of docs) {
+    const match = MEMBER_ROW_PATH.exec(path);
+    if (!match || match[2] !== uid) continue;
+    const role = deriveMembership(row);
+    if (role !== null) bySite[match[1]] = { role, swoopMode: deriveSwoopMode(row, role) };
+  }
+  return bySite;
+});
+jest.mock('@/lib/sitePolicy.server', () => ({
+  ...jest.requireActual('@/lib/sitePolicy.server'),
+  listUserStanding: (uid: string) => mockListUserStanding(uid),
+}));
+
 import { GET as membersGET, POST as membersPOST } from '@/app/api/sites/[siteId]/members/route';
+import { GET as candidatesGET } from '@/app/api/sites/[siteId]/member-candidates/route';
+import type { MemberStanding } from '@/lib/capabilities';
+import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
 import {
   DELETE as memberDELETE,
   PATCH as memberPATCH,
@@ -996,5 +1018,50 @@ describe('12. roleHonored reports what happened to the row', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).roleHonored).toBe(true);
     expect((docs.get(`sites/${SITE}/members/${OUTSIDER}`) as { role: string }).role).toBe('admin');
+  });
+});
+
+/**
+ * 13. the add-member candidates list stays closed to a plain member.
+ *
+ * the list is worked out against the site's roster, which a plain member may
+ * not read. with `capability_enforcement === false` the wrapper skips
+ * SITE_MEMBER_MANAGE, which is outside BYPASS_EXEMPT_CAPABILITIES, so the
+ * handler re-checks it, as members POST does (block 11).
+ *
+ * NEGATIVE CONTROL RUN 2026-11-04: removing the handler's `hasCapability` check
+ * reddens this block (the member gets 200). it is the only thing holding it.
+ */
+describe('13. member candidates stay closed to a plain member with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+  });
+
+  it('refuses a plain member with 403 site_member_manage_required', async () => {
+    authAs(MEMBER);
+    const res = await candidatesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/member-candidates`, { method: 'GET' }),
+      params(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+    expect(mockListUserStanding).not.toHaveBeenCalled();
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still gets the list', async () => {
+    // a second site they administer, so a working list has someone on it
+    docs.set(`sites/site-beta/members/${ADMIN}`, { uid: ADMIN, role: 'admin', status: 'active' });
+    docs.set(`sites/site-beta/members/${OUTSIDER}`, { uid: OUTSIDER, role: 'member', status: 'active' });
+    authAs(ADMIN);
+    const res = await candidatesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/member-candidates`, { method: 'GET' }),
+      params(),
+    );
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).candidates).toEqual([
+      { uid: OUTSIDER, email: `${OUTSIDER}@example.test`, displayName: null },
+    ]);
   });
 });
