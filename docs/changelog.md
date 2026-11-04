@@ -16,7 +16,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 Opening swoop on a machine someone was already in started a session of its own,
 and the machine ended theirs. Everyone who opens a machine now joins the session
 running there, with a lease of their own: ending yours or closing the tab takes
-only you out, and an admin's kill still ends it for everyone. Removing someone
+only you out, and an admin's kill still ends it for everyone. Two people
+opening it at the same moment land in the same session too. Removing someone
 from the site ends their session at once, and everyone else in it reconnects on
 their own. Nothing to update on the machine.
 

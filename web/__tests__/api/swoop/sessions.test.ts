@@ -31,21 +31,27 @@ jest.mock('@sentry/nextjs', () => ({
 }));
 
 type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
+// transactions run one at a time, as Firestore serializes two over the same documents
+let mockTxQueue: Promise<unknown> = Promise.resolve();
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     ...mockDbFactory(),
     // the verified-network write reads then writes on the same doc mocks, and
     // its writes land, or fail, at commit
-    runTransaction: async (fn: (tx: unknown) => unknown) => {
-      const writes: unknown[] = [];
-      const result = await fn({
-        get: (ref: MockTxRef) => ref.get(),
-        set: (ref: MockTxRef, ...a: unknown[]) => {
-          writes.push(ref.set(...a));
-        },
+    runTransaction: (fn: (tx: unknown) => unknown) => {
+      const run = mockTxQueue.then(async () => {
+        const writes: unknown[] = [];
+        const result = await fn({
+          get: (ref: MockTxRef) => ref.get(),
+          set: (ref: MockTxRef, ...a: unknown[]) => {
+            writes.push(ref.set(...a));
+          },
+        });
+        await Promise.all(writes);
+        return result;
       });
-      await Promise.all(writes);
-      return result;
+      mockTxQueue = run.catch(() => undefined);
+      return run;
     },
   }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
@@ -956,6 +962,30 @@ describe('POST swoop/sessions — a machine someone is already in', () => {
     expect(sessionCreates()).toEqual([expect.objectContaining({ sid: grant.sid })]);
   });
 
+  // two first viewers at once used to start two sessions, and the machine ended
+  // the earlier one's for the later: the one transaction is what lets the second
+  // find the first one's session.
+  it('lands two first viewers who arrive at once in one session', async () => {
+    signIn(MEMBER);
+    // a new session's record writes through, so the second transaction reads it
+    mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+      if (payload.state === 'pending' && typeof payload.sid === 'string') {
+        staged.set(`${SESSIONS_PATH}${payload.sid}`, { ...payload });
+      }
+    });
+
+    const [first, second] = await Promise.all([
+      POST(watchRequest(), routeContext()).then(parseResponse),
+      POST(watchRequest(), routeContext()).then(parseResponse),
+    ]);
+
+    expect([first.status, second.status]).toEqual([201, 201]);
+    const grants = [first.body.data, second.body.data] as Array<Record<string, unknown>>;
+    expect(grants[0].sid).toBe(grants[1].sid);
+    expect(grants.map((grant) => grant.joined).sort()).toEqual([false, true]);
+    expect(sessionCreates()).toHaveLength(1);
+  });
+
   it('turns a fifth person away with 409 session_full, before any grant is recorded', async () => {
     stageLiveSession({
       viewers: ['u1', 'u2', 'u3', 'u4'].map((uid, i) => seat(uid, { viewerId: `viewer000000000000000000000${i}` })),
@@ -1511,8 +1541,14 @@ describe('swoop audit trail', () => {
     expect(serialized).not.toContain(FP);
   });
 
-  it('refuses to start a session it cannot record', async () => {
+  it('refuses to start a session it cannot record, and ends the one it started for it', async () => {
     openWindow(ADMIN);
+    // the new session's record writes through, so the give-up reads it back
+    mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+      if (payload.state === 'pending' && typeof payload.sid === 'string') {
+        staged.set(`${SESSIONS_PATH}${payload.sid}`, { ...payload });
+      }
+    });
     // Only swoop's own row fails — the wrapper's allow row has already been
     // written by then, so this is the handler's fail-closed path, not its.
     writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
@@ -1530,6 +1566,8 @@ describe('swoop audit trail', () => {
     expect(status).toBe(503);
     expect(body.code).toBe('audit_unavailable');
     expect(mockRing).not.toHaveBeenCalled();
+    // its only seat given up, the record it started ends with it
+    expect(setPayloads()).toContainEqual(expect.objectContaining({ viewers: [], state: 'ended', endReason: 'error' }));
   });
 
   it('records the page\'s own reason beside the caller endReason', async () => {

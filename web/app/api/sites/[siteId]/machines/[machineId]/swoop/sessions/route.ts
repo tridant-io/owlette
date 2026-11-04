@@ -54,13 +54,15 @@ import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { mintViewerToken, canonicalizeFingerprint } from '@/lib/swoop/tokens.server';
 import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 import { ringDoorbell } from '@/lib/swoop/signal.server';
-import { continuityInherits, mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
 import {
-  createSwoopSession,
+  continuityInherits,
+  mintContinuity,
+  parseContinuity,
+  type Continuity,
+} from '@/lib/swoop/continuity.server';
+import {
+  enterSwoopSession,
   getSwoopSession,
-  joinSwoopSession,
-  listUnendedSwoopSessionsForMachine,
-  liveSessionToJoin,
   markSwoopContinuityUsed,
   removeSwoopViewers,
   type SwoopSessionViewer,
@@ -283,46 +285,46 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
     };
 
     // A machine already in a session is joined, never replaced: the agent ends
-    // the session it serves for a new sid, for everyone in it. Two first
-    // viewers inside the same moment still start two, and the later one wins.
-    const live = liveSessionToJoin(await listUnendedSwoopSessionsForMachine({ siteId, machineId }), now);
-    let sid = live?.sid ?? mintSwoopId();
-    // Only a control session carries continuity: a watch session has no
-    // ceremony to carry, and a token for it would inherit nothing.
-    let continuity = decision.ctl ? mintContinuity(sid) : null;
-    let joined = false;
-    if (live) {
-      const seat = await joinSwoopSession({
-        siteId,
-        machineId,
-        sid,
-        viewer,
-        ...(continuity ? { continuityHash: continuity.hash } : {}),
-        nowMs: now,
+    // the session it serves for a new sid, for everyone in it. The join or the
+    // start is one transaction over the machine's sessions, so two first
+    // viewers at once land in one. Only a control session carries continuity:
+    // a watch session has no ceremony to carry, and a token for it would
+    // inherit nothing. A token names its sid, so one is minted for whichever
+    // session this viewer lands in, and kept for the response.
+    const minted = new Map<string, Continuity>();
+    const continuityFor = (forSid: string): Continuity => {
+      const held = minted.get(forSid) ?? mintContinuity(forSid);
+      minted.set(forSid, held);
+      return held;
+    };
+    const entry = await enterSwoopSession({
+      siteId,
+      machineId,
+      viewer,
+      createdBy: `user:${userId}`,
+      newSid: mintSwoopId(),
+      ...(decision.ctl ? { continuityHash: (forSid: string) => continuityFor(forSid).hash } : {}),
+      nowMs: now,
+    });
+    if (entry.outcome === 'full') {
+      recordSwoopDenied({ ...auditBase, event: 'session_denied', denyReason: 'session_full', ctl: decision.ctl });
+      // a 409, which the page waits out on its reconnect ladder: a seat comes back when someone leaves.
+      return problem({
+        type: ProblemType.Conflict,
+        title: 'session full',
+        status: 409,
+        detail: `${SWOOP_MAX_VIEWERS} people are already in this machine's swoop session, the most it serves at once. you'll be let in when one of them leaves.`,
+        code: 'session_full',
       });
-      if (seat === 'full') {
-        recordSwoopDenied({ ...auditBase, event: 'session_denied', denyReason: 'session_full', ctl: decision.ctl });
-        // a 409, which the page waits out on its reconnect ladder: a seat comes back when someone leaves.
-        return problem({
-          type: ProblemType.Conflict,
-          title: 'session full',
-          status: 409,
-          detail: `${SWOOP_MAX_VIEWERS} people are already in this machine's swoop session, the most it serves at once. you'll be let in when one of them leaves.`,
-          code: 'session_full',
-        });
-      }
-      joined = seat === 'joined';
-      if (!joined) {
-        // it ended between the read and the seat: this viewer starts the next one.
-        sid = mintSwoopId();
-        continuity = decision.ctl ? mintContinuity(sid) : null;
-      }
     }
+    const { sid } = entry;
+    const joined = entry.outcome === 'joined';
+    const continuity = decision.ctl ? continuityFor(sid) : null;
 
     // Blocking, and before this viewer is handed anything that admits it — its
-    // token, a new session's record, the machine's notification: a control
-    // session that starts unrecorded is the failure this trail exists to
-    // prevent, so an audit that cannot be written refuses the session instead.
+    // token and the machine's notification: a control session that starts
+    // unrecorded is the failure this trail exists to prevent, so an audit that
+    // cannot be written refuses the session instead.
     try {
       await recordSwoopSessionStarted({ ...auditBase, sid, viewerId, ctl: decision.ctl, joined });
     } catch (err) {
@@ -334,15 +336,20 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
           err: err instanceof Error ? err.message : String(err),
         },
       });
-      // the seat taken above admits nobody yet, and is given up again.
-      if (joined) {
-        await removeSwoopViewers({ siteId, machineId, sid, viewerIds: [viewerId] }).catch((cleanup: unknown) => {
-          logger.warn('[swoop/sessions] the unrecorded seat could not be given up; its lease ends it', {
-            context: 'swoop/sessions',
-            data: { siteId, machineId, err: cleanup instanceof Error ? cleanup.message : String(cleanup) },
-          });
+      // the seat taken above admits nobody yet, and is given up again; a session
+      // started for it ends with it, unless someone has joined it since.
+      await removeSwoopViewers({
+        siteId,
+        machineId,
+        sid,
+        viewerIds: [viewerId],
+        ...(joined ? {} : { endWhenEmpty: { endReason: 'error' as const } }),
+      }).catch((cleanup: unknown) => {
+        logger.warn('[swoop/sessions] the unrecorded seat could not be given up; its lease ends it', {
+          context: 'swoop/sessions',
+          data: { siteId, machineId, err: cleanup instanceof Error ? cleanup.message : String(cleanup) },
         });
-      }
+      });
       return problem({
         type: ProblemType.ServiceUnavailable,
         title: 'service unavailable',
@@ -362,18 +369,6 @@ const coreHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
         data: { siteId, machineId, sid, from: inheritedFrom.sid },
       });
     }
-    if (!joined) {
-      await createSwoopSession({
-        siteId,
-        machineId,
-        sid,
-        createdBy: `user:${userId}`,
-        startedAt: now,
-        viewer,
-        ...(continuity ? { continuityHash: continuity.hash } : {}),
-      });
-    }
-
     const viewerToken = mintViewerToken({
       uid: userId,
       site: siteId,
