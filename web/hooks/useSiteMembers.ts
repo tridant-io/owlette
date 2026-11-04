@@ -1,16 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { MemberCandidate } from '@/lib/memberCandidates';
+import type { SwoopMode } from '@/lib/swoopMode';
 
 /**
- * The single owner of every `/api/sites/{siteId}/members` request.
+ * the single owner of every `/api/sites/{siteId}/members*` and
+ * `/api/sites/{siteId}/member-candidates` request.
  *
- * Fetch-based, never a Firestore listener: membership lives on `users/{uid}`,
- * and the rules deny cross-user reads — a client listener over the membership
- * query is impossible by design, so the server route is the only read path.
+ * fetch-based, never a firestore listener: the rules let a user read only their
+ * own member row, so a site's roster is readable only through the route.
  */
 
-/** Per-site role the route derives from global role + site ownership. */
+/**
+ * the role stored on the member row. `'superadmin'` is kept for `displayRole`;
+ * the route never returns it.
+ */
 export type SiteMemberRole = 'owner' | 'superadmin' | 'admin' | 'member';
 
 /** The two roles the add endpoint accepts. */
@@ -20,27 +25,48 @@ export interface SiteMember {
   uid: string;
   email: string | null;
   role: SiteMemberRole;
-  /** Global (fleet-wide) role, e.g. 'member' — drives whether `role` was honored. */
+  /**
+   * the account's platform role. it grants nothing on this site, so the UI
+   * must not decide anything by it.
+   */
   globalRole: string;
   displayName: string | null;
+  /** their own swoop mode on this site. null means their role decides. */
+  swoop: SwoopMode | null;
 }
 
-/** Email is the dashboard's affordance; the uid variant is server-side only. */
-export interface AddSiteMemberInput {
-  email: string;
+/**
+ * a picked candidate is added by uid, a typed full email by email. without
+ * swoop the new row carries no mode, so their role decides.
+ */
+export type AddSiteMemberInput = {
   role: AddableSiteMemberRole;
-}
+  swoop?: SwoopMode;
+} & ({ uid: string; email?: undefined } | { email: string; uid?: undefined });
 
 export interface AddSiteMemberResult {
   uid: string;
   siteId: string;
   requestedRole: AddableSiteMemberRole;
   /**
-   * `false` means the user was added to the site but keeps their global member
-   * role — admin rights need a separate global role change. Callers should say so.
+   * false means they were already on the site: nothing was written, and their
+   * role and swoop mode are unchanged.
    */
   roleHonored: boolean;
   globalRole: string;
+}
+
+export interface UpdateSiteMemberInput {
+  role?: AddableSiteMemberRole;
+  /** null puts them back on their role's default. */
+  swoop?: SwoopMode | null;
+}
+
+export interface UpdateSiteMemberResult {
+  siteId: string;
+  uid: string;
+  role: AddableSiteMemberRole;
+  swoop: SwoopMode | null;
 }
 
 export interface RemoveSiteMemberResult {
@@ -57,6 +83,7 @@ interface ApiProblem {
   title?: string;
   error?: string;
   message?: string;
+  code?: string;
 }
 
 /**
@@ -70,15 +97,18 @@ interface ApiProblem {
  */
 export class SiteMemberApiError extends Error {
   readonly status: number;
+  /** the problem's code, such as `cannot_remove_owner`: branch on it, never on the message. */
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code?: string) {
     super(message);
     this.name = 'SiteMemberApiError';
     this.status = status;
+    this.code = code;
   }
 }
 
-/** Non-2xx response -> an error carrying its status and best available message. */
+/** non-2xx response -> an error carrying its status, code and best available message. */
 async function problemError(
   res: Response,
   fallback: string,
@@ -86,7 +116,7 @@ async function problemError(
   const body = (await res.json().catch(() => ({}))) as ApiProblem;
   const message =
     body.detail || body.title || body.error || body.message || fallback;
-  return new SiteMemberApiError(res.status, message);
+  return new SiteMemberApiError(res.status, message, body.code);
 }
 
 // Duplicated per-hook rather than shared, matching the other mutation hooks.
@@ -110,6 +140,10 @@ export interface UseSiteMembersResult {
   /** Never rejects — a failed refetch lands in `error`. */
   refresh: () => Promise<void>;
   addMember: (input: AddSiteMemberInput) => Promise<AddSiteMemberResult>;
+  updateMember: (
+    uid: string,
+    patch: UpdateSiteMemberInput,
+  ) => Promise<UpdateSiteMemberResult>;
   removeMember: (
     uid: string,
     talonSuccessorUid?: string,
@@ -174,7 +208,13 @@ export function useSiteMembers(
             'content-type': 'application/json',
             'Idempotency-Key': makeIdempotencyKey('site-member-add'),
           },
-          body: JSON.stringify({ email: input.email, role: input.role }),
+          // stringify drops what is undefined: the identifier not given, and an unset swoop
+          body: JSON.stringify({
+            uid: input.uid,
+            email: input.email,
+            role: input.role,
+            swoop: input.swoop,
+          }),
         },
       );
       if (!res.ok) throw await problemError(res, 'failed to add member');
@@ -183,6 +223,31 @@ export function useSiteMembers(
       // from the user doc, which this response doesn't carry.
       await refresh();
       return added;
+    },
+    [siteId, refresh],
+  );
+
+  const updateMember = useCallback(
+    async (
+      uid: string,
+      patch: UpdateSiteMemberInput,
+    ): Promise<UpdateSiteMemberResult> => {
+      if (!siteId) throw new Error('no site selected');
+      const res = await fetch(
+        `/api/sites/${encodeURIComponent(siteId)}/members/${encodeURIComponent(uid)}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'content-type': 'application/json',
+            'Idempotency-Key': makeIdempotencyKey(`site-member-access-${uid}`),
+          },
+          body: JSON.stringify(patch),
+        },
+      );
+      if (!res.ok) throw await problemError(res, 'failed to change their access');
+      const updated = (await res.json()) as UpdateSiteMemberResult;
+      await refresh();
+      return updated;
     },
     [siteId, refresh],
   );
@@ -223,6 +288,70 @@ export function useSiteMembers(
     error: matches ? state.error : null,
     refresh,
     addMember,
+    updateMember,
     removeMember,
+  };
+}
+
+const EMPTY_CANDIDATES: MemberCandidate[] = [];
+
+interface CandidatesState {
+  candidates: MemberCandidate[];
+  loadedSiteId: string | null;
+  error: string | null;
+}
+
+/**
+ * the people the add-member dialog may offer for this site. it fetches on mount
+ * and when `siteId` changes, and has no refresh: the dialog mounts only while
+ * open, so every open is fresh.
+ */
+export function useMemberCandidates(siteId: string | null | undefined): {
+  candidates: MemberCandidate[];
+  loading: boolean;
+  error: string | null;
+} {
+  const [state, setState] = useState<CandidatesState>({
+    candidates: EMPTY_CANDIDATES,
+    loadedSiteId: null,
+    error: null,
+  });
+
+  // the same request-seq guard and pinned error state as `refresh` above
+  const requestSeq = useRef(0);
+
+  useEffect(() => {
+    if (!siteId) return;
+    const seq = ++requestSeq.current;
+    void (async () => {
+      try {
+        const res = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/member-candidates`,
+        );
+        if (!res.ok) throw await problemError(res, 'failed to load people');
+        const data = (await res.json()) as { candidates?: MemberCandidate[] };
+        if (seq !== requestSeq.current) return;
+        setState({
+          candidates: data.candidates ?? EMPTY_CANDIDATES,
+          loadedSiteId: siteId,
+          error: null,
+        });
+      } catch (err) {
+        if (seq !== requestSeq.current) return;
+        setState({
+          candidates: EMPTY_CANDIDATES,
+          loadedSiteId: siteId,
+          error: err instanceof Error ? err.message : 'failed to load people',
+        });
+      }
+    })();
+  }, [siteId]);
+
+  const matches = !!siteId && state.loadedSiteId === siteId;
+
+  return {
+    candidates: matches ? state.candidates : EMPTY_CANDIDATES,
+    loading: !!siteId && !matches,
+    error: matches ? state.error : null,
   };
 }
