@@ -8,7 +8,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
+import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { getUserShortName } from '@/lib/userUtils';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
@@ -144,6 +145,8 @@ export function PageHeader({
     focusables()[0]?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // the site filter spends the first escape on its text
+        if (filterClaimsEscape(e)) return;
         // claimed, so a panel underneath that closes on escape stays open.
         e.preventDefault();
         setNavDrawerOpen(false);
@@ -270,17 +273,8 @@ export function PageHeader({
                       <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`}>
-                    {sites.map((site) => (
-                      <DropdownMenuItem
-                        key={site.id}
-                        onClick={() => selectSite(site.id)}
-                        className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer flex items-center justify-between"
-                      >
-                        <span className="truncate">{site.name}</span>
-                        {site.id === currentSiteId && <Check className="h-4 w-4 text-accent-cyan flex-shrink-0" />}
-                      </DropdownMenuItem>
-                    ))}
+                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`} {...siteFilterHostProps}>
+                    <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} />
                     {siteEntries.length > 0 && <DropdownMenuSeparator className="bg-border" />}
                     {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                       <DropdownMenuItem
@@ -519,20 +513,17 @@ export function PageHeader({
                   className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
                 />
               </button>
-              {drawerSitesOpen && sites.map((site) => (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => {
-                    selectSite(site.id);
+              {drawerSitesOpen && (
+                <SiteSwitcherList
+                  surface="drawer"
+                  sites={sites}
+                  currentSiteId={currentSiteId}
+                  onPick={(siteId) => {
+                    selectSite(siteId);
                     setNavDrawerOpen(false);
                   }}
-                  className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground hover:bg-accent transition-colors cursor-pointer"
-                >
-                  <span className="truncate">{site.name}</span>
-                  {site.id === currentSiteId && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
-                </button>
-              ))}
+                />
+              )}
               {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                 <button
                   key={label}

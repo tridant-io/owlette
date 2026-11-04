@@ -13,11 +13,15 @@
  * in demo mode, and the user menu's admin panel lands site admins on their
  * sites.
  *
+ * past ten sites the switcher opens on a filter that keeps every typed key
+ * from the menu's typeahead, and the drawer's site list has the same filter.
+ * in both, escape clears the filter before it closes anything.
+ *
  * jsdom applies no media queries, so `md:hidden` markup renders here as it does
  * on a phone; the breakpoint itself is not on trial.
  */
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PageHeader } from '@/components/PageHeader';
 import { createSite } from '@/hooks/useFirestore';
@@ -232,6 +236,138 @@ describe('PageHeader site entries', () => {
 
     expect(screen.queryByRole('dialog', { name: 'menu' })).toBeNull();
     expect(await screen.findByTestId('create-site-dialog')).toBeInTheDocument();
+  });
+});
+
+// eleven: one past the switcher's filter threshold
+const MANY_SITES = [
+  ...SITES,
+  ...Array.from({ length: 9 }, (_, i) => ({ id: `harbor-${i}`, name: `harbor ${i}` })),
+];
+
+// the sites a surface lists, without its site entries
+function siteNames(surface: HTMLElement, role: 'menuitem' | 'button'): string[] {
+  return within(surface)
+    .queryAllByRole(role)
+    .map((item) => item.textContent ?? '')
+    .filter((label) => !SITE_ENTRIES.includes(label));
+}
+
+describe('PageHeader site filter', () => {
+  it('is not in a switcher of ten sites', async () => {
+    const { user } = renderHeader({ sites: MANY_SITES.slice(0, 10) });
+
+    const menu = await openSwitcher(user);
+
+    expect(within(menu).queryByRole('textbox')).toBeNull();
+    expect(siteNames(menu, 'menuitem')).toHaveLength(10);
+  });
+
+  it('past ten sites the switcher opens on it, and typed keys narrow the sites, not the typeahead', async () => {
+    const { user } = renderHeader({ sites: MANY_SITES });
+
+    const menu = await openSwitcher(user);
+    const filter = within(menu).getByRole('textbox', { name: 'filter sites' });
+    expect(filter).toHaveFocus();
+    // "s" alone would be typeahead to "site settings"
+    await user.keyboard('south');
+
+    expect(filter).toHaveValue('south');
+    expect(filter).toHaveFocus();
+    expect(siteNames(menu, 'menuitem')).toEqual(['gallery south']);
+    expect(siteEntries(menu, 'menuitem')).toEqual(['site settings', 'manage sites']);
+  });
+
+  it('enter picks the first match and closes the switcher', async () => {
+    const onSiteChange = jest.fn();
+    const { user } = renderHeader({ sites: MANY_SITES, onSiteChange });
+
+    await openSwitcher(user);
+    await user.keyboard('harbor{Enter}');
+
+    expect(onSiteChange).toHaveBeenCalledWith('harbor-0');
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+  });
+
+  it('arrow down moves from the filter into the sites, and up from the first one comes back', async () => {
+    const { user } = renderHeader({ sites: MANY_SITES });
+
+    const menu = await openSwitcher(user);
+    await user.keyboard('harbor{ArrowDown}');
+    expect(within(menu).getByRole('menuitem', { name: 'harbor 0' })).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(within(menu).getByRole('menuitem', { name: 'harbor 1' })).toHaveFocus();
+    await user.keyboard('{ArrowUp}{ArrowUp}');
+
+    expect(within(menu).getByRole('textbox', { name: 'filter sites' })).toHaveFocus();
+  });
+
+  it('takes the focus back once the pointer leaves a site, so typing still filters', async () => {
+    const { user } = renderHeader({ sites: MANY_SITES });
+
+    const menu = await openSwitcher(user);
+    const filter = within(menu).getByRole('textbox', { name: 'filter sites' });
+    const site = within(menu).getByRole('menuitem', { name: 'harbor 3' });
+    await user.hover(site);
+    expect(site).toHaveFocus();
+    // back up over the filter, with no click on it
+    await user.hover(filter);
+    expect(filter).toHaveFocus();
+    await user.keyboard('3');
+
+    expect(filter).toHaveValue('3');
+    expect(siteNames(menu, 'menuitem')).toEqual(['harbor 3']);
+  });
+
+  it('escape clears it and keeps the switcher open; the next escape closes the switcher', async () => {
+    const { user } = renderHeader({ sites: MANY_SITES });
+
+    const menu = await openSwitcher(user);
+    const filter = within(menu).getByRole('textbox', { name: 'filter sites' });
+    await user.keyboard('harbor');
+    await user.keyboard('{Escape}');
+
+    expect(filter).toHaveValue('');
+    expect(screen.getByRole('menu')).toBe(menu);
+    expect(siteNames(menu, 'menuitem')).toHaveLength(MANY_SITES.length);
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull());
+    expect(screen.getByTestId('site-switcher-trigger')).toHaveFocus();
+  });
+
+  it("is in the drawer's site list past ten sites, and picking a match closes the drawer", async () => {
+    const onSiteChange = jest.fn();
+    const { user } = renderHeader({ sites: MANY_SITES, onSiteChange });
+    await user.click(screen.getByRole('button', { name: 'menu', exact: true }));
+    await user.click(screen.getByTestId('drawer-site-toggle'));
+    const drawer = screen.getByRole('dialog', { name: 'menu' });
+
+    await user.type(within(drawer).getByRole('textbox', { name: 'filter sites' }), 'south');
+    expect(within(drawer).queryByRole('button', { name: 'gallery north' })).toBeNull();
+    expect(within(drawer).queryByRole('button', { name: 'harbor 0' })).toBeNull();
+    await user.click(within(drawer).getByRole('button', { name: 'gallery south' }));
+
+    expect(onSiteChange).toHaveBeenCalledWith('site-b');
+    expect(screen.queryByRole('dialog', { name: 'menu' })).toBeNull();
+  });
+
+  it("escape clears the drawer's filter and keeps the drawer open; the next escape closes it", async () => {
+    const { user } = renderHeader({ sites: MANY_SITES });
+    await user.click(screen.getByRole('button', { name: 'menu', exact: true }));
+    await user.click(screen.getByTestId('drawer-site-toggle'));
+    const filter = within(screen.getByRole('dialog', { name: 'menu' })).getByRole('textbox', { name: 'filter sites' });
+
+    await user.type(filter, 'harbor');
+    await user.keyboard('{Escape}');
+
+    expect(filter).toHaveValue('');
+    expect(screen.getByRole('dialog', { name: 'menu' })).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('dialog', { name: 'menu' })).toBeNull();
   });
 });
 

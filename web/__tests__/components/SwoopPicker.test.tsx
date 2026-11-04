@@ -10,7 +10,9 @@
  * browser a ready card's corner button opens the machine in owlette swoop
  * (2.7). the machines are a grid of up to four columns (2.10). inside owlette
  * swoop a card opens the session in the same window, and a right-click or
- * shift+enter in a new one (2.11b).
+ * shift+enter in a new one (2.11b). the site row's sites are a popover with the
+ * site filter past ten sites, behind a trigger that is still a combobox named
+ * site.
  */
 
 import React from 'react';
@@ -498,6 +500,84 @@ describe('SwoopPicker', () => {
     sites = [{ id: SITE, name: 'Site One' }];
     renderPicker();
     expect(screen.getByText('no machines in this site yet')).toBeInTheDocument();
+  });
+
+  it('lists the sites in a popover and switches to the one picked', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = [
+      { id: SITE, name: 'Site One' },
+      { id: 'site-2', name: 'Site Two' },
+    ];
+    machines = [machine('m1')];
+    renderPicker();
+
+    const trigger = screen.getByRole('combobox', { name: 'site' });
+    expect(trigger).toBe(screen.getByTestId('swoop-picker-site'));
+    expect(trigger).toHaveTextContent('Site One');
+    await user.click(trigger);
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    // two sites: no filter
+    expect(within(list).queryByRole('textbox')).toBeNull();
+    expect(within(list).getByRole('button', { name: 'Site One' })).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: 'Site Two' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(trigger).toHaveTextContent('Site Two');
+    expect(machinesSiteId).toBe('site-2');
+    expect(updateLastSite).toHaveBeenCalledWith('site-2');
+  });
+
+  const elevenSites = () => [
+    { id: SITE, name: 'Site One' },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `harbor-${i}`, name: `Harbor ${i}` })),
+  ];
+
+  it('past ten sites the list opens on the site filter, and enter picks the first match', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = elevenSites();
+    machines = [machine('m1')];
+    renderPicker();
+
+    // down opens the list, as it did on the select
+    screen.getByTestId('swoop-picker-site').focus();
+    await user.keyboard('{ArrowDown}');
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    const filter = within(list).getByRole('textbox', { name: 'filter sites' });
+    await waitFor(() => expect(filter).toHaveFocus());
+    await user.keyboard('harbor 7');
+    expect(within(list).getAllByRole('button').map((button) => button.textContent)).toEqual(['Harbor 7']);
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(screen.getByTestId('swoop-picker-site')).toHaveTextContent('Harbor 7');
+    expect(machinesSiteId).toBe('harbor-7');
+    expect(updateLastSite).toHaveBeenCalledWith('harbor-7');
+  });
+
+  it('escape clears the site filter and keeps the list open; the next escape closes it', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = elevenSites();
+    machines = [machine('m1')];
+    renderPicker();
+
+    await user.click(screen.getByTestId('swoop-picker-site'));
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    const filter = within(list).getByRole('textbox', { name: 'filter sites' });
+    await waitFor(() => expect(filter).toHaveFocus());
+    await user.keyboard('harbor');
+    await user.keyboard('{Escape}');
+
+    expect(filter).toHaveValue('');
+    expect(screen.getByRole('dialog', { name: 'sites' })).toBe(list);
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(screen.getByTestId('swoop-picker-site')).toHaveFocus();
+    expect(updateLastSite).not.toHaveBeenCalled();
   });
 });
 
