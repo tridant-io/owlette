@@ -1,14 +1,14 @@
 ---
 title: "member management"
-description: "add and remove the people who can reach a site, see who owns it, and change a member's role on it. site owners and admins manage membership from admin panel → members, one site at a time."
-keywords: ["invite", "invite user", "add user", "team", "share site", "remove user", "revoke access", "make admin", "promote", "demote", "site access", "colleague", "transfer ownership"]
+description: "add and remove the people who can reach a site, and set each one's site role and swoop mode. a site's owners and admins do it in the members section of its settings: admin panel → sites → the site's gear → members."
+keywords: ["invite", "invite user", "add user", "team", "share site", "remove user", "revoke access", "make admin", "promote", "demote", "site access", "colleague", "transfer ownership", "give control", "view only", "remote control access"]
 ---
 
-**location**: admin panel → members (`/admin/members`)
+**location**: admin panel → sites → a site's gear → members (`/admin/sites/{siteId}?section=members`)
 
 <Callout type="info" title={"permissions"}>
 
-the page opens for anyone who is an owner or admin on at least one site. it acts on one site at a time. its site selector lists every site you belong to, but on a site where you are only a member the list is refused. every change needs `SITE_MEMBER_MANAGE` on that site, which owners and admins hold.
+the section is part of a site's [settings](/docs/dashboard/admin/sites#site-settings), which open for the site's owners and admins, and for owlette's superadmins on every site. every change needs `SITE_MEMBER_MANAGE` on that site, which owners and admins hold.
 
 </Callout>
 
@@ -16,15 +16,14 @@ the page opens for anyone who is an owner or admin on at least one site. it acts
 
 ## the member list
 
-the header shows **total members** and **admins** (the owner is not counted as an admin).
-
 | column | what it shows |
 |---|---|
 | **member** | the display name if there is one, the email address, and a `you` badge on your own row |
 | **role** | `owner`, `admin` or `member`, on this site |
+| **swoop** | what they get from [swoop](/docs/dashboard/swoop) while the site has it on. the owner reads `control`; anyone else reads `no swoop`, `watch` or `control`, marked `· by role` when they have no [swoop mode](#swoop-mode) of their own |
 | **actions** | the row menu, or `—` when there is nothing you can do to that row |
 
-the list is the site's active member rows whose accounts still exist and are not deleted. the owner appears through their own row with the `owner` badge. the page never shows which other sites a member belongs to, and never lists anyone who is not on this site.
+the list is the site's active member rows whose accounts still exist and are not deleted. the owner appears through their own row with the `owner` badge. the list shows only this site's members, and the **add member** search suggests only people already on other sites you run. it never shows which other sites a member belongs to.
 
 ---
 
@@ -36,24 +35,51 @@ the list is the site's active member rows whose accounts still exist and are not
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, schedule presets, enrolling machines, revoking agent tokens, and managing members |
 | **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one |
 
-roles are **per site**. the same person can own one site, administer a second and be a plain member of a third, and their account-level role grants nothing on any of them. the [capability matrix](/docs/dashboard/admin#capability-matrix) lists every capability each role holds.
+roles are **per site**. the same person can own one site, administer a second and be a plain member of a third, and the role on their owlette account grants nothing on any of them. the [capability matrix](/docs/dashboard/admin#capability-matrix) lists every capability each role holds. a [swoop mode](#swoop-mode) changes what one person gets from swoop, and nothing else.
+
+---
+
+## swoop mode
+
+each person can have their own swoop mode on the site: **no swoop**, **watch** or **control**. without one, the role decides: members watch where the site lets members watch (its `membersMayWatch` setting, see [turning it on](/docs/dashboard/swoop#turning-it-on)), and admins and owners control. a person's own swoop mode wins over `membersMayWatch`.
+
+| swoop | on this site's machines |
+|---|---|
+| **by role** | no swoop mode of their own: the role decides, as above |
+| **no swoop** | nothing. the viewer says **you can't use swoop on this site** |
+| **watch** | they watch, and never take control |
+| **control** | they watch, and take control after confirming a [second factor](/docs/dashboard/swoop#the-second-factor) |
+
+it changes swoop and nothing else. a member set to control takes control, after confirming a second factor, and still has no commands or configuration. an admin held to watch keeps everything else an admin does.
+
+- the owner always controls, and their swoop mode cannot be set (`409 cannot_change_owner_role`)
+- nobody changes their own (`403 cannot_modify_own_membership`)
+- a member set to control cannot kill sessions or see the site's session list on [admin → swoop](/docs/dashboard/swoop#admin--swoop); an admin held to watch still can
+- it applies only while the site has swoop on
+
+lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in.
+
+set it when you [add someone](#adding-a-member), and change it later with `change access...` (see [changing a role](#changing-a-role)). the API equivalent is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "swoop": "control" }`. the values are `none`, `view` and `control`, and `null` goes back to by role.
 
 ---
 
 ## adding a member
 
-the person must already have an owlette account: this page adds an existing account to a site and sends no invitation.
+the person must already have an owlette account: this adds an existing account to the site and sends no invitation.
 
 1. click **add member**.
-2. enter their **email**.
+2. under **name or email**, search by name or email. the list offers people on the other sites where you are owner or admin, minus the people already here; owlette's superadmins are offered every account not on the site. pick someone, or type the full email they signed up with.
 3. choose a **role**: **member** or **admin**.
-4. click **add member**.
+4. choose their **swoop**: **by role**, **no swoop**, **watch** or **control**. **by role** leaves their swoop mode unset, so the role decides.
+5. click **add member**.
 
-if no account has that address, the page says **no account found for that email**: ask them to sign up first, then add them.
+if this is the only site you run, there is no one to suggest: type the full email they signed up with. deleted accounts and superadmin accounts are never suggested.
 
-the role you pick is written for this site only and changes nothing about their account or any other site. the dialog still shows an old hint when you pick **admin**, "admin is an account-level role…"; it no longer applies, and the person joins as an admin.
+the role and swoop mode you pick are written for this site only, and change nothing about their account or any other site.
 
-someone who is already on the site is left as they are. the request succeeds without changing their role, even though the toast says they now have the role you picked; to change it, see [changing a role](#changing-a-role). the site owner cannot be added again (`target_is_owner`), and a deleted account cannot be added.
+- **no account found for that email**: nobody has signed up with that address. ask them to sign up first, then add them
+- **already on this site**: they were a member already, so nothing changed, their swoop mode included. to change their access, see [changing a role](#changing-a-role)
+- the site owner cannot be added again (`target_is_owner`), and a deleted account cannot be added
 
 ---
 
@@ -68,15 +94,13 @@ removal takes away their access to this site at once. any [swoop](/docs/dashboar
 two rows cannot be removed:
 
 - **the site owner** has no remove action. transfer ownership first (below), then remove them
-- **yourself**: the page says **cannot remove yourself**, and the server refuses it too (`cannot_modify_own_membership`). ask another admin on the site
+- **yourself**: the section says **cannot remove yourself**, and the server refuses it too (`cannot_modify_own_membership`). ask another admin on the site
 
 ### talon reassignment
 
 talons belong to the site, but a talon with a hoot output or a visual check re-checks its **author's** access on every run. once its author has been removed, it switches itself off on its next run.
 
-when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker. choosing a successor moves authorship before the membership change; the page then says how many talons moved. if the server refuses the successor, nothing is removed.
-
-the server accepts only a successor who is an owner or admin on this site. the picker filters on account-level role instead, so it can list someone the server will refuse and leave out a site admin who would qualify.
+when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker, which lists this site's owners and admins. choosing a successor moves authorship before the membership change; the section then says how many talons moved. if the server refuses the successor, nothing is removed.
 
 reassignment is never automatic. leave the picker empty and the removal still goes through, leaving the talons with an author who can no longer run them: reassign or delete them afterwards.
 
@@ -84,7 +108,9 @@ reassignment is never automatic. leave the picker empty and the removal still go
 
 ## changing a role
 
-a role change applies to **this site only**. the server call is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "role": "admin" }` or `{ "role": "member" }`, from a signed-in session or an API key holding both `write` and `admin` on the site; the CLI equivalent is [`owlette site set-role`](/docs/cli/reference/site#set-role).
+open the row menu, select `change access...`, choose the **role** and the **swoop**, and click **save**. owners and admins get it on every row except their own and the owner's, and the change applies to **this site only**.
+
+the server call is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "role": "admin" }` or `{ "role": "member" }`, a `swoop` (see [swoop mode](#swoop-mode)), or both, from a signed-in session or an API key holding both `write` and `admin` on the site. the CLI equivalent is [`owlette site set-role`](/docs/cli/reference/site#set-role), which changes only the role.
 
 the server enforces:
 
@@ -93,9 +119,7 @@ the server enforces:
 - you cannot change your **own** role (`403 cannot_modify_own_membership`)
 - the person must already be on the site (`404`)
 
-demoting someone to member ends any swoop session in which they hold control. a session they are still allowed to watch carries on.
-
-the dashboard does not offer this to site owners and admins yet: the row menu's `change role...` is shown only to owlette's own operators. use the API or the CLI. the dialog behind that menu item also says "this changes the account, not just this site", which is wrong, and shows the account-level role as the current one.
+demoting someone to member ends any swoop session in which they hold control, unless their swoop mode keeps control. a session they are still allowed to watch carries on. a role change leaves their swoop mode as it was.
 
 to narrow someone's access instead, remove them from the sites they should not reach.
 
@@ -103,4 +127,4 @@ to narrow someone's access instead, remove them from the sites they should not r
 
 ## transferring ownership
 
-`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it. the new owner does not have to be on the site already; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.
+`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it, or one of owlette's superadmins. the new owner does not have to be on the site already; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.
