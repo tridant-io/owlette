@@ -54,7 +54,7 @@ import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { StatChip } from '@/components/admin/StatChip';
-import { displayRole } from './displayRole';
+import { displayRole } from '@/components/admin/sites/displayRole';
 
 /**
  * Site membership: who can reach ONE site, managed by that site's admins.
