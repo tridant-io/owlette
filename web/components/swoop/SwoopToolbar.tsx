@@ -1,11 +1,11 @@
 'use client';
 
 /**
- * the session bar: the way back to the dashboard, the machine's name, a badge
- * only when something is wrong, the one gesture that takes fullscreen and
- * keyboard lock together (and pointer lock, when the mouse-capture toggle beside
- * it is on), and whatever menus the page hands it as children. every button is
- * an icon with a tooltip; the bar stays clean.
+ * the session bar: the way back to the dashboard, the machine's name, who is
+ * in the session, a badge only when something is wrong, the one gesture that
+ * takes fullscreen and keyboard lock together (and pointer lock, when the
+ * mouse-capture toggle beside it is on), and whatever menus the page hands it
+ * as children. every control is an icon with a tooltip; the bar stays clean.
  *
  * **the locks ride one click, and the order is fixed.** keyboard lock is only
  * granted in js-initiated fullscreen, so fullscreen must be awaited first;
@@ -26,16 +26,17 @@
  * why the toggle is set before going fullscreen.
  *
  * on a side (from md up, marked as `data-swoop-bar` on <html> before first
- * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name and
- * the badges run vertically, the buttons stack at the bottom, and a notice
- * that is a sentence becomes an icon that says it on hover. the name reads
- * toward the picture: up a left bar, down a right one.
+ * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name,
+ * the viewers and the badges run vertically, the buttons stack at the bottom,
+ * and a notice that is a sentence becomes an icon that says it on hover. the
+ * name reads toward the picture: up a left bar, down a right one.
  *
  * below `md` (a phone, a narrow window) the buttons don't fit one row, and a
  * touch screen of any width has no hover to ask a tooltip with, so there one
- * button opens them all in a menu, each with its label under it, and a notice
- * is an icon; the row never wraps. fullscreen is left out where the browser
- * has none for a page (an iphone), rather than refusing every tap.
+ * button opens them all in a menu, each with its label under it, the viewers
+ * are one button with their count, and a notice is an icon; the row never
+ * wraps. fullscreen is left out where the browser has none for a page (an
+ * iphone), rather than refusing every tap.
  *
  * inside owlette swoop the bar is also the window's title bar: it drags the
  * window, and on top it ends in the window's controls (on macos it starts
@@ -46,13 +47,27 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Ellipsis, Eye, Gauge, Info, Maximize, Minimize, Mouse, PowerOff, RotateCcw } from 'lucide-react';
+import {
+  ArrowLeft,
+  Ellipsis,
+  Eye,
+  Gauge,
+  Info,
+  Maximize,
+  Minimize,
+  Mouse,
+  MousePointer2,
+  PowerOff,
+  RotateCcw,
+  Users,
+} from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { SwoopBarMenuPlacement, menuPlacementFor } from '@/components/swoop/barMenuPlacement';
+import { SwoopBarMenuPlacement, menuPlacementFor, useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip, SwoopBarInMenu } from '@/components/swoop/BarTooltip';
+import { tintOf } from '@/components/swoop/SwoopPresence';
 import {
   SwoopWindowControls,
   SwoopWindowStrip,
@@ -68,6 +83,7 @@ import { readMouseCapture, setMouseCapture, subscribeMouseCapture } from '@/lib/
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { useSwoopCompactBar } from '@/hooks/useSwoopCompactBar';
+import { useSwoopViewerNames, type SwoopNamedViewer } from '@/hooks/useSwoopViewerNames';
 const subscribeNever = (): (() => void) => () => {};
 const mouseFree = (): boolean => false;
 
@@ -130,6 +146,94 @@ function Notice({ text, testId }: { text: string; testId?: string }) {
         </TooltipContent>
       </Tooltip>
     </>
+  );
+}
+
+/** a pointer for one in control, an eye for one who only watches, in the tint their pointer has on the picture. */
+function ViewerIcon({ viewer, className }: { viewer: SwoopNamedViewer; className?: string }) {
+  // our own pointer is the real one, drawn in no tint
+  const tint = cn(viewer.you ? 'text-foreground' : tintOf(viewer.id), className);
+  return viewer.ctl ? (
+    <MousePointer2 aria-hidden className={tint} />
+  ) : (
+    <Eye role="img" aria-label="view only" className={tint} />
+  );
+}
+
+/** a viewer in full: the name, and the email where the session route sent one. */
+function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: string }) {
+  return (
+    <span className="flex min-w-0 flex-col wrap-anywhere">
+      <span>
+        {viewer.full}
+        {viewer.you && ' (you)'}
+      </span>
+      {viewer.email && viewer.email !== viewer.full && <span className={cn('text-xs', muted)}>{viewer.email}</span>}
+    </span>
+  );
+}
+
+/**
+ * who is in the session, beside the machine's name: a pill per viewer, this
+ * tab's own marked "(you)", hovering one names them in full. the session route
+ * sends an email to a site owner or admin only, and the pill shows what it was
+ * sent.
+ *
+ * a compact bar has no room for a row of them and a touch screen no hover, so
+ * there one button with the count opens the same list. a pill is a button so
+ * that pressing it never drags owlette swoop's window, whose title bar this is.
+ */
+function ViewerPills({ session, compact }: { session: SwoopSession | null; compact: boolean }) {
+  const viewers = useSwoopViewerNames(session);
+  const placement = useBarMenuPlacement();
+  if (viewers.length === 0) return null;
+
+  if (compact) {
+    return (
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={`${viewers.length} in this session`} className="gap-0.5">
+            <Users aria-hidden />
+            <span className="text-xs tabular-nums">{viewers.length}</span>
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent {...placement} align="start" className="w-auto max-w-[calc(100vw-1rem)] p-3">
+          <ul aria-label="in this session" className="space-y-2 text-sm">
+            {viewers.map((viewer) => (
+              <li key={viewer.id} className="flex items-start gap-2">
+                <ViewerIcon viewer={viewer} className="mt-0.5 size-4 shrink-0" />
+                <ViewerLines viewer={viewer} muted="text-muted-foreground" />
+              </li>
+            ))}
+          </ul>
+        </PopoverContent>
+      </Popover>
+    );
+  }
+
+  return (
+    <ul aria-label="in this session" className="flex shrink-0 items-center gap-1 md:bar-side:flex-col">
+      {viewers.map((viewer) => (
+        <li key={viewer.id} className="flex">
+          <BarTooltip
+            // the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink
+            label={<ViewerLines viewer={viewer} muted="text-tooltip-foreground/70 dark:text-muted-foreground" />}
+          >
+            <Badge asChild variant="outline" className={cn('cursor-default', VERTICAL)}>
+              <button
+                type="button"
+                // what it shows, and what its eye says on screen
+                aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}`}
+              >
+                <ViewerIcon viewer={viewer} />
+                {viewer.short}
+                {viewer.you && ' (you)'}
+              </button>
+            </Badge>
+          </BarTooltip>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -407,6 +511,8 @@ export function SwoopToolbar({
         >
           {machineId}
         </span>
+
+        <ViewerPills session={session} compact={compact} />
 
         {badge && (
           <Badge variant={badge.tone} data-testid="session-badge" className={cn('shrink-0', VERTICAL)}>

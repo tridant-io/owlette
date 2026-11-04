@@ -166,6 +166,16 @@ it('a refusal or failure keeps its notice and the way back', async () => {
   expect(close).not.toHaveBeenCalled();
 });
 
+it('a machine that left the site keeps its notice in owlette swoop too', async () => {
+  const close = fakeBridge('main');
+  const view = await openViewer();
+  moveTo(view, { state: 'error', error: 'this machine has left the site.' });
+  wait(5000);
+  expect(screen.getByRole('alert')).toHaveTextContent('this machine has left the site.');
+  expect(mockRouter.replace).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+});
+
 it('a reconnect inside the moment, or leaving the page, calls the return off', async () => {
   fakeBridge('main');
   const view = await openViewer();

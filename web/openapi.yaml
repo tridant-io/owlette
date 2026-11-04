@@ -4902,7 +4902,9 @@ paths:
       description: |
         Hard-deletes the machine document, its config document, the fixed
         pending/completed command-map documents, and the machine's agent
-        refresh tokens (so the agent cannot reconnect). Idempotent.
+        refresh tokens (so the agent cannot reconnect), and ends the machine's
+        swoop sessions as `machine_removed`, so their viewers say the machine
+        has left the site. Idempotent.
 
         ### Authentication and scopes
 
@@ -8088,7 +8090,10 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404':
-          description: The site or the machine does not exist, or the caller has no access to the site.
+          description: |
+            The site does not exist or the caller has no access to it
+            (`code: not_found`), or the machine is not in the site
+            (`code: machine_not_found`).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8130,6 +8135,11 @@ paths:
         Returns the live state of one session and its viewers. The session
         record holds no key material by construction.
 
+        A caller who is in the session gets each viewer's `displayName`, and a
+        caller whose role on the site is owner or admin, or a superadmin, gets
+        each viewer's `email` too. A caller who is not in the session gets
+        neither, whatever their role.
+
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
       security:
@@ -8157,12 +8167,23 @@ paths:
                           properties:
                             viewerId: { type: string }
                             uid: { type: string }
+                            displayName:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session. Null when the viewer's account has no name, or is gone.
+                            email:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session and their role on the site is owner or admin; a superadmin with no role on the site gets none. Null when the viewer's account is gone.
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }
                             renewedAt: { type: integer, description: When this viewer last renewed its lease; absent until it first has. }
-                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
+                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, machine_removed, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
+                      endedFor:
+                        type: string
+                        description: The uid a `revoked` end was for. Removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
@@ -8176,7 +8197,14 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
-        '404': { $ref: '#/components/responses/Problem404' }
+        '404':
+          description: |
+            `code: not_found` when the site does not exist or the caller is not
+            in it, `code: session_not_found` when the machine has no session
+            with this id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }

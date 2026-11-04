@@ -1,14 +1,13 @@
 /**
- * Take one user out of their live swoop sessions in a site, because their
- * authorisation to be in them just went away — removed from the site, or
- * demoted out of `MACHINE_REMOTE_CONTROL`.
+ * End one user's live swoop sessions in a site, because their authorisation to
+ * be in them just went away — removed from the site, or demoted out of
+ * `MACHINE_REMOTE_CONTROL`.
  *
  * The lease already covers this: the renewal route re-checks membership, site
  * enablement and capability, so a removed member is out within one lease
- * (<= 5 min) with nothing here at all (PROTOCOL.md §10). This takes their seats
- * out of the record, and where nobody else is in the session it is the fast
- * half of the same decision — the kill path (plan.md D11) closes the window to
- * <= 2 s. It is best-effort by construction: the membership write is
+ * (<= 5 min) with nothing here at all (PROTOCOL.md §10). This is the fast half
+ * of the same decision — the kill path (plan.md D11) closes the window to
+ * <= 2 s — and it is best-effort by construction: the membership write is
  * authoritative and has already landed when this runs.
  *
  * So: never inside the caller's Firestore transaction, never awaited in a way
@@ -20,7 +19,7 @@ import type { Actor } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
-import { listUnendedSwoopSessionsForUser, removeSwoopViewers } from '@/lib/swoop/sessionStore.server';
+import { endSwoopSession, listUnendedSwoopSessionsForUser } from '@/lib/swoop/sessionStore.server';
 import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 
 export interface RevokeSwoopSessionsArgs {
@@ -47,16 +46,19 @@ export interface RevokeSwoopSessionsResult {
 }
 
 /**
- * Takes this user's seats out of every unended session they are in.
+ * Ends every unended session this user holds a seat in, then stops the
+ * streamer the way the session DELETE does: the Worker broadcast
+ * (authoritative, <= 2 s), and the polled `swoop_kill` command only when that
+ * did not land.
  *
  * Several viewers share a session, and the kill is sid-scoped — the protocol's
- * only per-session stop, §10 has no "evict one viewer" — so killing one with
- * someone else still in it would end it for them too. There the seats going is
- * all: the user's next renewal is refused and the host drops them within one
- * lease, and the session goes on for the rest. A session nobody else is in is
- * ended, and its streamer stopped the way the session DELETE does: the Worker
- * broadcast (authoritative, <= 2 s), and the polled `swoop_kill` command only
- * when that did not land.
+ * only per-session stop, §10 has no "evict one viewer" — so it ends for
+ * everyone in it. Taking out the user's seat alone would leave them in it, in
+ * control if they held it, until the host drops them a lease later. So the
+ * record names whom it was ended for (`endedFor`), and everyone in it starts
+ * the next session on their own, where the api decides what each may do now:
+ * the person removed is refused, the person demoted watches. Step-up windows
+ * are untouched, which only the kill route closes.
  */
 export async function revokeSwoopSessionsForUser(
   args: RevokeSwoopSessionsArgs,
@@ -70,40 +72,18 @@ export async function revokeSwoopSessionsForUser(
 
     for (const session of sessions) {
       const { machineId, sid } = session;
-      // a demotion costs control and nothing else: a watch they are still
-      // entitled to survives it, in this session or another.
-      const seats = session.viewers.filter((viewer) => viewer.uid === args.uid && (!args.controlOnly || viewer.ctl));
-      if (args.controlOnly && seats.length === 0) continue;
+      // a session they started and left goes on without them, and a demotion
+      // costs control and nothing else: a watch they are still entitled to survives it.
+      const seated = session.viewers.some((viewer) => viewer.uid === args.uid && (!args.controlOnly || viewer.ctl));
+      if (!seated) continue;
 
-      // with nobody left the record ends in the same write as the seats.
-      const stillIn = await removeSwoopViewers({
+      await endSwoopSession({
         siteId: args.siteId,
         machineId,
         sid,
-        viewerIds: seats.map((viewer) => viewer.viewerId),
-        spendContinuity: true,
-        endWhenEmpty: { endReason: 'revoked' },
+        endReason: 'revoked',
+        endedFor: args.uid,
       });
-      if (stillIn === null) continue;
-      if (stillIn.length > 0) {
-        if (seats.length === 0) continue;
-        revokedSids.push(sid);
-        for (const seat of seats) {
-          await recordSwoopSessionEnded({
-            siteId: args.siteId,
-            machineId,
-            sid,
-            actor: args.actor,
-            ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-            endReason: args.reason,
-            viewerId: seat.viewerId,
-            left: true,
-            durationMs: Date.now() - seat.joinedAt,
-          });
-        }
-        continue;
-      }
-
       revokedSids.push(sid);
 
       const broadcast = await killSession({ siteId: args.siteId, machineId, sid }).catch(

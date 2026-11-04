@@ -36,10 +36,10 @@ jest.mock('@/lib/firebase-admin', () => {
     set: (...args: unknown[]) => mockSet(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
     get: () => mockGet(),
-    // a transaction reads and writes the same document mocks
+    // a transaction reads and writes the same mocks, a query and a document each through its own get
     runTransaction: async (fn: (tx: unknown) => unknown) =>
       fn({
-        get: () => mockGet(),
+        get: (ref: { get: () => unknown }) => ref.get(),
         set: (_ref: unknown, ...args: unknown[]) => mockSet(...args),
       }),
   };
@@ -58,10 +58,9 @@ jest.mock('@/lib/logger', () => ({
 import {
   SwoopSessionStoreError,
   assertNoKeyMaterial,
-  createSwoopSession,
   endSwoopSession,
+  enterSwoopSession,
   getSwoopSession,
-  joinSwoopSession,
   listLiveSwoopSessionsForSite,
   liveSessionToJoin,
   removeSwoopViewers,
@@ -143,29 +142,27 @@ describe('assertNoKeyMaterial', () => {
 
 describe('writes', () => {
   it('creates a session at sites/{s}/machines/{m}/swoop_sessions/{sid}, with its first viewer in it', async () => {
-    await createSwoopSession({
+    const entry = await enterSwoopSession({
       siteId: SITE,
       machineId: MACHINE,
-      sid: SID,
+      newSid: SID,
       createdBy: 'uid-1',
-      startedAt: 1000,
       viewer: viewer('v1'),
-      continuityHash: 'c'.repeat(64),
+      continuityHash: () => 'c'.repeat(64),
+      nowMs: 1000,
     });
 
-    expect(mockPath.slice(0, 6)).toEqual([
-      'sites',
-      SITE,
-      'machines',
-      MACHINE,
-      'swoop_sessions',
-      SID,
-    ]);
+    expect(entry).toEqual({ outcome: 'created', sid: SID });
+    // the machine's unended sessions, read in the transaction that decides
+    expect(mockWhere.mock.calls[0]).toEqual(['state', 'in', ['pending', 'live']]);
+    expect(mockPath.slice(0, 5)).toEqual(['sites', SITE, 'machines', MACHINE, 'swoop_sessions']);
+    expect(mockPath).toContain(SID);
     const [payload, options] = mockSet.mock.calls[0];
     expect(options).toEqual({ merge: true });
     expect(payload).toMatchObject({
       sid: SID,
       state: 'pending',
+      startedAt: 1000,
       viewers: [viewer('v1')],
       continuity: { v1: { uid: 'uid-v1', hash: 'c'.repeat(64) } },
     });
@@ -189,16 +186,23 @@ describe('writes', () => {
     });
   });
 
+  it('names whom a revocation ended it for, and reads it back', async () => {
+    await endSwoopSession({ siteId: SITE, machineId: MACHINE, sid: SID, endReason: 'revoked', endedFor: 'uid-removed' });
+    const written = mockSet.mock.calls[0][0] as Record<string, unknown>;
+    expect(written).toMatchObject({ state: 'ended', endReason: 'revoked', endedFor: 'uid-removed' });
+
+    mockGet.mockResolvedValue({ exists: true, data: () => ({ ...sessionDoc(SID, 'ended', []), ...written }) });
+    expect(await getSwoopSession(SITE, MACHINE, SID)).toMatchObject({ endReason: 'revoked', endedFor: 'uid-removed' });
+  });
+
   it('refuses a write that would carry key material', async () => {
-    mockGet.mockResolvedValue({
-      exists: true,
-      data: () => sessionDoc(SID, 'live', [viewer('v1')]),
-    });
+    mockQueryGet.mockResolvedValue(sessionDocs(sessionDoc(SID, 'live', [viewer('v1')])));
     await expect(
-      joinSwoopSession({
+      enterSwoopSession({
         siteId: SITE,
         machineId: MACHINE,
-        sid: SID,
+        newSid: 'sid-new',
+        createdBy: 'uid-v2',
         viewer: {
           ...viewer('v2'),
           // A future field addition that smuggles a secret in must fail here.
@@ -282,36 +286,56 @@ describe('seats', () => {
   const joiner = { viewerId: 'v9', uid: 'uid-v9', ctl: true, joinedAt: NOW, leaseExpiresAt: NOW + 300_000 };
   const stage = (doc: Record<string, unknown> | null) =>
     mockGet.mockResolvedValue(doc ? { exists: true, data: () => doc } : { exists: false, data: () => undefined });
-  const join = () =>
-    joinSwoopSession({ siteId: SITE, machineId: MACHINE, sid: SID, viewer: joiner, continuityHash: 'h'.repeat(64), nowMs: NOW });
+  /** the machine's unended sessions, as the entry's query reads them. */
+  const unended = (...docs: Array<ReturnType<typeof sessionDoc>>) => mockQueryGet.mockResolvedValue(sessionDocs(...docs));
+  const enter = () =>
+    enterSwoopSession({
+      siteId: SITE,
+      machineId: MACHINE,
+      newSid: 'sid-new',
+      createdBy: 'user:uid-v9',
+      viewer: joiner,
+      continuityHash: (sid) => `${sid}-hash`,
+      nowMs: NOW,
+    });
 
   it('joins in one transaction, beside the seats still held, with the joiner’s continuity grant', async () => {
-    stage(sessionDoc(SID, 'pending', [viewer('v1'), viewer('v2', LAPSED)]));
+    unended(sessionDoc(SID, 'pending', [viewer('v1'), viewer('v2', LAPSED)]));
 
-    await expect(join()).resolves.toBe('joined');
+    await expect(enter()).resolves.toEqual({ outcome: 'joined', sid: SID });
 
     expect(mockSet).toHaveBeenCalledTimes(1);
     expect(mockSet.mock.calls[0][0]).toMatchObject({
       viewers: [viewer('v1'), joiner],
-      continuity: { v9: { uid: 'uid-v9', hash: 'h'.repeat(64) } },
+      continuity: { v9: { uid: 'uid-v9', hash: `${SID}-hash` } },
     });
+    expect(mockSet.mock.calls[0][0]).not.toHaveProperty('state');
   });
 
   it('turns away a fifth person, and counts one person’s several tabs once', async () => {
-    stage(sessionDoc(SID, 'pending', ['a', 'b', 'c', 'd'].map((id) => viewer(id))));
-    await expect(join()).resolves.toBe('full');
+    unended(sessionDoc(SID, 'pending', ['a', 'b', 'c', 'd'].map((id) => viewer(id))));
+    await expect(enter()).resolves.toEqual({ outcome: 'full', sid: SID });
     expect(mockSet).not.toHaveBeenCalled();
 
-    stage(sessionDoc(SID, 'pending', ['a', 'b', 'c', 'd'].map((id) => ({ ...viewer(id), uid: 'uid-same' }))));
-    await expect(join()).resolves.toBe('joined');
+    unended(sessionDoc(SID, 'pending', ['a', 'b', 'c', 'd'].map((id) => ({ ...viewer(id), uid: 'uid-same' }))));
+    await expect(enter()).resolves.toEqual({ outcome: 'joined', sid: SID });
   });
 
-  it('seats nobody in a session that ended, and never re-creates one the sweep removed', async () => {
-    stage(sessionDoc(SID, 'ended', []));
-    await expect(join()).resolves.toBe('gone');
-    stage(null);
-    await expect(join()).resolves.toBe('gone');
-    expect(mockSet).not.toHaveBeenCalled();
+  it('starts a session of its own when there is none to join, its viewer in it', async () => {
+    unended();
+    await expect(enter()).resolves.toEqual({ outcome: 'created', sid: 'sid-new' });
+    expect(mockSet.mock.calls[0][0]).toMatchObject({
+      sid: 'sid-new',
+      state: 'pending',
+      createdBy: 'user:uid-v9',
+      viewers: [joiner],
+      continuity: { v9: { uid: 'uid-v9', hash: 'sid-new-hash' } },
+    });
+
+    // nobody left in the one there: nothing to join
+    mockSet.mockClear();
+    unended(sessionDoc(SID, 'pending', [viewer('v1', LAPSED)]));
+    await expect(enter()).resolves.toEqual({ outcome: 'created', sid: 'sid-new' });
   });
 
   it('takes viewers out, drops the lapsed seats with them, and answers who is still in', async () => {
@@ -510,22 +534,6 @@ describe('the machine viewer count', () => {
   // still pending, so going live is when that viewer starts to count.
   it.each([
     [
-      'createSwoopSession',
-      () =>
-        createSwoopSession({
-          siteId: SITE,
-          machineId: MACHINE,
-          sid: SID,
-          createdBy: 'user:uid-v1',
-          startedAt: NOW,
-          viewer: viewer('v1'),
-        }),
-    ],
-    [
-      'joinSwoopSession',
-      () => joinSwoopSession({ siteId: SITE, machineId: MACHINE, sid: SID, viewer: viewer('v3'), nowMs: NOW }),
-    ],
-    [
       'removeSwoopViewers',
       () => removeSwoopViewers({ siteId: SITE, machineId: MACHINE, sid: SID, viewerIds: ['v1'], nowMs: NOW }),
     ],
@@ -544,6 +552,22 @@ describe('the machine viewer count', () => {
     expect(mockSet.mock.invocationCallOrder[0]).toBeLessThan(
       mockQueryGet.mock.invocationCallOrder[0],
     );
+  });
+
+  it('enterSwoopSession recounts once, after the write it decided on', async () => {
+    await enterSwoopSession({
+      siteId: SITE,
+      machineId: MACHINE,
+      newSid: SID,
+      createdBy: 'user:uid-v3',
+      viewer: viewer('v3'),
+      nowMs: NOW,
+    });
+
+    // the entry's own read of the machine's sessions, then the recount
+    expect(mockQueryGet).toHaveBeenCalledTimes(2);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet.mock.invocationCallOrder[0]).toBeLessThan(mockQueryGet.mock.invocationCallOrder[1]);
   });
 
   it('writes 0 when the machine\'s last session ends', async () => {

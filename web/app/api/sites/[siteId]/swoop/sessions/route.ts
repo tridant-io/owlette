@@ -6,8 +6,8 @@
  *
  * The session records are server-only (no rule reaches them), so this is how a
  * site admin sees them at all. They are read through the store like every other
- * read of the collection; only the viewer names come from here, in one `getAll`
- * over `users`, the members-route pattern. A viewer whose account is gone keeps
+ * read of the collection; the viewer names come from `viewerNames`, one read
+ * for every person in the site's sessions. A viewer whose account is gone keeps
  * their row with null names: the seat is still taken, whoever held it.
  *
  * Api keys are refused like on every other swoop route. swoop is a
@@ -20,53 +20,13 @@ import { problemFromError } from '@/lib/apiErrors';
 import { applyAuthDeprecations } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
-import { getAdminDb } from '@/lib/firebase-admin';
-import { listLiveSwoopSessionsForSite, type SwoopSession } from '@/lib/swoop/sessionStore.server';
+import { listLiveSwoopSessionsForSite } from '@/lib/swoop/sessionStore.server';
+import { NO_NAME, viewerNames } from '@/lib/swoop/viewerNames.server';
 import { apiKeyRefusal } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/_shared';
 
 interface SiteSwoopSessionsParams {
   [key: string]: string | undefined;
   siteId: string;
-}
-
-interface UserDoc {
-  email?: unknown;
-  displayName?: unknown;
-  deletedAt?: unknown;
-}
-
-interface ViewerName {
-  email: string | null;
-  displayName: string | null;
-}
-
-const NO_NAME: ViewerName = { email: null, displayName: null };
-
-/**
- * One read for every distinct viewer in the site, however many sessions they
- * are in. A missing or soft-deleted account is left out of the map, so its
- * viewer answers `NO_NAME`.
- */
-async function viewerNames(sessions: SwoopSession[]): Promise<Map<string, ViewerName>> {
-  const names = new Map<string, ViewerName>();
-  // the store reads a viewer row with no uid as '', which is no document path.
-  const uids = [
-    ...new Set(sessions.flatMap((session) => session.viewers.map((viewer) => viewer.uid))),
-  ].filter((uid) => uid !== '');
-  if (uids.length === 0) return names;
-
-  const db = getAdminDb();
-  const snaps = await db.getAll(...uids.map((uid) => db.collection('users').doc(uid)));
-  snaps.forEach((snap, i) => {
-    if (!snap.exists) return;
-    const data = (snap.data() ?? {}) as UserDoc;
-    if (typeof data.deletedAt === 'number') return;
-    names.set(uids[i], {
-      email: typeof data.email === 'string' ? data.email : null,
-      displayName: typeof data.displayName === 'string' ? data.displayName : null,
-    });
-  });
-  return names;
 }
 
 const listHandler: SiteRouteHandler<SiteSwoopSessionsParams> = async (_request, ctx) => {

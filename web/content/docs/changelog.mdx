@@ -68,13 +68,37 @@ ownership.
 The header's manage sites dialog is gone: admin panel → sites and each site's
 settings page do what it did. `/admin/members` now redirects to `/admin/sites`.
 
+## [4.1.26] - 2026-11-04
+### added — swoop's bar shows who is in the session
+
+The bar now shows a pill for each viewer in a swoop session, beside the machine's
+name: first name and last initial, yours marked, and an eye for anyone who only
+watches. Hover one for the full name; site owners and admins also see the email.
+On a phone the pills fold into one button with the count, which lists everyone
+in full. The list that sat over the picture is gone, and the pointers of others
+in control carry their names instead of an account ID. Nothing to update on the
+machine.
+
 ### fixed — a second viewer no longer ends the first viewer's swoop session
 
 Opening swoop on a machine someone was already in started a session of its own,
 and the machine ended theirs. Everyone who opens a machine now joins the session
 running there, with a lease of their own: ending yours or closing the tab takes
-only you out, an admin's kill still ends it for everyone, and a member removed
-from the site is out within one lease. Nothing to update on the machine.
+only you out, and an admin's kill still ends it for everyone. Two people
+opening it at the same moment land in the same session too. Removing someone
+from the site, or taking their control, ends the session at once: everyone in
+it reconnects on their own, the removed member to a notice that their access
+was removed, and the demoted one to watching. Nothing to update on the machine.
+
+### fixed — swoop says a machine has left the site instead of "machine is restarting"
+
+A machine removed from the site, or one that left it from its own tray, told
+everyone watching it that it was restarting, and then showed a bare "machine
+not found". Removing a machine now ends its swoop sessions, and the viewer says
+the machine has left the site, with the way back. A machine on an agent older
+than 4.1.8 says nothing as it goes, so there the viewer says it once its lease
+runs out, within about five and a half minutes. Nothing to update on the
+machine.
 
 ## [4.1.25] - 2026-11-02
 

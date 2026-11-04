@@ -32,9 +32,23 @@ jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: (...args: unknown[]) => mockEmitMutation(...args),
 }));
 
+// the session store reads through `getAdminDb`, not the injected db
+const mockListSessions = jest.fn(async (..._a: unknown[]): Promise<unknown[]> => []);
+const mockEndSession = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/swoop/sessionStore.server', () => ({
+  listUnendedSwoopSessionsForMachine: (...a: unknown[]) => mockListSessions(...a),
+  endSwoopSession: (...a: unknown[]) => mockEndSession(...a),
+}));
+
+const mockRecordEnded = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/swoop/audit.server', () => ({
+  recordSwoopSessionEnded: (...a: unknown[]) => mockRecordEnded(...a),
+}));
+
 import { removeMachine } from '@/lib/actions/removeMachine.server';
 
 const AUDIT_ACTOR = 'user:admin-uid';
+const ACTOR = { type: 'user' as const, userId: 'admin-uid', role: 'admin' as const, siteRoles: { 'site-a': 'admin' as const } };
 
 interface RecordedDelete {
   path: string;
@@ -185,13 +199,14 @@ beforeEach(() => {
   loggerWarnSpy.mockClear();
   loggerErrorSpy.mockClear();
   mockEmitMutation.mockClear();
+  mockListSessions.mockResolvedValue([]);
 });
 
 describe('removeMachine — input validation', () => {
   it('throws when siteId is empty', async () => {
     const fake = buildFakeDb();
     await expect(
-      removeMachine({ siteId: '', machineId: 'm1', auditActor: AUDIT_ACTOR, db: fake.db }),
+      removeMachine({ siteId: '', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
     ).rejects.toThrow(/siteId/);
     expect(fake.batchCommitCount).toBe(0);
   });
@@ -199,7 +214,7 @@ describe('removeMachine — input validation', () => {
   it('throws when machineId is empty', async () => {
     const fake = buildFakeDb();
     await expect(
-      removeMachine({ siteId: 'site-a', machineId: '', auditActor: AUDIT_ACTOR, db: fake.db }),
+      removeMachine({ siteId: 'site-a', machineId: '', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
     ).rejects.toThrow(/machineId/);
     expect(fake.batchCommitCount).toBe(0);
   });
@@ -212,6 +227,7 @@ describe('removeMachine — cascade covers all 4 paths', () => {
       siteId: 'site-a',
       machineId: 'mach_alpha',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -254,6 +270,7 @@ describe('removeMachine — cascade covers all 4 paths', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -283,6 +300,7 @@ describe('removeMachine — cascade covers all 4 paths', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -299,7 +317,7 @@ describe('removeMachine — cascade covers all 4 paths', () => {
     fake.setBatchCommitFailure(new Error('batch_blew_up'));
 
     await expect(
-      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, db: fake.db }),
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
     ).rejects.toThrow('batch_blew_up');
 
     expect(fake.individualDeletes).toEqual([]);
@@ -319,6 +337,7 @@ describe('removeMachine — best-effort tolerance', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -345,6 +364,7 @@ describe('removeMachine — best-effort tolerance', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -368,6 +388,7 @@ describe('removeMachine — best-effort tolerance', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -389,12 +410,14 @@ describe('removeMachine — best-effort tolerance', () => {
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
     await removeMachine({
       siteId: 'site-a',
       machineId: 'm1',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
     // Two batches committed; eight delete-records (4 per call).
@@ -411,6 +434,7 @@ describe('removeMachine — audit emission', () => {
       siteId: 'site-a',
       machineId: 'mach_alpha',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
 
@@ -434,7 +458,7 @@ describe('removeMachine — audit emission', () => {
     fake.setBatchCommitFailure(new Error('batch_blew_up'));
 
     await expect(
-      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, db: fake.db }),
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
     ).rejects.toThrow('batch_blew_up');
 
     expect(mockEmitMutation).not.toHaveBeenCalled();
@@ -448,6 +472,7 @@ describe('removeMachine — return shape', () => {
       siteId: 'site-with_dashes-and_underscores',
       machineId: 'mach_42-x',
       auditActor: AUDIT_ACTOR,
+      actor: ACTOR,
       db: fake.db,
     });
     expect(result.deleted).toEqual({
@@ -458,5 +483,70 @@ describe('removeMachine — return shape', () => {
       completedCommands:
         'sites/site-with_dashes-and_underscores/machines/mach_42-x/commands/completed',
     });
+  });
+});
+
+/**
+ * a machine that leaves the site takes its streamer with it, and its session
+ * records, a subcollection of the deleted doc, outlive it. ended here, so every
+ * viewer of the machine reads why instead of waiting on a machine that will
+ * not come back.
+ */
+describe('removeMachine — the sessions swoop had on it', () => {
+  const live = { sid: 'sid-live', siteId: 'site-a', machineId: 'm1', state: 'live', startedAt: Date.now() - 60_000, viewers: [] };
+
+  it('ends every unended session on the machine as machine_removed, and records each one', async () => {
+    const fake = buildFakeDb();
+    mockListSessions.mockResolvedValue([live, { ...live, sid: 'sid-pending', state: 'pending' }]);
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(mockListSessions).toHaveBeenCalledWith({ siteId: 'site-a', machineId: 'm1' });
+    expect(mockEndSession.mock.calls.map(([args]) => args)).toEqual([
+      { siteId: 'site-a', machineId: 'm1', sid: 'sid-live', endReason: 'machine_removed' },
+      { siteId: 'site-a', machineId: 'm1', sid: 'sid-pending', endReason: 'machine_removed' },
+    ]);
+    expect(mockRecordEnded).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: 'site-a', machineId: 'm1', sid: 'sid-live', actor: ACTOR, endReason: 'machine_removed' }),
+    );
+    expect(mockRecordEnded).toHaveBeenCalledTimes(2);
+  });
+
+  it('ends them only once the machine itself is gone: a failed removal leaves them running', async () => {
+    const fake = buildFakeDb();
+    fake.setBatchCommitFailure(new Error('batch_blew_up'));
+    mockListSessions.mockResolvedValue([live]);
+
+    await expect(
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
+    ).rejects.toThrow('batch_blew_up');
+
+    expect(mockEndSession).not.toHaveBeenCalled();
+  });
+
+  it('ends the rest when one cannot be ended', async () => {
+    const fake = buildFakeDb();
+    mockListSessions.mockResolvedValue([live, { ...live, sid: 'sid-other' }]);
+    mockEndSession.mockRejectedValueOnce(new Error('write refused'));
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(mockEndSession).toHaveBeenCalledWith(expect.objectContaining({ sid: 'sid-other' }));
+    expect(mockRecordEnded).toHaveBeenCalledWith(expect.objectContaining({ sid: 'sid-other' }));
+    expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('swoop'), expect.anything());
+  });
+
+  it('removes the machine all the same when its sessions cannot be ended', async () => {
+    const fake = buildFakeDb([{ id: 'tok-1', siteId: 'site-a', machineId: 'm1' }]);
+    mockListSessions.mockRejectedValue(new Error('store down'));
+
+    const result = await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(result.machineId).toBe('m1');
+    expect(fake.batchOps).toContainEqual({ op: 'delete', path: 'agent_refresh_tokens/tok-1' });
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('swoop'),
+      expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1' }) }),
+    );
   });
 });

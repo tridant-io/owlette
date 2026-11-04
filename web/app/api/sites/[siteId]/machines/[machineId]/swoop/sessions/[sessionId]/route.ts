@@ -22,9 +22,11 @@
 
 import { NextResponse } from 'next/server';
 import {
+  problem,
   problemFromError,
   problemNotFound,
   problemValidation,
+  ProblemType,
 } from '@/lib/apiErrors';
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
@@ -40,6 +42,7 @@ import {
 import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopDenied, recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
+import { NO_NAME, viewerNames } from '@/lib/swoop/viewerNames.server';
 import {
   apiKeyRefusal,
   decisionProblem,
@@ -72,7 +75,27 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
     if (!decision.ok) return decisionProblem(decision);
 
     const session = await getSwoopSession(ctx.siteId, machineId, sessionId);
-    if (!session) return problemNotFound('session not found');
+    // its own code, apart from the site wrapper's `not_found` for a member no
+    // longer in the site, which the page reads as its access gone with a kill.
+    if (!session) {
+      return problem({
+        type: ProblemType.NotFound,
+        title: 'not found',
+        status: 404,
+        detail: 'session not found',
+        code: 'session_not_found',
+      });
+    }
+
+    // the people in it are named to the people in it, so a member who may
+    // watch learns no name until they are in the room. an email goes only to
+    // a site owner or admin by role, or a superadmin, never by capability: what
+    // someone may do in swoop is not the same question as whose address they may see.
+    const names = session.viewers.some((viewer) => viewer.uid === ctx.actor.userId)
+      ? await viewerNames([session])
+      : null;
+    const siteRole = ctx.actor.siteRoles[ctx.siteId];
+    const withEmail = ctx.actor.role === 'superadmin' || siteRole === 'owner' || siteRole === 'admin';
 
     return applyAuthDeprecations(
       NextResponse.json({
@@ -82,9 +105,16 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
           state: session.state,
           createdBy: session.createdBy,
           startedAt: session.startedAt,
-          viewers: session.viewers,
+          viewers: names
+            ? session.viewers.map((viewer) => {
+                const { displayName, email } = names.get(viewer.uid) ?? NO_NAME;
+                return { ...viewer, displayName, ...(withEmail ? { email } : {}) };
+              })
+            : session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
+          // whom a revocation ended it for: everyone else in it comes back on their own.
+          ...(session.endedFor ? { endedFor: session.endedFor } : {}),
         },
       }),
       ctx.scopeCheck,

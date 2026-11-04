@@ -124,6 +124,7 @@ export const DELETE = authorizedSiteHandler<PathParams>({
           siteId: ctx.siteId,
           machineId,
           auditActor: siteAuditActor(ctx),
+          actor: ctx.actor,
         });
 
         return applyAuthDeprecations(
