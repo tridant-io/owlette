@@ -184,7 +184,7 @@ The older screenshot slideshow that swoop replaces on machines that can stream. 
 _Avoid_: using it as a synonym for swoop
 
 **Session**:
-One streamer's time on one machine, shared by everyone viewing that machine: a browser tab or owlette swoop window that opens swoop on a machine already in a session joins it, with a viewer ID, lease and audit rows of its own, rather than starting another. It lasts while anyone is in it. A viewer's end, closed tab or refused lease takes only that viewer out; a kill ends it for everyone, and so does removing someone in it from the site or taking their control, after which everyone in it reconnects on their own as what they may now do.
+One streamer's time on one machine, shared by everyone viewing that machine: a browser tab or owlette swoop window that opens swoop on a machine already in a session joins it, with a viewer ID, lease and audit rows of its own, rather than starting another. It lasts while anyone is in it. A viewer's end, closed tab or refused lease takes only that viewer out; a kill ends it for everyone, and so does removing someone in it from the site, taking their control or kicking them, after which everyone in it reconnects on their own as what they may now do.
 _Avoid_: stream, connection, call
 
 **Viewer**:
@@ -204,7 +204,7 @@ A site owner's or admin's stop of every swoop session on a machine, whatever the
 _Avoid_: end (which only takes you out of the session), disconnect
 
 **Kick**:
-Taking one other person out of a live swoop session, which a site owner or admin can do whatever their own swoop mode. One streamer serves everyone on the machine and cannot drop one viewer, so a kick ends the session for everyone in it: the one it was for is told a site admin removed them and stays out until they reconnect, and everyone else reconnects on their own. It is not a ban (keeping someone out is their swoop mode) and closes no step-up window.
+Taking one other person out of a live swoop session, which a site owner or admin can do whatever their own swoop mode. One streamer serves everyone on the machine and cannot drop one viewer, so a kick ends the session for everyone in it: the one it was for is told a site admin took them out and stays out until they reconnect, and everyone else reconnects on their own. It is not a ban (keeping someone out is their swoop mode) and closes no step-up window.
 _Avoid_: kill (which stops every session on the machine), ban, remove (which takes someone off the site)
 
 **Doorbell**:
