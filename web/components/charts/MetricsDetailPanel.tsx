@@ -20,7 +20,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Input } from '@/components/ui/input';
+import { SearchRow } from '@/components/SearchRow';
 import { X, ToggleLeft, ToggleRight, Monitor, HardDrive, ArrowDownUp, ArrowUp, ArrowDown, Thermometer, ChevronDown, Check, Pin } from 'lucide-react';
 import { TimeRangeSelector, type TimeRange } from './TimeRangeSelector';
 import { ChartTooltip, metricConfig, type MetricType } from './ChartTooltip';
@@ -106,16 +106,14 @@ function MachineSwitcher({
       </PopoverTrigger>
       <PopoverContent align="start" className="p-0 w-64">
         {showFilter && (
-          <div className="border-b border-border p-2">
-            <Input
-              autoFocus
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              placeholder="filter machines…"
-              aria-label="filter machines"
-              className="h-8"
-            />
-          </div>
+          <SearchRow
+            variant="row"
+            autoFocus
+            value={filter}
+            onChange={setFilter}
+            placeholder="filter machines…"
+            aria-label="filter machines"
+          />
         )}
         <div className="max-h-72 overflow-y-auto py-1">
           {filtered.length === 0 ? (
