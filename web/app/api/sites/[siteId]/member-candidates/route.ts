@@ -102,7 +102,7 @@ export const GET = authorizedSiteHandler<{ siteId: string }>({
       // hasCapability rather than a role check decides whose rosters are theirs.
       // this site's roster is already in hand.
       const standing = await listUserStanding(ctx.actor.userId);
-      const actor = { ...ctx.actor, ...siteStanding(standing) };
+      const actor = { ...ctx.actor, ...siteStanding(Object.entries(standing)) };
       const manageable = Object.keys(standing).filter(
         (id) => id !== ctx.siteId && hasCapability(actor, Capability.SITE_MEMBER_MANAGE, id),
       );

@@ -181,7 +181,7 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
       role,
       // Per-site standing from the same access check above; the global `role`
       // beside it grants nothing on a site.
-      ...siteStanding({ [siteId]: { role: access.siteRole, swoopMode: access.swoopMode } }),
+      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode }]]),
     };
 
     let queued;

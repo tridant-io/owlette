@@ -148,28 +148,37 @@ export interface MemberStanding {
  * whatever the row carries reaches every gate. a builder that dropped the mode
  * would hand an admin held to view their control back.
  *
+ * takes `[siteId, standing]` pairs, not a record keyed by site id: a request's
+ * site id as a computed key, or written as one, reads as prototype pollution
+ * to the code scanner (js/remote-property-injection, 311-313 and 425-429),
+ * however the object was made. pairs say the same thing without one.
+ *
  * `swoopModes` is returned only when some site has a mode, so an actor built
  * from rows that carry none is the actor from before the field existed.
  */
-export function siteStanding(bySite: Readonly<Record<string, MemberStanding>>): {
+export function siteStanding(bySite: Iterable<readonly [string, MemberStanding]>): {
   siteRoles: Record<string, SiteRole>;
   swoopModes?: Record<string, SwoopMode>;
 } {
-  // null-prototype maps, because SITE_ID_RE admits `__proto__` as a site id
-  const siteRoles: Record<string, SiteRole> = Object.create(null);
-  const swoopModes: Record<string, SwoopMode> = Object.create(null);
-  let anyMode = false;
-  for (const siteId of Object.keys(bySite)) {
-    const { role, swoopMode } = bySite[siteId];
+  const roles: Array<readonly [string, SiteRole]> = [];
+  const modes: Array<readonly [string, SwoopMode]> = [];
+  for (const [siteId, { role, swoopMode }] of bySite) {
     if (role === null) continue;
-    siteRoles[siteId] = role;
+    roles.push([siteId, role]);
     // the owner always controls, so an owner row's mode is never carried
-    if (role !== 'owner' && swoopMode !== null) {
-      swoopModes[siteId] = swoopMode;
-      anyMode = true;
-    }
+    if (role !== 'owner' && swoopMode !== null) modes.push([siteId, swoopMode]);
   }
-  return anyMode ? { siteRoles, swoopModes } : { siteRoles };
+  return modes.length > 0
+    ? { siteRoles: recordOf(roles), swoopModes: recordOf(modes) }
+    : { siteRoles: recordOf(roles) };
+}
+
+/**
+ * a record with no prototype: SITE_ID_RE admits `__proto__` as a site id, and
+ * a site that is not there must look up as nothing, not as Object.prototype.
+ */
+function recordOf<V>(entries: ReadonlyArray<readonly [string, V]>): Record<string, V> {
+  return Object.setPrototypeOf(Object.fromEntries(entries), null) as Record<string, V>;
 }
 
 /**

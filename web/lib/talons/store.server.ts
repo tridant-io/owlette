@@ -623,9 +623,7 @@ async function loadSuccessorActor(
       type: 'user',
       userId: uid,
       role,
-      ...siteStanding({
-        [siteId]: { role: siteRole, swoopMode: deriveSwoopMode(memberData, siteRole) },
-      }),
+      ...siteStanding([[siteId, { role: siteRole, swoopMode: deriveSwoopMode(memberData, siteRole) }]]),
     },
   };
 }

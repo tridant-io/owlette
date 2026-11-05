@@ -10,7 +10,6 @@ import {
   isSiteScopedCapability,
   siteStanding,
   type Actor,
-  type MemberStanding,
   type SiteRole,
   type SystemActorName,
   type UserActor,
@@ -690,10 +689,10 @@ describe("hasCapability — a person's swoop mode (owner rulings 13-14)", () => 
 describe('siteStanding', () => {
   it('carries each site role, and a mode only where the row has one', () => {
     expect(
-      siteStanding({
-        site_a: { role: 'member', swoopMode: 'control' },
-        site_b: { role: 'admin', swoopMode: null },
-      }),
+      siteStanding([
+        ['site_a', { role: 'member', swoopMode: 'control' }],
+        ['site_b', { role: 'admin', swoopMode: null }],
+      ]),
     ).toEqual({
       siteRoles: { site_a: 'member', site_b: 'admin' },
       swoopModes: { site_a: 'control' },
@@ -701,27 +700,27 @@ describe('siteStanding', () => {
   });
 
   it('skips a site with no role, and its mode with it', () => {
-    expect(siteStanding({ site_a: { role: null, swoopMode: 'control' } })).toEqual({ siteRoles: {} });
+    expect(siteStanding([['site_a', { role: null, swoopMode: 'control' }]])).toEqual({ siteRoles: {} });
   });
 
   it("drops an owner's mode", () => {
-    expect(siteStanding({ site_a: { role: 'owner', swoopMode: 'none' } })).toEqual({
+    expect(siteStanding([['site_a', { role: 'owner', swoopMode: 'none' }]])).toEqual({
       siteRoles: { site_a: 'owner' },
     });
   });
 
   it('returns no swoopModes key when no site has a mode', () => {
-    const standing = siteStanding({
-      site_a: { role: 'member', swoopMode: null },
-      site_b: { role: 'owner', swoopMode: 'view' },
-      site_c: { role: null, swoopMode: 'control' },
-    });
+    const standing = siteStanding([
+      ['site_a', { role: 'member', swoopMode: null }],
+      ['site_b', { role: 'owner', swoopMode: 'view' }],
+      ['site_c', { role: null, swoopMode: 'control' }],
+    ]);
     expect(Object.keys(standing)).toEqual(['siteRoles']);
   });
 
   it('keeps __proto__ as an own key, and leaves Object.prototype untouched', () => {
     const prototypeBefore = Object.getOwnPropertyNames(Object.prototype).sort();
-    const standing = siteStanding(ownKeyMap<MemberStanding>('__proto__', { role: 'admin', swoopMode: 'view' }));
+    const standing = siteStanding([['__proto__', { role: 'admin', swoopMode: 'view' }]]);
 
     expect(Object.prototype.hasOwnProperty.call(standing.siteRoles, '__proto__')).toBe(true);
     expect(standing.siteRoles['__proto__']).toBe('admin');

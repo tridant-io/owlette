@@ -149,7 +149,7 @@ function standingOf(uid: string): Record<string, MemberStanding & { role: SiteRo
 function sessionAs(uid: string, globalRole: 'member' | 'superadmin' = 'member'): void {
   const onTarget = standingOf(uid)[TARGET] ?? { role: null, swoopMode: null };
   mockCtx = {
-    actor: { type: 'user', userId: uid, role: globalRole, ...siteStanding({ [TARGET]: onTarget }) },
+    actor: { type: 'user', userId: uid, role: globalRole, ...siteStanding([[TARGET, onTarget]]) },
     auth: { userId: uid, keyContext: null },
   };
 }

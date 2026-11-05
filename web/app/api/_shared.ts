@@ -416,9 +416,7 @@ async function requireSiteCapability(
     role: outcome.facts.globalRole,
     // A superadmin legitimately holds no membership; their capabilities
     // short-circuit on the global role before this map is consulted.
-    ...siteStanding({
-      [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode },
-    }),
+    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
   };
 
   if (!hasCapability(actor, capability, siteId)) {

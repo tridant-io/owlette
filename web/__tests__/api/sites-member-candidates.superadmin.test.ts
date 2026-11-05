@@ -131,7 +131,7 @@ describe('GET /api/sites/{siteId}/member-candidates and superadmin accounts', ()
     mockListUserStanding.mockImplementation(async (uid: string) => standingOf(uid));
     // built from the target site's row, as the wrapper builds it
     mockCtx = {
-      actor: { type: 'user', userId: SELF, role: 'member', ...siteStanding({ [TARGET]: standingOf(SELF)[TARGET] }) },
+      actor: { type: 'user', userId: SELF, role: 'member', ...siteStanding([[TARGET, standingOf(SELF)[TARGET]]]) },
       auth: { userId: SELF, keyContext: null },
     };
 

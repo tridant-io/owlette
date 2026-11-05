@@ -405,7 +405,7 @@ describe('swoop mode', () => {
               type: 'user',
               userId: 'u',
               role: 'member',
-              ...siteStanding({ [SITE]: { role: siteRole, swoopMode: mode } }),
+              ...siteStanding([[SITE, { role: siteRole, swoopMode: mode }]]),
             };
             const settings: SwoopSiteSettings = { ...ON, membersMayWatch };
             expect(access({ actor, settings }).ok).toBe(effective !== 'none');

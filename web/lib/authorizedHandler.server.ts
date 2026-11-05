@@ -617,9 +617,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         outcome.facts.globalRole,
         // Reached only when the outcome is ok, so a superadmin may legitimately
         // have no membership; their capabilities short-circuit on global role.
-        siteStanding({
-          [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode },
-        }),
+        siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
       );
 
       // 5. Read kill-switch config.

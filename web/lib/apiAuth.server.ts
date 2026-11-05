@@ -466,9 +466,7 @@ export async function assertUserHasSiteCapability(
     type: 'user',
     userId,
     role: outcome.facts.globalRole,
-    ...siteStanding({
-      [siteId]: { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode },
-    }),
+    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
   };
   if (!hasCapability(actor, capability, siteId)) {
     throw new ApiAuthError(403, 'Forbidden: capability not granted');
