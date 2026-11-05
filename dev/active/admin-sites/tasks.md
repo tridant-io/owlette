@@ -1290,7 +1290,31 @@ Every spec that seeds a site or a row releases it in its hooks (`releaseFixtureS
     7. **OWNER STEP:** go to tag. Then tag `v4.1.27`, and record the results in this Log and the project memory.
   - Done when: CI is green on dev, `smoke:dev` is green, the owner's steps are signed off, and the tag is pushed.
 
+## Wave 10: owner additions for 4.1.27 (2026-11-04, after the release branch was cut)
+
+Owner requests made while 4.1.27 was in flight, run on `release/4.1.27` as plain commits behind the release commit; task files in the session scratchpad (`waves/admin-sites/wave-10/`).
+
+- [x] **Task 10.1: a search in the site switcher when there are many sites** (`SiteSwitcherList`, threshold 10, in the header's switcher and the owlette swoop picker; e2e `sites/site-switcher-search.spec.ts`) — dda46440, changelog 7f03f711.
+- [x] **Task 10.2: the pill's pointer icon points top-left on a side bar** (`UPRIGHT` counter-rotation) — e3098011.
+- [x] **Task 10.3: a pill lights while its viewer moves the pointer, and fills while you click** (`lib/swoop/activity.ts`, `useSwoopViewerActivity`; others' clicks wait on the streamer publishing buttons in `vpos`) — b59ea3aa.
+- [x] **Task 10.4: another controller's pointer carries no name** (the bar names them; `SwoopPresence` keeps the tint) — 0bde2d54.
+- [x] **Task 10.5: codeql's property-injection alerts** (425-429, the september false positives 311-313 re-fired by `siteStanding({ [siteId]: … })`): the builder takes `[siteId, standing]` pairs and makes null-prototype records from entries — 0cd17001; the dead dependabot-423 ack dropped — 8aaac99e.
+
+## Wave 11: kick someone from a swoop session (2026-11-04 late; owner: "in the pill menu under email, there should be a button 'kick'")
+
+Design (settled): the protocol has no per-viewer evict, so a kick is the revocation cut (`endSwoopSessionForUser`, extracted from `revokeViewerSessions.server.ts`): the record ends `kicked` with `endedFor`, the streamer is killed, everyone else comes back on the ladder, and the kicked page stops on the record's word ("a site admin removed you from this session.") since its access is intact and a rejoin would succeed; reconnect is the deliberate rejoin. Gate `SWOOP_SETTINGS_MANAGE`, as kill; anyone but yourself, no hierarchy. Task files in the session scratchpad (`waves/admin-sites/wave-11/`).
+
+- [x] **Task 11.1: the route `POST …/sessions/{sid}/kick` `{ viewerId }`, the GET's per-viewer `kickable`, the page's stop, `useSwoopViewerNames.kickable`, `lib/swoop/kick.ts`, the pill menu (`viewer-menu` popover) with kick under the email and a confirm dialog, unit tests.** — 63c1c1c0; follow-ups 48dd747a (api reference, error codes, "swoop mode" wording).
+- [x] **Task 11.2: the e2e (`swoop/viewer-pills.spec.ts`: the admin kicks the member), swoop.mdx, rate-limits.mdx, both changelogs.** — fa92090c; the fake host's roster now names only the session it serves (85cc7b88), which the spec had trimmed by hand.
+
+## Wave 12: the machine picker's cards say who is connected (2026-11-04 late; owner: "these cards in the swoop desktop all should show who is connected to a machine")
+
+- [x] **Task 12.1: the mirror writes `swoopSeats` (uid, displayName, ctl; never the email) beside the count; `useMachines` parses it; the picker card lists the people on the right (first name and last initial, a pointer for control and an eye for a watcher, `+N`, `(you)`, full names on hover); `swoop/picker.spec.ts`; swoop.mdx; both changelogs.** — 717d152b.
+
 ## Log
+
+- Wave 12 (picker cards), 2026-11-05 ~02:30 PST: 717d152b; mutation checks 5/5; the e2e seeds the mirror directly, so the live path from a session to the names on a card rests on the unit tests of the sync. Review of the kick (three axes, wf_8772fe11-ba2): pass with notes, all fixed in 9f68c85b (a kick is final for its person in the continuity rule; the shared end-for-user function leaves the audit row to each caller; "took you out", not "removed"; the step-up claim corrected). Session spec 22/22 on the rig.
+- Wave 11 (kick), 2026-11-05 ~01:30 PST: both executors done (63c1c1c0, fa92090c); the pills spec with the new kick test passed on the rig after the fake-host roster fix (2 passed, 1.0 min); jest on every suite importing the changed modules passed (68 suites, 1592 tests in 11.1's run). Dev had moved under PR #474 (c7a53fa4, the 4.1.26 screenshots), which left the PR conflicting and GitHub ran no workflow on the pushed head; merged origin/dev into release/4.1.27 as f5a97522 keeping the 4.1.27 screenshots. CodeQL's five js/remote-property-injection alerts (the September false positives 311-313 re-fired by `siteStanding({ [siteId]: … })`) are fixed by 0cd17001: the builder takes `[siteId, standing]` pairs and builds null-prototype records from entries.
 ### 2026-11-04
 - Plan created from the 2026-11-04 research maps and owner decisions; not started. Starts after 4.1.26 merges to dev.
 - Revised against two critiques. The swoop mode (owner rulings 13-14) is now part of this release:
