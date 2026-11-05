@@ -97,7 +97,7 @@ export default function UserManagementPage() {
   const { users, loading, error, updateUserRole, getUserCounts, assignSiteToUser, removeSiteFromUser, deleteUser } = useUserManagement(isSuperadmin);
   const [updatingUser, setUpdatingUser] = useState<string | null>(null);
   const [deletingUser, setDeletingUser] = useState<string | null>(null);
-  const [manageSitesDialogOpen, setManageSitesDialogOpen] = useState(false);
+  const [manageSiteAccessOpen, setManageSiteAccessOpen] = useState(false);
   const [deleteConfirmDialogOpen, setDeleteConfirmDialogOpen] = useState(false);
   const [roleChangeDialogOpen, setRoleChangeDialogOpen] = useState(false);
   const [mfaResetDialogOpen, setMfaResetDialogOpen] = useState(false);
@@ -173,8 +173,8 @@ export default function UserManagementPage() {
     };
   }, []);
 
-  // Page-level, not in useUserManagement: that hook also runs in
-  // ManageSitesDialog on non-superadmin pages, where this endpoint 403s.
+  // Page-level, not in useUserManagement: that hook also feeds the owner
+  // column on /admin/sites, where this endpoint 403s for site admins.
   // Non-fatal — the column renders "never" if it fails.
   useEffect(() => {
     let cancelled = false;
@@ -199,9 +199,9 @@ export default function UserManagementPage() {
     };
   }, []);
 
-  const handleOpenManageSites = (userId: string, email: string, role: UserRole, sites: string[]) => {
+  const handleOpenManageSiteAccess = (userId: string, email: string, role: UserRole, sites: string[]) => {
     setSelectedUser({ uid: userId, email, role, sites });
-    setManageSitesDialogOpen(true);
+    setManageSiteAccessOpen(true);
   };
 
   const handleOpenRoleChangeDialog = (userId: string, email: string, currentRole: UserRole) => {
@@ -610,11 +610,11 @@ export default function UserManagementPage() {
                           </Tooltip>
                           <DropdownMenuContent align="end" className="bg-card border-border">
                             <DropdownMenuItem
-                              onClick={() => handleOpenManageSites(user.uid, user.email, user.role, user.sites || [])}
+                              onClick={() => handleOpenManageSiteAccess(user.uid, user.email, user.role, user.sites || [])}
                               className="text-foreground hover:bg-accent cursor-pointer focus:bg-accent focus:text-foreground"
                             >
                               <Settings className="h-4 w-4 mr-2" />
-                              manage sites
+                              manage site access
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => handleOpenRoleChangeDialog(user.uid, user.email, user.role)}
@@ -794,11 +794,11 @@ export default function UserManagementPage() {
         </div>
       )}
 
-      {/* Manage Sites Dialog */}
+      {/* manage site access dialog */}
       {selectedUser && (
         <ManageUserSitesDialog
-          open={manageSitesDialogOpen}
-          onOpenChange={setManageSitesDialogOpen}
+          open={manageSiteAccessOpen}
+          onOpenChange={setManageSiteAccessOpen}
           userId={selectedUser.uid}
           userEmail={selectedUser.email}
           userRole={selectedUser.role}

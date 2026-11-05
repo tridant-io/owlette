@@ -63,7 +63,7 @@ add the other method (or more passkeys) any time from account settings. removing
 
 sites are the top-level organizational unit — think of them as locations, departments, or projects.
 
-1. if you have no sites yet, click **create your first site**. otherwise open the site switcher, choose **manage sites**, then click **new site**.
+1. with no sites, click **create your first site**. otherwise open the site switcher and choose **new site**, or, if you own or run a site, **manage sites** → **new site**.
 2. in **create new site**, enter a **site name** (e.g., "NYC Gallery").
 3. keep the generated **site ID** or open **customize site ID** to set one manually. the ID is permanent and used in URLs.
 4. click **create site**.
@@ -74,12 +74,14 @@ you're automatically assigned as the owner with full access.
 
 ## site settings
 
-open the site switcher and choose **site settings** for the site you are on, or choose **manage sites** and click the pencil (**edit site**) on any site's row. site admins and owners see both; members see neither. each row in manage sites also shows whether that site has swoop on. the panel changes the **site name** and **timezone**, which apply on **save**, and holds the site's two switches, which take effect the moment they move:
+a site's settings are a page in the admin panel. the switcher's **site settings** opens it for the site you are on, and admin panel → **sites** lists every site you belong to, with a gear on each you run. owners and admins open it; members don't. its **general** section changes the **site name** and **timezone**, which apply on **save**, and its **swoop & screens** section holds the site's two switches, which take effect the moment they move:
 
 | switch | default | what it does |
 |---|---|---|
-| **swoop** | off | lets owners and admins watch and control this site's machines from a browser or owlette swoop, and members watch them by default. see [swoop](/docs/dashboard/swoop#turning-it-on). |
+| **swoop** | off | lets this site's machines be watched and controlled from a browser or owlette swoop. by default, members watch, and owners and admins watch and control. see [swoop](/docs/dashboard/swoop#turning-it-on). |
 | **keep screens awake** | on | machines on this site never sleep, blank or lock. |
+
+see [sites](/docs/dashboard/admin/sites) for every section of the page.
 
 ### keep screens awake
 
@@ -95,7 +97,7 @@ each machine holds it in two parts. the service holds sleep, which works with no
 
 a machine with nobody signed in keeps only the service's part: there is no session to keep from blanking or locking. on Linux that also covers a server with no desktop at all. the service's hold shows in each OS's own inspector: as `owlette keep screens awake` in `powercfg /requests` on Windows and `pmset -g assertions` on macOS, and as who `owlette`, why `keep screens awake` in `systemd-inhibit --list` on Linux.
 
-in manage sites, a machine's row in the machines panel reads **awake** while it holds. agents older than 4.1.1 ignore the setting, and a Windows machine on 4.1.1 held only the session's part, so a Windows machine needs 4.1.2 or later to stay out of sleep with nobody signed in.
+on a site's settings page, the **machines** section shows **awake** beside a machine while it holds. agents older than 4.1.1 ignore the setting, and a Windows machine on 4.1.1 held only the session's part, so a Windows machine needs 4.1.2 or later to stay out of sleep with nobody signed in.
 
 over the API, `PATCH /api/sites/{siteId}/display-settings` with `{ "keepAwake": false }` turns it off. it needs a site admin or owner signed in; an API key is refused.
 
@@ -145,7 +147,9 @@ see [machine monitoring](/docs/dashboard/machine-monitoring).
 - **roost** — content-addressed file sync, version publishing, and rollback at `/roosts`
 - **deploy** — software deployment and agent updates
 - **logs** — the activity event viewer
-- **admin panel** — site admins manage members, agent tokens, schedule presets, alert rules, webhooks and live swoop sessions for the sites they belong to
+- **admin panel** — site admins manage sites (members, machines, switches), agent tokens, schedule presets, alert rules, webhooks and live swoop sessions for the sites they belong to
+
+the site switcher in the header, or in the menu on a phone, moves between your sites, and with more than ten sites it has a filter that finds one by its name or ID.
 
 ---
 

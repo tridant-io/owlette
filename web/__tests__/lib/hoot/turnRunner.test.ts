@@ -490,6 +490,30 @@ describe('startTurn — happy path', () => {
       maxToolTier: 1,
     });
   });
+
+  it('hands the tools the swoop mode beside the site role, so an admin held to view stays held', async () => {
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'view',
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userSiteRole: 'admin',
+      userSwoopMode: 'view',
+    });
+  });
 });
 
 describe('startTurn — heartbeat', () => {

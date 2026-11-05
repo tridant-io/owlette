@@ -91,8 +91,16 @@ A machine's own refresh token, which never expires but an admin can revoke, kept
 _Avoid_: service account, credentials file
 
 **Site role**:
-A person's standing on one site: `owner`, `admin` or `member`. Members read; admins and owners act.
+A person's standing on one site: `owner`, `admin` or `member`. Members read; admins and owners act. A swoop mode on the same row can widen or narrow swoop alone.
 _Avoid_: using the global role for anything on a site
+
+**Swoop mode**:
+A person's own swoop on one site, set on their member row: `none`, `view` (watch) or `control`. Without one, the site role decides: members watch where the site lets members watch, admins and owners control. It changes swoop and nothing else, control still needs a step-up, and the owner's row never carries one.
+_Avoid_: swoop role, swoop permission, swoop access level
+
+**Site settings**:
+A site's own page in the admin panel, `/admin/sites/{siteId}`: its name and timezone, members, machines, the swoop and keep screens awake switches, and deleting it. The site's owners and admins open it from the site switcher or from the site's gear on admin panel → sites.
+_Avoid_: site editor, manage sites dialog
 
 **Superadmin**:
 The only global role that grants anything: owlette's own operators, who run platform-wide pages such as `/admin/installers`.
@@ -176,11 +184,11 @@ The older screenshot slideshow that swoop replaces on machines that can stream. 
 _Avoid_: using it as a synonym for swoop
 
 **Session**:
-One streamer's time on one machine, shared by everyone viewing that machine: a browser tab or owlette swoop window that opens swoop on a machine already in a session joins it, with a viewer ID, lease and audit rows of its own, rather than starting another. It lasts while anyone is in it. A viewer's end, closed tab or refused lease takes only that viewer out; a kill ends it for everyone, and so does removing someone in it from the site or taking their control, after which everyone in it reconnects on their own as what they may now do.
+One streamer's time on one machine, shared by everyone viewing that machine: a browser tab or owlette swoop window that opens swoop on a machine already in a session joins it, with a viewer ID, lease and audit rows of its own, rather than starting another. It lasts while anyone is in it. A viewer's end, closed tab or refused lease takes only that viewer out; a kill ends it for everyone, and so does removing someone in it from the site, taking their control or kicking them, after which everyone in it reconnects on their own as what they may now do.
 _Avoid_: stream, connection, call
 
 **Viewer**:
-The side of a session that watches (site membership) or is in control (site owner or admin, plus a step-up), in a browser tab or an owlette swoop window.
+The side of a session that watches or is in control, in a browser tab or an owlette swoop window. Which one is the person's swoop mode, or by default their site role (members watch, owners and admins control); control also needs a step-up.
 _Avoid_: client, guest
 
 **owlette swoop**:
@@ -192,8 +200,12 @@ The 5-minute grant a viewer renews while its tab or window is open. Authorizatio
 _Avoid_: token, timeout
 
 **Kill**:
-A site owner's or admin's stop of every swoop session on a machine. It also closes every step-up window on that machine. The desktop app's tray item "kill all swoop sessions on this machine" (Windows) is a local stop any user at the machine can click: it ends the sessions through the streamer but closes no step-up window.
+A site owner's or admin's stop of every swoop session on a machine, whatever their own swoop mode. It also closes every step-up window on that machine. The desktop app's tray item "kill all swoop sessions on this machine" (Windows) is a local stop any user at the machine can click: it ends the sessions through the streamer but closes no step-up window.
 _Avoid_: end (which only takes you out of the session), disconnect
+
+**Kick**:
+Taking one other person out of a live swoop session, which a site owner or admin can do whatever their own swoop mode. One streamer serves everyone on the machine and cannot drop one viewer, so a kick ends the session for everyone in it: the one it was for is told a site admin took them out and stays out until they reconnect, and everyone else reconnects on their own. It is not a ban (keeping someone out is their swoop mode) and closes no step-up window.
+_Avoid_: kill (which stops every session on the machine), ban, remove (which takes someone off the site)
 
 **Doorbell**:
 The idle WebSocket each agent holds to the swoop signalling worker, through which a new session rings the machine to start its streamer.

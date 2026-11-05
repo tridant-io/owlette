@@ -11,7 +11,7 @@
  */
 
 import React from 'react';
-import { render, screen, act, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, act, cleanup } from '@testing-library/react';
 import { SwoopPresence, tintOf } from '@/components/swoop/SwoopPresence';
 import { attach } from '@/lib/swoop/presence';
 import type { SwoopSession } from '@/lib/swoop/features';
@@ -106,32 +106,18 @@ describe('SwoopPresence', () => {
     h.detach();
   });
 
-  it('labels another viewer pointer with their first name and last initial, never a uid', async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        ok: true,
-        data: { viewers: [{ viewerId: 'viewer-a', uid: 'uid_operator', displayName: 'Ada Lovelace' }] },
-      }),
-    });
+  it("draws another viewer's pointer in the colour of their pill, with no name on it", () => {
     const h = harness();
     const { container } = render(<SwoopPresence session={h.session} />);
     h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
     h.cursor(JSON.stringify({ t: 'vpos', viewer: 'viewer-a', x: 0.5, y: 0.5, tsUs: 2 }));
 
-    await waitFor(() => expect(container.querySelector('div[aria-hidden]')).toHaveTextContent('Ada L.'));
-    expect(fetchMock).toHaveBeenCalledWith('/api/sites/site-a/machines/machine-1/swoop/sessions/sid-1');
-    expect(container).not.toHaveTextContent('uid_operator');
-    h.detach();
-  });
-
-  it('labels a pointer "viewer" while the session record has not named its viewer', () => {
-    const h = harness();
-    const { container } = render(<SwoopPresence session={h.session} />);
-    h.control(JSON.stringify({ t: 'roster', viewers: ROSTER, tsUs: 1 }));
-    h.cursor(JSON.stringify({ t: 'vpos', viewer: 'viewer-a', x: 0.5, y: 0.5, tsUs: 2 }));
-
-    expect(container.querySelector('div[aria-hidden]')).toHaveTextContent(/^viewer$/);
+    const cursor = container.querySelector<HTMLElement>('div[aria-hidden]');
+    expect(cursor).not.toBeNull();
+    // the bar names the person; the pointer only wears their colour
+    expect(cursor).toHaveTextContent('');
+    expect(cursor?.className).toContain(tintOf('viewer-a'));
+    expect(fetchMock).not.toHaveBeenCalled();
     h.detach();
   });
 

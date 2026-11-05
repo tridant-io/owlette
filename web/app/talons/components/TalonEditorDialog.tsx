@@ -306,8 +306,7 @@ export function TalonEditorDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* The base DialogContent carries `sm:max-w-lg`, which outranks a plain
-          `max-w-*` at sm+ — width overrides must be breakpoint-qualified
-          (see ManageSitesDialog for the same pattern). */}
+          `max-w-*` at sm+ — width overrides must be breakpoint-qualified. */}
       <DialogContent
         data-testid="talon-editor"
         className="border-border sm:max-w-5xl lg:max-w-6xl max-h-[90dvh] overflow-y-auto"

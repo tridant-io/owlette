@@ -6,7 +6,6 @@ import {
   collectionGroup,
   onSnapshot,
   doc,
-  getDoc,
   query,
   where,
   Timestamp,
@@ -24,6 +23,7 @@ import {
   type PowerCommandOptions,
   type PowerCommandSent,
 } from '@/lib/activeHours';
+import type { SwoopSeatMirror } from '@/lib/swoop/sessionStore.server';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -112,6 +112,18 @@ function parseDisplayAwake(value: unknown): Machine['displayAwake'] {
   };
 }
 
+/** a seat without a string uid is dropped, and a blank name reads as none, as on the bar's pills. */
+function parseSwoopSeats(value: unknown): Machine['swoopSeats'] {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((seat: unknown) => {
+    if (!seat || typeof seat !== 'object') return [];
+    const s = seat as Record<string, unknown>;
+    if (typeof s.uid !== 'string') return [];
+    const name = typeof s.displayName === 'string' ? s.displayName.trim() : '';
+    return [{ uid: s.uid, displayName: name || null, ctl: s.ctl === true }];
+  });
+}
+
 /**
  * Non-2xx from {@link apiJson}. Carries status + RFC-7807 `code` so callers can
  * tell an expected 401/403 from a real fault and keep it out of Sentry.
@@ -147,6 +159,48 @@ async function apiJson<T>(
     );
   }
   return body as T;
+}
+
+export async function createSite(
+  siteId: string,
+  name: string,
+  timezone?: string,
+  schedulesFollowSiteTime?: boolean,
+): Promise<string> {
+  if (!db) throw new Error('Firebase not configured');
+
+  const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
+  if (!isValid) {
+    throw new Error(error);
+  }
+
+  // No pre-read existence check: non-owners get permission-denied on getDoc.
+  // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
+  // availability is checked in CreateSiteDialog.
+  try {
+    await apiJson('/api/sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        siteId,
+        name,
+        timezone: timezone || 'UTC',
+        // Omitted, never `false`, when the caller states nothing. The field is
+        // three-state and an absent flag means "never asked" — sending `false`
+        // would spend that state at creation and permanently suppress the
+        // opt-in banner for a site nobody ever asked.
+        ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
+      }),
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : '';
+    if (message.includes('already exists')) {
+      throw new Error(`site ID "${siteId}" is already taken. choose a different one.`);
+    }
+    throw err;
+  }
+
+  return siteId;
 }
 
 function makeIdempotencyKey(prefix: string): string {
@@ -307,6 +361,8 @@ export interface Machine {
   activeHours?: ActiveHours;
   /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
   swoopViewers?: number;
+  /** those viewers' seats, each with its person's name, for the swoop picker's cards; absent until the server first mirrors them */
+  swoopSeats?: SwoopSeatMirror[];
   /**
    * What the agent holds for the site's keep screens awake switch, mirrored on
    * each change. `held` is the service's own hold (system sleep, and on macOS
@@ -797,7 +853,11 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // loading is set synchronously in this effect by design (it re-arms on every
+    // access change, below); the rule reports only the first such call, so the
+    // one suppression covers them all.
     if (!db) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setLoading(false);
       setError('Firebase not configured');
       return;
@@ -935,53 +995,10 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
     }
   }, [userId, userSites, isSuperadmin]);
 
-  const createSite = async (
-    siteId: string,
-    name: string,
-    _userId: string,
-    timezone?: string,
-    schedulesFollowSiteTime?: boolean,
-  ): Promise<string> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    const { isValid, error } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      throw new Error(error);
-    }
-
-    // No pre-read existence check: non-owners get permission-denied on getDoc.
-    // Rules block overwrites (setDoc on an existing doc hits the 'update' rule);
-    // availability is checked in CreateSiteDialog.
-    try {
-      await apiJson('/api/sites', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          siteId,
-          name,
-          timezone: timezone || 'UTC',
-          // Omitted, never `false`, when the caller states nothing. The field is
-          // three-state and an absent flag means "never asked" — sending `false`
-          // would spend that state at creation and permanently suppress the
-          // opt-in banner for a site nobody ever asked.
-          ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
-        }),
-      });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : '';
-      if (message.includes('already exists')) {
-        throw new Error(`Site ID "${siteId}" is already taken. Please choose a different ID.`);
-      }
-      throw err;
-    }
-
-    return siteId;
-  };
-
   const updateSite = async (siteId: string, updates: { name?: string; timezone?: string; timeFormat?: '12h' | '24h'; schedulesFollowSiteTime?: boolean }) => {
     if (!db) throw new Error('Firebase not configured');
     if (updates.name !== undefined && !updates.name.trim()) {
-      throw new Error('Site name cannot be empty');
+      throw new Error('site name cannot be empty');
     }
 
     const updateData: Record<string, string | boolean> = {};
@@ -1007,42 +1024,14 @@ export function useSites(userId?: string, userSites?: string[], isSuperadmin?: b
   const deleteSite = async (siteId: string) => {
     if (!db) throw new Error('Firebase not configured');
 
-    // Firestore does not cascade-delete the machines subcollection.
     await apiJson(`/api/sites/${encodeURIComponent(siteId)}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: '{}',
     });
-
-    // TODO: arrayRemove this siteId from every user's `sites`. Until then admins
-    // clean up orphans via the Manage Site Access dialog.
-    logger.info(`Site ${siteId} deleted. Note: User references may need manual cleanup.`);
   };
 
-  const checkSiteIdAvailability = async (siteId: string): Promise<boolean> => {
-    if (!db) throw new Error('Firebase not configured');
-
-    if (!siteId || siteId.trim() === '') {
-      return false;
-    }
-
-    const { isValid } = await import('@/lib/validators').then(m => m.validateSiteId(siteId));
-    if (!isValid) {
-      return false;
-    }
-
-    // A live site OR a tombstone from a deleted one makes the id unavailable —
-    // createSite refuses retired ids, so reporting them as free would send the
-    // user through the form only to 409 on submit.
-    const [siteSnap, tombstoneSnap] = await Promise.all([
-      getDoc(doc(db, 'sites', siteId)),
-      getDoc(doc(db, 'site_ids', siteId)),
-    ]);
-
-    return !siteSnap.exists() && !tombstoneSnap.exists();
-  };
-
-  return { sites, loading, error, createSite, updateSite, deleteSite, checkSiteIdAvailability };
+  return { sites, loading, error, createSite, updateSite, deleteSite };
 }
 
 // Module-level so consumers' memo/effect deps don't churn on a fresh [] each render.
@@ -1442,6 +1431,7 @@ export function useMachines(siteId: string) {
               capabilities: data.capabilities,
               activeHours: parseActiveHours(data.activeHours),
               swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
+              swoopSeats: parseSwoopSeats(data.swoopSeats),
               displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,

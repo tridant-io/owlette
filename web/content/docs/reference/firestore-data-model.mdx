@@ -117,6 +117,7 @@ the row that grants site access. `canAccessSite()` and `isSiteAdmin()` resolve e
 | --- | --- | --- |
 | `uid` | string | duplicated as a field, not only as the document ID, so the collection-group query can prove the rule. |
 | `role` | string | `owner`, `admin` or `member`. `owner` is written only at site creation and by ownership transfer. |
+| `swoop` | string | optional. `none`, `view` or `control`: the person's own swoop mode. absent means the role decides; never on the owner's row. any other value reads as `none`. |
 | `status` | string | `active`. |
 | `addedAt` | timestamp | |
 | `addedBy` | string | uid of whoever granted access. |
@@ -229,6 +230,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `lastScreenshot` | map or null | `{ url, timestamp, sizeKB }`, the latest screenshot. |
 | `liveView` | map | `{ active, interval, startedAt, expiresAt }`, unix seconds, while live view runs. |
 | `swoopViewers` | number | viewers across live swoop sessions with an unexpired lease, recomputed by the server when sessions change (not on every lease renewal, so it can lag). missing until the first session. |
+| `swoopSeats` | array | the seats `swoopViewers` counts, as `{ uid, displayName, ctl }`, written with it, so the swoop picker can name who is in the session. `displayName` is null when the account has none or is gone, and there is no email: every member of the site reads this document. missing until a session changes on the machine. |
 | `configChangeFlag` | boolean | set by the server after process-config writes. nothing in the agent reads it. |
 | `metrics` | map | the current metrics payload, below. |
 

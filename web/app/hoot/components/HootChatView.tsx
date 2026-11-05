@@ -842,7 +842,6 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {}}
         onAccountSettings={() => setAccountSettingsOpen(true)}
       />
 

@@ -326,9 +326,15 @@ export class FakeSwoopHost {
     await viewer.routeWebSocket((url) => url.href.startsWith(room), (ws) => this.join(ws));
   }
 
-  /** the roster on `swoop-control` to each viewer whose lease it checked, each named by its token's uid as the streamer names it. */
+  /**
+   * the roster on `swoop-control` to each viewer whose lease it checked for the
+   * session it serves, each named by its token's uid as the streamer names it.
+   * a lease checked for an earlier sid is not in the room: a streamer knows its
+   * own viewers alone, and after a kill the next one starts with none.
+   */
   async roster(): Promise<void> {
-    const lines = new Map(this.leases.map(({ viewer, uid, ctl }) => [viewer, { id: viewer, name: uid, ctl }]));
+    const seated = this.leases.filter((lease) => lease.sid === this.hostSid);
+    const lines = new Map(seated.map(({ viewer, uid, ctl }) => [viewer, { id: viewer, name: uid, ctl }]));
     const message = JSON.stringify({ t: 'roster', viewers: [...lines.values()], tsUs: Date.now() * 1000 });
     for (const viewer of lines.keys()) {
       await this.hostPage.evaluate(([v, m]) => (window as unknown as HostWindow).swoopHost.control(v, m), [viewer, message] as const);

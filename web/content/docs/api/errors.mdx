@@ -122,6 +122,8 @@ the site owner's plan decides, except when creating a site, creating or rotating
 
 the caller is authenticated, but lacks the site role or capability the operation needs, or their account has been deactivated. a site the caller cannot access at all answers `404`, not `403`.
 
+a missing swoop capability (watching, control or the swoop settings) answers [`capability_missing`](#capability_missing) instead.
+
 ### scope_insufficient
 
 the API key is valid but has no scope entry matching the operation. `required` names what is missing:
@@ -277,8 +279,10 @@ hoot could not start a reply: `503` when the pinned machine is offline or no mac
 | <span id="swoop_disabled" />`swoop_disabled` | 403 | swoop is off for this site |
 | <span id="machine_excluded" />`machine_excluded` | 403 | the site's swoop policy excludes this machine |
 | <span id="members_may_not_watch" />`members_may_not_watch` | 403 | the site does not let plain members watch |
-| <span id="capability_missing" />`capability_missing` | 403 | a lease renewal for a control viewer who has lost the remote-control capability |
+| <span id="capability_missing" />`capability_missing` | 403 | the swoop capability the route needs is missing: watching or control, which your site role or swoop mode decides, for a session, a lease, a stall report or a step-up; the swoop-settings capability (site owner or admin) for the swoop settings, a kill, a kick and the site's session list |
 | <span id="session_not_found" />`session_not_found` | 404 | no session with that ID on the machine |
+| <span id="viewer_not_found" />`viewer_not_found` | 404 | a kick named a seat nobody holds any more: they had already left |
+| <span id="session_ended" />`session_ended` | 409 | a kick on a session that had already ended |
 | <span id="session_full" />`session_full` | 409 | four other people are already in the machine's session, and a machine serves four viewers at once; a seat comes back when someone leaves |
 | <span id="swoop_not_configured" />`swoop_not_configured` | 503 | this deployment has no swoop signalling worker |
 | <span id="audit_unavailable" />`audit_unavailable` | 503 | the session's audit row could not be written, so the session was not started |

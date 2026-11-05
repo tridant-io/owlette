@@ -649,6 +649,36 @@ describe('POST swoop/kill', () => {
     expect(mockKill).not.toHaveBeenCalled();
   });
 
+  // a kill ends everyone's sessions on the machine and closes every step-up
+  // window there. that administers the site's swoop, so a swoop mode never
+  // reaches it.
+  it('a member set to control cannot kill, and nothing is stopped or closed', async () => {
+    seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+    signIn(MEMBER);
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('positive control: an admin held to view still kills', async () => {
+    seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+
+    const res = await KILL(
+      createMockRequest(killUrl(), { method: 'POST', body: { sid: SID } }),
+      machineContext(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+  });
+
   it('refuses a sid that is not an opaque id', async () => {
     const res = await KILL(
       createMockRequest(killUrl(), {

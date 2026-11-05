@@ -15,7 +15,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { NO_PRESENCE, swoopPresence } from '@/lib/swoop/presence';
-import { getUserShortName } from '@/lib/userUtils';
+import { viewerLabel } from '@/lib/swoop/viewerName';
 
 export interface SwoopNamedViewer {
   /** the roster's viewer id: one per tab or window, so one person in two tabs is two. */
@@ -30,16 +30,18 @@ export interface SwoopNamedViewer {
   full: string;
   /** only where the session route sent one. */
   email: string | null;
+  /** the session route said this caller may kick them: never your own seats. */
+  kickable: boolean;
 }
 
 interface Name {
   displayName: string | null;
   email: string | null;
+  kickable: boolean;
 }
 
 type Names = ReadonlyMap<string, Name>;
 
-const UNNAMED = 'viewer';
 const NOBODY: readonly SwoopNamedViewer[] = [];
 
 const subscribeNever = (): (() => void) => () => {};
@@ -61,8 +63,10 @@ async function fetchNames(session: SwoopSession): Promise<Names | null> {
     const body = (await res.json()) as { data?: { viewers?: unknown } };
     const names = new Map<string, Name>();
     for (const viewer of Array.isArray(body.data?.viewers) ? body.data.viewers : []) {
-      const { viewerId, displayName, email } = (viewer ?? {}) as Record<string, unknown>;
-      if (typeof viewerId === 'string') names.set(viewerId, { displayName: text(displayName), email: text(email) });
+      const { viewerId, displayName, email, kickable } = (viewer ?? {}) as Record<string, unknown>;
+      if (typeof viewerId === 'string') {
+        names.set(viewerId, { displayName: text(displayName), email: text(email), kickable: kickable === true });
+      }
     }
     return names;
   } catch {
@@ -108,15 +112,15 @@ export function useSwoopViewerNames(session: SwoopSession | null): readonly Swoo
   return viewers.map((viewer) => {
     const you = viewer.id === session?.viewerId;
     // an email is only ever the route's to give
-    const name = names?.get(viewer.id) ?? (you && user ? { displayName: text(user.displayName), email: null } : null);
-    const named = name?.displayName || name?.email ? name : null;
+    const name =
+      names?.get(viewer.id) ?? (you && user ? { displayName: text(user.displayName), email: null, kickable: false } : null);
     return {
       id: viewer.id,
       ctl: viewer.ctl,
       you,
-      short: named ? getUserShortName(named) : UNNAMED,
-      full: named?.displayName ?? named?.email ?? UNNAMED,
+      ...viewerLabel(name),
       email: name?.email ?? null,
+      kickable: name?.kickable ?? false,
     };
   });
 }

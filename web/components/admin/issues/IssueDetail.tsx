@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
-import Link from 'next/link';
-import { ArrowLeft, ChevronDown, Download, Film, ImageIcon, SearchX } from 'lucide-react';
+import { ChevronDown, Download, Film, ImageIcon, SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIssue, type Issue } from '@/hooks/useIssues';
+import { BackLink } from '@/components/admin/BackLink';
+import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
+import { Panel } from '@/components/admin/Panel';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { issueAttachmentsSummary, issueCategoryLabel, issueSourceLabel, plural } from '@/lib/issues';
@@ -53,27 +55,6 @@ function expiresIn(iso: string): string {
   const days = Math.ceil((Date.parse(iso) - Date.now()) / DAY_MS);
   if (days < 1) return 'expires today';
   return `expires in ${plural(days, 'day')}`;
-}
-
-function Panel({
-  id,
-  title,
-  children,
-  className,
-}: {
-  id: string;
-  title: string;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <section aria-labelledby={id} className={cn('rounded-xl border border-border bg-card p-4 sm:p-5', className)}>
-      <h2 id={id} className="mb-3 text-sm font-semibold text-foreground">
-        {title}
-      </h2>
-      {children}
-    </section>
-  );
 }
 
 function Fact({ label, children, mono }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -257,27 +238,6 @@ function LogTail({ logTail }: { logTail: string }) {
   );
 }
 
-function BackLink() {
-  return (
-    <Button asChild variant="ghost" size="sm" className="-ml-2.5 mb-3">
-      <Link href="/admin/issues">
-        <ArrowLeft />
-        issues
-      </Link>
-    </Button>
-  );
-}
-
-function DetailSkeleton() {
-  return (
-    <div aria-hidden="true" className="space-y-4">
-      <div className="h-4 w-32 rounded bg-muted motion-safe:animate-pulse" />
-      <div className="h-8 w-2/3 rounded bg-muted motion-safe:animate-pulse" />
-      <div className="h-40 rounded-xl bg-muted motion-safe:animate-pulse" />
-    </div>
-  );
-}
-
 /** One issue, everything it holds, and where a superadmin sets its status. */
 export function IssueDetail({ idOrNumber }: { idOrNumber: string }) {
   const { issue, loading, error, refresh, setStatus } = useIssue(idOrNumber);
@@ -366,7 +326,7 @@ export function IssueDetail({ idOrNumber }: { idOrNumber: string }) {
   return (
     <div className="p-4 sm:p-6 md:p-8">
       <div className="mx-auto max-w-screen-2xl">
-        <BackLink />
+        <BackLink href="/admin/issues" label="issues" />
         {body}
       </div>
     </div>

@@ -108,8 +108,36 @@ describe('useSwoopViewerNames', () => {
     await waitFor(() => expect(result.current[0]?.short).toBe('Ada L.'));
     expect(fetchMock).toHaveBeenCalledWith(RECORD);
     expect(result.current).toEqual<SwoopNamedViewer[]>([
-      { id: ADA.id, ctl: true, you: false, short: 'Ada L.', full: 'Ada Lovelace', email: null },
-      { id: ME.id, ctl: false, you: true, short: 'Bob W.', full: 'Bob Watcher', email: null },
+      { id: ADA.id, ctl: true, you: false, short: 'Ada L.', full: 'Ada Lovelace', email: null, kickable: false },
+      { id: ME.id, ctl: false, you: true, short: 'Bob W.', full: 'Bob Watcher', email: null, kickable: false },
+    ]);
+    live.detach();
+  });
+
+  it('carries whom the route says this caller may kick, and nobody before the read lands', async () => {
+    let settle: (value: unknown) => void = () => {};
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+    mockUser = { displayName: 'Bob Watcher' };
+    const live = liveSession();
+    const { result } = renderHook(() => useSwoopViewerNames(live.session));
+    live.roster([ADA, ME, CY]);
+
+    // this tab's own name stands in before the read, and kicks nobody
+    expect(result.current.map((viewer) => viewer.kickable)).toEqual([false, false, false]);
+    await act(async () =>
+      settle(
+        answer([
+          { viewerId: ADA.id, uid: 'uid_ada', displayName: 'Ada Lovelace', kickable: true },
+          { viewerId: ME.id, uid: 'uid_me', displayName: 'Bob Watcher', kickable: false },
+          // only `true` is a yes
+          { viewerId: CY.id, uid: 'uid_cy', displayName: 'Cy Young', kickable: 'true' },
+        ]),
+      ),
+    );
+    expect(result.current.map((viewer) => [viewer.short, viewer.kickable])).toEqual([
+      ['Ada L.', true],
+      ['Bob W.', false],
+      ['Cy Y.', false],
     ]);
     live.detach();
   });

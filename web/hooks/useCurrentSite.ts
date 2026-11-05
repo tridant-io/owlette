@@ -42,15 +42,6 @@ export interface UseCurrentSiteResult {
   hasNoSites: boolean;
   /** Select a site and persist it as the caller's last site. */
   selectSite: (siteId: string) => void;
-  /**
-   * Select without persisting — used right after creation, where the site is
-   * the natural focus but not yet the user's chosen default.
-   */
-  pickSite: (siteId: string) => void;
-  createSite: ReturnType<typeof useSites>['createSite'];
-  updateSite: ReturnType<typeof useSites>['updateSite'];
-  deleteSite: ReturnType<typeof useSites>['deleteSite'];
-  checkSiteIdAvailability: ReturnType<typeof useSites>['checkSiteIdAvailability'];
   sitesError: string | null;
 }
 
@@ -60,10 +51,6 @@ export function useCurrentSite(): UseCurrentSiteResult {
     sites,
     loading: sitesLoading,
     error: sitesError,
-    createSite,
-    updateSite,
-    deleteSite,
-    checkSiteIdAvailability,
   } = useSites(user?.uid, userSites, isSuperadmin);
 
   // '' means "no explicit pick yet": fall back to lastSiteId, then
@@ -99,10 +86,6 @@ export function useCurrentSite(): UseCurrentSiteResult {
     [updateLastSite],
   );
 
-  const pickSite = useCallback((siteId: string) => {
-    setUserPickedSiteId(siteId);
-  }, []);
-
   return {
     sites,
     currentSiteId,
@@ -112,11 +95,6 @@ export function useCurrentSite(): UseCurrentSiteResult {
     sitesLoading,
     hasNoSites: !sitesLoading && sites.length === 0,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
-    checkSiteIdAvailability,
     sitesError,
   };
 }

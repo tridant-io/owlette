@@ -444,6 +444,105 @@ describe('useSwoopSession — how a session ends', () => {
     });
   });
 
+  /**
+   * a kick ends the session for everyone in it, as a revocation does, but the
+   * one it was for keeps their access: the api would let them straight back
+   * in, so their page stops on the record's word, and only they rejoin it.
+   */
+  describe('a kick', () => {
+    it('stops the page of the one it was for, with no ladder, until they reconnect', async () => {
+      await open();
+      record = ended('kicked', 'user-me');
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('kicked');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+
+      // the session is over already: ending it again tells the server nothing
+      act(() => swoop.end());
+      expect(deletes()).toHaveLength(0);
+      // a kick is not a ban: the deliberate rejoin
+      act(() => swoop.reconnect());
+      await flush();
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('connecting');
+    });
+
+    it('brings everyone else back on the ladder, as a revocation of someone else does', async () => {
+      await open();
+      record = ended('kicked', 'user-other');
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      await advance(30_000);
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('connecting');
+      expect(deletes()).toHaveLength(0);
+    });
+
+    it('stops a page that missed the bye, between sessions, on the record read when its retry is due', async () => {
+      await open();
+      act(() => wired.peer!.onClosed!('timeout'));
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).not.toBeNull();
+
+      record = ended('kicked', 'user-me');
+      await advance(30_000);
+      expect(recordReads()).toHaveLength(1);
+      expect(mints()).toHaveLength(1);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('kicked');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+    });
+
+    it.each([
+      [
+        'its bye',
+        async () => {
+          act(() => wired.peer!.onClosed!('kill'));
+          await flush();
+        },
+      ],
+      [
+        'the record its retry read',
+        async () => {
+          act(() => wired.peer!.onClosed!('timeout'));
+          await advance(30_000);
+        },
+      ],
+    ])('retries a rejoin that fails on the way, after a kick told by %s, and never reads the kick again', async (_how, kickThem) => {
+      await open();
+      record = ended('kicked', 'user-me');
+      await kickThem();
+      expect(swoop.refusal).toBe('kicked');
+
+      mint = { status: 409, body: { code: 'machine_offline', detail: 'this machine is offline; swoop cannot reach it until it reconnects.' } };
+      act(() => swoop.reconnect());
+      await flush();
+      expect(swoop.state).toBe('error');
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(3);
+      expect(swoop.state).toBe('connecting');
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.error).toBeNull();
+    });
+  });
+
   describe('while a kill’s record is read', () => {
     /** the next record read waits for `answer`. */
     function holdRecord(): (reply: Reply) => void {
@@ -612,6 +711,38 @@ describe('useSwoopSession — how a session ends', () => {
 
     await advance(60_000);
     expect(mints()).toHaveLength(1);
+  });
+
+  describe('a person with no swoop', () => {
+    /** what each session POST asked for: control first, then the watch ask it steps down to. */
+    const asks = () => mints().map(([, init]) => (JSON.parse(String(init?.body)) as { control: boolean }).control);
+
+    it('is refused on the control ask and then the watch ask, and the viewer stops there', async () => {
+      mint = { status: 403, body: { code: 'capability_missing', detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('capability_missing');
+      expect(swoop.retryIn).toBeNull();
+
+      await advance(60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('a watch ask refused with no code is still retried on the ladder', async () => {
+      // the same sentence without the api's code: the control ask still steps down on it
+      mint = { status: 403, body: { detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(3);
+      expect(wired.session).not.toBeNull();
+    });
   });
 
   it('a plan refusal on a renewal ends the session for good, and names the plan', async () => {
@@ -979,6 +1110,27 @@ describe('useSwoopSession — control across a reload of the tab', () => {
   it('someone else’s revocation keeps it, so this viewer comes back in control', async () => {
     await open();
     record = ended('revoked', 'user-other');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
+    expect(mintBody(1).continuity).toBe('continuity-1');
+  });
+
+  it('a kick of this user forgets it, so their rejoin asks again', async () => {
+    await open();
+    record = ended('kicked', 'user-me');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    act(() => swoop.reconnect());
+    await flush();
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('a kick of someone else keeps it', async () => {
+    await open();
+    record = ended('kicked', 'user-other');
     act(() => wired.peer!.onClosed!('kill'));
     await flush();
 

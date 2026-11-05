@@ -133,7 +133,6 @@ export default function DemoPage() {
           sites={sites}
           currentSiteId={DEMO_SITE_ID}
           onSiteChange={noop}
-          onManageSites={noop}
           disableNav
         />
 

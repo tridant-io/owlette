@@ -1,6 +1,6 @@
 ---
 title: "user management"
-description: "every owlette account in one list: its platform role, its sites, when it was last seen, second-factor resets and deletion. this is an internal owlette page; customers manage who reaches their sites from members instead."
+description: "every owlette account in one list: its platform role, its sites, when it was last seen, second-factor resets and deletion. this is an internal owlette page; customers manage who reaches their sites from admin panel → sites instead."
 keywords: ["accounts", "all users", "superadmin", "promote user", "reset 2fa", "lost authenticator", "locked out", "delete user", "deleted accounts", "account audit"]
 ---
 
@@ -8,7 +8,7 @@ keywords: ["accounts", "all users", "superadmin", "promote user", "reset 2fa", "
 
 <Callout type="info" title={"internal page"}>
 
-`/admin/users` is run by owlette. it acts on accounts across the platform, so it is not part of the site-scoped admin panel, and every route behind it accepts only a platform superadmin. to manage who can reach one of your sites, use [member management](/docs/dashboard/admin/member-management) (`/admin/members`).
+`/admin/users` is run by owlette. it acts on accounts across the platform, so it is not part of the site-scoped admin panel, and every route behind it accepts only a platform superadmin. customers manage who reaches their sites from admin panel → sites → the site's gear → members: see [member management](/docs/dashboard/admin/member-management).
 
 </Callout>
 
@@ -28,7 +28,7 @@ it gives no site access: that comes from being added to a site. there is no SSO 
 
 ## the role model
 
-what someone may do on a site comes from their **role on that site**, held in `sites/{siteId}/members/{uid}`: owner, admin or member. see [roles](/docs/dashboard/admin#roles). the account-level role on this page is a different thing:
+what someone may do on a site comes from their **role on that site**, held in `sites/{siteId}/members/{uid}`: owner, admin or member. see [roles](/docs/dashboard/admin#roles). the account role on this page is a different thing:
 
 | account role | what it grants |
 |---|---|
@@ -58,7 +58,7 @@ the page follows the `users` collection live, newest account first.
 | **last seen** | the last sign-in or session refresh, from Firebase Auth, or `never` |
 | **actions** | the row menu, or `—` on a deleted account |
 
-**joined** and **last seen** are not shown on a phone. the row menu holds `manage sites`, `change role...`, `reset 2FA...` and `delete user`; the last two are disabled on your own row.
+**joined** and **last seen** are not shown on a phone. the row menu holds `manage site access`, `change role...`, `reset 2FA...` and `delete user`; the last two are disabled on your own row.
 
 ---
 
@@ -74,7 +74,7 @@ promoting calls `POST /api/users/{uid}/promote`, demoting to member `POST /api/u
 
 ## site assignment
 
-`manage sites` opens **manage site access**: the sites the account is on, the sites it could be added to, and any site IDs it still lists that no longer exist, with a search box.
+`manage site access` opens a dialog of the same name: the sites the account is on, the sites it could be added to, and any site IDs it still lists that no longer exist, with a search box.
 
 | action | what happens |
 |---|---|

@@ -12,12 +12,13 @@
  * (<= 2 s, authoritative), and the polled command only when that did not land.
  * Neither failing withholds the 200 — the record is already ended, and a
  * streamer that survives both is stopped by its own lease. Ending it for the
- * others is the kill route's, behind the control capability.
+ * others is the kill route's, behind the swoop-settings capability; one other
+ * person is the kick route's, behind the same.
  *
  * DELETE deliberately does NOT close the caller's step-up window: it sits on
  * the WATCH bar, so any member could otherwise put every admin on the machine
  * through a fresh ceremony. Closing windows is the kill route's job, and that
- * one takes the control capability.
+ * one takes the swoop-settings capability.
  */
 
 import { NextResponse } from 'next/server';
@@ -30,7 +31,7 @@ import {
 } from '@/lib/apiErrors';
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
-import { Capability } from '@/lib/capabilities';
+import { Capability, hasCapability } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { evaluateSwoopAccess } from '@/lib/swoop/policy.server';
 import { SWOOP_END_REASONS, isSwoopEndReason } from '@/lib/swoop/backoff';
@@ -55,6 +56,7 @@ import {
  * Reasons an operator may name. The machine-side reasons (`idle`,
  * `lease_expired`, `session_cap`) are recorded by the host, never claimed by a
  * caller, so accepting them here would let a viewer forge the audit trail.
+ * `kicked` is the kick route's alone, for the same reason.
  */
 const CALLER_END_REASONS: ReadonlySet<string> = new Set<SwoopSessionEndReason>([
   'closed',
@@ -96,6 +98,9 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
       : null;
     const siteRole = ctx.actor.siteRoles[ctx.siteId];
     const withEmail = ctx.actor.role === 'superadmin' || siteRole === 'owner' || siteRole === 'admin';
+    // the bar shows kick only where the kick route would say yes, and never on
+    // your own seats: a second tab of yours is closed, not kicked.
+    const mayKick = hasCapability(ctx.actor, Capability.SWOOP_SETTINGS_MANAGE, ctx.siteId);
 
     return applyAuthDeprecations(
       NextResponse.json({
@@ -108,12 +113,17 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
           viewers: names
             ? session.viewers.map((viewer) => {
                 const { displayName, email } = names.get(viewer.uid) ?? NO_NAME;
-                return { ...viewer, displayName, ...(withEmail ? { email } : {}) };
+                return {
+                  ...viewer,
+                  displayName,
+                  ...(withEmail ? { email } : {}),
+                  kickable: mayKick && viewer.uid !== ctx.actor.userId,
+                };
               })
             : session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
-          // whom a revocation ended it for: everyone else in it comes back on their own.
+          // whom a revocation or a kick ended it for: everyone else in it comes back on their own.
           ...(session.endedFor ? { endedFor: session.endedFor } : {}),
         },
       }),

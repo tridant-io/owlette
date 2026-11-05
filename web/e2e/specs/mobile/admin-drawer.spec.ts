@@ -13,8 +13,8 @@ import { roleState } from '../../helpers/roles';
 test.use(roleState('admin'));
 
 test('the admin drawer opens into focus, closes on escape and returns focus', async ({ page }) => {
-  await page.goto('/admin/members');
-  await expect(page.getByRole('heading', { level: 1, name: 'members', exact: true })).toBeVisible({
+  await page.goto('/admin/sites');
+  await expect(page.getByRole('heading', { level: 1, name: 'sites', exact: true })).toBeVisible({
     timeout: 10_000,
   });
 
@@ -22,12 +22,12 @@ test('the admin drawer opens into focus, closes on escape and returns focus', as
   const close = page.getByRole('button', { name: 'close admin menu' });
   // closed: the drawer's controls are out of the accessibility tree and the tab order
   await expect(close).toBeHidden();
-  await expect(page.getByRole('link', { name: /members/ })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: /sites/ })).toHaveCount(0);
 
   await open.focus();
   await page.keyboard.press('Enter');
   await expect(close).toBeFocused();
-  await expect(page.getByRole('link', { name: /members/ })).toHaveAttribute('aria-current', 'page');
+  await expect(page.getByRole('link', { name: /sites/ })).toHaveAttribute('aria-current', 'page');
 
   await page.keyboard.press('Escape');
   await expect(close).toBeHidden();

@@ -2,19 +2,29 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { UserAvatar } from '@/components/UserAvatar';
 import { Button } from '@/components/ui/button';
-import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Check, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal } from 'lucide-react';
+import { ArrowRight, ChevronDown, Settings, LogOut, Shield, Crown, LayoutDashboard, Zap, Rocket, FolderSync, ScrollText, CircleHelp, Bug, BookOpen, Menu, X, CreditCard, SlidersHorizontal, Plus } from 'lucide-react';
+import { SiteSwitcherList, filterClaimsEscape, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { getUserShortName } from '@/lib/userUtils';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
 import { TrialBanner } from '@/components/plan/TrialBanner';
 import { usePlan } from '@/hooks/usePlan';
+import { createSite } from '@/hooks/useFirestore';
+
+// out of the first bundle of every page the header is on: few people are offered "new site".
+const CreateSiteDialog = dynamic(
+  () => import('@/components/CreateSiteDialog').then((m) => ({ default: m.CreateSiteDialog })),
+  { ssr: false, loading: () => null },
+);
 
 const MENU_SURFACE = 'border-border bg-raised dark:bg-raised/85 backdrop-blur-sm shadow-2xl shadow-elevation-shadow ring-1 ring-elevation-ring';
 
@@ -89,9 +99,6 @@ interface PageHeaderProps {
   sites?: Site[];
   currentSiteId?: string;
   onSiteChange?: (siteId: string) => void;
-  onManageSites?: () => void;
-  /** Opens the current site's editor. Shown to that site's admins only. */
-  onSiteSettings?: () => void;
   actionButton?: React.ReactNode;
   onAccountSettings?: () => void;
   disableNav?: boolean;
@@ -102,8 +109,6 @@ export function PageHeader({
   sites = [],
   currentSiteId,
   onSiteChange,
-  onManageSites,
-  onSiteSettings,
   actionButton,
   onAccountSettings,
   disableNav,
@@ -112,6 +117,7 @@ export function PageHeader({
   const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin } = useAuth();
   const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
+  const [createSiteOpen, setCreateSiteOpen] = useState(false);
   const [feedbackLabel, setFeedbackLabel] = useState('submit issue');
   const [feedbackFading, setFeedbackFading] = useState(false);
   const [helpMenuOpen, setHelpMenuOpen] = useState(false);
@@ -139,6 +145,8 @@ export function PageHeader({
     focusables()[0]?.focus();
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        // the site filter spends the first escape on its text
+        if (filterClaimsEscape(e)) return;
         // claimed, so a panel underneath that closes on escape stays open.
         e.preventDefault();
         setNavDrawerOpen(false);
@@ -193,8 +201,18 @@ export function PageHeader({
   // Non-null only when there is actually a site to switch to. Holds the narrowed
   // callback so bar and drawer can call it without re-testing the same conditions.
   const selectSite = sites.length > 0 && currentSiteId && onSiteChange ? onSiteChange : null;
-  // the same narrowing for the current site's editor, which only its admins can use.
-  const openSiteSettings = currentSiteId && onSiteSettings && isSiteAdmin(currentSiteId) ? onSiteSettings : null;
+  const showSiteEntries = !disableNav && !!user;
+  const siteSettingsHref = showSiteEntries && currentSiteId && isSiteAdmin(currentSiteId) ? siteSettingsPath(currentSiteId) : null;
+  const canManageSites = showSiteEntries && (isSuperadmin || administersAnySite);
+  // "new site" is for people who administer nothing; everyone else creates
+  // from admin panel → sites.
+  const canCreateSite = showSiteEntries && !isSuperadmin && !administersAnySite;
+  // one list for the switcher and the drawer, so the two offer the same entries.
+  const siteEntries = [
+    siteSettingsHref ? { label: 'site settings', icon: SlidersHorizontal, onSelect: () => router.push(siteSettingsHref) } : null,
+    canManageSites ? { label: 'manage sites', icon: Settings, onSelect: () => router.push('/admin/sites') } : null,
+    canCreateSite ? { label: 'new site', icon: Plus, onSelect: () => setCreateSiteOpen(true) } : null,
+  ].filter((entry) => entry !== null);
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
 
   // the scrim mounts with the first open menu and goes once its fade-out ends:
@@ -255,36 +273,19 @@ export function PageHeader({
                       <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`}>
-                    {sites.map((site) => (
+                  <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-64`} {...siteFilterHostProps}>
+                    <SiteSwitcherList surface="menu" sites={sites} currentSiteId={currentSiteId} onPick={selectSite} />
+                    {siteEntries.length > 0 && <DropdownMenuSeparator className="bg-border" />}
+                    {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
                       <DropdownMenuItem
-                        key={site.id}
-                        onClick={() => selectSite(site.id)}
-                        className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer flex items-center justify-between"
+                        key={label}
+                        onClick={onSelect}
+                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
                       >
-                        <span className="truncate">{site.name}</span>
-                        {site.id === currentSiteId && <Check className="h-4 w-4 text-accent-cyan flex-shrink-0" />}
+                        <EntryIcon className="mr-2 h-4 w-4" />
+                        {label}
                       </DropdownMenuItem>
                     ))}
-                    {(openSiteSettings || onManageSites) && <DropdownMenuSeparator className="bg-border" />}
-                    {openSiteSettings && (
-                      <DropdownMenuItem
-                        onClick={openSiteSettings}
-                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
-                      >
-                        <SlidersHorizontal className="mr-2 h-4 w-4" />
-                        site settings
-                      </DropdownMenuItem>
-                    )}
-                    {onManageSites && (
-                      <DropdownMenuItem
-                        onClick={onManageSites}
-                        className="text-muted-foreground focus:bg-accent focus:text-foreground cursor-pointer"
-                      >
-                        <Settings className="mr-2 h-4 w-4" />
-                        manage sites
-                      </DropdownMenuItem>
-                    )}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </>
@@ -413,15 +414,14 @@ export function PageHeader({
                 <p className="text-xs text-muted-foreground truncate mt-0.5">{user?.email}</p>
               </div>
               <DropdownMenuSeparator className="bg-border" />
-              {/* Site admins get the panel too, landing on the one section they
-                  can reach; superadmins keep the installers entry point. The test
-                  is site standing, not the global role, which grants nothing.
-                  The back button's `owlette_pre_admin_path` is written by
+              {/* site admins land on their sites, superadmins on installers. the
+                  test is site standing, not the global role, which grants nothing.
+                  the back button's `owlette_pre_admin_path` is written by
                   LazyAuthProvider on every non-admin route, so it is already
                   correct for both roles without anything set here. */}
               {(isSuperadmin || administersAnySite) && (
                 <DropdownMenuItem
-                  onClick={() => router.push(isSuperadmin ? '/admin/installers' : '/admin/members')}
+                  onClick={() => router.push(isSuperadmin ? '/admin/installers' : '/admin/sites')}
                   className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
                 >
                   <Shield className="mr-2 h-4 w-4" />
@@ -513,46 +513,31 @@ export function PageHeader({
                   className={`h-4 w-4 flex-shrink-0 text-muted-foreground transition-transform ${drawerSitesOpen ? 'rotate-180' : ''}`}
                 />
               </button>
-              {drawerSitesOpen && sites.map((site) => (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => {
-                    selectSite(site.id);
+              {drawerSitesOpen && (
+                <SiteSwitcherList
+                  surface="drawer"
+                  sites={sites}
+                  currentSiteId={currentSiteId}
+                  onPick={(siteId) => {
+                    selectSite(siteId);
                     setNavDrawerOpen(false);
                   }}
-                  className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground hover:bg-accent transition-colors cursor-pointer"
+                />
+              )}
+              {siteEntries.map(({ label, icon: EntryIcon, onSelect }) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    setNavDrawerOpen(false);
+                    onSelect();
+                  }}
+                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
                 >
-                  <span className="truncate">{site.name}</span>
-                  {site.id === currentSiteId && <Check className="h-4 w-4 flex-shrink-0 text-accent-cyan" />}
+                  <EntryIcon className="h-4 w-4 flex-shrink-0" />
+                  {label}
                 </button>
               ))}
-              {openSiteSettings && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    openSiteSettings();
-                    setNavDrawerOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <SlidersHorizontal className="h-4 w-4 flex-shrink-0" />
-                  site settings
-                </button>
-              )}
-              {onManageSites && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onManageSites();
-                    setNavDrawerOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm text-muted-foreground hover:bg-accent hover:text-foreground transition-colors cursor-pointer"
-                >
-                  <Settings className="h-4 w-4 flex-shrink-0" />
-                  manage sites
-                </button>
-              )}
             </div>
           )}
 
@@ -600,6 +585,12 @@ export function PageHeader({
       />
     )}
     <ReportBugDialog open={reportBugOpen} onOpenChange={setReportBugOpen} />
+    <CreateSiteDialog
+      open={createSiteOpen}
+      onOpenChange={setCreateSiteOpen}
+      onCreateSite={createSite}
+      onSiteCreated={(id) => onSiteChange?.(id)}
+    />
     </>
   );
 }

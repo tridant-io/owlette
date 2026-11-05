@@ -43,7 +43,8 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
-import type { Actor } from '@/lib/capabilities';
+import { siteStanding, type Actor, type SiteRole } from '@/lib/capabilities';
+import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import {
   SWOOP_FRESH_CEREMONY_MS,
   SWOOP_SETTINGS_DEFAULTS,
@@ -317,6 +318,104 @@ describe('evaluateLeaseRenewal', () => {
     expect(renewal({ settings: { ...ON, membersMayWatch: false } })).toMatchObject({
       code: 'members_may_not_watch',
     });
+  });
+});
+
+/**
+ * owner rulings 13-14: a person's swoop mode on their member row decides watch
+ * and control, and the site's `membersMayWatch` is only the default for members
+ * with no mode of their own.
+ */
+describe('swoop mode', () => {
+  const MEMBERS_MAY_NOT_WATCH: SwoopSiteSettings = { ...ON, membersMayWatch: false };
+
+  function withMode(siteRole: SiteRole, mode: SwoopMode): Actor {
+    return {
+      type: 'user',
+      userId: `${siteRole}-${mode}`,
+      role: 'member',
+      siteRoles: { [SITE]: siteRole },
+      swoopModes: { [SITE]: mode },
+    };
+  }
+
+  describe('with membersMayWatch off', () => {
+    const offAccess = (over: Partial<Parameters<typeof evaluateSwoopAccess>[0]>) =>
+      access({ settings: MEMBERS_MAY_NOT_WATCH, ...over });
+
+    it('refuses a member with no mode of their own', () => {
+      expect(offAccess({})).toMatchObject({ code: 'members_may_not_watch' });
+    });
+
+    it('lets a member set to view watch', () => {
+      expect(offAccess({ actor: withMode('member', 'view') })).toEqual({ ok: true, ctl: false });
+    });
+
+    it('asks a member set to control for the step-up, and lets them take control after it', () => {
+      const actor = withMode('member', 'control');
+      expect(offAccess({ actor, intent: 'control' })).toEqual({
+        ok: false,
+        status: 401,
+        code: 'step_up_required',
+        error: expect.any(String),
+      });
+      expect(offAccess({ actor, intent: 'control', stepUpOpen: true })).toEqual({ ok: true, ctl: true });
+    });
+
+    it('refuses a member set to none on the capability', () => {
+      expect(offAccess({ actor: withMode('member', 'none') })).toMatchObject({ code: 'capability_missing' });
+    });
+  });
+
+  it('refuses an admin held to view control, and lets them watch', () => {
+    const actor = withMode('admin', 'view');
+    expect(access({ actor, intent: 'control', stepUpOpen: true })).toMatchObject({ code: 'capability_missing' });
+    expect(access({ actor })).toEqual({ ok: true, ctl: false });
+  });
+
+  it('refuses an admin held to none both', () => {
+    const actor = withMode('admin', 'none');
+    expect(access({ actor, intent: 'control', stepUpOpen: true })).toMatchObject({ code: 'capability_missing' });
+    expect(access({ actor })).toMatchObject({ code: 'capability_missing' });
+  });
+
+  it('refuses a control viewer at renewal once their mode is view', () => {
+    for (const siteRole of ['member', 'admin'] as SiteRole[]) {
+      expect(
+        evaluateLeaseRenewal({
+          actor: withMode(siteRole, 'view'),
+          siteId: SITE,
+          machineId: MACHINE,
+          intent: 'control',
+          viaApiKey: false,
+          settings: ON,
+        }),
+      ).toMatchObject({ code: 'capability_missing' });
+    }
+  });
+
+  describe('agrees with effectiveSwoopMode for an actor built by siteStanding', () => {
+    for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+      for (const mode of [null, 'none', 'view', 'control'] as Array<SwoopMode | null>) {
+        for (const membersMayWatch of [true, false]) {
+          const effective = effectiveSwoopMode(siteRole, mode, membersMayWatch);
+
+          it(`${siteRole}, mode ${mode ?? 'absent'}, membersMayWatch ${membersMayWatch}: ${effective}`, () => {
+            const actor: Actor = {
+              type: 'user',
+              userId: 'u',
+              role: 'member',
+              ...siteStanding([[SITE, { role: siteRole, swoopMode: mode }]]),
+            };
+            const settings: SwoopSiteSettings = { ...ON, membersMayWatch };
+            expect(access({ actor, settings }).ok).toBe(effective !== 'none');
+            expect(access({ actor, settings, intent: 'control', stepUpOpen: true }).ok).toBe(
+              effective === 'control',
+            );
+          });
+        }
+      }
+    }
   });
 });
 

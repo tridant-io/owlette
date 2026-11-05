@@ -6,7 +6,7 @@
 
 ### ai-powered fleet management for Windows, macOS and Linux applications
 
-[![Version](https://img.shields.io/badge/version-4.1.26-blue)](https://github.com/tridant-io/owlette/releases)
+[![Version](https://img.shields.io/badge/version-4.1.27-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://owlette.app)
 
@@ -34,7 +34,7 @@ live CPU, memory, disk, GPU, temperature and network metrics, with history and s
 add an app, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding) and restarts the machine when relaunching is not enough.
 
 **swoop: remote desktop**
-a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs site membership; control needs a site admin and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS.
+a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching and control follow each person's swoop mode on the site: by default members watch and site owners and admins control, and a site's owners and admins can set anyone's to none, watch or control. control always needs a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS.
 
 **remote deployment**
 push software silently to any number of Windows machines: NSIS, Inno Setup, MSI, and custom installers. save deployment templates, track progress in real time, and cancel mid-install. the agent itself updates remotely on all three platforms.
@@ -52,7 +52,7 @@ site-scoped automations: a trigger (a schedule, a machine or process event, a me
 restart machines on a weekly schedule in their own timezone, store a machine's monitor layout and restore it when it drifts, and keep screens awake: a site switch that stops every machine sleeping, blanking or locking.
 
 **multi-site access control**
-organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site; a platform superadmin reaches every site. sign-in with email, Google or a passkey, and a required second factor.
+organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site; a platform superadmin reaches every site. a site's owners and admins run it from its settings page in the admin panel: members with their roles and swoop modes, machines, and the swoop and keep screens awake switches. sign-in with email, Google or a passkey, and a required second factor.
 
 **alerts, webhooks and api**
 threshold and offline alerts by email, signed webhooks for external systems, and an activity log across the fleet. a public REST API with an [OpenAPI reference](https://owlette.app/docs/api), a command line client (`@owlette/cli`), and SDKs for Node (`@owlette/sdk`) and Python (`owlette-sdk`).

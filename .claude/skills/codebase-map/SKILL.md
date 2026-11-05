@@ -16,7 +16,7 @@ areas and the landmarks; the directories are the full list (`ls web/hooks`,
 - **Public**: `/`, `/demo` (backed by `web/contexts/DemoContext.tsx`), `/for-ai`, `/privacy`, `/terms`, `/legal/dmca`, `/unsubscribe`, `/share/[token]` (public chat share). Route handlers, not pages: `/download`, `/llms.txt`, `/for-ai.json`.
 - **Auth**: `/login`, `/register`, `/forgot-password`, `/reset-password`, `/setup-2fa`, `/verify-2fa`, `/cli/authorize`, `/add` (machine pairing; `/setup` only redirects here).
 - **App**: `/dashboard`, `/deployments`, `/roosts`, `/logs`, `/talons`, `/hoot`, `/hoot/[chatId]`, `/swoop/[siteId]/[machineId]`, `/settings/alerts`, `/settings/api-keys`, `/settings/webhooks`.
-- **Admin**: `/admin/alerts`, `/admin/email`, `/admin/installers`, `/admin/members`, `/admin/presets`, `/admin/schedules`, `/admin/swoop`, `/admin/tokens` (per-site agent tokens, not API keys), `/admin/users`, `/admin/webhooks`.
+- **Admin**: `/admin/alerts`, `/admin/email`, `/admin/installers`, `/admin/presets`, `/admin/schedules`, `/admin/sites`, `/admin/sites/[siteId]`, `/admin/swoop`, `/admin/tokens` (per-site agent tokens, not API keys), `/admin/users`, `/admin/webhooks`.
 - **Docs**: `/docs/[[...slug]]` (MDX in `web/content/docs`), `/docs/api` (API reference).
 
 Redirects: `web/next.config.ts` sends `/cortex` → `/hoot` and `/owlette/*` → `/docs/*`;
@@ -40,7 +40,7 @@ The contract is `web/openapi.yaml`, served at `GET /api/openapi` and rendered at
 ## Web Components
 
 - `web/components/ui/` — shadcn/ui primitives, ours to edit; `button.tsx` variants are the single source of truth for button styling (frontend-dev-guidelines skill).
-- `web/components/` — shared app components: dialogs (`ConfirmDialog`, `DeploymentDialog`, `ScreenshotDialog`, `WebhookSettingsDialog`, ...), `RequireAdminAccess` (admin guard), `PageHeader`, `ThemeProvider`, `LazyAuthProvider`. Subfolders: `admin`, `auth`, `charts`, `hoot`, `icons`, `landing`, `mdx`, `roost`, `swoop`.
+- `web/components/` — shared app components: dialogs (`ConfirmDialog`, `DeploymentDialog`, `ScreenshotDialog`, `WebhookSettingsDialog`, ...), `RequireAdminAccess` (admin guard), `PageHeader`, `ThemeProvider`, `LazyAuthProvider`. Subfolders: `admin` (the shared `admin/Panel`, `SegmentedControl` and `BackLink`, and `admin/sites`: the site list and the site settings sections), `auth`, `charts`, `hoot`, `icons`, `landing`, `mdx`, `roost`, `swoop`.
 - `web/app/dashboard/components/` — `MachineCardView`, `MachineListView`, `AddMachineButton`, `SiteTimeConfirmBanner`. The process add/edit dialog state lives in `web/app/dashboard/page.tsx`.
 
 ---
@@ -59,6 +59,7 @@ Every Firestore read from a component goes through one. Landmarks:
 | `useInstallerVersion.ts` / `useInstallerManagement.ts` | latest version; installer upload/management |
 | `usePasskeys.ts` | `usePasskeys(userId)` — `registerPasskey`, `deletePasskey`, `renamePasskey`, `supported` |
 | `useUserManagement.ts` | `useUserManagement(enabled)` |
+| `useSiteMembers.ts` | `useSiteMembers(siteId)` (list, add, remove, `updateMember`), `useMemberCandidates(siteId)` |
 
 ---
 
@@ -72,6 +73,7 @@ Every Firestore read from a component goes through one. Landmarks:
 | `firebase-admin.ts` | Admin SDK: `getAdminDb()`, `getAdminAuth()`, `getAdminStorage()` |
 | `apiAuth.server.ts` | Route auth: `resolveAuth`, `requireSession`, `requireAdminOrIdToken`, `requireScope`, `assertUserHasSiteAccess`, `assertUserHasSiteCapability`, `ApiAuthError` |
 | `sitePolicy.server.ts`, `capabilities.ts`, `membership.server.ts` | Site access and per-site roles (firebase-integration skill) |
+| `swoopMode.ts` | The swoop mode's labels and rules, shared by server and dashboard |
 | `sessionManager.server.ts` | HTTPOnly session via iron-session, including session MFA state |
 | `rateLimit.ts` / `rateLimit.server.ts` / `withRateLimit.ts` | Upstash limiters (`authRateLimit`, `apiRateLimit`, ...) / Firestore-sharded per-capability limiter / route wrapper |
 | `webhookSender.server.ts` | `fireWebhooks(siteId, siteName, eventType, data)`, `testWebhook(url, secret)` |

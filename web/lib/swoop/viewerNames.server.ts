@@ -1,7 +1,8 @@
 /**
- * the names behind swoop viewers, for the routes that say who is in a session:
- * the admin swoop page's list (`app/api/sites/[siteId]/swoop/sessions`) and a
- * session's own read, which names the people in it to the people in it.
+ * the names behind swoop viewers, for what says who is in a session: the admin
+ * swoop page's list (`app/api/sites/[siteId]/swoop/sessions`), a session's own
+ * read, which names the people in it to the people in it, and the machine's
+ * mirror of its seats (`syncMachineSwoopViewers`), which keeps the name alone.
  *
  * one `getAll` over `users` for every distinct viewer, however many sessions
  * or seats they hold: the members-route pattern. a missing or soft-deleted

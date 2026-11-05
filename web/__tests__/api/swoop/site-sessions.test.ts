@@ -164,6 +164,28 @@ describe('GET swoop/sessions', () => {
     expect(mockListLive).not.toHaveBeenCalled();
   });
 
+  // the list names every viewer on the site with their email, which is for its
+  // owners and admins, so a swoop mode never reaches it.
+  it('a member set to control cannot list the site sessions', async () => {
+    seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+    signIn(MEMBER);
+
+    const res = await GET(createMockRequest(sessionsUrl()), siteContext());
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(mockListLive).not.toHaveBeenCalled();
+  });
+
+  it('positive control: an admin held to view still lists them', async () => {
+    seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+
+    const res = await GET(createMockRequest(sessionsUrl()), siteContext());
+
+    expect(res.status).toBe(200);
+    expect(mockListLive).toHaveBeenCalledWith({ siteId: SITE });
+  });
+
   it('refuses an api key, even an admin key, before reading anything', async () => {
     signInWithApiKey(ADMIN);
 

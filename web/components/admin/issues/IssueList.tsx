@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Inbox, Loader2, RefreshCw } from 'lucide-react';
 import { useIssues, type Issue, type IssueStatus } from '@/hooks/useIssues';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { ISSUE_STATUSES, issueCategoryLabel } from '@/lib/issues';
@@ -26,25 +27,6 @@ const EMPTY_COPY: Record<IssueFilter, { title: string; detail: string }> = {
 
 function filterLabel(filter: IssueFilter): string {
   return filter === 'all' ? 'all' : ISSUE_STATUS_LABEL[filter];
-}
-
-function StatusFilter({ value, onChange }: { value: IssueFilter; onChange: (filter: IssueFilter) => void }) {
-  return (
-    <div role="group" aria-label="status" className="flex flex-wrap gap-0.5 rounded-lg border border-border bg-card p-0.5">
-      {ISSUE_FILTERS.map((filter) => (
-        <Button
-          key={filter}
-          variant="ghost"
-          size="sm"
-          aria-pressed={value === filter}
-          onClick={() => onChange(filter)}
-          className="h-7 px-2.5 text-xs sm:px-3"
-        >
-          {filterLabel(filter)}
-        </Button>
-      ))}
-    </div>
-  );
 }
 
 // one grid, two shapes. a phone: number, title and age on the first line, the
@@ -186,7 +168,14 @@ export function IssueList({
               <RefreshCw />
             </IconButton>
           }
-          toolbar={<StatusFilter value={filter} onChange={onFilterChange} />}
+          toolbar={
+            <SegmentedControl
+              label="status"
+              options={ISSUE_FILTERS.map((f) => ({ value: f, label: filterLabel(f) }))}
+              value={filter}
+              onChange={onFilterChange}
+            />
+          }
         />
         <IssueResults key={`${filter}:${reloads}`} filter={filter} />
       </div>

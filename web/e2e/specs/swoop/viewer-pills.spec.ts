@@ -11,10 +11,20 @@
  * fold into one button. `storageState` is emptied and each page signs in
  * itself, as in `session.spec.ts`: the admin asks for control, and a second
  * factor passed at sign-in moments ago is the step-up for it.
+ *
+ * a pill lights while its viewer moves the pointer: the admin's own from the
+ * admin's own mouse, which lights a click too, and the admin's on the member's
+ * list from a `vpos`, which the fake host sends only when a spec tells it to.
+ *
+ * a pill opens a menu too, and the site admin's menu for the member has a kick.
+ * the machine has one streamer for the session and no way to drop one viewer,
+ * so the kick ends it for both: the member's page stops and says a site admin
+ * took them out, and the admin's comes back on its own, into a session with no
+ * one else in it.
  */
 
 import crypto from 'crypto';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
 import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
@@ -130,6 +140,10 @@ test('two people on one machine each see both on the bar, and only the admin is 
     expect(second.y).toBeGreaterThanOrEqual(first.y + first.height);
     await test.info().attach('admin bar', { body: await page.screenshot(), contentType: 'image/png' });
     await test.info().attach('member bar', { body: await other.screenshot(), contentType: 'image/png' });
+    // a picture, not an assertion: class names cannot show which way the pointer and the eye face in a turned pill
+    const sideIcons = test.info().outputPath('pills-side-icon', 'left-bar.png');
+    await memberBar.screenshot({ path: sideIcons, animations: 'disabled' });
+    await test.info().attach('pills on a left bar', { path: sideIcons, contentType: 'image/png' });
 
     // the admin is shown the member's email beside their name
     await adminBar.getByRole('button', { name: 'Bob W., view only', exact: true }).hover();
@@ -173,7 +187,122 @@ test('two people on one machine each see both on the bar, and only the admin is 
     await expect(list).not.toContainText('@');
     await test.info().attach('member on a phone', { body: await other.screenshot(), contentType: 'image/png' });
 
+    // a light lasts 400 ms after the last move, so each try moves again, and the picture kept is
+    // one the light was on for from before it was taken until after
+    const whileLit = async (label: string, snap: () => Promise<Buffer>, act: () => Promise<void>, light: Locator) => {
+      let shot: Buffer = Buffer.alloc(0);
+      await expect(async () => {
+        await act();
+        await expect(light).toBeVisible({ timeout: 200 });
+        shot = await snap();
+        expect(await light.isVisible()).toBe(true);
+      }).toPass({ timeout: 15_000 });
+      await test.info().attach(label, { body: shot, contentType: 'image/png' });
+    };
+    const adminTop = () => page.screenshot({ clip: barTop });
+    // over the picture, below the bar
+    let x = 600;
+    const adminMoves = async () => {
+      await page.mouse.move((x += 3), 420);
+    };
+    const adminClicks = async () => {
+      await page.mouse.down();
+      await page.mouse.up();
+    };
+    const moving = adminBar.getByRole('button', { name: 'Ada L. (you), moving', exact: true });
+    const clicking = adminBar.getByRole('button', { name: 'Ada L. (you), clicking', exact: true });
+    // the focused pill's tooltip would cover the others in the pictures
+    await pills(page).first().blur();
+    // the admin's page is still in the light theme from the focus step
+    await whileLit('your pill while you move, light', adminTop, adminMoves, moving);
+    await whileLit('your pill while you click, light', adminTop, adminClicks, clicking);
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+    await whileLit('your pill while you move, dark', adminTop, adminMoves, moving);
+    await whileLit('your pill while you click, dark', adminTop, adminClicks, clicking);
+
+    // the streamer sends the others a `vpos` for each move it takes from a controller
+    const viewerOf = (user: TestUser) => host.leases.filter((lease) => lease.uid === user.uid).at(-1)!.viewer;
+    const vpos = () => JSON.stringify({ t: 'vpos', viewer: viewerOf(admin), x: 0.5, y: 0.5, tsUs: Date.now() * 1000 });
+    const adminPoints = () => host.cursor(viewerOf(member), vpos());
+    const adminLit = list.getByRole('img', { name: 'moving' });
+    await whileLit("the admin moving, on the member's phone", () => other.screenshot(), adminPoints, adminLit);
+
     expect(host.problems).toEqual([]);
+  } finally {
+    await otherContext.close();
+    await host.stop();
+  }
+});
+
+test("the admin kicks the member from their pill's menu, who is told so, and the admin comes back on their own", async ({
+  page,
+  browser,
+}) => {
+  const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: MACHINE_ID });
+  const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const other = await otherContext.newPage();
+    await host.addViewer(other);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await signIn(page, admin, adminSecret);
+    await signIn(other, member);
+
+    const adminBar = page.getByTestId('session-bar');
+    const memberBar = other.getByTestId('session-bar');
+    const pills = (p: Page) => p.getByTestId('session-bar').getByRole('list', { name: 'in this session' }).getByRole('button');
+    const checked = () => [...new Set(host.leases.map((lease) => `${lease.uid} ${lease.ctl}`))].sort();
+    const leasesOf = (user: TestUser) => host.leases.filter((lease) => lease.uid === user.uid);
+    const publish = (expected: () => Promise<void>) =>
+      expect(async () => {
+        await host.roster();
+        await expected();
+      }).toPass({ timeout: 20_000 });
+
+    await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    await expect.poll(checked, { timeout: 45_000 }).toEqual([`${admin.uid} true`]);
+    await publish(() => expect(pills(page)).toHaveText(['Ada L. (you)'], { timeout: 2_000 }));
+
+    await other.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
+    await expect.poll(checked, { timeout: 45_000 }).toEqual([`${admin.uid} true`, `${member.uid} false`].sort());
+    await publish(async () => {
+      await expect(pills(page)).toHaveCount(2, { timeout: 2_000 });
+      await expect(pills(other)).toHaveCount(2, { timeout: 2_000 });
+    });
+
+    await adminBar.getByRole('button', { name: 'Bob W., view only', exact: true }).click();
+    const menu = page.getByTestId('viewer-menu');
+    await expect(menu).toBeVisible();
+    await expect(menu).toContainText('Bob Watcher');
+    await expect(menu).toContainText(member.email);
+    const kick = menu.getByRole('button', { name: 'kick', exact: true });
+    await expect(kick).toBeVisible();
+    await test.info().attach('admin pill menu', { body: await page.screenshot(), contentType: 'image/png' });
+
+    await kick.click();
+    const confirm = page.getByRole('dialog', { name: 'kick Bob Watcher?' });
+    await expect(confirm).toBeVisible();
+    await test.info().attach('kick dialog', { body: await page.screenshot(), contentType: 'image/png' });
+    const kickedSid = leasesOf(member).at(-1)!.sid;
+    const before = leasesOf(admin).length;
+    const kicked = page.waitForResponse((r) => r.url().endsWith('/kick') && r.request().method() === 'POST');
+    await confirm.getByRole('button', { name: 'kick', exact: true }).click();
+    const reply = await kicked;
+    expect(reply.status(), await reply.text()).toBe(200);
+
+    // the record names the member: their page stops rather than coming back, and reconnecting is theirs to choose
+    await expect(other.getByText('a site admin took you out of this session.')).toBeVisible({ timeout: 20_000 });
+    await expect(memberBar.getByTestId('session-badge')).toHaveText('disconnected');
+    await expect(memberBar.getByRole('button', { name: 'reconnect' })).toBeVisible();
+    await test.info().attach('member kicked', { body: await other.screenshot(), contentType: 'image/png' });
+
+    // the kick cut the admin off too, and their page starts a session of its own
+    await expect.poll(() => leasesOf(admin).length, { timeout: 45_000 }).toBeGreaterThan(before);
+    await publish(() => expect(pills(page)).toHaveText(['Ada L. (you)'], { timeout: 2_000 }));
+
+    const killed = await getAdminDb().doc(`sites/${SITE_ID}/machines/${MACHINE_ID}/swoop_sessions/${kickedSid}`).get();
+    const record = killed.data() ?? {};
+    expect([record.state, record.endReason, record.endedFor]).toEqual(['ended', 'kicked', member.uid]);
   } finally {
     await otherContext.close();
     await host.stop();

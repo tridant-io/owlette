@@ -8,6 +8,7 @@ const mockGet = jest.fn().mockResolvedValue({ exists: false, data: () => undefin
 const mockQueryGet = jest.fn().mockResolvedValue({ docs: [] });
 const mockWhere = jest.fn();
 const mockWarn = jest.fn();
+const mockViewerNames = jest.fn();
 const mockPath: string[] = [];
 
 jest.mock('@/lib/firebase-admin', () => {
@@ -55,6 +56,11 @@ jest.mock('@/lib/logger', () => ({
   default: { warn: (...args: unknown[]) => mockWarn(...args) },
 }));
 
+// the users read is viewerNames' own; here it answers whatever each test says
+jest.mock('@/lib/swoop/viewerNames.server', () => ({
+  viewerNames: (...args: unknown[]) => mockViewerNames(...args),
+}));
+
 import {
   SwoopSessionStoreError,
   assertNoKeyMaterial,
@@ -84,6 +90,7 @@ beforeEach(() => {
   mockGet.mockResolvedValue({ exists: false, data: () => undefined });
   mockQueryGet.mockResolvedValue({ docs: [] });
   mockUpdate.mockResolvedValue(undefined);
+  mockViewerNames.mockResolvedValue(new Map());
 });
 
 function viewer(viewerId: string, leaseExpiresAt = NOW + 300_000) {
@@ -490,20 +497,51 @@ describe('reads', () => {
   });
 });
 
-describe('the machine viewer count', () => {
-  it('counts the viewers of live, un-lapsed sessions only', async () => {
+describe('the machine viewer count and seats', () => {
+  it('counts and lists the seats of live, un-lapsed sessions only, in one update', async () => {
     mockQueryGet.mockResolvedValue(
       sessionDocs(
-        sessionDoc('s-live', 'live', [viewer('v1'), viewer('v2')]),
+        sessionDoc('s-live', 'live', [{ ...viewer('v1'), ctl: true }, viewer('v2')]),
         sessionDoc('s-pending', 'pending', [viewer('v3')]),
         sessionDoc('s-lapsed', 'live', [viewer('v4', LAPSED)]),
       ),
+    );
+    // uid-v2's account is gone, so viewerNames leaves it out
+    mockViewerNames.mockResolvedValue(
+      new Map([['uid-v1', { email: 'ada@example.com', displayName: 'Ada Lovelace' }]]),
     );
 
     await syncMachineSwoopViewers(SITE, MACHINE, NOW);
 
     expect(mockWhere.mock.calls).toEqual([['state', 'in', ['pending', 'live']]]);
-    expect(mockUpdate).toHaveBeenCalledWith({ swoopViewers: 2 });
+    // names for the seats that count, and for no others
+    expect(mockViewerNames).toHaveBeenCalledTimes(1);
+    expect((mockViewerNames.mock.calls[0][0] as SwoopSession[]).map((session) => session.sid)).toEqual(['s-live']);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    // the name and never the email: every member of the site reads the machine
+    expect(mockUpdate).toHaveBeenCalledWith({
+      swoopViewers: 2,
+      swoopSeats: [
+        { uid: 'uid-v1', displayName: 'Ada Lovelace', ctl: true },
+        { uid: 'uid-v2', displayName: null, ctl: false },
+      ],
+    });
+  });
+
+  it('writes nothing when the names cannot be read, the count included, and says so', async () => {
+    mockQueryGet.mockResolvedValue(sessionDocs(sessionDoc('s-live', 'live', [viewer('v1')])));
+    mockViewerNames.mockRejectedValue(new Error('14 UNAVAILABLE'));
+
+    await expect(syncMachineSwoopViewers(SITE, MACHINE, NOW)).resolves.toBeUndefined();
+
+    // the next session write recounts in full, so the machine keeps its last count and seats meanwhile
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(mockWarn).toHaveBeenCalledWith(
+      expect.stringContaining('viewer count'),
+      expect.objectContaining({
+        data: expect.objectContaining({ siteId: SITE, machineId: MACHINE, err: '14 UNAVAILABLE' }),
+      }),
+    );
   });
 
   it('writes it on the machine record with update, never set', async () => {
@@ -570,12 +608,12 @@ describe('the machine viewer count', () => {
     expect(mockSet.mock.invocationCallOrder[0]).toBeLessThan(mockQueryGet.mock.invocationCallOrder[1]);
   });
 
-  it('writes 0 when the machine\'s last session ends', async () => {
+  it('writes 0 and no seats when the machine\'s last session ends', async () => {
     // the ended record no longer matches `state in [pending, live]`
     mockQueryGet.mockResolvedValue(sessionDocs());
 
     await endSwoopSession({ siteId: SITE, machineId: MACHINE, sid: SID, endReason: 'closed' });
 
-    expect(mockUpdate).toHaveBeenCalledWith({ swoopViewers: 0 });
+    expect(mockUpdate).toHaveBeenCalledWith({ swoopViewers: 0, swoopSeats: [] });
   });
 });

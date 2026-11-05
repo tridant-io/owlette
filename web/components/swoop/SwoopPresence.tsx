@@ -1,9 +1,10 @@
 'use client';
 
 /**
- * where the others in control are pointing, each pointer labelled with who it
- * is. who is in the session is the bar's to say (`SwoopToolbar`); the bar is
- * off screen in fullscreen, where these labels are all that says it.
+ * where the others in control are pointing, each pointer in the colour of that
+ * person's pill. who is in the session is the bar's to say (`SwoopToolbar`);
+ * a pointer carries no name (owner, 2026-11-04: the bar already says it), so
+ * in fullscreen, where the bar is hidden, its colour is the only cue.
  *
  * the roster is the host's: `ctl` on a line is the host's own verdict from that
  * viewer's verified jwt, so this is a read-out and not a control — there is no
@@ -22,7 +23,6 @@ import { useSyncExternalStore } from 'react';
 import { MousePointer2 } from 'lucide-react';
 import { NO_PRESENCE, swoopPresence } from '@/lib/swoop/presence';
 import { toPixel, useSwoopPictureBox } from '@/hooks/useSwoopPictureBox';
-import { useSwoopViewerNames } from '@/hooks/useSwoopViewerNames';
 import type { SwoopSession } from '@/lib/swoop/features';
 
 export interface SwoopPresenceProps {
@@ -56,7 +56,6 @@ export function SwoopPresence({ session }: SwoopPresenceProps) {
     noPresence,
   );
   const box = useSwoopPictureBox(session);
-  const viewers = useSwoopViewerNames(session);
 
   // alone in the session, which is the usual case, there is no pointer but the
   // real one; and before the first frame there is no picture to put one on.
@@ -69,16 +68,13 @@ export function SwoopPresence({ session }: SwoopPresenceProps) {
           key={cursor.viewer}
           aria-hidden
           // above the panels, as the machine's pointer is
-          className={`pointer-events-none absolute z-10 flex items-start gap-0.5 ${tintOf(cursor.viewer)}`}
+          className={`pointer-events-none absolute z-10 ${tintOf(cursor.viewer)}`}
           style={{
             left: toPixel(cursor.x, box.left, box.width),
             top: toPixel(cursor.y, box.top, box.height),
           }}
         >
           <MousePointer2 className="size-4 fill-current" />
-          <span className="rounded-sm bg-card/90 px-1 text-[10px] leading-4">
-            {viewers.find((viewer) => viewer.id === cursor.viewer)?.short}
-          </span>
         </div>
       ))}
     </>

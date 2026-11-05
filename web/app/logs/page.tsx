@@ -22,8 +22,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { DatePicker } from '@/components/ui/date-picker';
@@ -466,10 +464,6 @@ export default function LogsPage() {
     siteTimezone,
     hasNoSites,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
   } = useCurrentSite();
 
   // `clear logs` calls DELETE /api/sites/{siteId}/logs, gated on
@@ -532,10 +526,6 @@ export default function LogsPage() {
       opener?.focus();
     };
   }, [screenshotModalUrl]);
-
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -887,46 +877,8 @@ export default function LogsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={() => {
-          setManageEditSiteId(currentSiteId);
-          setManageDialogOpen(true);
-        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          // If we deleted the current site, switch to another one
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        // Focus the new site, matching /deployments, /roosts and /talons — logs omitted this,
-        // so a user creating their first site here stayed on the no-sites state.
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       <AccountSettingsDialog

@@ -18,9 +18,10 @@
 import { randomBytes } from 'node:crypto';
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import { emitMutation } from '@/lib/auditLogClient';
-import { Capability, hasCapability, type Actor, type UserActor } from '@/lib/capabilities';
+import { Capability, hasCapability, siteStanding, type Actor, type UserActor } from '@/lib/capabilities';
 import { assertLlmKeyAvailable } from '@/lib/hoot-utils.server';
 import logger from '@/lib/logger';
+import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
 import { validateWebhookUrl } from '@/lib/webhookUrl';
 import { computeNextRunAt } from './schedule.server';
 import { isCreatorDisabledReason } from './types';
@@ -613,12 +614,8 @@ async function loadSuccessorActor(
   // privilege. Standing on the site comes from the membership row below.
   const role = data.role === 'admin' || data.role === 'superadmin' ? data.role : 'member';
 
-  const memberData = memberSnapshot.exists ? memberSnapshot.data() : undefined;
-  const rawSiteRole = memberData?.status === 'active' ? memberData.role : undefined;
-  const siteRole =
-    rawSiteRole === 'owner' || rawSiteRole === 'admin' || rawSiteRole === 'member'
-      ? rawSiteRole
-      : undefined;
+  const memberData = memberSnapshot.exists ? (memberSnapshot.data() ?? null) : null;
+  const siteRole = deriveMembership(memberData);
 
   return {
     ok: true,
@@ -626,7 +623,7 @@ async function loadSuccessorActor(
       type: 'user',
       userId: uid,
       role,
-      siteRoles: siteRole ? { [siteId]: siteRole } : {},
+      ...siteStanding([[siteId, { role: siteRole, swoopMode: deriveSwoopMode(memberData, siteRole) }]]),
     },
   };
 }

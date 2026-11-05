@@ -2,8 +2,8 @@
  * Who may swoop into a machine, and for how long.
  *
  * Three layers, and they are deliberately separate:
- *   - the capability matrix (`lib/capabilities.ts`) says which ROLE may watch
- *     or control at all;
+ *   - the capability matrix (`lib/capabilities.ts`), with a person's swoop
+ *     mode, says who may watch or control at all;
  *   - the site's `sites/{siteId}/settings/swoop` document says whether the
  *     feature is on here, which machines are excluded, and whether plain
  *     members may watch — `membersMayWatch` is enforced HERE and never in the
@@ -48,7 +48,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { Capability, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
+import { Capability, explicitSwoopMode, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
 import { networkRecord, type RequestNetwork } from '@/lib/network.server';
@@ -232,8 +232,13 @@ export function evaluateSwoopAccess(input: SwoopAccessInput): SwoopDecision {
     return deny(403, 'capability_missing', 'you do not have permission to do this.');
   }
 
-  // The site-level gate the capability matrix deliberately does not carry.
-  if (siteRoleOf(input.actor, input.siteId) === 'member' && !input.settings.membersMayWatch) {
+  // the site's switch is the default for members with no swoop mode of their
+  // own; an explicit mode on the row wins (owner ruling 13).
+  if (
+    siteRoleOf(input.actor, input.siteId) === 'member' &&
+    explicitSwoopMode(input.actor, input.siteId) === null &&
+    !input.settings.membersMayWatch
+  ) {
     return deny(403, 'members_may_not_watch', 'this site does not allow members to watch.');
   }
 

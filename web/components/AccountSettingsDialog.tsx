@@ -544,7 +544,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       {([
                         { value: 'machine', label: "each machine's local timezone", help: 'every machine renders its own heartbeats and timestamps in its own local clock. best when monitoring kiosks across multiple timezones.' },
                         { value: 'user', label: 'my timezone', help: 'all machines render in your selected timezone (below). best when you want a single shared reference frame.' },
-                        { value: 'site', label: "site timezone", help: "all machines render in the site's configured timezone (set in manage sites). preserves the legacy behavior." },
+                        { value: 'site', label: "site timezone", help: "all machines render in the site's configured timezone (set in site settings). preserves the legacy behavior." },
                       ] as const).map(opt => (
                         <label
                           key={opt.value}

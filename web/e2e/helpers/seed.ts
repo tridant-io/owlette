@@ -4,6 +4,7 @@
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
+import type { SwoopMode } from '@/lib/swoopMode';
 import { getAdminAuth, getAdminDb } from './emulator';
 
 /**
@@ -187,6 +188,7 @@ export async function grantMembership(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
+  extra?: { swoop?: SwoopMode },
 ): Promise<void> {
   const db = getAdminDb();
   await db
@@ -196,7 +198,7 @@ export async function grantMembership(
   if (role === 'owner') {
     await db.collection('sites').doc(siteId).set({ owner: uid }, { merge: true });
   }
-  await seedMemberRow(siteId, uid, role);
+  await seedMemberRow(siteId, uid, role, extra);
 }
 
 /**
@@ -212,6 +214,7 @@ export async function seedMemberRow(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
+  extra?: { swoop?: SwoopMode },
 ): Promise<void> {
   await getAdminDb()
     .collection('sites')
@@ -224,6 +227,7 @@ export async function seedMemberRow(
       status: 'active',
       addedAt: new Date(0),
       addedBy: 'system:e2e-seed',
+      ...extra,
     });
 }
 

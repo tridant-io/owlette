@@ -187,6 +187,8 @@ export async function recordSwoopSessionEnded(
     durationMs?: number;
     viewerId?: string;
     left?: boolean;
+    /** the uid a revocation or a kick ended it for. */
+    endedFor?: string;
   },
 ): Promise<void> {
   await writeAuditEntryBlocking(
@@ -202,6 +204,7 @@ export async function recordSwoopSessionEnded(
         ...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
         ...(args.viewerId !== undefined ? { viewerId: args.viewerId } : {}),
         ...(args.left ? { left: true } : {}),
+        ...(args.endedFor !== undefined ? { endedFor: args.endedFor } : {}),
       },
     }),
   );

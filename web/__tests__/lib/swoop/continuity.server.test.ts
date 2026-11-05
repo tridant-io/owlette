@@ -66,10 +66,10 @@ describe('swoop continuity', () => {
     }
   });
 
-  it('never inherits past a kill, a deliberate close or a revocation', () => {
+  it('never inherits past a kill, a deliberate close, a revocation or a kick', () => {
     const minted = mintContinuity('sid-1');
     const { hash } = parseContinuity(minted.token)!;
-    for (const endReason of ['closed', 'killed', 'revoked'] as const) {
+    for (const endReason of ['closed', 'killed', 'revoked', 'kicked'] as const) {
       expect(verdict(record({ continuity: alicesGrant(minted.hash), endReason }), hash)).toEqual({
         ok: false,
         reason: 'ended_for_good',
@@ -89,6 +89,18 @@ describe('swoop continuity', () => {
     expect(verdict(revoked('alice'), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
     // a record that names nobody ended for everyone
     expect(verdict(revoked(), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
+  });
+
+  // the same cut, for a kick: the one kicked may rejoin, but through the ceremony
+  it('a kick is final only for the person it was ended for', () => {
+    const minted = mintContinuity('sid-1');
+    const { hash } = parseContinuity(minted.token)!;
+    const kicked = (endedFor?: string) =>
+      record({ continuity: alicesGrant(minted.hash), endReason: 'kicked', ...(endedFor ? { endedFor } : {}) });
+
+    expect(verdict(kicked('bob'), hash)).toEqual({ ok: true, viewerId: 'v-alice' });
+    expect(verdict(kicked('alice'), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
+    expect(verdict(kicked(), hash)).toEqual({ ok: false, reason: 'ended_for_good' });
   });
 
   // a kill closes only the records still open, and a tab's last one may already

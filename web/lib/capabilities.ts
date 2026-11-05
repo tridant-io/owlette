@@ -1,3 +1,5 @@
+import type { SwoopMode } from '@/lib/swoopMode';
+
 export const Capability = {
   MACHINE_EXEC_COMMAND: 'MACHINE_EXEC_COMMAND',
   // View-only machine commands (screenshot, live view). Read-class: granted to
@@ -5,19 +7,25 @@ export const Capability = {
   // mutating MACHINE_EXEC_COMMAND capability. Site-scoped like the other
   // machine capabilities.
   MACHINE_VIEW: 'MACHINE_VIEW',
-  // Interactive control of a machine through swoop: keyboard, mouse and
+  // interactive control of a machine through swoop: keyboard, mouse and
   // clipboard injected as SYSTEM, including on the logon, lock and UAC
-  // desktops. Split from MACHINE_REMOTE_VIEW because control is an integrity
-  // boundary where watching is only a confidentiality one — site admin/owner
-  // only, and exempt from the capability_enforcement bypass
+  // desktops. split from MACHINE_REMOTE_VIEW because control is an integrity
+  // boundary where watching is only a confidentiality one. by default it
+  // belongs to site admins and owners. a person's swoop mode on their member
+  // row widens or narrows this and MACHINE_REMOTE_VIEW, and nothing else (owner
+  // ruling, 2026-11-04). exempt from the capability_enforcement bypass
   // (BYPASS_EXEMPT_CAPABILITIES, lib/authorizedHandler.server.ts).
   MACHINE_REMOTE_CONTROL: 'MACHINE_REMOTE_CONTROL',
-  // Watching a swoop stream: a continuous screen feed plus system audio. This
-  // is deliberately NOT MACHINE_VIEW — that one gates a 5-60 s screenshot
+  // watching a swoop stream: a continuous screen feed plus system audio. this
+  // is deliberately not MACHINE_VIEW: that one gates a 5-60 s screenshot
   // slideshow, and a live feed with sound is a different exposure, so it gets
-  // its own capability instead of riding on the existing one. Members hold it;
-  // whether a member may actually watch is the site's `membersMayWatch`
-  // setting, enforced in lib/swoop/policy.server.ts and never in this matrix.
+  // its own capability instead of riding on the existing one. by default it
+  // belongs to members, and so to admins and owners too; a member with no swoop
+  // mode of their own watches only where the site's `membersMayWatch` allows,
+  // which lib/swoop/policy.server.ts enforces and this matrix never does. a
+  // person's swoop mode on their member row widens or narrows this and
+  // MACHINE_REMOTE_CONTROL, and nothing else (owner ruling, 2026-11-04). exempt
+  // from the capability_enforcement bypass, as MACHINE_REMOTE_CONTROL is.
   MACHINE_REMOTE_VIEW: 'MACHINE_REMOTE_VIEW',
   // Turning swoop ON for a site, and the policy around it: excluded machines,
   // `membersMayWatch`, and the on-machine indicator. Its OWN capability rather
@@ -113,6 +121,12 @@ export type UserActor = {
    * caller's full membership would cost a collection-group query per request.
    */
   siteRoles: Readonly<Record<string, SiteRole>>;
+  /**
+   * explicit swoop modes by site, from the member row's `swoop`. a site absent
+   * here follows its role. only MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL
+   * read it. built only through `siteStanding`.
+   */
+  swoopModes?: Readonly<Record<string, SwoopMode>>;
 };
 
 export type SystemActor = {
@@ -122,6 +136,50 @@ export type SystemActor = {
 };
 
 export type Actor = UserActor | SystemActor;
+
+/** one site's standing as its member row states it. */
+export interface MemberStanding {
+  role: SiteRole | null;
+  swoopMode: SwoopMode | null;
+}
+
+/**
+ * every UserActor built from a member row gets its per-site fields here, so
+ * whatever the row carries reaches every gate. a builder that dropped the mode
+ * would hand an admin held to view their control back.
+ *
+ * takes `[siteId, standing]` pairs, not a record keyed by site id: a request's
+ * site id as a computed key, or written as one, reads as prototype pollution
+ * to the code scanner (js/remote-property-injection, 311-313 and 425-429),
+ * however the object was made. pairs say the same thing without one.
+ *
+ * `swoopModes` is returned only when some site has a mode, so an actor built
+ * from rows that carry none is the actor from before the field existed.
+ */
+export function siteStanding(bySite: Iterable<readonly [string, MemberStanding]>): {
+  siteRoles: Record<string, SiteRole>;
+  swoopModes?: Record<string, SwoopMode>;
+} {
+  const roles: Array<readonly [string, SiteRole]> = [];
+  const modes: Array<readonly [string, SwoopMode]> = [];
+  for (const [siteId, { role, swoopMode }] of bySite) {
+    if (role === null) continue;
+    roles.push([siteId, role]);
+    // the owner always controls, so an owner row's mode is never carried
+    if (role !== 'owner' && swoopMode !== null) modes.push([siteId, swoopMode]);
+  }
+  return modes.length > 0
+    ? { siteRoles: recordOf(roles), swoopModes: recordOf(modes) }
+    : { siteRoles: recordOf(roles) };
+}
+
+/**
+ * a record with no prototype: SITE_ID_RE admits `__proto__` as a site id, and
+ * a site that is not there must look up as nothing, not as Object.prototype.
+ */
+function recordOf<V>(entries: ReadonlyArray<readonly [string, V]>): Record<string, V> {
+  return Object.setPrototypeOf(Object.fromEntries(entries), null) as Record<string, V>;
+}
 
 /**
  * Held by every authenticated user, on no site in particular. Self-service only:
@@ -230,6 +288,14 @@ export function isSiteScopedCapability(capability: Capability): boolean {
   return SITE_SCOPED_CAPABILITIES.has(capability);
 }
 
+/** the person's explicit swoop mode on a site, or null when their role decides. */
+export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | null {
+  if (actor.type === 'system' || !actor.swoopModes) return null;
+  // own properties only, for the reason `hasCapability` gives for siteRoles
+  if (!Object.prototype.hasOwnProperty.call(actor.swoopModes, siteId)) return null;
+  return actor.swoopModes[siteId];
+}
+
 export function hasCapability(
   actor: Actor,
   capability: Capability,
@@ -265,6 +331,16 @@ export function hasCapability(
     if (!Object.prototype.hasOwnProperty.call(actor.siteRoles, siteId)) return false;
     const siteRole = actor.siteRoles[siteId];
     if (siteRole === undefined) return false;
+    // the owner always controls, whatever a hand-built actor carries
+    if (
+      (capability === Capability.MACHINE_REMOTE_VIEW || capability === Capability.MACHINE_REMOTE_CONTROL) &&
+      siteRole !== 'owner'
+    ) {
+      const mode = explicitSwoopMode(actor, siteId);
+      if (mode !== null) {
+        return capability === Capability.MACHINE_REMOTE_CONTROL ? mode === 'control' : mode !== 'none';
+      }
+    }
     return SiteRoleCapabilityMatrix[siteRole].includes(capability);
   }
 

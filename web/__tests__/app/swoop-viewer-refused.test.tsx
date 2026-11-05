@@ -79,7 +79,7 @@ it('tells an admin to turn swoop on and links to the site’s settings', async (
   expect(notice).toHaveTextContent('turn it on in site settings.');
   expect(within(notice).getByRole('link', { name: 'open site settings' })).toHaveAttribute(
     'href',
-    '/dashboard?settings=site%201',
+    '/admin/sites/site%201?section=swoop',
   );
 });
 

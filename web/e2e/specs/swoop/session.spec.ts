@@ -50,6 +50,9 @@ const CURSOR_ID = `mach-cursor-${SUFFIX}`;
 const FIT_ID = `mach-fit-${SUFFIX}`;
 const PHONE_ID = `mach-phone-${SUFFIX}`;
 const SHARED_ID = `mach-shared-${SUFFIX}`;
+const MODE_CONTROL_ID = `mach-mode-control-${SUFFIX}`;
+const MODE_VIEW_ID = `mach-mode-view-${SUFFIX}`;
+const MODE_NONE_ID = `mach-mode-none-${SUFFIX}`;
 const REVOKED_ID = `mach-revoked-${SUFFIX}`;
 const DEMOTED_ID = `mach-demoted-${SUFFIX}`;
 const LEFT_ID = `mach-left-${SUFFIX}`;
@@ -77,6 +80,11 @@ let phoneOperator: TestUser;
 let phoneOperatorSecret = '';
 let sharedOperator: TestUser;
 let sharedOperatorSecret = '';
+let modeOperator: TestUser;
+let modeOperatorSecret = '';
+let heldAdmin: TestUser;
+let heldAdminSecret = '';
+let offMember: TestUser;
 let revokingOperator: TestUser;
 let revokingOperatorSecret = '';
 let leavingOperator: TestUser;
@@ -289,6 +297,27 @@ test.beforeAll(async () => {
       .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
     await grantMembership(SITE_ID, member.uid, 'member');
   }
+
+  await seedMachine(SITE_ID, MODE_CONTROL_ID, { displayName: `mode control box ${SUFFIX}` });
+  await seedMachine(SITE_ID, MODE_VIEW_ID, { displayName: `mode view box ${SUFFIX}` });
+  await seedMachine(SITE_ID, MODE_NONE_ID, { displayName: `mode none box ${SUFFIX}` });
+
+  const modeSeeded = await seedTotpUser(`swoop-mode-control-${SUFFIX}`);
+  modeOperator = modeSeeded.user;
+  modeOperatorSecret = modeSeeded.secret;
+  await grantMembership(SITE_ID, modeOperator.uid, 'member', { swoop: 'control' });
+
+  const heldSeeded = await seedTotpUser(`swoop-mode-view-${SUFFIX}`);
+  heldAdmin = heldSeeded.user;
+  heldAdminSecret = heldSeeded.secret;
+  await grantMembership(SITE_ID, heldAdmin.uid, 'admin', { swoop: 'view' });
+
+  offMember = await seedDedicatedUser(dedicatedUser('member', `swoop-mode-none-${SUFFIX}`));
+  await getAdminDb()
+    .collection('users')
+    .doc(offMember.uid)
+    .set({ mfaEnrolled: false, requiresMfaSetup: false, mfaFactors: { totp: false, passkeys: 0 } }, { merge: true });
+  await grantMembership(SITE_ID, offMember.uid, 'member', { swoop: 'none' });
 });
 
 test.describe('the viewer page', () => {
@@ -514,7 +543,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByText(/connecting/i)).toHaveCount(0);
     await expect(alertLine(page).getByRole('link', { name: 'open site settings' })).toHaveAttribute(
       'href',
-      `/dashboard?settings=${SITE_ID}`,
+      `/admin/sites/${SITE_ID}?section=swoop`,
     );
     await expect(alertLine(page).getByRole('link', { name: 'back to dashboard' })).toBeVisible();
     await expect(page.getByTestId('session-bar').getByRole('link', { name: 'back to dashboard' })).toBeVisible();
@@ -549,6 +578,87 @@ test.describe('the viewer page', () => {
     await expect(alertLine(page)).toHaveCount(0);
     await expect(page.getByText(/connecting/i).first()).toBeVisible();
     await page.getByRole('button', { name: /end session/i }).click();
+  });
+});
+
+test.describe('swoop mode', () => {
+  test('a member whose swoop mode is control takes control after the step-up', async ({ page }) => {
+    const spent = await signIn(page, modeOperator, modeOperatorSecret);
+    const seen = recordSwoopResponses(page);
+    await page.goto(`/swoop/${SITE_ID}/${MODE_CONTROL_ID}`);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+
+    const minted = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/machines/${MODE_CONTROL_ID}/swoop/sessions`) &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+      { timeout: 45_000 },
+    ).catch(() => null);
+    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, modeOperatorSecret, spent));
+    await dialog.getByRole('button', { name: /^confirm$/i }).click();
+    const mintResponse = await minted;
+    expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
+    const grant = ((await mintResponse!.json()) as { data: { sid: string; ctl: boolean } }).data;
+    expect(grant.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
+
+    const record = await readSession(page, grant.sid, MODE_CONTROL_ID);
+    expect((record.viewers as Array<{ uid: string; ctl: boolean }>).map((v) => [v.uid, v.ctl])).toEqual([
+      [modeOperator.uid, true],
+    ]);
+
+    const ended = page.waitForResponse(
+      (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',
+    );
+    await page.getByRole('button', { name: /end session/i }).click();
+    expect((await ended).status()).toBe(200);
+  });
+
+  test('an admin held to watch gets view only, with no ceremony', async ({ page }) => {
+    // the sign-in is dated back, so a dialog would mean the control ask got as far as the step-up
+    await signIn(page, heldAdmin, heldAdminSecret);
+    const seen = recordSwoopResponses(page);
+    const minted = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/machines/${MODE_VIEW_ID}/swoop/sessions`) &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+      { timeout: 45_000 },
+    ).catch(() => null);
+    await page.goto(`/swoop/${SITE_ID}/${MODE_VIEW_ID}`);
+    const mintResponse = await minted;
+    expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
+    const grant = ((await mintResponse!.json()) as { data: { sid: string; ctl: boolean } }).data;
+    expect(grant.ctl).toBe(false);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByText(/view only/i)).toBeVisible();
+
+    const ended = page.waitForResponse(
+      (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',
+    );
+    await page.getByRole('button', { name: /end session/i }).click();
+    expect((await ended).status()).toBe(200);
+  });
+
+  test('a member with no swoop is refused for good', async ({ page }) => {
+    await signIn(page, offMember);
+    const seen = recordSwoopResponses(page);
+    const asksForControl: unknown[] = [];
+    page.on('request', (r) => {
+      if (r.method() === 'POST' && r.url().endsWith(`/machines/${MODE_NONE_ID}/swoop/sessions`)) {
+        asksForControl.push((r.postDataJSON() as { control?: unknown } | null)?.control);
+      }
+    });
+    await page.goto(`/swoop/${SITE_ID}/${MODE_NONE_ID}`);
+    await expect(alertLine(page)).toContainText("you can't use swoop on this site", { timeout: 20_000 });
+
+    // the retry ladder's first rungs fall inside this wait, so a refusal that was not final would have asked again
+    await page.waitForTimeout(5_000);
+    expect(asksForControl, `swoop responses seen: ${seen.join(' | ')}`).toEqual([true, false]);
+    await expect(page.getByText(/reconnecting in/)).toHaveCount(0);
   });
 });
 
@@ -602,8 +712,12 @@ test.describe('through a host', () => {
       await expect(page.getByText(/view only/i)).toBeVisible();
 
       // the host let in the viewer its token names, bound to the certificate
-      // the page offered with, and watch-only as the api decided.
-      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: watcher.uid, ctl: false }]);
+      // the page offered with, and watch-only as the api decided. polled, here
+      // and below: the page mints its lease before presenting it, so the host
+      // can record it after the picture is up.
+      await expect
+        .poll(() => host.leases)
+        .toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: watcher.uid, ctl: false }]);
       expect(await host.sentCodecs()).toEqual(['video/H264']);
       expect(host.problems).toEqual([]);
 
@@ -627,7 +741,9 @@ test.describe('through a host', () => {
       const grant = await granted;
       expect(grant.ctl).toBe(true);
       await expectHostPicture(page);
-      expect(host.leases).toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: operator.uid, ctl: true }]);
+      await expect
+        .poll(() => host.leases)
+        .toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: operator.uid, ctl: true }]);
 
       // no signal worker here, so the kill reaches the machine as its queued
       // command, which the host takes the way the agent does.
@@ -736,7 +852,7 @@ test.describe('through a host', () => {
         [first.viewerId, joined.viewerId].sort(),
       );
       // the host verified each one's own token on the one sid
-      expect(host.leases).toEqual(
+      await expect.poll(() => host.leases).toEqual(
         expect.arrayContaining([
           { viewer: first.viewerId, sid: first.sid, uid: sharedOperator.uid, ctl: true },
           { viewer: joined.viewerId, sid: first.sid, uid: watcher.uid, ctl: false },

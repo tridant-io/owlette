@@ -63,6 +63,14 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopBarMenuPlacement, menuPlacementFor, useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
@@ -74,16 +82,19 @@ import {
   TRAFFIC_LIGHTS_INSET_PX,
   dragRegion,
 } from '@/components/swoop/SwoopWindowControls';
+import type { SwoopViewerActivity } from '@/lib/swoop/activity';
 import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import { cn } from '@/lib/utils';
 import { swoopInputCapture, type SwoopSession } from '@/lib/swoop/features';
+import { kickSwoopViewer } from '@/lib/swoop/kick';
 import { hasKeyboardLock, keyboardLock } from '@/lib/swoop/keyboardLock';
 import { readMouseCapture, setMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCapture';
 import type { SwoopSessionState, SwoopStats } from '@/hooks/useSwoopSession';
 import { useViewerAppNativeKeys, useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { useSwoopCompactBar } from '@/hooks/useSwoopCompactBar';
 import { useSwoopViewerNames, type SwoopNamedViewer } from '@/hooks/useSwoopViewerNames';
+import { useSwoopViewerActivity } from '@/hooks/useSwoopViewerActivity';
 const subscribeNever = (): (() => void) => () => {};
 const mouseFree = (): boolean => false;
 
@@ -128,6 +139,16 @@ const nothingHeld = (): boolean => false;
 /** vertical text on a side bar, turned so it reads toward the picture. */
 const VERTICAL = 'md:bar-side:[writing-mode:vertical-rl] md:bar-left:rotate-180';
 
+/**
+ * a pill's icon on a side bar: the pill's text is turned to read toward the
+ * picture, but an arrow has a direction of its own. writing-mode leaves an svg
+ * upright, so only a left bar's half turn is undone.
+ */
+const UPRIGHT = 'md:bar-left:rotate-180';
+
+/** behind a viewer while they click: a pill's fill, or a row's in the phone's list. */
+const CLICK_FILL = 'bg-accent-cyan/20';
+
 /** a sentence in a wide top bar; on a side or a phone, an icon that says it on hover or tap. */
 function Notice({ text, testId }: { text: string; testId?: string }) {
   return (
@@ -149,19 +170,37 @@ function Notice({ text, testId }: { text: string; testId?: string }) {
   );
 }
 
-/** a pointer for one in control, an eye for one who only watches, in the tint their pointer has on the picture. */
-function ViewerIcon({ viewer, className }: { viewer: SwoopNamedViewer; className?: string }) {
+/**
+ * a pointer for one in control, an eye for one who only watches, in the tint
+ * their pointer has on the picture; cyan while they move it, and in the
+ * pill's own ink on its fill while they click.
+ */
+function ViewerIcon({
+  viewer,
+  activity,
+  className,
+}: {
+  viewer: SwoopNamedViewer;
+  activity: SwoopViewerActivity;
+  className?: string;
+}) {
   // our own pointer is the real one, drawn in no tint
-  const tint = cn(viewer.you ? 'text-foreground' : tintOf(viewer.id), className);
-  return viewer.ctl ? (
+  const resting = viewer.you ? 'text-foreground' : tintOf(viewer.id);
+  const tint = cn(
+    activity === 'moving' ? 'text-accent-cyan' : activity === 'clicking' ? 'text-foreground' : resting,
+    className,
+  );
+  if (!viewer.ctl) return <Eye role="img" aria-label="view only" className={tint} />;
+  // the phone's list names no row, so there a lit pointer says it to a screen reader
+  return activity === 'idle' ? (
     <MousePointer2 aria-hidden className={tint} />
   ) : (
-    <Eye role="img" aria-label="view only" className={tint} />
+    <MousePointer2 role="img" aria-label={activity} className={tint} />
   );
 }
 
-/** a viewer in full: the name, and the email where the session route sent one. */
-function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: string }) {
+/** a viewer in full: the name, the email where the session route sent one, and kick where it is offered. */
+function ViewerLines({ viewer, muted, onKick }: { viewer: SwoopNamedViewer; muted: string; onKick?: () => void }) {
   return (
     <span className="flex min-w-0 flex-col wrap-anywhere">
       <span>
@@ -169,6 +208,11 @@ function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: strin
         {viewer.you && ' (you)'}
       </span>
       {viewer.email && viewer.email !== viewer.full && <span className={cn('text-xs', muted)}>{viewer.email}</span>}
+      {onKick && (
+        <Button type="button" variant="ghost-destructive" size="sm" className="self-start" onClick={onKick}>
+          kick
+        </Button>
+      )}
     </span>
   );
 }
@@ -177,63 +221,168 @@ function ViewerLines({ viewer, muted }: { viewer: SwoopNamedViewer; muted: strin
  * who is in the session, beside the machine's name: a pill per viewer, this
  * tab's own marked "(you)", hovering one names them in full. the session route
  * sends an email to a site owner or admin only, and the pill shows what it was
- * sent.
+ * sent. a pill's edge turns cyan while its viewer moves the pointer, and it
+ * fills in while they click: only this tab's own clicks, as nothing the host
+ * sends says when anyone else's button is down.
+ *
+ * clicking a pill opens its menu: the same lines, and kick where the session
+ * route says this caller may. a kick asks first, then ends the session for
+ * everyone in it: the one it was for stops, and everyone else, this tab
+ * included, comes back on their own, so their pill goes when the roster does.
  *
  * a compact bar has no room for a row of them and a touch screen no hover, so
- * there one button with the count opens the same list. a pill is a button so
- * that pressing it never drags owlette swoop's window, whose title bar this is.
+ * there one button with the count opens the same list, kick and all. a pill is
+ * a button so that pressing it never drags owlette swoop's window, whose title
+ * bar this is.
  */
 function ViewerPills({ session, compact }: { session: SwoopSession | null; compact: boolean }) {
   const viewers = useSwoopViewerNames(session);
+  const activities = useSwoopViewerActivity(session);
   const placement = useBarMenuPlacement();
+  const [kicking, setKicking] = useState<SwoopNamedViewer | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [kickError, setKickError] = useState<string | null>(null);
   if (viewers.length === 0) return null;
+  const activityOf = (viewer: SwoopNamedViewer): SwoopViewerActivity => activities.get(viewer.id) ?? 'idle';
+  const kickOf = (viewer: SwoopNamedViewer) =>
+    viewer.kickable
+      ? () => {
+          setKickError(null);
+          setKicking(viewer);
+        }
+      : undefined;
+
+  const kick = async (viewer: SwoopNamedViewer) => {
+    if (!session) return;
+    setBusy(true);
+    try {
+      await kickSwoopViewer(session, viewer.id);
+      setKicking(null);
+    } catch (err) {
+      setKickError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // no toast once it lands: this tab's own page sees the bye and comes back, and fullscreen would hide one
+  const confirm = (
+    <Dialog
+      open={kicking !== null}
+      onOpenChange={(open) => {
+        if (!open && !busy) setKicking(null);
+      }}
+    >
+      {kicking && (
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>kick {kicking.full}?</DialogTitle>
+            <DialogDescription>
+              they leave the session now and can rejoin. to keep someone out, change their swoop mode in the
+              site&apos;s members section.
+            </DialogDescription>
+            {kickError && (
+              <p role="alert" className="text-sm text-destructive">
+                {kickError}
+              </p>
+            )}
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setKicking(null)} disabled={busy}>
+              cancel
+            </Button>
+            <Button variant="destructive" onClick={() => void kick(kicking)} disabled={busy}>
+              {busy ? 'kicking...' : 'kick'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      )}
+    </Dialog>
+  );
 
   if (compact) {
     return (
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={`${viewers.length} in this session`} className="gap-0.5">
-            <Users aria-hidden />
-            <span className="text-xs tabular-nums">{viewers.length}</span>
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent {...placement} align="start" className="w-auto max-w-[calc(100vw-1rem)] p-3">
-          <ul aria-label="in this session" className="space-y-2 text-sm">
-            {viewers.map((viewer) => (
-              <li key={viewer.id} className="flex items-start gap-2">
-                <ViewerIcon viewer={viewer} className="mt-0.5 size-4 shrink-0" />
-                <ViewerLines viewer={viewer} muted="text-muted-foreground" />
-              </li>
-            ))}
-          </ul>
-        </PopoverContent>
-      </Popover>
+      <>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="icon-sm" aria-label={`${viewers.length} in this session`} className="gap-0.5">
+              <Users aria-hidden />
+              <span className="text-xs tabular-nums">{viewers.length}</span>
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent {...placement} align="start" className="w-auto max-w-[calc(100vw-1rem)] p-3">
+            <ul aria-label="in this session" className="space-y-2 text-sm">
+              {viewers.map((viewer) => (
+                <li
+                  key={viewer.id}
+                  // the fill reaches into the popover's padding, so it clears the text and the row stays put
+                  className={cn('-mx-1 flex items-start gap-2 rounded-sm px-1', activityOf(viewer) === 'clicking' && CLICK_FILL)}
+                >
+                  <ViewerIcon viewer={viewer} activity={activityOf(viewer)} className="mt-0.5 size-4 shrink-0" />
+                  <ViewerLines viewer={viewer} muted="text-muted-foreground" onKick={kickOf(viewer)} />
+                </li>
+              ))}
+            </ul>
+          </PopoverContent>
+        </Popover>
+        {confirm}
+      </>
     );
   }
 
   return (
-    <ul aria-label="in this session" className="flex shrink-0 items-center gap-1 md:bar-side:flex-col">
-      {viewers.map((viewer) => (
-        <li key={viewer.id} className="flex">
-          <BarTooltip
-            // the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink
-            label={<ViewerLines viewer={viewer} muted="text-tooltip-foreground/70 dark:text-muted-foreground" />}
-          >
-            <Badge asChild variant="outline" className={cn('cursor-default', VERTICAL)}>
-              <button
-                type="button"
-                // what it shows, and what its eye says on screen
-                aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}`}
-              >
-                <ViewerIcon viewer={viewer} />
-                {viewer.short}
-                {viewer.you && ' (you)'}
-              </button>
-            </Badge>
-          </BarTooltip>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul aria-label="in this session" className="flex shrink-0 items-center gap-1 md:bar-side:flex-col">
+        {viewers.map((viewer) => {
+          const activity = activityOf(viewer);
+          return (
+            <li key={viewer.id} className="flex">
+              {/* every pill opens its menu, kickable or not: a laptop's touch screen gets this
+                  bar, and a tap there has no hover to read the full name with. kick is in the
+                  menu, never the tooltip, which takes no clicks. */}
+              <Popover>
+                <BarTooltip
+                  // the light tooltip is inverse ink, so its muted line comes from the tooltip's own ink
+                  label={<ViewerLines viewer={viewer} muted="text-tooltip-foreground/70 dark:text-muted-foreground" />}
+                >
+                  <PopoverTrigger asChild>
+                    <Badge
+                      asChild
+                      variant="outline"
+                      className={cn(
+                        'cursor-pointer',
+                        VERTICAL,
+                        activity !== 'idle' && 'border-accent-cyan',
+                        activity === 'clicking' && CLICK_FILL,
+                      )}
+                    >
+                      <button
+                        type="button"
+                        // what it shows, and what its eye and its light say on screen
+                        aria-label={`${viewer.short}${viewer.you ? ' (you)' : ''}${viewer.ctl ? '' : ', view only'}${activity === 'idle' ? '' : `, ${activity}`}`}
+                      >
+                        <ViewerIcon viewer={viewer} activity={activity} className={UPRIGHT} />
+                        {viewer.short}
+                        {viewer.you && ' (you)'}
+                      </button>
+                    </Badge>
+                  </PopoverTrigger>
+                </BarTooltip>
+                <PopoverContent
+                  {...placement}
+                  align="start"
+                  data-testid="viewer-menu"
+                  className="w-auto max-w-[calc(100vw-1rem)] p-3 text-sm"
+                >
+                  <ViewerLines viewer={viewer} muted="text-muted-foreground" onKick={kickOf(viewer)} />
+                </PopoverContent>
+              </Popover>
+            </li>
+          );
+        })}
+      </ul>
+      {confirm}
+    </>
   );
 }
 
@@ -512,7 +661,8 @@ export function SwoopToolbar({
           {machineId}
         </span>
 
-        <ViewerPills session={session} compact={compact} />
+        {/* keyed to this tab's seat: a kick asked about one session's viewer is not carried into the next */}
+        <ViewerPills key={session?.viewerId} session={session} compact={compact} />
 
         {badge && (
           <Badge variant={badge.tone} data-testid="session-badge" className={cn('shrink-0', VERTICAL)}>

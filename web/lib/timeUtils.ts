@@ -138,7 +138,7 @@ export function getBrowserTimezone(): string {
 }
 
 // Three timezone actors: machine (agent-reported `machine_timezone_iana`),
-// user (preferences), site (manage-sites). The user's `timeDisplayMode` picks
+// user (preferences), site (site settings). The user's `timeDisplayMode` picks
 // one frame for all absolute timestamps. Schedule editors ignore it — schedules
 // are wall-clock config tied to the physical machine, always shown in its tz.
 

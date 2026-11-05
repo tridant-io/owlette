@@ -9,9 +9,11 @@
  */
 
 import React from 'react';
-import { act, render, screen, cleanup, waitFor, within } from '@testing-library/react';
+import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
+import { tintOf } from '@/components/swoop/SwoopPresence';
+import { ACTIVITY_CLICK_MS, ACTIVITY_MOVE_MS, attach as attachActivity } from '@/lib/swoop/activity';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { attach as attachPresence } from '@/lib/swoop/presence';
@@ -338,7 +340,7 @@ describe('SwoopToolbar with others in the session', () => {
   /**
    * a live session the streamer has sent a roster on, the caller's own line in
    * control as an admin's is or watching as a member's is, with the names the
-   * session route answers that caller.
+   * session route answers that caller: an admin may kick anyone but their own seat.
    */
   function renderShared({ admin, alone = false }: { admin: boolean; alone?: boolean }) {
     fetchMock.mockResolvedValue({
@@ -347,8 +349,20 @@ describe('SwoopToolbar with others in the session', () => {
         ok: true,
         data: {
           viewers: [
-            { viewerId: 'viewer-ada', uid: 'uid_ada', displayName: 'Ada Lovelace', ...(admin ? { email: 'ada@example.test' } : {}) },
-            { viewerId: 'viewer-me', uid: 'uid_me', displayName: 'Bob Watcher', ...(admin ? { email: 'bob@example.test' } : {}) },
+            {
+              viewerId: 'viewer-ada',
+              uid: 'uid_ada',
+              displayName: 'Ada Lovelace',
+              ...(admin ? { email: 'ada@example.test' } : {}),
+              kickable: admin,
+            },
+            {
+              viewerId: 'viewer-me',
+              uid: 'uid_me',
+              displayName: 'Bob Watcher',
+              ...(admin ? { email: 'bob@example.test' } : {}),
+              kickable: false,
+            },
           ],
         },
       }),
@@ -441,6 +455,133 @@ describe('SwoopToolbar with others in the session', () => {
     const tip = await screen.findByRole('tooltip');
     expect(tip).toHaveTextContent('Ada Lovelace');
     expect(tip).toHaveTextContent('ada@example.test');
+    // a tooltip takes no clicks: kick is in the pill's menu
+    expect(tip).not.toHaveTextContent('kick');
+  });
+
+  /** the admin clicks Ada's pill, then kick in its menu; the confirm is open. */
+  async function askToKickAda(): Promise<HTMLElement> {
+    renderShared({ admin: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L., view only' }));
+    await userEvent.click(within(await screen.findByTestId('viewer-menu')).getByRole('button', { name: 'kick' }));
+    return screen.findByRole('dialog', { name: 'kick Ada Lovelace?' });
+  }
+
+  it("opens a pill's menu on a click: the full name, the email and, to an admin, kick for someone else", async () => {
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L., view only' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent('Ada Lovelace');
+    expect(menu).toHaveTextContent('ada@example.test');
+    // under the email
+    expect(within(menu).getByText('ada@example.test').nextElementSibling).toBe(
+      within(menu).getByRole('button', { name: 'kick' }),
+    );
+  });
+
+  it('opens your own pill’s menu too, with no kick in it', async () => {
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Bob W. (you)' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent('Bob Watcher (you)');
+    expect(menu).toHaveTextContent('bob@example.test');
+    expect(within(menu).queryByRole('button', { name: 'kick' })).toBeNull();
+  });
+
+  it("gives a member the full name in a pill's menu, and no kick", async () => {
+    renderShared({ admin: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L.' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent(/^Ada Lovelace$/);
+    expect(within(menu).queryByRole('button', { name: 'kick' })).toBeNull();
+  });
+
+  it('asks before it kicks, then posts the seat to the kick route and closes', async () => {
+    const dialog = await askToKickAda();
+    expect(dialog).toHaveTextContent(
+      "they leave the session now and can rejoin. to keep someone out, change their swoop mode in the site's members section.",
+    );
+    // the names read only: nothing is kicked before the confirm
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/kick$/), expect.anything());
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'kick' }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/sites/site-a/machines/TEC-B4A/swoop/sessions/sid-1/kick',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ viewerId: 'viewer-ada' }) }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeNull());
+  });
+
+  it("keeps the question open with the api's sentence when the kick is refused", async () => {
+    const dialog = await askToKickAda();
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ code: 'session_ended', detail: 'this session has already ended' }),
+    });
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'kick' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('this session has already ended');
+    expect(screen.getByRole('dialog', { name: 'kick Ada Lovelace?' })).toBe(dialog);
+    expect(within(dialog).getByRole('button', { name: 'kick' })).toBeEnabled();
+  });
+
+  it('cancel closes the question and kicks nobody', async () => {
+    const dialog = await askToKickAda();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'cancel' }));
+
+    expect(screen.queryByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/kick$/), expect.anything());
+  });
+
+  it("puts kick under the email in a phone's list, where the route says this caller may", async () => {
+    narrowWindow();
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: '2 in this session' }));
+    const list = await screen.findByRole('list', { name: 'in this session' });
+    const [ada, me] = within(list).getAllByRole('listitem');
+    expect(await within(ada).findByText('ada@example.test')).toBeInTheDocument();
+    expect(within(ada).getByText('ada@example.test').nextElementSibling).toBe(
+      within(ada).getByRole('button', { name: 'kick' }),
+    );
+    expect(within(me).queryByRole('button', { name: 'kick' })).toBeNull();
+
+    await userEvent.click(within(ada).getByRole('button', { name: 'kick' }));
+    expect(await screen.findByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeInTheDocument();
+  });
+
+  it('keeps the pointer and the eye in a pill upright on a side bar, where the pill turns', async () => {
+    renderShared({ admin: true });
+
+    // this tab controls, so its pill has the pointer; ada watches, so hers has the eye
+    const pointer = (await screen.findByRole('button', { name: 'Bob W. (you)' })).querySelector('svg');
+    const eye = screen.getByRole('button', { name: 'Ada L., view only' }).querySelector('svg');
+    expect(pointer).toHaveClass('lucide-mouse-pointer-2');
+    expect(eye).toHaveClass('lucide-eye');
+    for (const icon of [pointer!, eye!]) {
+      // the pill's text runs down a right bar and, turned half round, up a left one
+      expect(icon.parentElement).toHaveClass('md:bar-side:[writing-mode:vertical-rl]', 'md:bar-left:rotate-180');
+      // writing-mode leaves an svg upright, so a right bar needs nothing and a left bar's half turn is undone
+      expect([...icon.classList].filter((name) => /rotate|writing-mode/.test(name))).toEqual(['md:bar-left:rotate-180']);
+    }
+  });
+
+  it('leaves the icons in the compact list unturned, as the list itself is', async () => {
+    narrowWindow();
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: '2 in this session' }));
+    const icons = (await screen.findByRole('list', { name: 'in this session' })).querySelectorAll('svg');
+    expect(icons).toHaveLength(2);
+    // the list opens in a portal under the same <html>, where a left bar's variant would still turn them
+    for (const icon of icons) expect(icon).not.toHaveClass('md:bar-left:rotate-180');
   });
 });
 
@@ -630,5 +771,153 @@ describe('SwoopToolbar inside owlette swoop', () => {
       );
       expect(screen.queryByRole('button', { name: 'capture the mouse in fullscreen' })).toBeNull();
     });
+  });
+});
+
+/**
+ * a pill lights while its viewer moves the pointer, its edge and its pointer
+ * cyan: from the host's `vpos` for anyone else, and from this tab's own capture
+ * for its own. it fills in while this tab clicks; nothing the host sends says
+ * when anyone else's button is down.
+ */
+describe('SwoopToolbar while people move the pointer', () => {
+  const fetchMock = jest.fn();
+  let channels: Map<string, (data: unknown) => void>;
+  let ownInput: ((kind: 'move' | 'press') => void) | null = null;
+  let detachers: Array<() => void> = [];
+
+  beforeEach(() => {
+    jest.useFakeTimers();
+    (globalThis as unknown as { fetch: unknown }).fetch = fetchMock;
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        ok: true,
+        data: {
+          viewers: [
+            { viewerId: 'viewer-ada', uid: 'uid_ada', displayName: 'Ada Lovelace' },
+            { viewerId: 'viewer-me', uid: 'uid_me', displayName: 'Bob Watcher' },
+          ],
+        },
+      }),
+    });
+  });
+  afterEach(() => {
+    for (const detach of detachers) detach();
+    detachers = [];
+    ownInput = null;
+    jest.useRealTimers();
+    delete (globalThis as unknown as { fetch?: unknown }).fetch;
+    fetchMock.mockReset();
+  });
+
+  /** a live session with ada in control beside this tab, which controls too; its own moves are the test's to send. */
+  function renderLive() {
+    channels = new Map();
+    const session = {
+      siteId: 'site-a',
+      machineId: 'TEC-B4A',
+      sid: 'sid-lit',
+      viewerId: 'viewer-me',
+      ctl: true,
+      stage: document.createElement('div'),
+      onChannelMessage: (label: string, incoming: (data: unknown) => void) => {
+        channels.set(label, incoming);
+        return () => channels.delete(label);
+      },
+    } as unknown as SwoopSession;
+    const capture = {
+      onPointerInput: (listener: (kind: 'move' | 'press') => void) => {
+        ownInput = listener;
+        return () => {
+          ownInput = null;
+        };
+      },
+    };
+    detachers.push(attachActivity(session, capture), attachPresence(session));
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SwoopToolbar
+          session={session}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    const roster = [
+      { id: 'viewer-ada', name: 'uid_ada', ctl: true },
+      { id: 'viewer-me', name: 'uid_me', ctl: true },
+    ];
+    act(() => channels.get('swoop-control')?.(JSON.stringify({ t: 'roster', viewers: roster, tsUs: 1 })));
+  }
+
+  const adaMoves = () =>
+    act(() => channels.get('swoop-cursor')?.(JSON.stringify({ t: 'vpos', viewer: 'viewer-ada', x: 0.5, y: 0.5, tsUs: 1 })));
+
+  it("lights the pill of someone else moving the pointer, on a side bar's turned pill too, and says so", async () => {
+    renderLive();
+    // the names land first: waiting runs the clock that puts a light out
+    await screen.findByRole('button', { name: 'Ada L.' });
+
+    adaMoves();
+    const ada = screen.getByRole('button', { name: 'Ada L., moving' });
+    expect(ada).toHaveClass('border-accent-cyan', 'md:bar-side:[writing-mode:vertical-rl]');
+    expect(ada).not.toHaveClass('bg-accent-cyan/20');
+    expect(ada.querySelector('svg')).toHaveClass('text-accent-cyan');
+    expect(screen.getByRole('button', { name: 'Bob W. (you)' })).not.toHaveClass('border-accent-cyan');
+
+    act(() => jest.advanceTimersByTime(ACTIVITY_MOVE_MS));
+    const resting = screen.getByRole('button', { name: 'Ada L.' });
+    expect(resting).not.toHaveClass('border-accent-cyan');
+    // back in the tint her pointer has on the picture
+    expect(resting.querySelector('svg')).toHaveClass(tintOf('viewer-ada'));
+    expect(resting.querySelector('svg')).not.toHaveClass('text-accent-cyan');
+  });
+
+  it("fills your own pill while you click, its pointer in the pill's ink, and lights it while you move", async () => {
+    renderLive();
+    await screen.findByRole('button', { name: 'Bob W. (you)' });
+
+    act(() => ownInput?.('move'));
+    expect(screen.getByRole('button', { name: 'Bob W. (you), moving' })).toHaveClass('border-accent-cyan');
+
+    act(() => ownInput?.('press'));
+    const clicking = screen.getByRole('button', { name: 'Bob W. (you), clicking' });
+    expect(clicking).toHaveClass('border-accent-cyan', 'bg-accent-cyan/20');
+    expect(clicking.querySelector('svg')).toHaveClass('text-foreground');
+    expect(clicking.querySelector('svg')).not.toHaveClass('text-accent-cyan');
+
+    // the click goes out first, and the move it came with after it
+    act(() => jest.advanceTimersByTime(ACTIVITY_CLICK_MS));
+    expect(screen.getByRole('button', { name: 'Bob W. (you), moving' })).not.toHaveClass('bg-accent-cyan/20');
+    act(() => jest.advanceTimersByTime(ACTIVITY_MOVE_MS - ACTIVITY_CLICK_MS));
+    expect(screen.getByRole('button', { name: 'Bob W. (you)' })).not.toHaveClass('border-accent-cyan');
+  });
+
+  it("lights the rows in a phone's list the same way, and says so to a screen reader there", async () => {
+    narrowWindow();
+    renderLive();
+    // opened at once, so the first wait is the one for the names, which then land inside it
+    fireEvent.click(screen.getByRole('button', { name: '2 in this session' }));
+    const list = screen.getByRole('list', { name: 'in this session' });
+    await within(list).findByText('Ada Lovelace');
+    expect(within(list).queryByRole('img')).toBeNull();
+
+    adaMoves();
+    act(() => ownInput?.('press'));
+    const moving = within(list).getByRole('img', { name: 'moving' });
+    expect(moving).toHaveClass('text-accent-cyan');
+    expect(moving.closest('li')).not.toHaveClass('bg-accent-cyan/20');
+    const clicking = within(list).getByRole('img', { name: 'clicking' });
+    expect(clicking).toHaveClass('text-foreground');
+    expect(clicking.closest('li')).toHaveClass('bg-accent-cyan/20');
+
+    act(() => jest.advanceTimersByTime(ACTIVITY_MOVE_MS));
+    expect(within(list).queryByRole('img')).toBeNull();
   });
 });

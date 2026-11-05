@@ -10,7 +10,8 @@ export type DisplayedRole = 'owner' | 'admin' | 'member';
  * customer looking at their own site has no business learning that tier exists.
  * It therefore collapses into `admin`, which is what it behaves as on this site.
  * The string `superadmin` must never reach the screen — no badge, tooltip, or
- * aria label anywhere on /admin/members.
+ * aria label anywhere on any site-scoped surface (the site list, the members
+ * section).
  */
 export function displayRole(role: SiteMemberRole): DisplayedRole {
   if (role === 'owner') return 'owner';

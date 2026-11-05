@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
 /**
- * /admin/members role labelling.
+ * site-scoped role labelling.
  *
  * Guards rosco's rule: `superadmin` is internal vocabulary and must never reach
  * a customer's screen. A superadmin listed on a site reads as `admin` — the tier
@@ -9,7 +9,7 @@
  * rather than in front of a customer.
  */
 
-import { displayRole } from '@/app/admin/members/displayRole';
+import { displayRole } from '@/components/admin/sites/displayRole';
 
 describe('displayRole', () => {
   it('keeps owner distinct', () => {

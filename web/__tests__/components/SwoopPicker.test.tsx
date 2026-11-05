@@ -10,7 +10,10 @@
  * browser a ready card's corner button opens the machine in owlette swoop
  * (2.7). the machines are a grid of up to four columns (2.10). inside owlette
  * swoop a card opens the session in the same window, and a right-click or
- * shift+enter in a new one (2.11b).
+ * shift+enter in a new one (2.11b). the site row's sites are a popover with the
+ * site filter past ten sites, behind a trigger that is still a combobox named
+ * site. a card names the people in its machine's session, from the seats the
+ * server mirrors onto the machine.
  */
 
 import React from 'react';
@@ -114,13 +117,12 @@ describe('SwoopPicker', () => {
   it('opens a ready machine the way the dashboard does', async () => {
     const user = userEvent.setup();
     const open = jest.spyOn(window, 'open').mockReturnValue(null);
-    machines = [machine('kiosk.lobby', { osFamily: 'linux', swoopViewers: 2 })];
+    machines = [machine('kiosk.lobby', { osFamily: 'linux' })];
     renderPicker();
 
     const ready = await screen.findByTestId('swoop-picker-machine-kiosk.lobby');
     expect(ready).toBeEnabled();
     expect(ready).toHaveTextContent('linux');
-    expect(within(ready).getByText('2')).toBeInTheDocument();
     expect(screen.queryByTestId('swoop-picker-reason-kiosk.lobby')).toBeNull();
 
     await user.click(ready);
@@ -214,7 +216,7 @@ describe('SwoopPicker', () => {
     expect(card('m1')).toBeDisabled();
     expect(reason('m1')).toHaveTextContent('swoop is off for this site');
     const link = within(reason('m1')).getByRole('link', { name: 'open site settings' });
-    expect(link).toHaveAttribute('href', '/dashboard?settings=site-1');
+    expect(link).toHaveAttribute('href', '/admin/sites/site-1?section=swoop');
     expect(reason('m1')).not.toHaveTextContent('ask a site owner');
   });
 
@@ -498,6 +500,178 @@ describe('SwoopPicker', () => {
     sites = [{ id: SITE, name: 'Site One' }];
     renderPicker();
     expect(screen.getByText('no machines in this site yet')).toBeInTheDocument();
+  });
+
+  it('lists the sites in a popover and switches to the one picked', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = [
+      { id: SITE, name: 'Site One' },
+      { id: 'site-2', name: 'Site Two' },
+    ];
+    machines = [machine('m1')];
+    renderPicker();
+
+    const trigger = screen.getByRole('combobox', { name: 'site' });
+    expect(trigger).toBe(screen.getByTestId('swoop-picker-site'));
+    expect(trigger).toHaveTextContent('Site One');
+    await user.click(trigger);
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    // two sites: no filter
+    expect(within(list).queryByRole('textbox')).toBeNull();
+    expect(within(list).getByRole('button', { name: 'Site One' })).toHaveAttribute('aria-current', 'true');
+    await user.click(within(list).getByRole('button', { name: 'Site Two' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(trigger).toHaveTextContent('Site Two');
+    expect(machinesSiteId).toBe('site-2');
+    expect(updateLastSite).toHaveBeenCalledWith('site-2');
+  });
+
+  const elevenSites = () => [
+    { id: SITE, name: 'Site One' },
+    ...Array.from({ length: 10 }, (_, i) => ({ id: `harbor-${i}`, name: `Harbor ${i}` })),
+  ];
+
+  it('past ten sites the list opens on the site filter, and enter picks the first match', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = elevenSites();
+    machines = [machine('m1')];
+    renderPicker();
+
+    // down opens the list, as it did on the select
+    screen.getByTestId('swoop-picker-site').focus();
+    await user.keyboard('{ArrowDown}');
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    const filter = within(list).getByRole('textbox', { name: 'filter sites' });
+    await waitFor(() => expect(filter).toHaveFocus());
+    await user.keyboard('harbor 7');
+    expect(within(list).getAllByRole('button').map((button) => button.textContent)).toEqual(['Harbor 7']);
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(screen.getByTestId('swoop-picker-site')).toHaveTextContent('Harbor 7');
+    expect(machinesSiteId).toBe('harbor-7');
+    expect(updateLastSite).toHaveBeenCalledWith('harbor-7');
+  });
+
+  it('escape clears the site filter and keeps the list open; the next escape closes it', async () => {
+    const user = userEvent.setup();
+    updateLastSite.mockClear();
+    sites = elevenSites();
+    machines = [machine('m1')];
+    renderPicker();
+
+    await user.click(screen.getByTestId('swoop-picker-site'));
+    const list = await screen.findByRole('dialog', { name: 'sites' });
+    const filter = within(list).getByRole('textbox', { name: 'filter sites' });
+    await waitFor(() => expect(filter).toHaveFocus());
+    await user.keyboard('harbor');
+    await user.keyboard('{Escape}');
+
+    expect(filter).toHaveValue('');
+    expect(screen.getByRole('dialog', { name: 'sites' })).toBe(list);
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
+    expect(screen.getByTestId('swoop-picker-site')).toHaveFocus();
+    expect(updateLastSite).not.toHaveBeenCalled();
+  });
+});
+
+describe('SwoopPicker — who is in the session', () => {
+  const ada = { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true };
+  const bob = { uid: 'uid-bob', displayName: 'Bob Watcher', ctl: false };
+  /** the people beside a card's machine name: the span their full names hover on. */
+  const peopleOn = (id: string, everyone: string) => within(card(id)).getByTitle(everyone);
+  /** the icon drawn before a short name. */
+  const iconOf = (name: HTMLElement) => name.parentElement!.querySelector('svg');
+
+  it('names one in control with a pointer and one watching with an eye, beside the machine', async () => {
+    machines = [machine('m1', { swoopViewers: 2, swoopSeats: [ada, bob] })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const people = peopleOn('m1', 'Ada Lovelace, Bob Watcher');
+    expect(iconOf(within(people).getByText('Ada L.'))).toHaveClass('lucide-mouse-pointer-2');
+    expect(iconOf(within(people).getByText('Bob W.'))).toHaveClass('lucide-eye');
+    expect(within(people).getByText('2 in the session: Ada Lovelace, Bob Watcher')).toHaveClass('sr-only');
+    // a screen reader hears the sentence, not the short names drawn for the eye
+    expect(card('m1')).toHaveAccessibleName(/2 in the session: Ada Lovelace, Bob Watcher/);
+    expect(card('m1')).not.toHaveAccessibleName(/Ada L[.]/);
+    // on the right of the name row, and never wider than its share of it
+    // on the second row beside the platform, at its end: the name's row stays the name's
+    expect(people).toHaveClass('ml-auto', 'justify-end');
+    expect(people.parentElement).toHaveTextContent(/^windows/);
+    expect(screen.getByText('m1')).toHaveClass('flex-1', 'truncate');
+  });
+
+  it('shows two people and counts the rest', async () => {
+    const cy = { uid: 'uid-cy', displayName: 'Cy Third', ctl: false };
+    machines = [machine('m1', { swoopViewers: 3, swoopSeats: [ada, bob, cy] })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const people = peopleOn('m1', 'Ada Lovelace, Bob Watcher, Cy Third');
+    expect(within(people).getByText('+1')).toBeInTheDocument();
+    expect(within(people).queryByText('Cy T.')).toBeNull();
+    expect(within(people).getByText('3 in the session: Ada Lovelace, Bob Watcher, Cy Third')).toBeInTheDocument();
+  });
+
+  it('marks your own account (you)', async () => {
+    machines = [machine('m1', { swoopViewers: 2, swoopSeats: [{ uid: 'u1', displayName: 'Una One', ctl: true }, bob] })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const people = peopleOn('m1', 'Una One (you), Bob Watcher');
+    expect(within(people).getByText('Una O. (you)')).toBeInTheDocument();
+    expect(within(people).getByText('Bob W.')).toBeInTheDocument();
+    expect(within(people).getByText('2 in the session: Una One (you), Bob Watcher')).toBeInTheDocument();
+  });
+
+  it('calls someone with no name viewer', async () => {
+    machines = [machine('m1', { swoopViewers: 1, swoopSeats: [{ uid: 'uid-anon', displayName: null, ctl: false }] })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const people = peopleOn('m1', 'viewer');
+    expect(within(people).getByText('viewer')).toBeInTheDocument();
+    expect(within(people).getByText('1 in the session: viewer')).toBeInTheDocument();
+  });
+
+  it('names one person in two tabs once, in control if either tab is', async () => {
+    machines = [machine('m1', { swoopViewers: 2, swoopSeats: [bob, { ...bob, ctl: true }] })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    const people = peopleOn('m1', 'Bob Watcher');
+    expect(within(people).getAllByText('Bob W.')).toHaveLength(1);
+    expect(iconOf(within(people).getByText('Bob W.'))).toHaveClass('lucide-mouse-pointer-2');
+    expect(within(people).getByText('1 in the session: Bob Watcher')).toBeInTheDocument();
+  });
+
+  it('names nobody on an offline or incapable card, whatever the mirror says, or when nobody is in', async () => {
+    machines = [
+      machine('m-offline', { online: false, swoopViewers: 1, swoopSeats: [ada] }),
+      machine('m-old', { capabilities: {}, swoopViewers: 1, swoopSeats: [ada] }),
+      machine('m-empty', { swoopViewers: 0, swoopSeats: [] }),
+    ];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m-empty');
+    for (const id of ['m-offline', 'm-old', 'm-empty']) {
+      expect(card(id)).not.toHaveTextContent(/Ada|in the session/);
+    }
+  });
+
+  it('shows no bare count: a machine with a count and no seats shows nothing', async () => {
+    machines = [machine('m1', { swoopViewers: 2 })];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    expect(card('m1')).not.toHaveTextContent(/2|watching|in the session/);
   });
 });
 

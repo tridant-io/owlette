@@ -22,7 +22,6 @@ interface CreateSiteDialogProps {
   onCreateSite: (
     siteId: string,
     siteName: string,
-    userId: string,
     timezone?: string,
     schedulesFollowSiteTime?: boolean,
   ) => Promise<string>;
@@ -146,22 +145,22 @@ export function CreateSiteDialog({
 
   const handleCreateSite = async () => {
     if (!newSiteName.trim()) {
-      toast.error('Please enter a site name');
+      toast.error('enter a site name');
       return;
     }
 
     if (!newSiteId.trim()) {
-      toast.error('Site ID is missing');
+      toast.error('the site ID is missing');
       return;
     }
 
     if (!user) {
-      toast.error('You must be logged in to create a site');
+      toast.error('sign in to create a site');
       return;
     }
 
     if (availabilityStatus !== 'available') {
-      toast.error('Please choose an available Site ID');
+      toast.error('choose an available site ID');
       return;
     }
 
@@ -179,11 +178,10 @@ export function CreateSiteDialog({
       const createdSiteId = await onCreateSite(
         newSiteId,
         newSiteName,
-        user.uid,
         resolvedTimezone || undefined,
         resolvedTimezone ? true : undefined,
       );
-      toast.success(`Site "${newSiteName}" created successfully!`);
+      toast.success('site created', { description: `${newSiteName} is ready for its first machine.` });
       setNewSiteId('');
       setNewSiteName('');
       setAvailabilityStatus('idle');
@@ -195,7 +193,7 @@ export function CreateSiteDialog({
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(message || 'Failed to create site');
+      toast.error('could not create the site', { description: message || 'try again in a moment.' });
     } finally {
       setIsCreating(false);
     }

@@ -9,7 +9,7 @@
  * `__tests__/lib/talons/store.test.ts`; this is the mirror.
  */
 
-import { eligibleTalonSuccessors } from '@/lib/talonSuccessors';
+import { eligibleTalonSuccessors, siteTalonSuccessors } from '@/lib/talonSuccessors';
 
 const SITE = 'site-a';
 
@@ -73,6 +73,48 @@ describe('eligibleTalonSuccessors', () => {
         { uid: 'u1', displayName: 'Ada', role: 'admin', sites: [SITE] },
         { uid: 'u2', role: 'admin', sites: [SITE] },
       ], { siteId: SITE }),
+    ).toEqual([
+      { uid: 'u1', label: 'Ada' },
+      { uid: 'u2', label: 'u2' },
+    ]);
+  });
+});
+
+describe('siteTalonSuccessors', () => {
+  // shaped like the rows GET /api/sites/{siteId}/members returns: `role` is the
+  // site role from the member row, `globalRole` the account's own
+  const MEMBERS = [
+    { uid: 'zoe-owner', email: 'zoe@example.com', displayName: null, role: 'owner', globalRole: 'member' },
+    { uid: 'bea-admin', email: 'Bea@example.com', displayName: null, role: 'admin', globalRole: 'member' },
+    { uid: 'amy-admin', email: 'amy@example.com', displayName: null, role: 'admin', globalRole: 'admin' },
+    { uid: 'mem', email: 'mem@example.com', displayName: null, role: 'member', globalRole: 'admin' },
+  ];
+
+  it("offers the site's owners and admins, in label order, ignoring case", () => {
+    expect(siteTalonSuccessors(MEMBERS)).toEqual([
+      { uid: 'amy-admin', label: 'amy@example.com' },
+      { uid: 'bea-admin', label: 'Bea@example.com' },
+      { uid: 'zoe-owner', label: 'zoe@example.com' },
+    ]);
+  });
+
+  it('reads the site role on the row, not the global role', () => {
+    const uids = siteTalonSuccessors(MEMBERS).map((c) => c.uid);
+    expect(uids).not.toContain('mem');
+    expect(uids).toContain('bea-admin');
+  });
+
+  it('never offers the departing member as their own successor', () => {
+    const uids = siteTalonSuccessors(MEMBERS, 'zoe-owner').map((c) => c.uid);
+    expect(uids).toEqual(['amy-admin', 'bea-admin']);
+  });
+
+  it('falls back to display name, then uid, when there is no email', () => {
+    expect(
+      siteTalonSuccessors([
+        { uid: 'u1', email: null, displayName: 'Ada', role: 'admin' },
+        { uid: 'u2', email: null, displayName: null, role: 'owner' },
+      ]),
     ).toEqual([
       { uid: 'u1', label: 'Ada' },
       { uid: 'u2', label: 'u2' },

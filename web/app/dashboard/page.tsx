@@ -55,6 +55,7 @@ import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -70,10 +71,6 @@ const DisplayLayoutPanel = dynamic(
 // Closed until asked for, so they stay out of the dashboard's first bundle.
 const AccountSettingsDialog = dynamic(
   () => import('@/components/AccountSettingsDialog').then((m) => ({ default: m.AccountSettingsDialog })),
-  { ssr: false, loading: () => null },
-);
-const ManageSitesDialog = dynamic(
-  () => import('@/components/ManageSitesDialog').then((m) => ({ default: m.ManageSitesDialog })),
   { ssr: false, loading: () => null },
 );
 const CreateSiteDialog = dynamic(
@@ -118,13 +115,11 @@ export default function DashboardPage() {
 
   const router = useRouter();
   const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
-  const { sites, loading: sitesLoading, createSite, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
+  const { sites, loading: sitesLoading, createSite, updateSite } = useSites(user?.uid, userSites, isSuperadmin);
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [viewType, setViewType] = useState<ViewType>('card');
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -770,19 +765,6 @@ export default function DashboardPage() {
   // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
-      // `?settings=<siteId>`, the swoop viewer's way back to the switch: that site,
-      // with its editor open for an admin. read once, then dropped from the url.
-      const settingsFor = new URLSearchParams(window.location.search).get('settings');
-      if (settingsFor) window.history.replaceState(null, '', window.location.pathname);
-      if (settingsFor && sites.some(s => s.id === settingsFor)) {
-        setCurrentSiteId(settingsFor);
-        updateLastSite(settingsFor);
-        if (isSiteAdmin(settingsFor)) {
-          setManageEditSiteId(settingsFor);
-          setManageDialogOpen(true);
-        }
-        return;
-      }
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');
       if (savedSite && sites.find(s => s.id === savedSite)) {
         setCurrentSiteId(savedSite);
@@ -790,7 +772,7 @@ export default function DashboardPage() {
         setCurrentSiteId(sites[0].id);
       }
     }
-  }, [sites, sitesLoading, currentSiteId, lastSiteId, updateLastSite, isSiteAdmin]);
+  }, [sites, sitesLoading, currentSiteId, lastSiteId]);
 
   const handleSiteChange = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -923,10 +905,7 @@ export default function DashboardPage() {
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
   const onSwoopApp = useStableCallback(openSwoopApp);
-  const onSiteSettings = useStableCallback(() => {
-    setManageEditSiteId(currentSiteId);
-    setManageDialogOpen(true);
-  });
+  const onSiteSettings = useStableCallback(() => router.push(siteSettingsPath(currentSiteId, 'swoop')));
   const swoopSettings = useSwoopSettings(currentSiteId);
   // not while loading: the hook reads off until the snapshot lands.
   const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
@@ -1024,44 +1003,8 @@ export default function DashboardPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={onSiteSettings}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        machineCount={machines.length}
-        currentUserId={user?.uid}
-        isSuperadmin={isSuperadmin}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          // Deleting the current site: switch to another, or clear the selection
-          // when that was the last one. Without the else, currentSiteId keeps
-          // pointing at a site that no longer exists and every child query runs
-          // against a dead id — reachable now that deleting your last site is
-          // allowed (the browser-only guard was removed, see
-          // dev/active/per-site-roles/).
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            } else {
-              setCurrentSiteId('');
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
       />
 
       <CreateSiteDialog

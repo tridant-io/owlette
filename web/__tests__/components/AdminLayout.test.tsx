@@ -13,7 +13,7 @@ import userEvent from '@testing-library/user-event';
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), prefetch: jest.fn() }),
-  usePathname: () => '/admin/members',
+  usePathname: () => '/admin/sites',
 }));
 
 jest.mock('next/image', () => ({
@@ -43,7 +43,7 @@ function renderLayout() {
   const user = userEvent.setup();
   render(
     <AdminLayout>
-      <h1>members</h1>
+      <h1>sites</h1>
     </AdminLayout>,
   );
   return user;
@@ -57,20 +57,20 @@ describe('admin layout', () => {
   it('leaves the page its single h1', () => {
     renderLayout();
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('members');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('sites');
   });
 
   it('marks the active destination as the current page', () => {
     renderLayout();
     const active = screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page');
     expect(active).toHaveLength(1);
-    expect(active[0]).toHaveAttribute('href', '/admin/members');
+    expect(active[0]).toHaveAttribute('href', '/admin/sites');
   });
 
   it('names the collapsed rail links, whose text is hidden', () => {
     collapsed = true;
     renderLayout();
-    expect(screen.getByRole('link', { name: 'members' })).toHaveAttribute('href', '/admin/members');
+    expect(screen.getByRole('link', { name: 'sites' })).toHaveAttribute('href', '/admin/sites');
     expect(screen.getByRole('link', { name: 'installers' })).toHaveAttribute('href', '/admin/installers');
   });
 

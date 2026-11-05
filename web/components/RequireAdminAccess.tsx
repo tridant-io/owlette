@@ -1,16 +1,17 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/lib/toast';
 
 /**
  * Gate for the admin panel. `minRole` names the tier that may see the wrapped
- * subtree; anyone below it is bounced to /dashboard with an error toast.
+ * subtree; anyone below it is bounced to /dashboard, with an error toast unless
+ * the gate had already let them in.
  *
  * `'superadmin'` is the platform tier (installers, presets, users, email).
- * `'admin'` is the SITE-SCOPED half (members, tokens, schedules, alerts,
+ * `'admin'` is the SITE-SCOPED half (sites, tokens, schedules, alerts,
  * webhooks), and since wave 5.1 the global role no longer expresses it — a
  * global `admin` with no membership grants nothing. The gate is now
  * "administers at least one site", which is what those pages actually require:
@@ -27,13 +28,17 @@ export default function RequireAdminAccess({
   minRole: 'admin' | 'superadmin';
   children: React.ReactNode;
 }) {
-  const { user, loading, isSuperadmin, administersAnySite } = useAuth();
+  const { user, loading, isSuperadmin, administersAnySite, userSites } = useAuth();
   const router = useRouter();
+  const admitted = useRef(false);
 
+  // loading ends with the user doc while the membership rows may still be on
+  // their way; deciding before userSites resolves bounces a site admin on a hard load
+  const resolving = loading || (!!user && userSites === undefined);
   const allowed = minRole === 'admin' ? administersAnySite : isSuperadmin;
 
   useEffect(() => {
-    if (loading) return;
+    if (resolving) return;
 
     // The proxy should already have redirected; double-check for safety.
     if (!user) {
@@ -41,15 +46,21 @@ export default function RequireAdminAccess({
       return;
     }
 
-    if (!allowed) {
+    if (allowed) {
+      admitted.current = true;
+      return;
+    }
+
+    // a site admin who just deleted their last site is leaving, not intruding
+    if (!admitted.current) {
       toast.error('access denied', {
         description: 'you do not have permission to access this page.',
       });
-      router.push('/dashboard');
     }
-  }, [user, loading, allowed, router]);
+    router.push('/dashboard');
+  }, [user, resolving, allowed, router]);
 
-  if (loading || !user || !allowed) {
+  if (resolving || !user || !allowed) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-background">
         <div className="text-center">

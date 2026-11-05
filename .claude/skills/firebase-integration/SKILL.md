@@ -16,9 +16,10 @@ The main paths (`firestore.rules` has every collection):
 ```
 firestore/
 ├── sites/{siteId}/                # name, timezone, owner (legacy), createdAt
-│   ├── members/{uid}/             # THE site-access grant. { uid, role, status, addedAt, addedBy }
+│   ├── members/{uid}/             # THE site-access grant. { uid, role, status, addedAt, addedBy, swoop? }
 │   │   # role: 'owner' | 'admin' | 'member'. Written by lib/membership.server.ts and the
 │   │   # ownership transfer (lib/actions/transferSiteOwnership.server.ts).
+│   │   # `swoop` is the person's swoop mode, absent = by role, written only by lib/membership.server.ts.
 │   │   # `uid` is duplicated as a field so the client can run
 │   │   # collectionGroup('members').where('uid','==',me) — rules cannot prove a doc id.
 │   ├── machines/{machineId}       # ONE doc the agent heartbeats into — these are fields, not subdocs:

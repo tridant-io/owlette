@@ -203,6 +203,7 @@ import {
 import { allTools } from '@/lib/mcp-tools';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { MAX_TARGET_MACHINES } from '@/lib/hoot/target';
+import { Capability, hasCapability, type UserActor } from '@/lib/capabilities';
 
 beforeEach(() => {
   mockCreateProcess.mockReset();
@@ -2155,6 +2156,24 @@ describe('verifyUserSiteAccess', () => {
     expect(access.siteRole).toBe('member');
   });
 
+  it('returns the swoop mode the member row carries, beside the site role', async () => {
+    const heldToView = makeAccessDb({
+      users: { role: 'member' },
+      sites: {},
+      member: { ...member('admin'), swoop: 'view' },
+    });
+    await expect(verifyUserSiteAccess(heldToView, 'u1', 's1')).resolves.toMatchObject({
+      siteRole: 'admin',
+      swoopMode: 'view',
+    });
+
+    const byRole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('admin') });
+    await expect(verifyUserSiteAccess(byRole, 'u1', 's1')).resolves.toMatchObject({
+      siteRole: 'admin',
+      swoopMode: null,
+    });
+  });
+
   it('a GLOBAL admin with no membership is refused outright', async () => {
     // The headline change. This user previously reached the site through
     // `sites[]` and held tier-3 Hoot on it; the global role now grants nothing.
@@ -2203,6 +2222,51 @@ describe('verifyUserSiteAccess', () => {
     const error = await verifyUserSiteAccess(db, 'u1', 's1').catch((err: unknown) => err);
     expect(error).toBeInstanceOf(SiteAccessError);
     expect((error as SiteAccessError).code).toBe(code);
+  });
+});
+
+// the hoot actor
+
+/**
+ * the actor hoot's tools act as, built from the access check the way a turn
+ * builds it. an actor that dropped the swoop mode would hand an admin held to
+ * view their control back.
+ */
+describe('the hoot actor', () => {
+  /** the actor `update_process` hands its action, for a caller with this member row. */
+  async function hootActorFor(row: Record<string, unknown>): Promise<UserActor> {
+    const access = await verifyUserSiteAccess(
+      makeAccessDb({ users: { role: 'member' }, sites: {}, member: row }),
+      'u1',
+      's1',
+    );
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+    const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+      userId: 'u1',
+      userRole: access.role,
+      userSiteRole: access.siteRole,
+      userSwoopMode: access.swoopMode,
+    });
+    await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+    return mockUpdateProcess.mock.calls[0][0].actor;
+  }
+
+  it('carries an admin held to view, so it never controls', async () => {
+    const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active', swoop: 'view' });
+
+    expect(actor.swoopModes?.s1).toBe('view');
+    expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
+    // the mode changes swoop and nothing else
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1')).toBe(true);
+  });
+
+  it('builds the same actor as before from a row with no mode', async () => {
+    const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active' });
+
+    expect(actor).toEqual({ type: 'user', userId: 'u1', role: 'member', siteRoles: { s1: 'admin' } });
+    expect(actor).not.toHaveProperty('swoopModes');
   });
 });
 

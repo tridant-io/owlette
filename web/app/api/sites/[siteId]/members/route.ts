@@ -3,7 +3,9 @@
  *      that actually grant access, and derives each person's role FROM THE ROW.
  *      It used to query `users where sites array-contains {siteId}` and compute
  *      the per-site role from the GLOBAL role, which reported a real site-admin
- *      as a plain member forever.
+ *      as a plain member forever. each member also carries `swoop`, their own
+ *      swoop mode: null when the role decides (always, on the owner's row), and
+ *      `none` for a malformed value, so a hand edit never reads as a grant.
  *
  * POST /api/sites/{siteId}/members  `{uid | email, role}` — writes the member
  *      row through `addMember`, so the requested role is STORED rather than
@@ -12,13 +14,16 @@
  *      knows a colleague's address, not their uid) and resolves through Admin
  *      Auth to the same uid path. Idempotency-Key required. `roleHonored` says
  *      whether the row was actually written at the requested role — adding an
- *      existing member is a 200 no-op, not a promotion.
+ *      existing member is a 200 no-op, not a promotion. the body may also carry
+ *      `swoop` (`none`, `view` or `control`), written on a new row only; the
+ *      no-op writes no mode either.
  *
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
  * POST. Site access is membership — a global `admin` role grants nothing here.
  * POST additionally re-checks the capability IN the handler, where the
- * `capability_enforcement` kill switch cannot skip it — see the comment there.
+ * `capability_enforcement` kill switch cannot skip it — see
+ * `refuseWithoutSiteMemberManage` in `_shared.ts`.
  *
  * api-sprint wave 3 track 3B (users-api / site-members).
  */
@@ -35,12 +40,14 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
-import { Capability, hasCapability } from '@/lib/capabilities';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
+  refuseWithoutSiteMemberManage,
 } from '../../../_shared';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
+import { deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { SWOOP_MODES, type SwoopMode } from '@/lib/swoopMode';
 
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
 const VALID_ADD_ROLES = new Set(['member', 'admin']);
@@ -53,6 +60,7 @@ interface AddMemberBody {
   uid?: unknown;
   email?: unknown;
   role?: unknown;
+  swoop?: unknown;
 }
 
 /** Which identifier the caller supplied; resolved to a uid before any write. */
@@ -108,6 +116,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
       role: MemberRole;
       globalRole: string;
       displayName: string | null;
+      swoop: SwoopMode | null;
     }> = [];
 
     const activeRows = memberRowsSnap.docs.filter(
@@ -135,6 +144,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
         globalRole: typeof data.role === 'string' ? data.role : 'member',
         displayName:
           typeof data.displayName === 'string' ? data.displayName : null,
+        swoop: deriveSwoopMode(row.data() ?? null, rowRole),
       });
     });
 
@@ -159,37 +169,17 @@ export const POST = authorizedSiteHandler<RouteParams>({
   try {
     const { siteId } = await routeContext.params;
 
-    // CAPABILITY, RE-CHECKED IN THE HANDLER — deliberately not a duplicate of
-    // the wrapper's check, because the wrapper's is SKIPPED while
-    // `capability_enforcement` is false (the 4h operator break-glass in
-    // `global/security_config`) and SITE_MEMBER_MANAGE is not in
-    // BYPASS_EXEMPT_CAPABILITIES. Browser sessions never reach `requireScope`
-    // either, so during that window a plain site `member` reached this handler
-    // and could write a membership row for any account at any role. Nothing
-    // below stopped it: the owner guard refuses only the OWNER as a target, and
-    // `addMember`'s create() refuses only a target that ALREADY has a row.
-    //
-    // What makes that worse than an ordinary bypass is that the grant OUTLIVES
-    // the window. The added account is a site admin on merit, so it keeps
-    // MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE once the switch is back
-    // on, and can then promote the original caller through the sibling PATCH
-    // with enforcement fully restored. Time-boxed break-glass, permanent admin.
-    //
     // Placed before the body read and before `withIdempotency`: the decision
     // depends on nothing but actor and site, and `withIdempotency` saves
     // whatever the handler returns — a 403 stored under a key would be replayed
     // at a legitimate later call.
-    if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId)) {
-      return problem({
-        type: ProblemType.Forbidden,
-        title: 'forbidden',
-        status: 403,
-        detail:
-          'adding a member requires the SITE_MEMBER_MANAGE capability on this site',
-        instance: `/api/sites/${siteId}/members`,
-        code: 'site_member_manage_required',
-      });
-    }
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'adding a member',
+      `/api/sites/${siteId}/members`,
+    );
+    if (manageRefusal) return manageRefusal;
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
@@ -250,6 +240,14 @@ export const POST = authorizedSiteHandler<RouteParams>({
             'role is required and must be admin or member',
             { 'body.role': ['must be one of: admin, member'] },
           );
+        }
+
+        // a new row has no mode to clear, so null is a bad value here, unlike on PATCH
+        const requestedSwoop = SWOOP_MODES.find((mode) => mode === body.swoop);
+        if (body.swoop !== undefined && requestedSwoop === undefined) {
+          return problemValidation('swoop must be none, view or control', {
+            'body.swoop': ['must be one of: none, view, control'],
+          });
         }
 
         // An email is only an alias for a uid — resolve it through Admin Auth,
@@ -324,6 +322,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           siteId,
           uid: targetUid,
           role: assignableRole,
+          swoop: requestedSwoop,
           addedBy: ctx.actor.userId,
         });
         if (!added.ok && added.failure.kind !== 'already_member') {
@@ -365,6 +364,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             method: 'POST',
             verb: 'member_added',
             requestedRole,
+            ...(requestedSwoop !== undefined ? { requestedSwoop } : {}),
             roleHonored,
             globalRole: targetGlobalRole,
           },

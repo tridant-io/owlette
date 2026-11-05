@@ -116,6 +116,17 @@ describe('swoop audit rows', () => {
       viewerReason: 'kill',
       durationMs: 12_000,
     });
+    expect(row.metadata).not.toHaveProperty('endedFor');
+  });
+
+  it('names whom a kick or a revocation ended it for', async () => {
+    await recordSwoopSessionEnded({ ...base, sid: SID, endReason: 'kicked', endedFor: 'user-member' });
+
+    expect(auditRows()[0].data.metadata).toMatchObject({
+      event: 'session_ended',
+      endReason: 'kicked',
+      endedFor: 'user-member',
+    });
   });
 
   it('records a refusal as a deny carrying its reason code', async () => {

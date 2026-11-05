@@ -7,6 +7,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import {
+  problem,
   problemValidation,
   problemUnauthorized,
   problemForbidden,
@@ -14,6 +15,7 @@ import {
   problemPlanRequired,
   problemScopeInsufficient,
   problemTokenExpired,
+  ProblemType,
 } from '@/lib/apiErrors';
 import {
   ApiAuthError,
@@ -30,6 +32,7 @@ import type { ApiKeyPermission, ApiKeyResource } from '@/lib/apiKeyTypes';
 import {
   Capability,
   hasCapability,
+  siteStanding,
   type UserActor,
 } from '@/lib/capabilities';
 import { checkRoostVersion } from '@/lib/versionHeader';
@@ -171,6 +174,42 @@ export function requireSiteScopesForBulkMembership(
     }
   }
   return null;
+}
+
+/**
+ * SITE_MEMBER_MANAGE, re-checked inside the members and member-candidates
+ * handlers. not a duplicate of the wrapper's check: the wrapper skips that check
+ * while `capability_enforcement` is off (the operator break-glass in
+ * `global/security_config`), this capability is not in
+ * BYPASS_EXEMPT_CAPABILITIES, and a browser session never reaches
+ * `requireScope`, so in that window a plain site member could add anyone, change
+ * or remove other members, or list candidates worked out against a roster they
+ * may not read.
+ *
+ * a grant made in the window outlives it. an account added or promoted to admin
+ * holds the role on merit, so once the switch is back on it keeps
+ * MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE and can promote the original
+ * caller with enforcement fully restored. a swoop mode set to control is a
+ * second way to hand out MACHINE_REMOTE_CONTROL. time-boxed break-glass,
+ * permanent admin.
+ *
+ * `action` opens the detail, as in `adding a member`.
+ */
+export function refuseWithoutSiteMemberManage(
+  actor: UserActor,
+  siteId: string,
+  action: string,
+  instance: string,
+): NextResponse | null {
+  if (hasCapability(actor, Capability.SITE_MEMBER_MANAGE, siteId)) return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    detail: `${action} requires the SITE_MEMBER_MANAGE capability on this site`,
+    instance,
+    code: 'site_member_manage_required',
+  });
 }
 
 export function validateResourceId(id: string, fieldName: string): NextResponse | null {
@@ -377,9 +416,7 @@ async function requireSiteCapability(
     role: outcome.facts.globalRole,
     // A superadmin legitimately holds no membership; their capabilities
     // short-circuit on the global role before this map is consulted.
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
   };
 
   if (!hasCapability(actor, capability, siteId)) {

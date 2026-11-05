@@ -7,18 +7,32 @@
  * writes two collections, reads back through batches, and deletes fields with
  * a `FieldValue.delete()` sentinel, so assertions like "the secret is in
  * talon_secrets and nowhere else" or "nextRunAt was removed, not nulled" need
- * real state. `firebase-admin/firestore` is mocked to `FieldValue` alone so
- * the real Admin SDK never loads.
+ * real state. `firebase-admin/firestore` is mocked to `FieldValue` alone, and
+ * `@/lib/firebase-admin` stubbed, so the real Admin SDK never loads.
  */
 
 const mockDeleteSentinel = { __fieldValue: 'delete' } as const;
 const mockEmitMutation = jest.fn();
 const mockAssertLlmKeyAvailable = jest.fn();
 const mockValidateWebhookUrl = jest.fn();
+const mockCapabilityCheck = jest.fn();
 
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { delete: () => mockDeleteSentinel },
 }));
+jest.mock('@/lib/firebase-admin', () => ({ getAdminAuth: jest.fn(), getAdminDb: jest.fn() }));
+// the real check, recording each actor it is asked about: the successor's actor
+// never leaves the store any other way.
+jest.mock('@/lib/capabilities', () => {
+  const actual = jest.requireActual('@/lib/capabilities');
+  return {
+    ...actual,
+    hasCapability: (...args: unknown[]) => {
+      mockCapabilityCheck(...args);
+      return actual.hasCapability(...args);
+    },
+  };
+});
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: (...args: unknown[]) => mockEmitMutation(...args),
 }));
@@ -34,7 +48,7 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
-import type { Actor } from '@/lib/capabilities';
+import { Capability, hasCapability, type Actor, type UserActor } from '@/lib/capabilities';
 import {
   TalonStoreError,
   countTalonsAuthoredBy,
@@ -1155,6 +1169,7 @@ describe('reassignTalons', () => {
     uid: string,
     overrides: DocData = {},
     siteRole: 'owner' | 'admin' | 'member' | null = 'admin',
+    memberFields: DocData = {},
   ): void {
     fake.docs.set(`users/${uid}`, { role: 'admin', sites: [SITE], ...overrides });
     if (siteRole === null) return;
@@ -1164,7 +1179,16 @@ describe('reassignTalons', () => {
       status: 'active',
       addedAt: new Date(0),
       addedBy: 'system:test',
+      ...memberFields,
     });
+  }
+
+  /** the actor the author gates were asked about for `uid`. */
+  function gateActorFor(uid: string): UserActor {
+    const call = mockCapabilityCheck.mock.calls.find(
+      ([actor]) => (actor as UserActor).userId === uid,
+    );
+    return call?.[0] as UserActor;
   }
 
   it('moves every talon the departing author wrote', async () => {
@@ -1371,6 +1395,35 @@ describe('reassignTalons', () => {
     await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
 
     expect(storedTalon('t1').createdBy).toBe('successor-uid');
+  });
+
+  it('carries a successor admin held to view to the gates, so it never controls', async () => {
+    seedSuccessor('successor-uid', {}, 'admin', { swoop: 'view' });
+    seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+    await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+    const successor = gateActorFor('successor-uid');
+    expect(successor.swoopModes?.[SITE]).toBe('view');
+    expect(hasCapability(successor, Capability.MACHINE_REMOTE_CONTROL, SITE)).toBe(false);
+    // the mode changes swoop and nothing else: they still inherit
+    expect(storedTalon('t1').createdBy).toBe('successor-uid');
+  });
+
+  it('builds the same successor actor as before from a row with no mode', async () => {
+    seedSuccessor('successor-uid');
+    seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+    await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+    const successor = gateActorFor('successor-uid');
+    expect(successor).toEqual({
+      type: 'user',
+      userId: 'successor-uid',
+      role: 'admin',
+      siteRoles: { [SITE]: 'admin' },
+    });
+    expect(successor).not.toHaveProperty('swoopModes');
   });
 
   it('writes nothing when one talon in the selection is missing', async () => {
