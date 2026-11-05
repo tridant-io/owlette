@@ -203,6 +203,10 @@ _Avoid_: token, timeout
 A site owner's or admin's stop of every swoop session on a machine, whatever their own swoop mode. It also closes every step-up window on that machine. The desktop app's tray item "kill all swoop sessions on this machine" (Windows) is a local stop any user at the machine can click: it ends the sessions through the streamer but closes no step-up window.
 _Avoid_: end (which only takes you out of the session), disconnect
 
+**Kick**:
+Taking one other person out of a live swoop session, which a site owner or admin can do whatever their own swoop mode. One streamer serves everyone on the machine and cannot drop one viewer, so a kick ends the session for everyone in it: the one it was for is told a site admin removed them and stays out until they reconnect, and everyone else reconnects on their own. It is not a ban (keeping someone out is their swoop mode) and closes no step-up window.
+_Avoid_: kill (which stops every session on the machine), ban, remove (which takes someone off the site)
+
 **Doorbell**:
 The idle WebSocket each agent holds to the swoop signalling worker, through which a new session rings the machine to start its streamer.
 _Avoid_: signalling socket, push channel

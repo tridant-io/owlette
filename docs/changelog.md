@@ -52,6 +52,16 @@ others' clicks light up in a later agent release. The pointer of someone else
 in control no longer carries their name over the picture: its colour matches
 their pill. Nothing to update on the machine.
 
+### added — kick someone from a swoop session
+
+A site owner or admin, or a superadmin, can take someone out of a live swoop
+session: click their pill in the bar (or their row in a phone's "in this
+session" list), then **kick**. They are told a site admin removed them and can
+rejoin; to keep someone out, change their swoop access in the site's members
+section. One streamer serves everyone on a machine, so everyone else in the
+session comes back on their own within a couple of seconds. Nothing to update
+on the machine.
+
 ### added — a filter in the site switcher
 
 With more than ten sites, the site switcher and owlette swoop's site list open
