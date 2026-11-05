@@ -458,7 +458,7 @@ describe('useSwoopSession — how a session ends', () => {
       await flush();
       expect(swoop.state).toBe('error');
       expect(swoop.refusal).toBe('kicked');
-      expect(swoop.error).toBe('a site admin removed you from this session.');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
       expect(swoop.retryIn).toBeNull();
       await advance(60_000);
       expect(mints()).toHaveLength(1);
@@ -501,7 +501,7 @@ describe('useSwoopSession — how a session ends', () => {
       expect(mints()).toHaveLength(1);
       expect(swoop.state).toBe('error');
       expect(swoop.refusal).toBe('kicked');
-      expect(swoop.error).toBe('a site admin removed you from this session.');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
       expect(swoop.retryIn).toBeNull();
       await advance(60_000);
       expect(mints()).toHaveLength(1);

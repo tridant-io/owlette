@@ -57,8 +57,6 @@ export interface EndSwoopSessionForUserArgs {
   /** whom it is ended for: the record names them. */
   uid: string;
   endReason: 'revoked' | 'kicked';
-  /** why, for the audit row: a reason code, never prose. */
-  auditReason: string;
   /** whoever ended it. */
   actor: Actor;
   /** `user:<uid>` / `apiKey:<keyId>`, for the command envelope. */
@@ -82,8 +80,10 @@ export interface EndSwoopSessionForUserArgs {
  * kicked stops on the record's word. Step-up windows are untouched, which only
  * the kill route closes.
  *
- * Throws when the record cannot be ended or the audit row cannot be written;
- * a stop path that fails is logged, and the lease still ends the streamer.
+ * Throws when the record cannot be ended; a stop path that fails is logged, and
+ * the lease still ends the streamer. The audit row is the caller's: a kick
+ * writes it after the stop and answers its failure, a revocation counts the
+ * session as ended before writing it.
  */
 export async function endSwoopSessionForUser(args: EndSwoopSessionForUserArgs): Promise<void> {
   const { siteId, machineId, sid } = args.session;
@@ -103,9 +103,9 @@ export async function endSwoopSessionForUser(args: EndSwoopSessionForUserArgs): 
   // running, whatever sid it names, so a polled kill queued every time lands on the
   // next session.
   if (!broadcast.ok) {
-    logger.warn('[swoop/revoke] kill broadcast failed; falling back to the polled command', {
-      context: 'swoop/revoke',
-      data: { siteId, machineId, reason: broadcast.reason },
+    logger.warn('[swoop/end-for-user] kill broadcast failed; falling back to the polled command', {
+      context: 'swoop/end-for-user',
+      data: { siteId, machineId, endReason: args.endReason, reason: broadcast.reason },
     });
     try {
       await requestSwoopSession({
@@ -118,27 +118,17 @@ export async function endSwoopSessionForUser(args: EndSwoopSessionForUserArgs): 
         ...(args.correlationId ? { correlationId: args.correlationId } : {}),
       });
     } catch (err) {
-      logger.warn('[swoop/revoke] kill command could not be queued; the lease still ends it', {
-        context: 'swoop/revoke',
+      logger.warn('[swoop/end-for-user] kill command could not be queued; the lease still ends it', {
+        context: 'swoop/end-for-user',
         data: {
           siteId,
           machineId,
+          endReason: args.endReason,
           err: err instanceof Error ? err.message : String(err),
         },
       });
     }
   }
-
-  await recordSwoopSessionEnded({
-    siteId,
-    machineId,
-    sid,
-    actor: args.actor,
-    ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-    endReason: args.auditReason,
-    endedFor: args.uid,
-    durationMs: Date.now() - args.session.startedAt,
-  });
 }
 
 /** Ends every unended session this user holds a seat in (`endSwoopSessionForUser`). */
@@ -162,12 +152,22 @@ export async function revokeSwoopSessionsForUser(
         session,
         uid: args.uid,
         endReason: 'revoked',
-        auditReason: args.reason,
         actor: args.actor,
         auditActor: args.auditActor,
         correlationId: args.correlationId,
       });
       revokedSids.push(session.sid);
+
+      await recordSwoopSessionEnded({
+        siteId: args.siteId,
+        machineId: session.machineId,
+        sid: session.sid,
+        actor: args.actor,
+        ...(args.correlationId ? { correlationId: args.correlationId } : {}),
+        endReason: args.reason,
+        endedFor: args.uid,
+        durationMs: Date.now() - session.startedAt,
+      });
     }
   } catch (err) {
     // The membership write is already done and is what actually removes the

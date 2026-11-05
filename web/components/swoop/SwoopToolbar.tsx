@@ -259,7 +259,7 @@ function ViewerPills({ session, compact }: { session: SwoopSession | null; compa
       await kickSwoopViewer(session, viewer.id);
       setKicking(null);
     } catch (err) {
-      setKickError(err instanceof Error ? err.message : 'could not kick them');
+      setKickError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }

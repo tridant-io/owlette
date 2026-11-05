@@ -108,7 +108,7 @@ const HOST_SILENT_FINAL =
 const ACCESS_REMOVED = 'your access to this machine was removed.';
 
 /** told to the one a kick was for, who may rejoin. */
-const KICKED = 'a site admin removed you from this session.';
+const KICKED = 'a site admin took you out of this session.';
 
 /** a machine removed from the site, or one that left it from its own tray: there is nothing to reconnect to. */
 const LEFT_SITE = 'this machine has left the site.';

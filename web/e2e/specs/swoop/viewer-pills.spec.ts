@@ -19,7 +19,7 @@
  * a pill opens a menu too, and the site admin's menu for the member has a kick.
  * the machine has one streamer for the session and no way to drop one viewer,
  * so the kick ends it for both: the member's page stops and says a site admin
- * removed them, and the admin's comes back on its own, into a session with no
+ * took them out, and the admin's comes back on its own, into a session with no
  * one else in it.
  */
 
@@ -291,7 +291,7 @@ test("the admin kicks the member from their pill's menu, who is told so, and the
     expect(reply.status(), await reply.text()).toBe(200);
 
     // the record names the member: their page stops rather than coming back, and reconnecting is theirs to choose
-    await expect(other.getByText('a site admin removed you from this session.')).toBeVisible({ timeout: 20_000 });
+    await expect(other.getByText('a site admin took you out of this session.')).toBeVisible({ timeout: 20_000 });
     await expect(memberBar.getByTestId('session-badge')).toHaveText('disconnected');
     await expect(memberBar.getByRole('button', { name: 'reconnect' })).toBeVisible();
     await test.info().attach('member kicked', { body: await other.screenshot(), contentType: 'image/png' });

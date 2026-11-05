@@ -123,7 +123,7 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
             : session.viewers,
           ...(session.endReason ? { endReason: session.endReason } : {}),
           ...(session.endedAt ? { endedAt: session.endedAt } : {}),
-          // whom a revocation ended it for: everyone else in it comes back on their own.
+          // whom a revocation or a kick ended it for: everyone else in it comes back on their own.
           ...(session.endedFor ? { endedFor: session.endedFor } : {}),
         },
       }),

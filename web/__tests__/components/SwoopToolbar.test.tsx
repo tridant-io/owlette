@@ -505,7 +505,7 @@ describe('SwoopToolbar with others in the session', () => {
       "they leave the session now and can rejoin. to keep someone out, change their swoop mode in the site's members section.",
     );
     // the names read only: nothing is kicked before the confirm
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/kick$/), expect.anything());
 
     await userEvent.click(within(dialog).getByRole('button', { name: 'kick' }));
 
@@ -537,7 +537,7 @@ describe('SwoopToolbar with others in the session', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'cancel' }));
 
     expect(screen.queryByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringMatching(/\/kick$/), expect.anything());
   });
 
   it("puts kick under the email in a phone's list, where the route says this caller may", async () => {

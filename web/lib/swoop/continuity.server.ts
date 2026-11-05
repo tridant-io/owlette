@@ -27,7 +27,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SwoopSession } from '@/lib/swoop/sessionStore.server';
 
 /** ends a session must not be resumed from without a fresh ceremony. */
-const FINAL_ENDS = new Set<NonNullable<SwoopSession['endReason']>>(['closed', 'killed', 'revoked']);
+const FINAL_ENDS = new Set<NonNullable<SwoopSession['endReason']>>(['closed', 'killed', 'revoked', 'kicked']);
 
 const SECRET_BYTES = 32;
 const TOKEN = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/;
@@ -88,11 +88,15 @@ export function continuityInherits(args: {
   // a kill closes only the records still open: one that had already ended for a
   // transient reason is reached through the kill's own timestamp instead.
   if (revokedAt >= record.startedAt) return { ok: false, reason: 'killed' };
-  // a revocation ends the session for everyone in it, and is final only for the
-  // person it was for: the rest come back on their own (`revokeViewerSessions.server.ts`).
-  const revokedForAnother =
-    record.endReason === 'revoked' && record.endedFor !== undefined && record.endedFor !== grant.uid;
-  if (record.endReason && FINAL_ENDS.has(record.endReason) && !revokedForAnother) {
+  // a revocation or a kick ends the session for everyone in it, and is final only
+  // for the person it was for: the rest come back on their own
+  // (`revokeViewerSessions.server.ts`). so the kicked person's grant is spent by
+  // the record's own word, whatever the kick route's spend loop saw.
+  const endedForAnother =
+    (record.endReason === 'revoked' || record.endReason === 'kicked') &&
+    record.endedFor !== undefined &&
+    record.endedFor !== grant.uid;
+  if (record.endReason && FINAL_ENDS.has(record.endReason) && !endedForAnother) {
     return { ok: false, reason: 'ended_for_good' };
   }
   return { ok: true, viewerId };

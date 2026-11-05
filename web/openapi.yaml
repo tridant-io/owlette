@@ -8507,16 +8507,18 @@ paths:
         seat they hold, and every seat of theirs goes with it. One streamer
         serves everyone on the machine and cannot drop one viewer, so the
         session ends for everyone in it with `endReason: kicked` and `endedFor`
-        naming them: their page stops and tells them a site admin removed
-        them, and everyone else's page starts the next session on its own
+        naming them: their page stops and tells them a site admin took them
+        out, and everyone else's page starts the next session on its own
         within a couple of seconds. The streamer is stopped through the
         signalling broadcast, with the polled command queued when that does
         not land.
 
-        A kick is not a ban: their access is intact and they may rejoin, after
-        the step-up again, since their continuity grants are spent. Keeping
-        someone out is their swoop mode in the site's members section. Step-up
-        windows stay open; only `POST …/swoop/kill` closes them.
+        A kick is not a ban: their access is intact and they may rejoin. Their
+        continuity grants are spent, so a token cannot stand in for the step-up
+        once their window has closed; the windows themselves stay open, only
+        `POST …/swoop/kill` closes them, so a rejoin inside one asks for
+        nothing. Keeping someone out is their swoop mode in the site's members
+        section.
 
         Site owner or admin, or a superadmin, whatever their own swoop mode:
         the swoop-settings capability, as for a kill. Anyone but yourself, with

@@ -12,9 +12,11 @@
  * unlike a revocation, their access is intact, so they may rejoin: a kick is
  * not a ban, and keeping someone out is their swoop mode, in the site's members
  * section. their continuity grants are spent, as their own leave spends them,
- * so a rejoin asks for the step-up again. the step-up windows stay open: only
- * the kill route closes them, for the whole machine, and a kick puts nobody
- * through a ceremony the admin did not ask for. a revocation leaves them too.
+ * so a token cannot stand in for the step-up once their window has closed. the
+ * step-up windows themselves stay open: only the kill route closes them, for
+ * the whole machine, and a kick puts nobody through a ceremony the admin did
+ * not ask for, so a rejoin inside a window asks for nothing. a revocation
+ * leaves the windows too.
  *
  * who: a site owner or admin, or a superadmin, whatever their own swoop mode,
  * as for a kill. anyone but yourself, with no order among them: an admin may
@@ -28,7 +30,7 @@ import { problem, problemFromError, problemValidation, ProblemType } from '@/lib
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
-import { recordSwoopDenied } from '@/lib/swoop/audit.server';
+import { recordSwoopDenied, recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
 import { endSwoopSessionForUser } from '@/lib/swoop/revokeViewerSessions.server';
 import { getSwoopSession, markSwoopContinuityUsed } from '@/lib/swoop/sessionStore.server';
 import { apiKeyRefusal, isValidSid, type SwoopRouteParams } from '../../../_shared';
@@ -109,10 +111,22 @@ const kickHandler: SiteRouteHandler<SwoopRouteParams> = async (request, ctx, { p
       session,
       uid,
       endReason: 'kicked',
-      auditReason: 'kicked',
       actor: ctx.actor,
       auditActor: `user:${ctx.actor.userId}`,
       correlationId: ctx.correlationId,
+    });
+
+    // after the stop, as the session DELETE does: an audit write that throws
+    // must not leave a live session behind an error response.
+    await recordSwoopSessionEnded({
+      siteId,
+      machineId,
+      sid: sessionId,
+      actor: ctx.actor,
+      correlationId: ctx.correlationId,
+      endReason: 'kicked',
+      endedFor: uid,
+      durationMs: Date.now() - session.startedAt,
     });
 
     return applyAuthDeprecations(
