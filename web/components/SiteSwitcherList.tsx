@@ -1,10 +1,9 @@
 'use client';
 
 import { useMemo, useRef, useState, type FocusEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Check } from 'lucide-react';
+import { Check, Search, X } from 'lucide-react';
 import { highlightMatch } from '@/components/admin/sites/highlightMatch';
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 
 /** past this many sites the list has a filter */
@@ -15,24 +14,25 @@ const ITEM_SELECTOR = '[data-site-item]';
 
 type Surface = 'menu' | 'drawer' | 'popover';
 
-// a menu marks the focused item, which the pointer focuses too; the lists mark the hovered one.
-// over that accent fill in dark the cyan marks and the muted id miss aa, so the marked row
-// takes the stronger tone, as in the add-member search
+// the filter is a search row whose border runs edge to edge, so the menu's row takes back the
+// p-1 its menu pads with. a menu marks the focused item, which the pointer focuses too; the
+// lists mark the hovered one. over that accent fill in dark the cyan marks and the muted id
+// miss aa, so the marked row takes the stronger tone, as in the add-member search
 const SURFACE: Record<Surface, { filter: string; list?: string; item: string; id: string; empty: string }> = {
   menu: {
-    filter: 'pb-1',
+    filter: '-mx-1 -mt-1 mb-1 flex items-center gap-2 border-b border-border px-3 py-2',
     item: 'group flex cursor-pointer items-center justify-between text-foreground focus:bg-accent focus:text-foreground dark:focus:[&_mark]:text-accent-foreground',
     id: 'group-focus:text-accent-foreground/80',
     empty: 'px-2 py-1.5',
   },
   drawer: {
-    filter: 'px-4 pb-2 pt-1',
+    filter: 'flex items-center gap-2 border-b border-border px-4 py-2',
     item: 'group flex w-full cursor-pointer items-center justify-between gap-2 px-4 py-2.5 text-left text-sm text-foreground transition-colors hover:bg-accent dark:hover:[&_mark]:text-accent-foreground',
     id: 'group-hover:text-accent-foreground/80',
     empty: 'px-4 py-2.5',
   },
   popover: {
-    filter: 'p-1 pb-0',
+    filter: 'flex items-center gap-2 border-b border-border px-3 py-2',
     list: 'max-h-72 overflow-y-auto p-1',
     item: 'group flex w-full cursor-pointer items-center justify-between gap-2 rounded-sm px-2 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-accent dark:hover:[&_mark]:text-accent-foreground',
     id: 'group-hover:text-accent-foreground/80',
@@ -145,7 +145,8 @@ export function SiteSwitcherList({
     <>
       {showFilter && (
         <div className={styles.filter}>
-          <Input
+          <Search aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+          <input
             ref={inputRef}
             data-site-filter=""
             type="text"
@@ -158,8 +159,25 @@ export function SiteSwitcherList({
             placeholder="filter sites…"
             aria-label="filter sites"
             // 16px below md: ios zooms the page into any field smaller than that
-            className="h-8 text-base md:text-sm"
+            className="min-w-0 flex-1 bg-transparent text-base text-foreground outline-none placeholder:text-muted-foreground md:text-sm"
           />
+          {text !== '' && (
+            <button
+              type="button"
+              onClick={() => {
+                setText('');
+                inputRef.current?.focus();
+              }}
+              // the filter's rule: in a menu a key that got past this button would be typeahead
+              onKeyDown={(e) => {
+                if (e.key !== 'Tab') e.stopPropagation();
+              }}
+              aria-label="clear filter"
+              className="shrink-0 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       )}
       <div ref={listRef} onKeyDown={handleListKeyDown} className={styles.list}>
