@@ -229,11 +229,11 @@ describe('SwoopToolbar', () => {
 
     jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
     renderBar('connected');
-    expect(screen.getByRole('button', { name: /allow the clipboard for this site/ })).toBe(
+    expect(screen.getByRole('button', { name: /allow clipboard access for this site/ })).toBe(
       screen.getByTestId('clipboard-held-notice'),
     );
     // the icon's name and its tooltip say it, never text on the bar
-    expect(screen.queryByText(/held back the machine's copy/)).toBeNull();
+    expect(screen.queryByText(/this browser will not take it yet/)).toBeNull();
     expect(screen.queryByTestId('clipboard-notice')).toBeNull();
   });
 
@@ -255,7 +255,7 @@ describe('SwoopToolbar', () => {
         />
       </TooltipProvider>,
     );
-    const notice = screen.getByRole('button', { name: /allow the clipboard for this site/ });
+    const notice = screen.getByRole('button', { name: /allow clipboard access for this site/ });
     expect(notice).toHaveAttribute('data-testid', 'clipboard-held-notice');
     expect(notice).toHaveTextContent('');
     expect(notice.querySelector('svg')).toHaveClass('lucide-triangle-alert', 'text-warning');

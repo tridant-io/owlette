@@ -21,8 +21,9 @@ clear it, instead of a boxed field. Nothing to update on the machine.
 A warning the swoop bar has for you (fullscreen refused, the keyboard or the
 mouse not captured, the clipboard not shared or a copy held back) is now a
 warning icon on every layout, with the sentence on hover, instead of a
-sentence that took the bar's room beside the people in the session. Nothing
-to update on the machine.
+sentence that took the bar's room beside the people in the session. The five
+sentences are plainer too: they say what happened and what to do about it.
+Nothing to update on the machine.
 
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site

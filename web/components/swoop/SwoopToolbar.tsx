@@ -491,21 +491,21 @@ export function SwoopToolbar({
     try {
       await stage.requestFullscreen({ navigationUI: 'hide' });
     } catch {
-      setNotice('this browser refused fullscreen, so the keyboard stays with it.');
+      setNotice('fullscreen was refused, so shortcuts like alt+tab still go to your browser.');
       return;
     }
 
     const kb = keyboardLock();
     if (kb) {
       // every capturable key: a remote desktop wants alt+tab and ctrl+w too.
-      await kb.lock().catch(() => setNotice('the keyboard could not be captured.'));
+      await kb.lock().catch(() => setNotice('the keyboard could not be captured: shortcuts like alt+tab still go to your browser.'));
     }
     stage.focus();
 
     const capture = swoopInputCapture(session);
     if (!capture || !readMouseCapture()) return;
     if (!(await capture.requestPointerLock())) {
-      setNotice('the mouse could not be captured; pointer positions stay absolute.');
+      setNotice('the mouse could not be captured: the pointer is not locked to the picture.');
     }
   }, [session]);
 
@@ -686,13 +686,13 @@ export function SwoopToolbar({
         {notice && <Notice text={notice} />}
         {!hostReads && (
           <Notice
-            text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
+            text="the machine cannot share its clipboard. on a mac, allow owlette under system settings, privacy & security, paste from other apps."
             testId="clipboard-notice"
           />
         )}
         {clipboardHeld && (
           <Notice
-            text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
+            text="the machine copied something, but this browser will not take it yet: click the picture to paste it into your clipboard, or allow clipboard access for this site."
             testId="clipboard-held-notice"
           />
         )}
