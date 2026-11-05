@@ -176,6 +176,9 @@ test("a card names who is in its machine's session, and an offline card nobody",
     await expect(online.getByTitle('Ada Lovelace, Bob Watcher')).toBeVisible();
     // what a screen reader hears in place of the short names
     await expect(online).toHaveAccessibleName(/2 in the session: Ada Lovelace, Bob Watcher/);
+    // a picture, not an assertion: the people sit on the card's right without growing it
+    await test.info().attach('card with people', { body: await online.screenshot(), contentType: 'image/png' });
+    await test.info().attach('picker with people', { body: await page.screenshot(), contentType: 'image/png' });
 
     const offline = page.getByTestId(`swoop-picker-machine-${OFFLINE_ID}`);
     await expect(offline).toBeDisabled();
