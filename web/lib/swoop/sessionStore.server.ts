@@ -540,7 +540,7 @@ export async function syncMachineSwoopViewers(
     );
     await machineRef(siteId, machineId).update({ swoopViewers: swoopSeats.length, swoopSeats });
   } catch (err) {
-    logger.warn('[swoop/store] machine viewer count could not be mirrored', {
+    logger.warn('[swoop/store] machine viewer count and seats could not be mirrored', {
       context: 'swoop/store',
       data: { siteId, machineId, err: err instanceof Error ? err.message : String(err) },
     });

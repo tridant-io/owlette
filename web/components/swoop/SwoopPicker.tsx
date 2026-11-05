@@ -33,14 +33,13 @@ import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
-import { getUserShortName } from '@/lib/userUtils';
+import { viewerLabel } from '@/lib/swoop/viewerName';
 import { cn } from '@/lib/utils';
 
 // past this many machines the grid grows a filter, as the metrics panel's machine switcher does.
 const FILTER_MIN = 8;
-// a card's name row has room for two people; the rest are a count.
+// a card's second row has room for two people beside the platform; the rest are a count.
 const SHOWN_PEOPLE = 2;
-const UNNAMED = 'viewer';
 
 type CardState ='ready' | 'offline' | 'incapable' | 'site-off' | 'this-machine';
 
@@ -288,11 +287,9 @@ function seatedPeople(seats: NonNullable<Machine['swoopSeats']>, currentUid: str
       if (seat.ctl) known.ctl = true;
       continue;
     }
-    const name = seat.displayName;
     people.set(seat.uid, {
       uid: seat.uid,
-      short: name ? getUserShortName({ displayName: name, email: null }) : UNNAMED,
-      full: name || UNNAMED,
+      ...viewerLabel({ displayName: seat.displayName, email: null }),
       ctl: seat.ctl,
       you: seat.uid === currentUid,
     });
@@ -395,23 +392,16 @@ function PickerCard({
             aria-hidden
             className={cn('h-2 w-2 shrink-0 rounded-full', online ? 'bg-success' : 'bg-muted-foreground/40')}
           />
-          <span
-            className={cn(
-              'min-w-0 truncate text-sm font-medium',
-              // the name comes first: with people beside it, it keeps its width up to
-              // most of the row and the names give way, not the other way round
-              people.length > 0 ? 'max-w-[60%] shrink-0' : 'flex-1',
-              ready ? 'text-foreground' : 'text-muted-foreground',
-            )}
-          >
+          <span className={cn('min-w-0 flex-1 truncate text-sm font-medium', ready ? 'text-foreground' : 'text-muted-foreground')}>
             {machineId}
           </span>
+        </span>
+        <span className="flex items-center gap-2 pl-4 text-xs text-muted-foreground">
+          <span className="shrink-0">{machine.osFamily ?? 'windows'}</span>
           {people.length > 0 && (
+            // beside the platform, where the row has room and the name above keeps its own.
             // the names are drawn short; a screen reader hears the sentence at the end instead
-            <span
-              title={everyone}
-              className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 text-xs text-muted-foreground"
-            >
+            <span title={everyone} className="ml-auto flex min-w-0 items-center justify-end gap-2">
               {people.slice(0, SHOWN_PEOPLE).map((person) => {
                 const Icon = person.ctl ? MousePointer2 : Eye;
                 return (
@@ -433,7 +423,6 @@ function PickerCard({
             </span>
           )}
         </span>
-        <span className="block pl-4 text-xs text-muted-foreground">{machine.osFamily ?? 'windows'}</span>
       </button>
       {ready && onOpenInApp && (
         <Tooltip>

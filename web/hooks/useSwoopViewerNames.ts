@@ -15,7 +15,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { NO_PRESENCE, swoopPresence } from '@/lib/swoop/presence';
-import { getUserShortName } from '@/lib/userUtils';
+import { viewerLabel } from '@/lib/swoop/viewerName';
 
 export interface SwoopNamedViewer {
   /** the roster's viewer id: one per tab or window, so one person in two tabs is two. */
@@ -42,7 +42,6 @@ interface Name {
 
 type Names = ReadonlyMap<string, Name>;
 
-const UNNAMED = 'viewer';
 const NOBODY: readonly SwoopNamedViewer[] = [];
 
 const subscribeNever = (): (() => void) => () => {};
@@ -115,13 +114,11 @@ export function useSwoopViewerNames(session: SwoopSession | null): readonly Swoo
     // an email is only ever the route's to give
     const name =
       names?.get(viewer.id) ?? (you && user ? { displayName: text(user.displayName), email: null, kickable: false } : null);
-    const named = name?.displayName || name?.email ? name : null;
     return {
       id: viewer.id,
       ctl: viewer.ctl,
       you,
-      short: named ? getUserShortName(named) : UNNAMED,
-      full: named?.displayName ?? named?.email ?? UNNAMED,
+      ...viewerLabel(name),
       email: name?.email ?? null,
       kickable: name?.kickable ?? false,
     };
