@@ -20,9 +20,10 @@
  *
  * This module never writes a command document. That is
  * `lib/actions/requestSwoopSession.server.ts`, and only that. Its one write
- * outside the collection is the machine record's `swoopViewers`, a count
- * recomputed from these documents (`syncMachineSwoopViewers`) so the dashboard
- * can show it without a rule that reaches them.
+ * outside the collection is the machine record's `swoopViewers` and
+ * `swoopSeats`, the count and the seats recomputed from these documents
+ * (`syncMachineSwoopViewers`) so the dashboard can show them without a rule
+ * that reaches them.
  *
  * Documents are removed by the retention sweep (`/api/cron/swoop-retention`)
  * and nowhere else. It takes its pages as REFERENCES from here rather than
@@ -39,6 +40,7 @@ import {
   SWOOP_LEASE_SECONDS,
   SWOOP_MAX_VIEWERS,
 } from '@/lib/swoop/policy.server';
+import { viewerNames } from '@/lib/swoop/viewerNames.server';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
 
@@ -497,11 +499,23 @@ export async function listSwoopSessionRefsStartedBefore(args: {
   return { refs, scanned: snap.docs.length };
 }
 
+/** one seat as the machine's record mirrors it, in `swoopSeats`. */
+export interface SwoopSeatMirror {
+  uid: string;
+  /** null when the account has no name, or is gone. */
+  displayName: string | null;
+  ctl: boolean;
+}
+
 /**
- * mirror the machine's viewer count onto its record as `swoopViewers`: the
- * viewers of its live sessions whose lease has not lapsed. the dashboard reads
- * the machine, never a session, so this is how the count reaches it. every
- * mutator that changes who is watching calls it after its own write.
+ * mirror the machine's viewers onto its record: `swoopViewers`, the count of
+ * the seats in its live sessions whose lease has not lapsed, and `swoopSeats`,
+ * those seats. the dashboard reads the machine, never a session, so this is
+ * how they reach it. every mutator that changes who is watching calls it after
+ * its own write.
+ *
+ * a seat carries its person's display name, for the picker's cards, and never
+ * an email: every member of the site reads the machine's record.
  *
  * a full recount every time, never an increment, so a write lost to a race is
  * healed by the next one. `update`, not `set`: a machine that is gone must not
@@ -515,10 +529,16 @@ export async function syncMachineSwoopViewers(
 ): Promise<void> {
   try {
     const sessions = await listUnendedSwoopSessionsForMachine({ siteId, machineId });
-    const swoopViewers = sessions
-      .filter((session) => session.state === 'live' && !leaseLapsed(session, nowMs))
-      .reduce((sum, session) => sum + session.viewers.length, 0);
-    await machineRef(siteId, machineId).update({ swoopViewers });
+    const live = sessions.filter((session) => session.state === 'live' && !leaseLapsed(session, nowMs));
+    const names = await viewerNames(live);
+    const swoopSeats: SwoopSeatMirror[] = live.flatMap((session) =>
+      session.viewers.map((viewer) => ({
+        uid: viewer.uid,
+        displayName: names.get(viewer.uid)?.displayName ?? null,
+        ctl: viewer.ctl,
+      })),
+    );
+    await machineRef(siteId, machineId).update({ swoopViewers: swoopSeats.length, swoopSeats });
   } catch (err) {
     logger.warn('[swoop/store] machine viewer count could not be mirrored', {
       context: 'swoop/store',

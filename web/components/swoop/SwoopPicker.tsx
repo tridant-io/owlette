@@ -15,7 +15,7 @@
 import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AppWindow, ArrowLeft, ChevronDown, Loader2, Monitor } from 'lucide-react';
+import { AppWindow, ArrowLeft, ChevronDown, Eye, Loader2, Monitor, MousePointer2 } from 'lucide-react';
 import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
@@ -23,7 +23,6 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { LoadingWord } from '@/components/LoadingWord';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
@@ -34,10 +33,14 @@ import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
+import { getUserShortName } from '@/lib/userUtils';
 import { cn } from '@/lib/utils';
 
 // past this many machines the grid grows a filter, as the metrics panel's machine switcher does.
 const FILTER_MIN = 8;
+// a card's name row has room for two people; the rest are a count.
+const SHOWN_PEOPLE = 2;
+const UNNAMED = 'viewer';
 
 type CardState ='ready' | 'offline' | 'incapable' | 'site-off' | 'this-machine';
 
@@ -120,6 +123,7 @@ export function SwoopPicker() {
             key={machine.machineId}
             siteId={siteId}
             machine={machine}
+            currentUid={user?.uid}
             siteSwoopOn={swoop.enabled}
             canEnable={canEnable}
             onOpen={inApp ? openSwoopHere : openSwoopWindow}
@@ -260,9 +264,46 @@ function Notice({ children, busy = false }: { children: React.ReactNode; busy?: 
   );
 }
 
+interface SeatedPerson {
+  uid: string;
+  /** first name and last initial, or "viewer". */
+  short: string;
+  /** the full name, or "viewer". */
+  full: string;
+  ctl: boolean;
+  you: boolean;
+}
+
+/**
+ * the people in a machine's session, from the seats the server mirrors onto
+ * the machine (`syncMachineSwoopViewers`): a page cannot read a session. in the
+ * mirror's order, and a person's several tabs are one person, in control if
+ * any of them is.
+ */
+function seatedPeople(seats: NonNullable<Machine['swoopSeats']>, currentUid: string | undefined): SeatedPerson[] {
+  const people = new Map<string, SeatedPerson>();
+  for (const seat of seats) {
+    const known = people.get(seat.uid);
+    if (known) {
+      if (seat.ctl) known.ctl = true;
+      continue;
+    }
+    const name = seat.displayName;
+    people.set(seat.uid, {
+      uid: seat.uid,
+      short: name ? getUserShortName({ displayName: name, email: null }) : UNNAMED,
+      full: name || UNNAMED,
+      ctl: seat.ctl,
+      you: seat.uid === currentUid,
+    });
+  }
+  return [...people.values()];
+}
+
 function PickerCard({
   siteId,
   machine,
+  currentUid,
   siteSwoopOn,
   canEnable,
   onOpen,
@@ -271,6 +312,8 @@ function PickerCard({
 }: {
   siteId: string;
   machine: Machine;
+  /** the signed-in account, whose seats are marked "(you)" */
+  currentUid?: string;
   siteSwoopOn: boolean;
   /** an owner or admin of the site, who can turn swoop on for it */
   canEnable: boolean;
@@ -301,8 +344,10 @@ function PickerCard({
           ? 'this-machine'
           : 'ready';
   const ready = state === 'ready';
-  // as on the machine menu: a stale mirror never badges a machine that cannot stream.
-  const watching = online && capable ? (machine.swoopViewers ?? 0) : 0;
+  // as on the machine menu: a stale mirror never names anyone on a machine that cannot stream.
+  const seats = online && capable ? (machine.swoopSeats ?? []) : [];
+  const people = seatedPeople(seats, currentUid);
+  const everyone = people.map((person) => `${person.full}${person.you ? ' (you)' : ''}`).join(', ');
   const reasonId = `swoop-picker-reason-${machineId}`;
   const openNewWindow = ready ? onOpenNewWindow : undefined;
   // a card that stops being ready drops its menu, so the menu cannot come back on its own
@@ -353,11 +398,31 @@ function PickerCard({
           <span className={cn('min-w-0 flex-1 truncate text-sm font-medium', ready ? 'text-foreground' : 'text-muted-foreground')}>
             {machineId}
           </span>
-          {watching > 0 && (
-            <Badge className="tabular-nums">
-              {watching}
-              <span className="sr-only"> watching</span>
-            </Badge>
+          {people.length > 0 && (
+            // the names are drawn short; a screen reader hears the sentence at the end instead
+            <span
+              title={everyone}
+              className="ml-auto flex min-w-0 max-w-[55%] shrink items-center gap-2 text-xs text-muted-foreground"
+            >
+              {people.slice(0, SHOWN_PEOPLE).map((person) => {
+                const Icon = person.ctl ? MousePointer2 : Eye;
+                return (
+                  <span key={person.uid} aria-hidden className="flex min-w-0 items-center gap-1">
+                    <Icon aria-hidden className="size-3 shrink-0" />
+                    <span className="truncate">
+                      {person.short}
+                      {person.you && ' (you)'}
+                    </span>
+                  </span>
+                );
+              })}
+              {people.length > SHOWN_PEOPLE && (
+                <span aria-hidden className="shrink-0 tabular-nums">
+                  +{people.length - SHOWN_PEOPLE}
+                </span>
+              )}
+              <span className="sr-only">{`${people.length} in the session: ${everyone}`}</span>
+            </span>
           )}
         </span>
         <span className="block pl-4 text-xs text-muted-foreground">{machine.osFamily ?? 'windows'}</span>

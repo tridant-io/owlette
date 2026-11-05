@@ -62,6 +62,13 @@ section. One streamer serves everyone on a machine, so everyone else in the
 session comes back on their own within a couple of seconds. Nothing to update
 on the machine.
 
+### added — the machine picker says who is in each session
+
+The machine cards in owlette swoop and on `/swoop` now name the people in each
+machine's session: first name and last initial, with a pointer for someone in
+control and an eye for someone watching, and full names on hover. The
+dashboard's cards keep their count. Nothing to update on the machine.
+
 ### added — a filter in the site switcher
 
 With more than ten sites, the site switcher and owlette swoop's site list open

@@ -23,6 +23,7 @@ import {
   type PowerCommandOptions,
   type PowerCommandSent,
 } from '@/lib/activeHours';
+import type { SwoopSeatMirror } from '@/lib/swoop/sessionStore.server';
 
 /** Every shape a Firestore timestamp field arrives in on the client. parseFirestoreSeconds handles all of them. */
 export type FirestoreTs =
@@ -109,6 +110,18 @@ function parseDisplayAwake(value: unknown): Machine['displayAwake'] {
     how: typeof v.how === 'string' ? v.how : null,
     reason: typeof v.reason === 'string' ? v.reason : null,
   };
+}
+
+/** a seat without a string uid is dropped, and a blank name reads as none, as on the bar's pills. */
+function parseSwoopSeats(value: unknown): Machine['swoopSeats'] {
+  if (!Array.isArray(value)) return undefined;
+  return value.flatMap((seat: unknown) => {
+    if (!seat || typeof seat !== 'object') return [];
+    const s = seat as Record<string, unknown>;
+    if (typeof s.uid !== 'string') return [];
+    const name = typeof s.displayName === 'string' ? s.displayName.trim() : '';
+    return [{ uid: s.uid, displayName: name || null, ctl: s.ctl === true }];
+  });
 }
 
 /**
@@ -348,6 +361,8 @@ export interface Machine {
   activeHours?: ActiveHours;
   /** live swoop viewers, mirrored from the session records by the server; absent until the first session */
   swoopViewers?: number;
+  /** those viewers' seats, each with its person's name, for the swoop picker's cards; absent until the server first mirrors them */
+  swoopSeats?: SwoopSeatMirror[];
   /**
    * What the agent holds for the site's keep screens awake switch, mirrored on
    * each change. `held` is the service's own hold (system sleep, and on macOS
@@ -1416,6 +1431,7 @@ export function useMachines(siteId: string) {
               capabilities: data.capabilities,
               activeHours: parseActiveHours(data.activeHours),
               swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : undefined,
+              swoopSeats: parseSwoopSeats(data.swoopSeats),
               displayAwake: parseDisplayAwake(data.displayAwake),
               rebooting: data.rebooting,
               shuttingDown: data.shuttingDown,
