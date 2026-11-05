@@ -27,16 +27,18 @@
  *
  * on a side (from md up, marked as `data-swoop-bar` on <html> before first
  * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name,
- * the viewers and the badges run vertically, the buttons stack at the bottom,
- * and a notice that is a sentence becomes an icon that says it on hover. the
- * name reads toward the picture: up a left bar, down a right one.
+ * the viewers and the badges run vertically, and the buttons stack at the
+ * bottom. the name reads toward the picture: up a left bar, down a right one.
+ *
+ * a notice is a warning icon that says its sentence on hover, on every layout,
+ * since a sentence beside the pills took the bar's room (owner, 2026-11-05).
  *
  * below `md` (a phone, a narrow window) the buttons don't fit one row, and a
  * touch screen of any width has no hover to ask a tooltip with, so there one
- * button opens them all in a menu, each with its label under it, the viewers
- * are one button with their count, and a notice is an icon; the row never
- * wraps. fullscreen is left out where the browser has none for a page (an
- * iphone), rather than refusing every tap.
+ * button opens them all in a menu, each with its label under it, and the
+ * viewers are one button with their count; the row never wraps. fullscreen is
+ * left out where the browser has none for a page (an iphone), rather than
+ * refusing every tap.
  *
  * inside owlette swoop the bar is also the window's title bar: it drags the
  * window, and on top it ends in the window's controls (on macos it starts
@@ -52,13 +54,13 @@ import {
   Ellipsis,
   Eye,
   Gauge,
-  Info,
   Maximize,
   Minimize,
   Mouse,
   MousePointer2,
   PowerOff,
   RotateCcw,
+  TriangleAlert,
   Users,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -72,7 +74,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopBarMenuPlacement, menuPlacementFor, useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip, SwoopBarInMenu } from '@/components/swoop/BarTooltip';
 import { tintOf } from '@/components/swoop/SwoopPresence';
@@ -149,24 +150,29 @@ const UPRIGHT = 'md:bar-left:rotate-180';
 /** behind a viewer while they click: a pill's fill, or a row's in the phone's list. */
 const CLICK_FILL = 'bg-accent-cyan/20';
 
-/** a sentence in a wide top bar; on a side or a phone, an icon that says it on hover or tap. */
+/**
+ * a warning the bar has for you: one icon on every layout, its sentence on
+ * hover, and in a popover on a click or a tap, since a touch screen has no
+ * hover to ask with (the pills work the same way). a sentence on the bar
+ * beside the pills took the bar's room. the tooltip and the popover are
+ * portaled, so they read across even from a side bar whose text runs down.
+ */
 function Notice({ text, testId }: { text: string; testId?: string }) {
+  const placement = useBarMenuPlacement();
   return (
-    <>
-      <span className="hidden text-xs text-muted-foreground md:inline md:bar-side:hidden" data-testid={testId}>
-        {text}
-      </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={text} className="shrink-0 md:hidden md:bar-side:inline-flex">
-            <Info aria-hidden />
+    <Popover>
+      <BarTooltip label={<p className="max-w-xs">{text}</p>}>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={text} data-testid={testId} className="shrink-0">
+            {/* on the glyph, where the ghost variant's hover ink does not reach */}
+            <TriangleAlert aria-hidden className="text-warning" />
           </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="max-w-xs">{text}</p>
-        </TooltipContent>
-      </Tooltip>
-    </>
+        </PopoverTrigger>
+      </BarTooltip>
+      <PopoverContent {...placement} className="w-auto max-w-xs p-3 text-sm">
+        {text}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -485,21 +491,21 @@ export function SwoopToolbar({
     try {
       await stage.requestFullscreen({ navigationUI: 'hide' });
     } catch {
-      setNotice('this browser refused fullscreen, so the keyboard stays with it.');
+      setNotice('fullscreen was refused, so shortcuts like alt+tab still go to your browser.');
       return;
     }
 
     const kb = keyboardLock();
     if (kb) {
       // every capturable key: a remote desktop wants alt+tab and ctrl+w too.
-      await kb.lock().catch(() => setNotice('the keyboard could not be captured.'));
+      await kb.lock().catch(() => setNotice('the keyboard could not be captured: shortcuts like alt+tab still go to your browser.'));
     }
     stage.focus();
 
     const capture = swoopInputCapture(session);
     if (!capture || !readMouseCapture()) return;
     if (!(await capture.requestPointerLock())) {
-      setNotice('the mouse could not be captured; pointer positions stay absolute.');
+      setNotice('the mouse could not be captured: the pointer is not locked to the picture.');
     }
   }, [session]);
 
@@ -680,13 +686,13 @@ export function SwoopToolbar({
         {notice && <Notice text={notice} />}
         {!hostReads && (
           <Notice
-            text="the machine's clipboard is not shared: on a mac, allow owlette under paste from other apps in system settings"
+            text="the machine cannot share its clipboard. on a mac, allow owlette under system settings, privacy & security, paste from other apps."
             testId="clipboard-notice"
           />
         )}
         {clipboardHeld && (
           <Notice
-            text="your browser held back the machine's copy: click the picture to take it, or allow the clipboard for this site"
+            text="the machine copied something, but this browser will not take it yet: click the picture to paste it into your clipboard, or allow clipboard access for this site."
             testId="clipboard-held-notice"
           />
         )}

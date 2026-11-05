@@ -14,6 +14,7 @@ import userEvent from '@testing-library/user-event';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { tintOf } from '@/components/swoop/SwoopPresence';
 import { ACTIVITY_CLICK_MS, ACTIVITY_MOVE_MS, attach as attachActivity } from '@/lib/swoop/activity';
+import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
 import { swoopClipboard } from '@/lib/swoop/clipboard';
 import type { SwoopSession } from '@/lib/swoop/features';
 import { attach as attachPresence } from '@/lib/swoop/presence';
@@ -228,22 +229,74 @@ describe('SwoopToolbar', () => {
 
     jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
     renderBar('connected');
-    expect(screen.getByTestId('clipboard-held-notice')).toHaveTextContent(/allow the clipboard for this site/);
+    expect(screen.getByRole('button', { name: /allow clipboard access for this site/ })).toBe(
+      screen.getByTestId('clipboard-held-notice'),
+    );
+    // the icon's name and its tooltip say it, never text on the bar
+    expect(screen.queryByText(/this browser will not take it yet/)).toBeNull();
     expect(screen.queryByTestId('clipboard-notice')).toBeNull();
   });
 
-  it('a notice is a sentence on a wide top bar and an icon that says it on a side one or a phone', () => {
+  /** the bar with the held copy's notice up, along the top or down `position`'s side: the notice, checked as an icon. */
+  const renderHeldNotice = (position: SwoopBarPosition = 'top') => {
     jest.mocked(swoopClipboard).mockReturnValue({ subscribe: () => () => {}, get: () => true, held: () => true });
-    renderBar('connected');
-    // both are rendered and css picks one from `data-swoop-bar`, which is set
-    // before first paint; react state would put the sentence up for a frame.
-    // below `md` the sentence would push the bar onto a second row.
-    expect(screen.getByTestId('clipboard-held-notice')).toHaveClass('hidden', 'md:inline', 'md:bar-side:hidden');
-    expect(screen.getByRole('button', { name: /allow the clipboard for this site/ })).toHaveClass(
-      'md:hidden',
-      'md:bar-side:inline-flex',
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SwoopToolbar
+          session={null}
+          machineId="TEC-B4A"
+          state="connected"
+          error={null}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+          position={position}
+        />
+      </TooltipProvider>,
     );
-    expect(screen.getByTestId('session-bar')).toHaveClass('md:bar-side:flex-col');
+    const notice = screen.getByRole('button', { name: /allow clipboard access for this site/ });
+    expect(notice).toHaveAttribute('data-testid', 'clipboard-held-notice');
+    expect(notice).toHaveTextContent('');
+    expect(notice.querySelector('svg')).toHaveClass('lucide-triangle-alert', 'text-warning');
+    // the same one element on every layout: nothing for css to swap for a sentence
+    for (const element of [notice, notice.parentElement!]) {
+      expect([...element.classList].filter((name) => name === 'hidden' || name.startsWith('md:'))).toEqual([]);
+    }
+    return notice;
+  };
+
+  /** the tooltip a hover raises on the notice, which says the sentence the icon is named. */
+  const hoverNotice = async (notice: HTMLElement) => {
+    await userEvent.hover(notice);
+    const tip = await screen.findByRole('tooltip');
+    expect(tip.textContent).toBe(notice.getAttribute('aria-label'));
+    return tip;
+  };
+
+  it('a notice is a warning icon that says its sentence on hover, on every layout', async () => {
+    await hoverNotice(renderHeldNotice());
+  });
+
+  it('a notice on a side bar is the same icon, and its tooltip reads across, not down the bar', async () => {
+    // the page sets it before first paint, and the bar-side variants key on it
+    document.documentElement.dataset.swoopBar = 'left';
+    try {
+      const tip = await hoverNotice(renderHeldNotice('left'));
+      expect(screen.getByTestId('session-bar')).toHaveClass('md:bar-side:flex-col');
+      // portaled under the same <html>, where a vertical class would turn the tooltip too
+      expect(tip.className).not.toContain('[writing-mode');
+      expect(tip.querySelector('[class*="[writing-mode"]')).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.swoopBar;
+    }
+  });
+
+  it('a tap on a notice opens its sentence in a popover, for a touch screen with no hover', async () => {
+    const notice = renderHeldNotice();
+    await userEvent.click(notice);
+    const popover = await screen.findByRole('dialog');
+    expect(popover).toHaveTextContent(notice.getAttribute('aria-label')!);
   });
 
   it('badges a poor connection from the measured round trip, and only then', () => {
