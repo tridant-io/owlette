@@ -12,12 +12,13 @@
  * (<= 2 s, authoritative), and the polled command only when that did not land.
  * Neither failing withholds the 200 — the record is already ended, and a
  * streamer that survives both is stopped by its own lease. Ending it for the
- * others is the kill route's, behind the control capability.
+ * others is the kill route's, behind the swoop-settings capability; one other
+ * person is the kick route's, behind the same.
  *
  * DELETE deliberately does NOT close the caller's step-up window: it sits on
  * the WATCH bar, so any member could otherwise put every admin on the machine
  * through a fresh ceremony. Closing windows is the kill route's job, and that
- * one takes the control capability.
+ * one takes the swoop-settings capability.
  */
 
 import { NextResponse } from 'next/server';

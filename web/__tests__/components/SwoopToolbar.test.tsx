@@ -502,7 +502,7 @@ describe('SwoopToolbar with others in the session', () => {
   it('asks before it kicks, then posts the seat to the kick route and closes', async () => {
     const dialog = await askToKickAda();
     expect(dialog).toHaveTextContent(
-      "they leave the session now and can rejoin. to keep someone out, change their swoop access in the site's members section.",
+      "they leave the session now and can rejoin. to keep someone out, change their swoop mode in the site's members section.",
     );
     // the names read only: nothing is kicked before the confirm
     expect(fetchMock).toHaveBeenCalledTimes(1);

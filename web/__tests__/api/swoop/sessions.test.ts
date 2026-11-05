@@ -1591,7 +1591,7 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
     });
 
-    // ending it for everyone is the kill route's, behind the control capability.
+    // ending it for everyone is the kill route's, behind the swoop-settings capability.
     it('answers a seat that is not the caller’s as a missing one, and ends nothing', async () => {
       signIn(MEMBER);
 

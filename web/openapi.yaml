@@ -8138,7 +8138,9 @@ paths:
         A caller who is in the session gets each viewer's `displayName`, and a
         caller whose role on the site is owner or admin, or a superadmin, gets
         each viewer's `email` too. A caller who is not in the session gets
-        neither, whatever their role.
+        neither, whatever their role. A caller in the session also gets each
+        viewer's `kickable`: whether `POST …/{sessionId}/kick` would take that
+        viewer out for them.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -8175,15 +8177,18 @@ paths:
                               type: string
                               nullable: true
                               description: Only when the caller is in the session and their role on the site is owner or admin; a superadmin with no role on the site gets none. Null when the viewer's account is gone.
+                            kickable:
+                              type: boolean
+                              description: Only when the caller is in the session. Whether `POST …/{sessionId}/kick` would take this viewer out for the caller — a site owner or admin, or a superadmin — and never on the caller's own seats.
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }
                             renewedAt: { type: integer, description: When this viewer last renewed its lease; absent until it first has. }
-                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, machine_removed, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
+                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, kicked, machine_removed, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
                       endedFor:
                         type: string
-                        description: The uid a `revoked` end was for. Removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own.
+                        description: The uid a `revoked` or `kicked` end was for. Removing a member, taking control from them, or kicking them ends the session for everyone in it, and everyone else starts the next one on their own.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
@@ -8221,7 +8226,8 @@ paths:
         broadcast, queueing a polled command only when the broadcast does not
         land. Neither failing withholds the `200`: the record is already ended,
         and a streamer that survives both is stopped by its own lease. Ending
-        a session for everyone in it is `POST …/swoop/kill`.
+        a session for everyone in it is `POST …/swoop/kill`; taking one other
+        person out of it is `POST …/{sessionId}/kick`.
 
         `endReason` is optional and may only be one a caller may claim:
         `closed` (the default), `killed`, or `revoked`. The machine-side
@@ -8475,6 +8481,107 @@ paths:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '413':
           description: The body is over 4 KB.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}/kick:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        description: The session id (`sid`) the person is in.
+    post:
+      operationId: kickSwoopViewer
+      tags: [Machines]
+      summary: kick someone from a swoop session
+      description: |
+        Takes one other person out of a live session: body `{ viewerId }`, a
+        seat they hold, and every seat of theirs goes with it. One streamer
+        serves everyone on the machine and cannot drop one viewer, so the
+        session ends for everyone in it with `endReason: kicked` and `endedFor`
+        naming them: their page stops and tells them a site admin removed
+        them, and everyone else's page starts the next session on its own
+        within a couple of seconds. The streamer is stopped through the
+        signalling broadcast, with the polled command queued when that does
+        not land.
+
+        A kick is not a ban: their access is intact and they may rejoin, after
+        the step-up again, since their continuity grants are spent. Keeping
+        someone out is their swoop mode in the site's members section. Step-up
+        windows stay open; only `POST …/swoop/kill` closes them.
+
+        Site owner or admin, or a superadmin, whatever their own swoop mode:
+        the swoop-settings capability, as for a kill. Anyone but yourself, with
+        no order among them. Not gated on the site's swoop settings or the
+        payer's plan.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [viewerId]
+              properties:
+                viewerId:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,64}$'
+                  description: A seat of the person to kick, as the session record lists it. Your own seat is refused with `400`.
+            example:
+              viewerId: viewer0000000000000000000000002
+      responses:
+        '200':
+          description: The session ended for everyone in it, naming the person kicked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      state: { type: string, enum: [ended] }
+                      endReason: { type: string, enum: [kicked] }
+                      endedFor: { type: string, description: The uid of the person kicked. }
+        '400':
+          description: A malformed body or `viewerId`, or a `viewerId` that names the caller's own seat.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability: your site role is not owner or
+            admin), `api_key_not_permitted` (an api key called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: |
+            `code: not_found` when the site does not exist or the caller is not
+            in it, `code: session_not_found` when the machine has no session
+            with this id, `code: viewer_not_found` when nobody holds that seat
+            any more.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '409':
+          description: '`code: session_ended`: the session had already ended.'
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }

@@ -278,7 +278,7 @@ function ViewerPills({ session, compact }: { session: SwoopSession | null; compa
           <DialogHeader>
             <DialogTitle>kick {kicking.full}?</DialogTitle>
             <DialogDescription>
-              they leave the session now and can rejoin. to keep someone out, change their swoop access in the
+              they leave the session now and can rejoin. to keep someone out, change their swoop mode in the
               site&apos;s members section.
             </DialogDescription>
             {kickError && (
