@@ -395,14 +395,22 @@ function PickerCard({
             aria-hidden
             className={cn('h-2 w-2 shrink-0 rounded-full', online ? 'bg-success' : 'bg-muted-foreground/40')}
           />
-          <span className={cn('min-w-0 flex-1 truncate text-sm font-medium', ready ? 'text-foreground' : 'text-muted-foreground')}>
+          <span
+            className={cn(
+              'min-w-0 truncate text-sm font-medium',
+              // the name comes first: with people beside it, it keeps its width up to
+              // most of the row and the names give way, not the other way round
+              people.length > 0 ? 'max-w-[60%] shrink-0' : 'flex-1',
+              ready ? 'text-foreground' : 'text-muted-foreground',
+            )}
+          >
             {machineId}
           </span>
           {people.length > 0 && (
             // the names are drawn short; a screen reader hears the sentence at the end instead
             <span
               title={everyone}
-              className="ml-auto flex min-w-0 max-w-[55%] shrink items-center gap-2 text-xs text-muted-foreground"
+              className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-2 text-xs text-muted-foreground"
             >
               {people.slice(0, SHOWN_PEOPLE).map((person) => {
                 const Icon = person.ctl ? MousePointer2 : Eye;

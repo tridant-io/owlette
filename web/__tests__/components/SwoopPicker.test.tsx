@@ -602,7 +602,9 @@ describe('SwoopPicker — who is in the session', () => {
     expect(card('m1')).toHaveAccessibleName(/2 in the session: Ada Lovelace, Bob Watcher/);
     expect(card('m1')).not.toHaveAccessibleName(/Ada L[.]/);
     // on the right of the name row, and never wider than its share of it
-    expect(people).toHaveClass('ml-auto', 'max-w-[55%]');
+    // at the row's end, taking what the name leaves: the name keeps its width first
+    expect(people).toHaveClass('ml-auto', 'justify-end', 'flex-1');
+    expect(screen.getByText('m1')).toHaveClass('shrink-0', 'max-w-[60%]');
   });
 
   it('shows two people and counts the rest', async () => {
