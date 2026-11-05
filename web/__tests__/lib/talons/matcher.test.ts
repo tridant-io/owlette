@@ -51,10 +51,16 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: jest.fn(),
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 import type { Firestore } from 'firebase-admin/firestore';
 import { NextRequest } from 'next/server';
 
 import { POST as matchPOST } from '@/app/api/talons/internal/match/route';
+import { createPlanMemo } from '@/lib/planPause.server';
 import {
   matchAndRunTalons,
   tapTalonMatcher,
@@ -71,6 +77,8 @@ class FakeFirestore {
   failReads = false;
   /** Set to make every `.add()` reject — a write that loses to a rules change. */
   failWrites = false;
+  /** Paths of every single-document read, in order — the plan lookup's reads. */
+  readonly docReads: string[] = [];
 
   collection(name: string): FakeCollection {
     return new FakeCollection(this, name);
@@ -146,6 +154,13 @@ class FakeDocRef {
 
   collection(name: string): FakeCollection {
     return new FakeCollection(this.db, `${this.path}/${name}`);
+  }
+
+  async get() {
+    if (this.db.failReads) throw new Error('firestore unavailable');
+    this.db.docReads.push(this.path);
+    const data = this.db.docs.get(this.path);
+    return { exists: data !== undefined, data: () => (data ? { ...data } : undefined) };
   }
 }
 
@@ -818,5 +833,128 @@ describe('POST /api/talons/internal/match', () => {
 
     expect(res.status).toBe(400);
     expect(mockRunTalon).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Plans (plan.md decision 8): matching pauses when the site's payer has no
+ * `owlette.talons`. Runs the real resolver against the fake; only tridant's
+ * answer is mocked.
+ */
+describe('plan pause', () => {
+  const ent = (talons: '0' | '1') => ({
+    ok: true,
+    resolved: talons === '1',
+    standing: talons === '1' ? 'active' : 'expired',
+    inGoodStanding: talons === '1',
+    ent: { 'owlette.talons': talons },
+    epoch: 0,
+  });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  beforeEach(() => {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.OWLETTE_E2E = '1';
+    fake.docs.set(`sites/${SITE}`, { owner: 'payer' });
+    fake.docs.set('users/payer', {});
+    mockGetEntitlements.mockResolvedValue(ent('0'));
+  });
+
+  afterEach(() => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.OWLETTE_E2E;
+  });
+
+  it('runs nothing when the payer has no talons, and says so', async () => {
+    seedTalon('t1');
+
+    expect(await matchAndRunTalons(db, SITE, breach())).toEqual({ matched: 0, runs: [] });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('payer');
+    expect(mockRunTalon).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      "Talon matching paused: the site's plan has no talons",
+      expect.objectContaining({ data: { siteId: SITE, kind: 'threshold', talons: 1 } }),
+    );
+  });
+
+  it('writes no deferral either', async () => {
+    seedTalon('delayed', {
+      trigger: { type: 'event', eventTypes: ['process_restarted'], delayMinutes: 3 },
+    });
+
+    await matchAndRunTalons(db, SITE, { kind: 'event', eventType: 'process_restarted', machineId: 'm1' });
+
+    expect(writtenRuns()).toHaveLength(0);
+  });
+
+  it('runs as before when the payer has talons', async () => {
+    mockGetEntitlements.mockResolvedValue(ent('1'));
+    seedTalon('t1');
+
+    expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
+    expect(mockRunTalon).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the lookup when no talon matches', async () => {
+    seedTalon('t1', { trigger: { type: 'event', eventTypes: ['display_drift'] } });
+
+    await matchAndRunTalons(db, SITE, breach());
+
+    expect(fake.docReads).toEqual([]);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('makes no plan read when enforcement is off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    seedTalon('t1');
+
+    expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
+    expect(fake.docReads).toEqual([]);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the lookup fails', async () => {
+    seedTalon('t1');
+    fake.docs.delete('users/payer');
+    mockGetEntitlements.mockRejectedValue(new Error('tridant exploded'));
+
+    expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
+    expect(mockRunTalon).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves the payer once across taps sharing a memo', async () => {
+    seedTalon('t1', { trigger: { type: 'event', eventTypes: ['machine_offline'] } });
+    const memo = createPlanMemo();
+
+    for (const machineId of ['m1', 'm2', 'm3']) {
+      tapTalonMatcher(db, SITE, { kind: 'event', eventType: 'machine_offline', machineId }, memo);
+    }
+    await settle();
+
+    expect(fake.docReads).toEqual([`sites/${SITE}`, 'users/payer']);
+    expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+    expect(mockRunTalon).not.toHaveBeenCalled();
+  });
+
+  it('pauses the internal match route too', async () => {
+    const originalSecret = process.env.CORTEX_INTERNAL_SECRET;
+    process.env.CORTEX_INTERNAL_SECRET = 'internal-secret-value';
+    seedTalon('t1', { trigger: { type: 'event', eventTypes: ['display_drift'] } });
+
+    try {
+      const res = await matchPOST(
+        new NextRequest('http://localhost/api/talons/internal/match', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-internal-secret': 'internal-secret-value' },
+          body: JSON.stringify({ siteId: SITE, eventType: 'display_drift', machineId: 'm1' }),
+        }),
+      );
+
+      expect(await res.json()).toEqual({ ok: true, matched: 0 });
+      expect(mockRunTalon).not.toHaveBeenCalled();
+    } finally {
+      if (originalSecret === undefined) delete process.env.CORTEX_INTERNAL_SECRET;
+      else process.env.CORTEX_INTERNAL_SECRET = originalSecret;
+    }
   });
 });

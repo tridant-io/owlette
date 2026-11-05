@@ -517,7 +517,8 @@ def _base_dirs():
     return [shared_utils.get_data_path()] + [
         shared_utils.get_data_path(name)
         for name in ('config', 'logs', 'logs/swoop', 'cache', 'tmp', 'ipc',
-                     'ipc/jobs', 'ipc/results', 'ipc/swoop', 'ipc/requests')
+                     'ipc/jobs', 'ipc/results', 'ipc/swoop', 'ipc/requests',
+                     'ipc/issue-attachments')
     ]
 
 

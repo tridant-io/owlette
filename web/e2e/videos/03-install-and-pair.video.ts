@@ -89,7 +89,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { test, expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb, E2E_BASE_URL } from '../helpers/emulator';
-import { TEST_USERS } from '../helpers/seed';
+import { TEST_USERS, grantMembership } from '../helpers/seed';
 import {
   FIXED_NOW_MS,
   seedScreenshotFixtures,
@@ -165,8 +165,9 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
       deletedAt: null,
     });
 
-    // The second site, plus membership so the client can actually read it
-    // (firestore.rules canAccessSite → `siteId in users/{uid}.sites`).
+    // The second site, plus membership so the client can actually read it:
+    // the member row is what grants access (seed.ts grantMembership), the
+    // legacy `users/{uid}.sites[]` alone is denied and /add would skip the site.
     await db.collection('sites').doc(ANNEX_SITE_ID).set({
       name: ANNEX_SITE_NAME,
       owner: TEST_USERS.admin.uid,
@@ -174,10 +175,7 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
       tier: 'pro',
       createdAt: Timestamp.fromMillis(FIXED_NOW_MS - 60 * 60 * 24 * 20 * 1000),
     });
-    await db
-      .collection('users')
-      .doc(TEST_USERS.admin.uid)
-      .set({ sites: FieldValue.arrayUnion(ANNEX_SITE_ID) }, { merge: true });
+    await grantMembership(ANNEX_SITE_ID, TEST_USERS.admin.uid, 'owner');
 
     // The phrase b07 authorizes. `.set()` with NO merge on purpose: a previous
     // take leaves status 'authorized', and a merge would re-run into a 409
@@ -263,9 +261,9 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         // (@radix-ui/react-tooltip Content). DOM order puts the visible one
         // first; asserting on role would frame the 1px clone.
         await expect(
-          page.getByText(`download owlette agent v${LATEST_VERSION}`).first(),
+          page.getByText(`download v${LATEST_VERSION} for windows`).first(),
         ).toBeVisible();
-        await narrate(page, 'b02 tooltip — download owlette agent v3.2.3', 4);
+        await narrate(page, 'b02 tooltip — download v3.2.3 for windows', 4);
 
         // Already on target from moveCursorTo; clickWithCursor would re-glide.
         await downloadButton.click();
@@ -465,8 +463,7 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         // Anchored ^…$ so it can only resolve to the command box itself; every
         // ancestor carries more text. Also proves the rendered command picked up
         // the seeded version — without installer_metadata the box would read
-        // "Owlette-Installer-v....exe" while the CLIPBOARD got "vundefined"
-        // (AddMachineButton.tsx:339 vs :345).
+        // "Owlette-Installer-v....exe".
         const commandBox = dialog.getByText(
           new RegExp(
             `^Owlette-Installer-v${LATEST_VERSION.replace(/\./g, '\\.')}\\.exe\\s+/ADD=[a-z-]+\\s+/SILENT$`,
@@ -478,9 +475,9 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
 
         await clickWithCursor(
           page,
-          dialog.getByRole('button', { name: 'copy silent install command' }),
+          dialog.getByRole('button', { name: 'copy windows silent install command' }),
         );
-        await expect(page.getByText('Command copied to clipboard')).toBeVisible();
+        await expect(page.getByText('windows silent install command copied')).toBeVisible();
         // b09 must be the LAST narrate in the scene — finishTake settles only the
         // final mark and then writes the sidecar. The cursor rests on the copy
         // button inside the centred modal, nowhere near the bottom-right toaster
@@ -503,6 +500,13 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
       .collection('users')
       .doc(TEST_USERS.admin.uid)
       .set({ sites: FieldValue.arrayRemove(ANNEX_SITE_ID) }, { merge: true })
+      .catch(() => undefined);
+    await db
+      .collection('sites')
+      .doc(ANNEX_SITE_ID)
+      .collection('members')
+      .doc(TEST_USERS.admin.uid)
+      .delete()
       .catch(() => undefined);
     await db.collection('sites').doc(ANNEX_SITE_ID).delete().catch(() => undefined);
     await ctx.cleanup();

@@ -8,11 +8,12 @@
  * offline), flips to list view — denser and more legible at
  * page-hero scale — and captures.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 // Hero shot at 1920×1080 rather than the 1280×720 capability-preview default:
 // it is the LCP asset and gets a 3D-tilt treatment in the value-prop section,
@@ -72,7 +73,7 @@ test('dashboard capability card preview', async ({ page }) => {
     await page.waitForTimeout(500);
 
     await page.screenshot({
-      path: 'public/landing-screens/dashboard.png',
+      path: themedPath('public/landing-screens/dashboard.png'),
       fullPage: false,
     });
   } finally {

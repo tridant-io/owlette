@@ -9,6 +9,14 @@ echo.
 
 cd /d "%~dp0"
 
+:: Signing lives in the full build. Exiting 0 here would hand back an unsigned
+:: installer under the same file name to someone who asked for a signed one.
+if "%OWLETTE_SIGN%"=="1" (
+    echo ERROR: the quick build cannot sign. Use build_installer_full.bat with OWLETTE_SIGN=1.
+    pause
+    exit /b 1
+)
+
 echo [1/3] Reading VERSION file...
 
 REM Read version from VERSION file using temporary file approach
@@ -75,6 +83,24 @@ if not exist "build\installer_package\app\owlette-desktop.exe" (
     echo   %DESKTOP_EXE%
     echo Run build_installer_full.bat, or build it manually with:
     echo   cd ..\desktop ^&^& npx tauri build --no-bundle
+    echo.
+    pause
+    exit /b 1
+)
+
+:: Re-copy owlette swoop, the viewer app, the same way: not built here either.
+:: The installer registers owlette-swoop:// and a shortcut for this exe, so a
+:: package without it is refused rather than shipped.
+set "VIEWER_EXE=%~dp0..\desktop\viewer\target\release\owlette-swoop-viewer.exe"
+if exist "%VIEWER_EXE%" (
+    copy /Y "%VIEWER_EXE%" build\installer_package\app\ >nul
+)
+if not exist "build\installer_package\app\owlette-swoop-viewer.exe" (
+    echo.
+    echo ERROR: No owlette swoop in the installer package and none built at:
+    echo   %VIEWER_EXE%
+    echo Run build_installer_full.bat, or build it manually with:
+    echo   cd ..\desktop\viewer ^&^& ..\node_modules\.bin\tauri build --no-bundle
     echo.
     pause
     exit /b 1

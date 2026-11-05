@@ -43,7 +43,7 @@ export default function ApplyScheduleToMachinesDialog({
   // (which violates react-hooks/set-state-in-effect).
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-card border-border sm:max-w-md">
+      <DialogContent className="border-border sm:max-w-md">
         {open && (
           <ApplyScheduleToMachinesDialogBody
             onOpenChange={onOpenChange}
@@ -154,15 +154,15 @@ function ApplyScheduleToMachinesDialogBody({
             machines.map((machine) => {
               const isCurrent = machine.machineId === currentMachineId;
               const isChecked = selected.has(machine.machineId);
+              // a label row: the whole row toggles the checkbox and names it
               return (
-                <div
+                <label
                   key={machine.machineId}
                   className={`flex items-center justify-between p-2 ${
                     isCurrent ? 'opacity-60' : 'hover:bg-secondary cursor-pointer'
                   }`}
-                  onClick={() => toggleMachine(machine.machineId)}
                 >
-                  <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-3">
                     <Checkbox
                       checked={isChecked}
                       onCheckedChange={() => toggleMachine(machine.machineId)}
@@ -173,11 +173,11 @@ function ApplyScheduleToMachinesDialogBody({
                     {isCurrent && (
                       <span className="text-[10px] text-muted-foreground">(current)</span>
                     )}
-                  </div>
-                  <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
+                  </span>
+                  <Badge className={`text-xs ${machine.online ? 'bg-success-solid text-success-solid-foreground' : 'bg-danger-solid text-danger-solid-foreground'}`}>
                     {machine.online ? 'online' : 'offline'}
                   </Badge>
-                </div>
+                </label>
               );
             })
           )}
@@ -198,7 +198,6 @@ function ApplyScheduleToMachinesDialogBody({
           type="button"
           onClick={handleApply}
           disabled={applying || otherSelectedCount === 0}
-          className="bg-cyan-600 hover:bg-cyan-700"
         >
           {applying ? 'applying...' : `apply to ${otherSelectedCount}`}
         </Button>

@@ -1,101 +1,87 @@
 ---
 title: "site"
-description: "a site is the top-level scope every operator command nests under (roosts, machines, audit log, quota, deploys, processes — all site-scoped). the site record itself stays read-only — create / update / delete live in the dashboard — but membership is managed here, because it is the part operators script."
+description: "a site is the scope every operator command nests under — roosts, machines, the audit log, quota, deploys and processes are all site-scoped. the CLI reads site records and manages site membership; it has no verbs to create, update or delete a site."
+keywords: ["team", "invite", "permissions"]
 ---
 
 verbs:
 
-- [`site list`](#site-list) — list sites the caller has access to
-- [`site get`](#site-get) — print the detail record for one site
-- [`site members`](#site-members) — list a site's members and their per-site roles
-- [`site add-member`](#site-add-member) — add someone to a site, by uid or email
-- [`site set-role`](#site-set-role) — change a member's role on **this** site
-- [`site remove-member`](#site-remove-member) — remove someone from a site
-- [`site transfer-ownership`](#site-transfer-ownership) — hand a site to another user
+- [`site list`](#list) — list the sites you can access
+- [`site get`](#get) — print one site's record
+- [`site members`](#members) — list a site's members and their roles on that site
+- [`site add-member`](#add-member) — add someone to a site, by uid or email
+- [`site set-role`](#set-role) — change a member's role on **this** site
+- [`site remove-member`](#remove-member) — remove someone from a site
+- [`site transfer-ownership`](#transfer-ownership) — hand a site to another user
 
 <Callout type="warn">
-  `site set-role` and `owlette user promote` are not the same thing. `set-role`
-  changes a role on **one** site. `user promote` changes a **global** role, which
-  applies to every site that person belongs to. If you want someone to administer
-  one site, `set-role` is the command you want.
+  `site set-role` and `owlette user promote` are different commands. `set-role`
+  changes a role on **one** site. `user promote` changes a **global** role on the
+  account. to let someone administer one site, use `set-role`.
 </Callout>
 
 ---
 
-## site list
+## list
 
-lists every site the active token has access to, server-resolved from the caller's identity. emits a plain ascii table by default and a `{ "sites": [...] }` envelope under `--json` (legacy unwrapped shape — kept stable for scripts that pipe into `jq`).
+lists every site the active token can reach: sites you belong to or own (every site for a superadmin), narrowed to the site IDs your key is scoped to, sorted by name.
 
 ```bash
 owlette site list [--json]
 ```
 
-no verb-specific flags. inherits `--json`, `--profile`, and `--api-url` from the global set.
+no verb-specific flags. the table has `id`, `name`, `plan`, `timezone` and `createdAt`, or prints `(no sites)`. `--json` prints `{ "sites": [...] }`.
 
 ### examples
 
 ```bash
-# human-readable table — id, name, plan, timezone, createdAt
 owlette site list
 ```
 
 ```bash
-# pull just the ids for use in another command
+# just the ids
 owlette --json site list | jq -r '.sites[].id'
-```
-
-```bash
-# count how many sites you can see
-owlette --json site list | jq '.sites | length'
 ```
 
 backing: `GET /api/sites`.
 
 ---
 
-## site get
+## get
 
-prints the full detail record for one site (id, name, plan, timezone, owner, createdAt). under `--json` the cli emits the raw detail object directly — there is no `{ "site": {...} }` wrapper.
+prints one site's record.
 
 ```bash
 owlette site get <siteId> [--json]
 ```
 
-no verb-specific flags. the positional `<siteId>` is required. inherits `--json`, `--profile`, and `--api-url` from the global set.
+no verb-specific flags. human mode prints `id`, `name`, `plan`, `timezone`, `owner` and `createdAt`. `--json` prints the raw record with no wrapper: `id`, `name`, `plan`, `tier`, `tierUpgradedAt`, `timezone`, `owner`, `createdAt` and `schedulesFollowSiteTime`.
 
 ### examples
 
 ```bash
-# human-readable detail block
 owlette site get site-1
 ```
 
 ```bash
-# pull a single field
 owlette --json site get site-1 | jq -r '.timezone'
-```
-
-```bash
-# scripted: only proceed if the site is on the pro plan
-plan=$(owlette --json site get site-1 | jq -r '.plan')
-[ "$plan" = "pro" ] || { echo "skipping — not on pro plan"; exit 0; }
 ```
 
 backing: `GET /api/sites/{siteId}`.
 
 ---
 
-## site members
+## members
 
-lists everyone with access to a site, with the role they hold **on that site**. emits an ascii table by default (`uid`, `email`, `role`, `globalRole`) and `{ "members": [...] }` under `--json`.
+lists the active members of a site with the role each holds **on that site**.
 
 ```bash
 owlette site members <siteId> [--json]
 ```
 
-`role` is the per-site standing: `owner`, `superadmin`, `admin` or `member`. `globalRole` is that person's account-wide role — the two differ on purpose, and seeing both side by side is usually what you came for.
+no verb-specific flags. the table has `uid`, `email`, `role` and `globalRole`, or prints `(no members)`. `--json` prints `{ "members": [...] }`, each with `uid`, `email`, `role`, `globalRole` and `displayName`.
 
-a member's *other* site memberships are deliberately not returned: listing them would hand a site admin the site ids of every other organisation that person belongs to.
+`role` comes from the member record and is `owner`, `admin` or `member`. `globalRole` is the account-wide role, which grants nothing on this site by itself. a member's other site memberships are never returned — that would show a site admin the IDs of every other organisation the person belongs to.
 
 ### examples
 
@@ -104,7 +90,7 @@ owlette site members site-1
 ```
 
 ```bash
-# just the admins
+# emails of this site's admins
 owlette --json site members site-1 | jq -r '.members[] | select(.role=="admin") | .email'
 ```
 
@@ -112,43 +98,56 @@ backing: `GET /api/sites/{siteId}/members`.
 
 ---
 
-## site add-member
+## add-member
 
-adds someone to a site. identify them by **exactly one** of `--uid` or `--email` — supplying both, or neither, fails locally without spending a request.
+adds someone to a site at the role you ask for. identify them with **exactly one** of `--uid` or `--email`.
 
 ```bash
 owlette site add-member <siteId> (--uid <uid> | --email <email>) [--role member|admin] [--idempotency-key <key>]
 ```
 
-`--role` defaults to `member`. requesting `admin` only takes effect if that person's **global** role is already admin or superadmin; otherwise the membership is still added and the cli prints a `WARNING ... NOT honored` line. adding someone to a site never promotes them.
+| flag | type | required | description |
+|---|---|---|---|
+| `--uid <uid>` | string | one of `--uid` / `--email` | the user's ID |
+| `--email <email>` | string | one of `--uid` / `--email` | the user's email; the server resolves it to a uid |
+| `--role <role>` | `member` or `admin` | no | role on this site (default `member`) |
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-add-member-<uuid>`) |
 
-re-adding an existing member is a no-op and returns success. the site's **owner** cannot be re-added at a lesser role — that returns `409 target_is_owner`.
+supplying both identifiers or neither, or any other `--role`, fails before a request is sent.
+
+adding someone who is already a member is a no-op that still succeeds, and their existing role is kept. the response then carries `roleHonored: false`; when you asked for `admin`, the CLI prints a `WARNING role 'admin' was NOT honored` line. to change an existing member's role, use [`set-role`](#set-role). the site owner cannot be re-added: `409 target_is_owner`.
+
+`--json` prints the raw response: `uid`, `siteId`, `requestedRole`, `roleHonored` and `globalRole`.
 
 ### examples
 
 ```bash
-# the usual case: you know a colleague's address, not their uid
 owlette site add-member site-1 --email alice@example.com
 ```
 
 ```bash
-# add as a site admin (only honored if their global role already allows it)
 owlette site add-member site-1 --uid u_123 --role admin
 ```
 
-backing: `POST /api/sites/{siteId}/members`.
+backing: `POST /api/sites/{siteId}/members` with body `{ uid | email, role }`.
 
 ---
 
-## site set-role
+## set-role
 
-changes a member's role **on this site only**. their global role is untouched.
+changes a member's role on this site only. their global role is untouched.
 
 ```bash
 owlette site set-role <siteId> <uid> <admin|member> [--idempotency-key <key>]
 ```
 
-`owner` is not a settable role. ownership moves through [`site transfer-ownership`](#site-transfer-ownership), and the cli rejects `set-role ... owner` locally with a pointer to it. the site owner also cannot be demoted through this command — that returns `409 cannot_change_owner_role`.
+| flag | type | required | description |
+|---|---|---|---|
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-set-role-<uuid>`) |
+
+`owner` is not a settable role — ownership moves only through [`transfer-ownership`](#transfer-ownership), and the CLI refuses `set-role ... owner` before sending anything. the server refuses to change the owner's role (`409 cannot_change_owner_role`), to change your own role (`403 cannot_modify_own_membership`), and answers `404` when the uid is not a member.
+
+`--json` prints the raw response: `siteId`, `uid` and `role`.
 
 ### examples
 
@@ -157,25 +156,30 @@ owlette site set-role site-1 u_123 admin
 ```
 
 ```bash
-# demote back to a read-only operator on this site
 owlette site set-role site-1 u_123 member
 ```
 
-backing: `PATCH /api/sites/{siteId}/members/{uid}`.
+backing: `PATCH /api/sites/{siteId}/members/{uid}` with body `{ role }`.
 
 ---
 
-## site remove-member
+## remove-member
 
-removes someone from a site. idempotent: removing a non-member succeeds and reports `was not a member`.
+removes someone from a site. removing a non-member succeeds and prints `was not a member of <siteId> (no change)`.
 
 ```bash
 owlette site remove-member <siteId> <uid> [--talon-successor <uid>]
 ```
 
-talons that person authored **survive** the removal — they belong to the site, not the author — but a talon with a hoot output re-resolves its author's site access on every run, so it starts failing silently once the author is gone. the cli prints a `WARNING ... talon(s) ... left in place` line when that happens. pass `--talon-successor <uid>` to reassign them first; reassignment is never implicit.
+| flag | type | required | description |
+|---|---|---|---|
+| `--talon-successor <uid>` | string | no | reassign the talons this member authored to another user before removing them |
 
-the site **owner** cannot be removed (`409 cannot_remove_owner`) — transfer ownership first.
+talons the person authored **survive** the removal — they belong to the site — but a talon with a hoot output re-checks its author's access on every run, so it starts failing once the author is gone. when talons are left in place the CLI prints a `WARNING <n> talon(s) authored by <uid> were left in place` line. reassignment never happens unless you pass `--talon-successor`.
+
+the server refuses to remove the site owner (`409 cannot_remove_owner` — transfer ownership first) and to remove yourself (`403 cannot_modify_own_membership`). this verb sends no `Idempotency-Key`; the route is idempotent on its own.
+
+`--json` prints the raw response: `siteId`, `uid`, `wasMember`, `talonCount` and `reassignedTalonIds`.
 
 ### examples
 
@@ -188,21 +192,25 @@ owlette site remove-member site-1 u_123
 owlette site remove-member site-1 u_123 --talon-successor u_456
 ```
 
-backing: `DELETE /api/sites/{siteId}/members/{uid}`.
+backing: `DELETE /api/sites/{siteId}/members/{uid}`, with `?talonSuccessorUid=<uid>` when `--talon-successor` is set.
 
 ---
 
-## site transfer-ownership
+## transfer-ownership
 
-hands a site to another user, atomically.
+hands a site to another user in one transaction.
 
 ```bash
 owlette site transfer-ownership <siteId> <successorUid> [--idempotency-key <key>]
 ```
 
-only the **current owner or a superadmin** may transfer; a site admin is refused with `403 not_owner` — administering a site and owning it are different things. the successor does not need to be a member already; they are made one by the same transaction. the outgoing owner is demoted to `admin` and **keeps** their membership, because handing a site over is not the same as leaving it.
+| flag | type | required | description |
+|---|---|---|---|
+| `--idempotency-key <key>` | string | no | `Idempotency-Key` header (default `cli-transfer-owner-<uuid>`) |
 
-transferring to the current owner returns `409 successor_already_owner` rather than silently succeeding.
+only the **current owner or a superadmin** can transfer; a site admin gets `403 not_owner`. the successor does not need to be a member already — the same transaction adds them. the outgoing owner stays a member, as a site `admin`. transferring to the current owner returns `409 successor_already_owner`, a deleted successor returns `400`, and an unknown site or user returns `404`.
+
+`--json` prints the raw response: `siteId`, `previousOwnerUid` and `newOwnerUid`.
 
 ### examples
 
@@ -211,27 +219,27 @@ owlette site transfer-ownership site-1 u_456
 ```
 
 ```bash
-# leaving the company: transfer, then remove
+# someone leaving: transfer, then remove
 owlette site transfer-ownership site-1 u_456
 owlette site remove-member site-1 u_departing --talon-successor u_456
 ```
 
-backing: `POST /api/sites/{siteId}/transfer-ownership`.
+backing: `POST /api/sites/{siteId}/transfer-ownership` with body `{ successorUid }`.
 
 ---
 
 ## exit codes
 
-- `0` — success (table printed or detail emitted)
-- `1` — network failure or non-2xx api response (e.g. `404` if `<siteId>` doesn't exist or you lack access)
-- `2` — no token configured for the active profile (run `owlette auth login` first)
+- `0` — success, including the no-op cases (re-adding a member, removing a non-member)
+- `1` — network failure or a non-2xx response (for example `404` for a site you cannot reach); also the local checks on `add-member` and `set-role` (both or neither of `--uid`/`--email`, a `--role` or role other than `member`/`admin`, `owner` passed to `set-role`)
+- `2` — no token configured for the active profile
 
 ---
 
 ## notes
 
-- **scope**: user — lists sites the caller's token has access to; no `--site` flag because the noun *is* the site
-- **tier**: `[ready]`. the site **record** is read-only here — `create`, `update` and `delete` stay in the dashboard — but **membership** is fully managed from the cli
-- **roles**: per-site (`owner` / `admin` / `member`) are distinct from the global account role. `site set-role` changes the former; `owlette user promote` changes the latter and affects every site that person belongs to
-- **json envelope**: `list` emits `{ "sites": [...] }` (legacy unwrapped shape); `get` emits the raw detail object. new commands wrap in `{ ok, data }` — these two predate that convention and stay stable for compatibility
-- **related**: [overview](/docs/cli/overview) (auth + config precedence), [roost](/docs/cli/reference/roost), [quota](/docs/cli/reference/quota), and every other operator noun (all consume `--site <siteId>` against the ids returned here)
+- **scope**: `list` and `get` need read access to the site; `members` needs `site=<id>` with `read` **and** `admin`; `add-member`, `set-role` and `remove-member` need `write` **and** `admin`
+- **JSON**: every verb prints a raw object with no `{ ok, data }` wrapper — `list` is `{ sites }`, `members` is `{ members }`, the rest print the response body
+- **site records**: the CLI cannot create, update or delete a site; use the dashboard
+- **roles**: a site role (`owner`, `admin`, `member`) is separate from the global account role. `site set-role` changes the first; [`user promote`](/docs/cli/reference/user#promote) changes the second
+- **related**: [overview](/docs/cli/overview), and every site-scoped noun — [roost](/docs/cli/reference/roost), [machine](/docs/cli/reference/machine), [quota](/docs/cli/reference/quota), [audit-log](/docs/cli/reference/audit-log) — takes `--site <siteId>` with an ID from `site list`

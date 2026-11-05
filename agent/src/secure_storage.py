@@ -671,6 +671,24 @@ class SecureStorage:
             logger.error(f"Failed to clear tokens: {e}")
             return False
 
+    def is_cleared(self) -> bool:
+        """True when neither the store nor its retained copy is on disk: what
+        clear_tokens leaves behind.
+
+        A store that is there but reads as empty (held open by another process,
+        caught mid-replace, damaged, or not a plain file) is not cleared, so a
+        failed read is never mistaken for a revoke.
+        """
+        for path in (self.token_file, self._retained_file()):
+            try:
+                os.lstat(path)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as e:
+                logger.warning(f"Could not check {path.name}: {e}")
+            return False
+        return True
+
     def has_refresh_token(self) -> bool:
         """
         Check if a refresh token exists in storage.

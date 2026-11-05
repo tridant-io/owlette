@@ -17,18 +17,28 @@
  * there is no honest number to show, so that row and the total read as unknown
  * rather than as zero. every other row subtracts two stamps from one clock and
  * needs no offset at all.
+ *
+ * it sits top right under a top bar, and at the bottom beside a side bar, next
+ * to the button that opens it.
  */
 
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopStats } from '@/hooks/useSwoopSession';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';
+import type { SwoopCodec } from '@/lib/swoop/protocol';
 
 export interface SwoopStatsOverlayProps {
   session: SwoopSession | null;
   stats: SwoopStats;
   /** the toolbar's toggle; the overlay is off by default. */
   open: boolean;
+  /**
+   * given (a phone, from the bar's menu), the overlay is a glance: it takes its
+   * own taps and closes at the next one anywhere else. without it, it stays up
+   * until the toggle, over a picture that clicks through it.
+   */
+  onClose?: () => void;
 }
 
 interface Row {
@@ -37,6 +47,9 @@ interface Row {
 }
 
 const show = (ms: number | null): string => (ms === null ? '—' : `${ms.toFixed(1)} ms`);
+
+/** the codec the picture is arriving in, from the frame's own meta record. */
+const CODEC_LABEL: Record<SwoopCodec, string> = { h264: 'H.264', hevc: 'HEVC', av1: 'AV1' };
 
 export type SwoopPathProfile = 'direct' | 'relay-udp' | 'relay-tls';
 
@@ -136,9 +149,9 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
       { label: 'capture → encode', ms: null },
       { label: 'encode → send', ms: null },
       { label: 'send → arrive', ms: null },
-      { label: 'arrive → decode', ms: null },
-      { label: 'decode → present', ms: null },
-      { label: 'present → display', ms: null },
+      { label: 'decode', ms: null },
+      { label: 'wait for paint', ms: null },
+      { label: 'paint → display', ms: null },
     ];
   }
   const { arrivalMs, decodeMs, presentedMs, expectedDisplayMs } = frame;
@@ -152,17 +165,33 @@ function stageRows(frame: FrameObservation | null, offsetUs: number | null): Row
           ? null
           : (arrivalMs * 1000 + offsetUs - frame.tSendUs) / 1000,
     },
-    { label: 'arrive → decode', ms: decodeMs },
+    // the decoder's own time, as the ua reports it.
+    { label: 'decode', ms: decodeMs },
     {
-      label: 'decode → present',
+      // a decoded frame waits for the next paint: on a 60 hz display this
+      // swings between 0 and one refresh (16.7 ms), and that is not decode.
+      label: 'wait for paint',
       ms: arrivalMs === null || decodeMs === null ? null : presentedMs - (arrivalMs + decodeMs),
     },
-    { label: 'present → display', ms: expectedDisplayMs - presentedMs },
+    // the painted frame reaches the glass one refresh later.
+    { label: 'paint → display', ms: expectedDisplayMs - presentedMs },
   ];
 }
 
-export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayProps) {
+export function SwoopStatsOverlay({ session, stats, open, onClose }: SwoopStatsOverlayProps) {
   const path = usePathProfile(session, open);
+  const ref = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    if (!open || !onClose) return;
+    // capture, so a tap the picture sends to the machine closes it too
+    const onDown = (event: PointerEvent) => {
+      if (!ref.current?.contains(event.target as Node)) onClose();
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const budget = path ? PATH_BUDGETS[path] : null;
@@ -178,10 +207,11 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
 
   return (
     <aside
+      ref={ref}
       aria-label="latency breakdown"
-      className="pointer-events-none absolute right-3 top-3 w-60 rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm"
+      className={`${onClose ? 'pointer-events-auto z-20' : 'pointer-events-none'} absolute right-3 top-3 w-72 md:bar-side:top-auto md:bar-side:bottom-3 md:bar-left:left-3 md:bar-left:right-auto rounded-md border border-border bg-card/90 p-3 text-xs text-muted-foreground shadow-sm`}
     >
-      <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 whitespace-nowrap [&>dd]:tabular-nums">
         {rows.map((row) => (
           <Fragment key={row.label}>
             <dt>{row.label}</dt>
@@ -200,9 +230,16 @@ export function SwoopStatsOverlay({ session, stats, open }: SwoopStatsOverlayPro
         <dd className="text-right font-mono text-foreground">
           {presenter.width > 0 ? `${presenter.width}×${presenter.height}` : '—'}
         </dd>
+        <dt>codec</dt>
+        <dd className="text-right font-mono text-foreground">{frame ? CODEC_LABEL[frame.codec] : '—'}</dd>
         <dt>gaps / duplicates</dt>
         <dd className="text-right font-mono text-foreground">
           {presenter.gaps} / {presenter.duplicates}
+        </dd>
+        <dt>frozen pictures</dt>
+        <dd className="text-right font-mono text-foreground">
+          {stats.stall.episodes}
+          {stats.stall.kind ? ` (last: ${stats.stall.kind})` : ''}
         </dd>
         <dt className="mt-1 border-t border-border pt-1">path</dt>
         <dd className="mt-1 border-t border-border pt-1 text-right font-mono text-foreground">

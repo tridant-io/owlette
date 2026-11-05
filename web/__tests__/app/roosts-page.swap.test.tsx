@@ -190,16 +190,6 @@ jest.mock('@/components/MinimizedUploadCard', () => ({
   MinimizedUploadCard: () => <div data-testid="minimized-upload-card" />,
 }));
 
-jest.mock('@/components/ManageSitesDialog', () => ({
-  ManageSitesDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="manage-sites-dialog" /> : null,
-}));
-
-jest.mock('@/components/CreateSiteDialog', () => ({
-  CreateSiteDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="create-site-dialog" /> : null,
-}));
-
 jest.mock('@/components/AccountSettingsDialog', () => ({
   AccountSettingsDialog: ({ open }: { open: boolean }) =>
     open ? <div data-testid="account-settings-dialog" /> : null,

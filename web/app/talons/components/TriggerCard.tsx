@@ -51,7 +51,7 @@ import { TALON_MAX_DELAY_MINUTES } from '@/lib/talons/validation';
  * exhaustively — a new catalog entry without a description fails the build.
  */
 const TALON_EVENT_INFO: Record<TalonEventType, string> = {
-  process_crash: 'a managed process exited on its own — not stopped by an operator or a schedule',
+  process_crash: 'a managed process crashed or exited with an error — not a clean exit, and not stopped by an operator or a schedule',
   process_start_failed: 'owlette tried to launch a process and it failed to start',
   process_restarted: 'a process came back up — via recovery, a schedule, or an operator restart',
   exe_missing: 'a process executable no longer exists at its configured path',
@@ -385,7 +385,7 @@ export function TriggerCard({
                         }
                         disabled={disabled}
                         aria-label={`remove time ${index + 1}`}
-                        className="h-6 w-6 rounded-md text-muted-foreground hover:text-red-400 hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
+                        className="h-6 w-6 rounded-md text-muted-foreground hover:text-danger hover:bg-muted transition-colors cursor-pointer flex items-center justify-center flex-shrink-0"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>

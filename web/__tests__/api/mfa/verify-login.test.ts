@@ -334,3 +334,26 @@ describe('POST /api/mfa/verify-login — device trust ("remember this device")',
     expect(mockMarkSessionMfaVerified).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('POST /api/mfa/verify-login — the network the ceremony ran on', () => {
+  afterEach(() => {
+    delete process.env.EDGE_SHARED_SECRET;
+  });
+
+  it('is stamped on the login session, for swoop to bind the ceremony to', async () => {
+    process.env.EDGE_SHARED_SECRET = 'edge-secret-for-tests';
+    docState.data.mfaSecret = 'PLAINSECRET';
+    mockVerifyTOTP.mockReturnValue(true);
+
+    const res = await POST(
+      createMockRequest('http://localhost/api/mfa/verify-login', {
+        method: 'POST',
+        headers: { 'x-owlette-edge': 'edge-secret-for-tests', 'x-owlette-asn': '64500' },
+        body: { userId: 'user-1', code: '123456' },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockMarkSessionMfaVerified).toHaveBeenCalledWith('asn:64500');
+  });
+});

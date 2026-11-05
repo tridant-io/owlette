@@ -9,23 +9,32 @@ const mockGet = jest.fn();
  * `mockSecretDocs` overrides it to assert the sibling takes precedence.
  */
 let mockSecretDocs: Array<{ data: () => Record<string, unknown> | undefined }> = [];
+const mockGetAll = jest.fn((...refs: unknown[]) =>
+  Promise.resolve(refs.map((_, i) => mockSecretDocs[i] ?? { data: () => undefined })),
+);
+/** Plan lookups read `sites/{id}` and `users/{payer}` by path; nothing else reads a doc. */
+let mockDocs: Record<string, Record<string, unknown>> = {};
+const mockDocGet = jest.fn(async (path: string) => ({ data: () => mockDocs[path] }));
 
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     // Subscription query path — `sites/{id}/webhooks`; also the secret-sibling
     // path, which only needs to be chainable since getAll does the reading.
-    collection: () => ({
+    collection: (name: string) => ({
       where: jest.fn().mockReturnThis(),
       get: mockGet,
-      doc: () => ({
+      doc: (id: string) => ({
+        get: () => mockDocGet(`${name}/${id}`),
         collection: () => ({ doc: () => ({}) }),
       }),
     }),
-    getAll: (...refs: unknown[]) =>
-      Promise.resolve(
-        refs.map((_, i) => mockSecretDocs[i] ?? { data: () => undefined }),
-      ),
+    getAll: mockGetAll,
   }),
+}));
+
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 // Mock global fetch
@@ -33,6 +42,7 @@ const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 import { fireWebhooks, testWebhook } from '@/lib/webhookSender.server';
+import { createPlanMemo } from '@/lib/planPause.server';
 import crypto from 'crypto';
 
 function makeWebhookDoc(overrides: Record<string, unknown> = {}) {
@@ -300,9 +310,86 @@ describe('webhookSender', () => {
     });
   });
 
-  /* ---------------------------------------------------------------- */
-  /*  billing-system wave 2.6 — delivery pauses on a locked-out account */
-  /* ---------------------------------------------------------------- */
+  /**
+   * Plans (plan.md decision 8): delivery pauses when the site's payer has no
+   * `owlette.webhooks`. Runs the real resolver; only tridant's answer is mocked.
+   */
+  describe('fireWebhooks — plan pause', () => {
+    const ent = (webhooks: '0' | '1') => ({
+      ok: true,
+      resolved: webhooks === '1',
+      standing: webhooks === '1' ? 'active' : 'expired',
+      inGoodStanding: webhooks === '1',
+      ent: { 'owlette.webhooks': webhooks },
+      epoch: 0,
+    });
+
+    beforeEach(() => {
+      process.env.PLAN_ENFORCEMENT = 'on';
+      process.env.OWLETTE_E2E = '1';
+      mockDocs = { 'sites/site1': { owner: 'payer' }, 'sites/site2': { owner: 'payer' }, 'users/payer': {} };
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc()] });
+      mockFetch.mockResolvedValue({ ok: true, status: 200 });
+    });
+
+    afterEach(() => {
+      delete process.env.PLAN_ENFORCEMENT;
+      delete process.env.OWLETTE_E2E;
+    });
+
+    it('pauses without delivering, reading secrets or touching delivery state', async () => {
+      mockGetEntitlements.mockResolvedValue(ent('0'));
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockGetEntitlements).toHaveBeenCalledWith('payer');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockGetAll).not.toHaveBeenCalled();
+      // a pause is not a failure: no failCount, so it never auto-disables.
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    it('delivers when the payer has webhooks', async () => {
+      mockGetEntitlements.mockResolvedValue(ent('1'));
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips the lookup when nothing is subscribed', async () => {
+      mockGet.mockResolvedValue({ empty: true, docs: [] });
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockDocGet).not.toHaveBeenCalled();
+      expect(mockGetEntitlements).not.toHaveBeenCalled();
+    });
+
+    it('makes no plan read when enforcement is off', async () => {
+      delete process.env.PLAN_ENFORCEMENT;
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
+      expect(mockDocGet).not.toHaveBeenCalled();
+      expect(mockGetEntitlements).not.toHaveBeenCalled();
+    });
+
+    it('resolves each site and payer once across a batch sharing a memo', async () => {
+      mockGetEntitlements.mockResolvedValue(ent('0'));
+      const memo = createPlanMemo();
+
+      await Promise.all([
+        fireWebhooks('site1', 'My Site', 'machine.offline', {}, memo),
+        fireWebhooks('site1', 'My Site', 'machine.offline', {}, memo),
+        fireWebhooks('site2', 'Other Site', 'machine.offline', {}, memo),
+      ]);
+
+      expect(mockDocGet.mock.calls.map(([path]) => path).sort()).toEqual([
+        'sites/site1',
+        'sites/site2',
+        'users/payer',
+      ]);
+      expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
 
   describe('testWebhook', () => {
     it('sends test payload and returns status', async () => {

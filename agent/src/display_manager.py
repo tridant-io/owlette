@@ -129,6 +129,9 @@ _ROTATION_DEGREES = {
 }
 
 DISPLAYCONFIG_PATH_ACTIVE = 0x00000001
+# a path target with this mode index carries no target timing of its own:
+# windows derives one from the path's refreshRate / scaling / rotation
+DISPLAYCONFIG_PATH_MODE_IDX_INVALID = 0xFFFFFFFF
 
 # DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY values we care about
 _OUTPUT_TECH_HD15 = 0
@@ -1634,12 +1637,7 @@ def _enumerate_monitors_ccd() -> list:
             )
             continue
 
-        source_mode = None
-        source_mode_idx = source.modeInfoIdx
-        if 0 <= source_mode_idx < len(modes):
-            mi = modes[source_mode_idx]
-            if mi.infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE:
-                source_mode = mi.sourceMode
+        source_mode = _source_mode(path, modes)
         if source_mode is None:
             logger.debug('path missing source mode, skipping (sourceId=%s)', source.id)
             continue
@@ -2225,6 +2223,21 @@ def _validate_desired_layout(desired_layout):
     return True, None, None
 
 
+def _source_mode(path, modes):
+    """The DISPLAYCONFIG_SOURCE_MODE a path's source index points at, or None."""
+    idx = path.sourceInfo.modeInfoIdx
+    if 0 <= idx < len(modes) and modes[idx].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE:
+        return modes[idx].sourceMode
+    return None
+
+
+def _path_monitor_id(path) -> str:
+    """``<adapter luid>:<target id>``, the change-descriptor key for a path."""
+    return '{0}:{1}'.format(
+        _luid_to_str(path.targetInfo.adapterId), int(path.targetInfo.id)
+    )
+
+
 def _apply_desired_to_paths(paths, modes, desired_by_hash, hash_by_path_idx):
     """Mutate the path/mode arrays in-place to reflect the desired layout.
 
@@ -2248,16 +2261,13 @@ def _apply_desired_to_paths(paths, modes, desired_by_hash, hash_by_path_idx):
 
     for path_idx, desired in path_lookup.items():
         path = paths[path_idx]
-        monitor_id = '{0}:{1}'.format(
-            _luid_to_str(path.targetInfo.adapterId), int(path.targetInfo.id)
-        )
+        monitor_id = _path_monitor_id(path)
 
         path.flags |= DISPLAYCONFIG_PATH_ACTIVE
+        mode_changed = False
 
-        src_idx = path.sourceInfo.modeInfoIdx
-        if 0 <= src_idx < len(modes) and modes[src_idx].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE:
-            sm = modes[src_idx].sourceMode
-
+        sm = _source_mode(path, modes)
+        if sm is not None:
             new_x = int(desired['position']['x']) - offset_x
             new_y = int(desired['position']['y']) - offset_y
             if sm.position.x != new_x or sm.position.y != new_y:
@@ -2283,6 +2293,7 @@ def _apply_desired_to_paths(paths, modes, desired_by_hash, hash_by_path_idx):
                     })
                     sm.width = new_w
                     sm.height = new_h
+                    mode_changed = True
 
         if 'rotation' in desired:
             new_rot = _ROTATION_FROM_DEGREES.get(int(desired['rotation']))
@@ -2309,6 +2320,15 @@ def _apply_desired_to_paths(paths, modes, desired_by_hash, hash_by_path_idx):
                 })
                 path.targetInfo.refreshRate.Numerator = new_num
                 path.targetInfo.refreshRate.Denominator = 1000
+                mode_changed = True
+
+        if mode_changed:
+            # the queried index still points at the panel's current timing. a
+            # panel that fell back to 640x480 cannot carry the requested source
+            # through that timing and SDC_VALIDATE rejects the whole config
+            # (rc 31 / 1610, issue #29); without the index windows picks a
+            # timing for the new size from refreshRate / scaling instead
+            path.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID
 
         if desired.get('primary'):
             # Primary = source at (0, 0), already enforced by the offset above;
@@ -2321,6 +2341,75 @@ def _apply_desired_to_paths(paths, modes, desired_by_hash, hash_by_path_idx):
             })
 
     return changes
+
+
+def _describe_requested_modes(paths, modes, hash_by_path_idx, changes) -> list:
+    """For each monitor whose resolution or refresh the apply changed: the mode
+    now in the path arrays and whether EnumDisplaySettingsExW offers it.
+
+    Runs only after a validate rejection, so the per-monitor mode walk never
+    costs a successful apply anything. A monitor whose mode list cannot be
+    read reports ``offered: None``.
+    """
+    changed = {
+        c.get('monitorId') for c in changes
+        if c.get('field') in ('resolution', 'refreshHz')
+    }
+    out = []
+    for path_idx, ehash in hash_by_path_idx.items():
+        path = paths[path_idx]
+        if _path_monitor_id(path) not in changed:
+            continue
+        sm = _source_mode(path, modes)
+        if sm is None:
+            continue
+        width, height = int(sm.width), int(sm.height)
+        hz = _refresh_hz(path.targetInfo.refreshRate)
+        device = _get_target_device_name(path.targetInfo.adapterId, path.targetInfo.id)
+        gdi_name = _get_source_device_name(path.sourceInfo.adapterId, path.sourceInfo.id)
+        offered_modes = _enum_modes_for_monitor(gdi_name) if gdi_name else []
+        out.append({
+            'edidHash': ehash,
+            'friendlyName': (device.monitorFriendlyDeviceName or '').strip() if device else '',
+            'width': width,
+            'height': height,
+            'hz': round(hz, 2),
+            # None when the list could not be read (the walk returns [] on a
+            # timeout or a missing gdi name), so nothing false is claimed
+            'offered': any(
+                m['w'] == width and m['h'] == height and abs(m['hz'] - hz) <= 1
+                for m in offered_modes
+            ) if offered_modes else None,
+        })
+    return out
+
+
+def _validate_rejection_text(rc: int, paths, modes, hash_by_path_idx, changes) -> str:
+    """Name the monitor and mode behind a validate rejection, so the dashboard
+    shows ``monitor <hash> does not currently offer 2560x2880@60Hz`` instead
+    of a bare rc. Diagnostics only: if the description fails the bare text
+    stands, and the failure code is never affected.
+    """
+    text = f'SDC_VALIDATE rejected config (rc={rc})'
+    try:
+        parts = []
+        for m in _describe_requested_modes(paths, modes, hash_by_path_idx, changes):
+            name = m['edidHash']
+            if m['friendlyName']:
+                name = f"{m['friendlyName']} ({name})"
+            mode = '{0}x{1}@{2:g}Hz'.format(m['width'], m['height'], m['hz'])
+            if m['offered'] is None:
+                parts.append(f'monitor {name} asked for {mode}, mode list unavailable')
+            elif m['offered']:
+                parts.append(f'monitor {name} offers {mode}')
+            else:
+                parts.append(f'monitor {name} does not currently offer {mode}')
+    except Exception as e:
+        logger.debug('could not describe the rejected modes: %s', e)
+        return text
+    if not parts:
+        return text
+    return text + ': ' + '; '.join(parts)
 
 
 def _emit_audit(
@@ -2697,7 +2786,9 @@ def _apply_core(
         if rc != ERROR_SUCCESS:
             return {
                 'ok': False,
-                'error': f'SDC_VALIDATE rejected config (rc={rc})',
+                'error': _validate_rejection_text(
+                    rc, paths, modes, hash_by_path_idx, changes,
+                ),
                 'code': _ccd_failure_code(rc, 'validate'),
                 'rc': rc,
             }

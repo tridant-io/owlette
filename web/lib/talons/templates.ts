@@ -195,10 +195,12 @@ export const BUILT_IN_TALON_PRESETS: TalonTemplateDefinition[] = [
             'if the manage_windows_update and suppress_setup_screens tools are not available ' +
             'in this session, this talon is not armed to act: report that a site admin needs ' +
             'to turn on "let hoot act" on this talon, then stop. otherwise: 1) call ' +
-            'manage_windows_update get_status — if no install schedule, active hours or ' +
-            'restart deadline is configured, set installs for tuesday 3 am, active hours 7 ' +
-            'to 23, and a 7-day restart deadline; if they are already configured, leave ' +
-            'them alone and note them. 2) call suppress_setup_screens with action apply — ' +
+            'manage_windows_update get_status. if no install schedule is configured, set ' +
+            'installs for tuesday 3 am. if active hours come from the windows default, call ' +
+            'manage_windows_update limit_auto_restart with start_hour 7 and end_hour 23; if ' +
+            'they were already chosen but get_status lists a restart deadline, call ' +
+            'limit_auto_restart with no hours, which keeps them. leave anything else already ' +
+            'configured alone and note it. 2) call suppress_setup_screens with action apply — ' +
             'it is idempotent — and name any profile that had drifted. 3) call ' +
             'check_pending_reboot and say plainly whether a reboot is waiting. finish with ' +
             'a short summary of what drifted, what you fixed, and anything needing a human.',

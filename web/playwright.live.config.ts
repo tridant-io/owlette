@@ -52,6 +52,8 @@ const config = defineConfig({
     screenshot: 'only-on-failure',
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
+    // the app follows the os colour scheme; the live smoke pins dark like the e2e suite
+    colorScheme: 'dark',
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
 });

@@ -22,9 +22,10 @@ import { requireSession } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
-import { Capability, hasCapability, type Actor } from '@/lib/capabilities';
+import { Capability, hasCapability, siteStanding, type Actor } from '@/lib/capabilities';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
+import { requireEntitlement } from '@/lib/plan.server';
 import { getUserIdFromSession, withRateLimit } from '@/lib/withRateLimit';
 
 const COMMAND_TIMEOUT_MS = 15_000;
@@ -70,7 +71,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       userId,
       role: access.role === 'superadmin' || access.role === 'admin' ? access.role : 'member',
       // Per-site standing decides; the global role beside it grants nothing.
-      siteRoles: access.siteRole ? { [siteId]: access.siteRole } : {},
+      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode }]]),
     };
     if (!hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, siteId)) {
       return NextResponse.json(
@@ -78,6 +79,9 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         { status: 403 },
       );
     }
+
+    const planRefusal = await requireEntitlement(siteId, 'owlette.hoot');
+    if (planRefusal) return planRefusal;
 
     const commandId = `provision_cortex_key_${Date.now()}`;
     const pendingRef = db

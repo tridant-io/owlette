@@ -117,7 +117,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div>
-          <Label className="text-white">two-factor authentication</Label>
+          <Label className="text-foreground">two-factor authentication</Label>
           <p className="text-xs text-muted-foreground">
             {loading
               ? 'checking your second factors'
@@ -134,7 +134,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
         </p>
       ) : error ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-card/50 p-4">
-          <p className="text-sm text-red-400">{error}</p>
+          <p className="text-sm text-danger">{error}</p>
           <Button
             type="button"
             variant="outline"
@@ -148,9 +148,9 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
       ) : (
         <>
           {totalFactors === 0 && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              <p className="text-xs text-amber-200">
+            <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 this account has no second factor. you&apos;ll be asked to set one up
                 the next time you sign in.
               </p>
@@ -158,9 +158,9 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
           )}
 
           {isLastFactor && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              <p className="text-xs text-amber-200">
+            <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 this is your only second factor. add another so you don&apos;t lose
                 access if you lose this one.
               </p>
@@ -210,7 +210,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
             <div className="flex min-w-0 items-center gap-3">
               <KeyRound className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0">
-                <p className="text-sm text-white">authenticator app</p>
+                <p className="text-sm text-foreground">authenticator app</p>
                 <p className="text-xs text-muted-foreground">
                   {totp.enrolled
                     ? totp.enrolledAt
@@ -225,7 +225,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
                 type="button"
                 variant="outline"
                 size="sm"
-                className="h-8 shrink-0 cursor-pointer border-border text-red-400 hover:bg-muted"
+                className="h-8 shrink-0 cursor-pointer border-border text-destructive hover:bg-muted"
                 onClick={() => setRemoveOpen(true)}
               >
                 remove
@@ -260,9 +260,9 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
       {/* `/api/mfa/disable` demands live proof of possession — a warm session is deliberately
           not enough — so the code field is part of the confirmation, not a second step. */}
       <Dialog open={removeOpen} onOpenChange={(open) => !open && closeRemoveDialog()}>
-        <DialogContent className="border-border bg-secondary text-white sm:max-w-sm">
+        <DialogContent className="border-border text-foreground sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle className="text-white">remove authenticator app</DialogTitle>
+            <DialogTitle className="text-foreground">remove authenticator app</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               enter a code from your authenticator to confirm. you won&apos;t be able
               to sign in with it anymore.
@@ -270,9 +270,9 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
           </DialogHeader>
 
           {isLastFactor && (
-            <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
-              <p className="text-xs text-amber-200">
+            <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <p className="text-xs text-warning">
                 this is your last second factor — you&apos;ll be asked to set one up
                 again next time you sign in.
               </p>
@@ -284,7 +284,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
               value={removeCode}
               onChange={(e) => setRemoveCode(e.target.value)}
               placeholder={useBackupCode ? 'backup code' : '6-digit code'}
-              className="border-border bg-input text-white placeholder:text-muted-foreground"
+              className="border-border bg-background text-foreground placeholder:text-muted-foreground"
               inputMode={useBackupCode ? 'text' : 'numeric'}
               maxLength={useBackupCode ? 16 : 6}
               autoFocus

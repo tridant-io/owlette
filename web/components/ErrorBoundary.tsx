@@ -2,6 +2,7 @@
 
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import * as Sentry from '@sentry/nextjs';
+import { Button } from '@/components/ui/button';
 
 interface Props {
   children: ReactNode;
@@ -74,9 +75,9 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <div className="min-h-screen bg-background flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-background border border-border rounded-lg shadow-lg p-6">
-            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-red-900/30 rounded-full mb-4">
+            <div className="flex items-center justify-center w-12 h-12 mx-auto bg-danger-surface rounded-full mb-4">
               <svg
-                className="w-6 h-6 text-red-400"
+                className="w-6 h-6 text-danger"
                 fill="none"
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -88,7 +89,7 @@ export class ErrorBoundary extends Component<Props, State> {
               </svg>
             </div>
 
-            <h2 className="text-xl font-semibold text-white text-center mb-2">
+            <h2 className="text-xl font-semibold text-foreground text-center mb-2">
               something went wrong
             </h2>
 
@@ -99,11 +100,11 @@ export class ErrorBoundary extends Component<Props, State> {
             {/* Show error details in development mode */}
             {process.env.NODE_ENV === 'development' && this.state.error && (
               <details className="mb-6">
-                <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-white mb-2">
+                <summary className="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground mb-2">
                   error details (development only)
                 </summary>
                 <div className="bg-secondary rounded p-3 text-xs font-mono overflow-auto max-h-48">
-                  <div className="text-red-400 mb-2">
+                  <div className="text-danger mb-2">
                     <strong>Error:</strong> {this.state.error.toString()}
                   </div>
                   {this.state.errorInfo && (
@@ -119,18 +120,16 @@ export class ErrorBoundary extends Component<Props, State> {
             )}
 
             <div className="flex gap-3">
-              <button
-                onClick={this.handleReset}
-                className="flex-1 text-gray-900 font-medium py-2 px-4 rounded-md transition-colors"
-              >
+              <Button onClick={this.handleReset} className="flex-1">
                 try again
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="secondary"
                 onClick={() => window.location.href = '/dashboard'}
-                className="flex-1 bg-secondary border border-border hover:bg-muted text-foreground hover:text-white font-medium py-2 px-4 rounded-md transition-colors"
+                className="flex-1 border border-border"
               >
                 go to dashboard
-              </button>
+              </Button>
             </div>
           </div>
         </div>

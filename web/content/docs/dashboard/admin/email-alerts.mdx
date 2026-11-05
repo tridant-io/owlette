@@ -1,137 +1,180 @@
 ---
 title: "email alerts"
-description: "Owlette sends email notifications for machine health, process, threshold, hoot, and display-event alerts. Site admins manage a site's alert rules in Admin Panel -> alerts (/admin/alerts). Individual recipients manage their own delivery preferences in account settings -> alerts."
+description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. site owners and admins write threshold rules on admin → alerts; each person picks which emails they get in account settings."
+keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest"]
 ---
 
+alert email goes to the people on a site, not to a fixed address. each person decides which categories they get; site owners and admins decide what counts as a threshold breach.
+
 ---
 
-## alert categories
+## who gets them
 
-| category | trigger | preference gate | delivery path |
-|----------|---------|-----------------|---------------|
-| **Machine offline** | A previously online machine has a heartbeat older than 5 minutes | `healthAlerts` | `GET /api/cron/health-check` sends per-site emails and respects a 1-hour per-machine cooldown |
-| **Agent connection failure** | The agent posts a `connection_failure` event | `healthAlerts` | `POST /api/agent/alert` sends immediately, subject to the agent-alert rate limit |
-| **Process crashed** | The agent posts `process_crash` for a monitored process | `processAlerts` | `POST /api/agent/alert` queues the event; `GET /api/cron/process-alerts` sends a digest |
-| **Process failed to start** | The agent posts `process_start_failed` | `processAlerts` | Same process-alert queue and digest path |
-| **Threshold alert** | A saved metric rule is breached | `thresholdAlerts` | Cloud Functions evaluates rules and calls `POST /api/alerts/trigger` |
-| **hoot escalation** | Autonomous hoot cannot resolve an issue and marks an escalation pending | `cortexAlerts` | `POST /api/hoot/escalation` or cron-style `GET /api/hoot/escalation` sends escalation emails |
-| **Display event** | A routed display event needs email delivery | `displayAlerts` | `POST /api/agent/alert` sends critical display emails immediately or queues a display digest |
-| **api key expiring** | One of your api keys is 14, 3 or 0 days from `expiresAt` | `apiKeyAlerts` | `GET /api/cron/api-key-expiry` scans daily and emails the key's owner once per rung |
+every alert for a site goes to each person on the site's member list who has an email address, plus the site owner, one email per person. then, per person:
 
-Display email delivery is not enabled for every display event. The current email-routed events are `display_monitor_removed`, `display_apply_failed`, `display_auto_revert_fired`, and `display_sync_lost`. `display_monitor_removed` and `display_auto_revert_fired` bypass the digest queue and send immediately; other routed display emails are drained by `GET /api/cron/display-alerts`.
+- their switch for that category has to be on. every switch is on unless it was turned off
+- a machine they have muted is left out of their email. a mute is stored by machine ID, so it also covers a machine with the same ID on another site
+- their **additional CC recipients** (up to five) are copied on every alert email they get
 
-The agent alert route also accepts `exe_missing` events. These are not email-routed today; they are written to `sites/{siteId}/logs` with `action: "exe_missing"` and drive the dashboard executable-missing toast.
+if the site has nobody who could be emailed at all, or the list could not be built, the alert goes to the deployment's `ADMIN_EMAIL_PROD` (or `ADMIN_EMAIL_DEV`) instead. when there are people but every one of them turned the category off, nothing is sent.
 
-`POST /api/agent/alert` accepts both the legacy flat process-alert body and the generic `{ "eventType": "...", "data": { ... } }` shape used by current agents.
+**API key expiry is the exception.** a key belongs to a person, not a site, so its notice goes to the key's owner only: no site list, no `ADMIN_EMAIL` fallback, and no machine mutes.
+
+every alert email ends with **manage alerts**, which opens `/settings/alerts`, and **unsubscribe**, which turns off all seven categories at once. turn them back on from **manage alerts** or from [account settings → alerts](/docs/dashboard/account-settings#alerts).
+
+---
+
+## categories
+
+| category | sent when | switch | how it is sent |
+|---|---|---|---|
+| machine offline | a machine its agent last reported online stops sending heartbeats | **machine offline alerts** | the health-check cron, one email per site; see [offline timing](#offline-timing) |
+| agent connection failure | the agent reports a `connection_failure` | **machine offline alerts** | at once, from `POST /api/agent/alert` |
+| process crashed or failed to start | the agent reports `process_crash` or `process_start_failed` | **process crash alerts** | queued, then sent as a digest by `GET /api/cron/process-alerts` |
+| threshold | a [rule](#threshold-alert-rules) is breached | **threshold alerts** | the metrics Cloud Function calls `POST /api/alerts/trigger` |
+| hoot escalation | [autonomous hoot](/docs/dashboard/hoot#autonomous-mode) could not resolve an issue | **hoot escalation alerts** | `/api/hoot/escalation` |
+| display event | a monitor is removed, an apply fails, auto-revert fires, or sync is lost | **display events** | removal and auto-revert at once; the rest as a digest by `GET /api/cron/display-alerts` |
+| talon | a [talon](/docs/dashboard/talons#outputs) with an email output fires | **talon alerts** | by the talon run |
+| API key expiring | one of your keys is 14, 3 or 0 days from expiry | **api key expiry** | `GET /api/cron/api-key-expiry`, daily, to the key's owner |
+
+display drift, a swapped monitor, a disabled Mosaic and a refused apply are webhook-only, and an added monitor or a successful apply only reaches the [events](/docs/dashboard/displays#events) feed. a display event the agent raises within 90 seconds of its own successful apply skips email but still fires the webhook.
+
+an `exe_missing` report sends no email. it is logged to the site's logs and shows as the dashboard's executable-missing toast.
+
+### offline timing
+
+a machine counts as offline only after two checks and a settling window, so a slow heartbeat never pages anyone:
+
+1. a scan finds the machine marked online with a heartbeat older than 5 minutes, and records when it first saw it stale
+2. a later scan, at least 5 more minutes on, finds it still stale. it is now confirmed
+3. confirmed machines collect into the site's pending set. the email waits until that set has stopped growing for 7 minutes, so a staggered outage arrives as one email with the full count
+
+the email lists the machines **not responding**, any that **reported shutting down** in the last six hours, and any **still offline** from an earlier email. each machine is then quiet for an hour.
+
+- **planned downtime is skipped.** no alert fires while the agent has announced a reboot or shutdown scheduled within 15 minutes either side of now
+- **a clean shutdown never pages.** a machine whose agent reported itself offline is only listed as context in an email another machine triggered
+- with the cron every 5 minutes, the first email lands about 20 to 25 minutes after the last heartbeat
 
 ---
 
 ## threshold alert rules
 
-The **alerts** admin page (`/admin/alerts`) manages site-scoped threshold rules stored at `sites/{siteId}/settings/alerts`. Site admins can open it; the site selector offers only the sites you belong to, and saving a rule set requires the site-scoped `ALERT_RULES_MANAGE` capability. A rule includes:
+**admin** → **alerts** (`/admin/alerts`) holds one site's threshold rules, stored at `sites/{siteId}/settings/alerts`. the site selector offers the sites you belong to; saving needs `ALERT_RULES_MANAGE` on the site, which owners and admins hold. every save replaces the whole rule list through `PUT /api/sites/{siteId}/alerts`.
 
-| field | current options |
-|-------|-----------------|
-| metric | `cpu_percent`, `memory_percent`, `disk_percent`, `gpu_percent`, `cpu_temp`, `gpu_temp`, `network_latency`, `network_packet_loss` |
-| operator | `>`, `<`, `>=`, `<=` |
-| severity | `info`, `warning`, `critical` |
-| channel | `email`, `webhook`, or both |
-| cooldown | minutes before the same rule can notify again for the same machine |
+**create rule** opens **create alert rule**:
 
-The admin page ships presets for GPU overheating, low disk, high memory, and high CPU. Saving a rule replaces the rules array through `PUT /api/sites/{siteId}/alerts`.
+| field | what it takes |
+|---|---|
+| **name** | required. the alert email's subject carries it |
+| **metric** | one of the eight below |
+| **operator** | `>`, `<`, `>=` or `<=` |
+| **threshold** | a number in the metric's unit. temperatures are always °C, whatever your temperature unit |
+| **severity** | `info`, `warning` or `critical` |
+| **notification channels** | **email**, **webhook**, or both. at least one |
+| **cooldown (minutes)** | at least 1, default 30. counted per rule, per machine |
+
+each rule's row has a switch to turn it off without deleting it, a pencil to edit it and a bin to delete it.
+
+| metric | shown as | reported on |
+|---|---|---|
+| `cpu_percent` | **CPU usage (%)** | every platform |
+| `memory_percent` | **memory usage (%)** | every platform |
+| `disk_percent` | **disk usage (%)** | every platform. the share of the disk that is used |
+| `gpu_percent` | **GPU usage (%)** | NVIDIA on Windows and Linux; the Apple GPU on a Mac |
+| `cpu_temp` | **CPU temperature (°C)** | Windows only |
+| `gpu_temp` | **GPU temperature (°C)** | Windows; NVIDIA on Linux |
+| `network_latency` | **network latency (ms)** | every platform |
+| `network_packet_loss` | **packet loss (%)** | every platform |
+
+a rule on a metric a machine does not report never fires for that machine; [platform support](/docs/reference/platform-support#metrics) has the detail.
+
+**how a rule is checked.** the metrics Cloud Function checks every enabled rule each time a machine writes fresh metrics. a machine whose metrics are more than 10 minutes old is skipped, so an offline machine's last numbers never fire. on a machine with several CPUs, disks or GPUs, a rule reads the one the agent reports as primary: the busiest CPU and GPU, the fullest disk. the function caches a site's rules for up to 5 minutes, so a new or edited rule can take that long to apply.
+
+**presets** adds a ready-made rule, both channels on. a preset whose name is already in use is refused:
+
+| preset | rule | severity | cooldown |
+|---|---|---|---|
+| GPU Overheating | `gpu_temp > 85` | warning | 30 min |
+| Low Disk | `disk_percent < 10` | warning | 60 min |
+| High Memory | `memory_percent > 90` | warning | 30 min |
+| High CPU | `cpu_percent > 95` | critical | 30 min |
+
+the Low Disk preset fires when a disk is less than 10% **used**, so it alerts on an almost empty disk, not a full one. for a disk filling up, create a rule on **disk usage (%)** `>` 90 instead.
+
+the **webhook** channel sends `threshold.breached`, an event new subscriptions cannot select, so it reaches only older subscriptions that already list it; see [what fires today](/docs/dashboard/admin/webhooks#what-fires-today).
 
 ![email alert rule configuration](/docs-screens/email-alerts.png)
 
 ---
 
-## recipients and preferences
+## your own switches
 
-Owlette builds the recipient list from users assigned to the site plus the site owner. If no site user email is available, it falls back to `ADMIN_EMAIL_PROD` or `ADMIN_EMAIL_DEV`.
+each person sets these for themselves in [account settings → alerts](/docs/dashboard/account-settings#alerts), or on `/settings/alerts`:
 
-**api key expiry is the exception.** A key belongs to a user, not a site, so its notice goes to that one owner and nobody else — no site enumeration, no `ADMIN_EMAIL` fallback (that exists so an orphan *site* still pages someone; applied to a key it would mail the admin about a stranger's credential), and no machine mutes.
-
-Each user's [**account settings -> alerts**](/docs/dashboard/account-settings#alerts) section controls:
-
-- **Machine offline alerts** (`healthAlerts`)
-- **Process crash alerts** (`processAlerts`)
-- **Threshold alerts** (`thresholdAlerts`)
-- **hoot escalation alerts** (`cortexAlerts`)
-- **Display events** (`displayAlerts`)
-- **talon alerts** (`talonAlerts`)
-- **api key expiry** (`apiKeyAlerts`)
-- **Additional CC recipients** (`alertCcEmails`, maximum 5)
-- **Muted machines** (`mutedMachines`)
-
-Alert preferences default to enabled unless the stored preference is explicitly `false`. CC recipients are added to that user's alert emails, and muted machines suppress all alert emails for that user for the selected machine. Users mute or unmute a machine from the machine context menu; muted entries can also be removed from account settings. The same toggles are reachable on their own at `/settings/alerts`, which is where the **manage alerts** link in every alert email lands.
+| switch | stored as |
+|---|---|
+| **machine offline alerts** | `healthAlerts` |
+| **process crash alerts** | `processAlerts` |
+| **threshold alerts** | `thresholdAlerts` |
+| **hoot escalation alerts** | `cortexAlerts` |
+| **display events** | `displayAlerts` |
+| **talon alerts** | `talonAlerts` |
+| **api key expiry** | `apiKeyAlerts` |
+| **additional CC recipients** | `alertCcEmails`, at most five |
+| **muted machines** | `mutedMachines`; see [muted machines](/docs/dashboard/account-settings#muted-machines) |
 
 ---
 
 ## setup
 
-### environment variables
+the deployment needs these, described in [environment variables](/docs/setup/environment-variables#email-required-for-alerts):
 
-| variable | required | description |
-|----------|----------|-------------|
-| `RESEND_API_KEY` | yes | Enables Resend email delivery |
-| `RESEND_FROM_EMAIL` | production recommended | Sender address shown by the admin email config page; falls back to `onboarding@resend.dev` if unset |
-| `ADMIN_EMAIL_PROD` | production | Fallback recipient and default test-email target in production |
-| `ADMIN_EMAIL_DEV` | development | Fallback recipient and default test-email target in development |
-| `CRON_SECRET` | yes for cron alerts | Shared secret for the health, process, display, and api key expiry cron endpoints |
-| `CORTEX_INTERNAL_SECRET` | yes for threshold and hoot flows | Shared secret for `/api/alerts/trigger`, hoot autonomous flows, and the hoot escalation POST route |
+| variable | required | what it does |
+|---|---|---|
+| `RESEND_API_KEY` | yes | sends every email through Resend |
+| `RESEND_FROM_EMAIL` | in production | the sender address on every email. unset, it falls back to `onboarding@resend.dev` |
+| `ADMIN_EMAIL_PROD` / `ADMIN_EMAIL_DEV` | yes | the fallback recipient, and the target of test sends |
+| `CRON_SECRET` | yes | authenticates the cron routes below, and signs the unsubscribe links |
+| `CORTEX_INTERNAL_SECRET` | for threshold and hoot alerts | sent as `x-internal-secret` to `/api/alerts/trigger` and as `x-cortex-secret` to `POST /api/hoot/escalation` |
 
-### cron routes
+the cron routes run on an external scheduler; see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints):
 
-Configure the cron caller to include the expected secret header for each route:
+| route | schedule | header | what it does |
+|---|---|---|---|
+| `GET /api/cron/health-check` | every 5 minutes | `X-Cron-Secret: <CRON_SECRET>` | finds machines that stopped heartbeating |
+| `GET /api/cron/process-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | sends process alerts older than 2 minutes as one digest per site |
+| `GET /api/cron/display-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | the same for display alerts |
+| `GET /api/cron/api-key-expiry` | daily, `0 8 * * *` | `X-Cron-Secret: <CRON_SECRET>` | emails key owners at 14, 3 and 0 days before expiry |
+| `GET /api/hoot/escalation` | your choice | `Authorization: Bearer <CRON_SECRET>` | sends pending hoot escalations. `/api/cortex/escalation` still works |
 
-| route | schedule used by code comments | auth header | purpose |
-|-------|--------------------------------|-------------|---------|
-| `GET /api/cron/health-check` | every 5 minutes | `X-Cron-Secret: <CRON_SECRET>` | detects stale machine heartbeats |
-| `GET /api/cron/process-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | drains `pending_process_alerts` after a 2-minute accumulation window |
-| `GET /api/cron/display-alerts` | every 3 minutes | `X-Cron-Secret: <CRON_SECRET>` | drains `pending_display_alerts` after a 2-minute accumulation window |
-| `GET /api/cron/api-key-expiry` | daily (`0 8 * * *`) | `X-Cron-Secret: <CRON_SECRET>` | emails api key owners at 14, 3 and 0 days before expiry |
-| `GET /api/hoot/escalation` | cron-style polling | `Authorization: Bearer <CRON_SECRET>` | processes pending hoot escalation events (`/api/cortex/escalation` is a working alias) |
-
-Threshold alerts are not drained by a cron route. The metrics Cloud Function evaluates stored rules and calls `POST /api/alerts/trigger` with `x-internal-secret: <CORTEX_INTERNAL_SECRET>`.
+threshold alerts have no cron route: the metrics Cloud Function calls `POST /api/alerts/trigger` itself.
 
 ---
 
 ## testing email delivery
 
-<Callout type="info" title={"Internal page"}>
+<Callout type="info" title={"internal page"}>
 
-**Admin Panel -> email** (`/admin/email`) configures the platform's mail sender, so it is operated by owlette and is not part of the site-scoped admin panel. If alert email is not arriving for your site, work through [troubleshooting](#troubleshooting) below and contact [support@tridant.io](mailto:support@tridant.io).
+**admin** → **email** (`/admin/email`) configures the platform's mail sender, so it is run by owlette and is not part of the site-scoped admin panel. if alert email is not reaching your site, work through [troubleshooting](#troubleshooting) and contact [support@tridant.io](mailto:support@tridant.io).
 
 </Callout>
 
-The email page verifies configuration and sends template previews. It reads current configuration from `GET /api/platform/email/config`, then sends the selected preview through `POST /api/test-email`.
-
-The current test templates are:
-
-- `test`
-- `process_crash`
-- `process_start_failed`
-- `agent_alert`
-- `threshold_alert`
-- `machines_offline`
-- `cortex_escalation`
-- `api_key_expiring`
-- `welcome`
-- `user_signup`
-
-The UI sends previews to the configured admin email. The API also accepts optional `to` and `cc` fields for direct admin-session calls. Event simulation is not part of the shipped email testing flow.
+the email page reads the configuration from `GET /api/platform/email/config` and sends a sample of any template through `POST /api/test-email`, to the configured admin address. the API also takes `to` and `cc`. the templates are `test`, `process_crash`, `process_start_failed`, `agent_alert`, `threshold_alert`, `machines_offline`, `cortex_escalation`, `api_key_expiring`, `welcome` and `user_signup`.
 
 ---
 
 ## rate limits and cooldowns
 
-| alert path | protection |
-|------------|------------|
-| Machine offline | 1-hour cooldown per machine via `health.lastCronAlertAt` |
-| Process alerts | 3 per hour per `machineId:processName` before queueing |
-| Agent alert route | 5 requests per hour per IP |
-| Display alerts | 1 per hour per machine and event type; `display_drift` uses a 4-hour window |
-| Threshold alerts | rule-specific `cooldownMinutes` per rule and machine |
-| api key expiry | once per rung per key — the rung is stamped on the key document before the email is sent |
+| alert | limit |
+|---|---|
+| machine offline | one email per machine per hour, after the [settling window](#offline-timing) |
+| everything an agent posts | 5 reports per hour per IP address on `POST /api/agent/alert`: process, display and connection reports together. machines behind one NAT share the budget |
+| process alerts | 3 per hour per machine and process. a report over the limit is dropped, not queued |
+| display alerts | 1 per hour per machine and event type; `display_drift` once every 4 hours |
+| threshold alerts | the rule's own cooldown, per machine |
+| API key expiry | once per rung per key, recorded on the key before the email is sent |
+
+these limits need the deployment's Upstash Redis; without it every endpoint falls back to one flat per-process limit. see [rate limiting](/docs/setup/environment-variables#rate-limiting-required).
 
 ---
 
@@ -139,19 +182,19 @@ The UI sends previews to the configured admin email. The API also accepts option
 
 ### no emails received
 
-Start with the checks a site admin can make:
+1. check the recipient's switch for that category in **account settings** → **alerts**. an **unsubscribe** click turns every category off
+2. check whether they muted the machine
+3. check they are still on the site's member list
+4. for a threshold alert: the rule exists and is switched on, its cooldown has passed, the machine reports that metric, and the machine is sending fresh metrics
 
-1. Confirm the relevant preference is still enabled for the recipient in **account settings -> alerts**.
-2. Check whether the machine is muted for that recipient.
-3. Confirm the recipient still belongs to the site — the recipient list is built from site membership plus the site owner.
-4. For a threshold alert, confirm a matching rule exists on `/admin/alerts` and that its cooldown has elapsed.
+if those are fine, the rest is platform-side: `RESEND_API_KEY` and the sender on the email page, a `test` send, `CRON_SECRET` or `CORTEX_INTERNAL_SECRET` for the route that should have sent it, and Resend errors in the server or function logs.
 
-If those are clean, the remaining checks are platform-side: `RESEND_API_KEY`, sender, and environment on the email page; a `test` template send; `CRON_SECRET` or `CORTEX_INTERNAL_SECRET` for the route that emits the alert; and Resend errors in the Railway or function logs.
+### alerts arrive late
 
-### expected process or display alerts are delayed
-
-Process alerts and non-critical display alerts are digested. The event must be older than the 2-minute accumulation window before the cron route sends it.
+- **machine offline** takes about 20 to 25 minutes by design; see [offline timing](#offline-timing). nothing fires during an announced reboot or shutdown
+- **process and display digests** wait until the event is 2 minutes old, then for the next 3-minute cron run
+- **a new threshold rule** can take up to 5 minutes to start firing
 
 ### duplicate alerts
 
-Check whether multiple emitters are calling the same route. The shipped alert paths include cooldowns or rate limits, but duplicate cron schedules can still create noisy logs and unnecessary route traffic.
+check whether two schedulers call the same cron route. the cooldowns and rate limits stop most repeats, but a doubled schedule still doubles the route traffic.

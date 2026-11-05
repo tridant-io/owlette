@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useId } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ChevronDown, Search, Check } from 'lucide-react';
+import { SearchRow } from '@/components/SearchRow';
+import { ChevronDown, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getAllTimezones, getTimezoneOffset, COMMON_TIMEZONES, type TimezoneOption } from '@/lib/timeUtils';
 
@@ -18,6 +19,8 @@ const COMMON_TZ_SET = new Set<string>(COMMON_TIMEZONES.map((tz) => tz.value));
 
 export function TimezoneSelect({ value, onValueChange, disabled, className, id }: TimezoneSelectProps) {
   const [open, setOpenRaw] = useState(false);
+  // the list the combobox controls, for assistive tech and the a11y lint
+  const listId = useId();
   const [search, setSearch] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -95,9 +98,10 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-controls={open ? listId : undefined}
           disabled={disabled}
           className={cn(
-            'flex h-9 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap shadow-xs outline-none disabled:cursor-not-allowed disabled:opacity-50',
+            'flex h-9 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap shadow-xs disabled:cursor-not-allowed disabled:opacity-50',
             'border-input dark:bg-input/30 dark:hover:bg-input/50 bg-transparent',
             className
           )}
@@ -107,22 +111,22 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
         </button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0 border-border bg-secondary"
+        className="w-[var(--radix-popover-trigger-width)] min-w-[280px] p-0 border-border dark:bg-secondary"
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex items-center border-b border-border px-3 py-2">
-          <Search className="mr-2 size-4 shrink-0 text-muted-foreground" />
-          <input
-            ref={inputRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="search timezones..."
-            className="flex-1 bg-transparent text-sm text-white placeholder:text-muted-foreground outline-none"
-          />
-        </div>
+        <SearchRow
+          variant="row"
+          ref={inputRef}
+          value={search}
+          onChange={setSearch}
+          onKeyDown={handleKeyDown}
+          placeholder="search timezones..."
+          aria-label="search timezones"
+          clearLabel="clear search"
+        />
         <div
+          id={listId}
           ref={listRef}
           className="max-h-[300px] overflow-y-auto p-1 [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar-track]:bg-background [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-thumb]:rounded-md [&::-webkit-scrollbar-thumb:hover]:bg-accent"
         >
@@ -138,7 +142,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           ) : (
             // Grouped view with pinned common timezones
             <>
-              <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">Common</div>
+              <div className="px-2 py-1.5 text-xs text-muted-foreground font-medium">common</div>
               {commonOptions.map((tz) => (
                 <TimezoneItem key={tz.value} tz={tz} selected={value === tz.value} onSelect={handleSelect} />
               ))}
@@ -167,9 +171,11 @@ function TimezoneItem({ tz, selected, onSelect }: { tz: TimezoneOption; selected
     <button
       type="button"
       onClick={() => onSelect(tz.value)}
+      // the check icon is aria-hidden, so the chosen zone needs its own state
+      aria-current={selected ? 'true' : undefined}
       className={cn(
-        'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer outline-none',
-        'text-white hover:bg-muted',
+        'flex w-full items-center justify-between rounded-sm px-2 py-1.5 text-sm cursor-pointer',
+        'text-foreground hover:bg-muted focus-visible:outline-none focus-visible:bg-muted',
         selected && 'bg-muted'
       )}
     >

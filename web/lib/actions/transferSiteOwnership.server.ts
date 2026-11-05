@@ -22,6 +22,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import type { MemberDoc } from '@/lib/membership.server';
+import { planLimit, resolvePlan } from '@/lib/plan.server';
 
 export type TransferFailure =
   | { kind: 'site_not_found' }
@@ -29,7 +30,8 @@ export type TransferFailure =
   | { kind: 'successor_not_found' }
   | { kind: 'successor_inactive' }
   | { kind: 'successor_already_owner' }
-  | { kind: 'site_has_no_owner' };
+  | { kind: 'site_has_no_owner' }
+  | { kind: 'plan_limit'; entitlement: 'owlette.sites' | 'owlette.machines' };
 
 export type TransferResult =
   | { ok: true; previousOwnerUid: string; newOwnerUid: string }
@@ -41,6 +43,12 @@ export interface TransferInput {
   actorUid: string;
   /** True when the actor holds the global superadmin role. */
   actorIsSuperadmin: boolean;
+  /**
+   * account deletion hands every site over even past the successor's plan: a
+   * departing owner can't be held hostage to someone else's limits, and the
+   * successor's gates still refuse anything new.
+   */
+  skipPlanCheck?: boolean;
   now?: () => Date;
   db?: FirebaseFirestore.Firestore;
 }
@@ -65,6 +73,12 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
   const siteRef = db.collection('sites').doc(input.siteId);
   const successorUserRef = db.collection('users').doc(input.successorUid);
   const membersCol = siteRef.collection('members');
+
+  // before the transaction: the tridant lookup can run to its timeout, and the
+  // transaction's reads would hold their locks for all of it.
+  const planRefusal = input.skipPlanCheck
+    ? null
+    : await successorPlanRefusal(db, input.successorUid, input.siteId);
 
   return db.runTransaction(async (tx) => {
     // All reads first: Firestore forbids a read after a write in one transaction,
@@ -100,6 +114,9 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
       return { ok: false, failure: { kind: 'successor_inactive' } };
     }
 
+    // last, so a caller refused for any other reason learns nothing of the successor's plan.
+    if (planRefusal) return { ok: false, failure: planRefusal };
+
     const previousOwnerMemberRef = membersCol.doc(currentOwnerUid);
     const successorMemberRef = membersCol.doc(input.successorUid);
     const previousOwnerMemberSnap = await tx.get(previousOwnerMemberRef);
@@ -133,4 +150,36 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
 
     return { ok: true, previousOwnerUid: currentOwnerUid, newOwnerUid: input.successorUid };
   }) as Promise<TransferResult>;
+}
+
+/**
+ * the plan limit the successor would break by taking the site, or null. the
+ * owner is the payer (plan decision 1), so the site counts against the
+ * successor's sites and its machines join theirs.
+ */
+async function successorPlanRefusal(
+  db: FirebaseFirestore.Firestore,
+  successorUid: string,
+  siteId: string,
+): Promise<TransferFailure | null> {
+  const plan = await resolvePlan(successorUid);
+  const siteLimit = planLimit(plan, 'owlette.sites');
+  const machineLimit = planLimit(plan, 'owlette.machines');
+  if (siteLimit === Infinity && machineLimit === Infinity) return null;
+
+  const owned = await db.collection('sites').where('owner', '==', successorUid).select().get();
+  if (owned.docs.length >= siteLimit) return { kind: 'plan_limit', entitlement: 'owlette.sites' };
+  if (machineLimit === Infinity) return null;
+
+  const machinesOf = async (id: string) =>
+    (await db.collection('sites').doc(id).collection('machines').select().get()).docs.map((doc) => doc.id);
+  const [incoming, ...ownedMachines] = await Promise.all(
+    [siteId, ...owned.docs.map((site) => site.id)].map(machinesOf),
+  );
+  const theirs = new Set(ownedMachines.flat());
+  const combined = new Set([...theirs, ...incoming]);
+  // a site whose machines are all already theirs adds nothing, as a re-pair is exempt at mint.
+  return combined.size > theirs.size && combined.size > machineLimit
+    ? { kind: 'plan_limit', entitlement: 'owlette.machines' }
+    : null;
 }

@@ -20,6 +20,7 @@ import {
   problem,
   problemFromError,
   problemNotFound,
+  problemPlanRequired,
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
@@ -123,6 +124,13 @@ export const POST = authorizedSiteHandler<RouteParams>({
                 instance: `/api/sites/${siteId}/transfer-ownership`,
                 code: 'site_has_no_owner',
               });
+            case 'plan_limit':
+              return problemPlanRequired(
+                result.failure.entitlement === 'owlette.sites'
+                  ? "the new owner's plan covers no more sites. they need to upgrade before taking this one."
+                  : "the new owner's plan doesn't cover this site's machines. they need to upgrade before taking this one.",
+                result.failure.entitlement,
+              );
           }
         }
 

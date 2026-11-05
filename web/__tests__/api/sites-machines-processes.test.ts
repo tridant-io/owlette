@@ -125,11 +125,13 @@ jest.mock('@/lib/actions/executeMachineCommand.server', () => {
     status: number;
     code: string;
     detail: string;
-    constructor(status: number, code: string, detail: string) {
+    entitlement?: string;
+    constructor(status: number, code: string, detail: string, entitlement?: string) {
       super(detail);
       this.status = status;
       this.code = code;
       this.detail = detail;
+      this.entitlement = entitlement;
     }
   }
   return {
@@ -171,6 +173,7 @@ jest.mock('@/lib/processConfig.server', () => {
 
 // Import after mock is registered so the class identity stays consistent.
 import { ProcessConfigError as FakeProcessConfigError } from '@/lib/processConfig.server';
+import { ExecuteMachineCommandError as FakeExecuteMachineCommandError } from '@/lib/actions/executeMachineCommand.server';
 
 // Firestore admin.
 const mockFsGet = jest.fn();
@@ -860,6 +863,28 @@ describe.each([
       ctx()
     );
     expect(res.status).toBe(403);
+  });
+
+  it('returns 402 plan_required when the payer lacks owlette.control', async () => {
+    mockExecuteMachineCommand.mockRejectedValueOnce(
+      new FakeExecuteMachineCommandError(
+        402,
+        'plan_required',
+        "your plan doesn't include remote control. upgrade to continue.",
+        'owlette.control',
+      ),
+    );
+    const res = await handler(
+      jsonReq(`${urlDetail()}/${verb}`, 'POST', {}, { 'idempotency-key': `${verb}-k402` }),
+      ctx()
+    );
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.control',
+      upgradeUrl: '/settings/plan',
+    });
+    expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 
   it(`emits process_mutated audit with verb=${verb}`, async () => {

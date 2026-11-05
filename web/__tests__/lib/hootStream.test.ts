@@ -15,14 +15,18 @@ const mockListSiteMachines = jest.fn();
 const mockBuildExecutableTools = jest.fn();
 const mockResolveLlmConfig = jest.fn();
 const mockGetHootRequireTier3Approval = jest.fn();
+const mockIsMachineOnline = jest.fn();
+const mockIsHootEnabled = jest.fn();
+const mockGetMachineSummary = jest.fn();
 
 jest.mock('@/lib/hoot-utils.server', () => ({
   __esModule: true,
   verifyUserSiteAccess: (...args: unknown[]) => mockVerifyUserSiteAccess(...args),
   resolveHootMaxTier: () => 3,
   listSiteMachines: (...args: unknown[]) => mockListSiteMachines(...args),
-  isMachineOnline: jest.fn(),
-  isHootEnabled: jest.fn(),
+  isMachineOnline: (...args: unknown[]) => mockIsMachineOnline(...args),
+  isHootEnabled: (...args: unknown[]) => mockIsHootEnabled(...args),
+  getMachineSummary: (...args: unknown[]) => mockGetMachineSummary(...args),
   getHootRequireTier3Approval: (...args: unknown[]) => mockGetHootRequireTier3Approval(...args),
   buildExecutableTools: (...args: unknown[]) => mockBuildExecutableTools(...args),
   resolveLlmConfig: (...args: unknown[]) => mockResolveLlmConfig(...args),
@@ -43,15 +47,28 @@ jest.mock('ai', () => ({
   __esModule: true,
   streamText: jest.fn(() => ({ toUIMessageStreamResponse: () => new Response('') })),
   stepCountIs: jest.fn((count: number) => count),
+  // what the real tools builder wraps each tool in; identity keeps them readable.
+  tool: jest.fn((definition: unknown) => definition),
+  jsonSchema: jest.fn((schema: unknown) => schema),
+}));
+
+// the real tools builder pulls in the admin sdk; nothing here reaches Firestore.
+jest.mock('@/lib/firebase-admin', () => ({
+  __esModule: true,
+  getAdminDb: jest.fn(),
+  getAdminAuth: jest.fn(),
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
+import { streamText } from 'ai';
 import {
   conversationsToolDefs,
   runHootStream,
   SITE_TARGET_ID as REEXPORTED_SITE_TARGET_ID,
 } from '@/lib/hootStream.server';
+import { withAdvisor } from '@/lib/hoot/advisor';
 import { SITE_TARGET_ID } from '@/lib/hoot/target';
+import { buildSystemPrompt } from '@/lib/llm';
 import { getToolsByTier } from '@/lib/mcp-tools';
 
 const FOLLOWUP_TOOLS = ['schedule_followup', 'cancel_followup'];
@@ -111,8 +128,8 @@ describe('runHootStream site mode', () => {
   /** The tools builder's 7th positional argument: the fan-out machine list. */
   const FANOUT_ARG = 6;
 
-  function machine(id: string, online: boolean, hootEnabled: boolean) {
-    return { id, online, hootEnabled };
+  function machine(id: string, online: boolean, hootEnabled: boolean, activeHoursGuard = false) {
+    return { id, online, hootEnabled, activeHoursGuard };
   }
 
   /**
@@ -214,5 +231,201 @@ describe('runHootStream site mode', () => {
     await settle();
 
     expect(mockListSiteMachines).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells the model the site's local time", async () => {
+    mockListSiteMachines.mockResolvedValue([machine('m1', true, true)]);
+    const siteDb = {
+      collection: () => ({
+        doc: () => ({ get: async () => ({ data: () => ({ timezone: 'Asia/Tokyo' }) }) }),
+      }),
+    } as unknown as Firestore;
+
+    await runHootStream({
+      db: siteDb,
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId: SITE_TARGET_ID,
+      machineName: 'site',
+      messages: [],
+      chatId: 'conv-1',
+    });
+    await settle();
+
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      '',
+      true,
+      undefined,
+      { scope: 'site', timeZone: 'Asia/Tokyo' },
+      { machineIds: ['m1'], guardedIds: [] },
+    );
+  });
+
+  it('tells the tools and the model which dispatched agents hold a restart for active hours', async () => {
+    mockListSiteMachines.mockResolvedValue([
+      machine('m1', true, true, true),
+      // guarded, but hoot is off on it, so it is not a target
+      machine('m2', true, false, true),
+      machine('m3', true, true),
+      machine('m4', false, true, true),
+    ]);
+
+    await send();
+    await settle();
+
+    expect(mockBuildExecutableTools.mock.calls[0][FANOUT_ARG]).toEqual(['m1', 'm3']);
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: ['m1'] });
+    expect((buildSystemPrompt as jest.Mock).mock.calls[0][4]).toEqual({ machineIds: ['m1', 'm3'], guardedIds: ['m1'] });
+  });
+});
+
+describe('runHootStream single-machine mode', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      role: 'admin',
+      siteRole: 'admin',
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: false,
+    });
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    // the gate on keeps this turn on the server-side llm path.
+    mockGetHootRequireTier3Approval.mockResolvedValue(true);
+    mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    mockBuildExecutableTools.mockReturnValue({});
+  });
+
+  const db = {} as unknown as Firestore;
+
+  /** hoot-utils' real summary of one machine doc, so a stale capability is judged as in production. */
+  function realMachineSummary(data: Record<string, unknown>) {
+    const { getMachineSummary } = jest.requireActual('@/lib/hoot-utils.server');
+    const machineDb = {
+      collection: () => ({ doc: () => ({ collection: () => ({ doc: () => ({
+        get: async () => ({ exists: true, data: () => data }),
+      }) }) }) }),
+    };
+    return getMachineSummary(machineDb, 'site-a', 'kiosk-01');
+  }
+
+  function send() {
+    return runHootStream({
+      db,
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId: 'kiosk-01',
+      machineName: 'Lobby',
+      messages: [],
+      chatId: 'conv-1',
+    });
+  }
+
+  it("tells the model the machine's local time, and that its agent holds restarts, from one read", async () => {
+    mockGetMachineSummary.mockResolvedValue({
+      id: 'kiosk-01',
+      online: true,
+      hootEnabled: true,
+      timezone: 'America/New_York',
+      activeHoursGuard: true,
+    });
+
+    const result = await send();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.ok).toBe(true);
+    expect(mockGetMachineSummary).toHaveBeenCalledTimes(1);
+    expect(mockGetMachineSummary).toHaveBeenCalledWith(db, 'site-a', 'kiosk-01');
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      'Lobby',
+      false,
+      [],
+      { scope: 'machine', timeZone: 'America/New_York' },
+      { machineIds: ['kiosk-01'], guardedIds: ['kiosk-01'] },
+    );
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: ['kiosk-01'] });
+  });
+
+  it.each([
+    ['an agent that does not hold restarts', () => Promise.resolve({ id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false })],
+    ['a machine with no doc', () => Promise.resolve(null)],
+    // the read failing is no reason to fail the turn: utc, and nothing held, as before.
+    ['a machine read that fails', () => Promise.reject(new Error('unavailable'))],
+    // the real summary: an older agent never clears the capability its newer self wrote
+    ['a machine rolled back to 3.3.7 that still carries the capability', () =>
+      realMachineSummary({ online: true, agent_version: '3.3.7', capabilities: { activeHoursGuard: 1 } })],
+  ])('tells the tools and the model about %s', async (_label, summary) => {
+    mockGetMachineSummary.mockImplementation(summary);
+
+    await send();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(buildSystemPrompt).toHaveBeenCalledWith(
+      'Lobby',
+      false,
+      [],
+      { scope: 'machine', timeZone: undefined },
+      { machineIds: ['kiosk-01'], guardedIds: [] },
+    );
+    expect(mockBuildExecutableTools.mock.calls[0][7]).toMatchObject({ activeHoursGuardIds: [] });
+  });
+});
+
+/**
+ * Nobody approves a conversations API call in a dashboard chat, so it can never
+ * carry an active-hours override: its tools are built without
+ * `allowActiveHoursOverride`, and the schemas the model gets lack the flag.
+ */
+describe('runHootStream never offers an active-hours override', () => {
+  /** The tools builder's 8th positional argument: its options. */
+  const OPTIONS_ARG = 7;
+  const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      role: 'admin',
+      siteRole: 'admin',
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: false,
+    });
+    mockListSiteMachines.mockResolvedValue([{ id: 'm1', online: true, hootEnabled: true, activeHoursGuard: true }]);
+    mockGetMachineSummary.mockResolvedValue({ id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: true });
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    mockGetHootRequireTier3Approval.mockResolvedValue(true);
+    mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    // the real builder, so the schemas checked are the ones the model is handed.
+    mockBuildExecutableTools.mockImplementationOnce(
+      jest.requireActual('@/lib/hoot-utils.server').buildExecutableTools,
+    );
+    (withAdvisor as jest.Mock).mockImplementationOnce((_config: unknown, tools: unknown) => ({ tools }));
+  });
+
+  it.each([
+    ['a single-machine turn', 'kiosk-01'],
+    ['a site-wide turn', SITE_TARGET_ID],
+  ])('%s', async (_label, machineId) => {
+    const result = await runHootStream({
+      db: {} as unknown as Firestore,
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId,
+      machineName: 'Lobby',
+      messages: [],
+      chatId: 'conv-1',
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.ok).toBe(true);
+    expect(mockBuildExecutableTools).toHaveBeenCalledTimes(1);
+    expect(mockBuildExecutableTools.mock.calls[0][OPTIONS_ARG]).not.toHaveProperty('allowActiveHoursOverride');
+    const { tools } = (streamText as jest.Mock).mock.calls[0][0];
+    for (const toolName of OVERRIDE_TOOLS) {
+      expect(tools[toolName].inputSchema.properties).not.toHaveProperty('override_active_hours');
+      expect(tools[toolName].inputSchema.properties).not.toHaveProperty('reason');
+    }
   });
 });

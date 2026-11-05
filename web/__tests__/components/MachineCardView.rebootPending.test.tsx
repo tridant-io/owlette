@@ -106,20 +106,20 @@ describe('MachineCardView — restart pending banner', () => {
     const banner = screen.getByTestId('reboot-pending-banner');
     expect(banner).toHaveTextContent('restart pending: lab-sleep crashed 9 times');
     expect(banner).toHaveTextContent('machine offline, cannot restart');
-    // Muted, not the amber alarm — nothing is pending that anything can act on.
-    expect(banner.className).not.toContain('amber');
+    // Muted, not the warning alarm — nothing is pending that anything can act on.
+    expect(banner.className).not.toContain('warning');
     expect(screen.queryByTestId('reboot-pending-approve')).not.toBeInTheDocument();
     expect(screen.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();
   });
 
-  it('an online machine keeps the amber banner and both actions', () => {
+  it('an online machine keeps the warning banner and both actions', () => {
     renderCard(machine({ online: true, lastHeartbeat: NOW_SEC }), {
       onDismiss: jest.fn(),
       onRestart: jest.fn(),
     });
 
     const banner = screen.getByTestId('reboot-pending-banner');
-    expect(banner.className).toContain('amber');
+    expect(banner.className).toContain('warning');
     expect(banner).not.toHaveTextContent('machine offline');
     expect(screen.getByTestId('reboot-pending-approve')).toBeInTheDocument();
     expect(screen.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();
@@ -150,6 +150,82 @@ describe('MachineCardView — restart pending banner', () => {
       'could not dismiss the pending restart',
       { description: 'machine not found' },
     );
+  });
+
+  // approving is a restart, and the agent refuses one inside active hours
+  // unless a person overrides: the same choice as the context menu's restart.
+  describe('approve inside active hours', () => {
+    const hour = new Date().getUTCHours();
+    const guarded = (start: number) => machine({
+      online: true,
+      lastHeartbeat: NOW_SEC,
+      machineTimezone: 'UTC',
+      capabilities: { activeHoursGuard: 1 },
+      agent_version: '4.1.21',
+      activeHours: { start, end: (start + 2) % 24, source: 'policy' },
+    });
+
+    it('opens the active-hours choice instead of restarting', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard(guarded(hour), { onRestart });
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+
+      expect(onRestart).not.toHaveBeenCalled();
+      expect(await screen.findByTestId('active-hours-notice')).toHaveTextContent('inside active hours');
+      await user.type(screen.getByLabelText('reason'), 'crash loop, show is over');
+      await user.click(screen.getByRole('button', { name: 'restart now' }));
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', { override: { reason: 'crash loop, show is over' } });
+    });
+
+    it('can wait for the window to end', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard(guarded(hour), { onRestart });
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+      await user.click(await screen.findByRole('button', { name: 'restart when active hours end' }));
+
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', { when: 'after_active_hours' });
+    });
+
+    it('restarts straight away outside the window, as before', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard(guarded((hour + 2) % 24), { onRestart });
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', {});
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(toast.success).toHaveBeenCalledWith('restart command sent to kiosk-01', expect.anything());
+    });
+
+    it('restarts straight away where the agent guards nothing', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard(
+        machine({
+          online: true,
+          lastHeartbeat: NOW_SEC,
+          machineTimezone: 'UTC',
+          activeHours: { start: hour, end: (hour + 2) % 24, source: 'policy' },
+        }),
+        { onRestart },
+      );
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', {});
+      expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+    });
+
+    it('restarts straight away on a machine rolled back below 4.1.21 that still carries the capability', async () => {
+      const onRestart = jest.fn().mockResolvedValue({ commandId: 'cmd_1' });
+      const user = renderCard({ ...guarded(hour), agent_version: '3.3.7' }, { onRestart });
+
+      await user.click(screen.getByTestId('reboot-pending-approve'));
+
+      expect(onRestart).toHaveBeenCalledWith('kiosk-01', {});
+      expect(screen.queryByTestId('active-hours-notice')).not.toBeInTheDocument();
+    });
   });
 
   it('renders no banner when the flag is not active', () => {

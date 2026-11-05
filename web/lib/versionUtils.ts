@@ -158,12 +158,22 @@ export function isValidVersion(version: string | undefined | null): boolean {
 export const SITE_TIME_MIN_AGENT_VERSION = '3.2.3';
 
 /**
- * Oldest agent that can serve a swoop session. COPY ONLY, exactly like
- * SITE_TIME_MIN_AGENT_VERSION above: the authorization gate is the machine's
- * own `capabilities.swoop == 1` heartbeat key, never this string — a version
+ * Oldest agent that can serve a swoop session. ENFORCED, unlike
+ * SITE_TIME_MIN_AGENT_VERSION above: the session bundle route
+ * (api/agent/swoop/bundle) refuses an older agent with 403 `agent_too_old`.
+ * The dashboard's entry is still gated by the machine's own
+ * `capabilities.swoop == 1` heartbeat key, never by this string — a version
  * number cannot see an upgrade that is still waiting on a reboot, and the
  * dashboard must keep offering legacy live view to every machine that has no
- * swoop. Provisional: Task 10.1, the swoop release, sets the real version and
- * must confirm this matches the installer that actually shipped.
+ * swoop. 3.3.7 is the first installer that ships the streamer and
+ * `websocket-client` (owner ruling, 2026-09-23); a release that changes the
+ * bundle contract raises it.
  */
-export const SWOOP_MIN_AGENT_VERSION = '3.4.0';
+export const SWOOP_MIN_AGENT_VERSION = '3.3.7';
+
+/**
+ * the first agent with the active-hours guard. its `capabilities.activeHoursGuard`
+ * can't say so alone: the agent writes it by dotted path and an older one never
+ * clears it, so a machine rolled back below this keeps a stale 1.
+ */
+export const ACTIVE_HOURS_GUARD_MIN_AGENT_VERSION = '4.1.21';

@@ -3,7 +3,10 @@
 # Auth is via env var, NOT this file:
 #   export CLOUDFLARE_API_TOKEN=...    (token scoped to:
 #     Account > Load Balancing: Monitors and Pools > Edit
-#     Zone    > Load Balancers        > Edit   for the owlette.app zone)
+#     Zone    > Load Balancers        > Edit
+#     Zone    > Transform Rules       > Edit   for the owlette.app zone)
+#   export TF_VAR_edge_shared_secret=...   (EDGE_SHARED_SECRET from .claude/.env.local;
+#     never in this file — it must equal EDGE_SHARED_SECRET on every origin)
 #
 # Prereq: the Load Balancing add-on must be enabled on the Cloudflare account,
 # or `terraform apply` will be rejected by the API.

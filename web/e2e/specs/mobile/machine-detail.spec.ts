@@ -15,7 +15,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
-import { assertNoHorizontalOverflow } from '../../helpers/mobile';
+import { assertNoHorizontalOverflow, stabilize } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
 import { TEST_SITES, TEST_USERS, seedMachine } from '../../helpers/seed';
 
@@ -52,6 +52,11 @@ async function seedDetailMachine(): Promise<void> {
           timestamp: Timestamp.now(),
           cpus: { CPU0: { percent: CPU_PERCENT, temperature: 54 } },
           memory: { percent: MEMORY_PERCENT, usedGb: 19.5 },
+          // the widest the collapsed row's other cells get: 100% and four-digit kilobytes
+          disks: { 'C:': { percent: 100 } },
+          gpus: { GPU0: { usagePercent: 100, temperature: 85 } },
+          nics: { eth0: { txBps: 1023 * 1024, rxBps: 1023 * 1024 } },
+          network: { packetLossPct: 3 },
           primary: { cpu: 'CPU0' },
           processes: {
             [PROCESS_ID]: {
@@ -128,9 +133,7 @@ test.describe('mobile machine detail — admin on site-A', () => {
     await expect(card.getByText('Test Monitor 2', { exact: true })).toBeVisible();
     await assertNoHorizontalOverflow(page);
 
-    // Icon-only with no accessible name, so addressed by its lucide glyph
-    // (`ChevronsDownUp` = the "collapse all" state).
-    await page.locator('button:has(svg.lucide-chevrons-down-up)').click();
+    await page.getByRole('button', { name: 'collapse all', exact: true }).click();
 
     // Collapsed: each section falls back to its one-line summary trigger.
     await expect(card.getByText('Test Monitor 1', { exact: true })).toBeHidden();
@@ -148,6 +151,38 @@ test.describe('mobile machine detail — admin on site-A', () => {
     // Back to fully expanded so the card ends as it started.
     await page.locator('button:has(svg.lucide-chevrons-up-down)').click();
     await expect(card.getByText(PROCESS_NAME, { exact: true })).toBeVisible();
+    await assertNoHorizontalOverflow(page);
+  });
+
+  test('the collapsed metric row fits a phone: an icon for each label, and no cell cut short', async ({ page }) => {
+    const card = await cardFor(page);
+    // what the row leaves out on a phone is in the expanded card, packet loss included
+    await expect(card.getByText('3% loss', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'collapse all', exact: true }).click();
+
+    const row = card.getByRole('button').filter({ hasText: `${CPU_PERCENT}%` });
+    await expect(row).toBeVisible();
+    for (const icon of ['cpu', 'memory-stick', 'hard-drive', 'gpu']) {
+      await expect(row.locator(`svg.lucide-${icon}`)).toBeVisible();
+    }
+    await expect(row).toContainText('↑1023K');
+    await expect(row).toContainText('↓1023K');
+    // a pixel to spare in every cell, not just no overflow: linux draws these
+    // cells wider than windows, and with no headroom ci cut three of them short.
+    // measured on the real webfont, not the fallback it swaps from
+    await stabilize(page);
+    const spare = await row.locator('.grid > span').evaluateAll((cells) =>
+      cells.map((cell) => {
+        const content = document.createRange();
+        content.selectNodeContents(cell);
+        return cell.getBoundingClientRect().width - content.getBoundingClientRect().width;
+      }),
+    );
+    expect(spare).toHaveLength(5);
+    expect(
+      spare.every((px) => px >= 1),
+      `spare px per cell (cpu, mem, disk, gpu, net): ${spare.map((px) => px.toFixed(2)).join(', ')}`,
+    ).toBe(true);
     await assertNoHorizontalOverflow(page);
   });
 

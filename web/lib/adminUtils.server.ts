@@ -1,6 +1,8 @@
 /** Server-only admin utilities. Never import from a client component. */
 
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
+import logger from '@/lib/logger';
+import { pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
 
 export interface SiteRecipient {
   userId: string;
@@ -154,11 +156,14 @@ export async function getSiteProcessAlertEmails(siteId: string): Promise<string[
 
 /**
  * Site recipients carrying userId + email, for per-user email personalization
- * (unsubscribe links). Optionally filtered by one alert preference.
+ * (unsubscribe links). Optionally filtered by one alert preference. None when
+ * the site's payer has no `owlette.control`; pass a batch's `planMemo` to
+ * resolve each payer once.
  */
 export async function getSiteAlertRecipients(
   siteId: string,
-  filterPreference?: 'healthAlerts' | 'processAlerts' | 'thresholdAlerts' | 'cortexAlerts' | 'displayAlerts' | 'talonAlerts'
+  filterPreference?: 'healthAlerts' | 'processAlerts' | 'thresholdAlerts' | 'cortexAlerts' | 'displayAlerts' | 'talonAlerts',
+  planMemo?: PlanMemo
 ): Promise<SiteRecipient[]> {
   const db = getAdminDb();
   const recipients: SiteRecipient[] = [];
@@ -173,7 +178,19 @@ export async function getSiteAlertRecipients(
 
   try {
     const siteDoc = await db.collection('sites').doc(siteId).get();
-    const ownerId = siteDoc.data()?.owner as string | undefined;
+    const siteData = siteDoc.data();
+
+    // returns before the ADMIN_EMAIL fallback below, which would otherwise page
+    // the admin with every paused customer's alerts.
+    if (await pausedByPlan(siteId, 'owlette.control', planMemo, siteData ?? null)) {
+      logger.warn("alerts paused: the site's plan has no remote control", {
+        context: 'adminUtils',
+        data: { siteId, filterPreference },
+      });
+      return [];
+    }
+
+    const ownerId = siteData?.owner as string | undefined;
 
     const usersQuery = await db
       .collection('users')

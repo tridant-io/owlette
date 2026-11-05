@@ -6,11 +6,12 @@
  * status=LAUNCHING so the row shows the launching indicator, with the processes
  * panel pre-expanded by the seeded `processesExpanded` preference.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 test.use(roleState('admin'));
 
@@ -54,7 +55,7 @@ test('control capability card preview', async ({ page }) => {
     await page.waitForTimeout(500);
 
     await page.screenshot({
-      path: 'public/landing-screens/control.png',
+      path: themedPath('public/landing-screens/control.png'),
       fullPage: false,
     });
   } finally {

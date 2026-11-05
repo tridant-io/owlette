@@ -1,419 +1,206 @@
 ---
-title: "Owlette API webhooks"
-description: "webhooks are how roost tells your systems that something happened — a new version published, a deploy failed, a machine dropped offline, a quota alarm tripped. instead of polling the api on a timer, you subscribe a url once and roost posts a signed json event to it when a matching event is dispatched."
+title: "webhooks"
+description: "webhooks are how roost tells your systems that something happened on a site, such as a new version published or a rollback. you subscribe a URL once and owlette posts a signed JSON event to it, instead of you polling the API."
+keywords: ["callback", "callback url", "notifications"]
 ---
 
-**developer preview status**: subscription management, delivery history, manual retry, and `POST /api/webhooks/probe` are public. automatic production event dispatch and SSE event fanout are still deferred; `owlette listen` is a scoped liveness stream for now. The cloud-function dispatcher that exists today still uses a legacy event catalog and is not fully aligned with public webhook records because its subscription schema expects legacy fields (`secret`/`disabled`) instead of public fields (`signingSecret`/`paused`). Receiver signature verification and probe flows are stable.
+**last updated**: 2026-10-05
+
+a webhook is an HTTP `POST` that owlette sends to a URL you control when a subscribed event happens on your site. the body is a JSON envelope describing the event, and the `Roost-Signature` header lets you prove owlette sent it. answer with any `2xx` status to acknowledge it.
+
+each subscription belongs to one site and lists the event types it wants. its signing secret is shown once, at creation, and can be rotated with a 24-hour grace window.
+
+what is live today:
+
+- `version.published` and `version.rolled_back` are dispatched to every matching subscription.
+- `machine.offline` is delivered by an older alerting sender, with a different body, signature, and retry behavior — see [machine.offline](#machineoffline).
+- every other event in the [catalog](#event-catalog) is accepted on subscriptions and by the probe, but nothing emits it yet.
+- `POST /api/webhooks/probe` sends one signed test delivery on demand.
+- `owlette listen` holds a liveness stream only; it does not carry webhook events yet.
+
+the examples use `$OWLETTE_API_URL` (`https://owlette.app`) and `$OWLETTE_API_KEY`, set up as in the [quickstart](/docs/api/quickstart).
 
 ---
 
-## what webhooks are
+## envelope
 
-a webhook is an http `POST` that roost sends to a url you control whenever a subscribed event is dispatched for your site. the request body is a json envelope describing the event; the headers carry a signature you verify before trusting the payload. your endpoint returns any `2xx` status to acknowledge receipt. for dispatcher and manual retry records, anything else follows the retry model below; `POST /api/webhooks/probe` reports the result but does not retry.
-
-the model is stripe/github shaped: one subscription per url, each scoped to a site and to an explicit list of event types. secrets are per-subscription, shown once at creation, and rotatable with a grace window.
-
----
-
-## current delivery envelopes
-
-Owlette currently has two webhook delivery paths. They are documented separately because the public probe/subscription api and the production dispatcher are not aligned yet.
-
-### probe envelope
-
-`POST /api/webhooks/probe?siteId=<id>` validates the requested event against the public developer-preview catalog and sends a signed, one-shot `POST` to the supplied url. The current probe body includes both a top-level `siteId` and an event `id`:
+a dispatched delivery's body is this envelope, serialized as compact JSON with object keys sorted at every level (the examples here are indented for reading):
 
 ```json
 {
-  "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y0",
+  "data": {
+    "createdBy": "uid_123",
+    "description": "fixed broken lobby video",
+    "roostId": "rst_lobby",
+    "siteId": "kiosk-fleet-01",
+    "totalFiles": 342,
+    "totalSize": 2147483648,
+    "versionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "versionNumber": 7
+  },
   "event": "version.published",
-  "occurredAt": "2026-04-22T15:30:00Z",
-  "siteId": "kiosk-fleet-01",
-  "data": { }
+  "occurredAt": "2026-04-22T15:30:00.000Z",
+  "siteId": "kiosk-fleet-01"
 }
 ```
 
-`id` is unique to the probe event. `event` is the stable event-type string. `occurredAt` is rfc 3339 utc. `siteId` is the scoped site from the query string. `data` is event-specific and documented below.
+- `event` is the event type, also sent as the `Roost-Event` header.
+- `siteId` is the site the event belongs to.
+- `occurredAt` is when the event happened, as an ISO 8601 UTC timestamp. it does not change on retries.
+- `data` is event-specific; see the catalog below.
+- there is no event ID in the body. the `Roost-Delivery` header identifies the delivery and stays the same across retries.
 
-### production dispatcher envelope
-
-The current Cloud Functions dispatcher accepts and stores a different envelope:
-
-```json
-{
-  "event": "version.published",
-  "siteId": "kiosk-fleet-01",
-  "occurredAt": "2026-04-22T15:30:00Z",
-  "data": { }
-}
-```
-
-This dispatcher envelope has no top-level `id`. Delivery idempotency is carried by the `Roost-Delivery` header instead. The dispatcher now collection-group queries `webhooks`, while the public api creates subscriptions at `sites/{siteId}/webhooks/{webhookId}`; automatic production dispatch to public api-created subscriptions is therefore deferred until the dispatcher's legacy subscription schema (`secret`/`disabled`) is aligned with public webhook records (`signingSecret`/`paused`).
+a [probe](#probe) delivery adds a top-level `"id": "evt_probe_<16 hex characters>"`; dispatched deliveries never carry one.
 
 ---
 
 ## event catalog
 
-The public subscription validator and probe endpoint currently accept these developer-preview event names:
+subscriptions and the probe accept exactly these event names. anything else is `400 validation_failed`.
 
-- `version.published`, `version.rolled_back`
-- `deployment.started`, `deployment.completed`, `deployment.failed`
-- `machine.online`, `machine.offline`
-- `chunk.garbage_collected`, `chunk.verify_failed`
-- `quota.warning`, `quota.exceeded`
-- `api_key.used`, `api_key.expired`
+### version.published
 
-The production dispatcher currently validates this legacy catalog instead:
+a publish created a new version and moved the roost's current pointer to it. it is not sent when a publish matches the current version or an older one.
 
-- `distribution.queued`, `distribution.started`, `distribution.succeeded`, `distribution.failed`
-- `chunk.uploaded`
-- `version.published`
-- `rollback.executed`
+| field | type | meaning |
+|---|---|---|
+| `roostId` | string | the roost |
+| `siteId` | string | the site |
+| `versionId` | string | the new version's 64-character ID |
+| `versionNumber` | integer | its number in the roost's history |
+| `description` | string or `null` | the publish description |
+| `totalFiles` | integer | files in the version |
+| `totalSize` | integer | total bytes in the version |
+| `createdBy` | string | user ID of the publisher (the key's owner for an API-key call) |
 
-Treat the dispatcher catalog as legacy until production dispatch is aligned with the public subscription api. The examples below show the public probe/subscription catalog and use the probe envelope shape.
+### version.rolled_back
 
-### roost lifecycle
+a [rollback](/docs/api/versions#rollback) moved the roost's current pointer to an earlier version.
 
-These lifecycle events are planned and are not accepted by the current developer-preview subscription validator yet. The current accepted catalog begins at [versions](#versions).
-
-- **`roost.created`** — a new roost was created via `POST /api/roosts`.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y0",
-    "event": "roost.created",
-    "occurredAt": "2026-04-22T15:30:00Z",
+```json
+{
+  "data": {
+    "fromVersion": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "roostId": "rst_lobby",
     "siteId": "kiosk-fleet-01",
-    "data": {
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "name": "lobby-touchdesigner",
-      "targets": ["machine-a7f3", "machine-b2c1"]
-    }
+    "toVersion": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+    "triggeredBy": "uid_123"
+  },
+  "event": "version.rolled_back",
+  "occurredAt": "2026-04-22T15:35:00.000Z",
+  "siteId": "kiosk-fleet-01"
+}
+```
+
+`fromVersion` is the version that was current before the rollback, or `null` if there was none. `toVersion` is the version now current. `triggeredBy` is the user ID of the caller.
+
+### machine.offline
+
+a machine stopped reporting. it is sent when the health check, which runs every 5 minutes, finds a machine whose heartbeat has gone stale (at most once an hour per machine), and when an agent reports a connection failure through its alert channel.
+
+this event comes from owlette's older alerting sender, not the roost dispatcher, so it does not follow the rest of this page:
+
+```json
+{
+  "event": "machine.offline",
+  "timestamp": "2026-10-05T18:30:00.000Z",
+  "site": { "id": "kiosk-fleet-01", "name": "lobby kiosks" },
+  "data": {
+    "machine": { "id": "lobby-01", "name": "lobby-01", "lastSeen": "2026-10-05T18:21:12.000Z" }
   }
-  ```
+}
+```
 
-- **`roost.updated`** — a roost's name or target list changed via `PATCH /api/roosts/{id}`.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y1",
-    "event": "roost.updated",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "changed": ["targets"],
-      "targets": ["machine-a7f3", "machine-b2c1", "machine-c3d4"]
-    }
-  }
-  ```
+- the body is the shape above, not the roost [envelope](#envelope); `lastSeen` is present only on health-check deliveries.
+- headers are `Content-Type: application/json`, `User-Agent: owlette-Webhooks/1.0`, `X-owlette-Event: machine.offline`, and `X-owlette-Signature: sha256=<hex>` — the lowercase hex HMAC-SHA256 of the raw body, keyed with the subscription's signing secret. there is no timestamp in the signature, so no replay window, and no `Roost-*` headers.
+- a URL on `hooks.slack.com` or `discord.com/api/webhooks` receives a chat-formatted message instead, unsigned.
+- each event is one attempt with a 5-second timeout: no retries, no entry in [delivery history](#delivery-history).
+- after 10 consecutive failed attempts the sender disables the subscription, which also stops its version events. the API does not show that state and `PATCH` cannot clear it; create the subscription again to resume.
 
-- **`roost.deleted`** — a roost was soft-deleted via `DELETE /api/roosts/{id}`.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y2",
-    "event": "roost.deleted",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "deletedAt": "2026-04-22T15:30:00Z",
-      "purgeAt": "2026-05-22T15:30:00Z"
-    }
-  }
-  ```
+### not dispatched yet
 
-### versions
+you can subscribe to these and probe them, but nothing sends them yet. the `data` fields listed are what the probe sends; check this page again when an event starts firing.
 
-- **`version.published`** — a new version was published via `POST /api/roosts/{id}/versions` and the roost's current pointer moved to it.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y3",
-    "event": "version.published",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "versionId": "vrs_8d969eef6ecad3c29a3a629280e686cf",
-      "versionNumber": 7,
-      "description": "fixed broken lobby video",
-      "totalFiles": 342,
-      "totalSize": 2147483648,
-      "createdBy": "user_01HYA7R3K2N9P1Q5S6T8V0W4X"
-    }
-  }
-  ```
+| event | intended meaning | probe `data` fields |
+|---|---|---|
+| `deployment.started` | a rollout began | `roostId`, `rolloutId`, `siteId`, `stage` (`"started"`) |
+| `deployment.completed` | a rollout finished | `roostId`, `rolloutId`, `siteId`, `stage` (`"complete"`), `succeeded`, `failed` |
+| `deployment.failed` | a rollout aborted | `roostId`, `rolloutId`, `siteId`, `stage` (`"aborted"`), `abortReason`, `succeeded`, `failed` |
+| `machine.online` | a machine resumed reporting | `siteId`, `machineId`, `lastHeartbeat` |
+| `chunk.garbage_collected` | garbage collection deleted a chunk | `siteId`, `hash`, `sizeBytes` |
+| `chunk.verify_failed` | a stored chunk did not match its hash | `siteId`, `hash`, `expectedDigest`, `actualDigest` |
+| `quota.warning` | storage use crossed a warning threshold | `siteId`, `tier`, `usedBytes`, `limitBytes`, `threshold` |
+| `quota.exceeded` | storage use reached the limit | `siteId`, `tier`, `usedBytes`, `limitBytes` |
+| `api_key.used` | an API key was used | `siteId`, `keyId`, `keyPrefix`, `ip`, `userAgent`, `firstUseFromIp` |
+| `api_key.expired` | an API key expired | `siteId`, `keyId`, `keyPrefix`, `name`, `expiresAt` |
 
-- **`version.rolled_back`** — a rollback flipped the roost's current version pointer to a prior version.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y4",
-    "event": "version.rolled_back",
-    "occurredAt": "2026-04-22T15:35:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "fromVersion": "vrs_8d969eef6ecad3c29a3a629280e686cf",
-      "toVersion": "vrs_2c26b46b68ffc68ff99b453c1d304134",
-      "triggeredBy": "user_01HYA7R3K2N9P1Q5S6T8V0W4X"
-    }
-  }
-  ```
-
-### deployments
-
-- **`deployment.started`** — a rollout began fanning out to targets.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y5",
-    "event": "deployment.started",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "rolloutId": "rollout_01HYA8K3R2N7P9Q1S5T6U8V0W2",
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "stage": "started"
-    }
-  }
-  ```
-
-- **`deployment.completed`** — every machine in the rollout reached `succeeded`.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y6",
-    "event": "deployment.completed",
-    "occurredAt": "2026-04-22T15:34:12Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "rolloutId": "rollout_01HYA8K3R2N7P9Q1S5T6U8V0W2",
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "stage": "completed",
-      "succeeded": 2,
-      "failed": 0
-    }
-  }
-  ```
-
-- **`deployment.failed`** — the rollout hit a terminal failure (canary failed, or per-machine retry budget exhausted).
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y7",
-    "event": "deployment.failed",
-    "occurredAt": "2026-04-22T15:33:48Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "rolloutId": "rollout_01HYA8K3R2N7P9Q1S5T6U8V0W2",
-      "roostId": "roost_lobby_td",
-      "siteId": "kiosk-fleet-01",
-      "stage": "failed",
-      "abortReason": "chunk_verify_failed",
-      "succeeded": 1,
-      "failed": 1
-    }
-  }
-  ```
-
-### machines
-
-- **`machine.online`** — a machine resumed reporting heartbeats after being offline.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y8",
-    "event": "machine.online",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "machineId": "machine-a7f3",
-      "siteId": "kiosk-fleet-01",
-      "lastHeartbeat": "2026-04-22T15:29:58Z"
-    }
-  }
-  ```
-
-- **`machine.offline`** — a machine's heartbeat went stale past the threshold.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Y9",
-    "event": "machine.offline",
-    "occurredAt": "2026-04-22T14:02:12Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "machineId": "machine-a7f3",
-      "siteId": "kiosk-fleet-01",
-      "lastHeartbeat": "2026-04-22T13:57:00Z"
-    }
-  }
-  ```
-
-### chunks
-
-- **`chunk.garbage_collected`** — a chunk was reclaimed by the gc sweeper after losing all referrers and serving its 30-day grace period.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z0",
-    "event": "chunk.garbage_collected",
-    "occurredAt": "2026-04-22T03:00:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "siteId": "kiosk-fleet-01",
-      "hash": "sha256:4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
-      "sizeBytes": 4194304
-    }
-  }
-  ```
-
-- **`chunk.verify_failed`** — a background verify pass found bytes at rest that do not match their claimed digest.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z1",
-    "event": "chunk.verify_failed",
-    "occurredAt": "2026-04-22T04:15:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "siteId": "kiosk-fleet-01",
-      "hash": "sha256:4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
-      "expectedDigest": "sha256:4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
-      "actualDigest": "sha256:5feceb66ffc86f38d952786c6d696c79c2dbc239dd4e91b46729d73a27fb57e9"
-    }
-  }
-  ```
-
-### quota
-
-- **`quota.warning`** — site storage usage crossed the 50% or 80% threshold. fired once per threshold crossing.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z2",
-    "event": "quota.warning",
-    "occurredAt": "2026-04-22T10:00:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "siteId": "kiosk-fleet-01",
-      "tier": "pro",
-      "threshold": 0.8,
-      "usedBytes": 85899345920,
-      "limitBytes": 107374182400
-    }
-  }
-  ```
-
-- **`quota.exceeded`** — site hit 100% of its storage or bandwidth limit; writes are rejected with `quota_exceeded` until usage drops or the period resets.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z3",
-    "event": "quota.exceeded",
-    "occurredAt": "2026-04-22T11:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "siteId": "kiosk-fleet-01",
-      "tier": "pro",
-      "usedBytes": 107374182400,
-      "limitBytes": 107374182400
-    }
-  }
-  ```
-
-### api keys
-
-- **`api_key.used`** — an api key authenticated a request (sampled; not fired for every call — intended for first-use-from-new-ip alerting).
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z4",
-    "event": "api_key.used",
-    "occurredAt": "2026-04-22T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "keyId": "key_01HXYZA7F3B2C1D0E9F8G7H6J5",
-      "keyPrefix": "owk_live_kB8n3p",
-      "ip": "203.0.113.42",
-      "userAgent": "owlette-cli/1.0.0-rc.0",
-      "firstUseFromIp": true
-    }
-  }
-  ```
-
-- **`api_key.expired`** — an api key's `expiresAt` has passed; subsequent requests return `401 token_expired`.
-  ```json
-  {
-    "id": "evt_01HYCAM5T4P9R1S3U7V8W0X2Z5",
-    "event": "api_key.expired",
-    "occurredAt": "2026-07-21T15:30:00Z",
-    "siteId": "kiosk-fleet-01",
-    "data": {
-      "keyId": "key_01HXYZA7F3B2C1D0E9F8G7H6J5",
-      "keyPrefix": "owk_live_kB8n3p",
-      "name": "ci/cd — prod",
-      "expiresAt": "2026-07-21T15:30:00Z"
-    }
-  }
-  ```
+hashes in chunk events are bare 64-character hex, as everywhere else in roost.
 
 ---
 
 ## signature format
 
-every delivery carries a `Roost-Signature` header modeled on stripe's:
+every delivery carries a `Roost-Signature` header:
 
 ```
 Roost-Signature: t=1745334602,v1=5f3e8a7c2b9d1e4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d
 ```
 
-- **`t`** — unix timestamp (seconds) when roost generated the signature.
-- **`v1`** — hex-encoded `hmac-sha256(signingSecret, "<t>.<raw_body>")` where `<raw_body>` is the exact bytes of the request body (no whitespace normalization, no re-serialization).
+- **`t`** is the unix time, in seconds, when the attempt was signed. every attempt is signed afresh.
+- **`v1`** is the lowercase hex HMAC-SHA256 of the string `<t>.<raw body>`, keyed with the subscription's signing secret. use the whole secret, including its `whsec_` prefix, and the exact request bytes: no whitespace changes, no re-serialization.
 
-verification has three steps, all mandatory:
+verify in three steps:
 
-1. recompute `v1` from the signing secret, the `t` value from the header, and the raw request body. compare using **constant-time** comparison (`hmac.compare_digest` in python, `crypto.timingSafeEqual` in node).
-2. reject if `|now - t| > 300` (5-minute replay tolerance). this is what stops a stolen payload from being replayed an hour later.
-3. be idempotent on `Roost-Delivery` — if you've already processed that delivery id, respond `200` without reprocessing.
+1. recompute `v1` from your secret, the header's `t` and the raw body, and compare it with a **constant-time** comparison (`hmac.compare_digest` in Python, `crypto.timingSafeEqual` in Node).
+2. reject the delivery if `t` is more than 300 seconds from your clock. this is what stops a captured delivery from being replayed later.
+3. deduplicate on `Roost-Delivery`: if you already processed that ID, answer `200` without processing it again.
 
-the `v1=` prefix leaves room for a future `v2=` algorithm. verifiers should accept any matching `v1=` value and ignore unknown scheme prefixes until a new algorithm is explicitly supported.
+for 24 hours after you [rotate the secret](#rotate-the-signing-secret), accept a signature that matches either the new or the old secret. new deliveries are signed with the new secret at once, but retries of deliveries queued before the rotation still use the old one.
+
+`v1=` leaves room for a future scheme. accept a delivery if any `v1=` value matches, and ignore schemes you do not know.
 
 ---
 
 ## signature verification
 
-all three examples below implement the same three-step protocol: split the header, check the timestamp against a 5-minute window, and constant-time-compare the hmac. prefer the sdk helpers over hand-rolled code — they ship with the replay check wired in and use timing-safe comparison by default.
+the Node and Python SDKs ship a `verifySignature` / `verify_signature` helper with the replay check built in and a timing-safe comparison. the bash version needs only `openssl`.
 
-### node
+the SDKs are not on npm or PyPI yet; until they are, install them from the repository (see [distribution](/docs/api/distribution)).
+
+### Node
 
 ```ts
-// npm install @owlette/sdk express
+// npm install @owlette/sdk@rc express   (run with: npx tsx server.ts)
 import express from 'express';
 import { verifySignature } from '@owlette/sdk';
 
 const app = express();
-const SECRET = process.env.ROOST_WEBHOOK_SECRET!;
+// during a rotation, set ROOST_WEBHOOK_PREVIOUS_SECRET to the old secret for 24 hours.
+const secrets = [
+  process.env.ROOST_WEBHOOK_SECRET,
+  process.env.ROOST_WEBHOOK_PREVIOUS_SECRET,
+].filter((s): s is string => Boolean(s));
+const processed = new Set<string>(); // use durable storage in production
 
-// webhooks need the raw body bytes — register the raw parser BEFORE
-// json-parser on this route.
+// verify the raw bytes: register express.raw on this route, not a json parser.
 app.post(
   '/webhooks/roost',
   express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    const verdict = verifySignature(
-      req.headers['roost-signature'] as string | undefined,
-      req.body as Buffer,               // raw bytes, NOT the parsed json
-      SECRET,
-      // { toleranceSeconds: 300 } — default; override only if you must.
-    );
-    if (!verdict.ok) {
-      // possible reasons: missing_header | malformed_header | missing_timestamp | missing_v1 | timestamp_out_of_tolerance | bad_signature
-      return res.status(401).json({ error: verdict.reason });
+  (req, res) => {
+    const header = req.get('roost-signature');
+    const verdicts = secrets.map((secret) => verifySignature(header, req.body as Buffer, secret));
+    const verdict = verdicts.find((v) => v.ok) ?? verdicts[0];
+    if (!verdict?.ok) {
+      // reason: missing_header | missing_timestamp | missing_v1 | timestamp_out_of_tolerance | bad_signature
+      return res.status(401).json({ error: verdict?.reason ?? 'no_secret_configured' });
     }
 
-    const event = JSON.parse(req.body.toString('utf-8'));
+    const deliveryId = req.get('roost-delivery') ?? '';
+    if (processed.has(deliveryId)) return res.status(200).end();
+    processed.add(deliveryId);
 
-    // dedup on Roost-Delivery — a retry of the same attempt keeps the id.
-    const deliveryId = String(req.headers['roost-delivery']);
-    if (await isAlreadyProcessed(deliveryId)) return res.status(200).end();
-
-    await handle(event);
+    const event = JSON.parse((req.body as Buffer).toString('utf-8'));
+    console.log(event.event, event.data);
     res.status(200).end();
   },
 );
@@ -421,44 +208,50 @@ app.post(
 app.listen(8080);
 ```
 
-### python
+### Python
 
 ```python
-# pip install owlette-sdk fastapi uvicorn
+# pip install --pre owlette-sdk fastapi uvicorn   (run with: uvicorn server:app --port 8080)
+import json
 import os
-from fastapi import FastAPI, Request, HTTPException
+
+from fastapi import FastAPI, HTTPException, Request
 from roost import verify_signature
 
 app = FastAPI()
-SECRET = os.environ["ROOST_WEBHOOK_SECRET"]
+# during a rotation, set ROOST_WEBHOOK_PREVIOUS_SECRET to the old secret for 24 hours.
+SECRETS = [s for s in (os.environ.get("ROOST_WEBHOOK_SECRET"), os.environ.get("ROOST_WEBHOOK_PREVIOUS_SECRET")) if s]
+processed: set[str] = set()  # use durable storage in production
+
 
 @app.post("/webhooks/roost")
 async def webhook(request: Request):
-    raw = await request.body()            # raw bytes — never use request.json()
-    sig = request.headers.get("roost-signature")
-    verdict = verify_signature(sig, raw, secret=SECRET)
-    if not verdict.ok:
-        # reason: "missing_header" | "malformed_header" | "missing_timestamp" | "missing_v1" | "timestamp_out_of_tolerance" | "bad_signature"
-        raise HTTPException(status_code=401, detail=verdict.reason or "bad_signature")
+    raw = await request.body()  # raw bytes; never verify request.json()
+    header = request.headers.get("roost-signature")
+    verdicts = [verify_signature(header, raw, secret) for secret in SECRETS]
+    verdict = next((v for v in verdicts if v.ok), verdicts[0] if verdicts else None)
+    if verdict is None or not verdict.ok:
+        # reason: missing_header | missing_timestamp | missing_v1 | timestamp_out_of_tolerance | bad_signature
+        raise HTTPException(status_code=401, detail=verdict.reason if verdict else "no_secret_configured")
 
     delivery_id = request.headers.get("roost-delivery", "")
-    if await is_already_processed(delivery_id):
+    if delivery_id in processed:
         return {"ok": True, "deduped": True}
+    processed.add(delivery_id)
 
-    import json
     event = json.loads(raw)
-    await handle(event)
+    print(event["event"], event["data"])
     return {"ok": True}
 ```
 
 ### bash
 
-no sdk — pure `openssl` + `jq`. useful when your receiver is a shell pipeline or a cloud function where adding a sdk is overkill. run this as a cgi script or behind a tiny http wrapper.
+no SDK, only `openssl`. useful when the receiver is a shell pipeline or a cgi script.
 
 ```bash
 #!/usr/bin/env bash
-# verify-roost-webhook.sh — stdin is the raw request body; headers are in env vars
-#                          HTTP_ROOST_SIGNATURE + HTTP_ROOST_DELIVERY (cgi style).
+# verify-roost-webhook.sh: stdin is the raw request body; headers arrive cgi-style in
+# HTTP_ROOST_SIGNATURE and HTTP_ROOST_DELIVERY.
 
 set -euo pipefail
 
@@ -469,7 +262,7 @@ body="$(cat)"                                         # raw bytes from stdin
 sig_header="${HTTP_ROOST_SIGNATURE:-}"
 [[ -n "$sig_header" ]] || { echo "missing Roost-Signature" >&2; exit 1; }
 
-# parse "t=<unix>,v1=<hex>" — tolerate other v*= schemes following it
+# parse "t=<unix>,v1=<hex>"; ignore other schemes
 t=""; v1=""
 while IFS= read -r part; do
   case "$part" in
@@ -482,103 +275,313 @@ done < <(tr ',' '\n' <<<"$sig_header")
 # replay window
 now="$(date -u +%s)"
 delta=$(( now > t ? now - t : t - now ))
-(( delta <= TOLERANCE_SECONDS )) || { echo "outside_tolerance ($delta s)" >&2; exit 1; }
+(( delta <= TOLERANCE_SECONDS )) || { echo "timestamp_out_of_tolerance ($delta s)" >&2; exit 1; }
 
 # recompute v1 = hmac_sha256(secret, "<t>.<body>")
 expected="$(printf '%s.%s' "$t" "$body" \
   | openssl dgst -sha256 -hmac "$ROOST_WEBHOOK_SECRET" -hex \
   | awk '{print $NF}')"
 
-# constant-time compare: use openssl's equal-length buffer diff via `cmp`
 [[ "${#expected}" -eq "${#v1}" ]] || { echo "bad_signature" >&2; exit 1; }
-if ! cmp --silent <(printf '%s' "$expected") <(printf '%s' "$v1"); then
+if ! cmp -s <(printf '%s' "$expected") <(printf '%s' "$v1"); then
   echo "bad_signature" >&2; exit 1
 fi
 
-echo "ok  delivery=${HTTP_ROOST_DELIVERY:-<none>}  event=$(jq -r '.event // empty' <<<"$body")"
+echo "ok  delivery=${HTTP_ROOST_DELIVERY:-<none>}"
 ```
 
-> **note on bash timing safety** — `cmp --silent` is the closest posix has to a constant-time hex compare. the hash values are non-secret on one side (the computed `$expected`) and the attacker-controlled `$v1` has fixed length, so timing leaks here are not exploitable in practice. if you need strict constant-time comparison, run the python or node examples instead.
+> **timing safety in bash**: `cmp` is not a constant-time comparison. the computed value is the only secret-derived side and the received `v1` has a fixed length, so the leak is not practical to exploit, but use the Node or Python version when you need a strict constant-time check.
 
 ---
 
 ## delivery headers
 
-Current delivery paths set slightly different headers.
+dispatched deliveries and manual retries send:
 
-Probe deliveries include:
+- **`Content-Type: application/json`**
+- **`Roost-Event: <event>`**, the same as the body's `event`; route on it without parsing the body.
+- **`Roost-Delivery: <id>`**, 32 hex characters derived from the event and its body. it stays the same across automatic retries and [manual retries](#manual-retry); use it as your idempotency key.
+- **`Roost-Signature: t=<unix>,v1=<hex>`**, see [signature format](#signature-format).
 
-- **`Content-Type: application/json`** — body is always a json envelope.
-- **`Roost-Event: <event.name>`** — redundant with the body's `event` field; useful for routing without parsing the body.
-- **`Roost-Delivery: <uuid>`** — random per probe firing. use this as your idempotency key on the receiver.
-- **`Roost-Signature: t=<unix>,v1=<hex>`** — see signature format above.
-- **`User-Agent: roost-probe/1.0`** — probe-specific user agent for receiver allowlisting.
+the dispatcher sets no `User-Agent` of its own.
 
-Production dispatcher deliveries currently include `Content-Type`, `Roost-Event`, `Roost-Delivery`, and `Roost-Signature`. The dispatcher does not currently set a `User-Agent` header. Its `Roost-Delivery` value is stable for the same event/body across automatic retries and manual retry records.
+probe deliveries send the same four headers plus `User-Agent: roost-probe/1.0`; their `Roost-Delivery` is a random UUID per probe.
 
 ---
 
 ## delivery guarantees
 
-The guarantees below describe the current Cloud Functions dispatcher and manual retry records. Automatic event dispatch to public api-created subscriptions is deferred; `POST /api/webhooks/probe` is a one-shot live POST and is not retried or stored in delivery history.
-
-- **at-least-once.** a delivery may arrive more than once if your receiver times out after processing but before returning `2xx`. dedup on `Roost-Delivery`.
-- **response handling.** `2xx` succeeds. network errors, `5xx`, `408`, `425`, and `429` are retried. other `4xx` responses are treated as permanent receiver failures and are not retried.
-- **retries.** retried deliveries use exponential backoff with 5s base delay, factor 3, 1h maximum delay, 20% jitter, and 10 total attempts. without jitter the retry delays after failed attempts are roughly 5s, 15s, 45s, 2m15s, 6m45s, 20m15s, then 1h until the attempt budget is exhausted. each attempt gets a fresh `Roost-Signature` timestamp but the same `Roost-Delivery` id.
-- **dead letter.** after the 10th failed attempt the delivery is marked `failed`. the dispatcher does not currently auto-pause or auto-disable the subscription from `attemptDelivery`; operators can still update `paused` explicitly via `PATCH /api/webhooks/{id}` on public webhook subscriptions.
-- **retention.** `GET /api/webhooks/{id}/deliveries` lists 30 days of delivery summaries. `GET /api/webhooks/{id}/deliveries/{deliveryId}` returns stored request details plus the captured response status.
-- **ordering.** deliveries are not globally ordered. if you need to reason about order, use `occurredAt` in the payload; do not rely on the order deliveries arrive.
+- **queueing.** when an event happens, one delivery is queued for each matching subscription that is neither paused nor deleted. a dispatcher runs once a minute and sends up to 200 due deliveries per run.
+- **at-least-once.** a delivery can arrive more than once, for example when your receiver processes it but times out before answering. deduplicate on `Roost-Delivery`.
+- **response handling.** your receiver has 10 seconds to answer; a slower answer counts as a network error. redirects are followed. `2xx` is success. network errors, timeouts, `408`, `425`, `429` and `5xx` are retried. any other status fails the delivery at once, with `lastError: "http_<status>"`.
+- **retries.** after a failed attempt `n`, the next attempt waits 5 seconds × 3<sup>n−1</sup>, capped at 1 hour, with ±20% jitter: about 5 s, 15 s, 45 s, 2 m 15 s, 6 m 45 s, 20 m 15 s, then 1 h. a wait shorter than a minute lands on the next dispatcher run. each attempt is signed with a fresh `t`; `Roost-Delivery` does not change.
+- **give-up.** a delivery gets 10 attempts. after the 10th failure it is marked `failed` with `lastError: "retry_exhausted: <reason>"`. the dispatcher never pauses a subscription; only the [machine.offline](#machineoffline) sender disables one.
+- **pause and delete.** pausing or deleting a subscription stops new deliveries from being queued for it. deliveries already queued are still sent.
+- **states.** a delivery is `pending` until it succeeds (`succeeded`) or gives up (`failed`).
+- **ordering.** deliveries are not ordered. use `occurredAt` when order matters.
+- **subscription counters.** `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` on a subscription are not updated by the dispatcher yet; read [delivery history](#delivery-history) instead.
 
 ---
 
 ## subscription management
 
-every operation on a webhook subscription - create, list, detail, update, delete, rotate-secret, delivery history, manual retry, and url probe - is a public api endpoint. the authoritative contract is `web/openapi.yaml`.
+every subscription operation is a public API route, and every route takes the site as a `siteId` query parameter. the full schema is in the [API reference](/docs/api).
 
-- `POST /api/webhooks?siteId=<id>` - create a subscription (returns `signingSecret` once).
-- `GET /api/webhooks?siteId=<id>` / `GET /api/webhooks/{id}?siteId=<id>` - list / detail.
-- `PATCH /api/webhooks/{id}?siteId=<id>` - update url, events, description, or paused state.
-- `DELETE /api/webhooks/{id}?siteId=<id>` - soft-delete and retain a 30-day tombstone.
-- `POST /api/webhooks/{id}/rotate-secret?siteId=<id>` - mint a new signing secret with a 24h grace window.
-- `GET /api/webhooks/{id}/deliveries?siteId=<id>` / `GET /api/webhooks/{id}/deliveries/{deliveryId}?siteId=<id>` - delivery history + single delivery detail.
-- `POST /api/webhooks/{id}/deliveries/{deliveryId}/retry?siteId=<id>` - manually redeliver a past event.
-- `POST /api/webhooks/probe?siteId=<id>` - fire a signed synthetic event at a url without creating a subscription.
+### authentication and scopes
 
-scopes: list/detail/deliveries require `site=<id>:read`; create/update/delete/rotate/probe/retry require `site=<id>:write`. create, update, delete, and rotate-secret additionally check webhook-manage rights on the site, so the key's owner must be a site admin or that site's owner - a `site=<id>:write` key held by a plain member is rejected.
+send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also works).
+
+| route | API-key scope | role |
+|---|---|---|
+| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | member |
+| `POST /api/webhooks`, `PATCH` or `DELETE /api/webhooks/{webhookId}`, `POST .../rotate-secret` | `site=<siteId>:write` | site admin or owner |
+| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | member |
+
+a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
+
+`Idempotency-Key` is optional on create, update, rotate-secret and retry: the same key with the same body within 24 hours replays the first success with `Idempotent-Replayed: true`. delete and probe ignore it. see [idempotency](/docs/api/idempotency).
+
+### create
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/webhooks?siteId=kiosk-fleet-01" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "url": "https://hooks.example.com/roost",
+    "events": ["version.published", "version.rolled_back"],
+    "description": "ci notifier"
+  }'
+```
+
+response (`201 Created`):
+
+```json
+{
+  "id": "wh_3f9c2a7e1b8d4c6a0e",
+  "siteId": "kiosk-fleet-01",
+  "url": "https://hooks.example.com/roost",
+  "events": ["version.published", "version.rolled_back"],
+  "paused": false,
+  "createdAt": "2026-04-22T15:30:00.000Z",
+  "signingSecret": "whsec_<64 hex characters>",
+  "description": "ci notifier"
+}
+```
+
+- **`url`** must use `https`, on no explicit port or on port 80, 443, 8080 or 8443, and be at most 2048 characters. its host must not be a private, loopback, link-local, carrier-grade NAT, multicast or reserved IP address, and must resolve in DNS to public addresses only. a wrong scheme, port or address is `400` with code `bad_scheme`, `bad_port` or `private_ip`; a URL that does not parse, is too long or does not resolve is `400 validation_failed`. the URL is stored normalized, so `https://hooks.example.com` comes back as `https://hooks.example.com/`.
+- **`events`** must be a non-empty list of catalog names; duplicates are dropped.
+- **`description`** is optional, trimmed, and cut to 500 characters.
+- **`signingSecret`** appears only in this response (and in an idempotent replay of it). store it now; if you lose it, rotate.
+
+### list and get
+
+```bash
+curl -fsS "$OWLETTE_API_URL/api/webhooks?siteId=kiosk-fleet-01&page_size=20" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+the list answers `{ webhooks, next_page_token, nextPageToken }`, newest first, without deleted subscriptions. `page_size` defaults to 20 with a maximum of 100. `GET /api/webhooks/{webhookId}?siteId=...` returns one subscription, or `404 not_found` once it is deleted. each subscription has `id`, `url`, `events`, `description` (when set), `createdAt`, `updatedAt`, `paused`, `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount`. the secret is never returned.
+
+### update
+
+`PATCH /api/webhooks/{webhookId}?siteId=...` takes any of `url`, `events`, `description` and `paused`, and at least one of them. `url` and `events` are checked as on create; `description` set to `null` or blank removes it; `paused` must be a boolean. the response is the updated subscription.
+
+### delete
+
+`DELETE /api/webhooks/{webhookId}?siteId=...` soft-deletes the subscription and pauses it. the response is `{ id, siteId, softDeleted: true, tombstoneExpiresAt }`, 30 days out; deleting again returns the same tombstone. after delete, the subscription and its delivery history answer `404 not_found`.
+
+### rotate the signing secret
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/webhooks/wh_3f9c2a7e1b8d4c6a0e/rotate-secret?siteId=kiosk-fleet-01" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+```json
+{
+  "id": "wh_3f9c2a7e1b8d4c6a0e",
+  "siteId": "kiosk-fleet-01",
+  "signingSecret": "whsec_<64 hex characters>",
+  "previousSecretValidUntil": "2026-04-23T15:30:00.000Z",
+  "gracePeriodHours": 24,
+  "rotatedAt": "2026-04-22T15:30:00.000Z"
+}
+```
+
+the new secret is returned once and signs every new delivery from now on. until `previousSecretValidUntil`, accept signatures from the old secret too (see [signature format](#signature-format)).
+
+### delivery history
+
+```bash
+curl -fsS "$OWLETTE_API_URL/api/webhooks/wh_3f9c2a7e1b8d4c6a0e/deliveries?siteId=kiosk-fleet-01" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+the list answers `{ deliveries, next_page_token, nextPageToken }` for the last 30 days, newest first; `page_size` defaults to 20 with a maximum of 100. each delivery has `id`, `event`, `state`, `attempt`, `lastStatus`, `lastError`, `createdAt`, `completedAt` and `nextAttemptAt` (set only while `pending`). a delivery `id` is `<Roost-Delivery>__<webhookId>`, with `__retry_<8 hex>` appended for a manual retry.
+
+`GET /api/webhooks/{webhookId}/deliveries/{deliveryId}?siteId=...` adds the request and response:
+
+```json
+{
+  "id": "0c1f5e9a2b7d4e8f9a0b1c2d3e4f5a6b__wh_3f9c2a7e1b8d4c6a0e",
+  "webhookId": "wh_3f9c2a7e1b8d4c6a0e",
+  "siteId": "kiosk-fleet-01",
+  "event": "version.published",
+  "state": "failed",
+  "request": {
+    "method": "POST",
+    "url": "https://hooks.example.com/roost",
+    "headers": {
+      "Content-Type": "application/json",
+      "Roost-Event": "version.published",
+      "Roost-Delivery": "0c1f5e9a2b7d4e8f9a0b1c2d3e4f5a6b",
+      "Roost-Signature": "t=1745334602,v1=5f3e8a7c2b9d1e4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d"
+    },
+    "body": "{\"data\":{...},\"event\":\"version.published\",\"occurredAt\":\"2026-04-22T15:30:00.000Z\",\"siteId\":\"kiosk-fleet-01\"}"
+  },
+  "response": {
+    "status": 404,
+    "headers": {},
+    "body": "",
+    "durationMs": null
+  },
+  "attempt": 1,
+  "nextAttemptAt": null,
+  "createdAt": "2026-04-22T15:30:00.000Z",
+  "completedAt": "2026-04-22T15:30:41.000Z",
+  "lastError": "http_404"
+}
+```
+
+`request.headers` shows the signature of the latest attempt. `response` is `null` until an attempt got an HTTP status; only `status` is recorded today, so `headers`, `body` and `durationMs` stay empty.
+
+### manual retry
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/webhooks/wh_3f9c2a7e1b8d4c6a0e/deliveries/0c1f5e9a2b7d4e8f9a0b1c2d3e4f5a6b__wh_3f9c2a7e1b8d4c6a0e/retry?siteId=kiosk-fleet-01" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+response (`202 Accepted`):
+
+```json
+{
+  "id": "0c1f5e9a2b7d4e8f9a0b1c2d3e4f5a6b__wh_3f9c2a7e1b8d4c6a0e__retry_9b2e41c7",
+  "webhookId": "wh_3f9c2a7e1b8d4c6a0e",
+  "siteId": "kiosk-fleet-01",
+  "retryOf": "0c1f5e9a2b7d4e8f9a0b1c2d3e4f5a6b__wh_3f9c2a7e1b8d4c6a0e",
+  "state": "pending",
+  "nextAttemptAt": "2026-04-22T16:00:00.000Z"
+}
+```
+
+- a retry is a new delivery with the same body and the same `Roost-Delivery`, signed with the current secret and given a fresh budget of 10 attempts. it goes out on the next dispatcher run.
+- it goes to the URL stored on the original delivery, even if you have since changed the subscription's URL.
+- you can retry a delivery in any state.
+- a subscription with no stored secret answers `500 internal_error`; rotate the secret, then retry.
+
+### probe
+
+`POST /api/webhooks/probe?siteId=...` sends one signed delivery to a URL without creating a subscription, so you can test a receiver before you subscribe it.
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/webhooks/probe?siteId=kiosk-fleet-01" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://hooks.example.com/roost",
+    "event": "version.published",
+    "signingSecret": "whsec_test_0000000000000000000000000000000000000000"
+  }'
+```
+
+- `url` follows the same rules as create. `event` must be a catalog name.
+- `payload` is optional: a JSON object to send as `data` instead of the canned example.
+- `signingSecret` is optional: at least 32 characters. without it the server generates one and returns it.
+- the probe waits up to 10 seconds for your receiver. it is not retried, not stored in delivery history, and every call sends again.
+
+the response is `200` whatever your receiver answered:
+
+```json
+{
+  "status": 200,
+  "durationMs": 184,
+  "deliveryId": "6f1d3c2a-9b8e-4f7a-a1d2-3c4b5a6f7e8d",
+  "event": "version.published",
+  "requestBody": "{\"data\":{...},\"event\":\"version.published\",\"id\":\"evt_probe_4b1e9c7a2f3d5e6a\",\"occurredAt\":\"2026-04-22T15:30:00.000Z\",\"siteId\":\"kiosk-fleet-01\"}",
+  "signature": "t=1745334602,v1=5f3e8a7c2b9d1e4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d4f6a8c0e2d",
+  "signingSecret": "whsec_test_0000000000000000000000000000000000000000",
+  "responseBody": "ok"
+}
+```
+
+`status` is your receiver's HTTP status, or `null` when it could not be reached, in which case `networkError` explains why. `responseBody` holds the first 2048 characters of the answer, when there is one.
 
 ---
 
 ## local development
 
-`owlette listen` opens the scoped server-sent-events transport at `GET /api/events/stream?siteId=<id>`. in the current developer preview the stream is a liveness channel: the server emits `connected` and `keepalive` events, but `owlette listen` currently consumes them internally and does not forward them to the receiver. production event fanout is deferred to a follow-up wave; do not rely on the stream for live webhook delivery yet.
-
 ```bash
-# 1. log in once per machine (stores an API key in the OS keychain when available, otherwise ~/.config/owlette/credentials.json; profile metadata lives in ~/.config/owlette/config.toml)
+# 1. log in once per machine. the api key goes to the os keychain when available,
+#    otherwise ~/.config/owlette/credentials.json; profiles live in ~/.config/owlette/config.toml
 owlette auth login
 
-# 2. start your receiver on :8080, using a throwaway test secret
+# 2. start your receiver on :8080 with a throwaway test secret
 export ROOST_WEBHOOK_SECRET=whsec_local_dev_0000000000000000000000000000000000
-node my-receiver.js &
+npx tsx server.ts &
 
-# 3. open the scoped SSE transport
-owlette listen \
-  --site kiosk-fleet-01 \
-  --forward-to http://localhost:8080/webhooks/roost \
-  --signing-secret "$ROOST_WEBHOOK_SECRET" \
-  --events version.published,deployment.failed
+# 3a. send one canned, signed event straight from your machine (no api call)
+owlette trigger version.published --site kiosk-fleet-01 \
+  --to http://localhost:8080/webhooks/roost \
+  --signing-secret "$ROOST_WEBHOOK_SECRET"
 
-# currently consumes connected/keepalive internally. Ctrl-C to stop.
+# 3b. or have the server send the exact envelope a real delivery uses (needs a public https url)
+owlette trigger version.published --site kiosk-fleet-01 \
+  --to https://hooks.example.com/roost --via-api
 ```
 
-a stream open currently logs liveness locally rather than forwarding it:
+- **`owlette trigger --to`** posts the event's `data` object on its own, without the envelope, signed with `--signing-secret` (unsigned without it). use it to exercise your signature check; use `--via-api` to test envelope parsing.
+- **`owlette trigger --via-api`** calls [`POST /api/webhooks/probe`](#probe), so the URL must pass the probe's rules: a public `https` URL, never `localhost`.
+- **`owlette listen --site <id> --forward-to <url>`** opens `GET /api/events/stream?siteId=<id>`, which needs `site=<id>:read`. the stream sends `connected` and then a `keepalive` every 15 seconds, and closes after 30 minutes, at which point `owlette listen` exits; run it again. it carries no webhook events yet, so nothing is forwarded today.
+
+a session of `owlette listen` looks like this:
 
 ```
-stream connected
-keepalive
+owlette: listening on https://owlette.app/api/events/stream
+       site: kiosk-fleet-01
+       forwarding to http://localhost:8080/webhooks/roost
+       events: version.published, deployment.failed
+       re-signing with supplied secret
+owlette: stream connected
 ```
 
-common local-dev patterns:
+to debug a delivery that is not arriving, read [delivery history](#delivery-history) for its `state`, `lastStatus` and `lastError`, fix the receiver, then [retry](#manual-retry) it.
 
-- **verifying a new integration without touching prod.** `owlette trigger version.published --site kiosk-fleet-01 --to http://localhost:8080/webhooks/roost --signing-secret "$ROOST_WEBHOOK_SECRET"` fires a single canned event locally. no tunnel, no subscription, no network.
-- **smoke-testing a public receiver before subscribing.** `POST /api/webhooks/probe?siteId=<id>` (or `owlette trigger <event> --site <id> --to <url> --via-api`) fires a one-shot signed payload at any https url and returns the request body + signature so you can confirm your receiver accepts the signature before you create a real subscription.
-- **debugging a stuck delivery.** `GET /api/webhooks/{id}/deliveries` lists the last 30 days of delivery summaries; `GET /api/webhooks/{id}/deliveries/{deliveryId}` returns stored request details plus the captured response status. `POST /api/webhooks/{id}/deliveries/{deliveryId}/retry` queues the same payload for redelivery with a fresh `Roost-Signature` timestamp so it slides back inside the 5-minute tolerance window.
+---
+
+## errors
+
+errors use `application/problem+json`; branch on `code`. see [errors](/docs/api/errors).
+
+| code | HTTP | meaning |
+|---|---:|---|
+| `validation_failed` | 400 | missing or invalid `siteId`, `webhookId` or `deliveryId`; invalid JSON; a URL that does not parse, is too long or does not resolve; empty or unknown `events`; a wrong field type; an update with no fields; an unknown probe event, or a probe `payload` that is not an object or a `signingSecret` under 32 characters; invalid pagination. |
+| `bad_scheme` / `bad_port` / `private_ip` | 400 | the URL is not `https`, uses a disallowed port, or points at a non-public address. |
+| `unsupported_version` | 400 | the `Roost-Version` header names an unsupported date. |
+| `idempotency_key_invalid` | 400 | the `Idempotency-Key` is longer than 255 characters. |
+| `unauthorized` / `token_expired` | 401 | no valid credential, or an expired API key. |
+| `forbidden` | 403 | your account is inactive, or create, update, delete or rotate-secret without the site admin or owner role. |
+| `scope_insufficient` | 403 | the API key lacks the `site=<siteId>` scope the route needs. |
+| `not_found` | 404 | the site, subscription or delivery does not exist, the subscription is deleted, or the delivery belongs to another subscription. |
+| `idempotency_key_mismatch` | 422 | an `Idempotency-Key` was reused with a different body. |
+| `internal_error` | 500 | unexpected server error, or a retry whose subscription has no stored secret; quote the `requestId`. |
+
+---
+
+## see also
+
+- [versions](/docs/api/versions) - the publish and rollback routes that emit today's events.
+- [idempotency](/docs/api/idempotency) - safe retries of create, update, rotate-secret and retry.
+- [Node SDK](/docs/api/sdk-node) and [Python SDK](/docs/api/sdk-python) - webhook management and signature helpers.

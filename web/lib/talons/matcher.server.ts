@@ -26,6 +26,7 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { generateCorrelationId } from '@/lib/auditLog.server';
 import logger from '@/lib/logger';
+import { pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
 import { runTalon, type TalonRunSummary } from './engine.server';
 import type { StoredTalon } from './store.server';
 import { TALON_EVENT_TYPES, type TalonDoc, type TalonOperator, type TalonRunDoc } from './types';
@@ -223,11 +224,15 @@ async function readEnabledTalons(db: Firestore, siteId: string): Promise<StoredT
  * the others. Cooldown, the in-flight guard and the auto-disable backoff belong
  * to the engine. A talon carrying a delay is deferred instead of run: it counts
  * as matched but contributes no run until the sweep fires it.
+ *
+ * Paused — nothing run or deferred — when the site's payer has no
+ * `owlette.talons`; pass a batch's `planMemo` to resolve each payer once.
  */
 export async function matchAndRunTalons(
   db: Firestore,
   siteId: string,
   event: TalonMatchEvent,
+  planMemo?: PlanMemo,
 ): Promise<TalonMatchResult> {
   // A non-numeric breach cannot be compared against a bound. Dropped here so
   // each dispatcher stays free to forward what it was handed.
@@ -249,6 +254,16 @@ export async function matchAndRunTalons(
     matchesEvent(talon, event),
   );
   if (matches.length === 0) return { matched: 0, runs: [] };
+
+  // after the talon read on purpose: most signals match nothing, and checking
+  // first would charge every one of them the lookup.
+  if (await pausedByPlan(siteId, 'owlette.talons', planMemo)) {
+    logger.warn("Talon matching paused: the site's plan has no talons", {
+      context: 'talons/matcher',
+      data: { siteId, kind: event.kind, talons: matches.length },
+    });
+    return { matched: 0, runs: [] };
+  }
 
   const now = new Date();
   const runs: TalonRunSummary[] = [];
@@ -288,8 +303,9 @@ export function tapTalonMatcher(
   db: Firestore,
   siteId: string,
   event: TalonMatchEvent,
+  planMemo?: PlanMemo,
 ): void {
-  void matchAndRunTalons(db, siteId, event).catch((error) => {
+  void matchAndRunTalons(db, siteId, event, planMemo).catch((error) => {
     logger.error('Talon matcher tap failed', {
       context: 'talons/matcher',
       data: { siteId, kind: event.kind, error: String(error) },

@@ -4,12 +4,14 @@
  * Drives:
  *   GET  /api/sites/{siteId}/machines[/{machineId}[/deployments]]
  *   POST /api/sites/{siteId}/machines/{machineId}/commands  (reboot/shutdown/screenshot)
- *   GET  /api/sites/{siteId}/machines/{machineId}/commands/{commandId}  (screenshot poll)
+ *   GET  /api/sites/{siteId}/machines/{machineId}/commands/{commandId}  (outcome poll)
  *
  * Reads render a plain-ascii table / key-value detail, or JSON with `--json`.
  * Mutations hit the wave-2A allowlisted commands endpoint with an auto-generated
  * `Idempotency-Key`. Screenshot is queue → poll → download the signed-url bytes
  * to `--output <path>` (default `screenshot-<machineId>-<timestamp>.png`).
+ * Reboot and shutdown poll too, so an agent's active-hours refusal reaches the
+ * caller instead of a bare "queued".
  *
  * `live-view` is the only remaining c-tier `stubExit()` shim — remote desktop
  * ships as swoop, so the stub points at `owlette swoop`.
@@ -20,6 +22,8 @@ import { randomUUID } from 'crypto';
 import { writeFile } from 'fs/promises';
 import * as path from 'path';
 import { loadConfig } from '../config';
+import { activeHoursOverrideFrom, addActiveHoursOverrideOptions } from '../lib/activeHoursOverride';
+import { isAgentVersionAtLeast } from '../lib/agentVersion';
 import { fetchWithTimeout } from '../lib/http';
 import {
   isJson,
@@ -92,18 +96,23 @@ interface MachineDeploymentsResponse {
   deployments: MachineDeployment[];
 }
 
-const SCREENSHOT_POLL_INTERVAL_MS = 1500;
-const SCREENSHOT_POLL_MAX_ATTEMPTS = 40; // 60s wall-clock at 1.5s interval
+const COMMAND_POLL_INTERVAL_MS = 1500;
+const COMMAND_POLL_MAX_ATTEMPTS = 40; // 60s wall-clock at 1.5s interval
+const COMMAND_POLL_SECONDS = (COMMAND_POLL_MAX_ATTEMPTS * COMMAND_POLL_INTERVAL_MS) / 1000;
+
+/** How a guarded Windows agent fails a reboot or shutdown inside active hours. */
+const ACTIVE_HOURS_REFUSAL_PREFIX = 'Error: active_hours: ';
 
 interface CommandStatusEnvelope {
   commandId: string;
   status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  /** an object for a screenshot; reboot, shutdown and cancel answer with a sentence. */
   result?: {
     screenshot_url?: string;
     screenshot_path?: string;
     expires_at?: number | string;
     [key: string]: unknown;
-  };
+  } | string;
   error?: string;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -126,6 +135,11 @@ interface OkEnvelope<T> {
   ok?: boolean;
   data?: T;
 }
+
+type PollOutcome =
+  | { kind: 'done'; final: CommandStatusEnvelope }
+  | { kind: 'timeout' }
+  | { kind: 'error'; status: number; problem: ProblemEnvelope };
 
 export function registerMachineCommands(program: Command): void {
   const machine =
@@ -285,13 +299,13 @@ export function registerMachineCommands(program: Command): void {
 
   registerSimpleCommandVerb(machine, {
     verb: 'reboot',
-    description: 'queue a reboot command on the machine',
+    description: 'reboot the machine and wait for the agent to accept or refuse it',
     commandType: 'reboot_machine',
   });
 
   registerSimpleCommandVerb(machine, {
     verb: 'shutdown',
-    description: 'queue a shutdown command on the machine',
+    description: 'shut the machine down and wait for the agent to accept or refuse it',
     commandType: 'shutdown_machine',
   });
 
@@ -360,40 +374,23 @@ export function registerMachineCommands(program: Command): void {
         return fatal('server returned ok but no commandId — cannot poll for screenshot');
       }
 
-      // Poll status. A dot per attempt in human mode; --json stays silent.
-      const pollUrl = `${apiUrl}/api/sites/${encodeURIComponent(opts.site)}/machines/${encodeURIComponent(machineId)}/commands/${encodeURIComponent(commandId)}`;
-      let final: CommandStatusEnvelope | null = null;
-      for (let attempt = 0; attempt < SCREENSHOT_POLL_MAX_ATTEMPTS; attempt++) {
-        if (attempt > 0) {
-          await sleep(SCREENSHOT_POLL_INTERVAL_MS);
-        }
-        if (!json) process.stdout.write('.');
-        const pollRes = await fetchWithTimeout(pollUrl, { headers: { Authorization: `Bearer ${token}` } });
-        const pollData = (await pollRes.json().catch(() => ({}))) as
-          OkEnvelope<CommandStatusEnvelope> & ProblemEnvelope;
-        if (!pollRes.ok) {
-          if (!json) process.stdout.write('\n');
-          return fatalProblem(`GET ${pollUrl}`, pollRes.status, pollData, 'screenshot');
-        }
-        const status = pollData.data?.status;
-        if (status === 'completed' || status === 'failed') {
-          final = pollData.data ?? null;
-          break;
-        }
+      const pollUrl = `${queueUrl}/${encodeURIComponent(commandId)}`;
+      const outcome = await pollCommand(pollUrl, token, json);
+      if (outcome.kind === 'error') {
+        return fatalProblem(`GET ${pollUrl}`, outcome.status, outcome.problem, 'screenshot');
       }
-      if (!json) process.stdout.write('\n');
-
-      if (!final) {
+      if (outcome.kind === 'timeout') {
         return fatal(
-          `screenshot timed out after ${SCREENSHOT_POLL_MAX_ATTEMPTS * SCREENSHOT_POLL_INTERVAL_MS / 1000}s — the command is still pending. check the dashboard or retry the screenshot command later`,
+          `screenshot timed out after ${COMMAND_POLL_SECONDS}s — the command is still pending. check the dashboard or retry the screenshot command later`,
         );
       }
 
+      const final = outcome.final;
       if (final.status === 'failed') {
         return fatal(`screenshot capture failed on the agent: ${final.error ?? '(no error detail)'}`);
       }
 
-      const signedUrl = final.result?.screenshot_url;
+      const signedUrl = final.result && typeof final.result === 'object' ? final.result.screenshot_url : undefined;
       if (!signedUrl) {
         return fatal('command completed but the server did not return a screenshot_url — try the dashboard');
       }
@@ -445,14 +442,22 @@ function registerSimpleCommandVerb(
   machine: Command,
   cfg: { verb: 'reboot' | 'shutdown'; description: string; commandType: string },
 ): void {
-  machine
+  const doing = cfg.verb === 'reboot' ? 'restart' : 'shut down';
+  const verbCmd = machine
     .command(`${cfg.verb} <machineId>`)
     .description(cfg.description)
     .requiredOption('--site <siteId>', 'site id that owns the machine')
     .option(
       '--delay-seconds <n>',
       'delay before the agent fires the command (default: 0)',
-    )
+    );
+  if (cfg.verb === 'reboot') {
+    verbCmd.option(
+      '--after-active-hours',
+      "restart once the machine's windows active hours end, or now if it is outside them. needs a windows agent with the active-hours guard (4.1.21 or later)",
+    );
+  }
+  addActiveHoursOverrideOptions(verbCmd, `${doing} inside the machine's active hours anyway`)
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -469,11 +474,23 @@ function registerSimpleCommandVerb(
         }
         params.delay_seconds = Math.floor(n);
       }
+      const override = activeHoursOverrideFrom(opts);
+      if (!override.ok) return;
+      if (override.override) {
+        if (opts.afterActiveHours) {
+          return usageFatal('--after-active-hours waits for active hours to end and --override-active-hours restarts inside them; pass one');
+        }
+        params.active_hours_override = override.override;
+      }
+      if (opts.afterActiveHours) params.when = 'after_active_hours';
+
+      const machineUrl = `${apiUrl}/api/sites/${encodeURIComponent(opts.site)}/machines/${encodeURIComponent(machineId)}`;
+      if (opts.afterActiveHours && !(await honoursAfterActiveHours(machineUrl, token, machineId))) return;
 
       const idempotencyKey = opts.idempotencyKey
         ? String(opts.idempotencyKey)
         : `cli-machine-${cfg.verb}-${randomUUID()}`;
-      const url = `${apiUrl}/api/sites/${encodeURIComponent(opts.site)}/machines/${encodeURIComponent(machineId)}/commands`;
+      const url = `${machineUrl}/commands`;
       let res: Response;
       try {
         res = await fetchWithTimeout(url, {
@@ -503,16 +520,119 @@ function registerSimpleCommandVerb(
         );
       }
 
-      if (json) {
-        process.stdout.write(JSON.stringify(data.data ?? {}, null, 2) + '\n');
+      const commandId = data.data?.commandId;
+      if (!commandId) {
+        return fatal(`server returned ok but no commandId — check the dashboard for the ${cfg.verb}`);
+      }
+      const outcome = await pollCommand(`${url}/${encodeURIComponent(commandId)}`, token, json);
+      const queuedLine = `owlette: ${cfg.verb} queued for machine ${machineId} (commandId=${commandId})`;
+
+      if (outcome.kind !== 'done') {
+        if (outcome.kind === 'error') {
+          const code = outcome.problem.code ?? '(no code)';
+          const hint = code === 'scope_insufficient' ? `\n  hint: reading it needs machine=${machineId}:read` : '';
+          process.stderr.write(
+            `owlette: could not read the ${cfg.verb} outcome (${outcome.status}, code=${code}), so an agent refusal would not show here${hint}\n`,
+          );
+        }
+        if (json) {
+          process.stdout.write(JSON.stringify(data.data, null, 2) + '\n');
+          return;
+        }
+        const waited = outcome.kind === 'timeout' ? `; no answer from the agent after ${COMMAND_POLL_SECONDS}s` : '';
+        process.stdout.write(`${queuedLine}${waited}\n`);
         return;
       }
 
-      const commandId = data.data?.commandId ?? '(unknown)';
+      const final = outcome.final;
+      if (json) {
+        process.stdout.write(JSON.stringify(final, null, 2) + '\n');
+        if (final.status === 'failed') process.exitCode = 1;
+        return;
+      }
+      if (final.status === 'failed') {
+        const error = final.error ?? '(no error detail)';
+        if (error.startsWith(ACTIVE_HOURS_REFUSAL_PREFIX)) {
+          const ways = cfg.verb === 'reboot'
+            ? '--after-active-hours to restart when they end, or --override-active-hours --reason <text> to restart now'
+            : '--override-active-hours --reason <text> to shut down now';
+          return fatal(
+            `${cfg.verb} refused by machine ${machineId}: ${error.slice(ACTIVE_HOURS_REFUSAL_PREFIX.length)}\n  hint: pass ${ways}`,
+          );
+        }
+        return fatal(`${cfg.verb} failed on machine ${machineId}: ${error}`);
+      }
+      // the agent says what it did, e.g. "Reboot deferred until 17:00 (machine time)"
+      const answer = typeof final.result === 'string' && final.result ? `: ${final.result}` : '';
+      const when = !answer && opts.afterActiveHours
+        ? '; it restarts when its active hours end, or now if it is outside them'
+        : '';
       process.stdout.write(
-        `owlette: ${cfg.verb} queued for machine ${machineId} (commandId=${commandId})\n`,
+        `owlette: ${cfg.verb} accepted by machine ${machineId} (commandId=${commandId})${answer}${when}\n`,
       );
     });
+}
+
+/**
+ * Poll a queued command until the agent resolves it. A dot per attempt in human
+ * mode; --json stays silent.
+ */
+async function pollCommand(pollUrl: string, token: string, json: boolean): Promise<PollOutcome> {
+  try {
+    for (let attempt = 0; attempt < COMMAND_POLL_MAX_ATTEMPTS; attempt++) {
+      if (attempt > 0) await sleep(COMMAND_POLL_INTERVAL_MS);
+      if (!json) process.stdout.write('.');
+      const res = await fetchWithTimeout(pollUrl, { headers: { Authorization: `Bearer ${token}` } });
+      const data = (await res.json().catch(() => ({}))) as
+        OkEnvelope<CommandStatusEnvelope> & ProblemEnvelope;
+      if (!res.ok) return { kind: 'error', status: res.status, problem: data };
+      const status = data.data?.status;
+      if (data.data && (status === 'completed' || status === 'failed')) {
+        return { kind: 'done', final: data.data };
+      }
+    }
+    return { kind: 'timeout' };
+  } finally {
+    if (!json) process.stdout.write('\n');
+  }
+}
+
+/**
+ * Only a windows agent with the active-hours guard can hold the restart; any
+ * other ignores `when` and restarts at once, and the API refuses the command
+ * there (409 held_restart_unsupported). Checking first gives a plain error before
+ * anything is sent. An unreadable machine goes ahead, since the API still refuses.
+ * The guard is the API's rule: `capabilities.activeHoursGuard: 1` on an agent of
+ * 4.1.21 or later, since an older agent never clears the capability.
+ */
+async function honoursAfterActiveHours(
+  machineUrl: string,
+  token: string,
+  machineId: string,
+): Promise<boolean> {
+  let res: Response | null = null;
+  try {
+    res = await fetchWithTimeout(machineUrl, { headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    // unreadable is reported below, same as a non-ok read
+  }
+  if (!res?.ok) {
+    process.stderr.write(
+      `owlette: could not check that machine ${machineId} honours --after-active-hours (${res ? res.status : 'no response'}); the API refuses it if the machine cannot hold the restart\n`,
+    );
+    return true;
+  }
+  const m = (await res.json().catch(() => ({}))) as {
+    agentVersion?: unknown;
+    capabilities?: { activeHoursGuard?: unknown } | null;
+  };
+  if (m.capabilities?.activeHoursGuard !== 1 || !isAgentVersionAtLeast(m.agentVersion, '4.1.21')) {
+    fatal(
+      `machine ${machineId} can't hold a restart for active hours: its agent is older than 4.1.21, or it isn't on Windows. drop the flag to restart now`,
+    );
+    return false;
+  }
+  return true;
 }
 
 function formatRoostSummary(roosts: readonly RoostSummary[] | undefined): string {
@@ -654,6 +774,6 @@ export const _internals = {
   parseMonitorOpt,
   defaultScreenshotFilename,
   hintForCode,
-  SCREENSHOT_POLL_INTERVAL_MS,
-  SCREENSHOT_POLL_MAX_ATTEMPTS,
+  COMMAND_POLL_INTERVAL_MS,
+  COMMAND_POLL_MAX_ATTEMPTS,
 };

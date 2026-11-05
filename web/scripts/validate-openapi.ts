@@ -23,6 +23,11 @@ const API_DIR = join(ROOT, 'app', 'api');
 // Routes that are intentionally not documented (internal only)
 const INTERNAL_ROUTES = new Set([
   '/api/auth/session',
+  '/api/auth/verify-email',
+  '/api/auth/app-link',
+  '/api/auth/app-link/start',
+  '/api/auth/app-link/approve',
+  '/api/auth/app-link/exchange',
   '/api/mfa/setup',
   '/api/mfa/verify-setup',
   '/api/mfa/verify-login',
@@ -42,6 +47,8 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/generate-installer',
   '/api/alerts/trigger',
   '/api/bug-report',
+  // signs the dashboard issue dialog's file uploads; session only, like /api/bug-report.
+  '/api/issue-attachments/upload-url',
   // hoot internals. The `/api/cortex/*` twins are back-compat re-export aliases from the
   // hoot rename, undocumented for the same reason as their canonical paths.
   '/api/hoot',
@@ -61,6 +68,8 @@ const INTERNAL_ROUTES = new Set([
   // Site-admin-only hoot policy toggle (session surface, no api-key scope) + alias.
   '/api/sites/{siteId}/hoot-settings',
   '/api/sites/{siteId}/cortex-settings',
+  // the process editor's check_path, session only: it refuses every api key (ADR 0014).
+  '/api/sites/{siteId}/machines/{machineId}/path-check',
   '/api/cron/display-alerts',
   '/api/cron/status-ping',
   '/api/settings/llm-key',
@@ -73,6 +82,8 @@ const INTERNAL_ROUTES = new Set([
   // E2E-only chunk PUT sink (hard 404 unless OWLETTE_E2E=1) — the local stand-in
   // for the R2 presigned URL, never reachable in production.
   '/api/chunks/e2e-put',
+  // E2E-only issue file PUT sink, same posture as /api/chunks/e2e-put.
+  '/api/issue-attachments/e2e-put',
   '/api/legal/dmca',
   '/api/setup/generate-token',
   '/api/test-email',

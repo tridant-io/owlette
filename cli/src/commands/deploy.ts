@@ -13,6 +13,7 @@
 import { Command } from 'commander';
 import { randomUUID } from 'crypto';
 import { loadConfig } from '../config';
+import { activeHoursOverrideFrom, addActiveHoursOverrideOptions } from '../lib/activeHoursOverride';
 import { fetchWithTimeout } from '../lib/http';
 import {
   isJson,
@@ -72,7 +73,7 @@ export function registerDeployCommands(program: Command): void {
     }
   }
 
-  deploy
+  const create = deploy
     .command('create')
     .description('create a new classic-installer deployment')
     .requiredOption('--site <siteId>', 'site id that owns the deployment')
@@ -85,7 +86,8 @@ export function registerDeployCommands(program: Command): void {
     .option('--sha256 <hex>', '64-char sha256 digest of the installer for verification')
     .option('--close-processes <csv>', 'comma-separated process exe names agents should close first')
     .option('--suppress-projects <csv>', 'comma-separated project names/paths agents should suppress first')
-    .option('--parallel', 'run install on all targets concurrently (default: serial)')
+    .option('--parallel', 'run install on all targets concurrently (default: serial)');
+  addActiveHoursOverrideOptions(create, "install inside the machines' active hours anyway")
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -109,6 +111,8 @@ export function registerDeployCommands(program: Command): void {
         usageFatal('--suppress-projects must contain at least one non-empty value when supplied');
         return;
       }
+      const override = activeHoursOverrideFrom(opts);
+      if (!override.ok) return;
 
       const body: Record<string, unknown> = {
         name: opts.name,
@@ -122,6 +126,7 @@ export function registerDeployCommands(program: Command): void {
       if (closeProcesses.length > 0) body.close_processes = closeProcesses;
       if (suppressProjects.length > 0) body.suppress_projects = suppressProjects;
       if (opts.parallel) body.parallel_install = true;
+      if (override.override) body.active_hours_override = override.override;
 
       const idempotencyKey = opts.idempotencyKey
         ? String(opts.idempotencyKey)
@@ -286,10 +291,12 @@ export function registerDeployCommands(program: Command): void {
       process.stdout.write(formatDeploymentDetail(data));
     });
 
-  deploy
+  const retry = deploy
     .command('retry <deploymentId>')
     .description('re-issue a deployment to targets that previously failed')
-    .requiredOption('--site <siteId>', 'site id that owns the deployment')
+    .requiredOption('--site <siteId>', 'site id that owns the deployment');
+  // a retry needs its own override; the original deployment's does not carry over.
+  addActiveHoursOverrideOptions(retry, "install inside the machines' active hours anyway")
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -297,6 +304,10 @@ export function registerDeployCommands(program: Command): void {
     .action(async (deploymentId: string, opts, cmd) => {
       const { apiUrl, token, json } = resolveAuth(cmd);
       if (!token) return;
+
+      const override = activeHoursOverrideFrom(opts);
+      if (!override.ok) return;
+      const body = override.override ? { active_hours_override: override.override } : {};
 
       const idempotencyKey = opts.idempotencyKey
         ? String(opts.idempotencyKey)
@@ -313,7 +324,7 @@ export function registerDeployCommands(program: Command): void {
         res = await fetchWithTimeout(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({}),
+          body: JSON.stringify(body),
         });
       } catch (err) {
         unconfirmedMutationFatal({

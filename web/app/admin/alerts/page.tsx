@@ -6,6 +6,7 @@ import { useSites } from '@/hooks/useFirestore';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
+import { IconButton } from '@/components/ui/icon-button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -28,6 +29,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { CompactButton } from '@/components/admin/CompactButton';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 /**
  * [B4.3] Display-alerts launch banner cutoff — 30 days after launch. Auto-hides
@@ -67,10 +71,11 @@ const OPERATORS = [
 
 const SEVERITIES = ['info', 'warning', 'critical'] as const;
 
+// light takes the family surface; dark keeps the solid tint these badges always had
 const SEVERITY_COLORS: Record<string, string> = {
-  info: 'bg-blue-600/20 text-blue-400',
-  warning: 'bg-yellow-600/20 text-yellow-400',
-  critical: 'bg-red-600/20 text-red-400',
+  info: 'border-info-border bg-info-surface text-info dark:border-transparent dark:bg-info-solid/20',
+  warning: 'border-warning-border bg-warning-surface text-warning dark:border-transparent dark:bg-warning-solid/20',
+  critical: 'border-danger-border bg-danger-surface text-danger dark:border-transparent dark:bg-danger-solid/20',
 };
 
 const PRESET_TEMPLATES: Omit<AlertRule, 'id'>[] = [
@@ -141,6 +146,9 @@ export default function AlertsPage() {
   const { sites } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
+  // alert rules ride on control, the core flag (plan.md decision 4)
+  const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
+  const rulesGated = usePlanGated('control', siteOwner);
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -196,8 +204,9 @@ export default function AlertsPage() {
   }, [selectedSiteId, fetchRules]);
 
   // Persist rules through the site-scoped API.
-  const saveRules = async (updatedRules: AlertRule[]) => {
-    if (!db || !selectedSiteId) return;
+  // resolves false when the save failed, so callers don't confirm a change that didn't land.
+  const saveRules = async (updatedRules: AlertRule[]): Promise<boolean> => {
+    if (!db || !selectedSiteId) return false;
     setSaving(true);
     try {
       const response = await fetch(`/api/sites/${encodeURIComponent(selectedSiteId)}/alerts`, {
@@ -206,12 +215,15 @@ export default function AlertsPage() {
         body: JSON.stringify({ rules: updatedRules }),
       });
       if (!response.ok) {
-        throw new Error('Failed to save alert rules');
+        const body = await response.json().catch(() => ({}));
+        throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to save alert rules');
       }
       setRules(updatedRules);
+      return true;
     } catch (err: unknown) {
       console.error('Failed to save alert rules:', err);
-      toast.error('Failed to save alert rules');
+      toast.error(err instanceof Error ? err.message : 'Failed to save alert rules');
+      return false;
     } finally {
       setSaving(false);
     }
@@ -291,7 +303,7 @@ export default function AlertsPage() {
       updatedRules = [...rules, rule];
     }
 
-    await saveRules(updatedRules);
+    if (!(await saveRules(updatedRules))) return;
     setDialogOpen(false);
     toast.success(editingRule ? 'Rule updated' : 'Rule created');
   };
@@ -306,10 +318,10 @@ export default function AlertsPage() {
   const handleDeleteConfirm = async () => {
     if (!ruleToDelete) return;
     const updatedRules = rules.filter((r) => r.id !== ruleToDelete.id);
-    await saveRules(updatedRules);
+    const saved = await saveRules(updatedRules);
     setDeleteDialogOpen(false);
     setRuleToDelete(null);
-    toast.success('Rule deleted');
+    if (saved) toast.success('Rule deleted');
   };
 
   const handleAddPreset = async (preset: Omit<AlertRule, 'id'>) => {
@@ -319,8 +331,7 @@ export default function AlertsPage() {
     }
     const rule: AlertRule = { ...preset, id: generateId() };
     const updatedRules = [...rules, rule];
-    await saveRules(updatedRules);
-    toast.success(`Preset "${preset.name}" added`);
+    if (await saveRules(updatedRules)) toast.success(`Preset "${preset.name}" added`);
   };
 
   if (loading) {
@@ -335,7 +346,7 @@ export default function AlertsPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 md:p-8">
       <div className="max-w-screen-2xl mx-auto">
         {/* [B4.3] Migration banner for the new display-alerts feature.
             Surfaces the new alert category to existing operators who already
@@ -344,7 +355,7 @@ export default function AlertsPage() {
             user; auto-hides at DISPLAY_ALERTS_BANNER_END. */}
         {showDisplayAlertsBanner && (
           <div
-            className="mb-6 flex items-start gap-3 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-4"
+            className="mb-4 sm:mb-6 flex items-start gap-3 rounded-lg border border-accent-cyan/30 bg-accent-cyan/5 p-3 sm:p-4"
             role="status"
           >
             <Sparkles className="h-5 w-5 text-accent-cyan shrink-0 mt-0.5" aria-hidden="true" />
@@ -369,19 +380,15 @@ export default function AlertsPage() {
           </div>
         )}
 
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold text-foreground mb-2">alerts</h1>
-              <p className="text-muted-foreground">
-                configure rules to get notified when machine metrics exceed thresholds
-              </p>
-            </div>
-            <div className="flex items-center gap-3">
+        <AdminPageHeader
+          className="mb-6 md:mb-8"
+          title="alerts"
+          description="configure rules to get notified when machine metrics exceed thresholds"
+          toolbar={
+            <>
               {sites.length > 1 && (
                 <Select value={selectedSiteId} onValueChange={handleSiteChange}>
-                  <SelectTrigger className="w-[180px] border-border bg-card text-foreground">
+                  <SelectTrigger aria-label="site" className="min-w-32 flex-1 sm:w-[180px] sm:flex-none border-border bg-card text-foreground">
                     <SelectValue placeholder="select site" />
                   </SelectTrigger>
                   <SelectContent className="border-border bg-card text-foreground">
@@ -394,75 +401,73 @@ export default function AlertsPage() {
                 </Select>
               )}
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer" disabled={saving}>
-                    <Zap className="h-4 w-4 mr-2" />
-                    presets
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="bg-card border-border text-foreground">
-                  {PRESET_TEMPLATES.map((preset) => (
-                    <DropdownMenuItem
-                      key={preset.name}
-                      onClick={() => handleAddPreset(preset)}
-                      className="cursor-pointer"
-                    >
-                      {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              <Button
-                onClick={openCreateDialog}
-                className="text-gray-900 cursor-pointer"
-                disabled={saving}
-              >
-                <Plus className="h-5 w-5 mr-2" />
-                create rule
-              </Button>
-            </div>
-          </div>
-        </div>
+              {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
+              <UpgradeGate flag="control" siteOwner={siteOwner} feature="alert rules" variant="inline">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer" disabled={saving}>
+                      <Zap className="h-4 w-4 mr-2" />
+                      presets
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="bg-card border-border text-foreground">
+                    {PRESET_TEMPLATES.map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.name}
+                        onClick={() => handleAddPreset(preset)}
+                        className="cursor-pointer"
+                      >
+                        {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </UpgradeGate>
+            </>
+          }
+          actions={!rulesGated && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
+        />
 
         {/* Empty state */}
         {rules.length === 0 && !loading && (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="flex flex-col items-center justify-center py-10 sm:py-16 text-center">
             <Bell className="h-12 w-12 text-muted-foreground/30 mb-4" />
-            <h3 className="text-lg font-medium text-foreground mb-2">no alert rules configured</h3>
+            <h2 className="text-lg font-medium text-foreground mb-2">no alert rules configured</h2>
             <p className="text-muted-foreground text-sm mb-6 max-w-md">
               create alert rules to get notified when machine metrics like CPU, memory, disk, or
               GPU exceed your defined thresholds.
             </p>
-            <div className="flex gap-3">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer">
-                    <Zap className="h-4 w-4 mr-2" />
-                    add from presets
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="center" className="bg-card border-border text-foreground">
-                  {PRESET_TEMPLATES.map((preset) => (
-                    <DropdownMenuItem
-                      key={preset.name}
-                      onClick={() => handleAddPreset(preset)}
-                      className="cursor-pointer"
-                    >
-                      {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-              <Button
-                onClick={openCreateDialog}
-                className="text-gray-900 cursor-pointer"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                create rule
-              </Button>
-            </div>
+            {/* the header already carries the upgrade note */}
+            {!rulesGated && (
+              <div className="flex flex-wrap justify-center gap-3">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer">
+                      <Zap className="h-4 w-4 mr-2" />
+                      add from presets
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="center" className="bg-card border-border text-foreground">
+                    {PRESET_TEMPLATES.map((preset) => (
+                      <DropdownMenuItem
+                        key={preset.name}
+                        onClick={() => handleAddPreset(preset)}
+                        className="cursor-pointer"
+                      >
+                        {preset.name} ({preset.metric.replace('_', ' ')} {preset.operator} {preset.value})
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <Button
+                  onClick={openCreateDialog}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  create rule
+                </Button>
+              </div>
+            )}
           </div>
         )}
 
@@ -472,19 +477,20 @@ export default function AlertsPage() {
             {rules.map((rule) => (
               <div
                 key={rule.id}
-                className="flex items-center gap-4 p-4 rounded-lg border border-border bg-card"
+                className="flex items-center gap-2 p-3 sm:gap-4 sm:p-4 rounded-lg border border-border bg-card"
               >
                 <Switch
                   checked={rule.enabled}
                   onCheckedChange={() => handleToggleEnabled(rule.id)}
                   disabled={saving}
+                  aria-label={`enable ${rule.name}`}
                 />
                 <div
                   className="flex-1 min-w-0 cursor-pointer"
                   onClick={() => openEditDialog(rule)}
                 >
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-foreground font-medium">{rule.name}</span>
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2 gap-y-1 mb-1">
+                    <span className="min-w-0 text-foreground font-medium">{rule.name}</span>
                     <Badge className={`${SEVERITY_COLORS[rule.severity]} text-[10px]`}>
                       {rule.severity}
                     </Badge>
@@ -500,28 +506,28 @@ export default function AlertsPage() {
                     cooldown {rule.cooldownMinutes}m
                   </p>
                 </div>
-                <Button
+                <IconButton
+                  label={`edit ${rule.name}`}
                   variant="ghost"
-                  size="icon"
                   onClick={() => openEditDialog(rule)}
                   disabled={saving}
                   className="h-8 w-8 text-muted-foreground hover:text-foreground hover:bg-accent cursor-pointer"
                 >
                   <Pencil className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
+                </IconButton>
+                <IconButton
+                  label={`delete ${rule.name}`}
+                  variant="ghost-destructive"
                   onClick={(e) => {
                     e.stopPropagation();
                     setRuleToDelete(rule);
                     setDeleteDialogOpen(true);
                   }}
                   disabled={saving}
-                  className="h-8 w-8 text-red-400 hover:text-red-300 hover:bg-red-950/30 cursor-pointer"
+                  className="h-8 w-8 cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
-                </Button>
+                </IconButton>
               </div>
             ))}
           </div>
@@ -530,7 +536,7 @@ export default function AlertsPage() {
 
       {/* Create / Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground sm:max-w-md">
+        <DialogContent className="border-border text-foreground sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{editingRule ? 'edit rule' : 'create alert rule'}</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -555,9 +561,9 @@ export default function AlertsPage() {
 
             {/* Metric */}
             <div className="space-y-2">
-              <Label>metric</Label>
+              <Label htmlFor="rule-metric">metric</Label>
               <Select value={formMetric} onValueChange={setFormMetric}>
-                <SelectTrigger className="bg-background border-border">
+                <SelectTrigger id="rule-metric" className="bg-background border-border">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border text-foreground">
@@ -573,9 +579,9 @@ export default function AlertsPage() {
             {/* Operator + Value */}
             <div className="flex gap-3">
               <div className="space-y-2 w-24">
-                <Label>operator</Label>
+                <Label htmlFor="rule-operator">operator</Label>
                 <Select value={formOperator} onValueChange={setFormOperator}>
-                  <SelectTrigger className="bg-background border-border">
+                  <SelectTrigger id="rule-operator" className="bg-background border-border">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="bg-card border-border text-foreground">
@@ -602,9 +608,9 @@ export default function AlertsPage() {
 
             {/* Severity */}
             <div className="space-y-2">
-              <Label>severity</Label>
+              <Label htmlFor="rule-severity">severity</Label>
               <Select value={formSeverity} onValueChange={setFormSeverity}>
-                <SelectTrigger className="bg-background border-border">
+                <SelectTrigger id="rule-severity" className="bg-background border-border">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border text-foreground">
@@ -619,8 +625,8 @@ export default function AlertsPage() {
 
             {/* Channels */}
             <div className="space-y-2">
-              <Label>notification channels</Label>
-              <div className="flex gap-4">
+              <p id="rule-channels-label" className="text-sm leading-none font-medium">notification channels</p>
+              <div role="group" aria-labelledby="rule-channels-label" className="flex gap-4">
                 <div className="flex items-center gap-2">
                   <Checkbox
                     id="channel-email"
@@ -670,7 +676,7 @@ export default function AlertsPage() {
             <Button
               onClick={handleSaveRule}
               disabled={saving}
-              className="text-gray-900 cursor-pointer"
+              className="cursor-pointer"
             >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               {editingRule ? 'save' : 'create'}
@@ -681,7 +687,7 @@ export default function AlertsPage() {
 
       {/* Delete Confirmation */}
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="bg-card border-border text-foreground">
+        <DialogContent className="border-border text-foreground">
           <DialogHeader>
             <DialogTitle>delete alert rule</DialogTitle>
             <DialogDescription className="text-muted-foreground">
@@ -698,9 +704,10 @@ export default function AlertsPage() {
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={handleDeleteConfirm}
               disabled={saving}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               {saving && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               delete

@@ -53,15 +53,30 @@ if "%OWLETTE_VERSION%"=="" (
 echo Building Owlette version: %OWLETTE_VERSION%
 echo.
 
+:: A signed build finds out now, not after the slow steps, that it cannot sign.
+if "%OWLETTE_SIGN%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "..\scripts\sign.ps1" -DryRun
+    if errorlevel 1 (
+        echo ERROR: OWLETTE_SIGN=1 but this machine cannot sign.
+        pause
+        exit /b 1
+    )
+)
+
+:: ci builds in two jobs so that only the one that signs is given an azure
+:: token: "payload" stops after step 8, "compile" goes straight to step 9.
+if /i "%~1"=="compile" goto :compile
+
 :: ============================================================================
 :: Step 1: Clean previous builds
 :: ============================================================================
 echo [1/9] Cleaning previous builds...
-:: Keep downloads\ cache intact - only wipe the build output
-if exist "build" (
-    rmdir /s /q build 2>nul
+:: Keep downloads\ cache intact - only wipe this build's own output. build\linux
+:: and build\macos hold the tracked posix build scripts and stay.
+for %%D in (installer_package installer_output python tools) do (
+    if exist "build\%%D" rmdir /s /q "build\%%D" 2>nul
 )
-mkdir build
+if not exist "build" mkdir build
 mkdir build\installer_package
 :: Persistent download cache (survives clean)
 if not exist "downloads" mkdir downloads
@@ -124,9 +139,31 @@ echo [3/9] Configuring Python import paths...
 :: Step 4: Install pip
 :: ============================================================================
 echo [4/9] Installing pip...
+:: pinned to one pypa/get-pip commit (pip 26.2.2) and checked like the python zip. the
+:: latest copy, which ran unchecked, broke on the embedded interpreter on 2026-11-02: its
+:: pip 26.3 refused to modify itself.
+set GETPIP_EXPECTED_HASH=f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424
 if not exist "downloads\get-pip.py" (
-    curl -o downloads\get-pip.py https://bootstrap.pypa.io/get-pip.py
+    curl -L -o downloads\get-pip.py https://raw.githubusercontent.com/pypa/get-pip/fa4e90301bf000c36309f3ad79c3ac720b55d6df/public/get-pip.py
+    if errorlevel 1 (
+        echo ERROR: Failed to download get-pip.py
+        pause
+        exit /b 1
+    )
 )
+for /f "skip=1 tokens=*" %%a in ('certutil -hashfile downloads\get-pip.py SHA256') do (
+    if not defined GETPIP_ACTUAL_HASH set "GETPIP_ACTUAL_HASH=%%a"
+)
+if /i not "%GETPIP_ACTUAL_HASH%"=="%GETPIP_EXPECTED_HASH%" (
+    echo ERROR: get-pip.py checksum mismatch
+    echo Expected: %GETPIP_EXPECTED_HASH%
+    echo Actual:   %GETPIP_ACTUAL_HASH%
+    echo A stale or tampered copy; it is deleted, so the next run downloads the pinned one.
+    del downloads\get-pip.py
+    pause
+    exit /b 1
+)
+set "GETPIP_ACTUAL_HASH="
 "%~dp0build\python\python.exe" "%~dp0downloads\get-pip.py"
 if errorlevel 1 (
     echo ERROR: Failed to install pip
@@ -191,7 +228,7 @@ if errorlevel 1 (
 echo Dependencies installed successfully!
 
 :: ============================================================================
-:: Step 6: Build the desktop app (Tauri)
+:: Step 6: Build the desktop app and owlette swoop (Tauri)
 :: ============================================================================
 :: Replaces the old "copy tkinter/tcl from system Python 3.11" step: the python
 :: UI (owlette_gui.py / owlette_tray.py and friends) was deleted in 3.0.0, so the
@@ -200,7 +237,7 @@ echo Dependencies installed successfully!
 :: --no-bundle is deliberate: Inno Setup is this product's packager. Letting the
 :: Tauri bundler run would demand NSIS/WiX and produce a second, competing
 :: installer we do not ship. We want the release binary and nothing else.
-echo [6/9] Building the desktop app ^(Tauri, release^)...
+echo [6/9] Building the desktop app and owlette swoop ^(Tauri, release^)...
 
 set "DESKTOP_DIR=%~dp0..\desktop"
 if not exist "%DESKTOP_DIR%\src-tauri\Cargo.toml" (
@@ -255,6 +292,35 @@ if not exist "%DESKTOP_EXE%" (
     exit /b 1
 )
 echo Desktop app built OK
+
+:: owlette swoop, the viewer app: a second Tauri crate in desktop\viewer with no
+:: frontend and no package.json, so it runs the CLI from the desktop app's
+:: node_modules (installed above). --no-bundle for the same reason as above.
+set "VIEWER_DIR=%DESKTOP_DIR%\viewer"
+if not exist "%VIEWER_DIR%\Cargo.toml" (
+    echo ERROR: owlette swoop sources not found at "%VIEWER_DIR%"
+    pause
+    exit /b 1
+)
+
+pushd "%VIEWER_DIR%"
+echo Compiling owlette-swoop-viewer.exe...
+call "..\node_modules\.bin\tauri.cmd" build --no-bundle --ci
+if errorlevel 1 (
+    echo ERROR: tauri build failed in "%VIEWER_DIR%"
+    popd
+    pause
+    exit /b 1
+)
+popd
+
+set "VIEWER_EXE=%VIEWER_DIR%\target\release\owlette-swoop-viewer.exe"
+if not exist "%VIEWER_EXE%" (
+    echo ERROR: tauri build reported success but "%VIEWER_EXE%" is missing
+    pause
+    exit /b 1
+)
+echo owlette swoop built OK
 
 :: ============================================================================
 :: Step 7: Build the Rust binaries (service host + swoop streamer)
@@ -435,6 +501,17 @@ if errorlevel 1 (
     exit /b 1
 )
 
+:: Copy owlette swoop beside it, {app}\app\owlette-swoop-viewer.exe: where the
+:: desktop app looks for it and what the installer's owlette-swoop:// key and
+:: Start-menu shortcut point at.
+echo Copying owlette swoop...
+copy /Y "%VIEWER_EXE%" build\installer_package\app\ >nul
+if errorlevel 1 (
+    echo ERROR: Failed to copy "%VIEWER_EXE%"
+    pause
+    exit /b 1
+)
+
 :: Copy the swoop streamer. Lands at {app}\swoop\owlette-swoop.exe on the
 :: target - the exact path shared_utils.get_swoop_exe_path() resolves.
 echo Copying swoop streamer...
@@ -452,6 +529,12 @@ echo Copying installation scripts...
 copy /Y scripts\install.bat build\installer_package\scripts\ >nul
 copy /Y scripts\uninstall.bat build\installer_package\scripts\ >nul
 
+if /i "%~1"=="payload" (
+    echo Package ready: build\installer_package
+    exit /b 0
+)
+
+:compile
 :: ============================================================================
 :: Step 9: Compile with Inno Setup
 :: ============================================================================
@@ -503,7 +586,24 @@ if not exist "build\installer_package\swoop\owlette-swoop.exe" (
 :: cannot be satisfied by a stale exe left behind by an earlier aborted run.
 if exist "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe" del /q "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe"
 
-"%INNO_PATH%" owlette_installer.iss
+:: Our own executables are signed here, before Inno packs them; Inno then signs
+:: setup and its uninstaller itself. The embedded python and vendor installers
+:: are not ours to sign.
+set "SIGN_SCRIPT=%CD%\..\scripts\sign.ps1"
+set "SIGN_ARGS="
+if "%OWLETTE_SIGN%"=="1" (
+    for %%F in (tools\owlette-host.exe swoop\owlette-swoop.exe app\owlette-desktop.exe app\owlette-swoop-viewer.exe) do (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%SIGN_SCRIPT%" -Path "build\installer_package\%%F"
+        if errorlevel 1 (
+            echo ERROR: signing %%F failed.
+            pause
+            exit /b 1
+        )
+    )
+    set SIGN_ARGS=/DSign "/Sartifact=powershell -NoProfile -ExecutionPolicy Bypass -File $q%SIGN_SCRIPT%$q -Path $f"
+)
+
+"%INNO_PATH%" !SIGN_ARGS! owlette_installer.iss
 
 :: Every other error branch in this script pauses and exits 1. This one used
 :: to print a WARNING and fall through to exit 0, so a failed compile reported

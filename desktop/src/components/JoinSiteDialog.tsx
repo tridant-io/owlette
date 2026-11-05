@@ -19,14 +19,16 @@ import {
 import { copyText } from '@/lib/clipboard'
 import { environmentToken, hostForServer, hostOf } from '@/lib/environment'
 
+type Server = 'dev' | 'prod'
+
 interface JoinSiteDialogProps {
   open: boolean
   /**
    * Which server to pair against, when the installer asked for this dialog.
    * Omitted (the tray/menu path) = the environment the config is already bound
-   * to.
+   * to. The dev backdoor below overrides it for as long as the dialog is open.
    */
-  server?: 'dev' | 'prod'
+  server?: Server
   /** Closes the dialog. Any run still in flight is cancelled first. */
   onClose: () => void
   /**
@@ -53,13 +55,24 @@ type Phase = 'starting' | 'waiting' | 'joined' | 'failed'
 const SERVICE_SETTLE_TIMEOUT_MS = 45_000
 
 /**
+ * The dev backdoor: this many clicks on the title, this close together, switch
+ * the pairing to dev.owlette.app. Only the team ever needs dev, so nothing in
+ * the dialog advertises it and a customer never sees a choice (#321). The same
+ * build serves both clouds; pairing writes the environment into config.json.
+ */
+const DEV_SWITCH_CLICKS = 5
+const DEV_SWITCH_WINDOW_MS = 2000
+
+/**
  * Device-code pairing, driven by `configure_site.py --json-progress`: it
  * streams the phrase as soon as the server issues it, then polls until someone
  * approves. Cancel kills the helper and lets the code expire server-side, as
  * the legacy GUI's Cancel did.
  *
  * No token handling here — the helper writes `.tokens.enc` and restarts the
- * service; this window only watches.
+ * service; this window only watches. Off windows the pairing is the daemon's
+ * own run (`src-tauri/src/seam.rs`): cancel asks it to end the run, and the
+ * service takes the new site up without a restart.
  */
 export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoined }: JoinSiteDialogProps) {
   const [phase, setPhase] = useState<Phase>('starting')
@@ -69,9 +82,18 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
   const [copied, setCopied] = useState(false)
   /** True between "paired" and the service coming back; drives the settle effect. */
   const [awaitingService, setAwaitingService] = useState(false)
+  /** The backdoor's pick; it wins over `server` until the dialog closes. */
+  const [override, setOverride] = useState<Server | null>(null)
+  // Forgotten on close, during render rather than in an effect: a tray re-open
+  // hours later must pair against the config's own environment, just as
+  // App.tsx drops the installer's flag once its launch is dismissed.
+  if (!open && override !== null) setOverride(null)
+  const requested = override ?? server
 
   const run = useRef<AgentRun | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const titleClicks = useRef(0)
+  const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // In a ref so an inline parent callback can't re-run the effect and start a
   // second pairing attempt.
@@ -93,7 +115,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
     setAwaitingService(false)
 
     void startAgentRun('join', {
-      server,
+      server: requested,
       onEvent: (event) => {
         if (disposed) return
         switch (event.event) {
@@ -152,13 +174,14 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
       void run.current?.cancel()
       run.current = null
     }
-    // `server` restarts the run: a different cloud is a different phrase, so
+    // `requested` restarts the run: a different cloud is a different phrase, so
     // reusing the one already in flight would pair against the wrong one.
-  }, [open, server])
+  }, [open, requested])
 
   useEffect(
     () => () => {
       if (copiedTimer.current) clearTimeout(copiedTimer.current)
+      if (titleTimer.current) clearTimeout(titleTimer.current)
     },
     [],
   )
@@ -204,13 +227,34 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
     })
   }, [phrase])
 
-  // Read the host off the URLs the server minted rather than off the `server`
-  // prop: `web/app/api/agent/auth/device-code/route.ts` builds them from the
+  // The switch works only while a phrase is up, or after a failed request. Not
+  // once paired: a stray click would wipe "paired" and mint a phrase for the
+  // other cloud. Not while the first request is in flight either: off windows
+  // the cancel and the new request race for the daemon's pairing lock
+  // (`src-tauri/src/seam.rs`), and the loser reports "already pairing".
+  const switchable = phase === 'waiting' || phase === 'failed'
+
+  const handleTitleClick = useCallback(() => {
+    if (!switchable) return
+    if (titleTimer.current) clearTimeout(titleTimer.current)
+    titleClicks.current += 1
+    if (titleClicks.current < DEV_SWITCH_CLICKS) {
+      titleTimer.current = setTimeout(() => {
+        titleClicks.current = 0
+      }, DEV_SWITCH_WINDOW_MS)
+      return
+    }
+    titleClicks.current = 0
+    setOverride('dev')
+  }, [switchable])
+
+  // Read the host off the URLs the server minted rather than off the requested
+  // server: `web/app/api/agent/auth/device-code/route.ts` builds them from the
   // request's own Host header, so they name the deployment that actually
   // answered — if that is not the one we asked for, the operator sees it.
   // Before the phrase lands (`pairingUrl` defaults to '') the requested server
   // is the best available answer, and with neither we name no host at all.
-  const host = hostOf(phrase?.pairingUrl) || hostOf(phrase?.verificationUri) || hostForServer(server)
+  const host = hostOf(phrase?.pairingUrl) || hostOf(phrase?.verificationUri) || hostForServer(requested)
   const environment = environmentToken(host)
 
   return (
@@ -218,14 +262,24 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
       <DialogContent className="sm:max-w-md" data-testid="join-site-dialog">
         <DialogHeader>
           <div className="flex items-center gap-2">
-            <DialogTitle>join a site</DialogTitle>
+            {/* select-none: five clicks would otherwise leave the title highlighted */}
+            <DialogTitle className="select-none" onClick={handleTitleClick}>
+              join a site
+            </DialogTitle>
             {environment && (
-              <span
+              // The badge is the way back: a click returns the pairing to
+              // owlette.app, so the backdoor is undone without reopening.
+              // Out of the tab order, or on a `/SERVER=dev` install it would
+              // take the dialog's initial focus and an Enter would flip it.
+              <button
+                type="button"
+                tabIndex={-1}
                 data-testid="join-environment"
-                className="rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[10px] font-medium whitespace-nowrap text-amber-400"
+                onClick={() => switchable && setOverride('prod')}
+                className="rounded border border-warning-border/75 bg-warning-surface px-1.5 py-0.5 font-mono text-[10px] font-medium whitespace-nowrap text-warning"
               >
                 {environment}
-              </span>
+              </button>
             )}
           </div>
           <DialogDescription>
@@ -258,7 +312,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
             <p className="font-mono text-xs text-muted-foreground">{error}</p>
           </InlineNotice>
         ) : phase === 'joined' ? (
-          <p className="text-sm text-green-500" data-testid="join-status">
+          <p className="text-sm text-success" data-testid="join-status">
             {status}
           </p>
         ) : (
@@ -268,12 +322,12 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
               disabled={!phrase}
               onClick={handleCopy}
               data-testid="join-phrase"
-              className="btn-sweep flex items-center justify-center gap-2 rounded-md border bg-secondary px-4 py-4 font-mono text-xl font-semibold tracking-tight text-primary disabled:opacity-60"
+              className="btn-sweep flex items-center justify-center gap-2 rounded-md border bg-card-sunken px-4 py-4 font-mono text-xl font-semibold tracking-tight text-primary disabled:opacity-60"
             >
               {phrase?.pairPhrase ?? '…'}
               {phrase &&
                 (copied ? (
-                  <Check className="size-4 text-green-500" />
+                  <Check className="size-4 text-success" />
                 ) : (
                   <Copy className="size-4 text-muted-foreground" />
                 ))}
@@ -281,7 +335,7 @@ export function JoinSiteDialog({ open, server, serviceConnected, onClose, onJoin
             <p className="text-center text-xs text-muted-foreground">
               {phrase ? (copied ? 'copied to clipboard' : 'click to copy') : 'asking owlette…'}
             </p>
-            <p className="text-center text-sm text-amber-400" data-testid="join-status">
+            <p className="text-center text-sm text-warning" data-testid="join-status">
               {status}
             </p>
           </div>

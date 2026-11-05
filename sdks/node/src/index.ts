@@ -215,6 +215,8 @@ export type {
   MachineCommandStatus,
   DispatchCommandResult,
   CommandStatus,
+  RebootOptions,
+  ShutdownOptions,
   CaptureScreenshotOptions,
   CaptureScreenshotResult,
 } from './resources/machines';
@@ -245,9 +247,12 @@ export type {
   ListInstallerDeploymentsResult,
   CreateInstallerDeploymentOptions,
   CreateInstallerDeploymentResult,
+  RetryInstallerDeploymentOptions,
   InstallerDeploymentMutationResult,
 } from './resources/installerDeployments';
 export type {
+  InstallerFile,
+  InstallerPlatform,
   InstallerVersion,
   ListInstallerOptions,
   ListInstallerResult,

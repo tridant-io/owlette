@@ -39,7 +39,8 @@ interface RoostDetailPanelProps {
    *  the targets section then renders an empty list until machines are wired in. */
   machines?: Machine[];
   onClose: () => void;
-  onNewVersion: (ctx: NewVersionContext) => void;
+  /** Absent when the plan leaves roost out; the page header carries the upgrade note. */
+  onNewVersion?: (ctx: NewVersionContext) => void;
   onResync: () => void;
   onDelete: () => void;
   onCopyRoostId: () => void;
@@ -143,7 +144,7 @@ export function RoostDetailPanel({
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={onDelete}
-              className="cursor-pointer text-red-400 focus:text-red-300 focus:bg-red-950/30"
+              className="cursor-pointer text-danger focus:text-danger focus:bg-danger-surface"
             >
               <Trash2 className="h-3.5 w-3.5 mr-2" />
               delete roost
@@ -241,14 +242,16 @@ export function RoostDetailPanel({
           roostCreatedAt={roost.createdAt}
           roostCreatedBy={roost.createdBy}
           refreshKey={refreshKey}
-          onNewVersion={() =>
-            onNewVersion({
-              roostId: roost.id,
-              name: roost.name,
-              extractPath: roost.extractPath,
-              targets: roost.targets,
-              currentVersionNumber: roost.currentVersionNumber,
-            })
+          onNewVersion={
+            onNewVersion &&
+            (() =>
+              onNewVersion({
+                roostId: roost.id,
+                name: roost.name,
+                extractPath: roost.extractPath,
+                targets: roost.targets,
+                currentVersionNumber: roost.currentVersionNumber,
+              }))
           }
         />
       </div>

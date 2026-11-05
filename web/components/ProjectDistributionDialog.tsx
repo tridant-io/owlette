@@ -512,10 +512,11 @@ export default function ProjectDistributionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Mobile: near-full-viewport with a 4px inset so edge taps land; sm+
           reverts to max-w-2xl. max-h-[90vh] + overflow-y keeps the footer
-          reachable on short viewports. */}
-      <DialogContent className="border-border bg-secondary text-white w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+          reachable on short viewports. by day the dialog is a white panel:
+          control paper would sit darker than the page it floats over. */}
+      <DialogContent className="border-border text-foreground w-[calc(100vw-1rem)] max-w-[calc(100vw-1rem)] sm:max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle className="text-white">
+          <DialogTitle className="text-foreground">
             {isNewVersion
               ? `publish new version of "${newVersion!.name}"`
               : 'new roost'}
@@ -539,7 +540,7 @@ export default function ProjectDistributionDialog({
               the pill's flex slot and blow out the row. `pb-10` reserves space
               for the attached panel. */}
           <div className="space-y-1.5">
-            <Label className="text-white">presets</Label>
+            <Label className="text-foreground">presets</Label>
             <div
               className={`flex flex-wrap items-start gap-x-1.5 gap-y-2 ${
                 selectedPreset && !selectedPreset.isBuiltIn && !savingNewPreset && !pendingReplacePreset ? 'pb-10' : ''
@@ -564,7 +565,7 @@ export default function ProjectDistributionDialog({
                       onClick={() => applyPreset(preset)}
                       className={`px-2.5 py-1 rounded-full text-[13px] font-medium transition-colors duration-150 cursor-pointer ${
                         isActive
-                          ? 'bg-cyan-600/20 text-cyan-100 ring-1 ring-cyan-500/40'
+                          ? 'bg-accent-cyan/20 text-foreground ring-1 ring-accent-cyan/40'
                           : 'bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground'
                       }`}
                     >
@@ -619,7 +620,7 @@ export default function ProjectDistributionDialog({
                               toast.error('failed to delete preset', { description: sanitizeError(err) });
                             }
                           }}
-                          className="flex items-center gap-1 px-2 py-0.5 rounded bg-red-600/20 text-red-400 hover:bg-red-600/40 hover:text-red-300 cursor-pointer transition-colors font-medium"
+                          className="flex items-center gap-1 px-2 py-0.5 rounded bg-danger-solid/15 text-danger hover:bg-danger-solid/40 hover:text-foreground cursor-pointer transition-colors font-medium"
                         >
                           <Trash2 className="h-3 w-3" /> yes, delete
                         </button>
@@ -641,10 +642,10 @@ export default function ProjectDistributionDialog({
                           aria-live="polite"
                           className={`flex items-center gap-1 ${
                             autosaveStatus === 'saving'
-                              ? 'text-cyan-400'
+                              ? 'text-accent-cyan'
                               : autosaveStatus === 'saved'
-                                ? 'text-green-400'
-                                : 'text-muted-foreground/70'
+                                ? 'text-success'
+                                : 'text-muted-foreground dark:text-muted-foreground/70'
                           }`}
                         >
                           <Save className="h-3 w-3" />
@@ -664,7 +665,7 @@ export default function ProjectDistributionDialog({
                         <button
                           type="button"
                           onClick={() => setConfirmDeletePresetId(selectedPreset.id)}
-                          className="flex items-center gap-1 hover:text-red-400 cursor-pointer transition-colors"
+                          className="flex items-center gap-1 hover:text-danger cursor-pointer transition-colors"
                         >
                           <Trash2 className="h-3 w-3" /> delete
                         </button>
@@ -677,7 +678,7 @@ export default function ProjectDistributionDialog({
                 <button
                   type="button"
                   onClick={() => setSavingNewPreset(true)}
-                  className="px-2.5 py-1 rounded-full text-[13px] text-muted-foreground/80 hover:text-foreground border border-dashed border-border/70 hover:border-muted-foreground transition-colors duration-150 cursor-pointer"
+                  className="px-2.5 py-1 rounded-full text-[13px] text-muted-foreground hover:text-foreground dark:text-muted-foreground/80 dark:hover:text-foreground border border-dashed border-border/70 hover:border-muted-foreground transition-colors duration-150 cursor-pointer"
                 >
                   <Plus className="h-3.5 w-3.5 inline mr-1" />
                   new preset
@@ -725,7 +726,7 @@ export default function ProjectDistributionDialog({
                 <button
                   type="button"
                   onClick={handleConfirmReplace}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/40 hover:text-cyan-200 cursor-pointer transition-colors font-medium"
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-accent-cyan/20 text-accent-cyan-hover hover:bg-accent-cyan/40 hover:text-foreground cursor-pointer transition-colors font-medium"
                 >
                   <Save className="h-3 w-3" /> yes, replace
                 </button>
@@ -741,7 +742,7 @@ export default function ProjectDistributionDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="distribution-name" className="text-white">roost name</Label>
+            <Label htmlFor="distribution-name" className="text-foreground">roost name</Label>
             <Input
               id="distribution-name"
               placeholder={namePlaceholder}
@@ -760,20 +761,16 @@ export default function ProjectDistributionDialog({
                   ? 'distribution-name-error'
                   : undefined
               }
-              className={`bg-muted/30 text-white ${
-                !isNewVersion &&
-                distributionName.length > 0 &&
-                !distributionName.trim()
-                  ? 'border-red-500 focus-visible:ring-red-500'
-                  : 'border-border'
-              } ${isNewVersion ? 'opacity-70 cursor-not-allowed' : ''}`}
+              // the invalid border and ring come from aria-invalid in the Input
+              // primitive, which outranks any plain border class here.
+              className={`border-border bg-muted/30 text-foreground ${isNewVersion ? 'opacity-70 cursor-not-allowed' : ''}`}
             />
             {!isNewVersion &&
               distributionName.length > 0 &&
               !distributionName.trim() && (
                 <p
                   id="distribution-name-error"
-                  className="text-xs text-red-400"
+                  className="text-xs text-danger"
                 >
                   roost name is required
                 </p>
@@ -781,7 +778,7 @@ export default function ProjectDistributionDialog({
             {!isNewVersion &&
               distributionName.trim().length > 0 &&
               (existingRoostIds ?? []).includes(slugify(distributionName)) && (
-                <p className="text-xs text-amber-400">
+                <p className="text-xs text-warning">
                   a roost with this name already exists. publishing here will
                   create a new, separate roost (auto-renamed) — open the
                   existing one and click <span className="font-medium">+ new version</span> if
@@ -794,7 +791,7 @@ export default function ProjectDistributionDialog({
               style in "+ new version"; the first version's description in
               new-roost mode. */}
           <div className="space-y-2">
-            <Label htmlFor="distribution-description" className="text-white">
+            <Label htmlFor="distribution-description" className="text-foreground">
               description <span className="text-muted-foreground text-xs">(optional)</span>
             </Label>
             <textarea
@@ -805,7 +802,7 @@ export default function ProjectDistributionDialog({
               }
               placeholder="what changed? (e.g. 'fixed broken video')"
               rows={2}
-              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-white placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-cyan resize-y"
+              className="w-full rounded-md border border-border bg-muted/30 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-accent-cyan resize-y"
             />
             <p className="text-[11px] text-muted-foreground tabular-nums text-right">
               {description.length}/{MAX_DESCRIPTION_LENGTH}
@@ -815,7 +812,7 @@ export default function ProjectDistributionDialog({
           {/* Uploading a folder is the only source — the v1 by-url path was
               removed, so bytes always come from a fresh file drop. */}
           <div className="space-y-2">
-            <Label className="text-white">folder to upload</Label>
+            <Label className="text-foreground">folder to upload</Label>
             <FolderDropzone
               onFilesReady={(files, rootName) => {
                 setDroppedFiles(files);
@@ -865,21 +862,21 @@ export default function ProjectDistributionDialog({
               return (
                 <div
                   role="status"
-                  className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400/90 space-y-1"
+                  className="rounded-md border border-warning-solid/30 bg-warning-solid/5 px-3 py-2 text-xs text-warning dark:text-warning/90 space-y-1"
                 >
-                  <div className="flex items-center gap-1.5 font-medium text-amber-300">
+                  <div className="flex items-center gap-1.5 font-medium text-warning">
                     <TriangleAlert className="h-3.5 w-3.5" />
                     heads up
                   </div>
                   {warnCount && (
-                    <p className="text-amber-400/75">
+                    <p className="dark:text-warning/75">
                       large file count ({fileCount.toLocaleString()}) — version will be big;
                       hashing may take several minutes. consider archiving into fewer files
                       if this is a one-off.
                     </p>
                   )}
                   {warnBytes && (
-                    <p className="text-amber-400/75">
+                    <p className="dark:text-warning/75">
                       large upload ({formatBytes(totalBytes)}) — hashing and upload will take
                       significant time. keep this tab open; the minimize-to-corner indicator
                       handles if you click away.
@@ -916,7 +913,7 @@ export default function ProjectDistributionDialog({
               return (
                 <div className="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs">
                   <div className="flex items-baseline gap-2">
-                    <span className="font-medium text-white">{phaseCopy}</span>
+                    <span className="font-medium text-foreground">{phaseCopy}</span>
                   </div>
                   {/* Darker track + border so the unfilled portion stays
                       visible on the dialog's bg-muted/20 panel. Matches
@@ -958,14 +955,14 @@ export default function ProjectDistributionDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="extract-path" className="text-white">extract to (optional)</Label>
+            <Label htmlFor="extract-path" className="text-foreground">extract to (optional)</Label>
             <Input
               id="extract-path"
               placeholder='Leave empty for default location'
               value={extractPath}
               onChange={(e) => setExtractPath(e.target.value)}
               disabled={isNewVersion}
-              className={`border-border bg-muted/30 text-white ${
+              className={`border-border bg-muted/30 text-foreground ${
                 isNewVersion ? 'opacity-70 cursor-not-allowed' : ''
               }`}
             />
@@ -974,13 +971,13 @@ export default function ProjectDistributionDialog({
               <span className="font-mono text-accent-cyan">{resolveExtractPath(extractPath)}</span>
             </p>
             {!isLikelyAllowed(extractPath, TARGET_OS_FAMILIES) && (
-              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-400/90 space-y-1.5">
+              <div className="rounded-md border border-warning-solid/30 bg-warning-solid/5 px-3 py-2 text-xs text-warning dark:text-warning/90 space-y-1.5">
                 {isPosixPathOnWindowsTargets(extractPath, TARGET_OS_FAMILIES) ? (
                   <>
                     <p className="font-medium">
                       not a path a windows machine can use
                     </p>
-                    <p className="text-amber-400/75">
+                    <p className="dark:text-warning/75">
                       these machines run windows, where{' '}
                       <code className="font-mono">{resolveExtractPath(extractPath)}</code>{' '}
                       isn&apos;t an absolute path at all — the agent refuses it before it
@@ -994,13 +991,13 @@ export default function ProjectDistributionDialog({
                     <p className="font-medium">
                       absolute path — agent needs to be told this is OK to write to
                     </p>
-                    <p className="text-amber-400/75">
+                    <p className="dark:text-warning/75">
                       the agent runs as SYSTEM on the target machine, so by default we
                       only allow writes under <code className="font-mono">~/Documents/</code>.
                       to write to <code className="font-mono">{resolveExtractPath(extractPath)}</code>,
                       add it to the allowlist on that machine:
                     </p>
-                    <ol className="list-decimal list-inside space-y-0.5 pt-0.5 text-amber-400/75">
+                    <ol className="list-decimal list-inside space-y-0.5 pt-0.5 dark:text-warning/75">
                       <li>open <code className="font-mono">C:\ProgramData\Owlette\config\config.json</code> as admin</li>
                       <li>
                         add (or append to) the <code className="font-mono">agent_config</code> block:
@@ -1024,7 +1021,7 @@ export default function ProjectDistributionDialog({
           <div className="space-y-2">
             {/* Wraps at 375px: the label stacks above the action buttons. */}
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Label className="text-white">target machines ({selectedMachines.size} selected){isNewVersion && ' — locked'}</Label>
+              <Label className="text-foreground">target machines ({selectedMachines.size} selected){isNewVersion && ' — locked'}</Label>
               {!isNewVersion && (
                 <div className="flex flex-wrap gap-2">
                   <Button
@@ -1032,7 +1029,7 @@ export default function ProjectDistributionDialog({
                     variant="outline"
                     size="sm"
                     onClick={selectOnlyOnlineMachines}
-                    className="border-border bg-background/50 text-white hover:bg-muted hover:text-white cursor-pointer text-xs"
+                    className="border-border bg-background/50 text-foreground hover:bg-muted cursor-pointer text-xs"
                   >
                     online only ({onlineMachines.length})
                   </Button>
@@ -1041,7 +1038,7 @@ export default function ProjectDistributionDialog({
                     variant="outline"
                     size="sm"
                     onClick={toggleAllMachines}
-                    className="border-border bg-background/50 text-white hover:bg-muted hover:text-white cursor-pointer text-xs"
+                    className="border-border bg-background/50 text-foreground hover:bg-muted cursor-pointer text-xs"
                   >
                     {allMachinesSelected ? 'deselect all' : 'select all'}
                   </Button>
@@ -1083,9 +1080,9 @@ export default function ProjectDistributionDialog({
                         disabled={isNewVersion}
                         className={isNewVersion ? '' : 'cursor-pointer'}
                       />
-                      <span className="text-white">{machine.machineId}</span>
+                      <span className="text-foreground">{machine.machineId}</span>
                     </div>
-                    <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
+                    <Badge className={`text-xs ${machine.online ? 'bg-success-solid text-success-solid-foreground' : 'bg-danger-solid text-danger-solid-foreground'}`}>
                       {machine.online ? 'online' : 'offline'}
                     </Badge>
                   </div>
@@ -1113,9 +1110,9 @@ export default function ProjectDistributionDialog({
           {uploading ? (
             <>
               <Button
-                variant="ghost"
+                variant="ghost-destructive"
                 onClick={() => upload.cancel()}
-                className="bg-secondary border border-border text-red-400 hover:text-red-300 cursor-pointer"
+                className="bg-secondary border border-border cursor-pointer"
               >
                 cancel upload
               </Button>
@@ -1179,7 +1176,7 @@ export default function ProjectDistributionDialog({
                 </Button>
                 <Button
                   onClick={handleUploadDistribute}
-                  className="text-gray-900 cursor-pointer"
+                  className="cursor-pointer"
                   disabled={distributeDisabled}
                   title={distributeReason}
                 >

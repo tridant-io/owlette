@@ -1,27 +1,42 @@
 ---
 title: "listen"
-description: "listen opens the site's scoped SSE stream and forwards each non-liveness event to a local HTTP endpoint. it is a long-running developer helper for testing webhook-style consumers against the owlette api. tier: [ready], with the current server stream limited to liveness events until production event fanout ships."
+description: "listen holds open a site's server-sent event stream and posts each event it receives to a local URL, for testing webhook-style receivers. the stream currently carries liveness events only; production event fanout has not shipped."
+keywords: ["local tunnel", "SSE"]
 ---
 
-**synopsis** - `owlette listen --site <siteId> --forward-to <url> [--events <csv>] [--signing-secret <secret>] [--print]`
+<Callout type="warn" title={"liveness events only, for now"}>
 
-| flag | required | purpose |
-|---|---|---|
-| `--site <siteId>` | yes | site id to read from `/api/events/stream` |
-| `--forward-to <url>` | yes | local HTTP endpoint that receives each forwarded event as a `POST` |
-| `--events <csv>` | no | comma-separated event kinds to forward; defaults to every non-liveness event |
-| `--signing-secret <secret>` | no | re-sign forwarded payloads with `Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>` |
-| `--print` | no | explicit print mode; events and status lines are already written to stderr |
+`GET /api/events/stream` sends `connected` when it opens, `keepalive` every 15 seconds, and `closing` when it shuts the stream after 30 minutes. no roost events flow through it yet. the forwarding below works the same once they do.
 
-inherits `--profile` and `--api-url` from the global set. it requires a configured token from `owlette auth login`, `OWLETTE_TOKEN`, or the active profile.
+</Callout>
+
+---
+
+## listen
 
 ```bash
-# forward every non-liveness event to a local app
+owlette listen --site <siteId> --forward-to <url> [--events <csv>] [--signing-secret <secret>] [--print]
+```
+
+| flag | type | required | description |
+|---|---|---|---|
+| `--site <siteId>` | string | yes | site whose stream to read |
+| `--forward-to <url>` | URL | yes | local endpoint that receives each event as a `POST` |
+| `--events <csv>` | string | no | event kinds to forward, comma-separated; must be names from the [event catalog](/docs/api/webhooks#event-catalog). default: everything except `connected` and `keepalive` |
+| `--signing-secret <secret>` | string | no | re-sign each forwarded body as `Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>` |
+| `--print` | boolean | no | no effect — events are always logged to stderr |
+
+the global `--profile` and `--api-url` pick the profile and host. the command runs until you press `Ctrl-C` or the server closes the stream.
+
+### examples
+
+```bash
+# forward everything to a local app
 owlette listen --site site-1 --forward-to http://localhost:3000/hooks/owlette
 ```
 
 ```bash
-# forward only selected event kinds
+# forward two event kinds only
 owlette listen \
   --site site-1 \
   --forward-to http://localhost:3000/hooks/owlette \
@@ -29,20 +44,20 @@ owlette listen \
 ```
 
 ```bash
-# sign forwarded payloads with a local test secret
+# re-sign forwarded payloads with a local test secret
 owlette listen \
   --site site-1 \
   --forward-to http://localhost:3000/hooks/owlette \
   --signing-secret whsec_local_test
 ```
 
-**backing endpoint**: `GET /api/events/stream?siteId=<siteId>&api_key=<token>[&events=<csv>]` with `Accept: text/event-stream` and `Authorization: Bearer <token>`.
+backing: `GET /api/events/stream?siteId=<siteId>&api_key=<token>[&events=<csv>]` with `Accept: text/event-stream` and `Authorization: Bearer <token>`.
 
 ---
 
-## stream behavior
+## stream handling
 
-the CLI parses SSE blocks with this shape:
+the CLI reads blocks of this shape, with an optional `id:` line:
 
 ```text
 event: <kind>
@@ -50,9 +65,9 @@ data: <json>
 
 ```
 
-`id:` is also accepted when the server includes it. `connected` and `keepalive` are treated as liveness events and are not forwarded. `keepalive` is counted silently; `connected` prints `owlette: stream connected` to stderr.
+`connected` prints `owlette: stream connected` and `keepalive` is counted silently; neither is forwarded. every other event, `closing` included, is forwarded unless `--events` leaves it out — then the CLI prints `owlette: (filtered) <kind>`.
 
-when `--events` is present, the command applies the comma-separated filter locally and also passes the same value to the stream endpoint. event names must match exactly after trimming whitespace.
+with `--events`, the same list is sent to the server, which rejects any name outside the event catalog with `400` before the stream opens, and is also applied locally. names match exactly after trimming spaces.
 
 ---
 
@@ -64,29 +79,29 @@ each forwarded event becomes:
 POST <forward-to>
 Content-Type: application/json
 Roost-Event: <event kind>
-Roost-Delivery: <event id, when present>
+Roost-Delivery: <event id, when the block has one>
 Roost-Signature: t=<unix>,v1=<hmac_sha256_hex>
 ```
 
-the request body is the raw SSE `data:` string. `Roost-Signature` is set when `--signing-secret` is supplied. without a signing secret, the CLI preserves a `roostSignature` value embedded in the JSON payload when one is present; otherwise the forwarded request has no signature header.
+the body is the raw `data:` string. with `--signing-secret`, `Roost-Signature` is an HMAC-SHA256 over `<t>.<body>`. without it, the CLI forwards a `roostSignature` value found in the JSON payload, and otherwise sends no signature header.
 
-local HTTP status codes are logged and counted as forwarded attempts, including non-2xx responses. network-level forward failures are logged as `forwardErrors`, but the listener keeps running for later events.
+every response from the local endpoint, 2xx or not, is logged and counted as forwarded. a network-level failure is logged and counted in `forwardErrors`, and the listener carries on with the next event.
 
 ---
 
 ## output
 
-`listen` writes status to stderr and does not emit structured stdout. startup output shows the api host, site, target URL, event filter, and signing mode:
+everything goes to stderr; nothing is written to stdout, and `--json` has no effect. on start:
 
 ```text
 owlette: listening on https://owlette.app/api/events/stream
        site: site-1
        forwarding to http://localhost:3000/hooks/owlette
        events: all (except keepalive)
-       (no re-sign secret - forwarded payloads carry the server's original Roost-Signature if present)
+       (no re-sign secret — forwarded payloads carry the server's original Roost-Signature if present)
 ```
 
-during the run it logs filtered events, forwarded events, HTTP statuses returned by the local endpoint, and forward failures. on shutdown it prints a summary:
+while running it logs `owlette: → forwarding <kind>`, `owlette: ← <status> from <url>` and any forward failures. on exit:
 
 ```text
 owlette: listener stopped. connected=1 events=3 forwarded=3 forwardErrors=0 keepalives=12
@@ -96,15 +111,15 @@ owlette: listener stopped. connected=1 events=3 forwarded=3 forwardErrors=0 keep
 
 ## exit codes
 
-- `0` - clean shutdown with `Ctrl-C`; also used when the stream ends without a connection-level error
-- `1` - failed to open the stream, non-2xx stream response, or stream parser/read error
-- `2` - no token configured for the active profile or an invalid `--forward-to` URL
+- `0` — you stopped it with `Ctrl-C`
+- `1` — the stream could not be opened, the server answered non-2xx (including a `400` for an unknown `--events` name), a read failed, or the server closed the stream — which it does after 30 minutes, after printing `owlette: stream closed by server`. a missing `--site` or `--forward-to` also exits `1`
+- `2` — no token configured, or a `--forward-to` that is not a valid URL
 
 ---
 
 ## notes
 
-- **scope**: site-scoped stream reader for the site named by `--site`
-- **auth**: the token is sent both as `api_key` in the stream query string and as an `Authorization` bearer header
-- **current stream**: the shipped server stream emits `connected` on open and `keepalive` roughly every 15 seconds as a liveness signal; real event fanout can flow through the same CLI when the server starts emitting canonical event kinds
-- **related**: [webhook](/docs/cli/reference/webhook) and [overview](/docs/cli/overview)
+- **scope**: the key needs `site=<id>:read`
+- **auth**: the token goes both in the `api_key` query parameter and in the `Authorization` header, so a proxy that strips headers from long-lived requests does not drop it
+- **reconnects**: there are none — wrap the command in a loop if you need it to outlive the 30-minute stream
+- **related**: [`trigger`](/docs/cli/reference/trigger) to send one synthetic event, [webhooks](/docs/api/webhooks) for the event catalog and signature format, [webhook](/docs/cli/reference/webhook) for the subscription routes

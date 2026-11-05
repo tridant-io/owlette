@@ -12,7 +12,7 @@
  *
  * Three invariants, each a live escalation path before this module (details at each
  * function): `addMember` uses `create()`, never `set()`, so a site admin cannot
- * overwrite the OWNER's row and take the site; `changeRole` cannot reach `'owner'` —
+ * overwrite the OWNER's row and take the site; `updateMember` cannot reach `'owner'` —
  * ownership moves only through the transactional `transferOwnership` (task 2.2);
  * `removeMember` refuses the owner.
  *
@@ -24,6 +24,8 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { listUserStanding } from '@/lib/sitePolicy.server';
+import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 
 /** Stored per-site role. `owner` is written only by ownership transfer. */
 export type MemberRole = 'owner' | 'admin' | 'member';
@@ -42,6 +44,17 @@ export interface MemberDoc {
   status: 'active';
   addedAt: Date;
   addedBy: string;
+  /**
+   * the person's own swoop mode, present only when someone set it; absent means
+   * the role decides. never stored as null, and never on the owner's row.
+   */
+  swoop?: SwoopMode;
+}
+
+/** a member's access on a site: the site role, and their own swoop mode or null. */
+export interface MemberAccess {
+  role: MemberRole;
+  swoop: SwoopMode | null;
 }
 
 /** Typed failures. Callers map these to status codes; this module picks none. */
@@ -67,7 +80,8 @@ function memberRef(db: FirebaseFirestore.Firestore, siteId: string, uid: string)
  * job; this module trusts the uid and re-checks only the invariants above.
  */
 /**
- * Every site id the user holds an ACTIVE member row for.
+ * every site id where the user's member row grants a site role, read as every
+ * gate reads it: an inactive row or a malformed role lists nothing.
  *
  * The read counterpart to this module's writes, and the replacement for
  * `getUserSiteIds` (which reads the legacy `users/{uid}.sites[]` array). Anything
@@ -75,32 +89,17 @@ function memberRef(db: FirebaseFirestore.Firestore, siteId: string, uid: string)
  * — an empty 200, not an error — which is why the two hoot/chat callers had to
  * move before the migration could run.
  *
- * `status` is filtered in memory rather than added as a second `where`: a
- * composite (uid, status) collection-group index does not exist and this query
- * is per-user, so the row count is small. The single-field `members.uid`
- * COLLECTION_GROUP override in `firestore.indexes.json` is what makes this legal
- * — automatic single-field indexing does NOT extend to collection-group scope,
- * and the emulator will not tell you when it is missing.
+ * the query and its index note are `listUserStanding`'s, in sitePolicy.server.ts.
  */
 export async function listUserSiteIds(userId: string): Promise<string[]> {
-  const snap = await getAdminDb()
-    .collectionGroup('members')
-    .where('uid', '==', userId)
-    .get();
-
-  const siteIds = new Set<string>();
-  for (const doc of snap.docs) {
-    if ((doc.data() ?? {}).status !== 'active') continue;
-    const siteId = doc.ref.parent.parent?.id;
-    if (siteId) siteIds.add(siteId);
-  }
-  return [...siteIds];
+  return Object.keys(await listUserStanding(userId));
 }
 
 export async function addMember(input: {
   siteId: string;
   uid: string;
   role: AssignableRole;
+  swoop?: SwoopMode;
   addedBy: string;
   now?: () => Date;
   db?: FirebaseFirestore.Firestore;
@@ -121,6 +120,7 @@ export async function addMember(input: {
     status: 'active',
     addedAt: now,
     addedBy: input.addedBy,
+    ...(input.swoop !== undefined ? { swoop: input.swoop } : {}),
   } satisfies MemberDoc);
   batch.update(userRef, { sites: FieldValue.arrayUnion(input.siteId) });
 
@@ -135,19 +135,25 @@ export async function addMember(input: {
 }
 
 /**
- * Change a member's per-site role.
+ * Change a member's per-site role, their swoop mode, or both, and return their
+ * access before and after the write.
  *
  * `AssignableRole` makes `'owner'` untypeable as a destination and the owner check
  * below makes it unreachable as a source — together they close the
- * admin-promotes-self-to-owner path.
+ * admin-promotes-self-to-owner path. the same check keeps a mode off the owner's
+ * row, because the owner always controls.
+ *
+ * `swoop: null` deletes the field, so the role decides again. a role change
+ * leaves the mode as it is.
  */
-export async function changeRole(input: {
+export async function updateMember(input: {
   siteId: string;
   uid: string;
-  role: AssignableRole;
+  role?: AssignableRole;
+  swoop?: SwoopMode | null;
   db?: FirebaseFirestore.Firestore;
-}): Promise<MembershipResult> {
-  if (!ASSIGNABLE_ROLES.includes(input.role)) {
+}): Promise<MembershipResult<{ before: MemberAccess; after: MemberAccess }>> {
+  if (input.role !== undefined && !ASSIGNABLE_ROLES.includes(input.role)) {
     return { ok: false, failure: { kind: 'invalid_role' } };
   }
 
@@ -157,14 +163,27 @@ export async function changeRole(input: {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return { ok: false, failure: { kind: 'not_member' } };
+    const row = snap.data() as MemberDoc;
     // Read INSIDE the transaction: a concurrent transferOwnership that makes this
     // uid the owner must abort this write rather than demote the new owner.
-    if ((snap.data() as MemberDoc | undefined)?.role === 'owner') {
+    if (row.role === 'owner') {
       return { ok: false, failure: { kind: 'is_owner' } };
     }
-    tx.update(ref, { role: input.role });
-    return { ok: true };
-  }) as Promise<MembershipResult>;
+
+    const before: MemberAccess = { role: row.role, swoop: parseSwoopMode(row.swoop) };
+    const update: { role?: AssignableRole; swoop?: SwoopMode | FieldValue } = {};
+    if (input.role !== undefined) update.role = input.role;
+    if (input.swoop !== undefined) {
+      update.swoop = input.swoop === null ? FieldValue.delete() : input.swoop;
+    }
+    if (Object.keys(update).length > 0) tx.update(ref, update);
+
+    const after: MemberAccess = {
+      role: input.role ?? before.role,
+      swoop: input.swoop === undefined ? before.swoop : input.swoop,
+    };
+    return { ok: true, value: { before, after } };
+  });
 }
 
 /**

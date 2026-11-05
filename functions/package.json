@@ -19,17 +19,19 @@
     "node": "22"
   },
   "dependencies": {
-    "firebase-admin": "^14.3.0",
-    "firebase-functions": "^7.3.2"
+    "firebase-admin": "^14.5.0",
+    "firebase-functions": "^7.4.0"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.3.0"
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
   },
   "private": true,
   "overrides": {
     "protobufjs": "^7.5.5",
     "websocket-driver": "^0.7.5",
+    "minimatch": "^11.0.1",
+    "glob": "^14.0.2",
     "gaxios": {
       "uuid": "^11.1.1"
     }

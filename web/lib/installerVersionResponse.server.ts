@@ -1,3 +1,5 @@
+import { normalizeInstallerFiles, type InstallerFiles } from '@/lib/installerPlatform';
+
 export interface InstallerVersionRecord {
   version?: unknown;
   download_url?: unknown;
@@ -10,6 +12,7 @@ export interface InstallerVersionRecord {
   promoted_at?: unknown;
   promoted_by?: unknown;
   deletedAt?: unknown;
+  files?: unknown;
 }
 
 export interface InstallerVersionResponse {
@@ -22,6 +25,7 @@ export interface InstallerVersionResponse {
   uploaded_by: string | null;
   release_date: string | null;
   deletedAt: number | null;
+  files: InstallerFiles;
   promoted_at?: number | null;
   promoted_by?: string | null;
 }
@@ -30,11 +34,12 @@ export function installerVersionResponse(
   id: string,
   data: InstallerVersionRecord,
 ): InstallerVersionResponse {
+  const version = stringOrNull(data.version) ?? id;
   const uploadedAt = numberOrNull(data.uploaded_at);
   const promotedAt = numberOrNull(data.promoted_at);
   const promotedBy = stringOrNull(data.promoted_by);
   return {
-    version: stringOrNull(data.version) ?? id,
+    version,
     download_url: stringOrNull(data.download_url),
     checksum_sha256: stringOrNull(data.checksum_sha256),
     release_notes: stringOrNull(data.release_notes),
@@ -43,6 +48,8 @@ export function installerVersionResponse(
     uploaded_by: stringOrNull(data.uploaded_by),
     release_date: dateStringOrNull(data.release_date, uploadedAt),
     deletedAt: numberOrNull(data.deletedAt),
+    // the legacy windows entry names its file from the version, which a doc keyed by id may not carry
+    files: normalizeInstallerFiles({ ...data, version }),
     ...(promotedAt !== null ? { promoted_at: promotedAt } : {}),
     ...(promotedBy !== null ? { promoted_by: promotedBy } : {}),
   };

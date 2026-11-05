@@ -6,6 +6,9 @@
  * concurrent deletes can't both see "3 active"; 409 `min_versions_violated`
  * otherwise.
  *
+ * A version registered with tridant id is yanked there; the outcome is
+ * `tridant`, and a tridant id failure never fails the delete.
+ *
  * Auth: api key with `installer=*:admin`, or a superadmin session/id-token.
  * Idempotent — re-deleting returns the same 200 shape, deletedAt unchanged.
  */
@@ -19,6 +22,7 @@ import {
 } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
+import { syncInstallerRelease } from '@/lib/tridantRelease.server';
 import { applyAuthDeprecations, requirePlatformAuthAndScope } from '../../_shared';
 
 const VERSION_REGEX = /^\d+\.\d+\.\d+$/;
@@ -142,11 +146,14 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       });
     }
 
+    const tridant = await syncInstallerRelease(version);
+
     return applyAuthDeprecations(
       NextResponse.json({
         version,
         deletedAt: result.deletedAt,
         alreadyDeleted: result.kind === 'already_deleted',
+        tridant,
       }),
       auth.scopeCheck,
     );

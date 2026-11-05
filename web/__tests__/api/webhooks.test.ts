@@ -38,6 +38,11 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
 // Stub ssrf + dns resolution so url validation is deterministic.
 jest.mock('@/lib/webhookUrl', () => ({
   validateWebhookUrl: jest.fn(async (raw: unknown) => {
@@ -61,6 +66,12 @@ import { POST as retryPOST } from '@/app/api/webhooks/[webhookId]/deliveries/[de
 // Real class — the module mock above spreads `jest.requireActual`, so this is
 // the same constructor `_shared.ts` branches on with `instanceof`.
 import { ApiAuthError } from '@/lib/apiAuth.server';
+import {
+  enforcePlans,
+  FREE_ENTITLEMENTS,
+  PRO_ENTITLEMENTS,
+  stopEnforcingPlans,
+} from './helpers/planEnforcement';
 
 const SITE = 'site-alpha';
 const WEBHOOK = 'wh_test_0000000001';
@@ -1033,4 +1044,54 @@ describe('WEBHOOK_MANAGE enforcement', () => {
   });
 });
 
-// billing gate — POST is pro-only (billing-system wave 0.6)
+// plan gate — creating needs the payer's owlette.webhooks; the rest stay open (plan.md decision 8)
+
+describe('owlette.webhooks plan gate', () => {
+  const create = () =>
+    createPOST(
+      createMockRequest(`http://localhost/api/webhooks?siteId=${SITE}`, {
+        method: 'POST',
+        body: { url: 'https://example.com/hook', events: ['version.published'] },
+      }),
+    );
+
+  beforeEach(() => {
+    enforcePlans();
+    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+  });
+  afterEach(stopEnforcingPlans);
+
+  it('402s a create on the site payer’s free plan, and writes nothing', async () => {
+    const res = await create();
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({
+      code: 'plan_required',
+      entitlement: 'owlette.webhooks',
+    });
+    expect(mockGetEntitlements).toHaveBeenCalledWith('user-1');
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('creates on pro', async () => {
+    mockGetEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+
+    expect((await create()).status).toBe(201);
+  });
+
+  it('keeps delete open on free', async () => {
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(WEBHOOK, { url: 'https://ex.com', events: ['version.published'], paused: false }),
+    );
+
+    const res = await detailDELETE(
+      createMockRequest(`http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`, {
+        method: 'DELETE',
+      }),
+      { params: Promise.resolve({ webhookId: WEBHOOK }) },
+    );
+
+    expect(res.status).toBe(200);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+  });
+});

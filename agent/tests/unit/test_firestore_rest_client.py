@@ -252,6 +252,26 @@ class TestCRUD:
 
         client.delete_document("test/nonexistent")
 
+    def test_batch_write_goes_through_commit(self, client):
+        """`:batchWrite` is for service accounts and answered 403 to the agent's
+        token, so a batch of 500 became 500 requests. `:commit` takes the same
+        writes array."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = MagicMock()
+        client.session.post = MagicMock(return_value=mock_response)
+
+        client.batch_write([
+            {'operation': 'set', 'path': 'logs/a', 'data': {'msg': 'one'}},
+            {'operation': 'delete', 'path': 'logs/b'},
+        ])
+
+        assert client.session.post.called
+        url = client.session.post.call_args.args[0]
+        assert url.endswith(':commit')
+        body = client.session.post.call_args.kwargs['json']
+        assert [list(w.keys())[0] for w in body['writes']] == ['update', 'delete']
+
     def test_update_document_with_field_mask(self, client):
         """update_document should include updateMask params."""
         mock_response = MagicMock()

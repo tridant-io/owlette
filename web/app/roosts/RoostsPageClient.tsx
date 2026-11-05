@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
+import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { useProjectDistributionPresets } from '@/hooks/useProjectDistributionPresets';
 import { useRoosts } from '@/hooks/useRoosts';
@@ -27,8 +28,6 @@ import ProjectDistributionDialog, {
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { MinimizedUploadCard } from '@/components/MinimizedUploadCard';
 import { useRoostUpload } from '@/hooks/useRoostUpload';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
@@ -37,6 +36,7 @@ import { LoadingWord } from '@/components/LoadingWord';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { RoostDetailPanel } from '@/components/roost/RoostDetailPanel';
 import { RoostMobileSheet } from '@/components/roost/RoostMobileSheet';
+import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
 const DESCRIPTION_PREVIEW_CAP = 40;
 
@@ -52,20 +52,17 @@ export default function RoostsPageClient() {
     sites,
     sitesLoading,
     currentSiteId,
+    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
   } = useCurrentSite();
+  const siteOwner = currentSite?.owner ?? null;
+  const roostGated = usePlanGated('roost', siteOwner);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
   const [newVersionContext, setNewVersionContext] = useState<NewVersionContext | null>(null);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   // Pending row actions; `null` = no prompt open. Each carries the roost plus
   // whatever the handler needs after confirm.
@@ -274,42 +271,15 @@ export default function RoostsPageClient() {
   }
 
   return (
-    <div className="relative min-h-screen pb-8">
+    <PageCascade className="relative min-h-screen pb-8">
       {/* Header */}
       <PageHeader
         currentPage="roost"
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => setManageDialogOpen(true)}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       {/* Main content */}
@@ -366,16 +336,18 @@ export default function RoostsPageClient() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <Button
-              onClick={() => {
-                setNewVersionContext(null);
-                setDistributionDialogOpen(true);
-              }}
-              className="text-gray-900 cursor-pointer"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              new roost
-            </Button>
+            <UpgradeGate flag="roost" siteOwner={siteOwner} variant="inline">
+              <Button
+                onClick={() => {
+                  setNewVersionContext(null);
+                  setDistributionDialogOpen(true);
+                }}
+                className="cursor-pointer"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                new roost
+              </Button>
+            </UpgradeGate>
           </div>
         </div>
 
@@ -407,14 +379,15 @@ export default function RoostsPageClient() {
             ) : roosts.length === 0 ? (
               <EmptyStateUpload
                 machineCount={machines.length}
-                onNewRoost={() => {
+                // the header already carries the upgrade note
+                onNewRoost={roostGated ? undefined : () => {
                   setNewVersionContext(null);
                   setDistributionDialogOpen(true);
                 }}
                 onAddMachine={() => router.push('/dashboard')}
               />
             ) : (
-              <div className="divide-y divide-border">
+              <div className="cascade-rows divide-y divide-border">
                 {roosts.map((roost) => {
                   const isSelected = selectedRoostId === roost.id;
                   const versionLabel =
@@ -548,7 +521,7 @@ export default function RoostsPageClient() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => setPendingDelete({ roostId: roost.id, name: roost.name })}
-                              className="cursor-pointer text-red-400 focus:text-red-300 focus:bg-red-950/30"
+                              className="cursor-pointer text-danger focus:text-danger focus:bg-danger-surface"
                             >
                               <Trash2 className="h-3.5 w-3.5 mr-2" />
                               delete roost
@@ -594,7 +567,7 @@ export default function RoostsPageClient() {
                     machines={machines}
                     headingId="roost-detail-heading"
                     onClose={() => setSelectedRoostId(null)}
-                    onNewVersion={openNewVersionDialog}
+                    onNewVersion={roostGated ? undefined : openNewVersionDialog}
                     onResync={() => {
                       if (
                         displayRoost.currentVersionId &&
@@ -649,7 +622,7 @@ export default function RoostsPageClient() {
                 machines={machines}
                 headingId="roost-detail-heading"
                 onClose={() => setSelectedRoostId(null)}
-                onNewVersion={openNewVersionDialog}
+                onNewVersion={roostGated ? undefined : openNewVersionDialog}
                 onResync={() => {
                   if (
                     selectedRoost.currentVersionId &&
@@ -732,6 +705,6 @@ export default function RoostsPageClient() {
           }
         }}
       />
-    </div>
+    </PageCascade>
   );
 }

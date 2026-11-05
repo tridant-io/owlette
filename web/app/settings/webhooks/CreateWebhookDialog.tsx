@@ -123,9 +123,9 @@ export function CreateWebhookDialog({
         if (!o) reset();
       }}
     >
-      <DialogContent className="sm:max-w-xl bg-card border-border">
+      <DialogContent className="sm:max-w-xl border-border">
         <DialogHeader>
-          <DialogTitle className="text-white">create webhook</DialogTitle>
+          <DialogTitle className="text-foreground">create webhook</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             roost signs every delivery with hmac-sha256. you&apos;ll receive the signing secret
             once after creation — store it now; it isn&apos;t shown again.
@@ -134,7 +134,7 @@ export function CreateWebhookDialog({
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label htmlFor="webhook-url" className="text-white">
+            <Label htmlFor="webhook-url" className="text-foreground">
               endpoint url
             </Label>
             <Input
@@ -144,7 +144,7 @@ export function CreateWebhookDialog({
               value={url}
               onChange={(e) => setUrl(e.target.value)}
               disabled={busy}
-              className="bg-background border-border text-white"
+              className="bg-background border-border text-foreground"
             />
             <p className="text-xs text-muted-foreground">
               must be https. private / loopback / link-local ips are blocked server-side.
@@ -152,7 +152,7 @@ export function CreateWebhookDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="webhook-description" className="text-white">
+            <Label htmlFor="webhook-description" className="text-foreground">
               description <span className="text-muted-foreground">(optional)</span>
             </Label>
             <Input
@@ -161,13 +161,13 @@ export function CreateWebhookDialog({
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={busy}
-              className="bg-background border-border text-white"
+              className="bg-background border-border text-foreground"
             />
           </div>
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-white">events</Label>
+              <p id="webhook-events-label" className="text-sm leading-none font-medium text-foreground">events</p>
               <button
                 type="button"
                 onClick={toggleAll}
@@ -178,11 +178,11 @@ export function CreateWebhookDialog({
                   : 'select all'}
               </button>
             </div>
-            <div className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto border border-border rounded p-3">
+            <div role="group" aria-labelledby="webhook-events-label" className="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto border border-border rounded p-3">
               {ROOST_WEBHOOK_EVENTS.map((evt) => (
                 <label
                   key={evt}
-                  className="flex items-center gap-2 text-sm text-white cursor-pointer"
+                  className="flex items-center gap-2 text-sm text-foreground cursor-pointer"
                 >
                   <Checkbox
                     checked={selected.has(evt)}
@@ -210,7 +210,7 @@ export function CreateWebhookDialog({
             type="button"
             onClick={handleSubmit}
             disabled={busy}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'create webhook'}
           </Button>

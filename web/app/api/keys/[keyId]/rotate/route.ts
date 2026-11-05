@@ -7,6 +7,7 @@ import {
   requireSessionOrIdToken,
 } from '@/lib/apiAuth.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { requireApiKeyMintPlan } from '@/app/api/_shared';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   problem,
@@ -45,6 +46,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
       const userId = await requireSessionOrIdToken(request);
       await assertActiveUser(userId);
+      // a rotation mints a fresh key, so it needs what minting needs
+      const planRefusal = await requireApiKeyMintPlan(userId);
+      if (planRefusal) return planRefusal;
       const { keyId } = await params;
 
       if (!keyId || typeof keyId !== 'string') {

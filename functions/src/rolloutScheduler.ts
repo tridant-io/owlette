@@ -23,10 +23,25 @@
  * Kill switch: a site with `roostEnabled: false` is skipped untouched (no fire,
  * no write-off) until the switch flips back. Fail-open on a read error, as the
  * web and agent mirrors do.
+ *
+ * plan gate (plan.md decision 13): a due rollout whose site owner's plan
+ * snapshot withholds roost or control is written off as `aborted`, with the
+ * reason, instead of fired, but only when the snapshot is newer than the
+ * rollout. one scheduled after it passed the web's live entitlement check,
+ * which is fresher, so a payer who just upgraded is not refused on a day-old
+ * snapshot. unlike the kill switch it is not left `scheduled`: a lapse lasts far
+ * past the grace window, and those rollouts would sit at the head of the
+ * oldest-first due query and starve every other site's.
  */
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
 import { getFirestore, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import {
+  planBlockReason,
+  readSitePlanSnapshot,
+  type PlanSnapshot,
+  type PlanSnapshotFlag,
+} from './lib/planSnapshot';
 import { buildSyncPullCommand, syncPullCommandId } from './lib/syncPullCommand';
 import {
   decideScheduledRollout,
@@ -43,6 +58,9 @@ import {
  */
 const MAX_CLAIMS_PER_SWEEP = 25;
 
+// a scheduled rollout is a roost deploy (decision 8) that queues machine commands, which are control (decision 7).
+const ROLLOUT_PLAN_FLAGS: readonly PlanSnapshotFlag[] = ['roost', 'control'];
+
 /** Identifies one `sites/{siteId}/roosts/{roostId}/rollouts/{versionId}` doc. */
 export interface ScheduledRolloutRef {
   siteId: string;
@@ -58,6 +76,8 @@ export interface RolloutDocData {
   versionUrl?: unknown;
   extractRoot?: unknown;
   canary?: unknown;
+  /** set by the deploy route when it parks the rollout: when it was scheduled. */
+  startedAt?: unknown;
 }
 
 /**
@@ -92,6 +112,8 @@ export interface ClaimArgs {
   data: RolloutDocData | null;
   nowMs: number;
   graceMs: number;
+  /** the site payer's plan snapshot, or null to proceed. */
+  planSnapshot: PlanSnapshot | null;
 }
 
 /** Firestore Timestamp | number | Date → epoch ms, else null. */
@@ -107,13 +129,26 @@ function toMillis(value: unknown): number | null {
 }
 
 /**
+ * why the plan withholds this rollout, or null to fire it. the snapshot applies
+ * only when it is newer than the rollout; a rollout with no `startedAt` counts
+ * as older, and a snapshot with no readable `resolvedAt` as never newer.
+ */
+function rolloutPlanBlock(snapshot: PlanSnapshot | null, startedAt: unknown): string | null {
+  if (!snapshot) return null;
+  const startedMs = toMillis(startedAt);
+  const resolvedMs = toMillis(snapshot.resolvedAt);
+  if (startedMs !== null && (resolvedMs === null || resolvedMs <= startedMs)) return null;
+  return planBlockReason(snapshot, ROLLOUT_PLAN_FLAGS);
+}
+
+/**
  * Decide and write, inside the caller's transaction. Returns what it applied.
  *
  * All writes for one rollout land here so the stage flip and the canary commands
  * commit together — see the claim note at the top of the file.
  */
 export function applyScheduledRolloutClaim(args: ClaimArgs): ScheduledRolloutDecision {
-  const { writer, targets, ref, data, nowMs, graceMs } = args;
+  const { writer, targets, ref, data, nowMs, graceMs, planSnapshot } = args;
 
   // Deleted between the due query and the claim — nothing to claim.
   if (!data) return { action: 'skip', reason: 'claimed' };
@@ -126,7 +161,7 @@ export function applyScheduledRolloutClaim(args: ClaimArgs): ScheduledRolloutDec
     : [];
   const versionUrl = typeof data.versionUrl === 'string' ? data.versionUrl : '';
 
-  const decision = decideScheduledRollout(
+  let decision = decideScheduledRollout(
     {
       stage: data.stage,
       scheduledAtMs: toMillis(data.scheduledAt),
@@ -136,6 +171,8 @@ export function applyScheduledRolloutClaim(args: ClaimArgs): ScheduledRolloutDec
     nowMs,
     graceMs,
   );
+  const planBlock = decision.action === 'fire' ? rolloutPlanBlock(planSnapshot, data.startedAt) : null;
+  if (planBlock) decision = { action: 'write_off', reason: planBlock };
 
   if (decision.action === 'skip') return decision;
 
@@ -190,11 +227,14 @@ export interface RolloutScheduleStore {
   listDue(nowMs: number, limit: number): Promise<ScheduledRolloutRef[]>;
   /** Raw `roostEnabled` field off `sites/{siteId}`; undefined when absent. */
   readRoostEnabled(siteId: string): Promise<unknown>;
+  /** the plan snapshot of the site's payer, or null to proceed. */
+  readPlanSnapshot(siteId: string): Promise<PlanSnapshot | null>;
   /** Transactionally re-read the rollout and apply `applyScheduledRolloutClaim`. */
   claim(
     ref: ScheduledRolloutRef,
     nowMs: number,
     graceMs: number,
+    planSnapshot: PlanSnapshot | null,
   ): Promise<ScheduledRolloutDecision>;
 }
 
@@ -215,6 +255,8 @@ export interface ScheduledSweepCounts {
   skipped: number;
   /** Left alone because the site's roost kill switch is engaged. */
   disabled: number;
+  /** written off because the site owner's plan withholds the rollout. */
+  planBlocked: number;
   failed: number;
 }
 
@@ -237,11 +279,13 @@ export async function sweepDueScheduledRollouts(
     missed: 0,
     skipped: 0,
     disabled: 0,
+    planBlocked: 0,
     failed: 0,
   };
 
-  // One kill-switch read per site per sweep, not per rollout.
+  // One kill-switch read per site per sweep, not per rollout. Same for the plan.
   const enabledBySite = new Map<string, boolean>();
+  const snapshotBySite = new Map<string, PlanSnapshot | null>();
 
   for (const ref of due) {
     const label = `${ref.siteId}/${ref.roostId}/${ref.versionId}`;
@@ -260,12 +304,19 @@ export async function sweepDueScheduledRollouts(
         continue;
       }
 
-      const decision = await deps.store.claim(ref, nowMs, graceMs);
+      if (!snapshotBySite.has(ref.siteId)) {
+        snapshotBySite.set(ref.siteId, await deps.store.readPlanSnapshot(ref.siteId));
+      }
+      const snapshot = snapshotBySite.get(ref.siteId) ?? null;
+
+      const decision = await deps.store.claim(ref, nowMs, graceMs, snapshot);
       if (decision.action === 'fire') {
         counts.fired += 1;
         console.log(`[rolloutScheduler] ${label}: scheduled rollout fired; canary wave queued`);
       } else if (decision.action === 'write_off') {
-        counts.missed += 1;
+        // a late rollout is written off for lateness first, and counts as missed.
+        if (decision.reason === planBlockReason(snapshot, ROLLOUT_PLAN_FLAGS)) counts.planBlocked += 1;
+        else counts.missed += 1;
         console.warn(`[rolloutScheduler] ${label}: written off — ${decision.reason}`);
       } else {
         counts.skipped += 1;
@@ -310,7 +361,7 @@ export const sweepScheduledRollouts = onSchedule(
     console.log(
       `[rolloutScheduler] sweep complete: due=${counts.due} fired=${counts.fired} ` +
         `missed=${counts.missed} skipped=${counts.skipped} ` +
-        `disabled=${counts.disabled} failed=${counts.failed}`,
+        `disabled=${counts.disabled} planBlocked=${counts.planBlocked} failed=${counts.failed}`,
     );
   },
 );
@@ -363,7 +414,11 @@ function getDefaultStore(): RolloutScheduleStore {
       return snap.exists ? snap.data()?.[ROOST_ENABLED_FIELD] : undefined;
     },
 
-    async claim(ref, nowMs, graceMs) {
+    readPlanSnapshot(siteId) {
+      return readSitePlanSnapshot(db, siteId);
+    },
+
+    async claim(ref, nowMs, graceMs, planSnapshot) {
       const rolloutRef = rolloutRefFor(ref);
       return db.runTransaction(async (tx) => {
         const snap = await tx.get(rolloutRef);
@@ -384,6 +439,7 @@ function getDefaultStore(): RolloutScheduleStore {
           data: snap.exists ? (snap.data() as RolloutDocData) : null,
           nowMs,
           graceMs,
+          planSnapshot,
         });
       });
     },

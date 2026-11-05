@@ -83,24 +83,18 @@ async function reopenMachineMenu(page: Page, trigger: Locator): Promise<void> {
 }
 
 /**
- * The two full-bleed overlays this scene opens — `ScreenshotDialog` and
- * `LiveViewModal` — do NOT answer Escape. Measured on the 2026-08-26 batch
- * (videos-results trace, b03): the screenshot dialog was still
- * `capturing screenshot…` 1.2s AND 1.9s after `keyboard.press('Escape')`, so the
- * ⋮ press that followed landed on the modal overlay, no menu opened, and
- * `menuitem "live view"` timed out 15s later.
- *
- * Both suppress the shared close button (`showCloseButton={false}`) and render
- * their own icon-only X at the end of the DialogTitle — ScreenshotDialog.tsx
- * :430-437, LiveViewModal.tsx:294-301 — which carries no accessible name, so the
- * title slot is the handle. Assert the overlay is gone before touching the card
- * underneath, or the next failure surfaces on an unrelated locator.
+ * The two full-bleed overlays this scene opens, `ScreenshotDialog` and
+ * `LiveViewModal`, suppress the shared close button (`showCloseButton={false}`)
+ * and render their own named "close" button in the title. Escape closes them now
+ * too, but the click is what the episode shows. Assert the overlay is gone before
+ * touching the card underneath, or the next failure surfaces on an unrelated
+ * locator.
  */
 async function closeOverlayDialog(page: Page, name: RegExp): Promise<void> {
   const dialog = page.getByRole('dialog', { name });
   await clickWithCursor(
     page,
-    dialog.locator('[data-slot="dialog-title"] button:has(svg.lucide-x)'),
+    dialog.getByRole('button', { name: 'close', exact: true }),
   );
   await expect(dialog).toBeHidden();
   await page.waitForTimeout(900);
@@ -179,11 +173,7 @@ test('episode 8 — remote actions: restart, screenshot, live view', async ({ br
         await page.waitForTimeout(700);
         await narrate(page, 'b05 shutdown dialog', 10);
         await reopenMachineMenu(page, menuTrigger);
-        // The gear in the "restart machine" row is icon-only and its label lives
-        // in a tooltip portal, so `getByRole('button', { name: 'schedule
-        // restarts' })` cannot resolve it — that name belongs to the standalone
-        // item an OFFLINE machine's menu shows instead. Testid added alongside
-        // this scene.
+        // the schedule-restarts control is a menu item now; the testid predates that
         const scheduleGear = page.getByTestId('machine-context-menu-schedule-restarts-gear');
         await centerInView(page, scheduleGear);
         await highlight(page, scheduleGear, 2400);

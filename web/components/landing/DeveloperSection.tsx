@@ -76,7 +76,7 @@ export function DeveloperSection() {
         <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 lg:items-stretch">
           {/* Code block — 60% on desktop, full on mobile */}
           <div className="lg:w-3/5 flex">
-            <div className="flex-1 min-w-0 rounded-xl border border-border bg-card/60 shadow-2xl shadow-black/30 ring-1 ring-white/5 overflow-hidden flex flex-col">
+            <div className="flex-1 min-w-0 rounded-xl border border-border bg-card/60 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50 overflow-hidden flex flex-col">
               <div role="tablist" className="flex border-b border-border bg-card/40">
                 {TABS.map((tab) => {
                   const isActive = tab.id === activeTab;
@@ -109,7 +109,7 @@ export function DeveloperSection() {
             {PROOF_CHIPS.map((chip) => (
               <div
                 key={chip.label}
-                className="rounded-xl border border-border bg-card/60 p-4 shadow-2xl shadow-black/30 ring-1 ring-white/5"
+                className="rounded-xl border border-border bg-card/60 p-4 shadow-2xl shadow-elevation-shadow/60 ring-1 ring-elevation-ring/50"
               >
                 <div className="flex items-center gap-2 mb-1.5">
                   <chip.icon className="w-4 h-4 text-accent-cyan flex-shrink-0" />

@@ -13,6 +13,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { fanOutToMachines } from '@/lib/fanOut.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { resolveActiveHoursOverride } from '@/lib/actions/executeMachineCommand.server';
 import logger from '@/lib/logger';
 
 /** default per-site target quota when `sites/{siteId}.deployQuota` is unset. */
@@ -39,6 +40,8 @@ export interface CreateDeploymentInput {
   parallel_install?: boolean;
   /** machine ids in this site; de-duplicated. */
   machines: string[];
+  /** a person's approval to install inside each target's active hours. */
+  active_hours_override?: { reason: string } | null;
 }
 
 export interface CreateDeploymentContext {
@@ -75,6 +78,7 @@ export type CreateDeploymentResult =
         | 'invalid_suppress_projects'
         | 'invalid_sha256_checksum'
         | 'invalid_machines'
+        | 'invalid_active_hours_override'
         | 'over_quota';
       message: string;
       details?: Record<string, unknown>;
@@ -268,6 +272,16 @@ export async function createDeployment(
   const validated = validateInput(input);
   if ('error' in validated) return validated.error;
 
+  const override = resolveActiveHoursOverride(input.active_hours_override, ctx.actorIdentifier);
+  if (!override.ok) {
+    return {
+      ok: false,
+      code: 'invalid_active_hours_override',
+      message: `active_hours_override: ${override.error}`,
+    };
+  }
+  const activeHoursOverride = override.override;
+
   const db = ctx.db ?? getAdminDb();
   const now = ctx.now ?? (() => Date.now());
 
@@ -346,6 +360,7 @@ export async function createDeployment(
       if (validated.closeProcesses) commandData.close_processes = validated.closeProcesses;
       if (validated.suppressProjects) commandData.suppress_projects = validated.suppressProjects;
       if (validated.parallelInstall) commandData.parallel_install = true;
+      if (activeHoursOverride) commandData.activeHoursOverride = activeHoursOverride;
       return { commandIdPrefix, commandData };
     },
   });
@@ -371,6 +386,9 @@ export async function createDeployment(
         target_count: validated.machines.length,
         installer_name: validated.installerName,
         correlationId: ctx.correlationId,
+        ...(activeHoursOverride
+          ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
+          : {}),
       },
     });
   } catch (err) {

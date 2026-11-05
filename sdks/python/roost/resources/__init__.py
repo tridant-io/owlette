@@ -10,7 +10,7 @@ from roost.resources.account import (
 from roost.resources.chat import Chat, ConversationSummary
 from roost.resources.chunks import Chunks
 from roost.resources.deployments import Deployments
-from roost.resources.installer import Installer, InstallerVersion
+from roost.resources.installer import Installer, InstallerFile, InstallerVersion
 from roost.resources.installer_deployments import (
     InstallerDeploymentDetail,
     InstallerDeploymentSummary,
@@ -19,6 +19,7 @@ from roost.resources.installer_deployments import (
 )
 from roost.resources.keys import ApiKeyRecord, ApiKeyScope, Keys
 from roost.resources.machines import (
+    ActiveHoursOverride,
     CommandStatus,
     CommandType,
     MachineDeployment,
@@ -50,6 +51,7 @@ __all__ = [
     "Account",
     "AccountApiKeys",
     "AccountKeyContext",
+    "ActiveHoursOverride",
     "AddRole",
     "ApiKeyRecord",
     "ApiKeyScope",
@@ -68,6 +70,7 @@ __all__ = [
     "InstallerDeploymentSummary",
     "InstallerDeploymentTarget",
     "InstallerDeployments",
+    "InstallerFile",
     "InstallerVersion",
     "Keys",
     "MachineDeployment",

@@ -4,10 +4,11 @@
  * Output: `web/public/docs-screens/scalar-reference.png`
  * Used by: `web/content/docs/api/overview.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import {
   disableAnimations,
   saveDocsScreenshot,
+  test,
 } from './docs-helpers';
 
 test.use({ viewport: { width: 1440, height: 1000 } });

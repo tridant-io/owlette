@@ -158,6 +158,35 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
+// R2 + tridant id: off by default, so every test above the R2 blocks runs the
+// firebase path with registration not configured
+
+const mockHost = 'https://download-staging.tridant.io/owlette';
+const mockR2 = { configured: false };
+const mockPresignInstallerUpload = jest.fn();
+const mockReadInstaller = jest.fn();
+const mockPublishedInstallerSha256 = jest.fn();
+const mockPublishInstaller = jest.fn();
+const mockDiscardInstallerUpload = jest.fn();
+jest.mock('@/lib/installerStorage.server', () => ({
+  isInstallerR2Configured: () => mockR2.configured,
+  installerPublicUrl: (name: string) => `${mockHost}/${name}`,
+  isInstallerPublicUrl: (url: string) => url.startsWith(`${mockHost}/`),
+  installerStagingKey: (uploadId: string) => `uploads/${uploadId}`,
+  presignInstallerUpload: (...a: unknown[]) => mockPresignInstallerUpload(...a),
+  readInstaller: (...a: unknown[]) => mockReadInstaller(...a),
+  publishedInstallerSha256: (...a: unknown[]) => mockPublishedInstallerSha256(...a),
+  publishInstaller: (...a: unknown[]) => mockPublishInstaller(...a),
+  discardInstallerUpload: (...a: unknown[]) => mockDiscardInstallerUpload(...a),
+}));
+
+const NOT_CONFIGURED = { status: 'not_configured', error: null };
+const mockSyncInstallerRelease = jest.fn();
+jest.mock('@/lib/tridantRelease.server', () => ({
+  syncInstallerRelease: (...a: unknown[]) => mockSyncInstallerRelease(...a),
+  tridantReleaseState: jest.requireActual('@/lib/tridantRelease.server').tridantReleaseState,
+}));
+
 // Imports come AFTER mocks
 
 import { GET as listGET } from '@/app/api/installer/route';
@@ -165,6 +194,7 @@ import { GET as latestGET } from '@/app/api/installer/latest/route';
 import { POST as uploadPOST, PUT as uploadPUT } from '@/app/api/installer/upload/route';
 import { DELETE as versionDELETE } from '@/app/api/installer/[version]/route';
 import { POST as setLatestPOST } from '@/app/api/installer/[version]/set-latest/route';
+import { POST as registerPOST } from '@/app/api/installer/[version]/register/route';
 
 // Fixtures
 
@@ -279,6 +309,8 @@ function seedUpload(uploadId: string, overrides: Partial<Record<string, unknown>
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockR2.configured = false;
+  mockSyncInstallerRelease.mockResolvedValue(NOT_CONFIGURED);
   for (const k of Object.keys(docStore)) delete docStore[k];
   for (const k of Object.keys(collectionDocs)) delete collectionDocs[k];
 });
@@ -557,6 +589,75 @@ describe('POST /api/installer/upload', () => {
     expect(res2.headers.get('Idempotent-Replayed')).toBe('true');
     expect(mockEmitMutation).not.toHaveBeenCalled();
   });
+
+  it('derives the platform from a .pkg and records it on the upload', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-pkg' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.pkg' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.platform).toBe('macos_arm64');
+    expect(body.storagePath).toBe(
+      'agent-installers/versions/3.0.0/Owlette-Installer-v3.0.0.pkg',
+    );
+    expect(docStore[`installer_uploads/${body.uploadId}`]?.data?.platform).toBe('macos_arm64');
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attributes: expect.objectContaining({ verb: 'upload_initiated', platform: 'macos_arm64' }),
+      }),
+    );
+  });
+
+  it('refuses a .deb declared as macos_arm64', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-mismatch' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.deb', platform: 'macos_arm64' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('does not match platform macos_arm64');
+  });
+
+  it('refuses an unknown platform value', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-bad-platform' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', platform: 'amd64' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('windows_x64, macos_arm64, linux_x64');
+  });
+
+  it('refuses an unknown extension and names the three accepted ones', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-bad-ext' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.zip' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.detail).toContain('.exe, .pkg or .deb');
+  });
 });
 
 // PUT /api/installer/upload (finalize)
@@ -645,6 +746,134 @@ describe('PUT /api/installer/upload', () => {
     expect(res.status).toBe(412);
     expect(body.code).toBe('checksum_mismatch');
     expect(docStore['installer_metadata/data/versions/3.0.0']).toBeUndefined();
+  });
+
+  const WINDOWS_FILE = {
+    download_url: 'https://storage.example.com/3.0.0.exe',
+    checksum_sha256: 'a'.repeat(64),
+    file_size: 1024,
+    file_name: 'Owlette-Installer-v3.0.0.exe',
+    uploaded_at: 1700000000000,
+  };
+  const MAC_FILE = {
+    download_url: 'https://storage.example.com/3.0.0.pkg',
+    checksum_sha256: 'b'.repeat(64),
+    file_size: 2048,
+    file_name: 'Owlette-Installer-v3.0.0.pkg',
+    uploaded_at: 1700000000001,
+  };
+  const PKG_UPLOAD = {
+    fileName: 'Owlette-Installer-v3.0.0.pkg',
+    storagePath: 'agent-installers/versions/3.0.0/Owlette-Installer-v3.0.0.pkg',
+    platform: 'macos_arm64',
+  };
+
+  it('merges a .pkg into an existing version without touching the windows alias', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: WINDOWS_FILE } });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-pkg' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.platform).toBe('macos_arm64');
+    expect(Object.keys(body.files).sort()).toEqual(['macos_arm64', 'windows_x64']);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.download_url).toBe(WINDOWS_FILE.download_url);
+    expect(doc.checksum_sha256).toBe(WINDOWS_FILE.checksum_sha256);
+    expect(doc.file_size).toBe(WINDOWS_FILE.file_size);
+    expect(doc.uploaded_by).toBe('admin');
+    const files = doc.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64).toEqual(WINDOWS_FILE);
+    expect(files.macos_arm64).toMatchObject({
+      download_url: 'https://storage.example.com/signed',
+      checksum_sha256: STORAGE_SHA256,
+      file_size: 1048576,
+      file_name: 'Owlette-Installer-v3.0.0.pkg',
+    });
+    expect(docStore['installer_metadata/latest']).toBeUndefined();
+  });
+
+  it('refreshes the windows alias on a windows_x64 re-upload and keeps the other platforms', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: WINDOWS_FILE, macos_arm64: MAC_FILE } });
+    seedUpload('upload-1', { platform: 'windows_x64', setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-exe-again' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+
+    expect(res.status).toBe(200);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.download_url).toBe('https://storage.example.com/signed');
+    expect(doc.checksum_sha256).toBe(STORAGE_SHA256);
+    expect(doc.file_size).toBe(1048576);
+    const files = doc.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64.download_url).toBe('https://storage.example.com/signed');
+    expect(files.macos_arm64).toEqual(MAC_FILE);
+  });
+
+  it('writes latest with every platform after a mac upload with setAsLatest', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      files: { windows_x64: WINDOWS_FILE },
+      release_date: { toDate: () => new Date('2026-04-28T00:00:00.000Z') },
+    });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: true });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-pkg-latest' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+
+    expect(res.status).toBe(200);
+    const latest = docStore['installer_metadata/latest']?.data as Record<string, unknown>;
+    expect(latest.version).toBe('3.0.0');
+    expect(latest.download_url).toBe(WINDOWS_FILE.download_url);
+    expect(latest.release_date).toBe('2026-04-28T00:00:00.000Z');
+    expect(latest.promoted_by).toBe('user-superadmin');
+    expect(typeof latest.promoted_at).toBe('number');
+    const files = latest.files as Record<string, Record<string, unknown>>;
+    expect(files.windows_x64).toEqual(WINDOWS_FILE);
+    expect(files.macos_arm64.checksum_sha256).toBe(STORAGE_SHA256);
+  });
+
+  it('revives a soft-deleted version with fresh fields and only the new file', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      deletedAt: 1234,
+      deletedBy: 'admin',
+      files: { windows_x64: WINDOWS_FILE, macos_arm64: MAC_FILE },
+    });
+    seedUpload('upload-1', { ...PKG_UPLOAD, setAsLatest: false });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-revive' },
+      body: { uploadId: 'upload-1' },
+    });
+    const res = await uploadPUT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.deletedAt).toBeNull();
+    expect(doc.deletedBy).toBeUndefined();
+    expect(doc.download_url).toBeUndefined();
+    expect(doc.uploaded_by).toBe('user-superadmin');
+    expect(Object.keys(doc.files as object)).toEqual(['macos_arm64']);
+    expect(Object.keys(body.files)).toEqual(['macos_arm64']);
   });
 });
 
@@ -962,5 +1191,415 @@ describe('POST /api/installer/{version}/set-latest', () => {
     expect(docStore['installer_metadata/latest']?.data?.release_date).toBe(
       '2026-04-28T00:00:00.000Z',
     );
+  });
+});
+
+// installers on R2 behind the download host
+
+describe('installer uploads on R2', () => {
+  const R2_UPLOAD = {
+    storage: 'r2',
+    storagePath: 'uploads/upload-1',
+    platform: 'windows_x64',
+  };
+  const R2_BYTES = { size: 2048, sha256: 'c'.repeat(64), contentType: 'application/octet-stream' };
+  const ON_HOST = {
+    download_url: `${mockHost}/Owlette-Installer-v3.0.0.exe`,
+    checksum_sha256: 'c'.repeat(64),
+    file_size: 2048,
+    file_name: 'Owlette-Installer-v3.0.0.exe',
+    uploaded_at: 1700000000000,
+  };
+
+  beforeEach(() => {
+    mockR2.configured = true;
+    mockPresignInstallerUpload.mockResolvedValue('https://acct.r2.cloudflarestorage.com/signed-put');
+    mockReadInstaller.mockResolvedValue(R2_BYTES);
+    mockPublishedInstallerSha256.mockResolvedValue(null);
+    mockPublishInstaller.mockResolvedValue(undefined);
+    mockDiscardInstallerUpload.mockResolvedValue(undefined);
+  });
+
+  function startUpload(key: string) {
+    return uploadPOST(
+      createMockRequest('http://localhost/api/installer/upload', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': key },
+        body: { version: '3.0.0', fileName: 'owlette-setup.exe' },
+      }),
+    );
+  }
+
+  function finalize(key: string, body: Record<string, unknown> = { uploadId: 'upload-1' }) {
+    return uploadPUT(
+      createMockRequest('http://localhost/api/installer/upload', {
+        method: 'PUT',
+        headers: { 'Idempotency-Key': key },
+        body,
+      }),
+    );
+  }
+
+  it('presigns a private staging key, never the public name, and records the upload as r2', async () => {
+    authedAsSuperadminWithKey('write');
+
+    const res = await startUpload('r2-start');
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.uploadUrl).toBe('https://acct.r2.cloudflarestorage.com/signed-put');
+    expect(body.storagePath).toBe(`uploads/${body.uploadId}`);
+    expect(mockPresignInstallerUpload).toHaveBeenCalledWith(
+      `uploads/${body.uploadId}`,
+      'application/octet-stream',
+      15 * 60,
+    );
+    const upload = docStore[`installer_uploads/${body.uploadId}`]?.data;
+    expect(upload).toMatchObject({ storage: 'r2', storagePath: `uploads/${body.uploadId}` });
+  });
+
+  it('refuses a version whose file is already on the download host', async () => {
+    authedAsSuperadminWithKey('write');
+    mockPublishedInstallerSha256.mockResolvedValue(R2_BYTES.sha256);
+
+    const res = await startUpload('r2-start-published');
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe('installer_published');
+    expect(mockPublishedInstallerSha256).toHaveBeenCalledWith('Owlette-Installer-v3.0.0.exe');
+    expect(mockPresignInstallerUpload).not.toHaveBeenCalled();
+  });
+
+  it('accepts a version whose record names the host but whose copy never landed, so it can be recovered', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: ON_HOST } });
+
+    const res = await startUpload('r2-start-recover');
+
+    expect(res.status).toBe(200);
+    expect(mockPresignInstallerUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('finishes an r2 finalize after the upload window, since the staged file stays put', async () => {
+    authedAsSuperadminWithKey('write');
+    seedUpload('upload-1', { ...R2_UPLOAD, expiresAt: { toMillis: () => Date.now() - 60_000 } });
+
+    const res = await finalize('r2-finalize-late');
+
+    expect(res.status).toBe(200);
+    expect(mockPublishInstaller).toHaveBeenCalledTimes(1);
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('completed');
+  });
+
+  it('still expires a firebase upload after its window', async () => {
+    authedAsSuperadminWithKey('write');
+    seedUpload('upload-1', { expiresAt: { toMillis: () => Date.now() - 60_000 } });
+
+    const res = await finalize('firebase-finalize-late');
+
+    expect(res.status).toBe(410);
+    expect((await res.json()).code).toBe('upload_expired');
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('expired');
+  });
+
+  it('accepts a version still on firebase storage, which is how a release moves to R2', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0');
+
+    const res = await startUpload('r2-start-move');
+
+    expect(res.status).toBe(200);
+    expect(mockPresignInstallerUpload).toHaveBeenCalledTimes(1);
+  });
+
+  it('publishes the staged file to its public name only after the record is written', async () => {
+    authedAsSuperadminWithKey('write');
+    seedUpload('upload-1', { ...R2_UPLOAD, setAsLatest: false });
+    mockPublishInstaller.mockImplementation(async () => {
+      // the copy runs after the transaction, before the upload is marked done
+      expect(docStore['installer_metadata/data/versions/3.0.0']).toBeDefined();
+      expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('pending');
+    });
+
+    const res = await finalize('r2-finalize', { uploadId: 'upload-1', checksum_sha256: R2_BYTES.sha256 });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockReadInstaller).toHaveBeenCalledWith('uploads/upload-1');
+    expect(mockPublishedInstallerSha256).toHaveBeenCalledWith('Owlette-Installer-v3.0.0.exe');
+    expect(mockPublishInstaller).toHaveBeenCalledWith(
+      'uploads/upload-1',
+      'Owlette-Installer-v3.0.0.exe',
+      R2_BYTES.sha256,
+      'application/octet-stream',
+    );
+    expect(mockDiscardInstallerUpload).toHaveBeenCalledWith('uploads/upload-1');
+    expect(body.download_url).toBe(`${mockHost}/Owlette-Installer-v3.0.0.exe`);
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect((doc.files as Record<string, unknown>).windows_x64).toMatchObject({
+      download_url: `${mockHost}/Owlette-Installer-v3.0.0.exe`,
+      checksum_sha256: R2_BYTES.sha256,
+      file_size: 2048,
+      file_name: 'Owlette-Installer-v3.0.0.exe',
+    });
+    expect(doc.download_url).toBe(`${mockHost}/Owlette-Installer-v3.0.0.exe`);
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('completed');
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+    expect(body.tridant).toBeUndefined();
+  });
+
+  it('answers 404 when nothing reached R2', async () => {
+    authedAsSuperadminWithKey('write');
+    seedUpload('upload-1', R2_UPLOAD);
+    mockReadInstaller.mockResolvedValue(null);
+
+    const res = await finalize('r2-finalize-missing');
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).code).toBe('binary_missing');
+    expect(mockPublishInstaller).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the public name already serves other bytes, even with no record of them', async () => {
+    // a deleted version re-created from another platform first: its windows
+    // entry is gone, but the file it published is still on the host
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      download_url: undefined,
+      checksum_sha256: undefined,
+      files: { macos_arm64: MAC_ON_FIREBASE },
+    });
+    seedUpload('upload-1', R2_UPLOAD);
+    mockPublishedInstallerSha256.mockResolvedValue('a'.repeat(64));
+
+    const res = await finalize('r2-finalize-public-differs');
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe('installer_published');
+    expect(mockPublishInstaller).not.toHaveBeenCalled();
+    const files = docStore['installer_metadata/data/versions/3.0.0']?.data?.files as Record<string, unknown>;
+    expect(files.windows_x64).toBeUndefined();
+  });
+
+  it('records a re-created version whose public file already holds the same bytes, without copying', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', {
+      deletedAt: 1234,
+      files: { windows_x64: ON_HOST },
+      tridant: { status: 'yanked', release_id: 'rel_3', yanked: true, error: null, at: 1 },
+    });
+    seedUpload('upload-1', R2_UPLOAD);
+    mockPublishedInstallerSha256.mockResolvedValue(R2_BYTES.sha256);
+
+    const res = await finalize('r2-finalize-same-bytes');
+
+    expect(res.status).toBe(200);
+    expect(mockPublishInstaller).not.toHaveBeenCalled();
+    expect(mockDiscardInstallerUpload).toHaveBeenCalledWith('uploads/upload-1');
+    const doc = docStore['installer_metadata/data/versions/3.0.0']?.data as Record<string, unknown>;
+    expect(doc.deletedAt).toBeNull();
+    // tridant id still holds the yanked release; keeping its id lets a promote lift the yank
+    expect(doc.tridant).toMatchObject({ release_id: 'rel_3', yanked: true });
+  });
+
+  it('refuses bytes that differ from the version already published elsewhere', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('3.0.0', { files: { windows_x64: { ...ON_HOST, download_url: 'https://storage.example.com/3.0.0.exe', checksum_sha256: 'a'.repeat(64) } } });
+    seedUpload('upload-1', R2_UPLOAD);
+
+    const res = await finalize('r2-finalize-differs');
+    const body = await res.json();
+
+    expect(res.status).toBe(409);
+    expect(body.code).toBe('installer_differs');
+    expect(mockPublishInstaller).not.toHaveBeenCalled();
+    const files = docStore['installer_metadata/data/versions/3.0.0']?.data?.files as Record<string, { checksum_sha256: string }>;
+    expect(files.windows_x64.checksum_sha256).toBe('a'.repeat(64));
+    expect(docStore['installer_metadata/latest']).toBeUndefined();
+  });
+
+  it('leaves the upload pending when the copy fails, so finalizing again finishes it', async () => {
+    authedAsSuperadminWithKey('write');
+    seedUpload('upload-1', R2_UPLOAD);
+    mockPublishInstaller.mockRejectedValueOnce(new Error('r2 down'));
+
+    const failed = await finalize('r2-finalize-copy-fails');
+
+    expect(failed.status).toBe(500);
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('pending');
+    expect(mockDiscardInstallerUpload).not.toHaveBeenCalled();
+
+    const retried = await finalize('r2-finalize-copy-retry');
+
+    expect(retried.status).toBe(200);
+    expect(mockPublishInstaller).toHaveBeenCalledTimes(2);
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('completed');
+  });
+
+  it('registers on a promoting finalize, and keeps the registration state off the latest pointer', async () => {
+    authedAsSuperadminWithKey('write');
+    // a mac-only version: no flat windows fields, so the windows upload is its first
+    seedVersion('3.0.0', {
+      download_url: undefined,
+      checksum_sha256: undefined,
+      files: { macos_arm64: MAC_ON_FIREBASE },
+      tridant: { status: 'failed', release_id: null, yanked: false, error: 'unreachable', at: 1 },
+    });
+    seedUpload('upload-1', { ...R2_UPLOAD, setAsLatest: true });
+    mockSyncInstallerRelease.mockResolvedValue({ status: 'registered', error: null });
+
+    const res = await finalize('r2-finalize-latest');
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockSyncInstallerRelease).toHaveBeenCalledWith('3.0.0');
+    expect(body.tridant).toEqual({ status: 'registered', error: null });
+    const latest = docStore['installer_metadata/latest']?.data as Record<string, unknown>;
+    expect(latest.version).toBe('3.0.0');
+    expect(latest).not.toHaveProperty('tridant');
+    expect(docStore['installer_metadata/data/versions/3.0.0']?.data?.tridant).toBeDefined();
+  });
+});
+
+const MAC_ON_FIREBASE = {
+  download_url: 'https://storage.example.com/3.0.0.pkg',
+  checksum_sha256: 'b'.repeat(64),
+  file_size: 2048,
+  file_name: 'Owlette-Installer-v3.0.0.pkg',
+  uploaded_at: 1700000000001,
+};
+
+// tridant id registration on promote, delete and register
+
+describe('tridant id registration', () => {
+  it('set-latest syncs the promoted version and returns the outcome', async () => {
+    authedAsSuperadminWithKey('admin');
+    seedVersion('3.0.0');
+    mockSyncInstallerRelease.mockResolvedValue({ status: 'failed', error: '400 download_url_not_allowed' });
+
+    const res = await setLatestPOST(
+      createMockRequest('http://localhost/api/installer/3.0.0/set-latest', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'set-latest-sync' },
+        body: {},
+      }),
+      { params: Promise.resolve({ version: '3.0.0' }) },
+    );
+    const body = await res.json();
+
+    // a refusal from tridant id never fails the promote
+    expect(res.status).toBe(200);
+    expect(docStore['installer_metadata/latest']?.data?.version).toBe('3.0.0');
+    expect(mockSyncInstallerRelease).toHaveBeenCalledWith('3.0.0');
+    expect(body.tridant).toEqual({ status: 'failed', error: '400 download_url_not_allowed' });
+  });
+
+  it('delete syncs the deleted version, so a registered one is yanked', async () => {
+    authedAsSuperadminWithKey('admin');
+    seedVersion('2.0.0');
+    seedVersion('2.1.0');
+    seedVersion('2.2.0');
+    mockSyncInstallerRelease.mockResolvedValue({ status: 'yanked', error: null });
+
+    const res = await versionDELETE(
+      createMockRequest('http://localhost/api/installer/2.0.0', { method: 'DELETE' }),
+      { params: Promise.resolve({ version: '2.0.0' }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mockSyncInstallerRelease).toHaveBeenCalledWith('2.0.0');
+    expect(body.tridant).toEqual({ status: 'yanked', error: null });
+  });
+
+  it('a refused delete does not sync', async () => {
+    authedAsSuperadminWithKey('admin');
+    seedVersion('2.0.0');
+    seedLatest('2.0.0');
+
+    const res = await versionDELETE(
+      createMockRequest('http://localhost/api/installer/2.0.0', { method: 'DELETE' }),
+      { params: Promise.resolve({ version: '2.0.0' }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('lists each version with its stored registration state', async () => {
+    authedAsSuperadminWithKey('read');
+    seedVersion('3.0.0', { tridant: { status: 'registered', release_id: 'rel_1', yanked: false, error: null, at: 9 } });
+    seedVersion('2.0.0');
+
+    const res = await listGET(createMockRequest('http://localhost/api/installer'));
+    const body = await res.json();
+
+    const byVersion = Object.fromEntries(
+      (body.versions as Array<{ version: string; tridant: unknown }>).map((v) => [v.version, v.tridant]),
+    );
+    expect(byVersion['3.0.0']).toEqual({ status: 'registered', release_id: 'rel_1', yanked: false, error: null, at: 9 });
+    expect(byVersion['2.0.0']).toBeNull();
+  });
+});
+
+describe('POST /api/installer/{version}/register', () => {
+  function register(version: string, headers: Record<string, string> = { 'Idempotency-Key': `register-${version}` }) {
+    return registerPOST(
+      createMockRequest(`http://localhost/api/installer/${version}/register`, {
+        method: 'POST',
+        headers,
+        body: {},
+      }),
+      { params: Promise.resolve({ version }) },
+    );
+  }
+
+  it('runs the sync again and returns its outcome', async () => {
+    authedAsSuperadminWithKey('admin');
+    seedVersion('3.0.0');
+    mockSyncInstallerRelease.mockResolvedValue({ status: 'registered', error: null });
+
+    const res = await register('3.0.0');
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ version: '3.0.0', tridant: { status: 'registered', error: null } });
+    expect(mockEmitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetId: '3.0.0',
+        attributes: expect.objectContaining({ verb: 'release_synced', tridantStatus: 'registered' }),
+      }),
+    );
+  });
+
+  it('returns 404 for an unknown version without syncing', async () => {
+    authedAsSuperadminWithKey('admin');
+
+    const res = await register('9.9.9');
+
+    expect(res.status).toBe(404);
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('requires Idempotency-Key', async () => {
+    authedAsSuperadminWithKey('admin');
+    seedVersion('3.0.0');
+
+    const res = await register('3.0.0', {});
+
+    expect(res.status).toBe(400);
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('rejects a key with write but not admin scope', async () => {
+    authedAsKeyMissingScope('write');
+    seedVersion('3.0.0');
+
+    const res = await register('3.0.0');
+
+    expect(res.status).toBe(403);
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
   });
 });

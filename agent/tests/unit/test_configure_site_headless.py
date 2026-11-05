@@ -12,6 +12,7 @@ Two things are being protected here:
 """
 
 import argparse
+import contextlib
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ import stat
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -29,6 +31,7 @@ import pytest
 # test_sync_state.py:10, test_command_router.py:8).
 import shared_utils  # noqa: F401  (import side effects: path bootstrapping)
 import configure_site
+import log_bundle
 
 
 # helpers
@@ -471,6 +474,73 @@ class TestLeaveSite:
         host.assert_not_called()
 
 
+# unpair — the server cut this machine off
+
+
+class TestUnpair:
+    CONFIG = {
+        'firebase': {
+            'enabled': True,
+            'site_id': 'default_site',
+            'project_id': 'owlette-dev-3838a',
+        },
+        'environment': 'development',
+        'processes': [],
+    }
+
+    def _run(self, *, cleared=True, missing_cache=False):
+        config = json.loads(json.dumps(self.CONFIG))
+        store = MagicMock()
+        store.clear_tokens.return_value = cleared
+        saved = {}
+
+        with patch.object(configure_site.shared_utils, 'load_config', return_value=config), \
+             patch.object(configure_site.shared_utils, 'save_config',
+                          side_effect=lambda cfg: saved.update({'config': cfg})), \
+             patch.object(configure_site.shared_utils, 'get_data_path',
+                          return_value='C:\\ProgramData\\Owlette\\cache\\firebase_cache.json'), \
+             patch.object(configure_site.shared_utils, 'retire_machine_id') as retire, \
+             patch.object(configure_site.os.path, 'exists', return_value=not missing_cache), \
+             patch.object(configure_site.os, 'remove') as remove, \
+             patch('secure_storage.get_storage', return_value=store):
+            configure_site.unpair('the agent token was revoked from the dashboard')
+
+        return saved.get('config'), store, remove, retire
+
+    def test_switches_cloud_sync_off_so_the_service_loop_stops_the_client(self):
+        # #327: the loop's "firebase disabled" branch is what stops the cloud
+        # client and flushes online: false; this is the switch it watches
+        config, _store, _remove, _retire = self._run()
+
+        assert config['firebase']['enabled'] is False
+        assert config['firebase']['site_id'] == ''
+
+    def test_drops_the_cached_cloud_config_and_the_credentials(self):
+        _config, store, remove, _retire = self._run()
+
+        remove.assert_called_once()
+        store.clear_tokens.assert_called_once()
+
+    def test_keeps_the_machine_id_so_a_re_pair_lands_on_the_same_row(self):
+        # a leave retires the id because it deletes the document; a revoke
+        # leaves the row standing, offline, for the admin to see
+        _config, _store, _remove, retire = self._run()
+
+        retire.assert_not_called()
+
+    def test_a_token_store_that_will_not_clear_does_not_undo_the_detach(self, caplog):
+        with caplog.at_level(logging.WARNING):
+            config, _store, _remove, _retire = self._run(cleared=False)
+
+        assert config['firebase']['enabled'] is False
+        assert 'token store could not be removed' in caplog.text
+
+    def test_a_missing_cache_is_nothing_to_remove(self):
+        _config, _store, remove, _retire = self._run(missing_cache=True)
+
+        remove.assert_not_called()
+
+
 # --report-issue
 
 
@@ -485,11 +555,13 @@ class TestReportIssue:
 
         with patch.object(configure_site, 'build_report_data',
                           return_value={'category': 'bug'}) as build, \
-             patch.object(configure_site, 'submit_report') as submit:
+             patch.object(configure_site, 'submit_report',
+                          return_value=configure_site._SubmittedIssue(False, 7)) as submit:
             code = configure_site.run_report_issue(path)
 
         assert code == 0
-        assert _events(capsys)[-1] == {'event': 'done', 'value': {'category': 'bug'}}
+        assert _events(capsys)[-1] == {
+            'event': 'done', 'value': {'category': 'bug', 'issueNumber': 7}}
         build.assert_called_once_with('bug', 'it broke')
         submit.assert_called_once()
         # The operator's description must not be left lying on disk.
@@ -535,6 +607,719 @@ class TestReportIssue:
     ])
     def test_categories_are_normalised_to_what_the_api_accepts(self, raw, expected):
         assert configure_site._normalize_report_category(raw) == expected
+
+
+def _http(status, body=None):
+    response = MagicMock()
+    response.status_code = status
+    response.json.return_value = body if body is not None else {}
+    response.text = json.dumps(body if body is not None else {})
+    return response
+
+
+_SIGNED_URL = 'https://r2.example/owlette-dev-issue-logs/k.zip?X-Amz-Signature=sekrit'
+_LOGS_KEY = 'issues/site-1/m-1/abc.zip'
+
+
+class TestReportIssueAttachLogs:
+    """The web API and the bucket are stood in for; every call is recorded."""
+
+    def _run(self, tmp_path, *, attach=True, zip_error=None, upload_url_status=200,
+             put_statuses=(200,), report_statuses=(200,), headless=False,
+             screenshots=None, shots_in_zip=None, logs_in_zip=None,
+             description='it broke', videos=None, videos_in_zip=None,
+             report_body=None):
+        payload = tmp_path / 'feedback.json'
+        fields = {'category': 'bug', 'description': description}
+        if attach is not None:
+            fields['attachLogs'] = attach
+        if screenshots is not None:
+            fields['screenshots'] = screenshots
+        if videos is not None:
+            fields['videos'] = videos
+        payload.write_text(json.dumps(fields))
+
+        zips = []
+
+        def build_zip(dest, screenshots=(), include_logs=True, videos=()):
+            zips.append(dest)
+            if zip_error:
+                raise zip_error
+            with open(dest, 'wb') as f:
+                f.write(b'PK' * 10)
+            shots = len(screenshots) if shots_in_zip is None else shots_in_zip
+            vids = len(videos) if videos_in_zip is None else videos_in_zip
+            logs = int(include_logs) if logs_in_zip is None else logs_in_zip
+            return {'files': shots + vids + logs, 'size': 20, 'skipped': [],
+                    'screenshots': shots, 'videos': vids}
+
+        posts, puts = [], []
+        report_responses = iter(report_statuses)
+        put_responses = iter(put_statuses)
+
+        def post(url, json=None, headers=None, timeout=None):
+            posts.append({'url': url, 'json': json, 'headers': headers})
+            if url.endswith('/upload-url'):
+                return _http(upload_url_status, {
+                    'uploadUrl': _SIGNED_URL, 'key': _LOGS_KEY, 'expiresIn': 900})
+            return _http(next(report_responses),
+                         report_body or {'success': True, 'id': 'r1', 'number': 42})
+
+        def put(url, data=None, headers=None, timeout=None):
+            puts.append({'url': url, 'body': data.read(), 'headers': headers, 'timeout': timeout})
+            return _http(next(put_responses))
+
+        with patch.object(configure_site, 'build_report_data',
+                          return_value={'description': 'it broke', 'siteId': 'site-1',
+                                        'hostname': 'box'}), \
+             patch.object(configure_site, '_web_session',
+                          return_value=('https://owlette.test', 'tok')), \
+             patch.object(configure_site.shared_utils, 'read_config',
+                          return_value={'firebase': {'site_id': 'site-1'}}), \
+             patch.object(configure_site.shared_utils, 'get_machine_id', return_value='m-1'), \
+             patch.object(log_bundle, 'build_log_zip', side_effect=build_zip) as build, \
+             patch.object(log_bundle, '_data_root', return_value=str(tmp_path / 'data')), \
+             patch('requests.post', side_effect=post), \
+             patch('requests.put', side_effect=put):
+            if headless:
+                code = configure_site._run_headless_mode(_args(report_issue=str(payload)))
+            else:
+                code = configure_site.run_report_issue(str(payload))
+
+        reports = [p for p in posts if p['url'].endswith('/api/bug-report')]
+        return SimpleNamespace(code=code, build=build, zips=zips, posts=posts,
+                               puts=puts, reports=reports)
+
+    @staticmethod
+    def _done(capsys):
+        events = _events(capsys)
+        assert events[-1]['event'] == 'done'
+        return events[-1]['value']
+
+    @pytest.mark.parametrize('attach', [None, False])
+    def test_without_attach_logs_nothing_is_zipped_or_uploaded(self, tmp_path, capsys, attach):
+        run = self._run(tmp_path, attach=attach)
+
+        assert run.code == 0
+        run.build.assert_not_called()
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'logsKey' not in run.reports[0]['json']
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'submitting']
+        # logs were not asked for, so the outcome says nothing about them
+        assert events[-1] == {'event': 'done', 'value': {'category': 'bug', 'issueNumber': 42}}
+
+    @pytest.mark.parametrize('report_body', [
+        # an older server does not number issues
+        {'success': True, 'id': 'r1'},
+        {'success': True, 'id': 'r1', 'number': True},
+        {'success': True, 'id': 'r1', 'number': '42'},
+        {'success': True, 'id': 'r1', 'number': None},
+    ])
+    def test_a_response_without_a_numeric_number_says_nothing_of_it(
+            self, tmp_path, capsys, report_body):
+        run = self._run(tmp_path, report_body=report_body)
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'logsAttached': True}
+
+    def test_attached_logs_are_uploaded_and_their_key_sent(self, tmp_path, capsys):
+        run = self._run(tmp_path)
+
+        assert run.code == 0
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'zipping logs', 'uploading attachments',
+            'submitting']
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True}}
+        upload_url = run.posts[0]
+        assert upload_url['url'] == (
+            'https://owlette.test/api/sites/site-1/machines/m-1/issue-logs/upload-url')
+        assert upload_url['json'] == {'size': 20}
+        assert upload_url['headers'] == {'Authorization': 'Bearer tok'}
+        assert run.puts == [{
+            'url': _SIGNED_URL,
+            'body': b'PK' * 10,
+            'headers': {'Content-Type': 'application/zip', 'Content-Length': '20'},
+            'timeout': (30, 300),
+        }]
+        body = run.reports[0]['json']
+        assert body['logsKey'] == _LOGS_KEY
+        assert body['logs'] is True
+        # the route takes the site from the token
+        assert 'siteId' not in body
+        assert 'attachments could not be sent' not in body['description']
+        assert not os.path.exists(run.zips[0])
+
+    def test_an_old_server_without_the_route_still_gets_the_issue(self, tmp_path, capsys):
+        run = self._run(tmp_path, upload_url_status=404)
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
+        assert run.puts == []
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert 'logs' not in body
+        assert body['description'].startswith(
+            'it broke\n\nattachments could not be sent: upload url request failed (404)')
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_refused_put_is_not_retried_and_the_issue_still_goes(
+            self, tmp_path, caplog, capsys):
+        with caplog.at_level(logging.WARNING):
+            run = self._run(tmp_path, put_statuses=(403,))
+
+        assert run.code == 0
+        assert len(run.puts) == 1
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert 'attachments could not be sent: the upload to storage failed' in body['description']
+        assert 'signed-url' not in body['description']
+        # the reason stays in the issue; the event only says the logs did not go
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
+        assert 'Issue attachments could not be sent' in caplog.text
+        # the signed url carries a credential: it stays out of the issue and the log
+        assert 'sekrit' not in body['description']
+        assert 'sekrit' not in caplog.text
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_zip_failure_still_sends_the_issue(self, tmp_path, capsys):
+        run = self._run(tmp_path, zip_error=OSError('disk full'))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'attachments could not be sent: disk full' in run.reports[0]['json']['description']
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_refused_logs_key_is_resent_without_it(self, tmp_path, capsys):
+        run = self._run(tmp_path, report_statuses=(400, 200))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
+        first, second = run.reports
+        assert first['json']['logsKey'] == _LOGS_KEY
+        assert first['json']['logs'] is True
+        assert 'logsKey' not in second['json']
+        assert 'logs' not in second['json']
+        assert second['json']['description'].startswith(
+            'it broke\n\nattachments could not be sent: the server refused them (400)')
+        assert not os.path.exists(run.zips[0])
+
+    def test_a_400_without_logs_is_not_resent(self, tmp_path, capsys):
+        run = self._run(tmp_path, attach=False, report_statuses=(400,))
+
+        assert run.code == 1
+        assert len(run.reports) == 1
+        assert '400' in _events(capsys)[-1]['value']
+
+    def test_a_failed_attach_is_kept_in_the_report_log(self, tmp_path, capsys):
+        with _report_data_root(tmp_path) as log:
+            run = self._run(tmp_path, put_statuses=(403,), headless=True)
+            logging.getLogger('urllib3.connectionpool').warning(
+                'Retrying after a reset: %s', _SIGNED_URL)
+
+        assert run.code == 0
+        text = log.read_text(encoding='utf-8')
+        assert ' - WARNING - Issue attachments could not be sent: the upload to storage failed' in text
+        assert 'issue submitted via API: r1' in text
+        # neither the signed url nor the operator's words reach the file
+        assert 'sekrit' not in text
+        assert 'it broke' not in text
+        captured = capsys.readouterr()
+        # stdout stays the event stream alone; stderr still gets the warning
+        events = [json.loads(line) for line in captured.out.splitlines()]
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': False}}
+        assert 'Issue attachments could not be sent' in captured.err
+
+    def test_a_report_log_that_cannot_be_opened_does_not_stop_the_report(
+            self, tmp_path, capsys):
+        root = logging.getLogger()
+        with _report_data_root(tmp_path) as log:
+            before = root.handlers[:]
+            with patch.object(configure_site, 'RotatingFileHandler',
+                              side_effect=PermissionError('denied')):
+                run = self._run(tmp_path, put_statuses=(403,), headless=True)
+            assert root.handlers == before
+
+        assert run.code == 0
+        assert not log.exists()
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'logsAttached': False}
+        assert 'attachments could not be sent' in run.reports[0]['json']['description']
+
+    # screenshots
+
+    SHOTS = ['a' * 32 + '.png', 'b' * 32 + '.jpg']
+
+    def _stage(self, tmp_path, names=None):
+        """Staged screenshot files, plus a stranger the run must leave alone."""
+        staging = tmp_path / 'data' / 'ipc' / 'issue-attachments'
+        staging.mkdir(parents=True)
+        for name in names or self.SHOTS:
+            (staging / name).write_bytes(b'image')
+        (staging / ('c' * 32 + '.png')).write_bytes(b'not this run')
+        return staging
+
+    def _left(self, staging):
+        return sorted(p.name for p in staging.iterdir())
+
+    def test_screenshots_without_logs_go_in_a_zip_of_their_own(self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS)
+
+        assert run.code == 0
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=False, videos=[])
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding attachments',
+            'uploading attachments', 'submitting']
+        # logs were not asked for, so the outcome says nothing about them
+        assert events[-1] == {'event': 'done', 'value': {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 2}}
+        body = run.reports[0]['json']
+        assert body['logsKey'] == _LOGS_KEY
+        # the count rides as its own integer field; the line is for people
+        assert body['screenshots'] == 2 and type(body['screenshots']) is int
+        # the zip holds no logs, so the body does not say it does
+        assert 'logs' not in body
+        assert body['description'].startswith('it broke\n\nscreenshots attached: 2')
+        assert self._left(staging) == ['c' * 32 + '.png']
+        assert not os.path.exists(run.zips[0])
+
+    def test_screenshots_and_logs_share_one_zip(self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS)
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=True, videos=[])
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding attachments', 'zipping logs',
+            'uploading attachments', 'submitting']
+        assert events[-1]['value'] == {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'screenshotsAttached': 2}
+        assert len(run.puts) == 1
+        body = run.reports[0]['json']
+        assert body['screenshots'] == 2
+        assert body['logs'] is True
+        assert 'screenshots attached: 2' in body['description']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_asked_for_logs_that_never_made_the_zip_are_not_claimed(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS, logs_in_zip=0)
+
+        body = run.reports[0]['json']
+        assert body['screenshots'] == 2
+        assert 'logs' not in body
+
+    def test_the_count_is_what_went_in_the_zip(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS, shots_in_zip=1)
+
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'screenshotsAttached': 1}
+        assert run.reports[0]['json']['screenshots'] == 1
+        assert 'screenshots attached: 1' in run.reports[0]['json']['description']
+
+    def test_logs_without_screenshots_say_nothing_of_them(self, tmp_path, capsys):
+        run = self._run(tmp_path)
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=[], include_logs=True, videos=[])
+        assert 'screenshots' not in run.reports[0]['json']
+        assert 'videos' not in run.reports[0]['json']
+        assert 'screenshots attached' not in run.reports[0]['json']['description']
+        assert 'videos attached' not in run.reports[0]['json']['description']
+        done = self._done(capsys)
+        assert 'screenshotsAttached' not in done and 'videosAttached' not in done
+
+    def test_a_filed_issue_whose_upload_failed_still_deletes_the_staged_screenshots(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, put_statuses=(403,))
+
+        assert run.code == 0
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
+        body = run.reports[0]['json']
+        assert 'logsKey' not in body
+        assert 'screenshots' not in body
+        assert body['description'].startswith(
+            'it broke\n\nattachments could not be sent: the upload to storage failed')
+        assert 'screenshots attached' not in body['description']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_a_refused_key_drops_the_screenshots_line(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS,
+                        report_statuses=(400, 200))
+
+        first, second = run.reports
+        assert first['json']['screenshots'] == 2
+        assert 'screenshots' not in second['json']
+        assert 'screenshots attached: 2' in first['json']['description']
+        assert 'screenshots attached' not in second['json']['description']
+        assert 'attachments could not be sent: the server refused them (400)' in (
+            second['json']['description'])
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
+
+    def test_no_readable_screenshot_and_no_logs_uploads_nothing(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, shots_in_zip=0)
+
+        assert run.puts == []
+        assert [p['url'] for p in run.posts] == ['https://owlette.test/api/bug-report']
+        assert 'attachments could not be sent: no screenshot could be read' in (
+            run.reports[0]['json']['description'])
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'screenshotsAttached': 0}
+
+    def test_a_rejected_report_keeps_the_staged_screenshots_for_a_retry(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, report_statuses=(500,))
+
+        assert run.code == 1
+        assert _events(capsys)[-1]['event'] == 'error'
+        assert self._left(staging) == sorted(self.SHOTS + ['c' * 32 + '.png'])
+
+    def test_a_report_refused_before_sending_keeps_the_staged_screenshots(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, description='  ')
+
+        assert run.code == 1
+        assert run.posts == []
+        assert _events(capsys)[-1]['event'] == 'error'
+        assert self._left(staging) == sorted(self.SHOTS + ['c' * 32 + '.png'])
+
+    def test_a_repeated_screenshot_goes_in_once(self, tmp_path, capsys):
+        self._stage(tmp_path)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS + self.SHOTS[:1])
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=False, videos=[])
+        assert run.reports[0]['json']['screenshots'] == 2
+
+    def test_a_screenshot_already_gone_is_not_an_error(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.SHOTS[:1])
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, shots_in_zip=1)
+
+        assert run.code == 0
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    @pytest.mark.parametrize('screenshots', [
+        'a' * 32 + '.png',
+        ['../' + 'a' * 29 + '.png'],
+        ['A' * 32 + '.png'],
+        ['a' * 32 + '.gif'],
+        ['a' * 32 + '.png'] * 11,
+    ])
+    def test_screenshots_that_are_not_staged_names_stop_the_report(
+            self, tmp_path, capsys, screenshots):
+        run = self._run(tmp_path, screenshots=screenshots)
+
+        assert run.code == 1
+        assert _events(capsys)[-1] == {
+            'event': 'error', 'value': 'the report names screenshots owlette did not stage.'}
+        assert run.posts == []
+        run.build.assert_not_called()
+
+    # a video
+
+    VIDEO = ['d' * 32 + '.mp4']
+
+    def test_a_video_without_logs_goes_in_a_zip_of_its_own(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, videos=self.VIDEO)
+
+        assert run.code == 0
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=[], include_logs=False, videos=self.VIDEO)
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding attachments',
+            'uploading attachments', 'submitting']
+        assert events[-1] == {'event': 'done',
+                              'value': {'category': 'bug', 'issueNumber': 42, 'videosAttached': 1}}
+        body = run.reports[0]['json']
+        assert body['logsKey'] == _LOGS_KEY
+        assert body['videos'] == 1 and type(body['videos']) is int
+        assert 'screenshots' not in body and 'logs' not in body
+        assert body['description'].startswith('it broke\n\nvideos attached: 1')
+        assert self._left(staging) == ['c' * 32 + '.png']
+        assert not os.path.exists(run.zips[0])
+
+    def test_screenshots_a_video_and_logs_share_one_zip(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.SHOTS + self.VIDEO)
+
+        run = self._run(tmp_path, screenshots=self.SHOTS, videos=self.VIDEO)
+
+        run.build.assert_called_once_with(
+            run.zips[0], screenshots=self.SHOTS, include_logs=True, videos=self.VIDEO)
+        events = _events(capsys)
+        assert [e['value'] for e in events if e['event'] == 'status'] == [
+            'collecting system info and recent logs', 'adding attachments',
+            'zipping logs', 'uploading attachments', 'submitting']
+        assert events[-1]['value'] == {'category': 'bug', 'issueNumber': 42, 'logsAttached': True,
+                                       'screenshotsAttached': 2, 'videosAttached': 1}
+        assert len(run.puts) == 1
+        body = run.reports[0]['json']
+        assert (body['screenshots'], body['videos'], body['logs']) == (2, 1, True)
+        assert 'screenshots attached: 2\n\nvideos attached: 1' in body['description']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_a_video_that_did_not_make_the_zip_is_not_claimed(self, tmp_path, capsys):
+        self._stage(tmp_path, names=self.VIDEO)
+
+        run = self._run(tmp_path, videos=self.VIDEO, videos_in_zip=0)
+
+        assert self._done(capsys) == {
+            'category': 'bug', 'issueNumber': 42, 'logsAttached': True, 'videosAttached': 0}
+        body = run.reports[0]['json']
+        assert body['logs'] is True
+        assert 'videos' not in body
+        assert 'videos attached' not in body['description']
+
+    def test_an_unreadable_video_and_no_logs_uploads_nothing(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, videos=self.VIDEO, videos_in_zip=0)
+
+        assert run.puts == []
+        assert 'attachments could not be sent: no video could be read' in (
+            run.reports[0]['json']['description'])
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
+        # the issue was filed, so the staged file goes all the same
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_neither_a_screenshot_nor_the_video_readable_says_both(self, tmp_path, capsys):
+        self._stage(tmp_path, names=self.SHOTS + self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, videos=self.VIDEO,
+                        shots_in_zip=0, videos_in_zip=0)
+
+        assert 'attachments could not be sent: no screenshot or video could be read' in (
+            run.reports[0]['json']['description'])
+
+    def test_a_refused_key_drops_the_video_line(self, tmp_path, capsys):
+        self._stage(tmp_path, names=self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, videos=self.VIDEO, report_statuses=(400, 200))
+
+        first, second = run.reports
+        assert first['json']['videos'] == 1
+        assert 'videos' not in second['json']
+        assert 'videos attached: 1' in first['json']['description']
+        assert 'videos attached' not in second['json']['description']
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
+
+    def test_a_filed_issue_whose_upload_failed_still_deletes_the_staged_video(
+            self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, videos=self.VIDEO, put_statuses=(403,))
+
+        assert run.code == 0
+        assert self._done(capsys) == {'category': 'bug', 'issueNumber': 42, 'videosAttached': 0}
+        assert 'videos' not in run.reports[0]['json']
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_a_rejected_report_keeps_the_staged_video_for_a_retry(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.SHOTS + self.VIDEO)
+
+        run = self._run(tmp_path, attach=None, screenshots=self.SHOTS, videos=self.VIDEO,
+                        report_statuses=(500,))
+
+        assert run.code == 1
+        assert _events(capsys)[-1]['event'] == 'error'
+        assert self._left(staging) == sorted(self.SHOTS + self.VIDEO + ['c' * 32 + '.png'])
+
+    def test_the_staged_video_is_deleted_only_once_the_issue_is_filed(self, tmp_path, capsys):
+        staging = self._stage(tmp_path, names=self.VIDEO)
+        seen = []
+        real_submit = configure_site.submit_report
+
+        def submit(*args, **kwargs):
+            seen.append(self._left(staging))
+            return real_submit(*args, **kwargs)
+
+        with patch.object(configure_site, 'submit_report', side_effect=submit):
+            run = self._run(tmp_path, attach=None, videos=self.VIDEO)
+
+        assert run.code == 0
+        assert seen == [sorted(self.VIDEO + ['c' * 32 + '.png'])]
+        assert self._left(staging) == ['c' * 32 + '.png']
+
+    def test_an_empty_video_list_is_no_video(self, tmp_path, capsys):
+        run = self._run(tmp_path, attach=None, videos=[])
+
+        run.build.assert_not_called()
+        assert 'videosAttached' not in self._done(capsys)
+        assert 'videos' not in run.reports[0]['json']
+
+    @pytest.mark.parametrize('videos', [
+        'd' * 32 + '.mp4',
+        # entries count before repeats are dropped, as with screenshots
+        ['d' * 32 + '.mp4'] * 21,
+        ['d' * 32 + '.mkv'],
+        ['D' * 32 + '.mp4'],
+        ['a' * 32 + '.png'],
+        ['../' + 'd' * 29 + '.mp4'],
+    ])
+    def test_videos_that_are_not_staged_names_stop_the_report(
+            self, tmp_path, capsys, videos):
+        run = self._run(tmp_path, videos=videos)
+
+        assert run.code == 1
+        assert _events(capsys)[-1] == {
+            'event': 'error', 'value': 'the report names videos owlette did not stage.'}
+        assert run.posts == []
+        run.build.assert_not_called()
+
+
+@contextlib.contextmanager
+def _report_data_root(tmp_path):
+    """A data root of the test's own, yielding its report log; the root logger
+    is put back as it was found."""
+    data = tmp_path / 'data'
+    (data / 'logs').mkdir(parents=True)
+    root = logging.getLogger()
+    handlers, level = root.handlers[:], root.level
+    try:
+        with patch.object(configure_site.shared_utils, 'get_data_path',
+                          side_effect=lambda name=None: str(data / name) if name else str(data)):
+            yield data / 'logs' / 'submit_issue.log'
+    finally:
+        for handler in root.handlers[:]:
+            if handler not in handlers:
+                root.removeHandler(handler)
+                handler.close()
+        root.setLevel(level)
+
+
+class TestUploadProgress:
+    """The zip's PUT reports how far it got as "uploading attachments (N%)"."""
+
+    @staticmethod
+    def _zip(tmp_path, size):
+        path = tmp_path / 'issue.zip'
+        path.write_bytes(os.urandom(size))
+        return str(path)
+
+    @staticmethod
+    def _clock(monkeypatch, step):
+        # only configure_site sees the fake clock: patching time.monotonic itself
+        # lets any other thread's call steal a tick and shift the lines
+        ticks = iter(range(10 ** 6))
+        monkeypatch.setattr(configure_site, 'time', SimpleNamespace(
+            monotonic=lambda: next(ticks) * step, time=time.time, sleep=time.sleep))
+
+    @staticmethod
+    def _percents(capsys):
+        return [e['value'] for e in _events(capsys) if e['event'] == 'status']
+
+    def _upload(self, tmp_path, monkeypatch, *, size, step, chunk):
+        zip_path = self._zip(tmp_path, size)
+        puts = []
+
+        def put(url, data=None, headers=None, timeout=None):
+            sent = b''
+            while block := data.read(chunk):
+                sent += block
+            puts.append({'body': sent, 'headers': headers})
+            return _http(200)
+
+        self._clock(monkeypatch, step)
+        with patch.object(configure_site, '_web_session',
+                          return_value=('https://owlette.test', 'tok')), \
+             patch.object(configure_site.shared_utils, 'read_config',
+                          return_value={'firebase': {'site_id': 'site-1'}}), \
+             patch.object(configure_site.shared_utils, 'get_machine_id', return_value='m-1'), \
+             patch('requests.post', return_value=_http(200, {
+                 'uploadUrl': _SIGNED_URL, 'key': _LOGS_KEY})), \
+             patch('requests.put', side_effect=put):
+            assert configure_site.upload_issue_logs(zip_path, size) == _LOGS_KEY
+        with open(zip_path, 'rb') as f:
+            assert puts[0]['body'] == f.read()
+        assert puts[0]['headers']['Content-Length'] == str(size)
+        return puts
+
+    def test_a_large_upload_reports_every_five_percent_in_order(
+            self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(configure_site, 'UPLOAD_PROGRESS_MIN_BYTES', 1000)
+
+        self._upload(tmp_path, monkeypatch, size=100_000, step=10, chunk=1000)
+
+        lines = self._percents(capsys)
+        assert lines == [f'uploading attachments ({n}%)' for n in range(5, 101, 5)]
+        assert not any('r2.example' in line or 'sekrit' in line for line in lines)
+
+    def test_lines_are_at_least_a_second_apart(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.setattr(configure_site, 'UPLOAD_PROGRESS_MIN_BYTES', 1000)
+
+        # a percent per read and an eighth of a second per read: a line every 8%
+        self._upload(tmp_path, monkeypatch, size=100_000, step=0.125, chunk=1000)
+
+        assert self._percents(capsys) == [
+            f'uploading attachments ({n}%)' for n in range(8, 100, 8)]
+
+    def test_a_small_upload_reports_no_percentages(self, tmp_path, monkeypatch, capsys):
+        size = 1024 * 1024
+        assert size <= configure_site.UPLOAD_PROGRESS_MIN_BYTES
+
+        self._upload(tmp_path, monkeypatch, size=size, step=10, chunk=16 * 1024)
+
+        assert self._percents(capsys) == []
+
+    def test_a_retry_starts_the_count_over(self, tmp_path, monkeypatch, capsys):
+        import requests
+        from screenshot_capture import upload_to_signed_url
+        monkeypatch.setattr(configure_site, 'UPLOAD_PROGRESS_MIN_BYTES', 1000)
+        self._clock(monkeypatch, 10)
+        size = 100_000
+        zip_path = self._zip(tmp_path, size)
+        attempts = []
+
+        def put(url, data=None, headers=None, timeout=None):
+            attempts.append(data)
+            if len(attempts) == 1:
+                for _ in range(50):
+                    data.read(1000)
+                raise requests.ConnectionError('reset')
+            while data.read(1000):
+                pass
+            return _http(200)
+
+        with patch('requests.put', side_effect=put):
+            upload_to_signed_url(
+                _SIGNED_URL, lambda: configure_site._UploadProgress(zip_path, size),
+                content_type='application/zip', content_length=size, sleep_fn=lambda _s: None)
+
+        assert len(attempts) == 2
+        assert self._percents(capsys) == (
+            [f'uploading attachments ({n}%)' for n in range(5, 51, 5)]
+            + [f'uploading attachments ({n}%)' for n in range(5, 101, 5)])
 
 
 # --reboot-now / --dismiss-reboot
@@ -994,14 +1779,24 @@ class TestRequestSeam:
         monkeypatch.setattr(configure_site, '_pairing_child', None)
         return tmp_path
 
-    def _request(self, seam, verb, nonce, *, name='req', mode=0o600):
+    def _request(self, seam, verb, nonce, *, name='req', mode=0o600, **fields):
         path = seam / 'ipc' / 'requests' / f'{name}.json'
-        path.write_text(json.dumps({'verb': verb, 'nonce': nonce}))
+        path.write_text(json.dumps({'verb': verb, 'nonce': nonce, **fields}))
         os.chmod(path, mode)
         return path
 
     def _reply(self, seam, name='req'):
         return seam / 'ipc' / 'requests' / f'{name}.result'
+
+    def _answer(self, seam, name='req'):
+        """Every line of one answer, parsed."""
+        path = self._reply(seam, name)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def _events(self, seam, name='req'):
+        return [line['event'] for line in self._answer(seam, name)]
 
     def _audit(self, seam):
         path = seam / 'logs' / 'privileged_requests.log'
@@ -1040,14 +1835,21 @@ class TestRequestSeam:
 
     def test_a_well_formed_restart_is_executed_and_audited(self, seam, monkeypatch):
         controls = []
-        monkeypatch.setattr(configure_site, '_service_control',
-                            lambda verb: controls.append(verb) or True)
+
+        def control(verb):
+            # A restart that works ends this process before it can write
+            # another line, so the app's terminal event is already there.
+            controls.append((verb, self._events(seam)))
+            return True
+
+        monkeypatch.setattr(configure_site, '_service_control', control)
         request = self._request(seam, 'restart', configure_site._request_nonce())
 
         rows = configure_site.drain_privileged_requests()
 
-        assert controls == ['restart']
+        assert controls == [('restart', ['status', 'done'])]
         assert [(row['verb'], row['outcome']) for row in rows] == [('restart', 'executed')]
+        assert rows[0]['uid'] == os.getuid()
         assert self._audit(seam) == rows
         assert not request.exists()
         assert stat.S_IMODE(self._reply(seam).stat().st_mode) == 0o640
@@ -1061,9 +1863,9 @@ class TestRequestSeam:
         assert [row['outcome'] for row in rows] == ['failed']
         assert [row['outcome'] for row in self._audit(seam)] == ['executed', 'failed']
         # The answer is a line protocol appended to, not a file overwritten:
-        # the status the app was already rendering survives the outcome.
+        # what the app was already shown survives the outcome.
         answer = self._reply(seam).read_text().splitlines()
-        assert [json.loads(line)['event'] for line in answer] == ['status', 'error']
+        assert [json.loads(line)['event'] for line in answer] == ['status', 'done', 'error']
         assert 'could not restart the service' in answer[-1]
 
     def test_a_pair_request_spawns_the_headless_run_into_the_answer(
@@ -1137,6 +1939,545 @@ class TestRequestSeam:
             ('reboot', 1, configure_site._REBOOT_MESSAGE),
         ]
         assert rows[0]['outcome'] == 'executed'
+        # The shutdown is scheduled rather than immediate, so there is time to
+        # tell the app it was.
+        assert self._events(seam) == ['status', 'done']
+
+    def test_a_pair_request_may_name_the_server_it_pairs_against(self, seam, monkeypatch):
+        # The installer opens the app with `--pair --server <dev|prod>`; off
+        # Windows that choice reaches the pairing run through the request.
+        spawned = {}
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: spawned.update(argv=argv) or MagicMock())
+        self._request(seam, 'pair', configure_site._request_nonce(), server='dev')
+
+        assert configure_site.drain_privileged_requests()[0]['outcome'] == 'executed'
+        assert spawned['argv'][2:] == [
+            '--json-progress', '--no-service-restart', '--server', 'dev']
+
+    @pytest.mark.parametrize('verb, server', [
+        ('pair', 'staging'),
+        ('pair', '--leave'),
+        ('pair', ['dev']),
+        ('restart', 'dev'),
+    ])
+    def test_a_server_that_is_not_one_of_the_two_never_reaches_an_argv(
+            self, seam, monkeypatch, verb, server):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: pytest.fail(f'spawned {argv}'))
+        monkeypatch.setattr(configure_site, '_service_control',
+                            lambda verb: pytest.fail('ran a request it should have refused'))
+        request = self._request(seam, verb, configure_site._request_nonce(), server=server)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not request.exists()
+        assert self._events(seam) == ['error']
+
+    def test_cancelling_a_pairing_ends_it_and_answers_the_run_it_ended(
+            self, seam, monkeypatch):
+        # On Windows the app's cancel kills its own pairing child. Off it the
+        # child is root's, so the cancel is a request too — without one a
+        # cancelled phrase stayed live, and the next join was refused as
+        # already pairing for the ten minutes it polled.
+        child = MagicMock()
+        child.poll.return_value = None
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda argv, **kwargs: child)
+        self._request(seam, 'pair', configure_site._request_nonce(), name='pair')
+        configure_site.drain_privileged_requests()
+
+        self._request(seam, 'cancel_pair', configure_site._request_nonce(), name='cancel')
+        rows = configure_site.drain_privileged_requests()
+
+        child.terminate.assert_called_once()
+        assert rows[0]['outcome'] == 'executed'
+        assert self._answer(seam, 'pair')[-1] == {
+            'event': 'error', 'value': 'pairing was cancelled'}
+        assert self._answer(seam, 'cancel') == [
+            {'event': 'done', 'value': {'cancelled': True}}]
+
+    def test_cancelling_with_no_pairing_in_flight_says_so(self, seam):
+        self._request(seam, 'cancel_pair', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests()
+
+        assert self._answer(seam) == [{'event': 'done', 'value': {'cancelled': False}}]
+
+    def test_a_dismiss_reboot_request_runs_the_dismissal_into_the_answer(
+            self, seam, monkeypatch):
+        # Clearing the cloud flag reads the token store, which off Windows is
+        # root's alone, so the app's own `--dismiss-reboot` could never do it.
+        spawned = {}
+
+        def fake_popen(argv, **kwargs):
+            spawned['argv'] = argv
+            os.write(kwargs['stdout'], b'{"event": "done", "value": {"cleared": true}}\n')
+            return MagicMock()
+
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', fake_popen)
+        self._request(seam, 'dismiss_reboot', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert rows[0]['outcome'] == 'executed'
+        assert spawned['argv'][1:] == [
+            shared_utils.get_path('configure_site.py'), '--dismiss-reboot']
+        assert self._events(seam) == ['done']
+
+    def test_a_report_request_files_the_report_from_a_root_only_copy(
+            self, seam, monkeypatch):
+        # Building the report reads root's logs and posting it takes the
+        # machine's token, so the app's own `--report-issue` could do neither.
+        spawned = {}
+
+        def fake_popen(argv, **kwargs):
+            spawned['argv'] = argv
+            staged = argv[-1]
+            spawned['mode'] = stat.S_IMODE(os.stat(staged).st_mode)
+            with open(staged, encoding='utf-8') as f:
+                spawned['report'] = json.load(f)
+            os.unlink(staged)  # what the real run does once it has read it
+            os.write(kwargs['stdout'], b'{"event": "done", "value": {"category": "bug"}}\n')
+            return MagicMock()
+
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', fake_popen)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='the kiosk froze at noon')
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert rows[0]['outcome'] == 'executed'
+        assert spawned['argv'][1:3] == [
+            shared_utils.get_path('configure_site.py'), '--report-issue']
+        assert spawned['mode'] == 0o600
+        assert spawned['report'] == {'category': 'bug',
+                                     'description': 'the kiosk froze at noon'}
+        assert self._events(seam) == ['done']
+        audit = (seam / 'logs' / 'privileged_requests.log').read_text()
+        assert 'kiosk froze' not in audit
+
+    def test_a_report_field_that_is_not_text_is_refused(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description={'text': 'nested'})
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def _staged_report(self, monkeypatch):
+        """The report each accepted request stages for `--report-issue`."""
+        staged = []
+
+        def fake_spawn(reply, *flags):
+            with open(flags[-1], encoding='utf-8') as f:
+                staged.append(json.load(f))
+            os.unlink(flags[-1])
+
+        monkeypatch.setattr(configure_site, '_spawn_into_reply', fake_spawn)
+        return staged
+
+    @pytest.mark.parametrize('attach_logs', [True, False])
+    def test_a_report_carries_attach_logs_through(self, seam, monkeypatch, attach_logs):
+        staged = self._staged_report(monkeypatch)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', attachLogs=attach_logs)
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze',
+                           'attachLogs': attach_logs}]
+
+    def test_a_report_without_attach_logs_stages_none(self, seam, monkeypatch):
+        staged = self._staged_report(monkeypatch)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze')
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze'}]
+
+    @pytest.mark.parametrize('attach_logs', ['yes', 'true', 1, 0])
+    def test_an_attach_logs_that_is_not_a_bool_is_refused(
+            self, seam, monkeypatch, attach_logs):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', attachLogs=attach_logs)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    @pytest.mark.parametrize('count', [0, 1, 5])
+    def test_a_report_carries_its_screenshots_through(self, seam, monkeypatch, count):
+        staged = self._staged_report(monkeypatch)
+        names = [f'{i:032x}.{ext}' for i, ext in zip(range(count), ['png', 'jpg', 'webp'] * 2)]
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=names)
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'screenshots': names}]
+
+    def test_a_repeated_screenshot_is_passed_on_once(self, seam, monkeypatch):
+        staged = self._staged_report(monkeypatch)
+        a, b = 'a' * 32 + '.png', 'b' * 32 + '.jpg'
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=[b, a, b])
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'screenshots': [b, a]}]
+
+    @pytest.mark.parametrize('screenshots', [
+        'a' * 32 + '.png',
+        {'name': 'a' * 32 + '.png'},
+        [7],
+        ['a' * 32 + '.png'] * 11,
+        ['a' * 31 + '.png'],
+        ['a' * 32 + '.PNG'],
+        ['a' * 32 + '.png\n'],
+        ['g' * 32 + '.png'],
+        ['a' * 32 + '.jpeg'],
+        ['../../.tokens.enc'],
+        ['/etc/' + 'a' * 32 + '.png'],
+    ])
+    def test_screenshots_that_are_not_staged_names_are_refused(
+            self, seam, monkeypatch, screenshots):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=screenshots)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def test_five_screenshots_and_the_apps_cap_fit_the_request_bound(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site, '_spawn_into_reply',
+                            lambda reply, *flags: os.unlink(flags[-1]))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='performance', description='\u0001' * 1000,
+                      attachLogs=True, screenshots=[f'{i:032x}.webp' for i in range(5)])
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert [row['outcome'] for row in rows] == ['executed']
+
+    @pytest.mark.parametrize('ext', ['mp4', 'mov', 'webm'])
+    def test_a_report_carries_its_video_through(self, seam, monkeypatch, ext):
+        staged = self._staged_report(monkeypatch)
+        name = f'{"d" * 32}.{ext}'
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', videos=[name])
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'videos': [name]}]
+
+    def test_an_empty_video_list_is_passed_on(self, seam, monkeypatch):
+        staged = self._staged_report(monkeypatch)
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', videos=[])
+
+        configure_site.drain_privileged_requests()
+
+        assert staged == [{'category': 'bug', 'description': 'it froze', 'videos': []}]
+
+    @pytest.mark.parametrize('videos', [
+        'd' * 32 + '.mp4',
+        {'name': 'd' * 32 + '.mp4'},
+        [7],
+        [f'{i:032x}.mp4' for i in range(21)],
+        ['d' * 32 + '.MP4'],
+        ['d' * 32 + '.mkv'],
+        ['d' * 32 + '.mp4\n'],
+        # a screenshot's id is not a video's
+        ['a' * 32 + '.png'],
+        ['../../.tokens.enc'],
+    ])
+    def test_videos_that_are_not_staged_names_are_refused(self, seam, monkeypatch, videos):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', videos=videos)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def test_a_video_id_is_refused_as_a_screenshot(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site.subprocess, 'Popen',
+                            lambda *a, **k: pytest.fail('filed a report it could not read'))
+        self._request(seam, 'report_issue', configure_site._request_nonce(),
+                      category='bug', description='it froze', screenshots=['d' * 32 + '.mp4'])
+
+        assert configure_site.drain_privileged_requests() == []
+        assert self._events(seam) == ['error']
+
+    def test_every_attachment_and_the_apps_cap_fit_the_request_bound(self, seam, monkeypatch):
+        monkeypatch.setattr(configure_site, '_spawn_into_reply',
+                            lambda reply, *flags: os.unlink(flags[-1]))
+        path = self._request(seam, 'report_issue', configure_site._request_nonce(),
+                             category='performance', description='\u0001' * 1000,
+                             attachLogs=True, screenshots=[f'{i:032x}.webp' for i in range(10)],
+                             videos=[f'{i:032x}.webm' for i in range(20)])
+        assert path.stat().st_size < configure_site.REQUEST_MAX_BYTES
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert [row['outcome'] for row in rows] == ['executed']
+
+    def test_a_report_at_the_apps_cap_fits_the_request_bound(self, seam, monkeypatch):
+        # 1000 UTF-16 units, each escaped to the six bytes JSON can make of one.
+        monkeypatch.setattr(configure_site, '_spawn_into_reply',
+                            lambda reply, *flags: os.unlink(flags[-1]))
+        path = self._request(seam, 'report_issue', configure_site._request_nonce(),
+                             category='performance', description='\u0001' * 1000)
+        assert path.stat().st_size > 6000
+
+        rows = configure_site.drain_privileged_requests()
+
+        assert [row['outcome'] for row in rows] == ['executed']
+
+    # leave
+
+    LEAVE_STEPS = ('disable', 'cache', 'detach', 'deregister', 'tokens', 'machine_id')
+
+    @pytest.fixture
+    def paired(self, seam, monkeypatch):
+        """A paired machine in the scratch tree, its cloud and credentials faked.
+
+        `trail` records what reached the cloud, the token store and the service,
+        in order, with the local state each found — the order is the contract.
+        """
+        import secure_storage
+
+        config = seam / 'config' / 'config.json'
+        config.parent.mkdir()
+        config.write_text(json.dumps(TestLeaveSite.CONFIG))
+        monkeypatch.setattr(shared_utils, 'CONFIG_PATH', str(config))
+        (seam / 'cache').mkdir()
+        (seam / 'cache' / 'firebase_cache.json').write_text('{}')
+        (seam / 'config' / 'machine_id').write_text('TEC-MBA.local')
+        monkeypatch.setattr(shared_utils, '_machine_id', None)
+        monkeypatch.setattr(configure_site, 'LEAVE_DETACH_POLL_SECONDS', 0.01)
+
+        state = SimpleNamespace(trail=[], resolved=[], detaches=True, tokens=True)
+
+        def detached():
+            firebase = json.loads(config.read_text())['firebase']
+            cache = (seam / 'cache' / 'firebase_cache.json').exists()
+            state.trail.append(('detached', firebase['enabled'], cache))
+            return state.detaches
+
+        def resolve(project_id, api_base, site_id):
+            state.resolved.append((project_id, api_base, site_id))
+            return state.client, state.document
+
+        def clear_tokens():
+            state.trail.append(('cleared', (seam / 'config' / 'machine_id').exists()))
+            state.tokens = False
+            return True
+
+        def control(verb):
+            state.trail.append((verb, self._events(seam)))
+            return True
+
+        state.client = MagicMock()
+        state.document = MagicMock()
+        state.document.delete.side_effect = lambda: state.trail.append(
+            ('deleted', state.tokens))
+        state.storage = SimpleNamespace(clear_tokens=clear_tokens)
+        state.detached = detached
+        state.config = config
+        monkeypatch.setattr(configure_site, '_machine_document', resolve)
+        monkeypatch.setattr(secure_storage, 'get_storage', lambda: state.storage)
+        monkeypatch.setattr(configure_site, '_service_control', control)
+        return state
+
+    def _ran(self, seam, paired):
+        """Which leave steps, and whether the restart, went through."""
+        reached = {entry[0] for entry in paired.trail}
+        ran = [step for step, mark in (('detach', 'detached'), ('deregister', 'deleted'),
+                                       ('tokens', 'cleared')) if mark in reached]
+        if list((seam / 'config').glob('machine_id.left-*')):
+            ran.append('machine_id')
+        if 'restart' in reached:
+            ran.append('restart')
+        return ran
+
+    def test_a_leave_unpairs_in_an_order_that_never_leaves_a_half_state(
+            self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome']) for row in rows] == [('leave', 'executed')]
+        # Config off and the cache gone before the daemon's own cloud client is
+        # waited out; that client gone before the document is deleted, or its
+        # next heartbeat writes the row back; the document deleted while the
+        # credentials still work; the restart only once the app has its answer.
+        assert paired.trail[:3] == [
+            ('detached', False, False),
+            ('deleted', True),
+            ('cleared', True),
+        ]
+        assert paired.trail[3] == ('restart', ['status'] * 7 + ['done'])
+        assert len(paired.trail) == 4
+        assert [line['value'] for line in self._answer(seam)
+                if line['event'] == 'status'] == [
+            'disabling cloud sync',
+            'removing the cached cloud config',
+            'stopping the cloud connection',
+            'deregistering this machine',
+            'clearing the credentials',
+            'retiring the machine id',
+            'restarting the service',
+        ]
+        assert self._answer(seam)[-1] == {
+            'event': 'done', 'value': {'siteId': 'default_site', 'deregistered': True}}
+        # The site captured before the config was blanked is the one deleted.
+        assert paired.resolved == [
+            ('owlette-dev-3838a', 'https://dev.owlette.app/api', 'default_site')]
+        paired.client.close.assert_called_once()
+        firebase = json.loads(paired.config.read_text())['firebase']
+        assert (firebase['enabled'], firebase['site_id']) == (False, '')
+
+    def test_the_machine_id_is_moved_aside_never_deleted(self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests(paired.detached)
+
+        assert not (seam / 'config' / 'machine_id').exists()
+        assert [path.read_text() for path in
+                (seam / 'config').glob('machine_id.left-*')] == ['TEC-MBA.local']
+
+    def test_every_leave_is_audited_with_the_uid_that_asked(self, seam, paired):
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert self._audit(seam) == rows
+        assert [(row['verb'], row['outcome'], row['uid']) for row in rows] == [
+            ('leave', 'executed', os.getuid())]
+
+    @pytest.mark.parametrize('step, failure', [
+        ('disable', 'could not disable cloud sync'),
+        ('cache', 'could not remove the cached cloud config'),
+        ('detach', 'the cloud connection did not stop'),
+        ('deregister', 'could not deregister this machine'),
+        ('tokens', 'could not clear the credentials'),
+        ('machine_id', 'could not retire the machine id'),
+    ])
+    def test_a_step_that_fails_stops_the_leave_there_and_says_which(
+            self, seam, paired, monkeypatch, step, failure):
+        if step == 'disable':
+            # write_json_to_file logs a failed write and returns, so the step
+            # has to read its own write back to know.
+            monkeypatch.setattr(shared_utils, 'save_config', lambda config=None: None)
+        elif step == 'cache':
+            cache = seam / 'cache' / 'firebase_cache.json'
+            cache.unlink()
+            cache.mkdir()
+        elif step == 'detach':
+            monkeypatch.setattr(configure_site, 'LEAVE_DETACH_TIMEOUT_SECONDS', 0.05)
+            paired.detaches = False
+        elif step == 'deregister':
+            paired.document.delete.side_effect = RuntimeError('403 Forbidden')
+        elif step == 'tokens':
+            paired.storage.clear_tokens = lambda: False
+        else:
+            monkeypatch.setattr(shared_utils, 'retire_machine_id',
+                                MagicMock(side_effect=PermissionError(13, 'Permission denied')))
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        answer = self._answer(seam)
+        assert answer[-1]['event'] == 'error'
+        assert answer[-1]['value'].startswith(f'{failure}: ')
+        assert [row['outcome'] for row in self._audit(seam)] == ['executed', 'failed']
+        assert rows[-1]['detail'].startswith(f'{failure}: ')
+        later = set(self.LEAVE_STEPS[self.LEAVE_STEPS.index(step) + 1:]) | {'restart'}
+        assert not later & set(self._ran(seam, paired))
+        if step != 'machine_id':
+            assert (seam / 'config' / 'machine_id').read_text() == 'TEC-MBA.local'
+
+    def test_leaving_an_unpaired_machine_is_refused_before_anything_is_touched(
+            self, seam, paired):
+        paired.config.write_text(json.dumps({'firebase': {'enabled': False, 'site_id': ''}}))
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests(paired.detached)
+
+        assert self._answer(seam) == [
+            {'event': 'error', 'value': 'this machine is not paired with a site'}]
+        assert paired.trail == []
+        assert (seam / 'cache' / 'firebase_cache.json').exists()
+
+    def test_a_leave_is_refused_while_a_pairing_is_polling(self, seam, paired, monkeypatch):
+        # The pairing would write the token store and the config the leave has
+        # just cleared, the moment someone approved its phrase.
+        child = MagicMock()
+        child.poll.return_value = None
+        monkeypatch.setattr(configure_site, '_pairing_child', child)
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert rows[0]['outcome'] == 'in_progress'
+        assert 'pairing' in self._answer(seam)[-1]['value']
+        assert json.loads(paired.config.read_text())['firebase']['enabled'] is True
+
+    def test_one_leave_per_nonce(self, seam, paired):
+        nonce = configure_site._request_nonce()
+        self._request(seam, 'leave', nonce, name='a')
+        self._request(seam, 'leave', nonce, name='b')
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome']) for row in rows] == [('leave', 'executed')]
+        assert 'nonce' in self._answer(seam, 'b')[-1]['value']
+
+    def test_a_drain_with_nothing_to_wait_the_cloud_client_out_goes_no_further(
+            self, seam, paired):
+        # Only the service can say its own client has wound down; a drain run
+        # without that answer must not delete a document a live client is
+        # about to write back.
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        configure_site.drain_privileged_requests()
+
+        assert self._answer(seam)[-1]['value'].startswith('the cloud connection did not stop')
+        assert self._ran(seam, paired) == []
+
+    @pytest.mark.parametrize('verb', ['leave', 'dismiss_reboot', 'cancel_pair'])
+    def test_the_new_verbs_answer_to_the_same_three_rules(
+            self, seam, monkeypatch, verb):
+        monkeypatch.setattr(configure_site, '_execute_request',
+                            lambda *args, **kwargs: pytest.fail(f'ran a {verb} it should refuse'))
+        stale = self._request(seam, verb, 'a-nonce-from-an-earlier-session', name='stale')
+        loose = self._request(seam, verb, configure_site._request_nonce(), name='loose',
+                              mode=0o660)
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not stale.exists() and not loose.exists()
+
+        other = _other_account()
+        if other is None:
+            pytest.skip('no second local account to stand in for another user')
+        monkeypatch.setattr(configure_site.osadapter, 'console_user', lambda: other)
+        foreign = self._request(seam, verb, configure_site._request_nonce(), name='foreign')
+
+        assert configure_site.drain_privileged_requests() == []
+        assert not foreign.exists()
 
     # what is refused
 
@@ -1305,6 +2646,46 @@ class TestRequestSeam:
         assert json.loads(
             self._reply(seam).read_text().splitlines()[0])['event'] == 'status'
 
+    @pytest.mark.parametrize('seam_file', ['ipc/requests/req.result', 'ipc/request_nonce'])
+    def test_the_group_goes_to_the_file_the_daemon_wrote_not_its_name(
+            self, seam, monkeypatch, seam_file):
+        # Both live in a group-writable directory, so their name can be taken
+        # over once the daemon has closed the file: the group handover has to
+        # land on what was written, not on whatever the name points at by then.
+        from osadapter import posix
+
+        monkeypatch.setattr(configure_site, '_service_control', lambda verb: True)
+        elsewhere = seam / 'elsewhere'
+        elsewhere.write_text('')
+        target = seam / seam_file
+        self._request(seam, 'restart', configure_site._request_nonce())
+        written = []
+        real_close = os.close
+
+        def close(fd):
+            info = os.fstat(fd)
+            real_close(fd)
+            if not written and stat.S_ISREG(info.st_mode) and target.exists() \
+                    and os.lstat(target).st_ino == info.st_ino:
+                written.append(info.st_ino)
+                os.unlink(target)
+                os.link(elsewhere, target)
+
+        handed = []
+        monkeypatch.setattr(posix, '_group_gid', lambda: os.getgid() + 4242)
+        with monkeypatch.context() as patched:
+            patched.setattr(os, 'chown', lambda path, uid, gid, **kw: handed.append(
+                os.fstat(path).st_ino if isinstance(path, int) else os.lstat(path).st_ino))
+            patched.setattr(os, 'fchown', lambda fd, uid, gid: handed.append(
+                os.fstat(fd).st_ino))
+            patched.setattr(os, 'close', close)
+
+            configure_site.drain_privileged_requests()
+
+        assert written, f'{seam_file} was never written'
+        assert elsewhere.stat().st_ino not in handed
+        assert written[0] in handed
+
     def test_nothing_is_honoured_with_nobody_at_a_graphical_session(
             self, seam, monkeypatch, caplog):
         monkeypatch.setattr(configure_site.osadapter, 'console_user', lambda: None)
@@ -1368,16 +2749,16 @@ class TestRequestSeam:
 
     # the negative control
 
-    def test_a_hand_written_leave_request_is_refused(self, seam, monkeypatch, caplog):
-        monkeypatch.setattr(configure_site, 'run_leave_site',
-                            lambda: pytest.fail('the seam deregistered this machine'))
-        request = self._request(seam, 'leave', configure_site._request_nonce())
+    def test_a_verb_the_daemon_does_not_execute_is_refused(self, seam, monkeypatch, caplog):
+        monkeypatch.setattr(configure_site, '_execute_request',
+                            lambda *args, **kwargs: pytest.fail('ran a verb nobody defined'))
+        request = self._request(seam, 'uninstall', configure_site._request_nonce())
 
         with caplog.at_level(logging.WARNING):
             assert configure_site.drain_privileged_requests() == []
 
         assert not request.exists()
-        assert "asks for 'leave'" in caplog.text
+        assert "asks for 'uninstall'" in caplog.text
 
 
     def test_a_fifo_at_the_answer_does_not_wedge_the_drain(self, seam):
@@ -1441,11 +2822,13 @@ class TestRequestSeam:
 
 
 class TestRequestSeamVerbs:
-    def test_leave_is_not_a_verb_the_daemon_executes(self):
-        """The negative control for the seam: deregistration stays an
-        uninstall-time root operation (`prerm` / `uninstall.sh`) and a dashboard
-        command. Adding a `leave` handler fails here first."""
-        assert set(configure_site.REQUEST_VERBS) == {'pair', 'restart', 'reboot'}
+    def test_the_verbs_are_exactly_what_the_app_may_ask_root_for(self):
+        """The negative control for the seam: what the console user can make
+        root do. Widening it fails here first, so a new verb is a decision
+        rather than a drift."""
+        assert set(configure_site.REQUEST_VERBS) == {
+            'pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
+            'report_issue'}
 
     @pytest.mark.skipif(sys.platform != 'win32',
                         reason='the Windows half of the seam gate')

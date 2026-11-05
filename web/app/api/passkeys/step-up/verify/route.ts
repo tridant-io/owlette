@@ -28,6 +28,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
 import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   mfaProofErrorResponse,
   verifyPasskeyStepUpAssertion,
@@ -59,7 +60,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
     // The ONLY session state this route writes. Never createSession (it re-mints
     // expiry and re-reads factor state) and never a custom token.
-    await markSessionMfaVerified();
+    await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
 
     return NextResponse.json({ success: true });
   } catch (error) {

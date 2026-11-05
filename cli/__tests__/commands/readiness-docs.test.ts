@@ -58,6 +58,6 @@ describe('CLI readiness docs', () => {
     const readiness = readRepoFile(`${cliDocsDir}/readiness.mdx`);
     expect(readiness).toContain('machine live-view');
     expect(readiness).toContain('public-api deferred: swoop');
-    expect(readiness).toContain('`owlette webhook` is not registered');
+    expect(readiness).toContain('`owlette webhook` is not a command');
   });
 });

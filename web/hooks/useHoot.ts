@@ -176,6 +176,9 @@ export function useOwletteChat({
   // approve/deny then, so a reload during an approval-resume can't re-arm the
   // buttons for a tool that is already executing (OWL-47 companion guard).
   const [turnRunning, setTurnRunning] = useState(false);
+  // the person pressed stop and the turn has not ended yet: the stream doc can
+  // still say running for a moment, so this is the first word that it is over.
+  const [stopRequested, setStopRequested] = useState(false);
   // Bumped to resubscribe after a listener error (Firestore kills it on error).
   const [streamSubAttempt, setStreamSubAttempt] = useState(0);
   // Scheduled follow-ups on the open chat — the chips above the composer.
@@ -264,6 +267,14 @@ export function useOwletteChat({
   const chatRef = useRef(chat);
   chatRef.current = chat;
 
+  // every request (a send, a retry, an approval's resume) starts a turn of its
+  // own, so a stop pressed on the one before no longer applies.
+  const [requestStatus, setRequestStatus] = useState(chat.status);
+  if (chat.status !== requestStatus) {
+    setRequestStatus(chat.status);
+    if (chat.status === 'submitted') setStopRequested(false);
+  }
+
   // Keep the open chat's mention vocabulary current, and ONLY that. The machines
   // listing usually lands after the pin (a deep link loads the chat before the
   // header's site resolves) and arrives as a fresh array on every heartbeat, so
@@ -344,6 +355,7 @@ export function useOwletteChat({
     setToolCommands({});
     setTurnStale(false);
     setTurnRunning(false);
+    setStopRequested(false);
 
     if (!user || !db) return;
 
@@ -405,7 +417,10 @@ export function useOwletteChat({
         // Track the running turn id for stop(); clear the user-stop guard once terminal.
         currentTurnIdRef.current =
           running && typeof data?.turnId === 'string' ? data.turnId : null;
-        if (!running) userStoppedRef.current = false;
+        if (!running) {
+          userStoppedRef.current = false;
+          setStopRequested(false);
+        }
         runningUpdatedAtMs =
           running && typeof data?.updatedAt?.toMillis === 'function'
             ? (data.updatedAt.toMillis() as number)
@@ -467,6 +482,7 @@ export function useOwletteChat({
         setTurnRunning(false);
         currentTurnIdRef.current = null;
         userStoppedRef.current = false;
+        setStopRequested(false);
         runningUpdatedAtMs = null;
         toolCommandsRef.current = {};
         setToolCommands({});
@@ -588,6 +604,7 @@ export function useOwletteChat({
     const running = streamRunningRef.current;
     // Set before any await so a snapshot arriving during the POST is suppressed.
     userStoppedRef.current = true;
+    setStopRequested(true);
     if (running && turnId) {
       try {
         const response = await fetch('/api/hoot/stop', {
@@ -1098,6 +1115,8 @@ export function useOwletteChat({
     turnStale,
     // A turn is live per the stream doc — the UI suppresses approve/deny while set.
     turnRunning,
+    // Stop was pressed and the turn has not reported its end yet.
+    stopRequested,
 
     // Scheduled follow-ups on this chat (`cortex-followups`, owner-read), soonest first.
     followups,

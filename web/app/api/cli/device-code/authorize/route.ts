@@ -22,6 +22,7 @@ import {
   assertUserHasSiteAccess,
   requireSessionOrIdToken,
 } from '@/lib/apiAuth.server';
+import { requireApiKeyMintPlan } from '@/app/api/_shared';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   DEVICE_CODE_WRAP_VERSION,
@@ -38,6 +39,7 @@ import {
   MAX_TTL_DAYS,
   MINTED_API_KEY_ENVIRONMENT,
   SUPERADMIN_ONLY_RESOURCES,
+  SUPERADMIN_ONLY_RESOURCES_LABEL,
 } from '@/lib/apiKeyTypes';
 import {
   problem,
@@ -112,6 +114,9 @@ export const POST = withRateLimit(
       const userId = await requireSessionOrIdToken(request);
       const activeUserData = await assertActiveUser(userId);
 
+      const planError = await requireApiKeyMintPlan(userId);
+      if (planError) return planError;
+
       const body = (await request.json().catch(() => ({}))) as AuthorizeBody;
 
       const code = typeof body.code === 'string' ? body.code.toLowerCase().trim() : '';
@@ -157,7 +162,7 @@ export const POST = withRateLimit(
         const role = activeUserData.role ?? null;
         if (role !== 'superadmin') {
           return problemForbidden(
-            'superadmin access required to create user or installer scopes',
+            `superadmin access required to create ${SUPERADMIN_ONLY_RESOURCES_LABEL} scopes`,
           );
         }
       }

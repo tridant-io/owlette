@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { ApiAuthError, requireAdmin } from '@/lib/apiAuth.server';
-import { getResend, FROM_EMAIL, ENV_LABEL, isProduction } from '@/lib/resendClient.server';
+import { getResend, FROM_EMAIL, ENV_LABEL, isProduction, trustedBaseUrl } from '@/lib/resendClient.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import {
   wrapEmailLayout,
   emailDataTable,
   emailTimestamp,
   buildApiKeyExpiryEmail,
+  buildIssueEmail,
   EMAIL_COLORS,
   SEVERITY_COLORS,
   METRIC_LABELS,
@@ -27,6 +28,7 @@ export const EMAIL_TEMPLATES = [
   { id: 'machines_offline', label: 'machines offline', description: 'stale heartbeat detected by health check' },
   { id: 'cortex_escalation', label: 'hoot escalation', description: 'autonomous investigation could not resolve issue' },
   { id: 'api_key_expiring', label: 'api key expiring', description: 'daily notice ladder before an api key expires' },
+  { id: 'issue', label: 'new issue', description: 'owlette support notified of a submitted issue' },
   { id: 'welcome', label: 'welcome email', description: 'sent to new users on signup' },
   { id: 'user_signup', label: 'admin signup notification', description: 'admin notified of new user registration' },
 ] as const;
@@ -213,6 +215,27 @@ function buildTemplateEmail(templateId: string): { subject: string; html: string
           'America/New_York',
         ),
       };
+    }
+
+    case 'issue': {
+      // the real builder, so the preview cannot drift from what bug-report sends
+      return buildIssueEmail({
+        number: 42,
+        categoryLabel: 'something broke',
+        title: 'swoop viewer goes black after the machine reconnects',
+        text:
+          'we lost wifi in the lobby for about a minute this morning. when LOBBY-PC-01 came back online the swoop viewer reconnected but the picture stayed black, even though the status said connected and the cursor still moved.\n\n' +
+          'closing the viewer and opening it again fixed it straight away. it happened twice today, both times right after the network dropped. the installation itself kept running fine, it is only the remote view.\n\n' +
+          'steps: 1. open swoop on LOBBY-PC-01 2. pull the network cable for 30 seconds 3. plug it back in. the viewer says connected, the picture never comes back. happy to send more logs if that helps.',
+        from: 'dana@studio.example',
+        host: 'LOBBY-PC-01',
+        siteId: 'downtown-gallery',
+        appVersion: '4.1.13',
+        source: 'agent',
+        envLabel: ENV_LABEL,
+        attachments: { screenshots: 3, videos: 1, logs: true },
+        issueUrl: `${trustedBaseUrl()}/admin/issues/42`,
+      });
     }
 
     case 'welcome': {

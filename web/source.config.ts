@@ -11,6 +11,11 @@ export const docs = defineDocs({
       // for terms an operator types that our prose never uses — we write
       // "reboot" and "roost", people search "restart" and "projects".
       keywords: z.array(z.string()).optional(),
+      // deepest heading level the page's "on this page" list shows. fumadocs'
+      // toc measures its svg track once per item along the whole path, so its
+      // cost grows with the square of the item count: the changelog's ~470
+      // headings froze a phone for 30s on opening the list.
+      tocDepth: z.number().int().min(2).optional(),
     }),
   },
 });
@@ -20,5 +25,14 @@ export default defineConfig({
     // Rewrites ```mermaid fences into <Mermaid chart="..." /> (registered in
     // mdx-components.tsx) so they render as real diagrams instead of raw text.
     remarkPlugins: [remarkMdxMermaid],
+    // fumadocs' default themes miss AA on our code blocks: github-light's keywords
+    // and github-dark's comments sit under 4.5:1. github-light-high-contrast and
+    // github-dark-default clear it for every token. passing `themes` drops
+    // fumadocs' defaults, so `defaultColor: false` is restated to keep the
+    // per-theme css variables.
+    rehypeCodeOptions: {
+      themes: { light: "github-light-high-contrast", dark: "github-dark-default" },
+      defaultColor: false,
+    },
   },
 });

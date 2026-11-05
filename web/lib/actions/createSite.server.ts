@@ -19,6 +19,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import { validateSiteId } from '@/lib/validators';
 import { addOwnerToBatch } from '@/lib/membership.server';
+import { siteSlotAvailable } from '@/lib/plan.server';
 
 const NAME_MAX_LENGTH = 200;
 
@@ -51,6 +52,7 @@ export type CreateSiteResult =
   | { kind: 'invalid_name'; reason: string }
   | { kind: 'already_exists' }
   | { kind: 'id_retired' }
+  | { kind: 'plan_limit' }
   | {
       kind: 'created';
       siteId: string;
@@ -116,6 +118,12 @@ export async function createSite(
   const tombstone = await db.collection('site_ids').doc(input.siteId).get();
   if (tombstone.exists) {
     return { kind: 'id_retired' };
+  }
+
+  // outside the batch, so two creates racing for the last slot can both land;
+  // the plan accepts that overshoot.
+  if (!(await siteSlotAvailable(input.ownerUid))) {
+    return { kind: 'plan_limit' };
   }
 
   const nowDate = (input.now ?? (() => new Date()))();

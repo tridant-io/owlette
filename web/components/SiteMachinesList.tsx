@@ -3,19 +3,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, Monitor, RotateCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/lib/toast';
 import { formatRelativeTime } from '@/lib/timeUtils';
+import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
+import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 
 interface SiteMachine {
   id: string;
@@ -23,29 +17,35 @@ interface SiteMachine {
   online: boolean;
   lastHeartbeat: string | null;
   agentVersion: string | null;
+  /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */
+  displayAwake?: { held?: boolean } | null;
+  /** what tells whether the agent would refuse a restart inside active hours; null where it reports none. */
+  osFamily?: string | null;
+  capabilities?: { activeHoursGuard?: number } | null;
+  activeHours?: unknown;
+  machineTimezone?: string | null;
 }
 
 interface SiteMachinesListProps {
   siteId: string;
-  /** Report the fetched machine count so the parent row can display it. */
-  onCountLoaded?: (siteId: string, count: number) => void;
 }
 
 /**
- * Expanded machine list for one site row in the manage-sites dialog.
+ * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
  *
- * Uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
+ * uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
  * rather than a client Firestore listener, so superadmins can inspect sites
- * they aren't members of without loosening rules. Mounted only while expanded,
- * so collapsing unmounts and re-expanding refetches.
+ * they aren't members of without loosening rules.
  */
-export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProps) {
+export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
   const [machines, setMachines] = useState<SiteMachine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
-  const [isRestarting, setIsRestarting] = useState(false);
+  const [restartOpen, setRestartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
+  const power = usePowerCommand(siteId);
 
   const fetchMachines = useCallback(async () => {
     setError(null);
@@ -54,58 +54,61 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
       if (!response.ok) throw new Error(`failed to load machines (${response.status})`);
       const body = (await response.json()) as { machines: SiteMachine[] };
       setMachines(body.machines);
-      onCountLoaded?.(siteId, body.machines.length);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'failed to load machines');
     }
-  }, [siteId, onCountLoaded]);
+  }, [siteId]);
 
   useEffect(() => {
     void fetchMachines();
   }, [fetchMachines]);
 
-  const handleConfirmRestart = async () => {
+  const handleConfirmRestart = async (options: PowerCommandOptions) => {
     if (!restartTarget) return;
-    setIsRestarting(true);
-    try {
-      // UI says "restart"; the wire verb deliberately stays "reboot".
-      const response = await fetch(
-        `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(restartTarget.id)}/commands`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Idempotency-Key': `machine-restart-${siteId}-${restartTarget.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    const target = restartTarget;
+    const queued = await power.send({
+      machineId: target.id,
+      machineName: target.name,
+      action: 'restart',
+      options,
+      run: async (opts) => {
+        // UI says "restart"; the wire verb deliberately stays "reboot".
+        const response = await fetch(
+          `/api/sites/${encodeURIComponent(siteId)}/machines/${encodeURIComponent(target.id)}/commands`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Idempotency-Key': `machine-restart-${siteId}-${target.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            },
+            body: JSON.stringify({ type: 'reboot_machine', params: powerCommandParams('restart', opts) }),
           },
-          body: JSON.stringify({ type: 'reboot_machine', params: { delay_seconds: 30 } }),
-        },
-      );
-      if (!response.ok) throw new Error(`restart failed (${response.status})`);
-      toast.success(`"${restartTarget.name}" will restart in ~30 seconds`);
-      setRestartTarget(null);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'failed to send restart');
-    } finally {
-      setIsRestarting(false);
-    }
+        );
+        if (!response.ok) throw new Error(`restart failed (${response.status})`);
+        const body = (await response.json()) as { data: { commandId: string } };
+        return { commandId: body.data.commandId };
+      },
+    });
+    if (queued) setRestartOpen(false);
   };
 
   const handleConfirmRemove = async () => {
     if (!removeTarget) return;
     try {
       await removeMachineFromSite(removeTarget.id);
-      toast.success(`Machine "${removeTarget.name}" removed from site successfully!`);
+      toast.success('machine removed', { description: `${removeTarget.name} is no longer on this site.` });
       setRemoveTarget(null);
       await fetchMachines();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'failed to remove machine');
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error('could not remove the machine', { description: message });
     }
   };
 
   if (error) {
     return (
       <div className="flex items-center justify-between gap-3 px-3 py-2.5">
-        <span className="text-xs text-red-400">{error}</span>
+        <span className="text-xs text-danger">{error}</span>
         <Button
           variant="ghost"
           size="sm"
@@ -146,23 +149,25 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         {machines.map((m) => (
           <li
             key={m.id}
-            className="grid items-center gap-3 px-3 py-1.5"
-            style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.3fr) minmax(0,1fr) 64px' }}
+            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_64px]"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span
                 aria-hidden="true"
-                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-emerald-400' : 'bg-red-400/70'}`}
+                className={`h-2 w-2 shrink-0 rounded-full ${m.online ? 'bg-success' : 'bg-danger/70'}`}
               />
               <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate text-xs text-white" title={m.name}>
+              <span className="truncate text-xs text-foreground" title={m.name}>
                 {m.name}
               </span>
+              {m.displayAwake?.held && (
+                <span className="shrink-0 text-[10px] text-muted-foreground">awake</span>
+              )}
             </span>
-            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-emerald-400/90' : 'text-muted-foreground'}`}>
+            <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
             </span>
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+            <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
               {m.agentVersion ? `v${m.agentVersion}` : '—'}
             </span>
             <span className="flex items-center justify-end gap-0.5">
@@ -171,7 +176,10 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setRestartTarget(m)}
+                    onClick={() => {
+                      setRestartTarget(m);
+                      setRestartOpen(true);
+                    }}
                     disabled={!m.online}
                     aria-label={`restart ${m.name}`}
                     className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-accent-cyan cursor-pointer disabled:cursor-not-allowed"
@@ -190,7 +198,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
                     size="sm"
                     onClick={() => setRemoveTarget(m)}
                     aria-label={`remove ${m.name}`}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-red-400 cursor-pointer"
+                    className="h-7 w-7 p-0 text-muted-foreground hover:bg-muted hover:text-danger cursor-pointer"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
@@ -204,37 +212,15 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         ))}
       </ul>
 
-      {/* Restart confirmation */}
-      <Dialog open={restartTarget !== null} onOpenChange={(o) => !o && setRestartTarget(null)}>
-        <DialogContent className="border-border bg-secondary text-white">
-          <DialogHeader>
-            <DialogTitle className="text-white">restart machine</DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              restart <span className="font-mono text-white">{restartTarget?.name}</span>? it will
-              restart in about 30 seconds and every process on it will be interrupted. the agent
-              reconnects automatically.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="ghost"
-              onClick={() => setRestartTarget(null)}
-              disabled={isRestarting}
-              className="bg-secondary border border-border cursor-pointer"
-            >
-              cancel
-            </Button>
-            <Button
-              onClick={handleConfirmRestart}
-              disabled={isRestarting}
-              className="text-gray-900 cursor-pointer"
-            >
-              <RotateCw className="h-4 w-4 mr-1" />
-              {isRestarting ? 'sending…' : 'restart'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <MachinePowerConfirm
+        action="restart"
+        open={restartOpen}
+        onOpenChange={setRestartOpen}
+        machineName={restartTarget?.name ?? ''}
+        guard={restartTarget ? activeHoursGuardOf({ ...restartTarget, agent_version: restartTarget.agentVersion }) : null}
+        sending={power.sending}
+        onConfirm={(options) => void handleConfirmRestart(options)}
+      />
 
       {/* Remove confirmation — the shared dialog the dashboard uses. Active-
           deployment data isn't loaded in this panel, so that pre-check is

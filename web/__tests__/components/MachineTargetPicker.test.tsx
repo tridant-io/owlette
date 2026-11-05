@@ -319,7 +319,7 @@ describe('MachineTargetPicker accessibility', () => {
 
   it('lifts the status text off the muted token on the focused row', async () => {
     // jsdom computes no Tailwind, so the class pair IS the guard: the muted
-    // token over the focused row's --accent fill is 4.37:1, under the 4.5:1
+    // token over the focused row's --accent fill is 4.37:1 in dark, under the 4.5:1
     // axe's color-contrast rule enforces on /hoot. Radix focuses a row on
     // pointer move, so every hover reaches that state.
     await openPicker({ machineIds: ['kiosk-01'] });

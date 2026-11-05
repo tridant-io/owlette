@@ -11,20 +11,29 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { AlertTriangle, ChevronDown, ChevronRight, Download, Loader2, Pencil, Plus, Save, Trash2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { useMachines, Process } from '@/hooks/useFirestore';
-import { DeploymentTemplate, Deployment } from '@/hooks/useDeployments';
+import { DeploymentTemplate, Deployment, type DeploymentRequestOptions } from '@/hooks/useDeployments';
 import { Badge } from '@/components/ui/badge';
 import { useSystemPresets } from '@/hooks/useSystemPresets';
 import { useInstallerChecksum, SHA256_HEX_RE } from '@/hooks/useInstallerChecksum';
 import InstallerChecksumStatus from '@/components/InstallerChecksumStatus';
 import { SelectGroup, SelectLabel } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { IconButton } from '@/components/ui/icon-button';
+import {
+  ActiveHoursDeployConfirm,
+  machinesInActiveHours,
+  type MachineInActiveHours,
+} from '@/components/ActiveHoursDeployConfirm';
 
 interface DeploymentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   siteId: string;
   templates: DeploymentTemplate[];
-  onCreateDeployment: (deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>, machineIds: string[]) => Promise<string>;
+  onCreateDeployment: (
+    deployment: Omit<Deployment, 'id' | 'createdAt' | 'status'>,
+    machineIds: string[],
+    options?: DeploymentRequestOptions,
+  ) => Promise<string>;
   onCreateTemplate: (template: Omit<DeploymentTemplate, 'id' | 'createdAt'>) => Promise<string>;
   onUpdateTemplate: (templateId: string, template: Partial<Omit<DeploymentTemplate, 'id' | 'createdAt'>>) => Promise<void>;
   onDeleteTemplate: (templateId: string) => Promise<void>;
@@ -61,6 +70,10 @@ export default function DeploymentDialog({
   const [additionalProcesses, setAdditionalProcesses] = useState('');
   const [parallelInstall, setParallelInstall] = useState(false);
   const [editingName, setEditingName] = useState(false);
+  // the chosen machines inside active hours; kept on close so the list doesn't empty as it fades
+  const [activeHoursConfirm, setActiveHoursConfirm] = useState<{ open: boolean; machines: MachineInActiveHours[] }>(
+    { open: false, machines: [] },
+  );
 
   // sha256 — agents refuse to run an installer without it. Computed server-side
   // from the URL; manual entry covers hosts the web server can't reach.
@@ -111,6 +124,7 @@ export default function DeploymentDialog({
       setAdditionalProcesses('');
       setParallelInstall(false);
       setEditingName(false);
+      setActiveHoursConfirm({ open: false, machines: [] });
       resetChecksum();
     }
   }, [open, resetChecksum]);
@@ -291,9 +305,6 @@ export default function DeploymentDialog({
   };
 
   const handleDeploy = async () => {
-    // Auto-derive deployment name if not set
-    const effectiveName = deploymentName.trim() || getSelectedLabel() || installerName || 'Deployment';
-
     if (!installerName.trim()) {
       toast.error('Please provide an installer URL');
       return;
@@ -326,6 +337,20 @@ export default function DeploymentDialog({
       });
       return;
     }
+
+    // a guarded agent refuses the install inside active hours, so ask for the override first
+    const inActiveHours = machinesInActiveHours(machines, selectedMachines);
+    if (inActiveHours.length > 0) {
+      setActiveHoursConfirm({ open: true, machines: inActiveHours });
+      return;
+    }
+
+    await submitDeployment();
+  };
+
+  const submitDeployment = async (override?: { reason: string }) => {
+    // Auto-derive deployment name if not set
+    const effectiveName = deploymentName.trim() || getSelectedLabel() || installerName || 'Deployment';
 
     setDeploying(true);
 
@@ -369,7 +394,8 @@ export default function DeploymentDialog({
 
       await onCreateDeployment(
         deploymentData,
-        Array.from(selectedMachines)
+        Array.from(selectedMachines),
+        override ? { override } : undefined,
       );
 
       toast.success(`Deployment started! Installing on ${selectedMachines.size} machine${selectedMachines.size > 1 ? 's' : ''}`);
@@ -386,6 +412,7 @@ export default function DeploymentDialog({
       setSelectedProjectIds(new Set());
       setAdditionalProcesses('');
       setShowCloseProcesses(false);
+      setActiveHoursConfirm((prev) => ({ ...prev, open: false }));
       resetChecksum();
 
       onOpenChange(false);
@@ -400,9 +427,9 @@ export default function DeploymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border bg-secondary text-white sm:max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+      <DialogContent className="border-border text-foreground sm:max-w-3xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
         <DialogHeader>
-          <DialogTitle className="text-white">deploy software</DialogTitle>
+          <DialogTitle className="text-foreground">deploy software</DialogTitle>
           <DialogDescription className="text-muted-foreground">
             install software across multiple machines simultaneously
           </DialogDescription>
@@ -411,14 +438,15 @@ export default function DeploymentDialog({
         <div className="space-y-4 py-4 pr-2">
           {/* Template — single row: dropdown/edit + pencil + save + trash */}
           <div className="space-y-2">
-            <Label className="text-white">template</Label>
+            <Label htmlFor="deployment-template" className="text-foreground">template</Label>
             <div className="flex gap-2">
               {editingName ? (
                 <Input
+                  id="deployment-template"
                   placeholder="e.g., TouchDesigner 2025.32280"
                   value={deploymentName}
                   onChange={(e) => setDeploymentName(e.target.value)}
-                  className="border-border bg-background text-white flex-1"
+                  className="border-border bg-background text-foreground flex-1"
                   autoFocus
                   onKeyDown={(e) => {
                     if (e.key === 'Escape') setEditingName(false);
@@ -429,15 +457,15 @@ export default function DeploymentDialog({
                   handleItemSelect(value);
                   setEditingName(false);
                 }}>
-                  <SelectTrigger className="border-border bg-background text-white flex-1 overflow-hidden">
+                  <SelectTrigger id="deployment-template" className="border-border bg-background text-foreground flex-1 overflow-hidden">
                     {selectedItem ? (
                       <span className="truncate">{deploymentName || getSelectedLabel()}</span>
                     ) : (
                       <span className="text-muted-foreground">select or create template...</span>
                     )}
                   </SelectTrigger>
-                  <SelectContent className="border-border bg-secondary">
-                    <SelectItem value="none" className="text-white focus:bg-accent focus:text-white">
+                  <SelectContent className="border-border dark:bg-secondary">
+                    <SelectItem value="none" className="text-foreground focus:bg-accent focus:text-foreground">
                       none
                     </SelectItem>
                     {/* Library presets by category */}
@@ -452,7 +480,7 @@ export default function DeploymentDialog({
                             <SelectItem
                               key={preset.id}
                               value={`${PRESET_PREFIX}${preset.id}`}
-                              className="text-white focus:bg-accent focus:text-white"
+                              className="text-foreground focus:bg-accent focus:text-foreground"
                             >
                               <span className="flex items-center gap-2">
                                 {preset.icon && <span>{preset.icon}</span>}
@@ -471,7 +499,7 @@ export default function DeploymentDialog({
                           <SelectItem
                             key={template.id}
                             value={`${TEMPLATE_PREFIX}${template.id}`}
-                            className="text-white focus:bg-accent focus:text-white"
+                            className="text-foreground focus:bg-accent focus:text-foreground"
                           >
                             {template.name}
                           </SelectItem>
@@ -482,68 +510,55 @@ export default function DeploymentDialog({
                 </Select>
               )}
               {/* New template: clear form and start fresh — always available */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    onClick={handleNewTemplate}
-                    className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>new template</p>
-                </TooltipContent>
-              </Tooltip>
+              <IconButton
+                label="new template"
+                type="button"
+                variant="outline"
+                onClick={handleNewTemplate}
+                className="border-border bg-background text-foreground hover:bg-muted hover:text-foreground cursor-pointer shrink-0"
+              >
+                <Plus className="h-4 w-4" />
+              </IconButton>
               {/* Action buttons — hidden for system presets */}
               {!isPresetSelected && (
                 <>
                   {/* Pencil: toggle edit name mode */}
-                  <Button
+                  <IconButton
+                    label="rename template"
+                    aria-pressed={editingName}
                     type="button"
                     variant="outline"
-                    size="icon"
                     onClick={() => {
                       if (!editingName && !deploymentName) {
                         setDeploymentName(getSelectedLabel());
                       }
                       setEditingName(!editingName);
                     }}
-                    className={`border-border bg-background cursor-pointer shrink-0 ${editingName ? 'text-accent-cyan hover:bg-accent-cyan/20 hover:text-accent-cyan' : 'text-white hover:bg-muted hover:text-white'}`}
+                    className={`border-border bg-background cursor-pointer shrink-0 ${editingName ? 'text-accent-cyan hover:bg-accent-cyan/20 hover:text-accent-cyan' : 'text-foreground hover:bg-muted hover:text-foreground'}`}
                   >
                     <Pencil className="h-4 w-4" />
-                  </Button>
+                  </IconButton>
                   {/* Save template */}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        onClick={handleSaveTemplate}
-                        className="border-border bg-background text-white hover:bg-muted hover:text-white cursor-pointer shrink-0"
-                      >
-                        <Save className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      <p>{isTemplateSelected ? 'save changes to template' : 'save as new template'}</p>
-                    </TooltipContent>
-                  </Tooltip>
+                  <IconButton
+                    label={isTemplateSelected ? 'save changes to template' : 'save as new template'}
+                    type="button"
+                    variant="outline"
+                    onClick={handleSaveTemplate}
+                    className="border-border bg-background text-foreground hover:bg-muted hover:text-foreground cursor-pointer shrink-0"
+                  >
+                    <Save className="h-4 w-4" />
+                  </IconButton>
                   {/* Delete template */}
                   {isTemplateSelected && (
-                    <Button
+                    <IconButton
+                      label="delete template"
                       type="button"
                       variant="outline"
-                      size="icon"
                       onClick={handleDeleteTemplate}
-                      className="border-border bg-background text-red-400 hover:bg-red-900 hover:text-red-300 cursor-pointer shrink-0"
+                      className="border-border bg-background text-destructive hover:text-destructive cursor-pointer shrink-0"
                     >
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </IconButton>
                   )}
                 </>
               )}
@@ -552,7 +567,7 @@ export default function DeploymentDialog({
 
           {/* Installer URL */}
           <div className="space-y-2">
-            <Label htmlFor="installer-url" className="text-white">installer URL</Label>
+            <Label htmlFor="installer-url" className="text-foreground">installer URL</Label>
             <Input
               id="installer-url"
               placeholder="https://example.com/installer.exe"
@@ -566,7 +581,7 @@ export default function DeploymentDialog({
                   if (filename && filename.includes('.')) setInstallerName(filename);
                 } catch { /* ignore invalid URLs while typing */ }
               }}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-base md:text-sm"
             />
             {installerName && (
               <p className="text-xs text-muted-foreground">filename: {installerName}</p>
@@ -577,7 +592,7 @@ export default function DeploymentDialog({
 
           {/* Silent Flags */}
           <div className="space-y-2">
-            <Label htmlFor="silent-flags" className="text-white">silent install flags</Label>
+            <Label htmlFor="silent-flags" className="text-foreground">silent install flags</Label>
             <Textarea
               id="silent-flags"
               placeholder='/VERYSILENT /DIR="C:\\Program Files\\App"'
@@ -585,7 +600,7 @@ export default function DeploymentDialog({
               // One command line: wrap visually, but collapse real newlines or the
               // agent's installer invocation gets a broken multi-line string.
               onChange={(e) => setSilentFlags(e.target.value.replace(/\s*[\r\n]+\s*/g, ' '))}
-              className="border-border bg-background text-white font-mono text-sm"
+              className="border-border bg-background text-foreground font-mono text-base md:text-sm"
             />
             <p className="text-xs text-muted-foreground">command-line flags for silent installation</p>
           </div>
@@ -599,7 +614,7 @@ export default function DeploymentDialog({
               className="cursor-pointer"
             />
             <div>
-              <Label htmlFor="parallel-install" className="text-white cursor-pointer">
+              <Label htmlFor="parallel-install" className="text-foreground cursor-pointer">
                 parallel install (keep existing versions)
               </Label>
               <p className="text-xs text-muted-foreground">
@@ -612,13 +627,14 @@ export default function DeploymentDialog({
           <div className="space-y-2">
             <button
               type="button"
-              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-white transition-colors"
+              className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
+              aria-expanded={showCloseProcesses}
               onClick={() => setShowCloseProcesses(!showCloseProcesses)}
             >
               {showCloseProcesses ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
               close running processes before install
               {(selectedProjectIds.size > 0 || additionalProcesses.trim()) && (
-                <Badge className="bg-amber-600 text-xs ml-1">active</Badge>
+                <Badge className="bg-warning-solid text-warning-solid-foreground text-xs ml-1">active</Badge>
               )}
             </button>
 
@@ -664,22 +680,11 @@ export default function DeploymentDialog({
                   }
 
                   return (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs text-muted-foreground">managed processes</Label>
+                    <div role="group" aria-labelledby="managed-processes-label" className="space-y-1.5">
+                      <p id="managed-processes-label" className="text-xs font-medium text-muted-foreground">managed processes</p>
                       {managedProcesses.map(proc => (
-                        <div
-                          key={proc.id}
-                          className="flex items-center gap-2 cursor-pointer"
-                          onClick={() => {
-                            const newSet = new Set(selectedProjectIds);
-                            if (newSet.has(proc.id)) {
-                              newSet.delete(proc.id);
-                            } else {
-                              newSet.add(proc.id);
-                            }
-                            setSelectedProjectIds(newSet);
-                          }}
-                        >
+                        // a label row: the whole row toggles the checkbox and names it
+                        <label key={proc.id} className="flex items-center gap-2 cursor-pointer">
                           <Checkbox
                             checked={selectedProjectIds.has(proc.id)}
                             onCheckedChange={() => {
@@ -693,9 +698,9 @@ export default function DeploymentDialog({
                             }}
                             className="cursor-pointer"
                           />
-                          <span className="text-white text-sm">{proc.name}</span>
+                          <span className="text-foreground text-sm">{proc.name}</span>
                           <span className="text-muted-foreground text-xs">({proc.exeName})</span>
-                        </div>
+                        </label>
                       ))}
                     </div>
                   );
@@ -709,7 +714,7 @@ export default function DeploymentDialog({
                     placeholder="e.g., msiexec.exe, CodeMeter.exe"
                     value={additionalProcesses}
                     onChange={(e) => setAdditionalProcesses(e.target.value)}
-                    className="border-border bg-background text-white text-sm"
+                    className="border-border bg-background text-foreground"
                   />
                   <p className="text-xs text-muted-foreground">comma-separated exe names for non-managed processes</p>
                 </div>
@@ -731,13 +736,13 @@ export default function DeploymentDialog({
                   additionalNames.forEach(n => { if (!allProcessNames.includes(n)) allProcessNames.push(n); });
 
                   return (
-                    <div className="flex items-start gap-2 p-2 bg-amber-900/30 border border-amber-600/40 rounded text-sm">
-                      <AlertTriangle className="h-4 w-4 text-amber-400 mt-0.5 shrink-0" />
-                      <div className="text-amber-200">
+                    <div className="flex items-start gap-2 p-2 bg-warning-surface border border-warning-border rounded text-sm">
+                      <AlertTriangle className="h-4 w-4 text-warning mt-0.5 shrink-0" />
+                      <div className="text-warning">
                         <span className="font-medium">The following processes will be closed on target machines before installation: </span>
                         <span>{allProcessNames.join(', ')}</span>
                         {selectedProjectIds.size > 0 && (
-                          <span className="block text-xs text-amber-300/70 mt-1">Managed processes will restart automatically after installation.</span>
+                          <span className="block text-xs text-warning mt-1">Managed processes will restart automatically after installation.</span>
                         )}
                       </div>
                     </div>
@@ -750,14 +755,14 @@ export default function DeploymentDialog({
           {/* Target Machines */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label className="text-white">target machines ({selectedMachines.size} selected)</Label>
+              <p id="target-machines-label" className="text-sm font-medium text-foreground">target machines ({selectedMachines.size} selected)</p>
               <div className="flex gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={selectOnlyOnlineMachines}
-                  className="border-border bg-background/50 text-white hover:bg-muted hover:text-white cursor-pointer text-xs"
+                  className="border-border bg-background/50 text-foreground hover:bg-muted hover:text-foreground cursor-pointer text-xs"
                 >
                   online only ({onlineMachines.length})
                 </Button>
@@ -766,34 +771,33 @@ export default function DeploymentDialog({
                   variant="outline"
                   size="sm"
                   onClick={toggleAllMachines}
-                  className="border-border bg-background/50 text-white hover:bg-muted hover:text-white cursor-pointer text-xs"
+                  className="border-border bg-background/50 text-foreground hover:bg-muted hover:text-foreground cursor-pointer text-xs"
                 >
                   {allMachinesSelected ? 'deselect all' : 'select all'}
                 </Button>
               </div>
             </div>
 
-            <div className="border border-border rounded-lg p-3 bg-background/50 max-h-48 overflow-y-auto space-y-2">
+            <div role="group" aria-labelledby="target-machines-label" className="border border-border rounded-lg p-3 bg-background/50 max-h-48 overflow-y-auto space-y-2">
               {machines.length === 0 ? (
                 <p className="text-muted-foreground text-sm text-center py-2">no machines available</p>
               ) : (
                 machines.map((machine) => (
-                  <div
-                    key={machine.machineId}
-                    className="flex items-center justify-between p-2 rounded hover:bg-secondary cursor-pointer"
-                    onClick={() => toggleMachine(machine.machineId)}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        checked={selectedMachines.has(machine.machineId)}
-                        onCheckedChange={() => toggleMachine(machine.machineId)}
-                        className="cursor-pointer"
-                      />
-                      <span className="text-white">{machine.machineId}</span>
-                    </div>
-                    <Badge className={`text-xs ${machine.online ? 'bg-green-600' : 'bg-red-600'}`}>
-                      {machine.online ? 'online' : 'offline'}
-                    </Badge>
+                  <div key={machine.machineId} className="rounded hover:bg-secondary">
+                    {/* a label fills the row: the whole row toggles the checkbox and names it */}
+                    <label className="flex items-center justify-between p-2 cursor-pointer">
+                      <span className="flex items-center gap-3">
+                        <Checkbox
+                          checked={selectedMachines.has(machine.machineId)}
+                          onCheckedChange={() => toggleMachine(machine.machineId)}
+                          className="cursor-pointer"
+                        />
+                        <span className="text-foreground">{machine.machineId}</span>
+                      </span>
+                      <Badge className={`text-xs ${machine.online ? 'bg-success-solid text-success-solid-foreground' : 'bg-danger-solid text-danger-solid-foreground'}`}>
+                        {machine.online ? 'online' : 'offline'}
+                      </Badge>
+                    </label>
                   </div>
                 ))
               )}
@@ -813,7 +817,7 @@ export default function DeploymentDialog({
           </Button>
           <Button
             onClick={handleDeploy}
-            className="text-gray-900 cursor-pointer"
+            className="cursor-pointer"
             disabled={deploying || checksumStatus === 'computing'}
           >
             {deploying ? (
@@ -831,11 +835,20 @@ export default function DeploymentDialog({
         </DialogFooter>
       </DialogContent>
 
+      <ActiveHoursDeployConfirm
+        action="deploy"
+        open={activeHoursConfirm.open}
+        machines={activeHoursConfirm.machines}
+        onCancel={() => setActiveHoursConfirm((prev) => ({ ...prev, open: false }))}
+        sending={deploying}
+        onConfirm={(override) => submitDeployment(override)}
+      />
+
       {/* Delete Confirmation Dialog */}
       <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
-        <DialogContent className="border-border bg-secondary text-white sm:max-w-md">
+        <DialogContent className="border-border text-foreground sm:max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-white">delete template</DialogTitle>
+            <DialogTitle className="text-foreground">delete template</DialogTitle>
             <DialogDescription className="text-muted-foreground">
               delete template &ldquo;{templates.find(t => t.id === selectedTemplateId)?.name}&rdquo;? this cannot be undone.
             </DialogDescription>
@@ -849,8 +862,9 @@ export default function DeploymentDialog({
               cancel
             </Button>
             <Button
+              variant="destructive"
               onClick={confirmDeleteTemplate}
-              className="bg-red-600 hover:bg-red-700 text-white cursor-pointer"
+              className="cursor-pointer"
             >
               delete
             </Button>

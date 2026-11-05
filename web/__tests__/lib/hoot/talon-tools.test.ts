@@ -4,8 +4,9 @@
  * Conversational talon tools. `create_talon` / `list_talons` /
  * `set_talon_enabled` never reach an agent — they call
  * `@/lib/talons/store.server`, which owns every rule and has its own suite, so
- * it is mocked here. What the tool layer owns: tier 2 only (members are capped
- * at tier 1 by `resolveHootMaxTier`); a store context naming the HUMAN driving
+ * it is mocked here. What the tool layer owns: writes at tier 2 (members are
+ * capped at tier 1 by `resolveHootMaxTier`) and the read at tier 1; a store
+ * context naming the HUMAN driving
  * the chat with `via: 'cortex'` and the authoring chat id; `command` outputs
  * refused for non-admins; store rejections (notably the pro gate) returned as a
  * tool RESULT, never thrown; lowercase copy that says "hoot", never "cortex".
@@ -153,12 +154,23 @@ beforeEach(() => {
 // Tool definitions
 
 describe('talon tool definitions', () => {
-  it.each(TALON_TOOL_NAMES)('%s is tier 2 — visible to site admins, not members', (name) => {
+  it.each(['create_talon', 'set_talon_enabled'])('%s is tier 2 — site admins change automations, members do not', (name) => {
     expect(getToolByName(name)?.tier).toBe(2);
     expect(getToolsByTier(2).map((t) => t.name)).toContain(name);
-    // Members cap at tier 1, so a talon tool leaking into tier 1 would hand every
-    // member the site's automations.
+    // Members cap at tier 1, so a talon WRITE leaking into tier 1 would let every
+    // member arm, disarm or author the site's automations.
     expect(getToolsByTier(1).map((t) => t.name)).not.toContain(name);
+  });
+
+  it('list_talons is tier 1 — members already read every talon on their site', () => {
+    // This was tier 2 on the grounds that a member seeing the site's automations
+    // was a leak. It isn't one: the rules let any site member read
+    // `sites/{siteId}/talons` (firestore.rules, `match /talons/{talonId}`,
+    // `allow read: if canAccessSite(siteId)`), and the talons page lists them all
+    // through `useTalons`. Hiding the read from a member's hoot only kept hoot
+    // from checking whether a talon is about to act on a machine before it acts.
+    expect(getToolByName('list_talons')?.tier).toBe(1);
+    expect(getToolsByTier(1).map((t) => t.name)).toContain('list_talons');
   });
 
   it('create_talon tells the model to confirm the shape and never invent machine ids', () => {

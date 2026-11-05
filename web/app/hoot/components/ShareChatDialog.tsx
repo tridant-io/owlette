@@ -335,7 +335,7 @@ export function ShareChatDialog({
         {/* Under the preview, not above it: it is a caption on what was just
             read, and above it the warning was asking the owner to check
             something they hadn't been shown yet. */}
-        <p className="shrink-0 text-xs text-yellow-500">
+        <p className="shrink-0 text-xs text-warning">
           hoot&apos;s replies can quote machine details — hostnames, file paths, log lines.
           read the preview before you share.
         </p>
@@ -365,7 +365,7 @@ export function ShareChatDialog({
             role="status"
             aria-live="polite"
             className={cn(
-              'flex items-center gap-1.5 text-xs text-green-400',
+              'flex items-center gap-1.5 text-xs text-success',
               createdUrl && 'mt-1.5 h-4',
             )}
           >

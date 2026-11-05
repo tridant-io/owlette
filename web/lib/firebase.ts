@@ -144,12 +144,18 @@ if (typeof window !== 'undefined' && !getApps().length && isConfigured) {
 export { app, auth, db, storage, isConfigured };
 
 import { getDoc, doc } from 'firebase/firestore';
+import { normalizeInstallerFiles, type InstallerFiles } from '@/lib/installerPlatform';
 
-/** Latest agent version from `installer_metadata/latest`, or null if absent. */
+/**
+ * Latest agent version from `installer_metadata/latest`, or null if absent.
+ * `files` holds every platform's installer; `downloadUrl` and `sha256Checksum`
+ * stay the windows one for callers that only want that.
+ */
 export async function getLatestOwletteVersion(): Promise<{
   version: string;
   downloadUrl: string;
   sha256Checksum?: string;
+  files: InstallerFiles;
   releaseDate?: Date;
   releaseNotes?: string;
 } | null> {
@@ -172,6 +178,7 @@ export async function getLatestOwletteVersion(): Promise<{
       version: data.version || 'Unknown',
       downloadUrl: data.download_url || data.downloadUrl || data.url || '',
       sha256Checksum: data.checksum_sha256 || data.sha256Checksum || data.checksum,
+      files: normalizeInstallerFiles(data),
       releaseDate: data.release_date?.toDate?.() || data.releaseDate?.toDate?.() || data.uploadedAt?.toDate?.(),
       releaseNotes: data.release_notes || data.releaseNotes || data.changelog,
     };
@@ -183,9 +190,10 @@ export async function getLatestOwletteVersion(): Promise<{
 
 /**
  * Queue an `update_owlette` command. Checksum and target version are mandatory —
- * the agent rejects updates without SHA256 verification. Always re-fetches the
- * download URL from installer_metadata: Storage URLs carry auth tokens that
- * expire after ~7 days, and an offline machine may only process this days later.
+ * the agent rejects updates without SHA256 verification. Sends exactly the URL
+ * it is given: the caller picks the file for the machine's platform, and reads
+ * `installer_metadata/latest` at update time so the Storage URL (auth token
+ * expires after ~7 days) is fresh.
  */
 export async function sendOwletteUpdateCommand(
   siteId: string,
@@ -208,23 +216,8 @@ export async function sendOwletteUpdateCommand(
   }
 
   try {
-    let freshUrl = installerUrl;
-    try {
-      const latestRef = doc(db, 'installer_metadata', 'latest');
-      const latestDoc = await getDoc(latestRef);
-      if (latestDoc.exists()) {
-        const data = latestDoc.data();
-        const metadataUrl = data.download_url || data.downloadUrl || data.url;
-        if (metadataUrl) {
-          freshUrl = metadataUrl;
-        }
-      }
-    } catch (urlErr) {
-      console.warn('Could not refresh download URL, using provided URL:', urlErr);
-    }
-
     const params: Record<string, string> = {
-        installer_url: freshUrl,
+        installer_url: installerUrl,
         target_version: targetVersion,
         checksum_sha256: checksumSha256,
     };

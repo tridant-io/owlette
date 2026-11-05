@@ -165,6 +165,43 @@ describe('owlette installer latest', () => {
     expect(headers.Authorization).toBe('Bearer owk_live_testtoken');
     expect(headers['Idempotency-Key']).toBeUndefined();
   });
+
+  it('prints one platform line per files entry under the version in human mode', async () => {
+    const stdout: string[] = [];
+    (process.stdout.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stdout.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    installFetchStub({
+      version: '3.4.0',
+      download_url: 'https://cdn.example/Owlette-Installer-v3.4.0.exe',
+      checksum_sha256: 'a'.repeat(64),
+      file_size: 1234,
+      release_date: '2026-09-25T00:00:00.000Z',
+      files: {
+        windows_x64: {
+          download_url: 'https://cdn.example/Owlette-Installer-v3.4.0.exe',
+          checksum_sha256: 'a'.repeat(64),
+          file_size: 1234,
+          file_name: 'Owlette-Installer-v3.4.0.exe',
+          uploaded_at: 1,
+        },
+        macos_arm64: {
+          download_url: 'https://cdn.example/Owlette-Installer-v3.4.0.pkg',
+          checksum_sha256: 'b'.repeat(64),
+          file_size: 2048,
+          file_name: 'Owlette-Installer-v3.4.0.pkg',
+          uploaded_at: 2,
+        },
+      },
+    });
+    const program = buildProgram();
+    await program.parseAsync(['installer', 'latest'], { from: 'user' });
+    const out = stdout.join('');
+    expect(out).toContain('3.4.0');
+    expect(out).toContain('  windows_x64  1.21 KiB  aaaaaaaaaaaa');
+    expect(out).toContain('  macos_arm64  2.00 KiB  bbbbbbbbbbbb');
+  });
 });
 
 describe('owlette installer upload', () => {
@@ -174,11 +211,17 @@ describe('owlette installer upload', () => {
   const FAKE_BYTES = Buffer.from('the quick brown fox\n');
   let tempDir: string;
   let FAKE_FILE: string;
+  let FAKE_DEB: string;
+  let FAKE_ZIP: string;
 
   beforeAll(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'owlette-cli-installer-test-'));
     FAKE_FILE = join(tempDir, 'Owlette-Installer-v2.11.0.exe');
+    FAKE_DEB = join(tempDir, 'Owlette-Installer-v2.11.0.deb');
+    FAKE_ZIP = join(tempDir, 'Owlette-Installer-v2.11.0.zip');
     writeFileSync(FAKE_FILE, FAKE_BYTES);
+    writeFileSync(FAKE_DEB, FAKE_BYTES);
+    writeFileSync(FAKE_ZIP, FAKE_BYTES);
   });
   afterAll(() => {
     rmSync(tempDir, { recursive: true, force: true });
@@ -231,6 +274,7 @@ describe('owlette installer upload', () => {
     const startBody = JSON.parse(String(calls[0]!.init.body));
     expect(startBody.version).toBe('2.11.0');
     expect(startBody.fileName).toBe('Owlette-Installer-v2.11.0.exe');
+    expect(startBody.platform).toBe('windows_x64');
     expect(startBody.releaseNotes).toBe('patch release');
     expect(startBody.setAsLatest).toBe(true);
 
@@ -275,6 +319,76 @@ describe('owlette installer upload', () => {
     const finalizeHeaders = calls[2]!.init.headers as Record<string, string>;
     expect(startHeaders['Idempotency-Key']).toBe('pinned-key');
     expect(finalizeHeaders['Idempotency-Key']).toBe('pinned-key');
+  });
+
+  it('derives platform linux_x64 from a .deb and sends it in the POST body', async () => {
+    const calls = installFetchSequence([
+      { payload: { uploadUrl: 'https://signed/u', uploadId: 'u-1', platform: 'linux_x64' } },
+      { payload: '' },
+      {
+        payload: {
+          version: '2.11.0',
+          download_url: 'd',
+          checksum_sha256: 'a'.repeat(64),
+          file_size: 1,
+          platform: 'linux_x64',
+        },
+      },
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(
+      ['--json', 'installer', 'upload', FAKE_DEB, '--version', '2.11.0'],
+      { from: 'user' },
+    );
+    expect(calls).toHaveLength(3);
+    const startBody = JSON.parse(String(calls[0]!.init.body));
+    expect(startBody.fileName).toBe('Owlette-Installer-v2.11.0.deb');
+    expect(startBody.platform).toBe('linux_x64');
+  });
+
+  it('sends an explicit --platform as given and leaves the extension check to the api', async () => {
+    const calls = installFetchSequence([
+      { payload: { uploadUrl: 'https://signed/u', uploadId: 'u-1' } },
+      { payload: '' },
+      { payload: { version: '2.11.0', download_url: 'd', checksum_sha256: 'a'.repeat(64), file_size: 1 } },
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(
+      ['--json', 'installer', 'upload', FAKE_ZIP, '--version', '2.11.0', '--platform', 'macos_arm64'],
+      { from: 'user' },
+    );
+    expect(calls).toHaveLength(3);
+    expect(JSON.parse(String(calls[0]!.init.body)).platform).toBe('macos_arm64');
+  });
+
+  it('refuses an unknown extension with exit 2 before firing fetch', async () => {
+    const stderr: string[] = [];
+    (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stderr.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    const calls = installFetchStub({});
+    const program = buildProgram();
+    await program.parseAsync(['installer', 'upload', FAKE_ZIP, '--version', '2.11.0'], {
+      from: 'user',
+    });
+    expect(calls).toHaveLength(0);
+    expect(process.exitCode).toBe(2);
+    const out = stderr.join('');
+    expect(out).toContain('.exe (windows_x64)');
+    expect(out).toContain('.pkg (macos_arm64)');
+    expect(out).toContain('.deb (linux_x64)');
+  });
+
+  it('refuses an unknown --platform with exit 2 before firing fetch', async () => {
+    const calls = installFetchStub({});
+    const program = buildProgram();
+    await program.parseAsync(
+      ['installer', 'upload', FAKE_FILE, '--version', '2.11.0', '--platform', 'windows_arm64'],
+      { from: 'user' },
+    );
+    expect(calls).toHaveLength(0);
+    expect(process.exitCode).toBe(2);
   });
 
   it('aborts before the signed-url PUT if step 1 fails', async () => {

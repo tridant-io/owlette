@@ -22,7 +22,7 @@ failure.
 | [7](#7-the-bundle) | the bundle |
 | [8](#8-jwt-claims) | jwt claims |
 | [9](#9-the-host-fingerprint-mac) | the host fingerprint mac |
-| [10](#10-lease-renewal) | lease renewal, the 12 h cap, and a missed renewal |
+| [10](#10-lease-renewal) | lease renewal and a missed renewal |
 | [11](#11-security) | security |
 
 ---
@@ -66,9 +66,9 @@ the room only enforces who may send what, and to whom.
 |---|---|---|
 | `hello` | **server only** | the socket that just joined |
 | `ring` | **server only** (from `POST /v1/ring`) | doorbell sockets |
-| `viewer-join` | **server only** | host and doorbell |
+| `viewer-join` | **server only** | the host, once per viewer id per session (see below) |
 | `error` | **server only** | the offending socket |
-| `kill` | **server only** (from `POST /v1/kill`) | every socket, then `close(1000)` |
+| `kill` | **server only** (from `POST /v1/kill`) | every socket of the named `sid` (every socket when `sid` is null), then `close(1000)` |
 | `offer` | viewer only | host and doorbell |
 | `answer` | host only | the named viewer (`to`) |
 | `host-ready` | host only | the named viewer, or all viewers when `to` is absent |
@@ -88,16 +88,31 @@ side only, agent traffic goes to a named viewer or broadcasts to viewers.
 **rooms are addressed from the verified token, never from the path.** the durable object is named
 `${claims.site}:${claims.machine}`; a url that disagrees is refused `room_mismatch` (403).
 
+**a viewer's socket closing is not the viewer leaving.** the socket is only the viewer's signalling path: the
+page re-dials it for a fresh token whenever it must send after its first minute, and a network blip or a
+durable-object restart drops it while the viewer's media peer carries on. so once a viewer's offer has reached
+a host of its sid, the room never tells the host that viewer left because its socket closed, and a viewer that
+re-joins with an id the host already holds for that sid is not announced again. the host learns that such a
+viewer is gone from its own media peer (a dtls close, ice consent), from its lease ledger (section 10), or from
+the sid's `kill`. the room still invents a `bye` for a viewer whose offer never reached a host of its sid and
+that has no other live socket, when its socket closes or when the room evicts it from a full room after it
+stopped pinging: the host cannot be holding a peer for it, and nothing else would release it. when the host
+lets a viewer go (a `bye` with a `to`), that viewer's next join is announced again.
+
 fields, beyond `type`, `from`, `fromRole` and `serverTimeMs`:
 
 - `hello`: `protocolVersion`, `role`, `id`, `sid`, `ctl`, `peers {doorbell, host, viewer}`
 - `ring`: `sid`, `sentAtMs` — **and nothing else**, see section 11
-- `viewer-join`: `viewer`, `sid`, `ctl`
+- `viewer-join`: `viewer`, `sid`, `ctl`. the host ignores a repeat for a viewer it already holds, until that
+  viewer leaves
 - `offer` / `answer`: `sdp`; `answer` also carries `mac` (section 9) and `to`
 - `host-ready`: `sid`, optional `to`
 - `candidate`: `candidate`, `sdpMid`, `sdpMLineIndex`, optional `to`
 - `kill`: `sid` (may be null — "kill whatever is running")
-- `bye`: optional `reason`, optional `to`
+- `bye`: optional `reason`, optional `to`. from the host, `restart` means the service is stopping to come
+  back (an update, a restart) and the viewer starts its next session; `kill` is somebody's decision and the
+  viewer stops; `same_machine` means the viewer reached the host at one of the host's own addresses — it is
+  on the machine it asked to watch — and the viewer stops and remembers the machine as its own
 - `error`: `code`
 
 golden vectors: one per type in `testdata/protocol/signaling/`, plus `signal-viewer-sends-answer.json`
@@ -243,34 +258,71 @@ those repeats are what an attack in progress looks like in the audit trail.
 the host maps `code` through [`testdata/keymap.json`](testdata/keymap.json) to a ps/2 set-1 scancode plus an
 extended flag. **the host keys on `code` and never on `key`**: the numpad and the control/arrow pad share
 scancode low bytes and are told apart only by `extended`. left and right modifiers stay distinct on the wire.
-a mac client maps cmd → `ControlLeft` **in the browser**, before it sends, so the host never guesses.
-`PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them.
+the shortcut modifier is mapped **in the browser**, before it sends, so the host never guesses: a mac client
+swaps cmd and ctrl for a windows or linux host, and a client that is not a mac swaps ctrl and meta for a macos
+host, so cmd arrives as `ControlLeft` / `ControlRight` and the mac's control as `MetaLeft` / `MetaRight`, and
+the other way round. the viewer may turn the swap off, and then every key goes as pressed.
+
+`swoop-input` is unordered and never retransmits, so a release can be lost or arrive before its own press. a
+viewer sends a modifier's release (`Control*`, `Shift*`, `Alt*`, `Meta*`) again 100 ms and 500 ms later,
+unless it has pressed that key again by then. the host injects every up it is sent, whether that viewer holds
+the key or not, and for a modifier that is already up that is a release nothing acts on. no other release is
+sent again: a second mouse up is a real release wherever the pointer has gone.
+`PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them. a
+macos host goes on from the scancode to the mac's virtual keycode through
+[`testdata/keymap-macos.json`](testdata/keymap-macos.json), so the host's keyboard layout decides what a key
+types, as it does on windows, and it drops `PrintScreen` and `Pause`, which a mac has no key for.
 
 ### cursor — `swoop-cursor`, host → viewer
 
 | `t` | fields |
 |---|---|
 | `cpos` | `x`, `y` normalised, `visible`, `tsUs` |
-| `cshape` | `id`, and on first use `hotX`, `hotY`, `w`, `h`, `png` (base64) |
+| `cshape` | `id`, and on first use `hotX`, `hotY`, `w`, `h`, `png` (base64), `dpi`, and `scale` when above 1 |
 | `vpos` | `viewer`, `x`, `y` normalised, `tsUs` — where **another** controller's pointer is |
 
 shapes are cached by `id`; a repeat is `{"t":"cshape","id":n}` alone. css cursors above 128×128 are silently
-ignored by browsers, so a shape larger than 32×32 css px is presented as an overlay instead.
+ignored by browsers, so a shape larger than 32×32 css px is presented as an overlay instead. `w`, `h`, `hotX`
+and `hotY` are pixels of the png; `scale` is machine pixels per png pixel, present only when the host shrank
+the shape for the 64 px message cap. `dpi` is the dpi the machine drew the shape at, 96 being 100%: a 2x mac
+display is 192, windows at 150% is 144. a viewer draws a shape at `w × scale × 96 / dpi` css pixels, the
+machine's pointer at its own size whatever the picture is scaled to, so a 2x mac's 56×80 arrow, sent as 28×40
+at `scale` 2, is 28×40 css px. a css cursor draws a png pixel per css pixel, so a shape at any other size is
+an overlay. a host older than `dpi` sends none, and a viewer keeps the sizes it drew such a shape at before.
 
 `cpos` is the **machine's own** pointer, which is one thing however many people are watching. `vpos` is where
 each *other* controller is pointing, so a session with more than one controller can draw them — the host
 publishes one per absolute `m` it accepts, from the viewer it accepted it from, and never for the viewer it
 is being sent to. a viewer in pointer lock sends `mr` deltas and has no position of its own, so it publishes
 no `vpos` at all; `cpos` is where that pointer went. a viewer draws `vpos` as an overlay element and leaves
-its own cursor a css cursor.
+its own cursor a css cursor. a controller outside pointer lock that overlays the machine's pointer draws it
+where its own last `m` put it, not at `cpos`, which trails that by a round trip.
+
+`visible` says whether the machine's pointer is on screen. during a window move or resize windows paints the
+pointer into the picture itself and desktop duplication reports it hidden at 0,0; the host still sends it
+`visible`, where the system has it, so a viewer draws it at its own size over the painted one, which is the
+picture's size.
 
 ### clipboard — `swoop-control`, both directions, host→viewer ungated, viewer→host requires `ctl`
 
 `{"t":"clip","dir":"to-host"|"to-viewer","fmt":"text"|"png","seq":n,"chunk":i,"chunks":k,"totalBytes":n,"data":"<base64>"}`
 
-- caps: text ≤ 256 KiB, image ≤ 2 MiB, one chunk ≤ 16 KiB. `totalBytes` is checked **before the first chunk
-  is buffered** — a receiver that waits until reassembly to notice the size has already paid for it.
-  over cap → drop the whole transfer, reason `clipboard_too_large`.
+- caps: text ≤ 256 KiB, image ≤ 15 MiB (a compressed 4k screenshot, with room to spare), one chunk ≤ 16 KiB.
+  `totalBytes` is checked **before the first chunk is buffered** — a receiver that waits until reassembly to
+  notice the size has already paid for it. over cap → drop the whole transfer, reason `clipboard_too_large`.
+- `png` is always a compressed png. the host sends the clipboard's registered `PNG` format when it has one,
+  and otherwise compresses its bitmap (`CF_DIBV5`, else `CF_DIB`); the cap applies to the png, not the
+  bitmap. an incoming `png` is set as both `PNG` and a `CF_DIBV5` bitmap (32-bit bottom-up BGRA, straight
+  alpha), so apps that paste only bitmaps can paste it. the bitmap is promised (delayed rendering) and decoded
+  when an app first asks for it, so the paste keystroke behind a clip never waits on the decode. a bitmap is
+  carried up to 64 Mi pixels (8192 × 8192) either way; an incoming `png` the host cannot decode, or one above
+  that, is pasted as `PNG` alone.
+- a sender paces a transfer rather than handing the channel a whole image at once. the host sends through
+  its outbox (a 32 KiB burst, then 1 MiB/s) and holds records back while any connected viewer whose path is
+  up has more than 32 KiB (half its 64 KiB transport queue) waiting, so the slowest viewer slows a transfer
+  instead of losing a chunk of it. the page stops above 1 MiB buffered and carries on below 256 KiB, and
+  holds the paste keystroke until the last chunk has left its buffer, so the keystroke is not sent while
+  most of the clip is still queued behind it.
 - file lists are never carried. there is no file transfer in this protocol.
 - transfers above 64 KiB are reported to `POST /api/agent/swoop/events` for the audit trail, as a
   `host_event` with `kind: "clipboard_audit"`. the content never is.
@@ -281,9 +333,13 @@ viewer → host: `quality` (`preset`, `maxBitrateKbps`, `maxFps` — per viewer,
 `display` (`index` — shared state, requires `ctl`), `idr`, `sas` (ctrl+alt+del, requires `ctl`),
 `mute` (`on`), `lease` (`token`, section 10).
 
-host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`),
-`sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]` of
-`{id, name, ctl}`, `tsUs`).
+host → viewer: `hello-host` (`codec`, `width`, `height`, `displays[]`, `streamerEpoch`, `protocolVersion`,
+`clipboardReads`), `sas-result` (`ok`), `lease-ok` (`expiresAt`), `ended` (`reason`), `roster` (`viewers[]`
+of `{id, name, ctl}`, `tsUs`).
+
+`clipboardReads` says whether the host reads its own clipboard, so what is copied there reaches a viewer:
+false on a Mac whose pasteboard access is not *allow* (decision 17), when only the viewer's clips cross. A
+viewer takes an older host's silence as true.
 
 `roster` is who is connected and who holds control, sent **whole on every change** rather than as a delta —
 this channel is ordered and reliable, but a viewer that joined late has no earlier state to apply a delta to.
@@ -304,29 +360,48 @@ timestamps comparable across the two clocks. feedback drives the rate governor: 
 
 golden vectors: `messages/msg-input-batch.json`, `messages/msg-input-no-ctl.json` (reject, `not_permitted`),
 `messages/msg-cursor.json`, `messages/msg-clipboard-text.json`, `messages/msg-clipboard-oversize.json`
-(reject, `clipboard_too_large`), `messages/msg-control.json`, `messages/msg-feedback.json`.
+(reject, `clipboard_too_large`), `messages/msg-clipboard-image-at-cap.json`,
+`messages/msg-clipboard-image-oversize.json` (reject, `clipboard_too_large`), `messages/msg-control.json`,
+`messages/msg-feedback.json`.
 
 ---
 
 ## 6. the stdin/stdout pipe protocol
 
-the service spawns `owlette-swoop.exe run` with its own system token retargeted to the console session, over
-**inherited anonymous pipes**. there are no files between the service and the streamer, and nothing sensitive
-is ever on a command line.
+on windows the service spawns `owlette-swoop.exe run` with its own system token retargeted to the console
+session, over **inherited anonymous pipes**. there are no files between the service and the streamer, and
+nothing sensitive is ever on a command line.
+
+on macos and linux the service is a root daemon with no display of its own, so it does not spawn the streamer:
+it asks the desktop app to, with a `launch` job that names the program `owlette-swoop` and allow-listed
+arguments, never a path, and the app resolves the program next to its own executable. the daemon first binds a
+**unix socket** under `ipc/swoop` (mode 0660, root and the ipc group); the app connects to it, starts the
+streamer as its own child with **stdin and stdout both on that one connection**, and drops its own copy of it.
+the daemon accepts that one connection, admits it only from a peer running as the console user, and unlinks the
+socket file. everything below then holds unchanged: line 1 is the bundle, and eof is the daemon's end closing.
+the one file is `ipc/swoop/<id>.exit.json`, where the app writes the child's `pid` and exit `code` once it has
+gone; the daemon, which is not the streamer's parent, books the `exiting` line's `code` first and reads that
+file only for an exit that sent none. the bundle is still never on disk, and nothing sensitive is in that file,
+in the job file or on a command line.
 
 ### stdin, service → streamer
 
 **line 1 is the bundle**: one json object, one line, utf-8, no bom, terminated by `\n`. every line after it is
 a control line:
 
-- `{"type":"kill"}` — end the session and exit 0.
+- `{"type":"kill"}` — end the session and exit 0. an optional `sid` names the session: a kill for any other
+  sid is ignored. an optional `reason`, whose only value is `service_stop`, marks the service's own stop,
+  which viewers are told to come back from (`bye` with `reason: "restart"`); every other kill byes them
+  `kill`.
 - `{"type":"sas_result","ok":true}` — the answer to a `sas_request`; the service, not the streamer, calls
-  `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else; an
-  answer to a question nobody put is dropped with a log line. `"ok": false` means the service could not
-  raise the sequence at all.
+  `SendSAS`. the streamer routes it to whichever feature raised that `sas_request` and to nothing else, and
+  passes it on as `sas-result` to the viewer who asked, and to no other; an answer to a question nobody put
+  is dropped with a log line. `"ok": false` means the service did not raise the sequence: the
+  `SoftwareSASGeneration` policy does not allow a service to, or one was raised in the last 2 s.
+  windows honours `SendSAS` only from session 0, which is why the streamer asks rather than calls it.
 
-**eof on stdin means the service is gone.** the streamer tears the session down and exits 0. it does not try
-to carry on, and it does not try to reach the service any other way.
+**eof on stdin means the service is gone.** the streamer byes its viewers `restart`, tears the session down
+and exits 0. it does not try to carry on, and it does not try to reach the service any other way.
 
 ### stdout, streamer → service
 
@@ -337,8 +412,9 @@ loop.
 |---|---|
 | `ready` | `sid`, `pid`, `version`, `protocolVersion`, `codecs[]`, `displays` |
 | `viewer_joined` | `sid`, `viewer`, `ctl`, `codec` |
-| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill`) |
+| `viewer_left` | `sid`, `viewer`, `reason` (`bye` \| `timeout` \| `lease_expired` \| `kill` \| `restart` \| `same_machine`) |
 | `sas_request` | `sid`, `viewer` |
+| `token_needed` | `sid` — the signaling socket closed under a live session; the service answers with a `token` line and the streamer redials. repeated every 20 s while the room stays unreachable; a session with no live viewer exits `SignalLost` instead |
 | `host_event` | `sid`, `kind`, `viewer` (optional), `reason` (optional) |
 | `status` | `sid`, `viewers`, `controllers`, `indicator`, `bitrateKbps`, `fps`, `path` (`direct` \| `relay`), `display`, `uptimeS`, and the optional fields below |
 | `exiting` | `sid`, `code`, `reason` (`idle` \| `kill` \| `signal_lost` \| `session_cap` \| `error`) |
@@ -347,6 +423,13 @@ loop.
 (§5). `kind` is that route's own closed vocabulary — `jwt_rejected`, `fp_mismatch`, `lease_expired`,
 `input_not_permitted`, `join_refused`, `clipboard_audit` — so a name added here has to be added there too, or
 the route answers 400 for the whole batch. `viewer` is absent when the refusal is not attributable to one.
+The service also posts `session_ended` rows of its own, never the streamer's: one when it refuses to spawn
+(`reason` is the refusal) and one when the streamer is gone (`reason` is the exit's name, or the `exiting`
+reason on exit 0), so the session record says why a viewer got no picture.
+
+`exiting` is the last line before the process exits, and its `code` is the one it exits with. on macos a stop
+from the menu bar's capture indicator ends the session the way a `kill` does: viewers leave with `kill`, and
+`exiting` carries code 0 and reason `kill`.
 
 `status` carries fifteen **optional** fields, each omitted when it has nothing to say: a session whose
 features are all quiet and whose peers are all down emits exactly the nine-field line above, which is what
@@ -360,14 +443,14 @@ out. with a single viewer every one of these is the number it always was.
 
 | field | meaning |
 |---|---|
-| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. |
+| `desktop` | the input desktop: `default` \| `winlogon` \| `screensaver` \| `unknown`. an `OpenInputDesktop` that failed is `unknown` and is **never** reported as a lock. a UAC prompt, the lock screen and the logon screen are all `winlogon`. absent on macos: the streamer runs in the console user's own session, which has one desktop. |
 | `audio` | the render endpoint: `ok` \| `no_endpoint`. swoop never creates a device and never moves the default. |
 | `displays` | `ok` \| `headless` — headless is no attached output, or a duplication that yields nothing but black. |
 | `inputDropped` | the input rate limiter's cumulative drop count. **absent means zero**, not unknown. |
 | `denials` | the control gate's cumulative refusals, including every one suppressed behind a single `host_event`. absent means zero. |
 | `testOverride` | the bundle's test-only `overrides`, named so an overridden session cannot pass for a real one in `logs/swoop`. absent on every release build, which refuses such a bundle with exit 10. |
 | `idrs` | keyframes the host actually forced since `ready`, **after** section 4's coalescing — not the number of requests, which a receiver in a loss storm raises on every record. absent means zero. |
-| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `qsv` \| `amf` \| `mf` \| `openh264`. absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
+| `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `mf-hw` \| `mf-sw` \| `videotoolbox` (macos's only one). absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
 | `tiers` | how many encode sessions the viewers are costing this machine: `min(distinct codec classes present, the measured encoder budget)`. **absent means one**, which is every session whose viewers all negotiated the same codec, and a session with nobody watching. one capture feeds all of them, so this is the whole of what multi-viewer costs the gpu. |
 
 the five below are the rate governor's, and they ride a `status` **only while at least one viewer's peer is
@@ -395,7 +478,7 @@ bundle never appears on stdout, on stderr, in a log, or in an error message — 
 
 | code | meaning |
 |---|---|
-| 0 | normal exit: killed, idle-timed-out, or stdin closed |
+| 0 | normal exit: killed (a mac's menu-bar stop included), idle-timed-out, or stdin closed |
 | 10 | bundle invalid — malformed, missing a required field, or carrying `overrides` without the `testhooks` build |
 | 11 | version mismatch — `protocolVersion` or `agentVersion` differs from this binary |
 | 12 | no capture source |
@@ -442,7 +525,7 @@ in a firestore command document** — see section 11.
     "membersMayWatch": true,
     "maxViewers": 4,
     "leaseSeconds": 300,
-    "sessionCapSeconds": 43200
+    "sessionCapSeconds": 3153600000  // a hundred years: no session reaches it, section 10
   },
   "indicator": "banner" | "tray" | "none",
   "ctl": true,
@@ -536,8 +619,8 @@ the `mac` field of `signaling/signal-answer.json`.
 
 ## 10. lease renewal
 
-a live session holds a **5-minute lease** the browser renews silently, and an absolute cap of **12 hours**.
-the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
+a live session holds a **5-minute lease** the browser renews silently, and no absolute cap: it lasts as long as
+its viewers keep renewing. the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
 site, a site that turns swoop off, a capability revoked or a machine excluded all take effect within one
 lease rather than at the next reconnect.
 
@@ -564,9 +647,20 @@ anchor plus monotonic elapsed — never the wall clock. at `expiry + 30 s` grace
 
 when the last viewer is gone the streamer lingers about 60 s and exits 0 with `reason: "idle"`.
 
-**the 12-hour cap** (`sessionCapSeconds`, default 43200) runs from `ready`. at the cap the streamer ends the
-session for everyone and exits 0 with `reason: "session_cap"`, regardless of how healthy the leases are. it is
-a hard stop, not a renewal ceiling.
+**host behaviour on a lost path.** ice going `disconnected` does not end a viewer. the host asks the viewer for
+an ice restart after 2 s, pauses that viewer's media while the path is down, and asks for a keyframe once it
+is back. a viewer still disconnected 60 s after ice reports the path down (str0m does that 15–25 s after the
+last packet) is let go with `reason: "timeout"`, and a dtls or sctp close ends it at once. the page matches
+it: its silence watchdog only judges a live path, and a restart offer's answer is timed only while the page's
+own signalling socket is open. a viewer that is itself offline waits, and a host that stays silent while the
+offer can reach it is given up on 10 s later. the picture comes back with the path; after a long drop the
+data channels can lag it by up to a minute, because sctp backs its retransmit timer off to 60 s, and the
+page's watchdog then starts a new session 8 s after the path is back rather than wait for them.
+
+**`sessionCapSeconds`** is still in the bundle, and the streamer still ends the session for everyone once that
+long has passed since `ready` (exit 0, `reason: "session_cap"`). the api sends a value no session reaches: the
+streamer parses the field strictly, as a required u64 compared `elapsed >= cap`, so it can be neither dropped
+nor zero.
 
 the kill switch is faster and independent of all of this: the worker broadcasts `kill`, the streamer exits,
 and that path completes in ≤ 2 s. the polled command is only the last resort for a machine with no socket.
@@ -700,7 +794,8 @@ k         = HKDF-SHA256(
   plus `sid` where the type carries one, plus the canonical envelope (`siteId`, `machineId`,
   `timestamp`, `status`, `queuedBy`) and the writer's lifecycle fields. Per type: `sid` is **mandatory**
   for `swoop_session_requested`, **optional** for `swoop_kill` (absent means "kill whatever is
-  running"), and **never present** for `swoop_refresh` (an enablement toggle names no session).
+  running"; a sid that is not the running session is ignored), and **never present** for
+  `swoop_refresh` (an enablement toggle names no session).
 - No bundle, no JWT, no key, no TURN credential, no viewer id, no uid. The reason is not stylistic:
   **every active site member can read that collection** — `firestore.rules:303-306` admits
   `canAccessSite(siteId)`, and `canAccessSite` is any active member (`firestore.rules:162-165`).

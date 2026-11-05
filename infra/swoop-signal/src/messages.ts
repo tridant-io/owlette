@@ -137,6 +137,16 @@ export const LIMITS = {
   controlFramesPerWindow: 40,
   /** 4 concurrent viewers per machine. more than a handful of watchers is not a swoop session. */
   viewersPerRoom: 4,
+  /**
+   * a viewer that has neither sent a frame nor had a keepalive `ping` answered for
+   * this long is dead to the room: the browser pings every 25 s, so this is three
+   * missed pings plus slack. it only matters when the room is full — a dead
+   * viewer's socket stays in the hibernation set until the peer's tcp side is
+   * noticed, which for a browser that vanished behind a vpn or a sleeping laptop
+   * can be a long time, and four of those refuse every live viewer as
+   * `room_full` (dev, 2026-09-24).
+   */
+  viewerStaleMs: 90000,
   /** 10 rings per 60 s per machine (review-2 M5): each accepted ring spawns a SYSTEM process on a customer box. */
   ringsPerWindow: 10,
   ringWindowMs: 60000,

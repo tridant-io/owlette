@@ -4,6 +4,29 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ---
 
+## next up — right after swoop on macOS ships
+
+- **native swoop viewer (#325): landed on dev** as owlette swoop, the desktop viewer app (ADR 0012); still owed: Windows key capture, a published standalone download (`/download/swoop-viewer` points at the docs until then), a session tried on Linux, the viewer's HEVC check fixed for WebKit, and full-size cursor bitmaps from the streamer so the cursor is sharp.
+
+- **hoot drives a machine through swoop.** *Extremely important: the owner's pick for the sprint that follows
+  swoop on macOS (2026-09-30).* With an admin's explicit authorization, hoot sees a machine's screen and sends it
+  clicks and keys through the swoop streamer, so it can operate any app on the machine, not only the processes
+  owlette manages. Swoop already has what this needs on Windows and macOS: screen capture, input injection, the
+  machine's own permission model (Screen Recording and Accessibility on a Mac), and an agent that starts the
+  streamer on demand. The shape to design: hoot as a special viewer in a swoop session or a local API on the
+  streamer; screenshots on request rather than video; actions as structured calls (click at, type, key chord,
+  scroll). The rules decide whether it is safe, so they are in the plan from the start:
+  - off by default, enabled per machine by an admin, and revocable;
+  - a visible indicator on the machine while hoot is in control, and a one-click stop there and in the dashboard;
+  - every action logged with the user who authorized the session;
+  - limits hoot cannot lift itself: no passkey step-up on its own, no change to its own authorization.
+
+  Planned 2026-10-11 at `dev/active/hoot-drives-swoop/` (tracked): hoot joins a swoop session as a viewer over the
+  service's stdin pipe to the streamer, stills on request, a human step-up per drive in the chat's approval card,
+  blocking audit per action, Windows and macOS only. Wave 0 (streamer still path, hoot-only mode) gates the rest.
+
+---
+
 ## infrastructure / ops
 
 - **Log TTL** — site event logs (`sites/{id}/logs`) and machine logs (`machines/{id}/logs`) have no expiry. Add a cleanup cron to delete entries older than 30-90 days. Low urgency (negligible cost), good hygiene.

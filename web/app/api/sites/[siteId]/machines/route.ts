@@ -73,6 +73,23 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         agentVersion:
           data.agent_version ?? data.presence?.agent_version ?? null,
         os: data.os ?? data.presence?.os ?? null,
+        // what the agent writes on every heartbeat (firebase_client._os_identity):
+        // 'windows' | 'macos' | 'linux', 'x64' | 'arm64', and the version string.
+        // an absent osFamily is a pre-3.4 windows agent.
+        osFamily: data.osFamily ?? null,
+        arch: data.arch ?? null,
+        osVersion: data.osVersion ?? null,
+        // what the agent holds for the site's keep screens awake switch
+        // ({ wanted, held, session, how, reason }), mirrored on each change;
+        // absent on an agent that predates it.
+        displayAwake: data.displayAwake ?? null,
+        // what the dashboard needs to tell whether the agent would refuse a
+        // restart now: the heartbeat's capability map (activeHoursGuard), its
+        // windows active hours ({ start, end, source }) and the machine's own
+        // zone, which the window is read on.
+        capabilities: data.capabilities ?? null,
+        activeHours: data.activeHours ?? null,
+        machineTimezone: data.machine_timezone_iana ?? null,
         currentRoosts: roostsByMachine.get(d.id) ?? [],
       };
     });

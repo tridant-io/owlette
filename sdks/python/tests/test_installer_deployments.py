@@ -129,6 +129,33 @@ async def test_retry_and_cancel_use_post_with_empty_body() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_and_retry_send_active_hours_override() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"deploymentId": "dep_1", "status": "in_progress"})
+
+    override = {"reason": "venue closed today"}
+    async with Roost(token="owk_live_x", transport=_transport(handler)) as client:
+        await client.installer_deployments.create(
+            "s1",
+            name="bulk",
+            installer_name="x.exe",
+            installer_url="https://example.com/x.exe",
+            silent_flags="/S",
+            machines=("m1",),
+            active_hours_override=override,
+        )
+        await client.installer_deployments.retry("s1", "dep_1", active_hours_override=override)
+
+    assert captured[0].url.path == "/api/sites/s1/deployments"
+    assert json.loads(captured[0].content)["active_hours_override"] == override
+    assert captured[1].url.path == "/api/sites/s1/deployments/dep_1/retry"
+    assert json.loads(captured[1].content) == {"active_hours_override": override}
+
+
+@pytest.mark.asyncio
 async def test_delete_uses_delete_with_empty_body_and_idempotency_key() -> None:
     captured: list[httpx.Request] = []
 

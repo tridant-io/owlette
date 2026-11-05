@@ -150,7 +150,7 @@ function ResetPasswordForm() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={submitting}
-                className="bg-input border-border pr-10 text-foreground placeholder:text-muted-foreground"
+                className="dark:bg-input border-border pr-10 text-foreground placeholder:text-muted-foreground"
               />
               <button
                 type="button"
@@ -176,7 +176,7 @@ function ResetPasswordForm() {
               onChange={(e) => setConfirm(e.target.value)}
               required
               disabled={submitting}
-              className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+              className="dark:bg-input border-border text-foreground placeholder:text-muted-foreground"
             />
           </div>
 

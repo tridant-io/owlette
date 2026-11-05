@@ -393,7 +393,7 @@ def check_pending_reboot(params, config):
     that a restart completes counts, as on Windows: an update that is merely
     available is not a reboot the machine is waiting on. Neither POSIX source
     says when the next update is due, and only macOS records when the last one
-    landed.
+    landed. Neither queues file renames for the next boot the way Windows does.
     """
     del params, config
     if _is_macos():
@@ -406,6 +406,7 @@ def check_pending_reboot(params, config):
     return {
         'pending': bool(reasons),
         'reasons': reasons,
+        'file_renames': False,
         'last_update_installed': last_update_installed,
         'next_scheduled_update': None,
     }

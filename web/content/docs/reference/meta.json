@@ -2,6 +2,7 @@
   "title": "reference",
   "pages": [
     "index",
+    "platform-support",
     "authentication",
     "agent-commands",
     "hoot-tools",

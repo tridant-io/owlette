@@ -194,31 +194,32 @@ export function restoreState(states: AppStates, pid: number, previous: AppState)
 }
 
 /**
- * Dot colours — the same tailwind steps as the dashboard's process badges.
+ * dot colours, on the dashboard's status tokens. stalled and queued keep a
+ * warmer step of their own, where the dashboard draws them as launching.
  * INACTIVE is a hollow ring, as in the legacy GUI.
  */
 export const STATUS_DOT: Record<ProcessStatus, string> = {
-  RUNNING: 'bg-green-500',
-  LAUNCHING: 'bg-yellow-400',
-  RESTARTING: 'bg-yellow-400',
-  STALLED: 'bg-orange-400',
-  QUEUED: 'bg-orange-400',
-  LAUNCH_FAILED: 'bg-red-500',
-  KILLED: 'bg-red-400',
-  STOPPED: 'bg-red-400',
-  INACTIVE: 'bg-transparent border border-slate-400/80',
+  RUNNING: 'bg-success',
+  LAUNCHING: 'bg-warning',
+  RESTARTING: 'bg-warning',
+  STALLED: 'bg-accent-warm',
+  QUEUED: 'bg-accent-warm',
+  LAUNCH_FAILED: 'bg-danger',
+  KILLED: 'bg-danger',
+  STOPPED: 'bg-danger',
+  INACTIVE: 'bg-transparent border border-muted-foreground/80',
 }
 
 /** Text colour for the status word in the detail panel. */
 export const STATUS_TEXT: Record<ProcessStatus, string> = {
-  RUNNING: 'text-green-500',
-  LAUNCHING: 'text-yellow-400',
-  RESTARTING: 'text-yellow-400',
-  STALLED: 'text-orange-400',
-  QUEUED: 'text-orange-400',
-  LAUNCH_FAILED: 'text-red-500',
-  KILLED: 'text-red-400',
-  STOPPED: 'text-red-400',
+  RUNNING: 'text-success',
+  LAUNCHING: 'text-warning',
+  RESTARTING: 'text-warning',
+  STALLED: 'text-accent-warm',
+  QUEUED: 'text-accent-warm',
+  LAUNCH_FAILED: 'text-danger',
+  KILLED: 'text-danger',
+  STOPPED: 'text-danger',
   INACTIVE: 'text-muted-foreground',
 }
 

@@ -14,6 +14,7 @@ import {
   problemFromError,
   problemForbidden,
   problemNotFound,
+  problemPlanRequired,
   problemScopeInsufficient,
   problemTokenExpired,
   problemValidation,
@@ -236,6 +237,12 @@ export const POST = withRateLimit(async (request: NextRequest) => {
             instance: '/api/sites',
             code: 'site_already_exists',
           });
+        }
+        if (result.kind === 'plan_limit') {
+          return problemPlanRequired(
+            "your plan doesn't cover another site. upgrade for more sites.",
+            'owlette.sites',
+          );
         }
         return applyScopedAuthDeprecations(
           NextResponse.json(

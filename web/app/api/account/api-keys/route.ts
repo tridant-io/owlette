@@ -6,6 +6,7 @@ import { emitMutation } from '@/lib/auditLogClient';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
 import { authorizedPlatformHandler } from '@/lib/authorizedHandler.server';
+import { requireApiKeyMintPlan } from '@/app/api/_shared';
 import {
   ALL_RESOURCES,
   DEFAULT_TTL_DAYS,
@@ -99,6 +100,9 @@ export const POST = withRateLimit(
     const userId = ctx.actor.userId;
 
     try {
+      const planError = await requireApiKeyMintPlan(userId);
+      if (planError) return planError;
+
       const body = await request.json().catch(() => ({}));
       const name = body.name || 'API Key';
       const environment: ApiKeyEnvironment = 'live';

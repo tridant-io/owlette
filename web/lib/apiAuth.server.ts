@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { getSessionFromRequest } from '@/lib/sessionManager.server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { resolveSiteAccess } from '@/lib/sitePolicy.server';
-import { type Actor, type Capability, hasCapability } from '@/lib/capabilities';
+import { type Actor, type Capability, hasCapability, siteStanding } from '@/lib/capabilities';
 import {
   type ApiKeyEnvironment,
   type ApiKeyLookup,
@@ -466,9 +466,7 @@ export async function assertUserHasSiteCapability(
     type: 'user',
     userId,
     role: outcome.facts.globalRole,
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
   };
   if (!hasCapability(actor, capability, siteId)) {
     throw new ApiAuthError(403, 'Forbidden: capability not granted');

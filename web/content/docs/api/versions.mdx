@@ -1,15 +1,58 @@
 ---
 title: "roost versions"
-description: "A version is an immutable JSON body that lists the files in a roost publish and the chunk hashes needed to reconstruct each file. The public routes use that body to publish history, resolve version refs, list files, compute diffs, roll back the current pointer, and trigger deployments."
+description: "a version is an immutable JSON body that lists the files in a roost publish and the chunk hashes that rebuild each file. this page covers roosts, the version body, version refs, publishing, history, file lists, diffs, rollback, deploys, rollout status and resync."
+keywords: ["projects", "manifest", "release"]
 ---
 
-This page documents the current server contract in
-`web/app/api/roosts/[roostId]/versions/**`, `rollback`, and `deploy`.
+**last updated**: 2026-10-05
+
+a roost is a deploy unit: a named set of files that owlette keeps in sync on a list of target machines. each publish adds an immutable version to the roost's history and moves its current pointer; agents on the target machines then pull the files they are missing. the bytes themselves are [chunks](/docs/api/chunks), uploaded before the version is published.
+
+the examples use `$OWLETTE_API_URL` (`https://owlette.app`), `$OWLETTE_API_KEY`, `$SITE_ID` and `$ROOST_ID`, set up as in the [quickstart](/docs/api/quickstart).
+
+---
+
+## authentication and scopes
+
+send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also works). routes under `/api/roosts/{roostId}` are authorized against the roost, so the key needs a `roost=<roostId>` scope (or `roost=*`) with the permission below; listing and creating roosts are authorized against the site instead. every route also needs membership of the site, and every route that changes something needs the site admin or owner role.
+
+| route | API-key scope | role |
+|---|---|---|
+| `GET /api/roosts` | `site=<siteId>:read` | member |
+| `POST /api/roosts` | `site=<siteId>:write` | admin or owner |
+| `GET` on `/api/roosts/{roostId}`, `/versions`, `/versions/{versionRef}`, `/files`, `/diff`, `/deployments`, `/deployments/{rolloutId}` | `roost=<roostId>:read` | member |
+| `PATCH` or `DELETE /api/roosts/{roostId}`, `POST /versions`, `PATCH /versions/{versionRef}` | `roost=<roostId>:write` | admin or owner |
+| `POST /api/roosts/{roostId}/rollback` | `roost=<roostId>:rollback` | admin or owner |
+| `POST /api/roosts/{roostId}/deploy`, `POST /api/roosts/{roostId}/resync` | `roost=<roostId>:deploy` | admin or owner |
+
+a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). permissions are exact: `rollback` and `deploy` do not include `write`, and none of them include `read`. see [authentication](/docs/api/authentication).
+
+every route also accepts the optional `Roost-Version: 2026-04-22` header. leave it out and the response carries `X-Roost-Version-Missing: true`; send an unsupported date and you get `400 unsupported_version`.
+
+## roosts
+
+| operation | request | response |
+|---|---|---|
+| list | `GET /api/roosts?siteId=...` | `200` with `roosts[]`, newest first. soft-deleted roosts are left out unless you pass `includeDeleted=true`. `page_size` defaults to 20, maximum 100. |
+| create | `POST /api/roosts` with `{ siteId, name, targets?, extractPath?, roostId? }` | `201` with `{ roostId, siteId, name, targets, extractPath? }` |
+| get | `GET /api/roosts/{roostId}?siteId=...` | `200` with the roost, plus `currentVersion` and `previousVersion` summaries (or `null`) |
+| update | `PATCH /api/roosts/{roostId}` with `{ siteId, name?, targets?, extractPath? }` | `200` with `{ roostId, siteId, updated }`, where `updated` names the fields written, including `updatedAt` |
+| delete | `DELETE /api/roosts/{roostId}?siteId=...` | `200` with `{ roostId, siteId, softDeleted: true, tombstoneExpiresAt }` |
+
+- `name` is required on create (`400 roost_name_required` when missing or blank); it is trimmed and cut to 200 characters.
+- `targets` is the list of machine IDs that receive the roost. entries must be non-empty strings; duplicates are dropped and only the first 500 are kept.
+- `extractPath` is where agents write the files. it is trimmed and cut to 500 characters; when unset, agents use `~/Documents/Owlette`. on update, an empty string clears it.
+- `roostId` is optional on create: 8 to 64 letters, digits, `_` or `-`. without it the server generates `rst_` plus 18 hex characters. creating an ID that already exists is `409 conflict`, unless that roost is soft-deleted, in which case create restores it with its version history.
+- delete is a soft delete: it stamps `deletedAt` and a `tombstoneExpiresAt` 30 days out, and keeps the versions. update and deploy answer `409 conflict` on a soft-deleted roost, and rollback answers `404 not_found`.
+- update needs at least one of `name`, `targets` or `extractPath`; it cannot move the version pointer.
+
+roost fields, as returned by get (list returns the same fields except `schemaVersion`, `versionUrl`, `createdBy` and the two summaries): `roostId`, `siteId`, `name`, `targets`, `extractPath`, `schemaVersion`, `currentVersionId`, `previousVersionId`, `versionCounter` (the highest version number minted), `versionUrl`, `createdAt`, `updatedAt`, `createdBy`, `deletedAt`, `tombstoneExpiresAt`, `currentVersion`, `previousVersion`.
+
+`versionUrl` here and on versions is the unsigned R2 location of the version body. it is a hint for tooling and cannot be fetched. agents get a signed URL from `POST /api/roosts/{roostId}/version-url`, which accepts only agent tokens and superadmin callers.
 
 ## version body
 
-`POST /api/roosts/{roostId}/versions` requires a `version` object with this
-shape:
+`POST /api/roosts/{roostId}/versions` takes a `version` object with this shape:
 
 ```json
 {
@@ -17,7 +60,7 @@ shape:
   "mediaType": "application/vnd.owlette.version.v1+json",
   "config": {
     "producer": "owlette-cli",
-    "cliVersion": "1.0.0-rc.1",
+    "cliVersion": "1.0.0-rc.0",
     "createdAt": "2026-04-22T15:30:00.000Z",
     "hostname": "build-runner-01",
     "platform": "linux"
@@ -41,50 +84,48 @@ shape:
 }
 ```
 
-Top-level fields:
+top-level fields:
 
 | field | required | server validation |
 |---|---:|---|
-| `schemaVersion` | yes | Must be exactly `2`. |
-| `mediaType` | yes | Must be exactly `application/vnd.owlette.version.v1+json`. |
-| `config` | yes | Must be a JSON object. The server does not require specific config keys. |
-| `files` | yes | Must be a non-empty array. An empty roost publish is rejected. |
+| `schemaVersion` | yes | must be exactly `2`. |
+| `mediaType` | yes | must be exactly `application/vnd.owlette.version.v1+json`. |
+| `config` | yes | must be a JSON object. no keys are required. |
+| `files` | yes | must be a non-empty array; an empty publish is rejected. |
 
-The CLI and SDKs currently emit these `config` keys: `producer`,
-`cliVersion`, `createdAt`, `hostname`, and `platform`. They are metadata, not
-server-required fields. Extra keys in the version body are stored and included
-in the computed version id, but current routes do not interpret them.
+the CLI and SDKs write `producer`, `cliVersion`, `createdAt`, `hostname` and `platform` into `config`. they are metadata the server does not read. any extra keys you add are stored and are part of the version ID.
 
-Each `files[]` entry:
+each `files[]` entry:
 
 | field | required | server validation |
 |---|---:|---|
-| `path` | yes | Must be a non-empty string. Use forward-slash relative paths. |
-| `size` | yes | Must be a non-negative number. |
-| `chunks` | yes | Must be an array. |
+| `path` | yes | non-empty string. use forward-slash relative paths. |
+| `size` | yes | non-negative number. |
+| `chunks` | yes | array; empty for a zero-byte file. |
 
-Each listed chunk must have a lowercase bare SHA-256 hex `hash` exactly 64
-characters long and a positive numeric `size`. Do not include a `sha256:`
-prefix in version bodies.
+each chunk needs a bare lowercase SHA-256 `hash` (64 hex characters, no `sha256:` prefix) and a positive numeric `size`.
 
-## version ids and refs
+the server checks only the rules above. agents check more when they sync, and refuse the whole version if any file breaks one:
 
-The server computes the `versionId` as the SHA-256 hex digest of the canonical
-JSON version body. Current publish responses return the bare 64-character hex
-id. The resolver also accepts legacy `vrs_<hex>` ids for older clients.
+- `size` and every chunk `size` must be integers, and `size` must equal the sum of the file's chunk sizes.
+- no two files may share a `path`.
+- a `path` must be relative and canonical: no leading `/`, no drive letter (`C:`), no `.`, `..` or empty segments, no `:` anywhere, no NUL bytes.
 
-Routes that take `{versionRef}` accept:
+## version IDs and refs
+
+the server computes `versionId` as the SHA-256 hex digest of the canonical JSON of the version body: object keys sorted at every level, no whitespace. publish responses return the bare 64-character ID. because `config` is part of the body, two pushes of the same files from the CLI or SDK produce different IDs, since each writes a fresh `config.createdAt`.
+
+routes that take a `{versionRef}` path segment, `targetVersion` on rollback, and `against` on diff accept:
 
 | form | examples |
 |---|---|
-| stable id | `8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`, legacy `vrs_8d969eef...` |
-| version number | `3`, `#3`, `v3`, `V3` |
-| alias | `current`, `previous`, `first` |
+| version ID | `8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92`, or the legacy form `vrs_8d969eef...` |
+| version number | `3`, `#3`, `v3`, `V3` (a positive integer, no leading zeros) |
+| alias | `current`, `previous`, `first` (version 1) |
 
-In URLs, a literal `#` starts a fragment in most clients. Prefer bare `3` or
-`v3`; if you use the hash form in a path segment, encode it as `%233`.
+surrounding whitespace is trimmed. any other form is `400 version_ref_malformed`; a well-formed ref with no match in this roost is `404 version_not_found`.
 
-Examples:
+in a URL, a literal `#` starts a fragment. use `3` or `v3`, or encode the hash form as `%233`:
 
 ```bash
 curl -fsS "$OWLETTE_API_URL/api/roosts/$ROOST_ID/versions/3?siteId=$SITE_ID" \
@@ -99,8 +140,7 @@ curl -fsS "$OWLETTE_API_URL/api/roosts/$ROOST_ID/versions/%233?siteId=$SITE_ID" 
 
 ## publish
 
-High-level clients should use the chunk-aware push API. It builds the version
-body, checks missing chunks, uploads missing bytes, and posts the version.
+the SDKs and CLI do the whole pipeline for you: chunk the directory, check which chunks are missing, upload them, build the version body and publish it.
 
 Node:
 
@@ -123,14 +163,9 @@ result = await client.roosts.push(
 )
 ```
 
-Low-level HTTP publish:
+to publish over plain HTTP, upload the chunks first ([upload flow](/docs/api/chunks#upload-flow)), then post the body. save this as `publish.json`:
 
-```http
-POST /api/roosts/{roostId}/versions
-Authorization: Bearer owk_live_...
-Idempotency-Key: 3f7b9c2a-8e14-4f1c-9d6e-2c8a5b0e9f4d
-Content-Type: application/json
-
+```json
 {
   "siteId": "site_kiosk_fleet",
   "version": {
@@ -162,28 +197,37 @@ Content-Type: application/json
 }
 ```
 
-Request body fields:
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/roosts/rst_lobby/versions" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  --data @publish.json
+```
+
+request body fields:
 
 | field | required | notes |
 |---|---:|---|
-| `siteId` | yes | Site that owns the roost. |
-| `version` | yes | Full version body. `files[]` must be non-empty. |
-| `description` | no | Plaintext metadata, max 500 characters. Empty strings are stored as `null`. |
-| `expectedCurrentVersionId` | no | Optional compare-and-swap guard for publish only. |
-| `name` | no | Optional roost display name update. |
-| `targets` | no | Optional target machine id list. |
-| `extractPath` | no | Optional agent extract root. |
+| `siteId` | yes | site that owns the roost. |
+| `version` | yes | the full version body. |
+| `description` | no | plaintext "what changed", at most 500 characters (longer is `400 validation_failed`). trimmed; blank is stored as `null`. |
+| `expectedCurrentVersionId` | no | compare-and-swap guard: a version ID, or `null` to require that the roost has no current version yet. |
+| `name` | no | sets the roost's display name. trimmed, cut to 200 characters. |
+| `targets` | no | replaces the roost's target machine IDs. non-empty strings; duplicates dropped, first 500 kept. |
+| `extractPath` | no | sets the agents' extract root. trimmed, cut to 500 characters; blank is ignored. |
 
-Before publishing, every chunk hash referenced by `version.files[].chunks[]`
-must already exist in R2 for the same site. Missing chunks fail with
-`412 precondition_failed`; upload them through the chunk routes first.
+what the server does:
 
-Publish concurrency is expressed only by the body field
-`expectedCurrentVersionId`. If it is present and does not match the roost's
-current pointer inside the transaction, the server returns `412 version_stale`.
-If it is omitted, publish advances the pointer unconditionally.
+- **chunk check**: every hash in `version.files[].chunks[]` must already be stored for the site. if any is missing, the publish fails with `412 precondition_failed` and a `missingChunks` array holding up to 20 of the missing hashes; upload them and retry.
+- **compare-and-swap**: when `expectedCurrentVersionId` is present and does not match the roost's current pointer at commit time, the publish fails with `412 version_stale`. without it, publish moves the pointer unconditionally.
+- **roost creation**: publishing to a roost ID that does not exist yet creates the roost, named after its ID unless you pass `name`.
+- **outcome**: a body whose ID is new creates version `N+1` and answers `201 Created`. a body that is already the current version changes nothing (it still applies any `name`, `targets` or `extractPath` you sent) and answers `200`. a body that matches an older version moves the pointer back to that version without minting a number and answers `200`; machines are not reliably re-synced this way, so use [rollback](#rollback) to put an older version back on machines.
+- **distribution**: when the pointer moves to a new version and the roost has targets, a canary rollout starts on its own; see [deploy](#deploy) for how waves progress. the automatic rollout picks canary machines by a stable hash of machine ID and version ID.
+- **webhooks**: a new version (the `201` case only) queues a [`version.published`](/docs/api/webhooks#versionpublished) event.
+- **idempotency**: `Idempotency-Key` is optional. the same key with the same body within 24 hours replays the first success with `Idempotent-Replayed: true`; a different body is `422 idempotency_key_mismatch`. see [idempotency](/docs/api/idempotency).
 
-Successful response (`201 Created`):
+response:
 
 ```json
 {
@@ -194,27 +238,27 @@ Successful response (`201 Created`):
 }
 ```
 
-The publish response does not include `description`, `publishedAt`, or the full
-version body. Fetch the version or list history for metadata.
+the publish response has no `description`, timestamps or version body; fetch the version for those. after a stale publish, read the roost with `GET /api/roosts/{roostId}?siteId=...`, decide whether to rebuild or stop, and retry with the new `expectedCurrentVersionId`.
 
-## edit description
+## edit a description
 
-Only `description` is mutable after publish. The patch body must include
-`siteId` and `description`; any other body field is rejected with
-`version_content_immutable`.
+a version's content is immutable; only `description` can change after publish. send `siteId` and `description` (a string, or `null` to clear it). any other body field is `400 version_content_immutable`.
 
-```http
-PATCH /api/roosts/{roostId}/versions/{versionRef}
-Authorization: Bearer owk_live_...
-Content-Type: application/json
-
-{
-  "siteId": "site_kiosk_fleet",
-  "description": "operator note corrected after publish"
-}
+```bash
+curl -fsS -X PATCH "$OWLETTE_API_URL/api/roosts/rst_lobby/versions/3" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "siteId": "site_kiosk_fleet",
+    "description": "operator note corrected after publish"
+  }'
 ```
 
-Response (`200 OK`):
+- `description` is required, at most 500 characters, trimmed; blank is stored as `null`.
+- when the version is the current one, the roost's displayed description updates too.
+- `Idempotency-Key` is optional and behaves as on publish.
+
+response (`200 OK`):
 
 ```json
 {
@@ -223,7 +267,7 @@ Response (`200 OK`):
   "description": "operator note corrected after publish",
   "roostId": "rst_lobby",
   "siteId": "site_kiosk_fleet",
-  "versionUrl": "https://...",
+  "versionUrl": "https://owlette-prod-manifests.<account-id>.r2.cloudflarestorage.com/project-manifests/site_kiosk_fleet/rst_lobby/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92.json",
   "createdAt": "2026-04-22T15:30:00.000Z",
   "updatedAt": "2026-04-22T16:10:00.000Z",
   "createdBy": "uid_123",
@@ -237,15 +281,14 @@ Response (`200 OK`):
 
 ### list versions
 
-```http
-GET /api/roosts/{roostId}/versions?siteId=site_kiosk_fleet&page_size=25&page_token=...
+```bash
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/versions?siteId=site_kiosk_fleet&page_size=25" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`siteId` is required. `page_size` defaults to 20 and is capped at 100.
-`page_token` is opaque. The route also accepts legacy `limit` and `cursor`
-aliases, but new clients should use `page_size` and `page_token`.
+`siteId` is required. versions come newest first. `page_size` defaults to 20 with a maximum of 100 (a larger value is `400 validation_failed`); pass the previous `next_page_token` as `page_token` for the next page. the legacy `limit` and `cursor` aliases still work. see [pagination](/docs/api/pagination).
 
-Response:
+response:
 
 ```json
 {
@@ -254,7 +297,7 @@ Response:
       "versionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
       "versionNumber": 3,
       "description": "fixed lobby video",
-      "versionUrl": "https://...",
+      "versionUrl": "https://owlette-prod-manifests.<account-id>.r2.cloudflarestorage.com/project-manifests/site_kiosk_fleet/rst_lobby/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92.json",
       "createdAt": "2026-04-22T15:30:00.000Z",
       "createdBy": "uid_123",
       "totalSize": 5242880,
@@ -268,16 +311,16 @@ Response:
 }
 ```
 
-The list response uses `versions`, `createdAt`, and `createdBy`. It does not
-include `items`, `publishedAt`, `publishedBy`, or `isCurrent`.
+`next_page_token` is `""` on the last page; `nextPageToken` repeats it and `nextCursor` is the legacy form (`null` on the last page). `parentVersionId` is the version that was current when this one was published. list items carry no `items`, `publishedAt`, `publishedBy` or `isCurrent`; compare `versionId` with the roost's `currentVersionId` instead.
 
 ### fetch one version
 
-```http
-GET /api/roosts/{roostId}/versions/{versionRef}?siteId=site_kiosk_fleet
+```bash
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/versions/current?siteId=site_kiosk_fleet" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`siteId` is required. Response:
+`siteId` is required. response:
 
 ```json
 {
@@ -291,7 +334,7 @@ GET /api/roosts/{roostId}/versions/{versionRef}?siteId=site_kiosk_fleet
     "mediaType": "application/vnd.owlette.version.v1+json",
     "config": {
       "producer": "owlette-cli",
-      "cliVersion": "1.0.0-rc.1",
+      "cliVersion": "1.0.0-rc.0",
       "createdAt": "2026-04-22T15:30:00.000Z",
       "hostname": "build-runner-01",
       "platform": "linux"
@@ -314,7 +357,7 @@ GET /api/roosts/{roostId}/versions/{versionRef}?siteId=site_kiosk_fleet
     ]
   },
   "metadata": {
-    "versionUrl": "https://...",
+    "versionUrl": "https://owlette-prod-manifests.<account-id>.r2.cloudflarestorage.com/project-manifests/site_kiosk_fleet/rst_lobby/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92.json",
     "createdAt": "2026-04-22T15:30:00.000Z",
     "createdBy": "uid_123",
     "totalSize": 5242880,
@@ -324,19 +367,20 @@ GET /api/roosts/{roostId}/versions/{versionRef}?siteId=site_kiosk_fleet
 }
 ```
 
-The `version` member is the stored version body. Route metadata is returned in
-sibling fields and under `metadata`.
+`version` is the stored body exactly as published. when the history entry exists but its body is gone from storage, the route answers `410` with code `not_found`.
 
 ### list files in a version
 
-```http
-GET /api/roosts/{roostId}/versions/{versionRef}/files?siteId=site_kiosk_fleet&prefix=assets/&page_size=100&page_token=...
+```bash
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/versions/3/files?siteId=site_kiosk_fleet&prefix=assets/&page_size=100" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`siteId` is required. `prefix` is optional. `page_size` defaults to 100 and is
-capped at 500. `page_token` is an opaque offset token for this route.
+- `siteId` is required.
+- `prefix` keeps only paths that start with that exact, case-sensitive string.
+- `page_size` defaults to 100 with a maximum of 500. `page_token` is the offset returned in `next_page_token`; any other value is `400 validation_failed`.
 
-Response:
+response:
 
 ```json
 {
@@ -373,19 +417,18 @@ Response:
 }
 ```
 
-File entries include `path`, `size`, and `chunks`; there is no file-level
-`digest` field.
+`total` counts the files that match `prefix`, across all pages. `items` repeats `files`. file entries carry `path`, `size` and `chunks`; there is no file-level digest.
 
 ### diff two versions
 
-```http
-GET /api/roosts/{roostId}/versions/{versionRef}/diff?siteId=site_kiosk_fleet&against=current
+```bash
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/versions/3/diff?siteId=site_kiosk_fleet&against=previous" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`siteId` and `against` are required. `{versionRef}` is the target version and
-`against` is the version to compare from.
+`siteId` and `against` are required. `{versionRef}` is the version you move to, and `against` is the version you compare from, so `added` means "appears when you move to `{versionRef}`".
 
-Response:
+response:
 
 ```json
 {
@@ -401,7 +444,7 @@ Response:
     "changed": 1,
     "unchanged": 12,
     "hasChanges": true,
-    "netBytesDelta": 523776
+    "netBytesDelta": 1572352
   },
   "added": [
     {
@@ -432,30 +475,33 @@ Response:
 }
 ```
 
-Diffs compare ordered chunk hash sequences. `summary.changed` counts the files
-returned in `modified`.
+- files are matched by path. a file is unchanged when its size and its ordered list of chunk hashes are the same in both versions; otherwise it is modified.
+- `summary.changed` counts the entries in `modified`. unchanged files are counted but not listed.
+- `netBytesDelta` is the total size of the `to` version minus the total size of the `from` version.
+- `chunks`, `fromChunks` and `toChunks` are chunk counts. each list is sorted by path.
 
 ## rollback
 
-Rollback moves the roost's current pointer to an existing version. It does not
-create a new version and it does not upload bytes.
+rollback moves the roost's current pointer to a version already in its history. it creates no version and uploads nothing.
 
-```http
-POST /api/roosts/{roostId}/rollback
-Authorization: Bearer owk_live_...
-Idempotency-Key: 3f7b9c2a-8e14-4f1c-9d6e-2c8a5b0e9f4d
-Content-Type: application/json
-
-{
-  "siteId": "site_kiosk_fleet",
-  "targetVersion": "previous"
-}
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/roosts/rst_lobby/rollback" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "siteId": "site_kiosk_fleet",
+    "targetVersion": "previous"
+  }'
 ```
 
-`siteId` is required. `targetVersion` is optional and defaults to `previous`.
-When present, it may be any supported version ref form.
+- `siteId` is required. `targetVersion` is optional, a string or a number in any [ref form](#version-ids-and-refs); omitted or `null`, it defaults to `previous`.
+- the old current version becomes `previousVersionId`, so two rollbacks to `previous` in a row swap back and forth.
+- rollback skips the canary: every target machine is told to sync the version at once, and the rollout record for that version is marked `complete`.
+- a [`version.rolled_back`](/docs/api/webhooks#versionrolled_back) event is queued.
+- there is no compare-and-swap guard. `Idempotency-Key` is optional and behaves as on publish.
 
-Response (`200 OK`):
+response (`200 OK`):
 
 ```json
 {
@@ -468,40 +514,45 @@ Response (`200 OK`):
 }
 ```
 
-Rollback does not implement a current-pointer compare-and-swap guard. A target
-that resolves to the already-current version returns `400 rollback_no_op`.
+errors specific to rollback: a target that is already current is `400 rollback_no_op`; a missing or soft-deleted roost is `404 not_found`; a target whose stored body location is missing is `409 version_url_missing`.
 
 ## deploy
 
-Deploy queues a rollout for an existing version. `versionId` is a concrete
-stable id; omit it to deploy the roost's current version.
+deploy starts a rollout of an existing version to machines, without moving the current pointer. omit `versionId` to deploy the current version.
 
-```http
-POST /api/roosts/{roostId}/deploy
-Authorization: Bearer owk_live_...
-Idempotency-Key: 3f7b9c2a-8e14-4f1c-9d6e-2c8a5b0e9f4d
-Content-Type: application/json
-
-{
-  "siteId": "site_kiosk_fleet",
-  "versionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-  "machines": ["mac-mini-01", "mac-mini-02"],
-  "scheduleAt": "2026-04-22T16:00:00.000Z",
-  "dryRun": false
-}
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/roosts/rst_lobby/deploy" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{
+    "siteId": "site_kiosk_fleet",
+    "versionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+    "machines": ["kiosk-01", "kiosk-02"],
+    "scheduleAt": "2026-04-22T16:00:00.000Z",
+    "dryRun": false
+  }'
 ```
 
-Request body fields:
+request body fields:
 
 | field | required | notes |
 |---|---:|---|
-| `siteId` | yes | Site that owns the roost. |
-| `versionId` | no | Concrete version id. Defaults to current. |
-| `machines` | no | Non-empty machine id list. Defaults to the roost's `targets[]`. |
-| `scheduleAt` | no | ISO-8601 timestamp. Values more than 60 seconds in the future park the rollout at `stage: "scheduled"` for the scheduler sweep; past or near-future values deploy immediately. |
-| `dryRun` | no | If `true`, returns the rollout shape without writing. |
+| `siteId` | yes | site that owns the roost. |
+| `versionId` | no | a version ID from this roost's history. refs such as `3` or `current` are not resolved here. defaults to the current version. |
+| `machines` | no | non-empty list of machine IDs; duplicates are dropped. defaults to the roost's `targets`. |
+| `scheduleAt` | no | ISO 8601 timestamp. more than 60 seconds in the future parks the rollout at `stage: "scheduled"`; otherwise it starts now. |
+| `dryRun` | no | `true` returns the plan without writing anything. |
 
-Normal response (`202 Accepted`):
+how a rollout runs:
+
+- the machines are sorted by ID; the first 10% (rounded up, at least 1, at most 50) form the canary wave and the rest form the fleet wave. the canary is told to sync at once.
+- when every canary machine has reported and at least 90% succeeded, the fleet wave is told to sync and the rollout moves to `stage: "fleet"`. when every fleet machine has reported, it moves to `complete`.
+- if more than 25% of the current wave has failed, the rollout moves to `aborted` with an `abortReason`.
+- a canary that settles with more than 10% but no more than 25% failures, or machines that never report, leave the rollout at `canary`. a rollout that is not finished blocks new deploys of the same version (see `alreadyRunning` below); [resync](#resync) clears it.
+- files land under the roost's `extractPath`, or `~/Documents/Owlette` when it is unset.
+
+normal response (`202 Accepted`):
 
 ```json
 {
@@ -510,68 +561,133 @@ Normal response (`202 Accepted`):
   "siteId": "site_kiosk_fleet",
   "roostId": "rst_lobby",
   "stage": "canary",
-  "canary": ["mac-mini-01"],
-  "fleet": ["mac-mini-02"],
+  "canary": ["kiosk-01"],
+  "fleet": ["kiosk-02"],
   "extractRoot": "~/Documents/Owlette",
-  "versionUrl": "https://..."
+  "versionUrl": "https://owlette-prod-manifests.<account-id>.r2.cloudflarestorage.com/project-manifests/site_kiosk_fleet/rst_lobby/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92.json"
 }
 ```
 
-If a non-terminal rollout already exists for the same version id, the response
-returns the existing rollout fields plus `alreadyRunning: true`. A dry run
-returns the same planning fields with `dryRun: true` and does not write.
-
-Deploy does not implement a current-pointer compare-and-swap guard.
+- `rolloutId` is always the version ID: there is one rollout record per version, and deploying a version whose rollout is `complete` or `aborted` replaces that record.
+- if the version's rollout is still `scheduled`, `canary` or `fleet`, the route answers `200` with that rollout's fields plus `alreadyRunning: true` and queues nothing.
+- a dry run answers `200` with the planned fields plus `dryRun: true` and writes nothing. it reports `stage: "scheduled"` whenever `scheduleAt` is present.
+- there is no compare-and-swap guard. `Idempotency-Key` is optional and behaves as on publish.
+- errors specific to deploy: a roost with no current version and no `versionId`, or no machines to target, is `400 validation_failed`; an unknown `versionId` is `404 version_not_found`; a soft-deleted roost, or a version whose stored body location is missing, is `409 conflict`.
 
 ### scheduled rollouts
 
-A `scheduleAt` more than 60 seconds in the future returns `202` with
-`stage: "scheduled"` and a `scheduled` object carrying the resolved instant. The
-rollout is stored with its canary/fleet split, `versionUrl`, and `extractRoot`
-already resolved. A scheduler sweep runs every 5 minutes, flips the due rollout
-to `stage: "canary"`, and queues the same `sync_pull` commands an immediate
-deploy queues — so a scheduled rollout fires within 5 minutes of its instant and
-then follows the ordinary canary → fleet → complete path.
+a `scheduleAt` more than 60 seconds in the future returns `202` with `stage: "scheduled"` and a `scheduled` object holding the resolved instant (`at`) and a `warning` that restates the timing below. the rollout is stored with its canary and fleet split, `versionUrl` and `extractRoot` already resolved. a scheduler sweep runs every 5 minutes, moves a due rollout to `stage: "canary"`, and queues the same sync commands an immediate deploy queues, so a scheduled rollout fires within 5 minutes of its instant and then follows the ordinary canary, fleet, complete path.
 
-Two cases do not fire:
+two cases do not fire:
 
-- **Missed window.** A rollout more than 30 minutes past its instant is written
-  off instead of fired: it lands at `stage: "aborted"` with an `abortReason`
-  naming how late it was. A stalled sweep must not push an overnight rollout to
-  a whole fleet at midday. `aborted` is terminal, so deploying that version again
-  starts a fresh rollout.
-- **Kill switch.** While a site has roost disabled, its scheduled rollouts are
-  left untouched — neither fired nor written off — until the switch flips back.
+- **missed window.** a rollout more than 30 minutes past its instant is written off instead of fired: it lands at `stage: "aborted"` with an `abortReason` saying how late it was. a stalled sweep must not push an overnight rollout to a whole fleet at midday. `aborted` is terminal, so deploying that version again starts a fresh rollout.
+- **kill switch.** while roost is switched off for a site, its scheduled rollouts are left untouched, neither fired nor written off. when the switch flips back, a rollout still inside its window fires, and one more than 30 minutes late is written off.
 
-The rollout's target list is the one resolved when the deploy was accepted, not
-the roost's `targets[]` at fire time. A scheduled rollout is non-terminal, so a
-second deploy of the same version id answers `alreadyRunning: true` rather than
-re-scheduling it.
+the target list is the one resolved when the deploy was accepted, not the roost's `targets` at fire time. a scheduled rollout is not finished, so a second deploy of the same version answers `alreadyRunning: true` instead of rescheduling it.
 
-## error codes
+## rollout status
 
-All errors use `application/problem+json`.
+```bash
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/deployments?siteId=site_kiosk_fleet&page_size=20" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+
+curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/deployments/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92?siteId=site_kiosk_fleet" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY"
+```
+
+`GET /api/roosts/{roostId}/deployments` lists rollout records, newest first, in `rollouts` (repeated as `items`). `page_size` defaults to 20 with a maximum of 100. filter with `stage=scheduled`, `canary`, `complete` or `aborted` (`fleet` is not accepted as a filter and returns `400 validation_failed`). each item has `rolloutId`, `versionId`, `stage`, `canaryCount`, `fleetCount`, `extractRoot`, `versionUrl`, `triggeredBy`, `startedAt`, `completedAt`, `abortedAt`, `abortReason` and `scheduledAt`.
+
+the list holds one record per version: publishes, deploys and rollbacks all write the record for their version, a later deploy of the same version replaces a finished one, and [resync](#resync) deletes it. `triggeredBy` is set only for deploys.
+
+`GET /api/roosts/{roostId}/deployments/{rolloutId}` returns one record with its per-machine state:
+
+```json
+{
+  "rolloutId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+  "roostId": "rst_lobby",
+  "siteId": "site_kiosk_fleet",
+  "versionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+  "versionUrl": "https://owlette-prod-manifests.<account-id>.r2.cloudflarestorage.com/project-manifests/site_kiosk_fleet/rst_lobby/8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92.json",
+  "extractRoot": "~/Documents/Owlette",
+  "stage": "fleet",
+  "triggeredBy": "uid_123",
+  "startedAt": "2026-04-22T16:00:04.000Z",
+  "completedAt": null,
+  "abortedAt": null,
+  "abortReason": null,
+  "scheduledAt": null,
+  "targetsOverride": ["kiosk-01", "kiosk-02"],
+  "canary": ["kiosk-01"],
+  "fleet": ["kiosk-02"],
+  "canaryStatus": [
+    {
+      "machineId": "kiosk-01",
+      "status": "committed",
+      "reportedVersionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+      "reportedAt": null
+    }
+  ],
+  "fleetStatus": [
+    {
+      "machineId": "kiosk-02",
+      "status": "downloading",
+      "reportedVersionId": "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
+      "reportedAt": null
+    }
+  ]
+}
+```
+
+- `stage` is `scheduled`, `canary`, `fleet`, `complete` or `aborted`.
+- a machine's `status` is what its agent last reported: `pending`, `downloading`, `assembling`, `committed` (the version is live on the machine), `failed` or `cancelled`. a machine that has not reported, or whose last report is for another version, shows `pending`.
+- `reportedAt` is currently always `null`.
+- `targetsOverride` is the `machines` list sent to deploy, or `null`.
+
+## resync
+
+resync tells every target machine to pull the current version again: the retry after a failed sync, or the reset for files someone edited by hand.
+
+```bash
+curl -fsS -X POST "$OWLETTE_API_URL/api/roosts/rst_lobby/resync" \
+  -H "Authorization: Bearer $OWLETTE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{ "siteId": "site_kiosk_fleet" }'
+```
+
+- every target gets the sync at once, with no canary. the per-machine state is cleared and the rollout record for the current version is deleted.
+- response (`200 OK`): `{ "resynced": 2, "targets": ["kiosk-01", "kiosk-02"] }`.
+- a roost with no current version, or with no targets, is `409 conflict`.
+- resync takes no `Idempotency-Key`; each call queues new sync commands.
+
+## errors
+
+errors use `application/problem+json`; branch on `code`. see [errors](/docs/api/errors).
 
 | code | HTTP | meaning |
 |---|---:|---|
-| `validation_failed` | 400 | Missing `siteId`, invalid pagination, invalid body shape, invalid `description`, invalid `machines`, or malformed request fields. |
-| `version_ref_malformed` | 400 | A `{versionRef}` or `targetVersion` string is not one of the accepted forms. |
-| `version_content_immutable` | 400 | PATCH tried to edit a field other than `siteId` or `description`. |
-| `rollback_no_op` | 400 | Rollback target resolves to the current version. |
-| `not_found` | 404 / 410 | The roost does not exist, or a stored version body is gone. |
-| `version_not_found` | 404 | A version ref did not resolve within this roost history. |
-| `precondition_failed` | 412 | Publish references chunks that are not present in R2 for the site. The response includes up to 20 `missingChunks`. |
-| `version_stale` | 412 | Publish included `expectedCurrentVersionId`, but the roost current pointer moved before the transaction committed. |
-| `conflict` | 409 | Deploy cannot proceed because the roost is deleted or the target version has no URL. |
-| `idempotency_key_mismatch` | 422 | The same `Idempotency-Key` was reused with a different request body. |
-
-For a stale publish, fetch the current roost with
-`GET /api/roosts/{roostId}?siteId=...`, decide whether to rebuild or abort,
-then retry with the new `expectedCurrentVersionId` if you still want a guarded
-publish.
+| `validation_failed` | 400 | missing or invalid `siteId` or `roostId`, invalid JSON, invalid pagination, an invalid version body, a `description` over 500 characters, invalid `machines`, `targets` or `scheduleAt`, or nothing to deploy to. |
+| `roost_name_required` | 400 | create without a non-blank `name`. |
+| `version_ref_malformed` | 400 | a `{versionRef}`, `targetVersion` or `against` value is not an accepted form. |
+| `version_content_immutable` | 400 | a version PATCH included a field other than `siteId` or `description`. |
+| `rollback_no_op` | 400 | the rollback target is already the current version. |
+| `unsupported_version` | 400 | the `Roost-Version` header names an unsupported date. |
+| `idempotency_key_invalid` | 400 | the `Idempotency-Key` is longer than 255 characters. |
+| `unauthorized` / `token_expired` | 401 | no valid credential, or an expired API key. |
+| `forbidden` | 403 | your account is inactive, or a change needs the site admin or owner role. |
+| `scope_insufficient` | 403 | the API key lacks the `roost=` or `site=` scope the route needs. |
+| `not_found` | 404 / 410 | the site, roost or rollout does not exist or you cannot access it; rollback on a soft-deleted roost; `410` when a version's stored body is gone. |
+| `version_not_found` | 404 | a version ref or `versionId` did not match this roost's history. |
+| `conflict` | 409 | the roost ID already exists on create; update or deploy on a soft-deleted roost; deploy of a version whose stored body location is missing; resync with no current version or no targets. |
+| `version_url_missing` | 409 | the rollback target has no stored body location. |
+| `precondition_failed` | 412 | the publish lists chunks the site does not have; `missingChunks` holds up to 20 of them. |
+| `version_stale` | 412 | `expectedCurrentVersionId` did not match the current pointer when the publish committed. |
+| `idempotency_key_mismatch` | 422 | an `Idempotency-Key` was reused with a different body. |
+| `service_unavailable` | 503 | roost is switched off for this site. |
+| `internal_error` | 500 | unexpected server error; quote the `requestId`. |
 
 ## see also
 
-- [chunks.md](/docs/api/chunks) - check, upload, and download content-addressed chunks.
-- [errors.md](/docs/api/errors) - shared problem envelope and recovery guidance.
-- [sdk-node.md](/docs/api/sdk-node) and [sdk-python.md](/docs/api/sdk-python) - high-level `roosts.push()` workflows.
+- [chunks](/docs/api/chunks) - check, upload and download content-addressed chunks.
+- [webhooks](/docs/api/webhooks) - `version.published` and `version.rolled_back` events.
+- [errors](/docs/api/errors) - the shared problem envelope and recovery guidance.
+- [Node SDK](/docs/api/sdk-node) and [Python SDK](/docs/api/sdk-python) - `roosts.push()` and the rest of the roost client.

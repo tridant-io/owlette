@@ -19,6 +19,7 @@
  */
 
 import { terminatePid, type TerminateMethod } from '@/lib/ipc'
+import { launchCopy } from '@/lib/launchCopy'
 import { expectedImagesFor, type ProcessEntry } from '@/lib/owletteConfig'
 import {
   candidatePidsForProcess,
@@ -104,7 +105,7 @@ export async function stopProcess(
   const name = String(entry.name ?? entry.id)
   const images = expectedImagesFor(entry)
   if (!images.length) {
-    throw new Error(`${name} has no exe path, so there is no way to identify its process`)
+    throw new Error(`${name} has no ${launchCopy().pathName}, so there is no way to identify its process`)
   }
 
   const states = await deps.readStates()

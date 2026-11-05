@@ -207,6 +207,35 @@ describe('ToolCallCard', () => {
     });
   });
 
+  describe('an approval that overrides active hours', () => {
+    function renderOverride(args: Record<string, unknown>) {
+      return renderCard({
+        toolName: 'reboot_machine',
+        args,
+        approvalState: 'requested',
+        approvalTargetMachineIds: ['kiosk-01'],
+        onApprove: () => {},
+        onDeny: () => {},
+      });
+    }
+
+    it('says so, with the reason, without expanding', () => {
+      renderOverride({ override_active_hours: true, reason: 'the show ended early' });
+
+      expectCollapsed(toggleFor('reboot_machine'));
+      // The label rides in a span, so read the whole line.
+      expect(screen.getByText(/override active hours:/).closest('p')).toHaveTextContent(
+        'override active hours: the show ended early',
+      );
+    });
+
+    it('says nothing about active hours for a plain call', () => {
+      renderOverride({ when: 'after_active_hours', reason: 'not an override' });
+
+      expect(screen.queryByText(/override active hours/)).toBeNull();
+    });
+  });
+
   describe('who an approval prompt names', () => {
     /** The banner sentence; the target rides in a span, so read the whole line. */
     function banner(props: Partial<CardProps>) {

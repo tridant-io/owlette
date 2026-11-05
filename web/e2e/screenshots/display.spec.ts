@@ -8,11 +8,12 @@
  * `e2e/specs/access-control/display-panel.spec.ts` because that path is already
  * proven stable by the regression suite.
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { getAdminDb } from '../helpers/emulator';
 import { TEST_USERS } from '../helpers/seed';
 import { FIXED_NOW_MS, seedScreenshotFixtures } from './fixtures';
+import { test, themedPath } from './docs-helpers';
 
 test.use(roleState('admin'));
 
@@ -71,7 +72,7 @@ test('display capability card preview', async ({ page }) => {
     await page.waitForTimeout(300);
 
     await page.screenshot({
-      path: 'public/landing-screens/preview-displays.png',
+      path: themedPath('public/landing-screens/preview-displays.png'),
       fullPage: false,
     });
   } finally {

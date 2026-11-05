@@ -44,11 +44,11 @@ export default function InstallerChecksumStatus({
           placeholder="64-character hex sha256 of the installer"
           value={sha256Checksum}
           onChange={(e) => setManualChecksumValue(e.target.value)}
-          className="border-border bg-background text-white font-mono text-xs"
+          className="border-border bg-background text-foreground font-mono text-xs"
         />
         <button
           type="button"
-          className="text-xs text-muted-foreground hover:text-white underline cursor-pointer"
+          className="text-xs text-muted-foreground hover:text-foreground underline cursor-pointer"
           onClick={exitManualChecksum}
         >
           compute automatically instead
@@ -64,7 +64,7 @@ export default function InstallerChecksumStatus({
         computing sha256 checksum…
         <button
           type="button"
-          className="underline cursor-pointer hover:text-white"
+          className="underline cursor-pointer hover:text-foreground"
           onClick={enterManualChecksum}
         >
           enter manually
@@ -76,7 +76,7 @@ export default function InstallerChecksumStatus({
   if (checksumStatus === 'ready') {
     return (
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-        <CheckCircle2 className="h-3 w-3 text-green-500 shrink-0" />
+        <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
         sha256: {sha256Checksum.slice(0, 12)}…{sha256Checksum.slice(-8)}
       </p>
     );
@@ -84,7 +84,7 @@ export default function InstallerChecksumStatus({
 
   if (checksumStatus === 'error') {
     return (
-      <div className="flex items-start gap-1.5 text-xs text-amber-400">
+      <div className="flex items-start gap-1.5 text-xs text-warning">
         <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
         <span>
           {checksumError || 'failed to compute checksum'}{' — '}

@@ -160,6 +160,12 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+// every fielded agent deletes its tokens on a refresh 401/403, so a plan gate
+// here would unpair machines: refresh must never load plan.server, even transitively.
+jest.mock('@/lib/plan.server', () => {
+  throw new Error('the refresh route must not load plan.server');
+});
+
 // Stub the Firebase REST token-exchange call.
 global.fetch = jest.fn(async () => ({
   ok: true,
@@ -528,5 +534,16 @@ describe('parseAgentVersion + shouldRotateRefreshToken', () => {
     ])('does NOT rotate for %j', (input, expected) => {
       expect(route.shouldRotateRefreshToken(input)).toBe(expected);
     });
+  });
+});
+
+describe('plan gates', () => {
+  it('never loads plan.server, so no plan can unpair an agent', () => {
+    expect(() =>
+      jest.isolateModules(() => {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        require('@/app/api/agent/auth/refresh/route');
+      }),
+    ).not.toThrow();
   });
 });

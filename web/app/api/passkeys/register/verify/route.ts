@@ -30,6 +30,7 @@ import {
 } from '@/lib/mfaFactors.server';
 import { checkMfaEnrollmentGate } from '@/lib/mfaEnrollmentGate.server';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   getRpId,
   getExpectedOrigins,
@@ -123,7 +124,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const wasFirstFactor =
       !deriveMfaEnrolled(factorsBefore) && factorsAfter.mfaEnrolled;
     if (wasFirstFactor) {
-      await markSessionMfaVerified();
+      await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
     }
 
     // Audit: registering a credential is the cheapest persistent-access move an attacker with

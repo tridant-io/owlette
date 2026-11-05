@@ -6,7 +6,7 @@ This is the canonical first-time path for an engineer cloning Owlette to develop
 
 | tool | version | required for | doc reference |
 |------|---------|--------------|---------------|
-| Windows 10/11 64-bit | — | agent dev/build, installer | not portable to Mac/Linux yet |
+| Windows 10/11 64-bit | — | the Windows agent build and installer | the macOS `.pkg` and Linux `.deb` build on their own OS: see [agent/README.md](../agent/README.md) |
 | Node.js | 22.x (see [/.nvmrc](../.nvmrc)) | web, desktop, functions, cli, sdks | [package.json engines field](../package.json) |
 | npm | >=10.0.0 | all js packages | [package.json](../package.json) |
 | Python | 3.11 | agent venv + tests, SDK dev (SDK requires >=3.10). The installer build downloads its own embedded 3.11.8 | [scripts/bootstrap-windows.ps1](../scripts/bootstrap-windows.ps1), [sdks/python/pyproject.toml](../sdks/python/pyproject.toml) |
@@ -51,7 +51,7 @@ None of these are committed. Create the ones for the work you are doing; files w
 | `test/integration/.env.test` | `test/integration/.env.test.example` | integration tests |
 | `scripts/.env.local` | none | `scripts/upload-cortex-cli.mjs` and `scripts/migrations/audit-legacy-api-keys.mjs`: `FIREBASE_PROJECT_ID_{DEV,PROD}`, `FIREBASE_CLIENT_EMAIL_{DEV,PROD}`, `FIREBASE_PRIVATE_KEY_{DEV,PROD}` (falls back to the unsuffixed trio in `web/.env.local`) |
 | `.claude/.env.tridant` | none | `scripts/dev/rotate-tridant-env.sh` and `rotate-functions-env.sh`: `R2_S3_ENDPOINT`, `R2_APP_S3_ACCESS_KEY_ID`, `R2_APP_S3_SECRET_ACCESS_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY_TRIDANT`, `TURNSTILE_SECRET_TRIDANT` |
-| `infra/cloudflare/terraform.tfvars` | `infra/cloudflare/terraform.tfvars.example` | Cloudflare load balancer — see [.claude/skills/cf-load-balancing.md](../.claude/skills/cf-load-balancing.md) |
+| `infra/cloudflare/terraform.tfvars` | `infra/cloudflare/terraform.tfvars.example` | Cloudflare load balancer — see [.claude/skills/cf-load-balancing/SKILL.md](../.claude/skills/cf-load-balancing/SKILL.md) |
 | `dev/video-tutorials/voiceover/.env` | `.env.example` in that folder | tutorial voiceover generation only |
 
 ## step 3: CLI logins
@@ -62,7 +62,7 @@ Only needed for the operations named; day-to-day dev needs none beyond `gh`.
 |-----|---------------------|----------|
 | `gh` | `gh auth login` | `/preflight` security-alert gate (`scripts/check-security-alerts.mjs`), watching CI runs |
 | `firebase` | `firebase login` | rules, indexes, and functions deploys ([setup/firebase.mdx](../web/content/docs/setup/firebase.mdx)); the local emulators need no login |
-| `railway` | `railway login` | `scripts/sync-env.mjs` and the rotation scripts ([.claude/skills/env-management.md](../.claude/skills/env-management.md)) |
+| `railway` | `railway login` | `scripts/sync-env.mjs` and the rotation scripts ([.claude/skills/env-management/SKILL.md](../.claude/skills/env-management/SKILL.md)) |
 | `vercel` | `vercel login`, then `vercel link` in `web/` | `scripts/sync-env.mjs` against the Vercel failover project |
 | `gcloud` | `gcloud auth login` | one-time infrastructure bootstrap in [manual-infrastructure.md](runbooks/manual-infrastructure.md) |
 | `terraform` | no login — export `CLOUDFLARE_API_TOKEN` in the shell (never in a file) | `infra/cloudflare` |
@@ -111,7 +111,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 4. Cloudflare R2 → run `/scripts/provision-r2.mjs` (buckets + CORS), mint the S3 access keys in the Cloudflare dashboard, and configure the env vars
 5. Cloud Functions secrets → `functions/.env.<projectId>` per [manual-infrastructure.md](runbooks/manual-infrastructure.md)
 6. npm publishing needs no token — `cli-publish.yml` and `node-sdk-publish.yml` use npm OIDC trusted publishing
-7. Agent installer code signing — not in place; installers ship unsigned with SmartScreen warnings (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
+7. Windows installer signing — Azure Artifact Signing on a local build with `OWLETTE_SIGN=1` and on CI's tagged builds; `scripts/setup-ci-signing.sh` sets up the CI side (see "code signing context" in [agent-installer-release.md](runbooks/agent-installer-release.md))
 
 ## machine-bound state — do not copy across machines
 
@@ -119,7 +119,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 
 ## known portability gaps (open work)
 
-- Code signing is deferred as a business decision ([runbooks/index.md](runbooks/index.md))
+- Local Windows signing needs the machine setup in [agent-installer-release.md](runbooks/agent-installer-release.md)
 - See [docs/changelog.md](changelog.md) for completed portability fixes
 
 ## runbooks

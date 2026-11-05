@@ -152,7 +152,7 @@ export function ConversationResizeHandle({
       // a touchscreen laptop is above the `md` breakpoint this mounts at, and the
       // browser would otherwise claim a slightly diagonal drag and cancel it.
       //
-      // The offset is the gutter (`gap-3`, 0.75rem) PLUS the panel's 1px border:
+      // The offset is the gutter (the panel's `mr-3`, 0.75rem) PLUS its 1px border:
       // an absolute right is measured from the containing block's PADDING box, so
       // a plain `-right-3` starts the strip 1px inside the panel's own edge and
       // lands the centre line 5px into a 12px gutter. Do not "simplify" it back.

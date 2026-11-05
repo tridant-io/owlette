@@ -363,4 +363,11 @@ describe('performUserDeleteCascade — transfer failure aborts the delete', () =
       expect.objectContaining({ siteId: 'site-a', successorUid: 'bob' }),
     );
   });
+
+  it("hands sites over past the successor's plan, so a deletion is never blocked by it", async () => {
+    seedOwnerAndSuccessor();
+    await performUserDeleteCascade('alice', { successorUid: 'bob' });
+
+    expect(mockTransfer).toHaveBeenCalledWith(expect.objectContaining({ skipPlanCheck: true }));
+  });
 });

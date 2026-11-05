@@ -46,6 +46,16 @@ and the TURN fallback. It replaces the dashboard's "live view" for every machine
   GA on that release.
 - The plan lives in `dev/active/swoop/`, force-added to git.
 
+**Rulings on resume (2026-09-23, after the 3.3.6/3.3.7 releases and the dev → prod promotion):**
+- Agent floor: `SWOOP_MIN_AGENT_VERSION = 3.3.7` — the first installer that ships the streamer. The bundle route
+  enforces it; the constant is not copy.
+- The pilot runs on **dev**: the owner swoops into **TEC-B4A from TEC-A4D**. Prod stays off.
+- G3 passes on the renderer's own timings; a camera photon row comes later (not a G3 gate).
+- Task 7.7: the installer's `[UninstallRun]` edit is approved; the mDNS firewall rule is deferred; uninstall
+  removes **all** swoop logs.
+- Long-lead items start now, owner-driven: Azure signing validation, the Cloudflare TURN key. Hardware for
+  6.7: C3A, B4A, A4D and the MacBook Air.
+
 ## Contracts recovered from the lost plan (keep stable — `dev/active/tri-platform-agent` references them)
 
 - Crate `agent/swoop`, binary `owlette-swoop.exe`, no cargo workspace, own `.cargo/config.toml` with
@@ -285,6 +295,8 @@ Full task text: [tasks.md](tasks.md).
 - **G1** (after 0.2): video path and transport library chosen by measurement; memo signed off by the owner.
   Task 1.1 and every transport task are written against the winner.
 - **G2** (after Wave 4): a frame from this dev box reaches a canvas through the real API and signaling service.
+  **MET 2026-09-23** over the LAN, A4D viewer → B4A host, with the viewer's mDNS obfuscation off as a workaround:
+  `spikes/g2-first-picture.md`.
 - **G3** (after Wave 5): a measured interactive LAN session meets the latency criteria → unsigned internal pilot
   on the owner's machines (NVIDIA, logged-in desktop).
 - **G4** (Task 10.1): every success criterion below is met; builds are signed; the install-directory security

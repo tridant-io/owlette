@@ -174,9 +174,9 @@
     {
       "id": "b07",
       "title": "when you're still stuck",
-      "screen_note": "the dashboard header's help menu → \"docs\" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → \"submit bug report\" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast \"thanks — your feedback was sent · system info and recent logs went with it.\"",
+      "screen_note": "the dashboard header's help menu → \"docs\" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → \"submit issue\" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast \"thanks — your feedback was sent · system info and recent logs went with it.\"",
       "direction": {
-        "SCREEN": "the dashboard header's help menu → \"docs\" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → \"submit bug report\" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast \"thanks — your feedback was sent · system info and recent logs went with it.\""
+        "SCREEN": "the dashboard header's help menu → \"docs\" opening /docs in-app (web/components/PageHeader.tsx:274-289). Cut to the machine: the owlette app's ⋯ menu → \"submit issue\" (desktop/src/components/AppMenu.tsx:110, dialog at desktop/src/components/ReportIssueDialog.tsx:96-99); pick a category, type a line, send — toast \"thanks — your feedback was sent · system info and recent logs went with it.\""
       },
       "start_s": 162.833,
       "start_frame": 9770,

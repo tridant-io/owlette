@@ -35,6 +35,7 @@ import {
   type FollowupSweepCounts,
 } from '@/lib/hoot/followupSweep.server';
 import logger from '@/lib/logger';
+import { createPlanMemo, pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
 import { runTalon, STALE_RUN_MS } from '@/lib/talons/engine.server';
 import { computeNextRunAt } from '@/lib/talons/schedule.server';
 import { getSiteTimezone, getTalon, type StoredTalon } from '@/lib/talons/store.server';
@@ -208,12 +209,14 @@ async function fireClaimedDeferral(
   ref: DocumentReference,
   deferral: TalonRunDoc,
   now: Date,
+  planMemo: PlanMemo,
 ): Promise<'fired' | 'skipped'> {
   const talon = await getTalon(db, siteId, deferral.talonId);
-  if (!talon || talon.enabled !== true) {
+  const paused = talon?.enabled === true && (await pausedByPlan(siteId, 'owlette.talons', planMemo));
+  if (!talon || talon.enabled !== true || paused) {
     await ref.update({
       status: 'skipped',
-      error: talon ? 'talon_disabled' : 'talon_deleted',
+      error: paused ? 'plan_paused' : talon ? 'talon_disabled' : 'talon_deleted',
       completedAt: now,
       durationMs: 0,
     });
@@ -264,6 +267,7 @@ async function fireDueDeferrals(
     missed: 0,
     skipped: 0,
   };
+  const planMemo = createPlanMemo();
 
   for (const doc of snapshot.docs) {
     // Leftovers stay `pending` with `runAfterAt` untouched — next sweep claims
@@ -296,7 +300,7 @@ async function fireDueDeferrals(
         continue;
       }
 
-      const outcome = await fireClaimedDeferral(db, siteId, doc.ref, claim.deferral, now);
+      const outcome = await fireClaimedDeferral(db, siteId, doc.ref, claim.deferral, now, planMemo);
       counts[outcome] += 1;
     } catch (error) {
       // One deferral's failure must not abort the pass.
@@ -414,6 +418,7 @@ export async function GET(request: NextRequest) {
     const due = dueSnapshot.docs.length;
     // One timezone read per site per sweep, not per talon.
     const timezones = new Map<string, string>();
+    const planMemo = createPlanMemo();
     let executed = 0;
     let missed = 0;
     let deferred = 0;
@@ -455,6 +460,9 @@ export async function GET(request: NextRequest) {
           );
           continue;
         }
+
+        // the claim already moved nextRunAt on, so a paused talon simply waits for its next slot
+        if (await pausedByPlan(siteId, 'owlette.talons', planMemo)) continue;
 
         await runTalon(db, claim.talon, { siteId, triggerSummary: SCHEDULE_TRIGGER_SUMMARY });
         executed += 1;

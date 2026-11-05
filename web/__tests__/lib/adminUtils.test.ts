@@ -38,15 +38,28 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: () => ({ getUserByEmail: mockGetUserByEmail }),
 }));
 
+const mockGetEntitlements = jest.fn();
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
+const mockLoggerWarn = jest.fn();
+jest.mock('@/lib/logger', () => ({
+  __esModule: true,
+  default: { info: jest.fn(), debug: jest.fn(), error: jest.fn(), warn: (...args: unknown[]) => mockLoggerWarn(...args) },
+}));
+
 const ADMIN_EMAIL = 'admin@owlette.test';
 
 let getSiteAlertRecipients: typeof import('@/lib/adminUtils.server').getSiteAlertRecipients;
 let getUserAlertRecipient: typeof import('@/lib/adminUtils.server').getUserAlertRecipient;
+let createPlanMemo: typeof import('@/lib/planPause.server').createPlanMemo;
 
 beforeAll(async () => {
   // ADMIN_EMAIL is read at module load from ADMIN_EMAIL_DEV — set it first.
   process.env.ADMIN_EMAIL_DEV = ADMIN_EMAIL;
   ({ getSiteAlertRecipients, getUserAlertRecipient } = await import('@/lib/adminUtils.server'));
+  ({ createPlanMemo } = await import('@/lib/planPause.server'));
 });
 
 beforeEach(() => {
@@ -58,6 +71,81 @@ beforeEach(() => {
     .mockResolvedValue({ data: () => ({ email: ADMIN_EMAIL, preferences: { mutedMachines: ['TEC-A4D'] } }) });
   mockGetUserByEmail.mockReset().mockResolvedValue({ uid: 'admin-uid' });
   mockUsersDoc.mockClear(); // keep impl, clear recorded calls
+  mockGetEntitlements.mockReset();
+  mockLoggerWarn.mockReset();
+});
+
+/**
+ * Plans (plan.md decision 7): no remote control means no alerts. Runs the real
+ * resolver; only tridant's answer is mocked.
+ */
+describe('getSiteAlertRecipients — plan pause', () => {
+  const ent = (control: '0' | '1') => ({
+    ok: true,
+    resolved: control === '1',
+    standing: control === '1' ? 'active' : 'expired',
+    inGoodStanding: control === '1',
+    ent: { 'owlette.control': control },
+    epoch: 0,
+  });
+  const member = { id: 'u1', data: () => ({ email: 'u1@owlette.test', preferences: {} }) };
+
+  beforeEach(() => {
+    process.env.PLAN_ENFORCEMENT = 'on';
+    process.env.OWLETTE_E2E = '1';
+    mockSiteDocGet.mockResolvedValue({ data: () => ({ owner: 'owner-uid' }) });
+    mockUsersWhereGet.mockResolvedValue({ docs: [member] });
+  });
+
+  afterEach(() => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.OWLETTE_E2E;
+  });
+
+  it('returns no one, and never the ADMIN_EMAIL fallback, when the payer has no control', async () => {
+    mockGetEntitlements.mockResolvedValue(ent('0'));
+
+    expect(await getSiteAlertRecipients('site-1', 'healthAlerts')).toEqual([]);
+    expect(mockGetEntitlements).toHaveBeenCalledWith('owner-uid');
+    // the site read is reused for the payer; nobody is enumerated.
+    expect(mockSiteDocGet).toHaveBeenCalledTimes(1);
+    expect(mockUsersWhereGet).not.toHaveBeenCalled();
+    expect(mockGetUserByEmail).not.toHaveBeenCalled();
+    expect(mockLoggerWarn).toHaveBeenCalledWith(
+      "alerts paused: the site's plan has no remote control",
+      expect.objectContaining({ data: { siteId: 'site-1', filterPreference: 'healthAlerts' } }),
+    );
+  });
+
+  it('enumerates as before when the payer has control', async () => {
+    mockGetEntitlements.mockResolvedValue(ent('1'));
+
+    const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
+    expect(recipients.map((r) => r.userId)).toEqual(['u1', 'owner-uid']);
+    expect(mockLoggerWarn).not.toHaveBeenCalled();
+  });
+
+  it('makes no plan read when enforcement is off', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    mockSiteDocGet.mockResolvedValue({ data: () => ({}) }); // no owner, so no owner read either
+
+    const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
+    expect(recipients.map((r) => r.userId)).toEqual(['u1']);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockSiteDocGet).toHaveBeenCalledTimes(1);
+    expect(mockUsersDoc).not.toHaveBeenCalled();
+  });
+
+  it('resolves the payer once across a batch sharing a memo', async () => {
+    mockGetEntitlements.mockResolvedValue(ent('0'));
+    const memo = createPlanMemo();
+
+    await getSiteAlertRecipients('site-1', 'healthAlerts', memo);
+    await getSiteAlertRecipients('site-2', 'healthAlerts', memo);
+
+    expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+    expect(mockUsersDoc).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('getSiteAlertRecipients — ADMIN_EMAIL fallback', () => {

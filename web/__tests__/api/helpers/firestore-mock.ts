@@ -7,6 +7,8 @@
  * `jest.mock('@/lib/firebase-admin', () => ({ getAdminDb: () => mockDbFactory() }))`).
  */
 
+import type { SwoopMode } from '@/lib/swoopMode';
+
 export const mocks = {
   /** doc().get() — called with the document's full path, so an implementation
    *  can answer per-collection (e.g. `users/{uid}` vs the route's own doc). */
@@ -147,6 +149,7 @@ export function mockDbFactory(): Record<string, unknown> {
 
 /**
  * Give `uid` standing on `siteId`, as `membership.server.ts` would write it.
+ * `extra` adds the person's `swoop` mode to the row.
  *
  * Site-scoped capabilities resolve from this row and nothing else, so a suite
  * exercising anything beyond a superadmin has to call it.
@@ -155,6 +158,7 @@ export function seedMember(
   siteId: string,
   uid: string,
   role: 'owner' | 'admin' | 'member' = 'admin',
+  extra: { swoop?: SwoopMode } = {},
 ): void {
   mocks.memberDocs.set(`${siteId}/${uid}`, {
     uid,
@@ -162,6 +166,7 @@ export function seedMember(
     status: 'active',
     addedAt: new Date(0),
     addedBy: 'system:test',
+    ...extra,
   });
   // A member needs a live user document to pass the soft-delete check, and
   // seeding it here takes that read off the `mocks.get` queue — see `userDocs`.

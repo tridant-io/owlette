@@ -90,6 +90,7 @@ logs/
 !web/app/logs/
 !web/app/api/sites/*/logs/
 !web/app/api/sites/*/logs/route.ts
+!web/app/api/admin/issues/*/logs/
 !web/e2e/specs/logs/
 tmp/
 agent/logs/

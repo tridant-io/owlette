@@ -26,6 +26,8 @@ const nextConfig: NextConfig = {
   allowedDevOrigins,
   images: {
     formats: ['image/avif', 'image/webp'],
+    // 90 is the landing dashboard screenshot, whose ui text blurs at 75.
+    qualities: [75, 90],
   },
   async redirects() {
     return [
@@ -117,6 +119,12 @@ const nextConfig: NextConfig = {
         destination: '/docs/:path*',
         permanent: true,
       },
+      // old bookmarks and links; a 307 until the release reaches prod, so a revert is not cached in browsers.
+      {
+        source: '/admin/members',
+        destination: '/admin/sites',
+        permanent: false,
+      },
     ];
   },
   async headers() {
@@ -171,5 +179,13 @@ export default withSentryConfig(withMDX(nextConfig), {
   // Source maps must not stay publicly reachable after upload.
   sourcemaps: {
     filesToDeleteAfterUpload: [".next/static/**/*.map"],
+  },
+  // errors only: traces and replays sample at 0 in every sentry.*.config.ts,
+  // so their code is dead weight in the bundle.
+  bundleSizeOptimizations: {
+    excludeTracing: true,
+    excludeReplayIframe: true,
+    excludeReplayShadowDom: true,
+    excludeDebugStatements: true,
   },
 });

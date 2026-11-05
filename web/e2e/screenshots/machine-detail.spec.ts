@@ -4,13 +4,15 @@
  * Output: `web/public/docs-screens/machine-detail.png`
  * Used by: `web/content/docs/dashboard/machine-monitoring.mdx`
  */
-import { test, expect } from '@playwright/test';
+import { expect } from '@playwright/test';
 import { roleState } from '../helpers/roles';
 import { seedScreenshotFixtures } from './fixtures';
 import {
   installFixedClock,
   pinAdminSiteContext,
   settleForDocsScreenshot,
+  test,
+  themedPath,
 } from './docs-helpers';
 
 test.use({ ...roleState('admin'), viewport: { width: 1100, height: 900 } });
@@ -58,7 +60,7 @@ test('machine detail docs screenshot', async ({ page }) => {
     await expect(panel).not.toContainText(/bienvenue/i);
 
     await settleForDocsScreenshot(page);
-    await panel.screenshot({ path: 'public/docs-screens/machine-detail.png' });
+    await panel.screenshot({ path: themedPath('public/docs-screens/machine-detail.png') });
   } finally {
     await ctx.cleanup();
   }

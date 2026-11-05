@@ -7,7 +7,7 @@
  * — ownership must be transferred first (mirrors the admin cascade's `orphan_sites` guard).
  *
  * Also drained so a self-deleted user leaves no residue: users/{uid}/{passkeys,
- * trustedDevices,api_keys}, top-level api_keys lookups, mfa_pending/{uid},
+ * trustedDevices,verified_networks,api_keys}, top-level api_keys lookups, mfa_pending/{uid},
  * agent_refresh_tokens by createdBy, chats by userId, and Storage users/{uid}/*.
  * The Firebase Auth user is revoked + deleted server-side afterwards; the client's own
  * post-response deleteUser() raced that and should be dropped.
@@ -87,6 +87,7 @@ export type DeleteOwnAccountResult =
         memberSitesRemoved: number;
         passkeys: number;
         trustedDevices: number;
+        verifiedNetworks: number;
         apiKeys: number;
         apiKeyLookups: number;
         mfaPending: number;
@@ -131,6 +132,7 @@ function emptyDeletedCounts() {
     memberSitesRemoved: 0,
     passkeys: 0,
     trustedDevices: 0,
+    verifiedNetworks: 0,
     apiKeys: 0,
     apiKeyLookups: 0,
     mfaPending: 0,
@@ -614,6 +616,7 @@ export async function deleteOwnAccount(
             memberSitesRemoved: numberOr0(counts.memberSitesRemoved),
             passkeys: numberOr0(counts.passkeys),
             trustedDevices: numberOr0(counts.trustedDevices),
+            verifiedNetworks: numberOr0(counts.verifiedNetworks),
             apiKeys: numberOr0(counts.apiKeys),
             apiKeyLookups: numberOr0(counts.apiKeyLookups),
             mfaPending: numberOr0(counts.mfaPending),
@@ -748,6 +751,8 @@ export async function deleteOwnAccount(
   // Drain device-trust records too, else a stale trust cookie could skip MFA for a later
   // account re-created under the same uid.
   const trustedDevices = await drainUserSubcollection(ctx, 'trustedDevices');
+  // the networks swoop control was verified from: asn and timestamps, nothing to keep
+  const verifiedNetworks = await drainUserSubcollection(ctx, 'verified_networks');
   const { apiKeys, apiKeyLookups } = await drainApiKeys(ctx);
   const mfaPending = await deleteMfaPending(ctx);
   const agentTokens = await drainQueryWhereEqualsUser(
@@ -783,6 +788,7 @@ export async function deleteOwnAccount(
     memberSitesRemoved,
     passkeys,
     trustedDevices,
+    verifiedNetworks,
     apiKeys,
     apiKeyLookups,
     mfaPending,

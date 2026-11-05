@@ -21,6 +21,7 @@ import {
   installerVersionResponse,
   type InstallerVersionRecord,
 } from '@/lib/installerVersionResponse.server';
+import { tridantReleaseState } from '@/lib/tridantRelease.server';
 import { applyAuthDeprecations, requirePlatformAuthAndScope } from '../_shared';
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -67,9 +68,10 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const versions = page.docs.map((d) =>
-      installerVersionResponse(d.id, d.data() as InstallerVersionRecord),
-    );
+    const versions = page.docs.map((d) => ({
+      ...installerVersionResponse(d.id, d.data() as InstallerVersionRecord),
+      tridant: tridantReleaseState(d.data().tridant),
+    }));
 
     return applyAuthDeprecations(
       NextResponse.json(withPaginationFields({ versions }, page.nextPageToken)),

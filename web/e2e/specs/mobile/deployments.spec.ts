@@ -6,7 +6,10 @@
  * flex-1`), the 90px status badge and timestamp drop out below `sm`, and the ⋮
  * trigger grows to a 40px touch target via `pointer-coarse:`.
  * responsive-acceptance only measures the collapsed list; this expands a row
- * (long installer url, per-target rows) and opens the actions menu.
+ * (long installer url, per-target rows) and opens the actions menu. The failed
+ * target's machine is inside its active hours, so its retry asks for a reason
+ * in a confirm that has to fit too (dispatch/deployment-active-hours.spec.ts
+ * owns the behaviour).
  *
  * Isolation: the deployment + machine are dedicated to this file and removed in
  * afterAll, so the dispatch specs' "exactly one deployment" assertions hold.
@@ -15,9 +18,9 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { Timestamp } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
-import { assertNoHorizontalOverflow } from '../../helpers/mobile';
+import { assertNoHorizontalOverflow, expectFullyWithinViewport } from '../../helpers/mobile';
 import { roleState } from '../../helpers/roles';
-import { TEST_SITES, seedMachine } from '../../helpers/seed';
+import { TEST_SITES, activeHoursAroundNow, seedMachine } from '../../helpers/seed';
 
 test.use(roleState('admin'));
 
@@ -37,7 +40,7 @@ const MIN_TOUCH_TARGET_PX = 40;
 async function seedDeployment(): Promise<void> {
   await Promise.all([
     seedMachine(SITE_ID, OK_MACHINE_ID),
-    seedMachine(SITE_ID, FAILED_MACHINE_ID),
+    seedMachine(SITE_ID, FAILED_MACHINE_ID, { activeHours: activeHoursAroundNow(true), activeHoursGuard: true }),
   ]);
   await getAdminDb()
     .collection('sites')
@@ -99,6 +102,8 @@ test('expanding a deployment row reveals its targets without widening the page',
   await expect(page.getByText('targets (2)', { exact: true })).toBeVisible();
   await expect(page.getByText(OK_MACHINE_ID, { exact: true })).toBeVisible();
   await expect(page.getByText(FAILED_MACHINE_ID, { exact: true })).toBeVisible();
+  // a failure that is not an active-hours refusal reads as the agent wrote it
+  await expect(page.getByText('install exited with code 1603', { exact: true })).toBeVisible();
   await expect(
     page.getByRole('button', { name: `retry deployment to ${FAILED_MACHINE_ID}` }),
   ).toBeVisible();
@@ -129,4 +134,23 @@ test('the row actions menu has a touch-sized trigger and opens its items', async
 
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
+});
+
+test('the retry confirm inside active hours fits a phone', async ({ page }) => {
+  const rowLabel = await openDeploymentsPage(page);
+  await rowLabel.click();
+  await page.getByRole('button', { name: `retry deployment to ${FAILED_MACHINE_ID}` }).click();
+
+  const confirm = page.getByRole('dialog', { name: 'retry inside active hours?' });
+  await expect(confirm.getByRole('listitem')).toContainText(FAILED_MACHINE_ID);
+  await confirm.getByLabel('reason').fill('venue closed for the day');
+
+  for (const name of ['retry anyway', 'cancel']) {
+    await expectFullyWithinViewport(page, confirm.getByRole('button', { name, exact: true }), name);
+  }
+  await assertNoHorizontalOverflow(page);
+
+  // nothing is sent: the dispatch spec owns the retry itself
+  await confirm.getByRole('button', { name: 'cancel', exact: true }).click();
+  await expect(confirm).toBeHidden();
 });

@@ -1,10 +1,11 @@
 //! Video encoders behind one trait (plan.md D7).
 //!
-//! Every backend module root exposes exactly `probe() -> BackendCaps` and
-//! `create(&EncoderConfig) -> Result<Box<dyn Encoder>>`, `#[cfg(feature = ...)]`
-//! gated, so Task 7.3 can select between them without knowing which are built
-//! in. Tasks 3.7, 7.1, 7.2 and 7.3 all sign against the types below — they are
-//! contract, not convenience.
+//! Every backend module root — each rung's, so `mf::hw` and `mf::sw` both —
+//! exposes exactly `probe() -> BackendCaps` and `create(&EncoderConfig) ->
+//! Result<Box<dyn Encoder>>`, `#[cfg(feature = ...)]` gated, so Task 7.3 can
+//! select between them without knowing which are built in. Tasks 3.7, 7.1,
+//! 7.2 and 7.3 all sign against the types below — they are contract, not
+//! convenience.
 
 use serde::{Deserialize, Serialize};
 
@@ -13,17 +14,16 @@ use crate::gpu::Frame;
 #[cfg(all(windows, feature = "encode-nvenc"))]
 pub mod nvenc;
 
-// Spike 6.7 picks the crate behind the Intel, AMD and software backends —
-// FFmpeg's LGPL `*_qsv`/`*_amf` (what Sunshine ships), native oneVPL/AMF, or
-// openh264 — so each of these is gated on either feature until it does.
-#[cfg(all(windows, any(feature = "encode-amf", feature = "encode-ffmpeg")))]
-pub mod amf;
+// The rungs below NVENC on Windows: the hardware MFT and the in-box software
+// encoder, both through Media Foundation (`mf::hw`, `mf::sw`).
 #[cfg(all(windows, feature = "encode-mf"))]
 pub mod mf;
-#[cfg(all(windows, any(feature = "encode-vpl", feature = "encode-ffmpeg")))]
-pub mod qsv;
-#[cfg(any(feature = "encode-openh264", feature = "encode-ffmpeg"))]
-pub mod soft;
+#[cfg(all(target_os = "macos", feature = "encode-videotoolbox"))]
+pub mod videotoolbox;
+
+// The H.264 SPS reader and its bitstream-restriction rewrite. Plain Rust with
+// no platform in it, so its tests run on every system.
+pub mod h264_sps;
 
 // The chain over whichever of the above are built, and the only module that
 // knows their order. Never gated: with no backend compiled in it still answers,
@@ -46,7 +46,7 @@ pub enum Codec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackendCaps {
     /// Backend name as the selection table and the probe JSON spell it —
-    /// "nvenc", "qsv", "amf", "mf", "openh264".
+    /// "nvenc", "mf-hw", "mf-sw", "videotoolbox".
     pub backend: &'static str,
     /// Per-codec limits. A codec absent from this list is not encodable here.
     pub codecs: Vec<CodecCaps>,
@@ -54,11 +54,14 @@ pub struct BackendCaps {
     /// convert pass (Task 4.5) sits in front of it and costs a frame stage.
     pub accepts_bgra_texture: bool,
     /// Frames per second the backend sustained at its largest supported size,
-    /// measured on this machine — not a datasheet number.
+    /// measured on this machine — not a datasheet number. 0 where nothing was
+    /// measured: the Media Foundation rungs' probe never encodes. Nothing
+    /// selects or tiers on it.
     pub max_fps: u32,
-    /// How many simultaneous encode sessions the driver allows. Consumer NVIDIA
-    /// drivers cap this, and Task 8.2's encoder tiers are min(codec classes
-    /// present, this).
+    /// How many simultaneous encode sessions the backend serves. NVENC counts
+    /// the driver's own cap by opening sessions; Media Foundation has no such
+    /// count, and its rungs report a fixed 4 that their modules document.
+    /// Task 8.2's encoder tiers are min(codec classes present, this).
     pub concurrent_sessions: u32,
 }
 
@@ -103,11 +106,23 @@ pub struct EncodedFrame {
     pub encoded_qpc: i64,
 }
 
+/// Where an asynchronous backend hands finished frames, from whatever thread
+/// finishes them. Answers whether the frame was taken: one refused leaves a
+/// hole, and the backend forces its next frame to an IRAP.
+pub type Sink = Box<dyn Fn(EncodedFrame) -> bool + Send + Sync>;
+
 /// A live encode session.
 pub trait Encoder: Send {
     /// Submit a captured frame. Returning `Ok(None)` is normal — an encoder
-    /// running asynchronously has not produced output for this input yet.
+    /// running asynchronously has not produced output for this input yet, or
+    /// hands it to its [`Sink`] instead.
     fn encode(&mut self, frame: &Frame, force_irap: bool) -> anyhow::Result<Option<EncodedFrame>>;
+
+    /// Deliver finished frames through `sink` as they complete instead of
+    /// answering them from `encode`, so the next capture overlaps this
+    /// encode. A backend that encodes asynchronously takes it (VideoToolbox);
+    /// the rest answer from `encode`, which is what the default keeps.
+    fn set_sink(&mut self, _sink: Sink) {}
 
     /// Move the CBR target. Called by the rate governor, several times a
     /// second, and must not restart the session.

@@ -27,11 +27,11 @@ This uses Docker Compose v2/BuildKit named build contexts so the runner can
 build from `test/infra/agent-runner/` while copying only `agent/src`,
 `agent/tests`, `agent/VERSION`, and `agent/requirements.txt` from the repo root.
 
-The same command also starts the MinIO R2 stand-in and waits for the bucket
-initialiser before running pytest. The agent container sees MinIO at:
+The same command also starts the S3 stand-in (versitygw) and waits for the
+bucket initialiser before running pytest. The agent container sees it at:
 
 ```text
-http://minio:9000
+http://s3:9000
 ```
 
 ## Adding test modules
@@ -63,7 +63,7 @@ docker compose -f test/infra/docker-compose.yml up --build agent-runner
   Linux: it pulls in `shared_utils`, `hardware_profile` and `config_sync` at
   module load and reaches `display_manager`, `nvapi_display` and
   `registry_utils` only inside the display and hardware methods that use them.
-- `test_sync_pipeline_minio.py` uses MinIO for manifest/chunk HTTP fetches and
+- `test_sync_pipeline_minio.py` uses the stand-in for manifest/chunk HTTP fetches and
   mocks Firestore at the Python level. The existing sync modules do not need a
   live Firestore emulator until the CI suite tests web-issued commands or
   `firebase_client` reporting directly.
@@ -74,11 +74,11 @@ docker compose -f test/infra/docker-compose.yml up --build agent-runner
 CI does not build this image. `.github/workflows/agent-tests.yml` runs the same
 module set as the `CMD` above on its ubuntu runner directly —
 `agent/requirements.txt` installs on Linux unmodified now, which was the whole
-reason this rig existed — and uses `test/infra/docker-compose.yml` for MinIO
-alone:
+reason this rig existed — and uses `test/infra/docker-compose.yml` for the
+stand-in alone:
 
 ```bash
-docker compose -f test/infra/docker-compose.yml up -d --wait minio
+docker compose -f test/infra/docker-compose.yml up -d --wait s3
 docker compose -f test/infra/docker-compose.yml run --rm init-buckets
 
 export PYTHONPATH=agent/src

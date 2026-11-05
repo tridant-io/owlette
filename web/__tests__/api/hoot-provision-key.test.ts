@@ -8,6 +8,9 @@
  * the queue write, so the `site_mutated` / `llm_key.provision` row is emitted
  * there — before the poll, and regardless of how the poll ends. The key must
  * never appear in the row.
+ *
+ * A payer without hoot is refused with 402 plan_required before the
+ * queue write, so nothing is queued or audited.
  */
 
 import { NextRequest } from 'next/server';
@@ -47,6 +50,13 @@ jest.mock('@/lib/hoot-utils.server', () => ({
 
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
+}));
+
+// the real gate by default, which with PLAN_ENFORCEMENT unset answers before any read.
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...a: unknown[]) => mockRequireEntitlement(...a),
 }));
 
 const SITE = 'site-a';
@@ -89,7 +99,11 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import { POST } from '@/app/api/hoot/provision-key/route';
+import { problemPlanRequired } from '@/lib/apiErrors';
 import { emitMutation } from '@/lib/auditLogClient';
+import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+
+const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
 
 function request(body: Record<string, unknown> = {}): NextRequest {
   return new NextRequest('http://localhost/api/hoot/provision-key', {
@@ -126,7 +140,43 @@ beforeEach(() => {
   mockVerifyAccess.mockResolvedValue({ role: 'admin', siteRole: 'admin' });
   mockPendingSet.mockResolvedValue(undefined);
   mockCompletedUpdate.mockResolvedValue(undefined);
+  mockRequireEntitlement.mockImplementation(realRequireEntitlement);
   completedDoc = {};
+});
+
+describe('POST /api/hoot/provision-key — the payer plan', () => {
+  it('refuses with 402 plan_required and queues nothing', async () => {
+    mockRequireEntitlement.mockResolvedValue(
+      problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.hoot'], 'owlette.hoot'),
+    );
+
+    const res = await POST(request());
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.hoot' });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockPendingSet).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('answers a read-only member 403 before the plan is looked up', async () => {
+    mockVerifyAccess.mockResolvedValue({ role: 'member', siteRole: 'member' });
+
+    const res = await POST(request());
+    expect(res.status).toBe(403);
+    expect(mockRequireEntitlement).not.toHaveBeenCalled();
+  });
+
+  it('queues the command as before with enforcement off', async () => {
+    mockPendingSet.mockImplementation(async (payload: Record<string, unknown>) => {
+      const [commandId] = Object.keys(payload);
+      completedDoc = { [commandId]: { status: 'completed' } };
+    });
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+    expect(mockPendingSet).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('POST /api/hoot/provision-key — audit', () => {
