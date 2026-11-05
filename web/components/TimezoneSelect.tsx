@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useId } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { SearchRow } from '@/components/SearchRow';
 import { ChevronDown, Check } from 'lucide-react';
@@ -19,6 +19,8 @@ const COMMON_TZ_SET = new Set<string>(COMMON_TIMEZONES.map((tz) => tz.value));
 
 export function TimezoneSelect({ value, onValueChange, disabled, className, id }: TimezoneSelectProps) {
   const [open, setOpenRaw] = useState(false);
+  // the list the combobox controls, for assistive tech and the a11y lint
+  const listId = useId();
   const [search, setSearch] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -96,6 +98,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-controls={open ? listId : undefined}
           disabled={disabled}
           className={cn(
             'flex h-9 w-full items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm whitespace-nowrap shadow-xs disabled:cursor-not-allowed disabled:opacity-50',
@@ -123,6 +126,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           clearLabel="clear search"
         />
         <div
+          id={listId}
           ref={listRef}
           className="max-h-[300px] overflow-y-auto p-1 [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar-track]:bg-background [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-thumb]:rounded-md [&::-webkit-scrollbar-thumb:hover]:bg-accent"
         >
