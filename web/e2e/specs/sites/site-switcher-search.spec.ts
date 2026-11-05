@@ -7,14 +7,16 @@
  * clears the filter before it closes the switcher. owlette swoop's picker
  * (`/swoop`) has the same filter in its site list, where enter picks the first
  * match. keys are pressed one at a time, as a person types them: a menu takes
- * a typed key as typeahead unless the filter keeps it.
+ * a typed key as typeahead unless the filter keeps it. the filter is a search
+ * row whose x clears it; the report keeps pictures of the open switcher, dark
+ * and light, and of swoop's list, because the look is the owner's to judge.
  *
  * the sites are released after the file and the superadmin's saved site put
  * back: the suite runs one worker, so either would carry into later specs.
  */
 
 import crypto from 'crypto';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
@@ -56,6 +58,13 @@ async function openSwitcher(page: Page) {
   return filter;
 }
 
+// the open surface and 16 px around it, so its edges and shadow are in the picture
+async function attachPicture(page: Page, surface: Locator, name: string) {
+  const box = (await surface.boundingBox())!;
+  const clip = { x: box.x - 16, y: box.y - 16, width: box.width + 32, height: box.height + 32 };
+  await test.info().attach(name, { body: await page.screenshot({ clip }), contentType: 'image/png' });
+}
+
 test("the header's switcher opens on a filter, and picking a match switches to that site", async ({ page }) => {
   const filter = await openSwitcher(page);
 
@@ -66,6 +75,19 @@ test("the header's switcher opens on a filter, and picking a match switches to t
   await expect(page.getByRole('menuitem', { name: 'Site A (Assigned)' })).toHaveCount(0);
   const match = page.getByRole('menuitem', { name: KESTREL.name, exact: true });
   await expect(match.locator('mark')).toHaveText(`kestrel ${SUFFIX}`);
+
+  const menu = page.getByRole('menu');
+  const clear = menu.getByRole('button', { name: 'clear filter' });
+  await expect(clear).toBeVisible();
+  await attachPicture(page, menu, 'switcher filter, dark');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).not.toHaveClass(/\bdark\b/);
+  await expect(clear).toBeVisible();
+  await attachPicture(page, menu, 'switcher filter, light');
+
+  await clear.click();
+
+  await expect(runSites(page)).toHaveCount(SITES.length);
 
   await match.click();
 
@@ -101,8 +123,10 @@ test("owlette swoop's picker has the same filter in its site list, and enter pic
   const filter = list.getByRole('textbox', { name: 'filter sites', exact: true });
   await expect(filter).toBeFocused();
   await filter.pressSequentially(`lagoon ${SUFFIX}`);
-  await expect(list.getByRole('button')).toHaveCount(1);
+  // this run's sites: the filter's x is a button in the list too
+  await expect(list.getByRole('button', { name: new RegExp(SUFFIX) })).toHaveCount(1);
   await expect(list.getByRole('button', { name: LAGOON.name, exact: true })).toBeVisible();
+  await attachPicture(page, list, 'picker site list, dark');
 
   await filter.press('Enter');
 

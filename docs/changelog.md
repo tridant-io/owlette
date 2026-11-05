@@ -10,6 +10,11 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — the site filter is a search row
+
+Past ten sites, the filter in the site switcher and in owlette swoop's site
+list is a search row at the top of the menu, with a magnifier and an x to
+clear it, instead of a boxed field. Nothing to update on the machine.
 
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site

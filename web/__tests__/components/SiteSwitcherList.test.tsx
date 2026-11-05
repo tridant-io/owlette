@@ -7,7 +7,8 @@
  * name or id, in any case, with the match marked and the current site still
  * checked. enter picks the first match and arrow down goes into the list.
  * escape clears the text, and only an escape with nothing left to clear is the
- * surface's to close on. the menu surface and the radix hosts are on trial in
+ * surface's to close on. the filter is a search row, not a boxed field, and its
+ * x clears the text too. the menu surface and the radix hosts are on trial in
  * PageHeader's suite and SwoopPicker's.
  */
 
@@ -15,6 +16,7 @@ import React from 'react';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SITE_FILTER_THRESHOLD, SiteSwitcherList, filterClaimsEscape } from '@/components/SiteSwitcherList';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
 const NAMED = [
   { id: 'elm-gate', name: 'LIVE NATION' },
@@ -36,7 +38,10 @@ function renderList(props: Partial<React.ComponentProps<typeof SiteSwitcherList>
 }
 
 const filterBox = () => screen.getByRole('textbox', { name: 'filter sites' });
-const shownNames = () => screen.queryAllByRole('button').map((button) => button.textContent);
+const clearButton = () => screen.queryByRole('button', { name: 'clear filter' });
+// every button but the filter's clear button
+const siteRows = () => screen.queryAllByRole('button', { name: (name) => name !== 'clear filter' });
+const shownNames = () => siteRows().map((button) => button.textContent);
 
 describe('SiteSwitcherList', () => {
   it('has no filter at ten sites, and one at eleven', () => {
@@ -57,7 +62,7 @@ describe('SiteSwitcherList', () => {
     await user.type(filterBox(), 'GALLERY');
 
     expect(shownNames()).toEqual(['Gallery North', 'Gallery South']);
-    const [north] = screen.getAllByRole('button');
+    const [north] = siteRows();
     expect(within(north).getByText('Gallery', { selector: 'mark' })).toBeInTheDocument();
     // a name match needs no id beside it
     expect(north).not.toHaveTextContent('gallery-n');
@@ -68,7 +73,7 @@ describe('SiteSwitcherList', () => {
 
     await user.type(filterBox(), 'Elm-Gate');
 
-    const buttons = screen.getAllByRole('button');
+    const buttons = siteRows();
     expect(buttons).toHaveLength(1);
     expect(buttons[0]).toHaveTextContent('LIVE NATION');
     expect(within(buttons[0]).getByText('elm-gate', { selector: 'mark' })).toBeInTheDocument();
@@ -93,7 +98,7 @@ describe('SiteSwitcherList', () => {
 
     await user.type(filterBox(), 'nowhere');
 
-    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(siteRows()).toHaveLength(0);
     expect(screen.getByText('no sites match “nowhere”')).toBeInTheDocument();
   });
 
@@ -168,5 +173,56 @@ describe('SiteSwitcherList', () => {
     other.value = 'still typing';
 
     expect(filterClaimsEscape({ key: 'Escape', target: other })).toBe(false);
+  });
+
+  it('is a search row with a magnifier, not a boxed field', () => {
+    renderList();
+
+    expect(filterBox().parentElement?.querySelector('svg.lucide-search')).not.toBeNull();
+    expect(filterBox()).toHaveClass('bg-transparent');
+    expect(filterBox()).not.toHaveClass('border');
+  });
+
+  it('has no clear button while the filter is empty', () => {
+    renderList();
+
+    expect(clearButton()).toBeNull();
+  });
+
+  it('its x clears the text, keeps the focus in the filter and lists every site again', async () => {
+    const { user } = renderList();
+
+    await user.type(filterBox(), 'gallery');
+    expect(siteRows()).toHaveLength(2);
+    await user.click(clearButton()!);
+
+    expect(filterBox()).toHaveValue('');
+    expect(filterBox()).toHaveFocus();
+    expect(siteRows()).toHaveLength(ELEVEN.length);
+    expect(clearButton()).toBeNull();
+  });
+
+  it('in a menu, a key on the x stays there, so the menu never takes it as typeahead; tab goes on', async () => {
+    const user = userEvent.setup();
+    const reached: string[] = [];
+    render(
+      <DropdownMenu>
+        <DropdownMenuTrigger>sites</DropdownMenuTrigger>
+        <DropdownMenuContent onKeyDown={(e) => reached.push(e.key)}>
+          <SiteSwitcherList surface="menu" sites={ELEVEN} onPick={jest.fn()} />
+        </DropdownMenuContent>
+      </DropdownMenu>,
+    );
+    await user.click(screen.getByRole('button', { name: 'sites' }));
+    // the filter has the focus as the menu opens, and keeps what is typed in it
+    await user.keyboard('kiosk');
+    clearButton()!.focus();
+    expect(clearButton()).toHaveFocus();
+
+    await user.keyboard('k');
+    expect(reached).toEqual([]);
+
+    await user.keyboard('{Tab}');
+    expect(reached).toEqual(['Tab']);
   });
 });

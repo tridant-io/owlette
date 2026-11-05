@@ -547,7 +547,8 @@ describe('SwoopPicker', () => {
     const filter = within(list).getByRole('textbox', { name: 'filter sites' });
     await waitFor(() => expect(filter).toHaveFocus());
     await user.keyboard('harbor 7');
-    expect(within(list).getAllByRole('button').map((button) => button.textContent)).toEqual(['Harbor 7']);
+    const siteRows = within(list).getAllByRole('button', { name: (name) => name !== 'clear filter' });
+    expect(siteRows.map((button) => button.textContent)).toEqual(['Harbor 7']);
     await user.keyboard('{Enter}');
 
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'sites' })).toBeNull());
