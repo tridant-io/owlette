@@ -107,6 +107,9 @@ const HOST_SILENT_FINAL =
 /** what someone a revocation was for is told when the api refuses their way back in. */
 const ACCESS_REMOVED = 'your access to this machine was removed.';
 
+/** told to the one a kick was for, who may rejoin. */
+const KICKED = 'a site admin removed you from this session.';
+
 /** a machine removed from the site, or one that left it from its own tray: there is nothing to reconnect to. */
 const LEFT_SITE = 'this machine has left the site.';
 
@@ -228,16 +231,22 @@ const REVOKED_REFUSALS: ReadonlySet<string> = new Set(['not_found', 'user_inacti
 
 /**
  * whom a kill was for, read off its record. one streamer serves everyone on the
- * machine and cannot drop one viewer, so a revocation ends the session for all
- * of them, and the record names whom it was for. a record this user may no
- * longer read is a revocation of them. a record that names nobody is the
- * decision a kill always was.
+ * machine and cannot drop one viewer, so a revocation or a kick ends the
+ * session for all of them, and the record names whom it was for. a record this
+ * user may no longer read is a revocation of them. a record that names nobody
+ * is the decision a kill always was.
  */
 function killedFor(ended: RecordedEnd | 'refused' | null, uid: string | null): 'me' | 'another' | 'nobody' {
   if (ended === 'refused') return 'me';
-  if (ended === null || ended.reason !== 'revoked' || ended.endedFor === null) return 'nobody';
+  if (ended === null || (ended.reason !== 'revoked' && ended.reason !== 'kicked') || ended.endedFor === null) {
+    return 'nobody';
+  }
   return ended.endedFor === uid ? 'me' : 'another';
 }
+
+/** whether the record says this user was kicked from it: their access is intact, so only the record stops them. */
+const kickedMe = (ended: RecordedEnd | 'refused' | null, uid: string | null): boolean =>
+  uid !== null && ended !== null && ended !== 'refused' && ended.reason === 'kicked' && ended.endedFor === uid;
 
 /**
  * whether the record says the machine left the site: its removal ends its
@@ -510,15 +519,20 @@ export function useSwoopSession(
         const reason = ended === null || ended === 'refused' ? null : ended.reason;
         const previous = lastMachineFailureRef.current;
         lastMachineFailureRef.current = reason;
+        // a kick of this user stops a page that missed its bye, already between sessions
+        const kicked = kickedMe(ended, uidRef.current);
         const why = leftTheSite(ended)
           ? LEFT_SITE
-          : reason !== null && machineFailureStops(reason, previous)
-            ? machineFailureCopy(reason)
-            : null;
+          : kicked
+            ? KICKED
+            : reason !== null && machineFailureStops(reason, previous)
+              ? machineFailureCopy(reason)
+              : null;
         if (reason === null || why === null) {
           startNext();
           return;
         }
+        if (kicked) lastSidRef.current = null;
         stoppedRef.current = true;
         setRestarting(false);
         setStall({ recovery: 'none' });
@@ -988,14 +1002,26 @@ export function useSwoopSession(
           if (reason === 'kill') {
             // an admin's kill or a stop from the machine itself: decisions,
             // which a retry would undo. a revocation is not one of them for
-            // anybody (`killedFor`): it ends the session for everyone in it,
-            // and everyone comes back on the ladder, where the api decides
-            // what each may do now. a removed member is refused, which says
-            // so, and someone whose control was taken comes back watching.
+            // anybody, nor is a kick of someone else (`killedFor`): either
+            // ends the session for everyone in it, and they come back on the
+            // ladder, where the api decides what each may do now. a removed
+            // member is refused, which says so, and someone whose control was
+            // taken comes back watching. a kick of this user is final, on the
+            // record's word: their access is intact, so the api would let
+            // them straight back in, and only their own reconnect does.
             // another tab or device opening the machine joins this session
             // rather than replacing it. a 4.0.x service stop or update byes
             // its viewers this way too; later agents say `restart`, below.
             settleBye(sid, (ended) => {
+              if (kickedMe(ended, uidRef.current)) {
+                // their rejoin starts from no session, so one that fails on the way
+                // goes on the ladder rather than reading this kick again
+                lastSidRef.current = null;
+                writeContinuity(siteId, machineId, null);
+                if (!disposed) setRefusal('kicked');
+                fail(KICKED, false);
+                return;
+              }
               const whom = killedFor(ended, uidRef.current);
               if (whom === 'nobody') {
                 // a decision: the next session from this tab asks again.

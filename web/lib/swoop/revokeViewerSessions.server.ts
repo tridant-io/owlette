@@ -1,25 +1,32 @@
 /**
- * End one user's live swoop sessions in a site, because their authorisation to
- * be in them just went away — removed from the site, or demoted out of
- * `MACHINE_REMOTE_CONTROL`.
+ * End one person's live swoop sessions. A revocation ends every one they are
+ * in, in a site, because their authorisation to be in them just went away —
+ * removed from the site, or demoted out of `MACHINE_REMOTE_CONTROL`. A kick
+ * (`swoop/sessions/{sid}/kick`) ends one, because a site owner or admin took
+ * them out of it.
  *
- * The lease already covers this: the renewal route re-checks membership, site
- * enablement and capability, so a removed member is out within one lease
- * (<= 5 min) with nothing here at all (PROTOCOL.md §10). This is the fast half
- * of the same decision — the kill path (plan.md D11) closes the window to
- * <= 2 s — and it is best-effort by construction: the membership write is
+ * The lease already covers a revocation: the renewal route re-checks
+ * membership, site enablement and capability, so a removed member is out within
+ * one lease (<= 5 min) with nothing here at all (PROTOCOL.md §10). This is the
+ * fast half of the same decision — the kill path (plan.md D11) closes the window
+ * to <= 2 s — and it is best-effort by construction: the membership write is
  * authoritative and has already landed when this runs.
  *
- * So: never inside the caller's Firestore transaction, never awaited in a way
- * that can fail the response, and never throwing. A relay that is down costs
- * the revocation its 2 seconds, not its correctness.
+ * So the sweep is never inside the caller's Firestore transaction, never
+ * awaited in a way that can fail the response, and never throws. A relay that
+ * is down costs the revocation its 2 seconds, not its correctness. A kick is the
+ * request itself, so its end may throw, and the kick route answers it.
  */
 
 import type { Actor } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { requestSwoopSession } from '@/lib/actions/requestSwoopSession.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
-import { endSwoopSession, listUnendedSwoopSessionsForUser } from '@/lib/swoop/sessionStore.server';
+import {
+  endSwoopSession,
+  listUnendedSwoopSessionsForUser,
+  type SwoopSession,
+} from '@/lib/swoop/sessionStore.server';
 import { killSession, type SwoopSignalResult } from '@/lib/swoop/signal.server';
 
 export interface RevokeSwoopSessionsArgs {
@@ -45,21 +52,96 @@ export interface RevokeSwoopSessionsResult {
   revokedSids: string[];
 }
 
+export interface EndSwoopSessionForUserArgs {
+  session: SwoopSession;
+  /** whom it is ended for: the record names them. */
+  uid: string;
+  endReason: 'revoked' | 'kicked';
+  /** why, for the audit row: a reason code, never prose. */
+  auditReason: string;
+  /** whoever ended it. */
+  actor: Actor;
+  /** `user:<uid>` / `apiKey:<keyId>`, for the command envelope. */
+  auditActor: string;
+  /** stamped on the command envelope so the agent's write-back correlates. */
+  correlationId?: string;
+}
+
 /**
- * Ends every unended session this user holds a seat in, then stops the
- * streamer the way the session DELETE does: the Worker broadcast
- * (authoritative, <= 2 s), and the polled `swoop_kill` command only when that
- * did not land.
+ * Ends one session for one person, then stops the streamer the way the session
+ * DELETE does: the Worker broadcast (authoritative, <= 2 s), and the polled
+ * `swoop_kill` command only when that did not land.
  *
  * Several viewers share a session, and the kill is sid-scoped — the protocol's
  * only per-session stop, §10 has no "evict one viewer" — so it ends for
- * everyone in it. Taking out the user's seat alone would leave them in it, in
+ * everyone in it. Taking out the person's seat alone would leave them in it, in
  * control if they held it, until the host drops them a lease later. So the
  * record names whom it was ended for (`endedFor`), and everyone in it starts
  * the next session on their own, where the api decides what each may do now:
- * the person removed is refused, the person demoted watches. Step-up windows
- * are untouched, which only the kill route closes.
+ * the person removed is refused, the person demoted watches, and the person
+ * kicked stops on the record's word. Step-up windows are untouched, which only
+ * the kill route closes.
+ *
+ * Throws when the record cannot be ended or the audit row cannot be written;
+ * a stop path that fails is logged, and the lease still ends the streamer.
  */
+export async function endSwoopSessionForUser(args: EndSwoopSessionForUserArgs): Promise<void> {
+  const { siteId, machineId, sid } = args.session;
+
+  await endSwoopSession({
+    siteId,
+    machineId,
+    sid,
+    endReason: args.endReason,
+    endedFor: args.uid,
+  });
+
+  const broadcast = await killSession({ siteId, machineId, sid }).catch(
+    (): SwoopSignalResult => ({ ok: false, reason: 'unreachable' }),
+  );
+  // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
+  // running, whatever sid it names, so a polled kill queued every time lands on the
+  // next session.
+  if (!broadcast.ok) {
+    logger.warn('[swoop/revoke] kill broadcast failed; falling back to the polled command', {
+      context: 'swoop/revoke',
+      data: { siteId, machineId, reason: broadcast.reason },
+    });
+    try {
+      await requestSwoopSession({
+        type: 'swoop_kill',
+        sid,
+        siteId,
+        machineId,
+        actor: args.actor,
+        auditActor: args.auditActor,
+        ...(args.correlationId ? { correlationId: args.correlationId } : {}),
+      });
+    } catch (err) {
+      logger.warn('[swoop/revoke] kill command could not be queued; the lease still ends it', {
+        context: 'swoop/revoke',
+        data: {
+          siteId,
+          machineId,
+          err: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
+  }
+
+  await recordSwoopSessionEnded({
+    siteId,
+    machineId,
+    sid,
+    actor: args.actor,
+    ...(args.correlationId ? { correlationId: args.correlationId } : {}),
+    endReason: args.auditReason,
+    endedFor: args.uid,
+    durationMs: Date.now() - args.session.startedAt,
+  });
+}
+
+/** Ends every unended session this user holds a seat in (`endSwoopSessionForUser`). */
 export async function revokeSwoopSessionsForUser(
   args: RevokeSwoopSessionsArgs,
 ): Promise<RevokeSwoopSessionsResult> {
@@ -71,63 +153,21 @@ export async function revokeSwoopSessionsForUser(
     });
 
     for (const session of sessions) {
-      const { machineId, sid } = session;
       // a session they started and left goes on without them, and a demotion
       // costs control and nothing else: a watch they are still entitled to survives it.
       const seated = session.viewers.some((viewer) => viewer.uid === args.uid && (!args.controlOnly || viewer.ctl));
       if (!seated) continue;
 
-      await endSwoopSession({
-        siteId: args.siteId,
-        machineId,
-        sid,
+      await endSwoopSessionForUser({
+        session,
+        uid: args.uid,
         endReason: 'revoked',
-        endedFor: args.uid,
-      });
-      revokedSids.push(sid);
-
-      const broadcast = await killSession({ siteId: args.siteId, machineId, sid }).catch(
-        (): SwoopSignalResult => ({ ok: false, reason: 'unreachable' }),
-      );
-      // the agent's swoop_kill (4.0.1 and every earlier one) stops whatever streamer is
-      // running, whatever sid it names, so a polled kill queued every time lands on the
-      // next session.
-      if (!broadcast.ok) {
-        logger.warn('[swoop/revoke] kill broadcast failed; falling back to the polled command', {
-          context: 'swoop/revoke',
-          data: { siteId: args.siteId, machineId, reason: broadcast.reason },
-        });
-        try {
-          await requestSwoopSession({
-            type: 'swoop_kill',
-            sid,
-            siteId: args.siteId,
-            machineId,
-            actor: args.actor,
-            auditActor: args.auditActor,
-            ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-          });
-        } catch (err) {
-          logger.warn('[swoop/revoke] kill command could not be queued; the lease still ends it', {
-            context: 'swoop/revoke',
-            data: {
-              siteId: args.siteId,
-              machineId,
-              err: err instanceof Error ? err.message : String(err),
-            },
-          });
-        }
-      }
-
-      await recordSwoopSessionEnded({
-        siteId: args.siteId,
-        machineId,
-        sid,
+        auditReason: args.reason,
         actor: args.actor,
-        ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-        endReason: args.reason,
-        durationMs: Date.now() - session.startedAt,
+        auditActor: args.auditActor,
+        correlationId: args.correlationId,
       });
+      revokedSids.push(session.sid);
     }
   } catch (err) {
     // The membership write is already done and is what actually removes the

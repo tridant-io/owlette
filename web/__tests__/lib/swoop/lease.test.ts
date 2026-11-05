@@ -266,7 +266,7 @@ describe('revokeSwoopSessionsForUser', () => {
     });
     expect(requestSwoopSession).not.toHaveBeenCalled();
     expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
-      expect.objectContaining({ sid: 'sid-control', endReason: 'member_removed' }),
+      expect.objectContaining({ sid: 'sid-control', endReason: 'member_removed', endedFor: UID }),
     );
   });
 

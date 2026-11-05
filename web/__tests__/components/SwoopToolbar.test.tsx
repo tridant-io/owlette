@@ -340,7 +340,7 @@ describe('SwoopToolbar with others in the session', () => {
   /**
    * a live session the streamer has sent a roster on, the caller's own line in
    * control as an admin's is or watching as a member's is, with the names the
-   * session route answers that caller.
+   * session route answers that caller: an admin may kick anyone but their own seat.
    */
   function renderShared({ admin, alone = false }: { admin: boolean; alone?: boolean }) {
     fetchMock.mockResolvedValue({
@@ -349,8 +349,20 @@ describe('SwoopToolbar with others in the session', () => {
         ok: true,
         data: {
           viewers: [
-            { viewerId: 'viewer-ada', uid: 'uid_ada', displayName: 'Ada Lovelace', ...(admin ? { email: 'ada@example.test' } : {}) },
-            { viewerId: 'viewer-me', uid: 'uid_me', displayName: 'Bob Watcher', ...(admin ? { email: 'bob@example.test' } : {}) },
+            {
+              viewerId: 'viewer-ada',
+              uid: 'uid_ada',
+              displayName: 'Ada Lovelace',
+              ...(admin ? { email: 'ada@example.test' } : {}),
+              kickable: admin,
+            },
+            {
+              viewerId: 'viewer-me',
+              uid: 'uid_me',
+              displayName: 'Bob Watcher',
+              ...(admin ? { email: 'bob@example.test' } : {}),
+              kickable: false,
+            },
           ],
         },
       }),
@@ -443,6 +455,106 @@ describe('SwoopToolbar with others in the session', () => {
     const tip = await screen.findByRole('tooltip');
     expect(tip).toHaveTextContent('Ada Lovelace');
     expect(tip).toHaveTextContent('ada@example.test');
+    // a tooltip takes no clicks: kick is in the pill's menu
+    expect(tip).not.toHaveTextContent('kick');
+  });
+
+  /** the admin clicks Ada's pill, then kick in its menu; the confirm is open. */
+  async function askToKickAda(): Promise<HTMLElement> {
+    renderShared({ admin: true });
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L., view only' }));
+    await userEvent.click(within(await screen.findByTestId('viewer-menu')).getByRole('button', { name: 'kick' }));
+    return screen.findByRole('dialog', { name: 'kick Ada Lovelace?' });
+  }
+
+  it("opens a pill's menu on a click: the full name, the email and, to an admin, kick for someone else", async () => {
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L., view only' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent('Ada Lovelace');
+    expect(menu).toHaveTextContent('ada@example.test');
+    // under the email
+    expect(within(menu).getByText('ada@example.test').nextElementSibling).toBe(
+      within(menu).getByRole('button', { name: 'kick' }),
+    );
+  });
+
+  it('opens your own pill’s menu too, with no kick in it', async () => {
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Bob W. (you)' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent('Bob Watcher (you)');
+    expect(menu).toHaveTextContent('bob@example.test');
+    expect(within(menu).queryByRole('button', { name: 'kick' })).toBeNull();
+  });
+
+  it("gives a member the full name in a pill's menu, and no kick", async () => {
+    renderShared({ admin: false });
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Ada L.' }));
+    const menu = await screen.findByTestId('viewer-menu');
+    expect(menu).toHaveTextContent(/^Ada Lovelace$/);
+    expect(within(menu).queryByRole('button', { name: 'kick' })).toBeNull();
+  });
+
+  it('asks before it kicks, then posts the seat to the kick route and closes', async () => {
+    const dialog = await askToKickAda();
+    expect(dialog).toHaveTextContent(
+      "they leave the session now and can rejoin. to keep someone out, change their swoop access in the site's members section.",
+    );
+    // the names read only: nothing is kicked before the confirm
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'kick' }));
+
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/sites/site-a/machines/TEC-B4A/swoop/sessions/sid-1/kick',
+      expect.objectContaining({ method: 'POST', body: JSON.stringify({ viewerId: 'viewer-ada' }) }),
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeNull());
+  });
+
+  it("keeps the question open with the api's sentence when the kick is refused", async () => {
+    const dialog = await askToKickAda();
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      status: 409,
+      json: async () => ({ code: 'session_ended', detail: 'this session has already ended' }),
+    });
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'kick' }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('this session has already ended');
+    expect(screen.getByRole('dialog', { name: 'kick Ada Lovelace?' })).toBe(dialog);
+    expect(within(dialog).getByRole('button', { name: 'kick' })).toBeEnabled();
+  });
+
+  it('cancel closes the question and kicks nobody', async () => {
+    const dialog = await askToKickAda();
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'cancel' }));
+
+    expect(screen.queryByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("puts kick under the email in a phone's list, where the route says this caller may", async () => {
+    narrowWindow();
+    renderShared({ admin: true });
+
+    await userEvent.click(await screen.findByRole('button', { name: '2 in this session' }));
+    const list = await screen.findByRole('list', { name: 'in this session' });
+    const [ada, me] = within(list).getAllByRole('listitem');
+    expect(await within(ada).findByText('ada@example.test')).toBeInTheDocument();
+    expect(within(ada).getByText('ada@example.test').nextElementSibling).toBe(
+      within(ada).getByRole('button', { name: 'kick' }),
+    );
+    expect(within(me).queryByRole('button', { name: 'kick' })).toBeNull();
+
+    await userEvent.click(within(ada).getByRole('button', { name: 'kick' }));
+    expect(await screen.findByRole('dialog', { name: 'kick Ada Lovelace?' })).toBeInTheDocument();
   });
 
   it('keeps the pointer and the eye in a pill upright on a side bar, where the pill turns', async () => {
