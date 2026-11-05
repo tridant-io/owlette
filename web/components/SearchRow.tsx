@@ -13,7 +13,9 @@ import { Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const VARIANT = {
-  row: 'flex items-center gap-2 border-b border-border px-3 py-2',
+  // the rule under a row, and the border around a field, tint on focus: a quiet
+  // mark that keeps keyboard focus visible without the box's glow
+  row: 'flex items-center gap-2 border-b border-border px-3 py-2 focus-within:border-ring',
   field: 'flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5 focus-within:border-ring',
 } as const;
 

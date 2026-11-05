@@ -120,6 +120,7 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
           onKeyDown={handleKeyDown}
           placeholder="search timezones..."
           aria-label="search timezones"
+          clearLabel="clear search"
         />
         <div
           ref={listRef}

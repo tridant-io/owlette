@@ -41,7 +41,7 @@ describe('SearchRow', () => {
   it('a row runs edge to edge with a rule under it, not a box', () => {
     render(<Host />);
 
-    expect(wrapper()).toHaveClass('border-b', 'border-border', 'px-3', 'py-2');
+    expect(wrapper()).toHaveClass('border-b', 'focus-within:border-ring', 'border-border', 'px-3', 'py-2');
     expect(wrapper()).not.toHaveClass('border');
     expect(wrapper()).not.toHaveClass('rounded-md');
   });
