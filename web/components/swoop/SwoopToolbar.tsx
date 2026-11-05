@@ -27,16 +27,18 @@
  *
  * on a side (from md up, marked as `data-swoop-bar` on <html> before first
  * paint, see `lib/swoop/barPosition.ts`) the bar is a narrow column: the name,
- * the viewers and the badges run vertically, the buttons stack at the bottom,
- * and a notice that is a sentence becomes an icon that says it on hover. the
- * name reads toward the picture: up a left bar, down a right one.
+ * the viewers and the badges run vertically, and the buttons stack at the
+ * bottom. the name reads toward the picture: up a left bar, down a right one.
+ *
+ * a notice is a warning icon that says its sentence on hover, on every layout,
+ * since a sentence beside the pills took the bar's room (owner, 2026-11-05).
  *
  * below `md` (a phone, a narrow window) the buttons don't fit one row, and a
  * touch screen of any width has no hover to ask a tooltip with, so there one
- * button opens them all in a menu, each with its label under it, the viewers
- * are one button with their count, and a notice is an icon; the row never
- * wraps. fullscreen is left out where the browser has none for a page (an
- * iphone), rather than refusing every tap.
+ * button opens them all in a menu, each with its label under it, and the
+ * viewers are one button with their count; the row never wraps. fullscreen is
+ * left out where the browser has none for a page (an iphone), rather than
+ * refusing every tap.
  *
  * inside owlette swoop the bar is also the window's title bar: it drags the
  * window, and on top it ends in the window's controls (on macos it starts
@@ -52,13 +54,13 @@ import {
   Ellipsis,
   Eye,
   Gauge,
-  Info,
   Maximize,
   Minimize,
   Mouse,
   MousePointer2,
   PowerOff,
   RotateCcw,
+  TriangleAlert,
   Users,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -72,7 +74,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopBarMenuPlacement, menuPlacementFor, useBarMenuPlacement } from '@/components/swoop/barMenuPlacement';
 import { BarTooltip, SwoopBarInMenu } from '@/components/swoop/BarTooltip';
 import { tintOf } from '@/components/swoop/SwoopPresence';
@@ -149,24 +150,19 @@ const UPRIGHT = 'md:bar-left:rotate-180';
 /** behind a viewer while they click: a pill's fill, or a row's in the phone's list. */
 const CLICK_FILL = 'bg-accent-cyan/20';
 
-/** a sentence in a wide top bar; on a side or a phone, an icon that says it on hover or tap. */
+/**
+ * a warning icon that says its sentence on hover, on every layout: a sentence
+ * beside the pills took the bar's room. the tooltip is portaled, so it reads
+ * across even from a side bar whose text runs down.
+ */
 function Notice({ text, testId }: { text: string; testId?: string }) {
   return (
-    <>
-      <span className="hidden text-xs text-muted-foreground md:inline md:bar-side:hidden" data-testid={testId}>
-        {text}
-      </span>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button variant="ghost" size="icon-sm" aria-label={text} className="shrink-0 md:hidden md:bar-side:inline-flex">
-            <Info aria-hidden />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="max-w-xs">{text}</p>
-        </TooltipContent>
-      </Tooltip>
-    </>
+    <BarTooltip label={<p className="max-w-xs">{text}</p>}>
+      <Button variant="ghost" size="icon-sm" aria-label={text} data-testid={testId} className="shrink-0">
+        {/* on the glyph, where the ghost variant's hover ink does not reach */}
+        <TriangleAlert aria-hidden className="text-warning" />
+      </Button>
+    </BarTooltip>
   );
 }
 
