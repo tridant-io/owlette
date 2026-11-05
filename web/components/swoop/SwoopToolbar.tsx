@@ -151,18 +151,28 @@ const UPRIGHT = 'md:bar-left:rotate-180';
 const CLICK_FILL = 'bg-accent-cyan/20';
 
 /**
- * a warning icon that says its sentence on hover, on every layout: a sentence
- * beside the pills took the bar's room. the tooltip is portaled, so it reads
- * across even from a side bar whose text runs down.
+ * a warning the bar has for you: one icon on every layout, its sentence on
+ * hover, and in a popover on a click or a tap, since a touch screen has no
+ * hover to ask with (the pills work the same way). a sentence on the bar
+ * beside the pills took the bar's room. the tooltip and the popover are
+ * portaled, so they read across even from a side bar whose text runs down.
  */
 function Notice({ text, testId }: { text: string; testId?: string }) {
+  const placement = useBarMenuPlacement();
   return (
-    <BarTooltip label={<p className="max-w-xs">{text}</p>}>
-      <Button variant="ghost" size="icon-sm" aria-label={text} data-testid={testId} className="shrink-0">
-        {/* on the glyph, where the ghost variant's hover ink does not reach */}
-        <TriangleAlert aria-hidden className="text-warning" />
-      </Button>
-    </BarTooltip>
+    <Popover>
+      <BarTooltip label={<p className="max-w-xs">{text}</p>}>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon-sm" aria-label={text} data-testid={testId} className="shrink-0">
+            {/* on the glyph, where the ghost variant's hover ink does not reach */}
+            <TriangleAlert aria-hidden className="text-warning" />
+          </Button>
+        </PopoverTrigger>
+      </BarTooltip>
+      <PopoverContent {...placement} className="w-auto max-w-xs p-3 text-sm">
+        {text}
+      </PopoverContent>
+    </Popover>
   );
 }
 

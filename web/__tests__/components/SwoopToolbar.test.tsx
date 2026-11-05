@@ -292,6 +292,13 @@ describe('SwoopToolbar', () => {
     }
   });
 
+  it('a tap on a notice opens its sentence in a popover, for a touch screen with no hover', async () => {
+    const notice = renderHeldNotice();
+    await userEvent.click(notice);
+    const popover = await screen.findByRole('dialog');
+    expect(popover).toHaveTextContent(notice.getAttribute('aria-label')!);
+  });
+
   it('badges a poor connection from the measured round trip, and only then', () => {
     const stats = (rttUs: number): SwoopStats => ({
       signal: 'open',
