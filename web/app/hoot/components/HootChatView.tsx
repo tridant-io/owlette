@@ -15,11 +15,10 @@ import {
 import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
+import { SearchRow } from '@/components/SearchRow';
 import { Button } from '@/components/ui/button';
-import { IconButton } from '@/components/ui/icon-button';
 import { Plus, MessageSquare, Trash2, KeyRound, Check, X, Zap, Search, Loader2, Pencil, ChevronRight, ChevronsDownUp, ChevronsUpDown, PanelLeftClose, PanelLeftOpen, RotateCw, Clock, Share2 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { Input } from '@/components/ui/input';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { ChatWindow } from './ChatWindow';
@@ -916,32 +915,24 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                 >
                   <Plus className="h-4 w-4" />
                 </Button>
-                <div className="relative flex-1 min-w-0">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-                  <Input
-                    autoFocus
-                    placeholder="search..."
-                    aria-label="search conversations"
-                    value={chat.searchQuery}
-                    onChange={(e) => chat.setSearchQuery(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        chat.setSearchQuery('');
-                        setSearchOpen(false);
-                      }
-                    }}
-                    className="h-8 pl-7 pr-7 text-base md:text-xs bg-secondary border-border"
-                  />
-                  <IconButton
-                    label="close search"
-                    tooltip={false}
-                    variant="ghost"
-                    onClick={() => { chat.setSearchQuery(''); setSearchOpen(false); }}
-                    className="absolute right-0.5 top-1/2 -translate-y-1/2 size-7 text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="size-3" />
-                  </IconButton>
-                </div>
+                <SearchRow
+                  variant="field"
+                  clear="always"
+                  clearLabel="close search"
+                  autoFocus
+                  value={chat.searchQuery}
+                  onChange={chat.setSearchQuery}
+                  onClear={() => { chat.setSearchQuery(''); setSearchOpen(false); }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      chat.setSearchQuery('');
+                      setSearchOpen(false);
+                    }
+                  }}
+                  placeholder="search conversations…"
+                  aria-label="search conversations"
+                  className="h-8 min-w-0 flex-1 py-1"
+                />
               </>
             ) : (
               /* Default: new conversation button + section toggle + search icon */

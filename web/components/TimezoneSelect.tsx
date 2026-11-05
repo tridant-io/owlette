@@ -2,7 +2,8 @@
 
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { ChevronDown, Search, Check } from 'lucide-react';
+import { SearchRow } from '@/components/SearchRow';
+import { ChevronDown, Check } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getAllTimezones, getTimezoneOffset, COMMON_TIMEZONES, type TimezoneOption } from '@/lib/timeUtils';
 
@@ -111,18 +112,15 @@ export function TimezoneSelect({ value, onValueChange, disabled, className, id }
         align="start"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex items-center border-b border-border px-3 py-2">
-          <Search className="mr-2 size-4 shrink-0 text-muted-foreground" />
-          <input
-            ref={inputRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="search timezones..."
-            aria-label="search timezones"
-            className="flex-1 bg-transparent text-base md:text-sm text-foreground placeholder:text-muted-foreground"
-          />
-        </div>
+        <SearchRow
+          variant="row"
+          ref={inputRef}
+          value={search}
+          onChange={setSearch}
+          onKeyDown={handleKeyDown}
+          placeholder="search timezones..."
+          aria-label="search timezones"
+        />
         <div
           ref={listRef}
           className="max-h-[300px] overflow-y-auto p-1 [&::-webkit-scrollbar]:w-3 [&::-webkit-scrollbar-track]:bg-background [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-thumb]:rounded-md [&::-webkit-scrollbar-thumb:hover]:bg-accent"

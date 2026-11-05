@@ -25,6 +25,14 @@ sentence that took the bar's room beside the people in the session. The five
 sentences are plainer too: they say what happened and what to do about it.
 Nothing to update on the machine.
 
+### changed — every search in a menu is a search row
+
+The machine switcher on the metrics page and the timezone picker now have the
+same search row the site switcher got: a magnifier, a plain field with no box,
+a rule under it and an x to clear it. Hoot's conversation search is an enclosed
+field with the same magnifier and x, and focusing it tints its border rather
+than lighting it up. Nothing to update on the machine.
+
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site
 
