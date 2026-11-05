@@ -298,11 +298,6 @@ test("the admin kicks the member from their pill's menu, who is told so, and the
 
     // the kick cut the admin off too, and their page starts a session of its own
     await expect.poll(() => leasesOf(admin).length, { timeout: 45_000 }).toBeGreaterThan(before);
-    // a new session's streamer has checked its own viewers alone, but the fake host's roster
-    // names every lease it ever checked: the kicked session's go first
-    const back = leasesOf(admin).at(-1)!.sid;
-    const current = host.leases.filter((lease) => lease.sid === back);
-    host.leases.splice(0, host.leases.length, ...current);
     await publish(() => expect(pills(page)).toHaveText(['Ada L. (you)'], { timeout: 2_000 }));
 
     const killed = await getAdminDb().doc(`sites/${SITE_ID}/machines/${MACHINE_ID}/swoop_sessions/${kickedSid}`).get();
