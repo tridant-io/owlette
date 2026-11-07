@@ -39,8 +39,16 @@ const selectedPair = (localCandidateId: string) => ({
   localCandidateId,
 });
 
-function sessionWith(getStats: () => Promise<RTCStatsReport>): SwoopSession {
-  return { peer: { connection: { getStats } } } as unknown as SwoopSession;
+/** `width` is the picture's css width on screen; a `videoWidth` of 0 is before a frame. */
+function sessionWith(
+  getStats: () => Promise<RTCStatsReport>,
+  picture = { width: 0, videoWidth: 0 },
+): SwoopSession {
+  return {
+    peer: { connection: { getStats } },
+    video: { videoWidth: picture.videoWidth },
+    contentRect: () => ({ width: picture.width }) as DOMRect,
+  } as unknown as SwoopSession;
 }
 
 describe('classifyPath', () => {
@@ -234,6 +242,39 @@ describe('SwoopStatsOverlay path indicator', () => {
     await mount(sessionWith(getStats), false);
 
     expect(getStats).not.toHaveBeenCalled();
+  });
+});
+
+describe('SwoopStatsOverlay shown at', () => {
+  const jsdomDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+  afterEach(() => {
+    cleanup();
+    if (jsdomDpr) Object.defineProperty(window, 'devicePixelRatio', jsdomDpr);
+  });
+
+  const shownAt = async (session: SwoopSession | null, dpr = 1) => {
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: dpr });
+    await act(async () => {
+      render(<SwoopStatsOverlay session={session} stats={EMPTY_STATS} open />);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return screen.getByText('shown at').nextSibling;
+  };
+  const noPair = async () => report({});
+
+  it('reads half size when a 1280 wide picture takes 640 css pixels at dpr 1', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 1280 }))).toHaveTextContent(/^50%$/);
+  });
+
+  it('reads 100% when those 640 css pixels are 1280 device pixels at dpr 2', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 1280 }), 2)).toHaveTextContent(/^100%$/);
+  });
+
+  it('says nothing before a frame, or without a session', async () => {
+    expect(await shownAt(sessionWith(noPair, { width: 640, videoWidth: 0 }))).toHaveTextContent(/^—$/);
+    cleanup();
+    expect(await shownAt(null)).toHaveTextContent(/^—$/);
   });
 });
 

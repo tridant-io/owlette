@@ -204,6 +204,11 @@ export function SwoopStatsOverlay({ session, stats, open, onClose }: SwoopStatsO
       : null;
   const ms = (us: number | null | undefined): number | null =>
     us === null || us === undefined ? null : us / 1000;
+  // device pixels per machine pixel; contentRect carries the local zoom, so a pinch shows
+  const shownAt =
+    session && session.video.videoWidth > 0
+      ? `${Math.round((100 * session.contentRect().width * window.devicePixelRatio) / session.video.videoWidth)}%`
+      : '—';
 
   return (
     <aside
@@ -230,6 +235,8 @@ export function SwoopStatsOverlay({ session, stats, open, onClose }: SwoopStatsO
         <dd className="text-right font-mono text-foreground">
           {presenter.width > 0 ? `${presenter.width}×${presenter.height}` : '—'}
         </dd>
+        <dt>shown at</dt>
+        <dd className="text-right font-mono text-foreground">{shownAt}</dd>
         <dt>codec</dt>
         <dd className="text-right font-mono text-foreground">{frame ? CODEC_LABEL[frame.codec] : '—'}</dd>
         <dt>gaps / duplicates</dt>
