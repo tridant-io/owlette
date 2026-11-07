@@ -221,6 +221,31 @@ describe('two fingers', () => {
     expect(r.calls).toEqual(['move 150,100']);
   });
 
+  it('pans a zoomed picture for fingers moving together, and sends the machine nothing', () => {
+    const r = rig();
+    r.gestures.down(1, 150, 100);
+    r.gestures.down(2, 250, 100);
+    r.gestures.move(1, 100, 100);
+    r.gestures.move(2, 300, 100);
+    r.gestures.up(1, 100, 100);
+    r.gestures.up(2, 300, 100);
+    expect(r.zoom().scale).toBeCloseTo(2);
+    expect(r.zoom().y).toBeCloseTo(-100);
+
+    r.gestures.down(1, 100, 100);
+    r.gestures.down(2, 200, 100);
+    r.gestures.move(1, 100, 120);
+    r.gestures.move(2, 200, 120);
+    r.gestures.up(1, 100, 120);
+    r.gestures.up(2, 200, 120);
+    // the picture follows the fingers down 20 css px, at the same zoom
+    expect(r.zoom().scale).toBeCloseTo(2);
+    expect(r.zoom().x).toBeCloseTo(-200);
+    expect(r.zoom().y).toBeCloseTo(-80);
+    // each first finger only moves the pointer, as a pinch's does: no wheel, no button
+    expect(r.calls).toEqual(['move 150,100', 'move 100,100']);
+  });
+
   it('ignores a finger that lands on a drag under way', () => {
     const r = rig();
     r.gestures.down(1, 100, 50);
