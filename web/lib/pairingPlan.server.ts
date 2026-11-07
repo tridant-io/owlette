@@ -11,6 +11,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { machineSlotAvailable, payerForSite, plansEnforced } from '@/lib/plan.server';
 
 export const MACHINE_LIMIT_ERROR =
@@ -28,24 +29,46 @@ export async function machineLimitRefusal(
 }
 
 /**
- * stamps `pairedAt` on the machine doc unless it already has one, so a re-pair
- * keeps the original date the lapse ui orders machines by. best effort: the
- * credentials are already minted, and failing the pairing over this would strand them.
+ * what a pairing records once the credentials are minted. best effort: failing
+ * the pairing over either step would strand those credentials.
+ *
+ * - stamps `pairedAt` on the machine doc unless it already has one, so a re-pair
+ *   keeps the original date the lapse ui orders machines by.
+ * - when the machine doc did not exist, takes the id out of every machine scope
+ *   on the site. missing means an id new to the site, or one whose doc a leave
+ *   deleted: dashboard removal, or the desktop app's leave-site, which deletes it
+ *   through the agent's rest client and never reaches `removeMachine`. machine
+ *   ids start as hostnames and get reused, so a machine that pairs anew starts
+ *   with no member's grant. a re-pair of a machine still on the site, a legacy
+ *   doc with no `pairedAt` included, keeps its grants, and so does a failed read,
+ *   which proves nothing.
  */
-export async function stampPairedAt(siteId: string, machineId: string): Promise<void> {
+export async function recordPairing(siteId: string, machineId: string): Promise<void> {
+  let existed = true;
   try {
     // generate and exchange take the machine id unvalidated, and a slash would address a nested doc.
     if (machineId.includes('/')) return;
     const db = getAdminDb();
     const ref = db.collection('sites').doc(siteId).collection('machines').doc(machineId);
-    await db.runTransaction(async (transaction) => {
+    existed = await db.runTransaction(async (transaction) => {
       const snap = await transaction.get(ref);
       if (snap.data()?.pairedAt == null) {
         transaction.set(ref, { pairedAt: FieldValue.serverTimestamp() }, { merge: true });
       }
+      return snap.exists;
     });
   } catch (error: unknown) {
     logger.warn(`pairedAt not stamped: site=${siteId}, machine=${machineId}`, {
+      context: 'pairing',
+      data: { error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+  if (existed) return;
+
+  try {
+    await pruneMachineFromMembers({ siteId, machineId });
+  } catch (error: unknown) {
+    logger.warn(`machine scopes not pruned: site=${siteId}, machine=${machineId}`, {
       context: 'pairing',
       data: { error: error instanceof Error ? error.message : String(error) },
     });

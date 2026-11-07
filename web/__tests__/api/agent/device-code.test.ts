@@ -66,6 +66,11 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
+const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/membership.server', () => ({
+  pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
+}));
+
 const mockDocGet = jest.fn();
 const mockDocSet = jest.fn();
 const mockWhereGet = jest.fn();
@@ -427,6 +432,8 @@ describe('POST /api/agent/auth/device-code/poll', () => {
       { pairedAt: 'SERVER_TIMESTAMP' },
       { merge: true },
     ]);
+    // a machine new to the site leaves every machine scope
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: host });
     expect(mockTransactionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionPath: 'device_codes',
@@ -621,14 +628,15 @@ describe('POST /api/agent/auth/device-code/poll', () => {
     expect(body.encryptedCredentials).toBe('ENC');
     expect(body.phrase).toBe('test-pair-phrase');
     expect(mockTransactionDelete).toHaveBeenCalled();
-    // the handover is when the machine is paired, so it stamps here
+    // the handover is when the machine is paired, so it records the pairing here
     expect(pairedAtWrite('site-1', 'test-machine')?.slice(1)).toEqual([
       { pairedAt: 'SERVER_TIMESTAMP' },
       { merge: true },
     ]);
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'test-machine' });
   });
 
-  it('keeps the first pairedAt when a machine re-pairs', async () => {
+  it('keeps the first pairedAt and the grants when a machine re-pairs', async () => {
     mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': { pairedAt: 'FIRST' } } } };
     mockWhereGet.mockResolvedValue({ empty: false, docs: [{ ref: mockDocRef }] });
     mockTransactionGet.mockResolvedValue({
@@ -648,6 +656,7 @@ describe('POST /api/agent/auth/device-code/poll', () => {
 
     expect(status).toBe(200);
     expect(pairedAtWrite('site-1', 'test-machine')).toBeUndefined();
+    expect(mockPrune).not.toHaveBeenCalled();
   });
 
   it('rejects phrase-based polling for a legacy doc that is not preauthorised', async () => {

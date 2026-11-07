@@ -4,7 +4,8 @@
  * /api/agent/auth/exchange and the machine limit (plan.md decision 6): a
  * registration code mints credentials, so the limit is checked before the mint,
  * refused as 402 `{ error }` (never 401/403, which an agent reads as a dead
- * credential), and a successful mint stamps `pairedAt` once.
+ * credential), and a successful mint records the pairing: `pairedAt` once, and
+ * a machine new to the site leaves every machine scope.
  */
 
 import { NextRequest } from 'next/server';
@@ -25,6 +26,11 @@ jest.mock('firebase-admin/firestore', () => ({
 const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
+}));
+
+const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/membership.server', () => ({
+  pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
 }));
 
 type Doc = Record<string, unknown>;
@@ -162,7 +168,7 @@ function enforceFree() {
 }
 
 describe('POST /api/agent/auth/exchange', () => {
-  it('pairs, claims the code and stamps pairedAt, never reading the plan with enforcement off', async () => {
+  it('pairs, claims the code and records the pairing, never reading the plan with enforcement off', async () => {
     mockDocs['sites/site-1/machines/other-pc'] = {};
     mockGetEntitlements.mockResolvedValue(FREE);
 
@@ -172,6 +178,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect((await res.json()).accessToken).toBe('id-token');
     expect(mockTxUpdate).toHaveBeenCalledWith('agent_tokens/reg-code', expect.objectContaining({ used: true }));
     expect(pairedAtWrite('new-pc')?.slice(1)).toEqual([{ pairedAt: 'SERVER_TIMESTAMP' }, { merge: true }]);
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
     expect(mockGetEntitlements).not.toHaveBeenCalled();
     expect(mockPlanRead).not.toHaveBeenCalled();
   });
@@ -192,7 +199,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(mockTxSet).not.toHaveBeenCalled();
   });
 
-  it("lets a machine already in the payer's sites re-pair, keeping its first pairedAt", async () => {
+  it("lets a machine already in the payer's sites re-pair, keeping its first pairedAt and its grants", async () => {
     enforceFree();
     mockDocs['sites/site-1/machines/home-pc'] = { pairedAt: 'FIRST' };
 
@@ -201,6 +208,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(res.status).toBe(200);
     expect(mockCreateCustomToken).toHaveBeenCalled();
     expect(pairedAtWrite('home-pc')).toBeUndefined();
+    expect(mockPrune).not.toHaveBeenCalled();
   });
 
   it('never stamps a nested doc for a machine id with a slash', async () => {
@@ -208,6 +216,7 @@ describe('POST /api/agent/auth/exchange', () => {
 
     expect(res.status).toBe(200);
     expect(mockTxSet).not.toHaveBeenCalled();
+    expect(mockPrune).not.toHaveBeenCalled();
   });
 
   it('still hands over the credentials when the pairedAt stamp fails', async () => {
