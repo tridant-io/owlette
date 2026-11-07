@@ -127,6 +127,12 @@ interface UseChatOptions {
   selection: HootTarget;
   /** Every machine id in `siteId` — the vocabulary `@mentions` resolve against. */
   siteMachineIds: string[];
+  /**
+   * list the site's autonomous chats beside the person's own. they are
+   * whole-site (rules 2.12.0), so pass false for a scoped member: the read
+   * would be refused.
+   */
+  includeAutonomous?: boolean;
   onChatPersisted?: (chatId: string) => void;
   onChatLoaded?: (result: ChatLoadedTarget) => void;
 }
@@ -137,6 +143,7 @@ export function useOwletteChat({
   siteId,
   selection,
   siteMachineIds,
+  includeAutonomous = true,
   onChatPersisted,
   onChatLoaded,
 }: UseChatOptions) {
@@ -641,7 +648,7 @@ export function useOwletteChat({
     );
 
     // Autonomous chats for this site (no userId, source === 'autonomous')
-    const autoQuery = siteId ? query(
+    const autoQuery = siteId && includeAutonomous ? query(
       chatsRef,
       where('source', '==', 'autonomous'),
       where('siteId', '==', siteId),
@@ -730,7 +737,7 @@ export function useOwletteChat({
       unsubUser();
       unsubAuto?.();
     };
-  }, [user, siteId]);
+  }, [user, siteId, includeAutonomous]);
 
   const startNewChat = useCallback((overrides?: { siteId?: string; selection?: HootTarget }) => {
     loadChatRequestRef.current += 1;
@@ -773,9 +780,12 @@ export function useOwletteChat({
     ]);
   }, [chat]);
 
+  // a page left over from a site that listed autonomous chats must not keep "load more" alive
+  const moreAuto = includeAutonomous && hasMoreAuto;
+
   const loadMoreConversations = useCallback(async () => {
     if (loadingMore || !user || !db) return;
-    if (!hasMoreUser && !hasMoreAuto) return;
+    if (!hasMoreUser && !moreAuto) return;
 
     setLoadingMore(true);
     try {
@@ -803,7 +813,7 @@ export function useOwletteChat({
         setHasMoreUser(snapshot.docs.length === PAGE_SIZE);
       }
 
-      if (hasMoreAuto && lastAutoDocRef.current && siteId) {
+      if (moreAuto && lastAutoDocRef.current && siteId) {
         const moreAutoQuery = query(
           chatsRef,
           where('source', '==', 'autonomous'),
@@ -839,9 +849,9 @@ export function useOwletteChat({
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, user, siteId, hasMoreUser, hasMoreAuto]);
+  }, [loadingMore, user, siteId, hasMoreUser, moreAuto]);
 
-  const hasMoreConversations = hasMoreUser || hasMoreAuto;
+  const hasMoreConversations = hasMoreUser || moreAuto;
 
   // NOTE: every setMessages below goes through `chatRef.current`, never the
   // captured `chat`. @ai-sdk/react keys its Chat instance on `id`
