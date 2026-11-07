@@ -5,9 +5,10 @@
  * `web/lib/authorizedHandler.server.ts`: happy path, allow-audit failure → 503,
  * capability + rate-limit kill-switch bypass (and their bypass metadata),
  * the swoop carve-out from the capability one (BYPASS_EXEMPT_CAPABILITIES),
- * api-key scope never bypassed, site-access 404, capability 403, rate-limit 429,
- * the plan lockout 402, the platform handler's superadmin gate, and the
- * `siteIdParam: 'body'` type error.
+ * api-key scope never bypassed, site-access 404, machine scope (404 off the
+ * scope, 403 site-wide, on both sides of the kill switch), capability 403,
+ * rate-limit 429, the plan lockout 402, the platform handler's superadmin gate,
+ * and the `siteIdParam: 'body'` type error.
  */
 
 import type { NextRequest } from 'next/server';
@@ -223,6 +224,8 @@ import {
   assertUserHasSiteAccess,
 } from '@/lib/apiAuth.server';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+import { scopeMatches, type ApiKeyScope } from '@/lib/apiKeyTypes';
+import type { Capability } from '@/lib/capabilities';
 
 const resolveAuthMock = resolveAuth as unknown as jest.Mock;
 const requireScopeMock = requireScope as unknown as jest.Mock;
@@ -268,6 +271,10 @@ function makeRequest(url = 'http://localhost/api/sites/site-a/test', method = 'P
 
 function pathParamsFor(siteId: string): { params: Promise<{ siteId: string }> } {
   return { params: Promise.resolve({ siteId }) };
+}
+
+function machineParamsFor(machineId: string): { params: Promise<{ siteId: string; machineId: string }> } {
+  return { params: Promise.resolve({ siteId: 'site-a', machineId }) };
 }
 
 // authorizedSiteHandler
@@ -585,6 +592,191 @@ describe('authorizedSiteHandler — a swoop mode reaches nothing outside swoop',
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+// machine scope is part of site access, so it holds on both sides of the kill
+// switch: the step runs before the switch is read.
+describe.each([
+  ['on', true],
+  ['off', false],
+])('authorizedSiteHandler — machine scope, capability enforcement %s', (_label, enforcement) => {
+  beforeEach(() => {
+    configResult = { ...configResult, capability_enforcement: enforcement };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+  });
+
+  async function call(
+    capability: Capability,
+    machineId: string | null,
+    extra: { apiKeyScope?: { resource: 'machine'; idParam: string } } = {},
+  ) {
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path', ...extra })(handler);
+    const res = machineId === null
+      ? await wrapped(makeRequest(), pathParamsFor('site-a'))
+      : await wrapped(makeRequest(`http://localhost/api/sites/site-a/machines/${machineId}/test`), machineParamsFor(machineId));
+    return { res, handler };
+  }
+
+  function deny(): { denyReason?: string; metadata?: Record<string, unknown> } | undefined {
+    return setCalls.find((c) => c.payload.outcome === 'deny')?.payload as
+      | { denyReason?: string; metadata?: Record<string, unknown> }
+      | undefined;
+  }
+
+  describe('a scoped member, m1', () => {
+    beforeEach(() => setMember('member', { machineIds: ['m1'] }));
+
+    it('runs a MACHINE_VIEW route on m1, on the one site read', async () => {
+      const { res, handler } = await call('MACHINE_VIEW', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][1].actor.machineScopes).toEqual({ ['site-a']: ['m1'] });
+      expect(siteDocReads).toBe(1);
+    });
+
+    it('answers 404 on m2, with a machine_out_of_scope deny row and before the kill switch is read', async () => {
+      const { res, handler } = await call('MACHINE_VIEW', 'm2');
+
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ detail: 'machine not found or no access' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()).toMatchObject({ denyReason: 'machine_out_of_scope', metadata: { machineId: 'm2' } });
+      expect(setCalls.find((c) => c.payload.outcome === 'allow')).toBeUndefined();
+      expect(securityConfigReadSpy).not.toHaveBeenCalled();
+      expect(siteDocReads).toBe(1);
+    });
+  });
+
+  describe('a scoped member set to control, m1', () => {
+    beforeEach(() => setMember('member', { swoop: 'control', machineIds: ['m1'] }));
+
+    it('runs a MACHINE_REMOTE_CONTROL route on m1', async () => {
+      const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('answers 404 on m2', async () => {
+      const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm2');
+
+      expect(res.status).toBe(404);
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_out_of_scope');
+    });
+  });
+
+  describe('a scoped admin, m1', () => {
+    beforeEach(() => setMember('admin', { machineIds: ['m1'] }));
+
+    it('runs MACHINE_EXEC_COMMAND on m1', async () => {
+      const { res, handler } = await call('MACHINE_EXEC_COMMAND', 'm1');
+
+      expect(res.status).toBe(200);
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses MACHINE_REMOVE on m1 with 403 forbidden, naming the machine in the deny row', async () => {
+      const { res, handler } = await call('MACHINE_REMOVE', 'm1');
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()).toMatchObject({ denyReason: 'machine_scope_site_wide', metadata: { machineId: 'm1' } });
+      expect(securityConfigReadSpy).not.toHaveBeenCalled();
+    });
+
+    it("refuses SWOOP_SETTINGS_MANAGE on m1 (kill's shape) with code capability_missing", async () => {
+      const { res, handler } = await call('SWOOP_SETTINGS_MANAGE', 'm1');
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ code: 'capability_missing', detail: 'capability not granted' });
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_scope_site_wide');
+    });
+
+    it.each([
+      ['SITE_MEMBER_MANAGE', 'forbidden'],
+      ['SWOOP_SETTINGS_MANAGE', 'capability_missing'],
+    ] as const)('refuses %s with no machineId with 403 %s', async (capability, code) => {
+      const { res, handler } = await call(capability, null);
+
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe(code);
+      expect(handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_scope_site_wide');
+      expect(deny()?.metadata).not.toHaveProperty('machineId');
+    });
+
+    it('with its own api key on machine=*:write: runs on m1 and answers 404 on m2', async () => {
+      const scopes: ApiKeyScope[] = [{ resource: 'machine', id: '*', permissions: ['write'] }];
+      resolveAuthResult = { userId: 'uid_alice', keyContext: { keyId: 'key-a', scopes } };
+      // the real match, so the key admits m2 and only the machine scope refuses it
+      requireScopeMock.mockImplementation((_auth, resource, id, permission) => {
+        if (!scopeMatches(scopes, resource, id, permission)) {
+          throw new ApiAuthError(403, 'insufficient scope', { code: 'scope_insufficient' });
+        }
+        return { isLegacy: false };
+      });
+      const apiKeyScope = { resource: 'machine' as const, idParam: 'machineId' };
+
+      const onM1 = await call('MACHINE_EXEC_COMMAND', 'm1', { apiKeyScope });
+      expect(onM1.res.status).toBe(200);
+      expect(requireScopeMock).toHaveBeenCalledWith(expect.anything(), 'machine', 'm1', 'write');
+
+      const onM2 = await call('MACHINE_EXEC_COMMAND', 'm2', { apiKeyScope });
+      expect(onM2.res.status).toBe(404);
+      expect(onM2.handler).not.toHaveBeenCalled();
+      expect(deny()?.denyReason).toBe('machine_out_of_scope');
+    });
+  });
+
+  it('a scoped admin set to view is refused MACHINE_REMOTE_CONTROL on m1 by the capability step', async () => {
+    setMember('admin', { swoop: 'view', machineIds: ['m1'] });
+    const { res, handler } = await call('MACHINE_REMOTE_CONTROL', 'm1');
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(handler).not.toHaveBeenCalled();
+    expect(deny()?.denyReason).toBe('capability_missing');
+  });
+
+  it('a superadmin with no row runs on m2', async () => {
+    userDoc = { exists: true, data: () => ({ role: 'superadmin', sites: [] }) };
+    memberDoc = { exists: false, data: () => undefined };
+    const { res, handler } = await call('MACHINE_EXEC_COMMAND', 'm2');
+
+    expect(res.status).toBe(200);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('a whole-site admin is unchanged: MACHINE_REMOVE on m2 and SITE_MEMBER_MANAGE with no machineId run', async () => {
+    setMember('admin');
+    const onMachine = await call('MACHINE_REMOVE', 'm2');
+    const siteWide = await call('SITE_MEMBER_MANAGE', null);
+
+    expect(onMachine.res.status).toBe(200);
+    expect(siteWide.res.status).toBe(200);
+    expect(onMachine.handler.mock.calls[0][1].actor).not.toHaveProperty('machineScopes');
+  });
+});
+
+describe('authorizedSiteHandler — machine scope leaves the kill switch intact', () => {
+  it('capability kill switch off: a whole-site member still reaches a non-exempt route on a machine', async () => {
+    configResult = { ...configResult, capability_enforcement: false };
+    userDoc = { exists: true, data: () => ({ role: 'member', sites: [] }) };
+    setMember('member');
+    const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
+    const wrapped = authorizedSiteHandler({ capability: 'MACHINE_EXEC_COMMAND', siteIdParam: 'path' })(handler);
+
+    const res = await wrapped(makeRequest('http://localhost/api/sites/site-a/machines/m2/test'), machineParamsFor('m2'));
+
+    expect(res.status).toBe(200);
+    const allow = setCalls.find((c) => c.payload.outcome === 'allow');
+    expect((allow!.payload.metadata as Record<string, unknown>).enforcement_bypassed).toBe('capability');
   });
 });
 

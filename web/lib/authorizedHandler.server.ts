@@ -5,23 +5,28 @@
  *   1. resolveAuth → UserActor (api-key or session/id-token)
  *   2. site access + actor (site wrapper only) — resolveSiteAccess, the shared
  *      decision core in lib/sitePolicy.server.ts, in one batched read
- *   3. securityConfig.read() for kill-switch state
- *   4. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
+ *   3. machine scope (site wrapper only) — part of site access, so it runs
+ *      before the kill switch is read and is never bypassed. a scoped caller
+ *      gets 404 for a `params.machineId` outside their scope, and the
+ *      capability step's 403 on a route with no machineId or for a site-wide
+ *      capability.
+ *   4. securityConfig.read() for kill-switch state
+ *   5. api-key scope — ALWAYS runs, never bypassed: it is the resilient line
  *      against a downgraded key gaining rights while capability enforcement
  *      is off.
- *   5. capability — skipped when `capability_enforcement === false`, EXCEPT for
+ *   6. capability — skipped when `capability_enforcement === false`, EXCEPT for
  *      BYPASS_EXEMPT_CAPABILITIES; bypass recorded in the audit row so the
  *      trail survives the kill switch.
- *   6. rate limit — skipped when `rate_limit_enforcement === false`, logged
+ *   7. rate limit — skipped when `rate_limit_enforcement === false`, logged
  *      the same way.
- *   7. plan lockout — writes (POST/PUT/PATCH) whose capability is in
+ *   8. plan lockout — writes (POST/PUT/PATCH) whose capability is in
  *      PLAN_GATED_CAPABILITIES need the site payer's tridant key, and every
  *      api-key request needs its `owlette.api_keys`, else 402. Not part of the
  *      kill switch: it is billing, not authorization.
- *   8. allow audit — BLOCKING: an uncommittable row means 503 and no handler
+ *   9. allow audit — BLOCKING: an uncommittable row means 503 and no handler
  *      call. Deny/error audits stay best-effort; they grant nothing.
- *   9. handler(`{ actor, siteId, correlationId }`)
- *  10. handler throw → error audit (best-effort) + re-throw
+ *  10. handler(`{ actor, siteId, correlationId }`)
+ *  11. handler throw → error audit (best-effort) + re-throw
  *
  * `siteIdParam: 'body'` is a compile error by design — siteId-from-body is
  * the confused-deputy surface this closes.
@@ -62,6 +67,7 @@ import {
   type Role,
   type UserActor,
   hasCapability,
+  isMachineCapability,
   siteStanding,
 } from '@/lib/capabilities';
 import {
@@ -313,6 +319,25 @@ function serviceUnavailable(detail: string, instance?: string): NextResponse {
     detail,
     ...(instance ? { instance } : {}),
   });
+}
+
+/**
+ * the 403 for a capability the caller does not hold. swoop's viewer and lease
+ * end only on a coded refusal (`isWithdrawal`, lib/swoop/backoff.ts). a bare 403
+ * reads as an edge in front of the app, so a person set to none would retry
+ * every 30 s for the life of the tab and write a deny audit row each time.
+ */
+function capabilityRefusal(capability: Capability): NextResponse {
+  if (BYPASS_EXEMPT_CAPABILITIES.has(capability)) {
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: 403,
+      detail: 'capability not granted',
+      code: 'capability_missing',
+    });
+  }
+  return problemForbidden('capability not granted');
 }
 
 function denyAudit(
@@ -619,6 +644,44 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         siteStanding([[siteId, standingOf(outcome.facts)]]),
       );
 
+      // machine scope is part of site access, like membership: the kill switch
+      // never reaches it. it reads params.machineId itself, because
+      // targetIdParam and apiKeyScope.idParam miss the process verbs and uninstall.
+      const routeMachineId = await extractRouteParam(routeParamsPromise, 'machineId');
+      const machineScope = outcome.facts.machineIds;
+      if (machineScope !== null) {
+        if (routeMachineId !== null && !machineScope.includes(routeMachineId)) {
+          denyAudit(siteId, {
+            correlationId,
+            actor,
+            capability: options.capability,
+            target: { kind: targetKind, id: targetId } as AuditTarget,
+            outcome: 'deny',
+            denyReason: 'machine_out_of_scope',
+            metadata: { route: request.nextUrl.pathname, method: request.method, machineId: routeMachineId },
+          });
+          // no existence leak, as for the site: a machine that does not exist is out of scope too
+          return problemNotFound('machine not found or no access');
+        }
+        if (routeMachineId === null || !isMachineCapability(options.capability)) {
+          denyAudit(siteId, {
+            correlationId,
+            actor,
+            capability: options.capability,
+            target: { kind: targetKind, id: targetId } as AuditTarget,
+            outcome: 'deny',
+            denyReason: 'machine_scope_site_wide',
+            // uninstall's audit target is the site, so this is where its machine shows
+            metadata: {
+              route: request.nextUrl.pathname,
+              method: request.method,
+              ...(routeMachineId ? { machineId: routeMachineId } : {}),
+            },
+          });
+          return capabilityRefusal(options.capability);
+        }
+      }
+
       // 5. Read kill-switch config.
       const config = await securityConfig.read();
 
@@ -680,7 +743,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         // site. The matrix is keyed on per-site standing now, and `owner` is a
         // row in it — so ownership is granted by the matrix rather than routed
         // around it, and `sites/{siteId}.owner` is no longer read here at all.
-        const ok = hasCapability(actor as Actor, options.capability, siteId);
+        const ok = hasCapability(actor as Actor, options.capability, siteId, routeMachineId ?? undefined);
         if (!ok) {
           denyAudit(siteId, {
             correlationId,
@@ -691,20 +754,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
             denyReason: 'capability_missing',
             metadata: { route: request.nextUrl.pathname, method: request.method },
           });
-          // swoop's viewer and lease end only on a coded refusal (`isWithdrawal`,
-          // lib/swoop/backoff.ts). a bare 403 reads as an edge in front of the
-          // app, so a person set to none would retry every 30 s for the life of
-          // the tab and write a deny audit row each time.
-          if (capabilityExempt) {
-            return problem({
-              type: ProblemType.Forbidden,
-              title: 'forbidden',
-              status: 403,
-              detail: 'capability not granted',
-              code: 'capability_missing',
-            });
-          }
-          return problemForbidden('capability not granted');
+          return capabilityRefusal(options.capability);
         }
       }
 
