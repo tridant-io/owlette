@@ -4,16 +4,20 @@ import { useEffect, useState, useRef, useMemo } from 'react';
 import {
   collection,
   collectionGroup,
+  documentId,
   onSnapshot,
   doc,
   query,
   where,
   Timestamp,
+  type CollectionReference,
   type DocumentData,
+  type Query,
   type Unsubscribe,
 } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
+import { MAX_MACHINE_SCOPE, parseMachineIds } from '@/lib/machineAccess';
 import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
 import {
   parseActiveHours,
@@ -728,6 +732,12 @@ const SITE_ROLES: readonly string[] = ['owner', 'admin', 'member'];
 export interface SiteMemberships {
   /** siteId -> the caller's role there. Empty until the listener first resolves. */
   roleMap: Map<string, SiteRole>;
+  /**
+   * siteId -> the machines the caller reaches there, only for sites where their
+   * row carries a machine scope. a site absent here is whole site; `[]` is no
+   * machines, as the rules read a malformed scope.
+   */
+  scopeMap: Map<string, readonly string[]>;
   loading: boolean;
   /**
    * Non-null when the listener was refused or failed.
@@ -746,6 +756,19 @@ function roleMapsEqual(a: Map<string, SiteRole>, b: Map<string, SiteRole>): bool
   return true;
 }
 
+function scopeMapsEqual(
+  a: Map<string, readonly string[]>,
+  b: Map<string, readonly string[]>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) {
+    const w = b.get(k);
+    if (w === undefined || w.length !== v.length) return false;
+    for (let i = 0; i < v.length; i++) if (v[i] !== w[i]) return false;
+  }
+  return true;
+}
+
 /**
  * The caller's site memberships, live.
  *
@@ -755,12 +778,14 @@ function roleMapsEqual(a: Map<string, SiteRole>, b: Map<string, SiteRole>): bool
  * against the rules — see the recursive members block in `firestore.rules`, which
  * is also what makes a collection-group query legal at all.
  *
- * No composite index is needed: a single-field equality is covered by automatic
- * single-field indexing at collection-group scope. Role is filtered in memory,
- * over tens of documents.
+ * the `members.uid` COLLECTION_GROUP field override in firestore.indexes.json is
+ * what makes the query servable: automatic single-field indexing does not extend
+ * to collection-group scope (scripts/check-membership-read-path.mjs). role and
+ * scope are read in memory, over tens of documents.
  */
 export function useSiteMemberships(userId?: string): SiteMemberships {
   const [roleMap, setRoleMap] = useState<Map<string, SiteRole>>(() => new Map());
+  const [scopeMap, setScopeMap] = useState<Map<string, readonly string[]>>(() => new Map());
   // `db` is a module constant, so its absence is knowable at first render.
   const [loading, setLoading] = useState(Boolean(db));
   const [error, setError] = useState<string | null>(db ? null : 'Firebase not configured');
@@ -774,6 +799,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
   if (subscribedUid !== userId) {
     setSubscribedUid(userId);
     setRoleMap(new Map());
+    setScopeMap(new Map());
     setLoading(Boolean(db));
     setError(db ? null : 'Firebase not configured');
   }
@@ -795,6 +821,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
       membershipQuery,
       (snapshot) => {
         const next = new Map<string, SiteRole>();
+        const nextScopes = new Map<string, readonly string[]>();
         snapshot.forEach((memberDoc) => {
           // sites/{siteId}/members/{uid} — the grandparent is the site.
           const siteId = memberDoc.ref.parent.parent?.id;
@@ -803,8 +830,11 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
           if (data.status !== 'active') return;
           if (typeof data.role !== 'string' || !SITE_ROLES.includes(data.role)) return;
           next.set(siteId, data.role as SiteRole);
+          const scope = parseMachineIds(data);
+          if (scope !== null) nextScopes.set(siteId, scope);
         });
         setRoleMap((prev) => (roleMapsEqual(prev, next) ? prev : next));
+        setScopeMap((prev) => (scopeMapsEqual(prev, nextScopes) ? prev : nextScopes));
         setLoading(false);
       },
       (err) => {
@@ -817,7 +847,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
     return () => unsubscribe();
   }, [userId]);
 
-  return { roleMap, loading, error };
+  return { roleMap, scopeMap, loading, error };
 }
 
 export interface MembershipUnion {
@@ -1040,6 +1070,15 @@ const EMPTY_MACHINES: Machine[] = [];
 // are both unchanged keeps its joined object across renders
 const joinedMachineCache = new WeakMap<Machine, { profile: HardwareProfile | undefined; joined: Machine }>();
 const PROFILE_LISTENER_LIMIT = 50;
+// the scope key of a scoped member who reaches no machines: no listener opens
+const EMPTY_SCOPE_KEY = '[]';
+
+// a scoped member cannot list the collection. the rules prove a documentId() `in`
+// against the row's machineIds, and one id outside them refuses the whole query.
+function scopedMachines(col: CollectionReference, scopeKey: string | null): Query {
+  if (scopeKey === null) return col;
+  return query(col, where(documentId(), 'in', JSON.parse(scopeKey) as string[]));
+}
 
 // Heartbeat age at which the pill flips offline. 300s tolerates two missed idle
 // beats (120s each); 180s greyed out healthy machines on one slow tick. Must match
@@ -1101,13 +1140,35 @@ export function useMachineHardware(siteId: string | null, machineId: string | nu
   };
 }
 
-export function useMachines(siteId: string) {
+/**
+ * the site's machines, live. `machineIds` is the caller's machine scope there:
+ * null or absent reads the whole site, a list reads only those machines (a
+ * scoped member), and `[]` reads nothing.
+ */
+export function useMachines(siteId: string, machineIds?: readonly string[] | null) {
+  // one key per scope, so a fresh array with the same ids keeps the listeners
+  const scopeIds = machineIds == null ? null : [...new Set(machineIds)].sort();
+  const scopeOverflow = scopeIds === null ? 0 : Math.max(0, scopeIds.length - MAX_MACHINE_SCOPE);
+  const scopeKey = scopeIds === null ? null : JSON.stringify(scopeIds.slice(0, MAX_MACHINE_SCOPE));
+  const emptyScope = scopeKey === EMPTY_SCOPE_KEY;
+  const loadKey = scopeKey === null ? siteId : `${siteId}:${scopeKey}`;
+
   const [machines, setMachines] = useState<Machine[]>([]);
   const [profiles, setProfiles] = useState<Record<string, HardwareProfile>>({});
-  // Pins `machines` to the site it was populated for: a mismatch with `siteId`
-  // yields empty + loading, so the effect never flips loading synchronously.
-  const [loadedSiteId, setLoadedSiteId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(db ? null : 'Firebase not configured');
+  // Pins `machines` to the site and scope it was populated for: a mismatch with
+  // `loadKey` yields empty + loading, so the effect never flips loading synchronously.
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  // keyed like `machines`, so a refusal on one site or scope is not reported on the next
+  const [failure, setFailure] = useState<{ key: string; message: string } | null>(null);
+
+  useEffect(() => {
+    // the server never writes more than MAX_MACHINE_SCOPE ids, so a longer row is a data error
+    if (scopeOverflow > 0) {
+      console.warn(
+        `[useMachines] the machine scope on site ${siteId} lists ${MAX_MACHINE_SCOPE + scopeOverflow} machines; only the first ${MAX_MACHINE_SCOPE} load`,
+      );
+    }
+  }, [siteId, scopeKey, scopeOverflow]);
 
   // Capped: one listener per machine hits Firebase's soft client listener ceiling
   // on large sites. Machines past the cap get metric-only `devices` below.
@@ -1133,8 +1194,8 @@ export function useMachines(siteId: string) {
   // Config doc is source of truth; the status doc lags 10-120s. onSnapshot (not
   // getDocs) so agent-originated changes propagate.
   useEffect(() => {
-    if (!db || !siteId) return;
-    const configCol = collection(db, 'config', siteId, 'machines');
+    if (!db || !siteId || scopeKey === EMPTY_SCOPE_KEY) return;
+    const configCol = scopedMachines(collection(db, 'config', siteId, 'machines'), scopeKey);
     const unsubConfig = onSnapshot(configCol, (snapshot) => {
       const overrides: typeof configOverridesRef.current = {};
       const restartOverrides: typeof restartScheduleOverridesRef.current = {};
@@ -1203,7 +1264,7 @@ export function useMachines(siteId: string) {
       console.debug('Config override listener error:', e);
     });
     return () => unsubConfig();
-  }, [siteId]);
+  }, [siteId, scopeKey]);
 
   // 30s staleness sweep for machines that died without writing online=false
   // (crashes, installer kills). Must keep using `isMachineOnline` — the pill
@@ -1236,12 +1297,12 @@ export function useMachines(siteId: string) {
   }, [machines.length]);
 
   useEffect(() => {
-    if (!db || !siteId) return;
+    if (!db || !siteId || scopeKey === EMPTY_SCOPE_KEY) return;
 
-    // No sync state reset: loading derives from `loadedSiteId !== siteId` below.
+    // No sync state reset: loading derives from `loadedKey !== loadKey` below.
     // No try/catch: collection() only throws on invalid paths (guarded above) and
     // onSnapshot reports runtime errors via its own callback.
-    const machinesRef = collection(db, 'sites', siteId, 'machines');
+    const machinesRef = scopedMachines(collection(db, 'sites', siteId, 'machines'), scopeKey);
     // a new site's first snapshot rebuilds every machine, even one whose id the
     // previous site shared
     statusDocDataRef.current = new Map();
@@ -1455,11 +1516,15 @@ export function useMachines(siteId: string) {
             && machineData.every((m, i) => m === prevMachines[i]);
           return unchanged ? prevMachines : machineData;
         });
-        setLoadedSiteId(siteId);
+        setLoadedKey(loadKey);
       },
       (err) => {
         console.error('Error fetching machines:', err);
-        setError(err.message);
+        // a refused listener is final until the site or scope changes, so stop
+        // loading: a page that waited would spin forever
+        setFailure({ key: loadKey, message: err.message });
+        setMachines([]);
+        setLoadedKey(loadKey);
       }
     );
 
@@ -1472,7 +1537,7 @@ export function useMachines(siteId: string) {
       profileListenersRef.current = {};
       setProfiles({});
     };
-  }, [siteId]);
+  }, [siteId, scopeKey, loadKey]);
 
   const killProcess = async (machineId: string, processId: string, processName: string) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
@@ -1939,8 +2004,9 @@ export function useMachines(siteId: string) {
     });
   }, [machines, profiles]);
 
-  const machinesForCurrentSite = loadedSiteId === siteId ? joinedMachines : EMPTY_MACHINES;
-  const loading = !!db && !!siteId && loadedSiteId !== siteId;
+  const machinesForCurrentSite = !emptyScope && loadedKey === loadKey ? joinedMachines : EMPTY_MACHINES;
+  const loading = !!db && !!siteId && !emptyScope && loadedKey !== loadKey;
+  const error = !db ? 'Firebase not configured' : failure?.key === loadKey ? failure.message : null;
 
   return { machines: machinesForCurrentSite, loading, error, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView, updateRestartSchedule };
 }
