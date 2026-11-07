@@ -6,7 +6,7 @@
 import { createHash } from 'crypto';
 import { tool, jsonSchema } from 'ai';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
-import { resolveSiteAccess, type MembershipRole } from '@/lib/sitePolicy.server';
+import { resolveSiteAccess, standingOf, type MembershipRole } from '@/lib/sitePolicy.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
   EXISTING_COMMAND_MAPPINGS,
@@ -33,6 +33,7 @@ import {
   hasCapability,
   siteStanding,
   type Actor,
+  type MemberStanding,
   type Role,
   type SystemActorName,
 } from '@/lib/capabilities';
@@ -72,6 +73,19 @@ export const SERVER_SIDE_TOOLS: ReadonlySet<string> = new Set([
   // Follow-ups are chat records; the cron sweep acts on them, never an agent.
   'schedule_followup',
   'cancel_followup',
+]);
+
+/**
+ * server-side tools that reach across the whole site, not just the turn's
+ * machines: site logs, deployments and talons. a turn whose person is limited
+ * to some machines is never offered them.
+ */
+export const SITE_WIDE_SERVER_TOOLS: ReadonlySet<string> = new Set([
+  'get_site_logs',
+  'deploy_software',
+  'create_talon',
+  'list_talons',
+  'set_talon_enabled',
 ]);
 
 export const COMMAND_POLL_INTERVAL_MS = 1500;
@@ -134,10 +148,20 @@ export interface BuildExecutableToolsOptions {
   userId?: string;
   /** GLOBAL role. Grants nothing on a site; kept for audit attribution. */
   userRole?: string | null;
-  /** PER-SITE standing. Omit it and every site-scoped tool denies. */
-  userSiteRole?: MembershipRole;
-  /** the member row's swoop mode, carried beside `userSiteRole`. absent or null, the site role decides. */
-  userSwoopMode?: SwoopMode | null;
+  /**
+   * PER-SITE standing: the person's role, swoop mode and machine scope on the
+   * site, from `verifyUserSiteAccess`. omit it and every site-scoped tool denies.
+   */
+  userStanding?: MemberStanding;
+  /**
+   * the machines the person reaches, null for the whole site. a list hides
+   * SITE_WIDE_SERVER_TOOLS from the model. separate from `userStanding`
+   * because the conversations API builds its actor without site standing, yet
+   * must still hide them. `buildExecutableTools` requires it, so no caller
+   * forgets it; `undefined` in an untyped test literal reads as the whole site.
+   * the server-side tools never read it, so the autonomous path leaves it out.
+   */
+  machineScope?: readonly string[] | null;
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
@@ -232,9 +256,7 @@ function actionContextForHoot(
     // belonged to the site without ever checking, so the global role alone
     // decided what the tools could do. The real standing is resolved by
     // `verifyUserSiteAccess` and threaded in; absent, nothing site-scoped runs.
-    ...siteStanding([
-      [siteId, { role: options.userSiteRole ?? null, swoopMode: options.userSwoopMode ?? null, machineIds: null }],
-    ]),
+    ...siteStanding(options.userStanding ? [[siteId, options.userStanding]] : []),
   };
   return {
     siteId,
@@ -381,17 +403,25 @@ export interface SiteAccessLevel {
   role: string | null;
   /**
    * PER-SITE standing from `sites/{siteId}/members/{uid}`, or null for none.
-   * This is what grants; `role` above does not. Callers building a `UserActor`
-   * must pass this through, or every site-scoped capability denies.
+   * This is what grants; `role` above does not. The same as `standing.role`.
    */
   siteRole: MembershipRole;
-  /**
-   * the member row's swoop mode, null when it carries none. callers building a
-   * `UserActor` pass it to `siteStanding` with `siteRole`: dropped, an admin held
-   * to view would control again.
-   */
+  /** the member row's swoop mode, null when it carries none. the same as `standing.swoopMode`. */
   swoopMode: SwoopMode | null;
+  /**
+   * the member row's whole standing: role, swoop mode and machine scope. callers
+   * building a `UserActor` pass it to `siteStanding` as it is: without it every
+   * site-scoped capability denies, and a part dropped hands back what the row
+   * takes away (control to an admin held to view, the whole site to a scoped
+   * member).
+   */
+  standing: MemberStanding;
   isSuperadmin: boolean;
+  /**
+   * the role, which decides the tool tier, and nothing narrower: a scoped admin
+   * keeps tier 3 on their machines (ADR 0016), and `standing.machineIds`
+   * narrows where it applies.
+   */
   isSiteAdmin: boolean;
   isSiteOwner: boolean;
 }
@@ -480,6 +510,7 @@ export async function verifyUserSiteAccess(
     role: facts.rawRole,
     siteRole: facts.membershipRole,
     swoopMode: facts.swoopMode,
+    standing: standingOf(facts),
     isSuperadmin,
     isSiteAdmin,
     isSiteOwner,
@@ -598,10 +629,14 @@ function machineSummary(id: string, data: FirebaseFirestore.DocumentData): SiteM
  * document reads per machine. Those two stay for the single-machine callers that
  * are not on this path: hootStream's machine mode and the talon runner's
  * per-machine pre-flight each check one named machine.
+ *
+ * `machineScope` is the caller's machine scope, null for the whole site: a list leaves
+ * out every machine it does not name, so nothing downstream can reach one.
  */
 export async function listSiteMachines(
   db: FirebaseFirestore.Firestore,
   siteId: string,
+  machineScope: readonly string[] | null,
 ): Promise<SiteMachineSummary[]> {
   const snapshot = await db
     .collection('sites')
@@ -609,7 +644,11 @@ export async function listSiteMachines(
     .collection('machines')
     .get();
 
-  return snapshot.docs.map((doc) => machineSummary(doc.id, doc.data()));
+  // Array.isArray, not `!== null`: an untyped test that leaves it out is the whole site
+  const docs = Array.isArray(machineScope)
+    ? snapshot.docs.filter((doc) => machineScope.includes(doc.id))
+    : snapshot.docs;
+  return docs.map((doc) => machineSummary(doc.id, doc.data()));
 }
 
 /** One named machine's summary in one document read, for the paths that act on it alone; null with no doc. */
@@ -663,6 +702,12 @@ export interface ResolveHootTargetsRequest {
   /** `@machine` ids parsed from THIS turn's message. They REPLACE `requested`
    *  for this turn only (D-3), so a mention can name an unticked machine. */
   mentions?: string[];
+  /**
+   * the person's machine scope, null for the whole site. a machine outside it
+   * reads as one the site does not have: `unknown_machine`, which says nothing
+   * about whether it exists. "all machines" means all machines in scope.
+   */
+  machineScope: readonly string[] | null;
 }
 
 /**
@@ -724,7 +769,7 @@ export async function resolveHootTargets(
     return { ok: false, status: 400, reason: 'invalid_target', machineIds: [] };
   }
 
-  const machines = await listSiteMachines(db, siteId);
+  const machines = await listSiteMachines(db, siteId, request.machineScope);
   const byId = new Map(machines.map((machine) => [machine.id, machine]));
 
   if (mentions) {
@@ -756,7 +801,8 @@ export async function resolveHootTargets(
     const unknown = requested.filter((id) => !byId.has(id));
     if (unknown.length > 0) {
       // Includes another site's machine: the listing is this site's, so a
-      // foreign id is simply absent. Refusing beats quietly dropping it.
+      // foreign id is simply absent, as is one outside the person's scope.
+      // Refusing beats quietly dropping it.
       return { ok: false, status: 400, reason: 'unknown_machine', machineIds: unknown };
     }
   }
@@ -2097,9 +2143,9 @@ export function buildExecutableTools(
   machineId: string,
   chatId: string,
   toolDefs: McpToolDefinition[],
-  siteMode: boolean = false,
-  onlineMachines: string[] = [],
-  options: BuildExecutableToolsOptions = {},
+  siteMode: boolean,
+  onlineMachines: string[],
+  options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null },
 ) {
   // Server-side tools only see `options`, so fold the positional chatId in. An
   // explicit `options.chatId` wins, attributing the loop to a different chat.
@@ -2120,12 +2166,14 @@ export function buildExecutableTools(
 
   const guarded = new Set(options.activeHoursGuardIds ?? []);
   const targets = siteMode ? onlineMachines : [machineId];
+  const scoped = Array.isArray(options.machineScope);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = {};
 
   for (const def of toolDefs) {
     const toolName = def.name;
+    if (scoped && SITE_WIDE_SERVER_TOOLS.has(toolName)) continue;
     const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
     const takesOverride = takesActiveHoursOverride(def);
     const offered = offerOverride ? def : withoutActiveHoursOverride(def);

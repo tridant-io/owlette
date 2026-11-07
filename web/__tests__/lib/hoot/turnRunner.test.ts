@@ -166,7 +166,15 @@ function baseParams(overrides: Partial<StartTurnParams> = {}): StartTurnParams {
     siteId: SITE_ID,
     messages: [userMsg('u1', 'check the cpu')],
     userId: 'user-1',
-    access: { role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true },
+    access: {
+      role: 'admin',
+      siteRole: 'owner',
+      swoopMode: null,
+      standing: { role: 'owner', swoopMode: null, machineIds: null },
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: true,
+    },
     resolved: resolvedOn([MACHINE_ID]),
     turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source: 'chat' },
     chatTarget: { machineIds: [MACHINE_ID] },
@@ -500,6 +508,7 @@ describe('startTurn — happy path', () => {
             role: 'member',
             siteRole: 'admin',
             swoopMode: 'view',
+            standing: { role: 'admin', swoopMode: 'view', machineIds: null },
             isSuperadmin: false,
             isSiteAdmin: true,
             isSiteOwner: false,
@@ -510,9 +519,77 @@ describe('startTurn — happy path', () => {
     await flushAsync();
 
     expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
-      userSiteRole: 'admin',
-      userSwoopMode: 'view',
+      userStanding: { role: 'admin', swoopMode: 'view', machineIds: null },
+      machineScope: null,
     });
+  });
+
+  it('hands a scoped turn its standing and scope, and lists the site within that scope', async () => {
+    const standing = { role: 'admin' as const, swoopMode: 'control' as const, machineIds: [MACHINE_ID] };
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue([
+      { id: MACHINE_ID, online: true, hootEnabled: true, activeHoursGuard: false },
+    ]);
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'control',
+            standing,
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, [MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual([MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userStanding: standing,
+      machineScope: [MACHINE_ID],
+    });
+  });
+
+  it('drops a resolved machine that has left the scope since the turn was resolved', async () => {
+    // the real listing: both machines are online on the site, one is outside the scope now
+    const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
+    const docs = [
+      { id: 'machine-1', data: () => ({ online: true }) },
+      { id: 'machine-2', data: () => ({ online: true }) },
+    ];
+    const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
+    );
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        siteParams({
+          access: {
+            role: 'member',
+            siteRole: 'member',
+            swoopMode: null,
+            standing: { role: 'member', swoopMode: null, machineIds: ['machine-1'] },
+            isSuperadmin: false,
+            isSiteAdmin: false,
+            isSiteOwner: false,
+          },
+          resolved: resolvedOn(['machine-1', 'machine-2']),
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, ['machine-1']);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual(['machine-1']);
+    expect(turnStore.recordResolvedMachines).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, ['machine-1']);
   });
 });
 

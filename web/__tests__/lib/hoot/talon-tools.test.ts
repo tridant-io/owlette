@@ -90,18 +90,20 @@ const CHAT = 'chat-77';
 /** Sentinel — executors hand the db straight to the mocked store. */
 const db = { __db: 'sentinel' } as unknown as FirebaseFirestore.Firestore;
 
-// `userSiteRole` is the standing that grants; `userRole` is the global tier and
+// `userStanding` is the standing that grants; `userRole` is the global tier and
 // confers nothing on a site. Omitting the former denies every site-scoped tool,
 // which is the correct default but not what these fixtures mean.
 const ADMIN: BuildExecutableToolsOptions = {
   userId: 'uid_alice',
   userRole: 'admin',
-  userSiteRole: 'admin',
+  userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+  machineScope: null,
 };
 const MEMBER: BuildExecutableToolsOptions = {
   userId: 'uid_bob',
   userRole: 'member',
-  userSiteRole: 'member',
+  userStanding: { role: 'member', swoopMode: null, machineIds: null },
+  machineScope: null,
 };
 
 /** The store context a chat-authored talon must be written with. */
@@ -203,6 +205,17 @@ describe('talon tool definitions', () => {
       'talon_id',
       'enabled',
     ]);
+  });
+
+  it('none is offered to an admin limited to some machines: talons span the site', () => {
+    const scopedAdmin: BuildExecutableToolsOptions = {
+      ...ADMIN,
+      userStanding: { role: 'admin', swoopMode: null, machineIds: ['m1'] },
+      machineScope: ['m1'],
+    };
+
+    expect(talonTools(scopedAdmin)).toEqual({});
+    expect(Object.keys(talonTools())).toEqual([...TALON_TOOL_NAMES]);
   });
 });
 

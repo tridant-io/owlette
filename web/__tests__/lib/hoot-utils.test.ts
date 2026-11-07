@@ -197,6 +197,7 @@ import {
   MAX_TOOL_TIMEOUT_SECONDS,
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_NOTE_LENGTH,
+  SITE_WIDE_SERVER_TOOLS,
   type BuildExecutableToolsOptions,
 } from '@/lib/hoot-utils.server';
 
@@ -631,6 +632,22 @@ describe('listSiteMachines', () => {
     expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false, false, false]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
   });
+
+  it('lists only the machines a scope names, off the same one read', async () => {
+    const { db, machinesGet } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true },
+      { id: 'kiosk-02', online: true },
+      { id: 'kiosk-03', online: true },
+    ]);
+
+    const scoped = await listSiteMachines(db, 's1', ['kiosk-03', 'kiosk-01', 'gone-01']);
+    expect(scoped.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-03']);
+    expect(machinesGet).toHaveBeenCalledTimes(1);
+    // no machines is nothing, never the whole site
+    await expect(listSiteMachines(db, 's1', [])).resolves.toEqual([]);
+    const whole = await listSiteMachines(db, 's1', null);
+    expect(whole.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-02', 'kiosk-03']);
+  });
 });
 
 describe('getMachineSummary', () => {
@@ -961,11 +978,80 @@ describe('resolveHootTargets', () => {
     ).resolves.toMatchObject({ status: 400, reason: 'invalid_target' });
     expect(machinesGet).not.toHaveBeenCalled();
   });
+
+  describe('for someone limited to some machines', () => {
+    const SCOPE = ['kiosk-01'];
+
+    it('resolves "all machines" to the machines in scope only', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: SCOPE })).resolves.toEqual({
+        ok: true,
+        // one machine in scope keeps the single path, as a one-machine site does
+        resolved: { ids: ['kiosk-01'], fanOut: false, skipped: { offline: [], disabled: [] } },
+      });
+    });
+
+    it.each([
+      ['a machine outside it', ['kiosk-02'], ['kiosk-02']],
+      ['a set that reaches past it', ['kiosk-01', 'kiosk-03'], ['kiosk-03']],
+    ])('refuses %s as unknown, saying no more than for a machine that is not there', async (_label, requested, offenders) => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested, machineScope: SCOPE })).resolves.toEqual({
+        ok: false,
+        status: 400,
+        reason: 'unknown_machine',
+        machineIds: offenders,
+      });
+    });
+
+    it('refuses a mention of a machine outside it as unknown', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: SCOPE }),
+      ).resolves.toEqual({ ok: false, status: 400, reason: 'unknown_machine', machineIds: ['kiosk-02'] });
+    });
+
+    it('resolves a machine in scope as it would for the whole site', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: SCOPE }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'], fanOut: false } });
+    });
+
+    it('reaches nothing with no machines in scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: [] })).resolves.toEqual({
+        ok: false,
+        status: 503,
+        reason: 'no_machines',
+        machineIds: [],
+      });
+    });
+
+    it('leaves the whole site unchanged with a null scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toMatchObject({
+        ok: true,
+        resolved: { ids: ['kiosk-01', 'kiosk-02', 'kiosk-03'], fanOut: true },
+      });
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-02'], mentions: ['kiosk-03'], machineScope: null }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
+    });
+  });
 });
 
 describe('buildExecutableTools', () => {
+  const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null };
+
   it('creates an executable tool for each definition', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
 
     expect(Object.keys(tools)).toHaveLength(allTools.length);
     for (const def of allTools) {
@@ -975,12 +1061,40 @@ describe('buildExecutableTools', () => {
   });
 
   it('site mode creates tools for fan-out execution', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2']);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2'], WHOLE_SITE);
     expect(Object.keys(tools)).toHaveLength(allTools.length);
   });
 
+  it.each([
+    ['a single machine', false],
+    ['a fan-out', true],
+  ])('offers someone limited to some machines no site-wide tool, on %s', (_label, siteMode) => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', siteMode ? '__site__' : 'm1', 'c1', allTools, siteMode, siteMode ? ['m1'] : [],
+      { machineScope: ['m1'] },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+    // everything else, the per-machine server-side tools included, stays on offer
+    expect(offered.sort()).toEqual(
+      allTools.map((def) => def.name).filter((name) => !SITE_WIDE_SERVER_TOOLS.has(name)).sort(),
+    );
+    expect(offered).toEqual(expect.arrayContaining(['update_process', 'get_system_presets', 'schedule_followup']));
+  });
+
+  it('names exactly the five site-wide tools, each a tool that exists', () => {
+    // a renamed tool would silently fall out of the set and be offered again
+    expect([...SITE_WIDE_SERVER_TOOLS].sort()).toEqual(
+      ['create_talon', 'deploy_software', 'get_site_logs', 'list_talons', 'set_talon_enabled'],
+    );
+    const names = allTools.map((def) => def.name);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(names).toContain(name);
+  });
+
   it('asks for approval on tier-3 calls and lets tier-1/2 calls run', async () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
     for (const def of allTools) {
       // A call without an override: the tier alone decides.
       expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(def.tier >= 3);
@@ -1048,7 +1162,7 @@ describe('buildExecutableTools', () => {
       { id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' },
     ]);
     const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
-    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef]);
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], WHOLE_SITE);
 
     const result = await tools.update_process.execute({
       process_name: 'Missing',
@@ -1135,7 +1249,8 @@ describe('active-hours override', () => {
   const PERSON: BuildExecutableToolsOptions = {
     userId: 'uid_alice',
     userRole: 'admin',
-    userSiteRole: 'admin',
+    userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+    machineScope: null,
     allowActiveHoursOverride: true,
   };
   const REBOOT_NOW = { override_active_hours: true, reason: 'the show ended early' };
@@ -1285,9 +1400,17 @@ describe('active-hours override', () => {
   });
 
   const NO_PERSON_TURNS: Array<[string, BuildExecutableToolsOptions]> = [
-    ['a follow-up or talon turn', { userId: 'uid_alice', userRole: 'admin', userSiteRole: 'admin' }],
-    ['the conversations API', { userId: 'uid_alice', userRole: 'admin', requireTier3Approval: true }],
-    ['an unattended system actor', { systemActor: 'cortex_autonomous', allowActiveHoursOverride: true }],
+    [
+      'a follow-up or talon turn',
+      {
+        userId: 'uid_alice',
+        userRole: 'admin',
+        userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+        machineScope: null,
+      },
+    ],
+    ['the conversations API', { userId: 'uid_alice', userRole: 'admin', machineScope: null, requireTier3Approval: true }],
+    ['an unattended system actor', { systemActor: 'cortex_autonomous', machineScope: null, allowActiveHoursOverride: true }],
   ];
   const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
 
@@ -2174,6 +2297,30 @@ describe('verifyUserSiteAccess', () => {
     });
   });
 
+  it('returns the whole standing, machine scope included, while the role still decides the tier', async () => {
+    const scoped = makeAccessDb({
+      users: { role: 'member' },
+      sites: {},
+      member: { ...member('admin'), swoop: 'control', machineIds: ['m2', 'm1'] },
+    });
+    const access = await verifyUserSiteAccess(scoped, 'u1', 's1');
+    expect(access.standing).toEqual({ role: 'admin', swoopMode: 'control', machineIds: ['m1', 'm2'] });
+    // a scoped admin keeps tier 3; the scope narrows where it applies
+    expect(access.isSiteAdmin).toBe(true);
+    expect(resolveHootMaxTier(access)).toBe(3);
+
+    const whole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('member') });
+    await expect(verifyUserSiteAccess(whole, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: 'member', swoopMode: null, machineIds: null },
+    });
+
+    // a superadmin holds no row and reaches the whole site
+    const superadmin = makeAccessDb({ users: { role: 'superadmin' }, sites: {} });
+    await expect(verifyUserSiteAccess(superadmin, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: null, swoopMode: null, machineIds: null },
+    });
+  });
+
   it('a GLOBAL admin with no membership is refused outright', async () => {
     // The headline change. This user previously reached the site through
     // `sites[]` and held tier-3 Hoot on it; the global role now grants nothing.
@@ -2246,8 +2393,8 @@ describe('the hoot actor', () => {
     const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
       userId: 'u1',
       userRole: access.role,
-      userSiteRole: access.siteRole,
-      userSwoopMode: access.swoopMode,
+      userStanding: access.standing,
+      machineScope: access.standing.machineIds,
     });
     await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
     return mockUpdateProcess.mock.calls[0][0].actor;
@@ -2262,11 +2409,45 @@ describe('the hoot actor', () => {
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1')).toBe(true);
   });
 
+  it('carries the machine scope beside the swoop mode, so it reaches only those machines', async () => {
+    const actor = await hootActorFor({
+      uid: 'u1',
+      role: 'admin',
+      status: 'active',
+      swoop: 'view',
+      machineIds: ['m1'],
+    });
+
+    expect(actor.machineScopes?.s1).toEqual(['m1']);
+    expect(actor.swoopModes?.s1).toBe('view');
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm2')).toBe(false);
+    // nothing site-wide, whatever the role
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 's1')).toBe(false);
+  });
+
   it('builds the same actor as before from a row with no mode', async () => {
     const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active' });
 
     expect(actor).toEqual({ type: 'user', userId: 'u1', role: 'member', siteRoles: { s1: 'admin' } });
     expect(actor).not.toHaveProperty('swoopModes');
+    expect(actor).not.toHaveProperty('machineScopes');
+  });
+
+  it('denies every site-scoped capability with no standing', async () => {
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+    const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+      userId: 'u1',
+      userRole: 'admin',
+      machineScope: null,
+    });
+    await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+    const actor: UserActor = mockUpdateProcess.mock.calls[0][0].actor;
+
+    expect(actor.siteRoles).toEqual({});
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(false);
   });
 });
 
@@ -2351,6 +2532,7 @@ describe('capture_screenshot toModelOutput', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', siteMode ? '' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [],
+      { machineScope: null },
     );
     return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => {
       type: string;
