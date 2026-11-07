@@ -27,6 +27,7 @@ import * as Sentry from '@sentry/nextjs';
 // client bundle; `import type` is erased at compile time.
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
+import { scopeCovers } from '@/lib/machineAccess';
 import { emitMembershipFallback, emitMembershipListenerError } from '@/lib/membershipMetrics';
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -243,12 +244,16 @@ export function computeIsSuperadmin(role: UserRole | null): boolean {
  * worth nothing on a site it holds no membership for, which is the whole point of
  * per-site roles. Owners rank above admins and satisfy this too.
  *
+ * whole site only: a row with a machine scope holds nothing site-wide, whatever
+ * its role (ADR 0016), so a scoped admin is not a site admin here.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeIsSiteAdmin(
   role: UserRole | null,
   roleMap: Map<string, SiteRole>,
-  siteId: string
+  siteId: string,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   // A null global role means the user document has not resolved — pre-auth, doc
@@ -257,7 +262,7 @@ export function computeIsSiteAdmin(
   // role map replaced `sites[]`.
   if (role === null) return false;
   const siteRole = roleMap.get(siteId);
-  return siteRole === 'owner' || siteRole === 'admin';
+  return (siteRole === 'owner' || siteRole === 'admin') && !scopeMap.has(siteId);
 }
 
 /**
@@ -268,16 +273,20 @@ export function computeIsSiteAdmin(
  * Reads the role map, never `sites/{siteId}.owner` — the legacy field is
  * stripped in wave 6.1 and a control gated on it would silently stop rendering.
  *
+ * owners are never scoped, so an owner row with a machine scope is malformed and
+ * reads as scoped, the way the server reads it: not the owner here.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeIsSiteOwner(
   role: UserRole | null,
   roleMap: Map<string, SiteRole>,
-  siteId: string
+  siteId: string,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   if (role === null) return false;
-  return roleMap.get(siteId) === 'owner';
+  return roleMap.get(siteId) === 'owner' && !scopeMap.has(siteId);
 }
 
 /**
@@ -291,18 +300,74 @@ export function computeIsSiteOwner(
  *
  * Superadmins pass without a membership, as everywhere else.
  *
+ * only a whole-site owner or admin row counts: those pages are site-wide, and a
+ * scoped admin would find every one refused.
+ *
  * Exported so it's testable without AuthProvider.
  */
 export function computeAdministersAnySite(
   role: UserRole | null,
-  roleMap: Map<string, SiteRole>
+  roleMap: Map<string, SiteRole>,
+  scopeMap: Map<string, readonly string[]>
 ): boolean {
   if (role === 'superadmin') return true;
   if (role === null) return false;
-  for (const siteRole of roleMap.values()) {
-    if (siteRole === 'owner' || siteRole === 'admin') return true;
+  for (const [siteId, siteRole] of roleMap) {
+    if ((siteRole === 'owner' || siteRole === 'admin') && !scopeMap.has(siteId)) return true;
   }
   return false;
+}
+
+/**
+ * the machines the caller reaches on `siteId`, or null for the whole site. a
+ * superadmin holds no member rows and reaches every machine.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeMachineScope(
+  role: UserRole | null,
+  scopeMap: Map<string, readonly string[]>,
+  siteId: string
+): readonly string[] | null {
+  if (role === 'superadmin') return null;
+  return scopeMap.get(siteId) ?? null;
+}
+
+/**
+ * owner or admin of `siteId` whose access covers `machineId`, or a superadmin.
+ * a scoped admin passes on their own machines only.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeIsMachineAdmin(
+  role: UserRole | null,
+  roleMap: Map<string, SiteRole>,
+  scopeMap: Map<string, readonly string[]>,
+  siteId: string,
+  machineId: string
+): boolean {
+  if (role === 'superadmin') return true;
+  // unresolved session: fail closed, as computeIsSiteAdmin does
+  if (role === null) return false;
+  const siteRole = roleMap.get(siteId);
+  return (
+    (siteRole === 'owner' || siteRole === 'admin') &&
+    scopeCovers(scopeMap.get(siteId) ?? null, machineId)
+  );
+}
+
+/**
+ * the caller's role on `siteId` as its row says, scoped or not, or null with no
+ * row. for labels only: it is never a gate, because a scoped admin's row still
+ * says admin.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeSiteRole(
+  roleMap: Map<string, SiteRole>,
+  siteId: string
+): SiteRole | null {
+  return roleMap.get(siteId) ?? null;
 }
 
 export interface UserPreferences {
@@ -357,12 +422,26 @@ interface AuthContextType {
   role: UserRole | null;
   /** role === 'superadmin'. Installer uploads, role management, cross-site admining. */
   isSuperadmin: boolean;
-  /** Admin or superadmin of `siteId`. Gates site-level elevated ops (delete machines, stored layouts, site webhooks/settings). */
+  /**
+   * whole-site owner or admin (or superadmin): gates site-wide surfaces such as
+   * site settings, members, the admin panel, remove machine, revoke token and
+   * clear logs; false for a scoped row.
+   */
   isSiteAdmin: (siteId: string) => boolean;
   /** Administers at least one site — the admin panel's site-scoped entry gate. */
   administersAnySite: boolean;
   /** Owner of this site. Gates SITE_DELETE, the one owner-only capability. */
   isSiteOwner: (siteId: string) => boolean;
+  /** the machines the caller reaches on `siteId`. null = whole site. */
+  machineScope: (siteId: string) => readonly string[] | null;
+  /**
+   * owner or admin whose access covers the machine, or a superadmin: gates
+   * commands, process config and displays on that machine. swoop is not here:
+   * the server decides it from the role, the swoop mode and the scope.
+   */
+  isMachineAdmin: (siteId: string, machineId: string) => boolean;
+  /** the role map's value for `siteId`, scoped or not. for labels only, never a gate. */
+  siteRole: (siteId: string) => SiteRole | null;
   /**
    * Sites the user has access to, or `undefined` until access has RESOLVED: the
    * user doc (role, legacy `sites[]`, `lastSiteId`) and the membership listener
@@ -401,6 +480,9 @@ const AuthContext = createContext<AuthContextType>({
   isSiteAdmin: () => false,
   administersAnySite: false,
   isSiteOwner: () => false,
+  machineScope: () => null,
+  isMachineAdmin: () => false,
+  siteRole: () => null,
   userSites: [],
   lastSiteId: null,
   lastMachineIds: {},
@@ -1192,7 +1274,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Per-site membership — THE source of site access from here on. One
   // collectionGroup listener replaces reading `users/{uid}.sites[]`.
-  const { roleMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
+  const { roleMap, scopeMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
 
   // A listener that is not running degrades every user to the legacy array. The
   // union hides that today, so without this it stays silent right up until wave
@@ -1234,16 +1316,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const isSuperadmin = computeIsSuperadmin(role);
   const isSiteAdmin = useCallback(
-    (siteId: string) => computeIsSiteAdmin(role, roleMap, siteId),
-    [role, roleMap]
+    (siteId: string) => computeIsSiteAdmin(role, roleMap, siteId, scopeMap),
+    [role, roleMap, scopeMap]
   );
   const administersAnySite = useMemo(
-    () => computeAdministersAnySite(role, roleMap),
-    [role, roleMap]
+    () => computeAdministersAnySite(role, roleMap, scopeMap),
+    [role, roleMap, scopeMap]
   );
   const isSiteOwner = useCallback(
-    (siteId: string) => computeIsSiteOwner(role, roleMap, siteId),
-    [role, roleMap]
+    (siteId: string) => computeIsSiteOwner(role, roleMap, siteId, scopeMap),
+    [role, roleMap, scopeMap]
+  );
+  const machineScope = useCallback(
+    (siteId: string) => computeMachineScope(role, scopeMap, siteId),
+    [role, scopeMap]
+  );
+  const isMachineAdmin = useCallback(
+    (siteId: string, machineId: string) =>
+      computeIsMachineAdmin(role, roleMap, scopeMap, siteId, machineId),
+    [role, roleMap, scopeMap]
+  );
+  const siteRole = useCallback(
+    (siteId: string) => computeSiteRole(roleMap, siteId),
+    [roleMap]
   );
 
   const value = useMemo(() => ({
@@ -1254,6 +1349,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isSiteAdmin,
     administersAnySite,
     isSiteOwner,
+    machineScope,
+    isMachineAdmin,
+    siteRole,
     userSites,
     lastSiteId,
     lastMachineIds,
@@ -1272,7 +1370,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
