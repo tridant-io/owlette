@@ -28,16 +28,45 @@
 //! off: applying rotation is Task 6.4's job, and turning it on here would
 //! silently transpose the very case that is already easy to get wrong.
 //!
-//! # Hardware test
+//! # Filter: which usage each caller takes
+//!
+//! The video processor's usage picks the driver's filter and what it costs,
+//! and the two callers do different jobs. [`Downscaler::open`] is the BGRA
+//! downscale a session opens when a tier's size differs from the capture (a
+//! menu resolution, an encoder's size limit, mf-sw's 720p cap), where the
+//! filter decides whether thin text survives: it takes `DOWNSCALE_USAGE`,
+//! which stays `D3D11_VIDEO_USAGE_OPTIMAL_SPEED` unless task 4.1 of the swoop
+//! text clarity plan (`dev/active/swoop-clarity`, decision C12) measures
+//! `OPTIMAL_QUALITY`'s 3840x2160 -> 1920x1080 p50 within 1.0 ms of
+//! `OPTIMAL_SPEED`'s. [`Downscaler::open_nv12`] is the same-size BGRA -> NV12
+//! convert mf-hw and mf-sw run on every frame, on the Intel and AMD machines
+//! mf-hw exists for: not a downscale, so it always takes `OPTIMAL_SPEED`.
+//! Task 4.1 records both usages' numbers here, with the GPU, the driver and
+//! the date.
+//!
+//! The CPU path is an area average: each target pixel is the mean of the
+//! source pixels it covers, so a shrink skips none of them. Task 4.1 records
+//! its 3840x2160 -> 1280x720 time here too, held to a 10 ms p50 (mf-sw's
+//! frame is 33 ms).
+//!
+//! # Hardware tests
 //!
 //! ```text
-//! cargo test -- --ignored scale        # working directory agent/swoop
+//! cargo test -- --ignored scale --nocapture                 # working directory agent/swoop
+//! cargo test --release -- --ignored scale --nocapture --test-threads=1   # the timings
 //! ```
 //!
-//! Expected: one test runs and passes, printing the source and target sizes it
-//! blitted (`gpu scale: 256x128 -> 128x64`). It downscales a two-tone BGRA
-//! pattern by half and asserts the two halves survive at the right side of the
-//! output, so a transposed or mirrored blit fails it.
+//! Expected: every test passes. The two correctness tests downscale a two-tone
+//! BGRA pattern by half and assert the two halves survive at the right side
+//! of the output, so a transposed or mirrored blit fails them
+//! (`gpu scale: 256x128 -> 128x64`), and convert it to NV12 at BT.709
+//! limited luma. `each_usage_prints_its_blit_time_and_its_filter` asserts
+//! nothing: for each usage it prints the p50 of 120 BGRA blits at 3840x2160
+//! -> 1920x1080 and -> 2560x1440, the p50 of 120 same-size NV12 converts at
+//! 3840x2160 and 2560x1440, and the mean and spread of 1-px black and white
+//! stripes scaled 3:1. `cpu_scale_times_a_four_k_shrink_to_720p` prints the
+//! CPU path's p50, in a release build only. Timings are worth reading only
+//! from the second command, one test at a time and nothing else on the box.
 
 /// The largest frame a backend will encode, on each axis.
 ///
@@ -142,31 +171,86 @@ fn even_floor(value: u64) -> u32 {
 // or a box with no GPU renders on, and where the software encoder is the only
 // rung. Never used where the GPU path exists.
 
-/// Bilinear BGRA scale. `src` rows are `src_pitch` bytes apart; `dst` is
-/// packed at `to`.
+/// Area-average BGRA scale: each target pixel is the mean of the source
+/// pixels it covers, a pixel on the edge of its footprint weighted by how much
+/// of it falls inside, so no source pixel is skipped however far the picture
+/// shrinks (a two-tap bilinear filter reads two of every n below half size,
+/// and thin strokes between its taps drop out). Separable, down the columns
+/// and then along the row. The same size is a plain copy. `src` rows are
+/// `src_pitch` bytes apart; `dst` is packed at `to`.
 pub fn scale_bgra_cpu(src: &[u8], src_pitch: usize, from: (u32, u32), to: (u32, u32), dst: &mut [u8]) {
     let (sw, sh) = (from.0 as usize, from.1 as usize);
     let (tw, th) = (to.0 as usize, to.1 as usize);
-    // the source position of a target pixel, centre to centre, in 1/256 of a
-    // pixel: the two taps and the weight of the second
-    let position = |t: usize, target: usize, source: usize| -> (usize, usize, u32) {
-        let fixed = ((2 * t + 1) * source * 256 / (2 * target)).saturating_sub(128);
-        let whole = (fixed / 256).min(source - 1);
-        (whole, (whole + 1).min(source - 1), (fixed % 256) as u32)
-    };
-    let columns: Vec<(usize, usize, u32)> = (0..tw).map(|x| position(x, tw, sw)).collect();
-    for y in 0..th {
-        let (y0, y1, fy) = position(y, th, sh);
-        let (row0, row1) = (&src[y0 * src_pitch..], &src[y1 * src_pitch..]);
-        for (x, &(x0, x1, fx)) in columns.iter().enumerate() {
-            for c in 0..4 {
-                let tap = |row: &[u8], at: usize| u32::from(row[at * 4 + c]);
-                let top = tap(row0, x0) * (256 - fx) + tap(row0, x1) * fx;
-                let bottom = tap(row1, x0) * (256 - fx) + tap(row1, x1) * fx;
-                dst[(y * tw + x) * 4 + c] = ((top * (256 - fy) + bottom * fy + 32768) >> 16) as u8;
+    if from == to {
+        for (y, row) in dst.chunks_exact_mut(tw * 4).take(th).enumerate() {
+            row.copy_from_slice(&src[y * src_pitch..][..tw * 4]);
+        }
+        return;
+    }
+    let columns = footprints(sw, tw, COLUMN_WEIGHT_BITS);
+    // one target row's source rows, summed down each column at the source's
+    // width in u16 lanes: the pass that reads every source byte is the one
+    // that vectorises, eight lanes to a register
+    let mut sums = vec![0u16; sw * 4];
+    for (y, (first, weights)) in footprints(sh, th, ROW_WEIGHT_BITS).iter().enumerate() {
+        sums.fill(0);
+        for (r, &weight) in weights.iter().enumerate() {
+            let weight = weight as u16;
+            let row = &src[(first + r) * src_pitch..][..sw * 4];
+            for (sum, &value) in sums.iter_mut().zip(row) {
+                *sum += u16::from(value) * weight;
+            }
+        }
+        let summed = sums.as_chunks::<4>().0;
+        let out = dst[y * tw * 4..][..tw * 4].as_chunks_mut::<4>().0;
+        for (pixel, (first, weights)) in out.iter_mut().zip(&columns) {
+            let mut total = [0u32; 4];
+            for (sum, &weight) in summed[*first..].iter().zip(weights) {
+                for (channel, &value) in total.iter_mut().zip(sum) {
+                    *channel += u32::from(value) * weight;
+                }
+            }
+            for (byte, channel) in pixel.iter_mut().zip(total) {
+                *byte = ((channel + (1 << (WEIGHT_BITS - 1))) >> WEIGHT_BITS) as u8;
             }
         }
     }
+}
+
+/// The source rows' weights, in 1/256: a column's sum is then at most
+/// 255 << 8, which a u16 lane holds. Their rounding can move a pixel by about
+/// a level against an exact average, which no one sees; finer weights would
+/// need u32 lanes, half as many to a register.
+const ROW_WEIGHT_BITS: u32 = 8;
+
+/// The source columns' weights, in 1/65536: a pixel's total is then at most
+/// 255 << 24, which a u32 holds with the rounding half added.
+const COLUMN_WEIGHT_BITS: u32 = 16;
+
+const WEIGHT_BITS: u32 = ROW_WEIGHT_BITS + COLUMN_WEIGHT_BITS;
+
+/// One axis of an area average: for each of `target` pixels, the first of
+/// the `source` pixels it covers and the weight of each one it covers, in
+/// 1/2^`bits` and summing to one. Target pixel `t` spans
+/// `[t * source, (t + 1) * source)` on a grid of 1/`target` source pixels, so
+/// every coverage is a whole number before it is rounded.
+fn footprints(source: usize, target: usize, bits: u32) -> Vec<(usize, Vec<u32>)> {
+    // rounding the running total, not each weight, keeps the sum exact
+    let share = |covered: usize| ((covered << bits) + source / 2) / source;
+    (0..target)
+        .map(|t| {
+            let (start, end) = (t * source, (t + 1) * source);
+            let first = start / target;
+            let weights = (first..=(end - 1) / target)
+                .map(|s| {
+                    let before = (s * target).max(start) - start;
+                    let through = ((s + 1) * target).min(end) - start;
+                    (share(through) - share(before)) as u32
+                })
+                .collect();
+            (first, weights)
+        })
+        .collect()
 }
 
 /// BT.709 limited-range NV12 from full-range BGRA — the colour the GPU convert
@@ -221,7 +305,7 @@ mod imp {
         D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
-        D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+        D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE, D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
         D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
     };
     use windows::Win32::Graphics::Dxgi::Common::{
@@ -239,6 +323,11 @@ mod imp {
         Numerator: 60,
         Denominator: 1,
     };
+
+    /// The usage [`Downscaler::open`]'s video processor opens at, which picks
+    /// the driver's filter. The module doc says when it moves to
+    /// `OPTIMAL_QUALITY`.
+    const DOWNSCALE_USAGE: D3D11_VIDEO_USAGE = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 
     /// Everything that stops a frame being downscaled.
     #[derive(Debug, Error)]
@@ -339,12 +428,16 @@ mod imp {
                 height,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                DOWNSCALE_USAGE,
             )
         }
 
         /// The same, producing `width`x`height` BT.709 limited-range NV12 —
         /// which may be the frame's own size, a convert with no scale. Only on
-        /// a device with a video processor.
+        /// a device with a video processor. Always `OPTIMAL_SPEED`: its
+        /// callers convert at the captured size, which is not a downscale,
+        /// and mf-hw and mf-sw pay for it on every frame, on the Intel and
+        /// AMD machines mf-hw exists for.
         pub fn open_nv12(frame: &Frame, width: u32, height: u32) -> Result<Self, ScaleError> {
             Self::open_as(
                 frame,
@@ -352,15 +445,18 @@ mod imp {
                 height,
                 DXGI_FORMAT_NV12,
                 DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+                D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
             )
         }
 
-        fn open_as(
+        /// Module-private so the hardware test can open either usage.
+        pub(super) fn open_as(
             frame: &Frame,
             width: u32,
             height: u32,
             format: DXGI_FORMAT,
             color_space: DXGI_COLOR_SPACE_TYPE,
+            usage: D3D11_VIDEO_USAGE,
         ) -> Result<Self, ScaleError> {
             let raw = frame.handle as *mut c_void;
             let texture = texture_of(&raw)?;
@@ -374,6 +470,7 @@ mod imp {
                     frame,
                     (width, height),
                     color_space,
+                    usage,
                 )?),
                 Err(_) if format == DXGI_FORMAT_B8G8R8A8_UNORM => {
                     ::log::info!("swoop: this device has no video processor; downscaling on the cpu");
@@ -456,6 +553,7 @@ mod imp {
             frame: &Frame,
             (width, height): (u32, u32),
             color_space: DXGI_COLOR_SPACE_TYPE,
+            usage: D3D11_VIDEO_USAGE,
         ) -> Result<Self, ScaleError> {
             let context = unsafe { device.GetImmediateContext() }
                 .map_err(d3d("GetImmediateContext"))?;
@@ -471,9 +569,11 @@ mod imp {
                 OutputFrameRate: RATE,
                 OutputWidth: width,
                 OutputHeight: height,
-                // Latency over picture quality: this is a live stream, and the
-                // quality path enables per-frame work we cannot afford.
-                Usage: D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+                // the caller's: DOWNSCALE_USAGE for a downscale, where the
+                // filter decides whether thin text survives; OPTIMAL_SPEED for
+                // the same-size nv12 convert, which is not a downscale and
+                // runs on every frame of mf-hw and mf-sw
+                Usage: usage,
             };
             let enumerator = unsafe { video_device.CreateVideoProcessorEnumerator(&content) }
                 .map_err(d3d("CreateVideoProcessorEnumerator"))?;
@@ -908,21 +1008,124 @@ mod tests {
         scale_bgra_cpu(&src, w * 4 + pad, (64, 32), (64, 32), &mut same);
         assert_eq!(same, halves(w, h, 0, BLUE, RED));
     }
+
+    /// `len` bytes of a fixed xorshift sequence: a picture with no structure
+    /// for a filter to line up with.
+    fn noise(len: usize) -> Vec<u8> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        (0..len)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 56) as u8
+            })
+            .collect()
+    }
+
+    /// Each channel's mean over a `w`x`h` BGRA picture whose rows are `pitch`
+    /// bytes apart.
+    fn means(px: &[u8], pitch: usize, w: usize, h: usize) -> [f64; 4] {
+        let mut sums = [0u64; 4];
+        for row in px.chunks(pitch).take(h) {
+            for pixel in row[..w * 4].as_chunks::<4>().0 {
+                for (sum, &value) in sums.iter_mut().zip(pixel) {
+                    *sum += u64::from(value);
+                }
+            }
+        }
+        sums.map(|sum| sum as f64 / (w * h) as f64)
+    }
+
+    #[test]
+    fn one_pixel_lines_come_out_even_at_three_to_one() {
+        // a 1-px white line every third column and row: each 3x3 footprint
+        // holds one of each, so an area average is the same grey everywhere,
+        // where a two-tap filter reads only the black between the lines
+        let (w, h, pad) = (96, 48, 8);
+        let mut src: Vec<u8> = Vec::with_capacity((w * 4 + pad) * h);
+        for y in 0..h {
+            for x in 0..w {
+                let v = if x % 3 == 0 || y % 3 == 0 { 255 } else { 0 };
+                src.extend_from_slice(&[v, v, v, 255]);
+            }
+            src.extend(std::iter::repeat_n(0xee, pad));
+        }
+        let mean = means(&src, w * 4 + pad, w, h);
+        let mut out = vec![0u8; 32 * 16 * 4];
+        scale_bgra_cpu(&src, w * 4 + pad, (96, 48), (32, 16), &mut out);
+        for (i, pixel) in out.as_chunks::<4>().0.iter().enumerate() {
+            for (&value, mean) in pixel.iter().zip(mean) {
+                assert!(
+                    (f64::from(value) - mean).abs() <= 1.0,
+                    "pixel {i} is {pixel:?}, the lines' mean {mean:.2}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_four_to_three_shrink_keeps_a_pictures_mean() {
+        let (w, h, pad) = (128, 96, 12);
+        let src = noise((w * 4 + pad) * h);
+        let mut out = vec![0u8; 96 * 72 * 4];
+        scale_bgra_cpu(&src, w * 4 + pad, (128, 96), (96, 72), &mut out);
+        let (before, after) = (means(&src, w * 4 + pad, w, h), means(&out, 96 * 4, 96, 72));
+        for (before, after) in before.into_iter().zip(after) {
+            assert!(
+                (before - after).abs() <= 1.0,
+                "the mean moved from {before:.2} to {after:.2}"
+            );
+        }
+    }
+
+    /// The CPU path's cost on a 4K desktop at mf-sw's 720p cap; task 4.1
+    /// holds its p50 to 10 ms. A debug build's time means nothing, so it
+    /// times only with `--release`.
+    #[test]
+    #[ignore = "a timing: run it with --release"]
+    fn cpu_scale_times_a_four_k_shrink_to_720p() {
+        if cfg!(debug_assertions) {
+            println!("cpu scale: 3840x2160 -> 1280x720 times only with --release");
+            return;
+        }
+        let (from, to) = ((3840u32, 2160u32), (1280u32, 720u32));
+        let src = noise(3840 * 2160 * 4);
+        let mut out = vec![0u8; 1280 * 720 * 4];
+        let mut times: Vec<_> = (0..60)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                scale_bgra_cpu(&src, 3840 * 4, from, to, std::hint::black_box(&mut out));
+                start.elapsed()
+            })
+            .collect();
+        times.sort();
+        println!(
+            "cpu scale: 3840x2160 -> 1280x720 p50 {:.2} ms over {} runs",
+            times[times.len() / 2].as_secs_f64() * 1e3,
+            times.len()
+        );
+    }
 }
 
 #[cfg(all(test, windows))]
 mod gpu_tests {
-    use windows::core::Interface;
+    use std::time::{Duration, Instant};
+
+    use windows::core::{Interface, BOOL};
     use windows::Win32::Graphics::Direct3D::{
         D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL_11_0,
     };
     use windows::Win32::Graphics::Direct3D11::{
-        D3D11CreateDevice, ID3D11Device, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
+        D3D11CreateDevice, ID3D11Device, ID3D11Query, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
         D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA,
-        D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
+        D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_QUERY_DESC, D3D11_QUERY_EVENT,
+        D3D11_SDK_VERSION, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        D3D11_USAGE_STAGING, D3D11_VIDEO_USAGE, D3D11_VIDEO_USAGE_OPTIMAL_QUALITY,
+        D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
     };
     use windows::Win32::Graphics::Dxgi::Common::{
+        DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
     };
 
@@ -969,9 +1172,22 @@ mod gpu_tests {
                 }
             }
         }
+        texture(device, SRC, &pixels)
+    }
+
+    /// 1-px black and white columns, alternating, in BGRA.
+    fn stripes((width, height): (u32, u32)) -> Vec<u8> {
+        let row: Vec<u8> = (0..width)
+            .flat_map(|x| if x % 2 == 0 { [0, 0, 0, 255] } else { [255, 255, 255, 255] })
+            .collect();
+        row.repeat(height as usize)
+    }
+
+    /// A `width`x`height` BGRA texture holding `pixels`, rows packed.
+    fn texture(device: &ID3D11Device, (width, height): (u32, u32), pixels: &[u8]) -> ID3D11Texture2D {
         let desc = D3D11_TEXTURE2D_DESC {
-            Width: SRC.0,
-            Height: SRC.1,
+            Width: width,
+            Height: height,
             MipLevels: 1,
             ArraySize: 1,
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
@@ -986,7 +1202,7 @@ mod gpu_tests {
         };
         let data = D3D11_SUBRESOURCE_DATA {
             pSysMem: pixels.as_ptr().cast(),
-            SysMemPitch: SRC.0 * 4,
+            SysMemPitch: width * 4,
             SysMemSlicePitch: 0,
         };
         let mut texture = None;
@@ -1127,5 +1343,118 @@ mod gpu_tests {
         };
         assert_eq!(at(16, 32), (255, 0, 0), "left half stays blue");
         assert_eq!(at(112, 32), (0, 0, 255), "right half stays red");
+    }
+
+    /// A scaler as [`Downscaler::open`] makes it, or a convert as
+    /// [`Downscaler::open_nv12`] does, but at `usage`.
+    fn open_at(frame: &Frame, to: (u32, u32), nv12: bool, usage: D3D11_VIDEO_USAGE) -> Downscaler {
+        let (format, color_space) = if nv12 {
+            (DXGI_FORMAT_NV12, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709)
+        } else {
+            (DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
+        };
+        Downscaler::open_as(frame, to.0, to.1, format, color_space, usage).expect("a scaler")
+    }
+
+    /// The p50 of 120 blits, each from its submit until the GPU signals it
+    /// done, which is what a frame waits for. 30 untimed blits go first, so
+    /// whichever case runs first does not pay for idle clocks.
+    fn blit_p50(device: &ID3D11Device, scaler: &mut Downscaler, frame: &Frame) -> Duration {
+        let context = unsafe { device.GetImmediateContext() }.expect("the immediate context");
+        let desc = D3D11_QUERY_DESC {
+            Query: D3D11_QUERY_EVENT,
+            MiscFlags: 0,
+        };
+        let mut query = None;
+        unsafe { device.CreateQuery(&desc, Some(&mut query)) }.expect("an event query");
+        let query: ID3D11Query = query.expect("CreateQuery returned a query");
+        let mut blit = || {
+            let start = Instant::now();
+            scaler.scale(frame).expect("a blit");
+            let mut done = BOOL(0);
+            unsafe { context.End(&query) };
+            // S_FALSE until the gpu reaches the event, and windows-rs reads
+            // S_FALSE as success: the flag is the answer
+            while !done.as_bool() {
+                unsafe {
+                    context.GetData(
+                        &query,
+                        Some((&mut done as *mut BOOL).cast()),
+                        size_of::<BOOL>() as u32,
+                        0,
+                    )
+                }
+                .expect("the event query");
+            }
+            start.elapsed()
+        };
+        for _ in 0..30 {
+            blit();
+        }
+        let mut times: Vec<Duration> = (0..120).map(|_| blit()).collect();
+        times.sort();
+        times[times.len() / 2]
+    }
+
+    /// The numbers task 4.1 chooses `DOWNSCALE_USAGE` by, for each usage: the
+    /// BGRA downscale's p50 at 3840x2160 -> 1920x1080 and -> 2560x1440, the
+    /// same-size NV12 convert's at 3840x2160 and 2560x1440, and what its
+    /// filter makes of 1-px black and white stripes at 3:1. Prints only.
+    #[test]
+    #[ignore = "needs a gpu"]
+    fn each_usage_prints_its_blit_time_and_its_filter() {
+        let device = device();
+        let (uhd, qhd) = ((3840, 2160), (2560, 1440));
+        let (uhd_stripes, qhd_stripes) = (
+            texture(&device, uhd, &stripes(uhd)),
+            texture(&device, qhd, &stripes(qhd)),
+        );
+        let frame = |texture: &ID3D11Texture2D, (width, height): (u32, u32)| Frame {
+            handle: texture.as_raw() as usize,
+            width,
+            height,
+            captured_qpc: 0,
+        };
+        let ms = |time: Duration| time.as_secs_f64() * 1e3;
+        let source = frame(&uhd_stripes, uhd);
+        for (name, usage) in [
+            ("OPTIMAL_SPEED", D3D11_VIDEO_USAGE_OPTIMAL_SPEED),
+            ("OPTIMAL_QUALITY", D3D11_VIDEO_USAGE_OPTIMAL_QUALITY),
+        ] {
+            for to in [(1920, 1080), qhd] {
+                let mut scaler = open_at(&source, to, false, usage);
+                let p50 = blit_p50(&device, &mut scaler, &source);
+                println!("gpu scale {name}: bgra 3840x2160 -> {}x{} p50 {:.3} ms", to.0, to.1, ms(p50));
+            }
+            for (texture, size) in [(&uhd_stripes, uhd), (&qhd_stripes, qhd)] {
+                let input = frame(texture, size);
+                let mut convert = open_at(&input, size, true, usage);
+                let p50 = blit_p50(&device, &mut convert, &input);
+                println!("gpu scale {name}: nv12 {}x{} p50 {:.3} ms", size.0, size.1, ms(p50));
+            }
+
+            let to = (1280u32, 720u32);
+            let mut scaler = open_at(&source, to, false, usage);
+            let scaled = scaler.scale(&source).expect("a scaled frame");
+            let raw = scaled.handle as *mut std::ffi::c_void;
+            // SAFETY: borrowed from the scaler, which is still alive.
+            let output = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("the output");
+            let pixels = readback(&device, output);
+            // green, inside an 8-px border where a filter's taps run off the
+            // picture: an ideal filter gives 127.5 and no spread, an area
+            // average 85 and 170 in turn, a point sample 0 and 255
+            let inside: Vec<u8> = (8..to.1 - 8)
+                .flat_map(|y| (8..to.0 - 8).map(move |x| (y * to.0 + x) as usize))
+                .map(|i| pixels[i * 4 + 1])
+                .collect();
+            let mean = inside.iter().map(|&v| f64::from(v)).sum::<f64>() / inside.len() as f64;
+            let (min, max) = inside
+                .iter()
+                .fold((u8::MAX, u8::MIN), |(min, max), &v| (min.min(v), max.max(v)));
+            println!(
+                "gpu scale {name}: 1-px stripes 3840x2160 -> 1280x720 mean {mean:.1}, spread {} ({min}..{max})",
+                max - min
+            );
+        }
     }
 }
