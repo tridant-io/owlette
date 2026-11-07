@@ -74,6 +74,7 @@ jest.mock('@/lib/talons/visualCheck.server', () => {
 jest.mock('@/lib/adminUtils.server', () => ({
   __esModule: true,
   getSiteAlertRecipients: (...args: unknown[]) => mockGetSiteAlertRecipients(...args),
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 jest.mock('@/app/api/unsubscribe/route', () => ({
   __esModule: true,
@@ -708,6 +709,40 @@ describe('outputs', () => {
       status: 'sent',
       detail: 'delivered to 1 recipient(s)',
     });
+  });
+
+  it("emails a machine's run only to recipients whose machine scope reaches it", async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m1'] },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m2'] },
+    ]);
+
+    const talon = seedTalon('t1', {
+      trigger: { type: 'event', eventTypes: ['process_crash'] },
+      cooldownMinutes: 0,
+    });
+    seedMachine('m1', true, 'LOBBY-01');
+
+    await runTalon(db, talon, { siteId: SITE, now: NOW, machineId: 'm1' });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'] });
+  });
+
+  it('skips scoped recipients on a site-level run, since they hold nothing site-wide', async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m1'] },
+    ]);
+
+    await runTalon(db, seedTalon('t1'), { siteId: SITE, now: NOW });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'] });
   });
 
   it('reports an in-band resend rejection as a failed output', async () => {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import {
   buildDisplayDigestEmail,
@@ -94,9 +94,9 @@ export async function GET(request: NextRequest) {
         // Per-recipient so each carries its own unsubscribe link.
         for (const recipient of recipients) {
           try {
-            // Per-user `mutedMachines` filter; an empty result skips the send.
+            // Per-user mutes and machine scope; an empty result skips the send.
             const userAlerts = siteAlerts.filter(
-              (a) => !recipient.mutedMachines.includes(a.machineId),
+              (a) => recipientWantsMachine(recipient, a.machineId),
             );
             if (userAlerts.length === 0) continue;
 
