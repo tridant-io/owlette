@@ -44,7 +44,7 @@ import {
   resolvePlan,
   type PlanFlag,
 } from '@/lib/plan.server';
-import { SITE_ID_RE, resolveSiteAccess } from '@/lib/sitePolicy.server';
+import { SITE_ID_RE, resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 
 export const MAX_HASHES_PER_REQUEST = 1000;
 
@@ -416,7 +416,7 @@ async function requireSiteCapability(
     role: outcome.facts.globalRole,
     // A superadmin legitimately holds no membership; their capabilities
     // short-circuit on the global role before this map is consulted.
-    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
+    ...siteStanding([[siteId, standingOf(outcome.facts)]]),
   };
 
   if (!hasCapability(actor, capability, siteId)) {

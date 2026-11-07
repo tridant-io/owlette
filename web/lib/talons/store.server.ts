@@ -21,7 +21,7 @@ import { emitMutation } from '@/lib/auditLogClient';
 import { Capability, hasCapability, siteStanding, type Actor, type UserActor } from '@/lib/capabilities';
 import { assertLlmKeyAvailable } from '@/lib/hoot-utils.server';
 import logger from '@/lib/logger';
-import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { memberStanding } from '@/lib/sitePolicy.server';
 import { validateWebhookUrl } from '@/lib/webhookUrl';
 import { computeNextRunAt } from './schedule.server';
 import { isCreatorDisabledReason } from './types';
@@ -615,7 +615,6 @@ async function loadSuccessorActor(
   const role = data.role === 'admin' || data.role === 'superadmin' ? data.role : 'member';
 
   const memberData = memberSnapshot.exists ? (memberSnapshot.data() ?? null) : null;
-  const siteRole = deriveMembership(memberData);
 
   return {
     ok: true,
@@ -623,7 +622,7 @@ async function loadSuccessorActor(
       type: 'user',
       userId: uid,
       role,
-      ...siteStanding([[siteId, { role: siteRole, swoopMode: deriveSwoopMode(memberData, siteRole) }]]),
+      ...siteStanding([[siteId, memberStanding(memberData)]]),
     },
   };
 }

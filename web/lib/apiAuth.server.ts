@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { getSessionFromRequest } from '@/lib/sessionManager.server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { resolveSiteAccess } from '@/lib/sitePolicy.server';
+import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 import { type Actor, type Capability, hasCapability, siteStanding } from '@/lib/capabilities';
 import {
   type ApiKeyEnvironment,
@@ -466,7 +466,7 @@ export async function assertUserHasSiteCapability(
     type: 'user',
     userId,
     role: outcome.facts.globalRole,
-    ...siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
+    ...siteStanding([[siteId, standingOf(outcome.facts)]]),
   };
   if (!hasCapability(actor, capability, siteId)) {
     throw new ApiAuthError(403, 'Forbidden: capability not granted');

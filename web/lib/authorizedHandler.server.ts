@@ -41,6 +41,7 @@ import { checkRoostVersion } from '@/lib/versionHeader';
 import {
   resolveSiteAccess,
   SITE_ID_RE,
+  standingOf,
   type SiteAccessOutcome,
 } from '@/lib/sitePolicy.server';
 import {
@@ -59,12 +60,10 @@ import {
   type Actor,
   Capability,
   type Role,
-  type SiteRole,
   type UserActor,
   hasCapability,
   siteStanding,
 } from '@/lib/capabilities';
-import type { SwoopMode } from '@/lib/swoopMode';
 import {
   generateCorrelationId,
   writeAuditEntry,
@@ -244,16 +243,16 @@ function toPermissionList(
 }
 
 /**
- * `standing` carries the caller's site role and swoop mode on the site this
- * request names, built by `siteStanding`, and is `{ siteRoles: {} }` on platform
- * routes where no site was resolved. an empty map denies every site-scoped
- * capability, which is the correct default: a route that never resolved
- * membership must not be able to act on a site.
+ * `standing` carries the caller's site role, swoop mode and machine scope on the
+ * site this request names, built by `siteStanding`, and is `siteStanding([])` on
+ * platform routes where no site was resolved. an empty map denies every
+ * site-scoped capability, which is the correct default: a route that never
+ * resolved membership must not be able to act on a site.
  */
 function authToActor(
   auth: ResolvedAuth,
   role: Role,
-  standing: { siteRoles: Record<string, SiteRole>; swoopModes?: Record<string, SwoopMode> },
+  standing: ReturnType<typeof siteStanding>,
 ): UserActor {
   return {
     type: 'user',
@@ -279,7 +278,7 @@ async function loadUserActor(auth: ResolvedAuth): Promise<UserActor> {
   const role: Role = rawRole === 'superadmin' || rawRole === 'admin' ? rawRole : 'member';
   // No site is in scope on this path, so no per-site standing is resolved and
   // every site-scoped capability denies. Platform routes are the only callers.
-  return authToActor(auth, role, { siteRoles: {} });
+  return authToActor(auth, role, siteStanding([]));
 }
 
 function authErrorToResponse(err: ApiAuthError): NextResponse {
@@ -617,7 +616,7 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         outcome.facts.globalRole,
         // Reached only when the outcome is ok, so a superadmin may legitimately
         // have no membership; their capabilities short-circuit on global role.
-        siteStanding([[siteId, { role: outcome.facts.membershipRole, swoopMode: outcome.facts.swoopMode }]]),
+        siteStanding([[siteId, standingOf(outcome.facts)]]),
       );
 
       // 5. Read kill-switch config.

@@ -232,7 +232,9 @@ function actionContextForHoot(
     // belonged to the site without ever checking, so the global role alone
     // decided what the tools could do. The real standing is resolved by
     // `verifyUserSiteAccess` and threaded in; absent, nothing site-scoped runs.
-    ...siteStanding([[siteId, { role: options.userSiteRole ?? null, swoopMode: options.userSwoopMode ?? null }]]),
+    ...siteStanding([
+      [siteId, { role: options.userSiteRole ?? null, swoopMode: options.userSwoopMode ?? null, machineIds: null }],
+    ]),
   };
   return {
     siteId,

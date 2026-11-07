@@ -71,7 +71,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       userId,
       role: access.role === 'superadmin' || access.role === 'admin' ? access.role : 'member',
       // Per-site standing decides; the global role beside it grants nothing.
-      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode }]]),
+      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode, machineIds: null }]]),
     };
     if (!hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, siteId)) {
       return NextResponse.json(

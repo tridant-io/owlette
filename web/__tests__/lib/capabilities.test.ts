@@ -7,7 +7,10 @@ import {
   GlobalRoleCapabilityMatrix,
   SystemCapabilityMatrix,
   hasCapability,
+  isMachineCapability,
   isSiteScopedCapability,
+  MACHINE_CAPABILITIES,
+  machineScopeOf,
   siteStanding,
   type Actor,
   type SiteRole,
@@ -734,5 +737,255 @@ describe('siteStanding', () => {
     expect(hasCapability(actor, VIEW, '__proto__')).toBe(true);
     expect(hasCapability(actor, CONTROL, '__proto__')).toBe(false);
     expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, '__proto__')).toBe(true);
+  });
+
+  it('writes a machine scope for every site in siteRoles once one is scoped, and none for a null role', () => {
+    const standing = siteStanding([
+      ['site_a', { role: 'member', swoopMode: 'control', machineIds: ['m1', 'm2'] }],
+      ['site_b', { role: 'admin', swoopMode: null, machineIds: null }],
+      ['site_c', { role: 'owner', swoopMode: null, machineIds: ['m3'] }],
+      ['site_d', { role: null, swoopMode: null, machineIds: ['m1'] }],
+    ]);
+    expect(standing.machineScopes).toEqual({ site_a: ['m1', 'm2'], site_b: null, site_c: ['m3'] });
+    expect(Object.keys(standing.machineScopes ?? {}).sort()).toEqual(Object.keys(standing.siteRoles).sort());
+  });
+
+  it('returns no machineScopes key when every site is the whole site', () => {
+    const standing = siteStanding([
+      ['site_a', { role: 'admin', swoopMode: null, machineIds: null }],
+      ['site_b', { role: null, swoopMode: null, machineIds: ['m1'] }],
+    ]);
+    expect(Object.keys(standing)).toEqual(['siteRoles']);
+    expect(Object.keys(siteStanding([]))).toEqual(['siteRoles']);
+  });
+});
+
+describe('MACHINE_CAPABILITIES', () => {
+  const MACHINE = [
+    Capability.MACHINE_VIEW,
+    Capability.MACHINE_REMOTE_VIEW,
+    Capability.MACHINE_EXEC_COMMAND,
+    Capability.MACHINE_REMOTE_CONTROL,
+    Capability.MACHINE_CONFIG_WRITE,
+  ];
+
+  it('is exactly the five that act on one machine, each of them site-scoped', () => {
+    expect(new Set(MACHINE_CAPABILITIES)).toEqual(new Set(MACHINE));
+    for (const cap of MACHINE) expect(isSiteScopedCapability(cap)).toBe(true);
+  });
+
+  it.each(ALL_CAPABILITIES)('isMachineCapability(%s) agrees with the set', (cap) => {
+    expect(isMachineCapability(cap)).toBe(MACHINE.includes(cap));
+  });
+
+  it('leaves the machine-sized site-wide ones out', () => {
+    for (const cap of [
+      Capability.MACHINE_REMOVE,
+      Capability.UNINSTALL_TRIGGER,
+      Capability.MACHINE_ENROLL,
+      Capability.AGENT_TOKEN_REVOKE,
+      Capability.SWOOP_SETTINGS_MANAGE,
+    ]) {
+      expect(isMachineCapability(cap)).toBe(false);
+    }
+  });
+});
+
+describe('machineScopeOf', () => {
+  it('is null with no map, and fails closed on a map without the site', () => {
+    expect(machineScopeOf(userActor({ siteRoles: { site_a: 'admin' } }), 'site_a')).toBeNull();
+    expect(machineScopeOf(userActor({ machineScopes: {} }), 'site_a')).toEqual([]);
+    expect(machineScopeOf(userActor({ machineScopes: { site_b: null } }), 'site_a')).toEqual([]);
+  });
+
+  it('reads null as the whole site, a list as that list, and anything else as no machines', () => {
+    expect(machineScopeOf(userActor({ machineScopes: { site_a: null } }), 'site_a')).toBeNull();
+    expect(machineScopeOf(userActor({ machineScopes: { site_a: ['m1'] } }), 'site_a')).toEqual(['m1']);
+    for (const bad of ['m1', { m1: true }, 1, undefined]) {
+      const actor = userActor({ machineScopes: { site_a: bad as unknown as string[] } });
+      expect(machineScopeOf(actor, 'site_a')).toEqual([]);
+    }
+  });
+
+  it('reads own keys only', () => {
+    for (const key of ['constructor', '__proto__', 'toString']) {
+      expect(machineScopeOf(userActor({ machineScopes: { site_a: null } }), key)).toEqual([]);
+    }
+  });
+});
+
+describe('hasCapability — machine scope after the role and the swoop mode (owner decisions 1, 3, 13, 14)', () => {
+  const SITE_WIDE = SITE_SCOPED.filter((cap) => !MACHINE_CAPABILITIES.has(cap));
+
+  /** an actor as every builder makes one: through siteStanding. */
+  function standingActor(
+    siteRole: SiteRole,
+    swoopMode: SwoopMode | null,
+    machineIds: readonly string[] | null,
+  ): UserActor {
+    return userActor(siteStanding([['site_a', { role: siteRole, swoopMode, machineIds }]]));
+  }
+
+  /** what the three steps should give, worked out from the rules rather than the code. */
+  function oracle(
+    siteRole: SiteRole,
+    mode: SwoopMode | null,
+    scope: readonly string[] | null,
+    machineId: string | undefined,
+    cap: Capability,
+  ): boolean {
+    const onMachine = scope === null || (machineId !== undefined && scope.includes(machineId));
+    const granted = grantedSwoopMode(siteRole, mode);
+    switch (cap) {
+      case Capability.MACHINE_REMOTE_CONTROL:
+        return granted === 'control' && onMachine;
+      case Capability.MACHINE_REMOTE_VIEW:
+        return granted !== 'none' && onMachine;
+      case Capability.MACHINE_EXEC_COMMAND:
+      case Capability.MACHINE_CONFIG_WRITE:
+        return siteRole !== 'member' && onMachine;
+      case Capability.MACHINE_VIEW:
+        return onMachine;
+      default:
+        return scope === null && SiteRoleCapabilityMatrix[siteRole].includes(cap);
+    }
+  }
+
+  const ROWS: Array<{
+    siteRole: SiteRole;
+    mode: SwoopMode | null;
+    scope: readonly string[] | null;
+    machineId: string | undefined;
+    cap: Capability;
+  }> = [];
+  for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+    for (const mode of [null, 'none', 'view', 'control'] as Array<SwoopMode | null>) {
+      for (const scope of [null, ['m1']] as Array<readonly string[] | null>) {
+        for (const machineId of ['m1', 'm2', undefined]) {
+          for (const cap of SITE_SCOPED) ROWS.push({ siteRole, mode, scope, machineId, cap });
+        }
+      }
+    }
+  }
+
+  it.each(ROWS)(
+    '$siteRole, mode $mode, scope $scope, machine $machineId × $cap',
+    ({ siteRole, mode, scope, machineId, cap }) => {
+      const actor = standingActor(siteRole, mode, scope);
+      expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(oracle(siteRole, mode, scope, machineId, cap));
+    },
+  );
+
+  it("every site-wide capability is false on a scope, the owner's SITE_DELETE included", () => {
+    expect(SITE_WIDE).toContain(Capability.SITE_DELETE);
+    for (const machineId of ['m1', undefined]) {
+      for (const cap of SITE_WIDE) {
+        expect(hasCapability(standingActor('owner', null, ['m1']), cap, 'site_a', machineId)).toBe(false);
+      }
+    }
+  });
+
+  it('a member set to control on m1 controls m1 and nothing else', () => {
+    const actor = standingActor('member', 'control', ['m1']);
+    expect(hasCapability(actor, CONTROL, 'site_a', 'm1')).toBe(true);
+    expect(hasCapability(actor, CONTROL, 'site_a', 'm2')).toBe(false);
+    expect(hasCapability(actor, CONTROL, 'site_a')).toBe(false);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm1')).toBe(false);
+
+    const held = (machineId?: string) => SITE_SCOPED.filter((cap) => hasCapability(actor, cap, 'site_a', machineId));
+    expect(held('m1').sort()).toEqual([Capability.MACHINE_REMOTE_CONTROL, Capability.MACHINE_REMOTE_VIEW, Capability.MACHINE_VIEW].sort());
+    expect(held('m2')).toEqual([]);
+    expect(held()).toEqual([]);
+  });
+
+  it('an admin set to view on m1 runs commands there, and never controls', () => {
+    const actor = standingActor('admin', 'view', ['m1']);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm1')).toBe(true);
+    expect(hasCapability(actor, VIEW, 'site_a', 'm1')).toBe(true);
+    expect(hasCapability(actor, CONTROL, 'site_a', 'm1')).toBe(false);
+  });
+
+  it('an admin set to none on m1 has no swoop there, and keeps machine config', () => {
+    const actor = standingActor('admin', 'none', ['m1']);
+    expect(hasCapability(actor, VIEW, 'site_a', 'm1')).toBe(false);
+    expect(hasCapability(actor, CONTROL, 'site_a', 'm1')).toBe(false);
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 'site_a', 'm1')).toBe(true);
+  });
+
+  it('fails closed: a present map without the site, an empty list, or a malformed entry reaches nothing', () => {
+    const actors = [
+      userActor({ siteRoles: { site_a: 'admin' }, machineScopes: {} }),
+      userActor({ siteRoles: { site_a: 'admin' }, machineScopes: { site_a: [] } }),
+      userActor({ siteRoles: { site_a: 'admin' }, machineScopes: { site_a: 'm1' as unknown as string[] } }),
+      userActor({ siteRoles: { site_a: 'admin' }, machineScopes: { site_a: { m1: true } as unknown as string[] } }),
+    ];
+    for (const actor of actors) {
+      for (const cap of SITE_SCOPED) {
+        for (const machineId of ['m1', undefined]) {
+          expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('a scope on site_a says nothing about site_b', () => {
+    const actor = userActor(
+      siteStanding([
+        ['site_a', { role: 'admin', swoopMode: null, machineIds: ['m1'] }],
+        ['site_b', { role: 'admin', swoopMode: null, machineIds: null }],
+      ]),
+    );
+    expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, 'site_b')).toBe(true);
+    expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, 'site_a')).toBe(false);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_b', 'm2')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm2')).toBe(false);
+  });
+
+  it('a machine id that names an Object.prototype member is no machine in scope', () => {
+    const actor = standingActor('admin', null, ['m1']);
+    for (const machineId of ['__proto__', 'constructor']) {
+      for (const cap of SITE_SCOPED) {
+        expect(() => hasCapability(actor, cap, 'site_a', machineId)).not.toThrow();
+        expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(false);
+      }
+    }
+  });
+
+  it('keeps a site id __proto__ as an own key of machineScopes, and the gate reads it', () => {
+    const standing = siteStanding([['__proto__', { role: 'admin', swoopMode: null, machineIds: ['m1'] }]]);
+    expect(Object.prototype.hasOwnProperty.call(standing.machineScopes, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf({})).toBe(Object.prototype);
+
+    const actor = userActor(standing);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, '__proto__', 'm1')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, '__proto__', 'm2')).toBe(false);
+    expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, '__proto__')).toBe(false);
+  });
+
+  it('a superadmin with a scope entry holds everything', () => {
+    const actor = userActor({
+      role: 'superadmin',
+      siteRoles: { site_a: 'member' },
+      machineScopes: { site_a: ['m1'] },
+    });
+    for (const cap of ALL_CAPABILITIES) {
+      expect(hasCapability(actor, cap, 'site_a', 'm2')).toBe(true);
+      expect(hasCapability(actor, cap, 'site_a')).toBe(true);
+    }
+  });
+
+  it('an actor with no machineScopes key gives exactly the matrix, with or without a machine', () => {
+    for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+      const actor = userActor({ siteRoles: { site_a: siteRole } });
+      expect(actor).not.toHaveProperty('machineScopes');
+      for (const cap of ALL_CAPABILITIES) {
+        const today = isSiteScopedCapability(cap)
+          ? SiteRoleCapabilityMatrix[siteRole].includes(cap)
+          : GlobalRoleCapabilityMatrix.member.includes(cap);
+        for (const machineId of [undefined, 'm2']) {
+          expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(today);
+        }
+      }
+    }
   });
 });
