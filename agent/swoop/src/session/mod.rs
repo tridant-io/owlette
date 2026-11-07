@@ -1254,8 +1254,8 @@ mod host {
 
         // Probed once, here, and then carried: NVENC's `probe` opens encode
         // sessions until the driver refuses in order to count them, and the
-        // capture thread opens a new encoder on every resolution rung, every
-        // retarget and every ACCESS_LOST recovery.
+        // capture thread opens a new encoder on every rung, every retarget and
+        // every ACCESS_LOST recovery.
         let caps = select::probe_chain();
         #[cfg(feature = "testhooks")]
         let caps = overridden_caps(caps, bundle.overrides.as_ref());
@@ -4082,6 +4082,16 @@ mod host {
         *tiers = next;
     }
 
+    /// Tell every open encoder how many tiers the pass encodes. They encode one
+    /// after another, so each gated encoder judges its share of the pass's
+    /// encode-time budget; a tier with no encoder yet is told when it opens.
+    fn share_among(tiers: &mut [TierPass]) {
+        let count = tiers.len();
+        for encoder in tiers.iter_mut().filter_map(|tier| tier.encoder.as_mut()) {
+            encoder.share_encode_time(count);
+        }
+    }
+
     enum Pass {
         /// The last viewer left: the duplication is closed and the thread waits
         /// for the next one.
@@ -4170,6 +4180,7 @@ mod host {
                     Ok(ToCapture::Tiers(wanted)) => {
                         ctx.wanted = wanted;
                         apply_tiers(&mut tiers, &ctx.wanted, Instant::now());
+                        share_among(&mut tiers);
                     }
                     Ok(ToCapture::Idr(codec)) => {
                         if let Some(tier) = tiers.iter_mut().find(|t| t.want.codec == codec) {
@@ -4304,6 +4315,7 @@ mod host {
             };
 
             let mut rebuilt = false;
+            let count = tiers.len();
             for tier in tiers.iter_mut() {
                 if fresh {
                     // The ladder's frame-rate rung, and the only place it can be
@@ -4374,6 +4386,7 @@ mod host {
                             let tx = ctx.tx.clone();
                             let drops = Arc::clone(&ctx.drops);
                             created.set_sink(Box::new(move |frame| hand_over(&tx, &drops, frame)));
+                            created.share_encode_time(count);
                             tier.encoder = Some(created);
                             tier.unproven = Some(backend);
                             if ctx.backend != Some(backend) {
@@ -4741,6 +4754,8 @@ mod host {
 
     #[cfg(test)]
     mod tests {
+        use std::sync::Mutex;
+
         use super::*;
 
         const OFFER_WITH_CANDIDATES: &str = "v=0\r\n\
@@ -5311,6 +5326,61 @@ mod host {
                 vec![floor]
             );
             assert_eq!(overridden_caps(probed.clone(), None).len(), probed.len());
+        }
+
+        /// An encoder that only remembers the tier counts it is told.
+        struct Told(Arc<Mutex<Vec<usize>>>);
+
+        impl Encoder for Told {
+            fn encode(&mut self, _frame: &Frame, _force_irap: bool) -> anyhow::Result<Option<EncodedFrame>> {
+                Ok(None)
+            }
+
+            fn set_bitrate(&mut self, _bitrate_bps: u32) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            fn share_encode_time(&mut self, tiers: usize) {
+                self.0.lock().expect("the record").push(tiers);
+            }
+        }
+
+        /// The pass encodes its tiers one after another, so an H.264 and an
+        /// HEVC viewer watching at once halve each encoder's share of the
+        /// encode-time budget.
+        #[test]
+        fn every_open_encoder_is_told_its_share_of_the_pass() {
+            let want = |codec| TierEncode {
+                codec,
+                width: 1920,
+                height: 1080,
+                bitrate_bps: 20_000_000,
+                fps: 60,
+            };
+            let told = |record: &Arc<Mutex<Vec<usize>>>| record.lock().expect("the record").clone();
+            let now = Instant::now();
+            let mut tiers = Vec::new();
+            apply_tiers(&mut tiers, &[want(Codec::H264)], now);
+            let h264 = Arc::new(Mutex::new(Vec::new()));
+            tiers[0].encoder = Some(Box::new(Told(Arc::clone(&h264))));
+
+            apply_tiers(&mut tiers, &[want(Codec::H264), want(Codec::H265)], now);
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2]);
+            // the new hevc tier has no encoder yet: it is skipped here and told
+            // when the pass opens one
+            assert!(tiers[1].encoder.is_none());
+
+            let h265 = Arc::new(Mutex::new(Vec::new()));
+            tiers[1].encoder = Some(Box::new(Told(Arc::clone(&h265))));
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2, 2]);
+            assert_eq!(told(&h265), vec![2]);
+
+            apply_tiers(&mut tiers, &[want(Codec::H264)], now);
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2, 2, 1]);
+            assert_eq!(told(&h265), vec![2], "a closed encoder is told nothing");
         }
     }
 }
