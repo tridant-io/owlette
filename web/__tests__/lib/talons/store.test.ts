@@ -48,7 +48,13 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
-import { Capability, hasCapability, type Actor, type UserActor } from '@/lib/capabilities';
+import {
+  Capability,
+  hasCapability,
+  machineScopeOf,
+  type Actor,
+  type UserActor,
+} from '@/lib/capabilities';
 import {
   TalonStoreError,
   countTalonsAuthoredBy,
@@ -1424,6 +1430,48 @@ describe('reassignTalons', () => {
       siteRoles: { [SITE]: 'admin' },
     });
     expect(successor).not.toHaveProperty('swoopModes');
+  });
+
+  describe('machine scope', () => {
+    // TALON_MANAGE is site-wide, because a talon spans the site's machines. the
+    // store's rejection reason surfaces only as its detail.
+    async function expectInsufficientRole(): Promise<void> {
+      await expect(
+        reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'successor_invalid',
+        message: expect.stringContaining('must be a site admin'),
+      });
+      expect(storedTalon('t1').createdBy).toBe('leaver-uid');
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    }
+
+    it('refuses a scoped admin with insufficient_role', async () => {
+      seedSuccessor('successor-uid', {}, 'admin', { machineIds: ['m1'] });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toEqual(['m1']);
+    });
+
+    it('refuses a member set to swoop control: a mode never grants TALON_MANAGE', async () => {
+      seedSuccessor('successor-uid', { role: 'member' }, 'member', { swoop: 'control' });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(gateActorFor('successor-uid').swoopModes?.[SITE]).toBe('control');
+    });
+
+    it('accepts a whole-site admin', async () => {
+      seedSuccessor('successor-uid');
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+      expect(storedTalon('t1').createdBy).toBe('successor-uid');
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toBeNull();
+    });
   });
 
   it('writes nothing when one talon in the selection is missing', async () => {
