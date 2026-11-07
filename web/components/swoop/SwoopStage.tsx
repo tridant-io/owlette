@@ -3,7 +3,7 @@
 /**
  * the picture, and the surface everything else overlays.
  *
- * gate g1 chose the rtp media track, so the stage is a `<video>` element rather
+ * gate g1 chose the rtp media track, so the picture is a `<video>` element rather
  * than the canvas the plan's arm A would have drawn into. `video/receiver.ts`
  * owns that element — it attaches the track, sets `srcObject`, mutes it for
  * autoplay and runs the single `requestVideoFrameCallback` chain. this
@@ -14,16 +14,17 @@
  * capture itself is attached by the `input` feature in `lib/swoop/features.ts`
  * — this component must not attach a second one.
  *
- * **`object-contain` on the video is load-bearing.** a `<video>` whose aspect
- * ratio does not match its box letterboxes, and `session.contentRect()` derives
- * the picture's box from exactly this fit and this (default, centred) position.
- * input capture normalises against that rect, not the element's — normalising
- * against the element makes `0..1` span the black bars and every pointer
- * position lands offset. changing the fit or the object-position here without
- * changing `contentRect` breaks clicks on every non-matching aspect ratio.
+ * **the video's own box is the picture's box.** the video sits in an area, the
+ * stage's content box, and `useSwoopView` writes its left, top, width and
+ * height from `layoutPicture` (`lib/swoop/view.ts`): whole device pixels,
+ * snapped or sharp. `session.contentRect()` is that element's rect, so input,
+ * touch and the overlays read the one box the picture is drawn in, and the bars
+ * around it are the area's. giving the video a size or position of its own here,
+ * or a fit other than `object-fill`, puts the picture somewhere input does not
+ * think it is.
  */
 
-import { useCallback, useEffect, useId, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -33,6 +34,7 @@ import { readMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCaptur
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { useSwoopView } from '@/hooks/useSwoopView';
 import type { SwoopNoPath } from '@/lib/swoop/peer';
 
 export interface SwoopStageProps {
@@ -156,6 +158,8 @@ export function SwoopStage({
 }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const areaRef = useRef<HTMLDivElement | null>(null);
+  useSwoopView({ videoRef, areaRef });
   // in the app the way back from a settled notice is the picker
   const inApp = useViewerAppPlatform() !== null;
   // the way out, said on each entry into fullscreen and only where it is not
@@ -250,6 +254,7 @@ export function SwoopStage({
     // by day, the night page at night.
     <div
       ref={stageRef}
+      data-testid="swoop-stage"
       tabIndex={-1}
       role={capture ? 'application' : undefined}
       aria-label={capture ? 'remote screen' : undefined}
@@ -257,13 +262,11 @@ export function SwoopStage({
       onPointerDown={onPointerDown}
       className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none select-none [-webkit-touch-callout:none] [&:fullscreen]:bg-black"
     >
-      <video
-        ref={videoRef}
-        muted
-        playsInline
-        className="h-full w-full object-contain"
-        aria-label="remote screen"
-      />
+      {/* the area is in flow, so the phone keyboard's padding on the stage shrinks it. the
+          video's box is useSwoopView's alone: max-w-none keeps preflight's max-width off it */}
+      <div ref={areaRef} data-testid="swoop-area" className="relative h-full w-full">
+        <video ref={videoRef} muted playsInline className="absolute max-w-none object-fill" aria-label="remote screen" />
+      </div>
       {recovering && (
         <p role="status" className={washed}>
           <Loader2 className="size-6 animate-spin" aria-hidden />

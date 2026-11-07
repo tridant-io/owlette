@@ -273,6 +273,23 @@ describe('SwoopStage — leaving with the keyboard', () => {
   });
 });
 
+describe('SwoopStage layout', () => {
+  it('names the stage, and lays the video out in an area inside it', () => {
+    const stageRef = renderStage();
+    const stage = screen.getByTestId('swoop-stage');
+    const area = screen.getByTestId('swoop-area');
+    const video = screen.getByLabelText('remote screen', { selector: 'video' });
+    expect(stage).toBe(stageRef.current);
+    expect(area.parentElement).toBe(stage);
+    expect(video.parentElement).toBe(area);
+    // the area in flow, so the phone keyboard's padding on the stage shrinks it
+    expect(area).toHaveClass('relative', 'h-full', 'w-full');
+    // the video's box is the picture's, written by useSwoopView
+    expect(video).toHaveClass('absolute', 'object-fill');
+    expect(video).not.toHaveClass('object-contain');
+  });
+});
+
 describe('SwoopStage touch', () => {
   it('keeps touch gestures from panning the page or pulling it to refresh', () => {
     const stageRef = renderStage();

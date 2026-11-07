@@ -1547,3 +1547,13 @@ describe('useSwoopSession — frames', () => {
     logged.mockRestore();
   });
 });
+
+describe('useSwoopSession — the picture box', () => {
+  it("is the video's own rect, which useSwoopView lays out as the picture", async () => {
+    await open();
+    const { video } = wired.session!;
+    const rect = { x: 10, y: 20, left: 10, top: 20, width: 1280, height: 720, right: 1290, bottom: 740 } as DOMRect;
+    video.getBoundingClientRect = () => rect;
+    expect(wired.session!.contentRect()).toBe(rect);
+  });
+});

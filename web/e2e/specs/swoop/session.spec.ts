@@ -459,7 +459,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByText(/connecting/i).first()).toBeVisible();
 
     // the letterbox follows the page: the night page at night, a neutral grey by day
-    const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+    const stage = page.getByTestId('swoop-stage');
     const background = (target: Locator) => target.evaluate((node) => getComputedStyle(node).backgroundColor);
     expect(await background(stage)).toBe(await background(page.locator('body')));
     await page.emulateMedia({ colorScheme: 'light' });
@@ -1011,7 +1011,7 @@ test.describe('through a host, inside owlette swoop', () => {
       await expectHostPicture(page);
 
       // a picture, and no word from the host on its pointer yet: the local one is the only one.
-      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      const stage = page.getByTestId('swoop-stage');
       const drawn = page.getByTestId('machine-cursor');
       await expect(stage).not.toHaveCSS('cursor', 'none');
       await expect(drawn).toHaveCount(0);
@@ -1081,21 +1081,23 @@ test.describe('through a host, inside owlette swoop', () => {
       await expectHostPicture(page);
 
       const bar = page.getByTestId('session-bar');
-      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      const stage = page.getByTestId('swoop-stage');
+      const video = page.locator('video[aria-label="remote screen"]');
+      const size = async (target: Locator) => {
+        const box = (await target.boundingBox())!;
+        return [box.width, box.height];
+      };
       // desktop/viewer/src/windows.rs: MAIN_SIZE, where the first session opens, and SWOOP_SIZE
       for (const [width, height] of [
         [1120, 678],
         [1280, 768],
       ]) {
         await page.setViewportSize({ width, height });
-        // one row of bar, and under it a stage the host's 640x360 fills with no bars
+        // one row of bar, and under it a stage the host's 640x360 fills with no bars: the
+        // video's own box is the picture's, so it fills the window, not just its element
         await expect.poll(async () => (await bar.boundingBox())?.height).toBe(48);
-        await expect
-          .poll(async () => {
-            const box = (await stage.boundingBox())!;
-            return box.width * 9 === box.height * 16 ? [box.width, box.height] : null;
-          })
-          .toEqual([width, height - 48]);
+        await expect.poll(() => size(stage)).toEqual([width, height - 48]);
+        await expect.poll(() => size(video)).toEqual([width, height - 48]);
       }
     } finally {
       await host.stop();
@@ -1314,7 +1316,7 @@ test.describe('through a host, on a phone', () => {
       };
       await expect.poll(async () => (await rowEdges()).bottom).toBe(844 - keyboardPx);
       const rowTop = (await rowEdges()).top;
-      // object-contain centres the picture in the video's box, so its centre is the box's
+      // the video's box is the picture's, laid out in the middle of the area
       const pictureCentre = () =>
         video.evaluate((node) => {
           const box = node.getBoundingClientRect();

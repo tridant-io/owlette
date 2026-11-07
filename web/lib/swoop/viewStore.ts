@@ -20,7 +20,7 @@
  * beats the default either way, and is stored as `on` or `off` once made.
  */
 
-export type SwoopSize = 'fit' | 'sharp';
+import type { SwoopSize } from '@/lib/swoop/view';
 
 const SIZE_KEY = 'owlette.swoop.size';
 const SMOOTH_KEY = 'owlette.swoop.smooth';

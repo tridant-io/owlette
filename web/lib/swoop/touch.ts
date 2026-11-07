@@ -30,7 +30,6 @@ import {
   NO_ZOOM,
   clampZoom,
   distance,
-  fitBox,
   midpoint,
   pinchZoom,
   zoomTransform,
@@ -62,12 +61,12 @@ export const NO_AIM: AimState = { active: false, x: 0, y: 0 };
 export interface GestureDeps {
   /** null for a watcher, whose touches send nothing. */
   capture: TouchCapture | null;
-  /** where the picture is shown (the video's layout box) starts, in client coordinates: a pinch works in its own. */
+  /** where the picture is shown (the area it is laid out in) starts, in client coordinates: a pinch works in its own. */
   stageOrigin(): Point;
   zoom: {
     get(): ZoomState;
     set(next: ZoomState): void;
-    /** the picture's box in the element, untransformed. */
+    /** the picture's box in the area, untransformed. */
     picture(): Box;
     /** the size of where the picture is shown, which a zoom keeps it covering. */
     stage(): Size;
@@ -333,33 +332,37 @@ export const swoopTouch = (session: SwoopSession | null): SwoopTouch | null =>
  */
 export function attach(session: SwoopSession, capture: InputCapture | null): SwoopDetach {
   const { stage, video } = session;
+  // what the picture is shown in: SwoopStage's area, the stage's content box,
+  // so the stage less what it pads out from under the phone keyboard
+  const area = video.parentElement ?? stage;
   const zoom = watched<ZoomState>(NO_ZOOM);
   const aim = watched<AimState>(NO_AIM);
 
-  // the layout box, which the transform does not change
-  const picture = (): Box =>
-    fitBox(
-      { width: video.offsetWidth, height: video.offsetHeight },
-      { width: video.videoWidth, height: video.videoHeight },
-    );
-  // what the picture is shown in: the video's layout box, which is the stage's
-  // but for what the stage pads out from under the phone keyboard
-  const area = (): Size => ({ width: video.offsetWidth, height: video.offsetHeight });
-  // the transform before the word: a listener measures the picture's box as it is told
+  // the video's layout box in the area, which the transform does not change:
+  // useSwoopView lays it out as the picture's box, and the area is its offset parent
+  const picture = (): Box => ({
+    left: video.offsetLeft,
+    top: video.offsetTop,
+    width: video.offsetWidth,
+    height: video.offsetHeight,
+  });
+  const areaSize = (): Size => ({ width: area.offsetWidth, height: area.offsetHeight });
+  // the transform before the word: a listener measures the picture's box as it is told.
+  // about the area's origin, so a zoom means the same wherever the picture sits in the area
   const setZoom = (next: ZoomState): void => {
-    video.style.transformOrigin = '0 0';
+    video.style.transformOrigin = `${-video.offsetLeft}px ${-video.offsetTop}px`;
     video.style.transform = zoomTransform(next);
     zoom.set(next);
   };
 
   const gestures = createGestures({
     capture,
-    // the video's layout origin, which its transform is about: the stage is its offset parent
+    // the area's origin, which the transform is about
     stageOrigin: () => {
-      const box = stage.getBoundingClientRect();
-      return { x: box.left + video.offsetLeft, y: box.top + video.offsetTop };
+      const box = area.getBoundingClientRect();
+      return { x: box.left, y: box.top };
     },
-    zoom: { get: zoom.get, set: setZoom, picture, stage: area },
+    zoom: { get: zoom.get, set: setZoom, picture, stage: areaSize },
     pictureScale: () => (video.videoWidth > 0 ? session.contentRect().width / video.videoWidth : 0),
     haptic: () => {
       // android only: an iphone has no vibration a page may use
@@ -371,9 +374,10 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
     onAim: aim.set,
   });
 
-  // the picture's own touches: the stage's controls (the fit pill, the key
-  // row) keep theirs as plain taps
-  const onPicture = (event: Event): boolean => event.target === video || event.target === stage;
+  // the picture's own touches, the bars around it included: the stage's
+  // controls (the fit pill, the key row) keep theirs as plain taps
+  const onPicture = (event: Event): boolean =>
+    event.target === video || event.target === area || event.target === stage;
 
   const onDown = (event: PointerEvent): void => {
     if (event.pointerType !== 'touch' || !onPicture(event)) return;
@@ -401,9 +405,9 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
   };
   // safari's pinch, which would zoom the page instead of the picture
   const onGesture = (event: Event): void => event.preventDefault();
-  // the picture's box moves with the video's size, and the zoom with it
-  const reclamp = (): void => setZoom(clampZoom(zoom.get(), picture(), area()));
-  // the keyboard's padding resizes the video with no window resize to say so
+  // the picture's box moves with the area and the frame, and the zoom with it
+  const reclamp = (): void => setZoom(clampZoom(zoom.get(), picture(), areaSize()));
+  // the keyboard's padding resizes the area, and so the picture, with no window resize to say so
   const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(reclamp) : null;
 
   stage.addEventListener('pointerdown', onDown);
@@ -417,6 +421,7 @@ export function attach(session: SwoopSession, capture: InputCapture | null): Swo
   document.addEventListener('fullscreenchange', reclamp);
   video.addEventListener('resize', reclamp);
   resizes?.observe(video);
+  resizes?.observe(area);
 
   touches.set(session, {
     zoom: { get: zoom.get, subscribe: zoom.subscribe, reset: () => setZoom(NO_ZOOM) },

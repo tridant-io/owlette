@@ -314,29 +314,6 @@ const RECORD_READ_MS = 5_000;
 /** how often the overlay's numbers are resampled. */
 const STATS_INTERVAL_MS = 1000;
 
-/**
- * the letterboxed picture inside the element, in client coordinates.
- *
- * `object-contain` scales the frame to fit and centres what is left over, so
- * the content box is the element box shrunk by the smaller of the two axis
- * ratios. the css in `SwoopStage` and this function are one decision: change
- * the fit or the position there and this is wrong.
- *
- * the size comes from the presenter, which already tracks `videoWidth` /
- * `videoHeight` off the element's own `resize` event — a third listener on the
- * same element would only be a second copy of the same number. before metadata
- * lands both are 0 and the element box is genuinely all anyone knows; it
- * self-corrects on the first frame.
- */
-function contentRect(video: HTMLVideoElement, width: number, height: number): DOMRect {
-  const box = video.getBoundingClientRect();
-  if (width <= 0 || height <= 0) return box;
-  const scale = Math.min(box.width / width, box.height / height);
-  const w = width * scale;
-  const h = height * scale;
-  return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
-}
-
 export function useSwoopSession(
   siteId: string,
   machineId: string,
@@ -1076,10 +1053,10 @@ export function useSwoopSession(
         fingerprint: identity.fingerprint,
         video,
         stage,
-        contentRect: () => {
-          const size = presenter?.stats();
-          return contentRect(video, size?.width ?? 0, size?.height ?? 0);
-        },
+        // the element's own rect: useSwoopView lays the video out as the picture's box,
+        // and the rect includes the local zoom's transform. before the first frame
+        // that box is the whole area, which is all anyone knows then.
+        contentRect: () => video.getBoundingClientRect(),
         peer,
         presenter,
         inboundStats: async () => (await receiver?.inboundStats()) ?? null,
