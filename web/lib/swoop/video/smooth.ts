@@ -25,9 +25,42 @@
  * node's `stripTypeScriptTypes`, so what the probe measures is what ships
  * (plan C16).
  *
- * measurements: task 2.5 records the cover it chose here, and tasks 4.1
- * (chromium, edge) and 3.4 (safari) record their rows here. the webkitgtk
- * check (task 5.2) is logged in dev/active/swoop-clarity/tasks.md.
+ * measurements: tasks 4.1 (chromium, edge) and 3.4 (safari) record their
+ * rows here. the webkitgtk check (task 5.2) is logged in
+ * dev/active/swoop-clarity/tasks.md.
+ *
+ * the cover (task 2.5, 2026-11-07) is an open question for the owner. the
+ * only candidate is an opaque canvas over the visible video, which stays the
+ * composited source, the frame count the freeze watchdog reads, and the
+ * fallback. the probe streamed a 1920x1080 source into a 1000x562 css box at
+ * dpr 1, three 20 s runs per engine, both engines on this box's rtx 2080 ti
+ * through d3d11 (not swiftshader), while other tasks' builds and tests loaded
+ * the box. each cell is rvfc callbacks / totalVideoFrames / droppedVideoFrames:
+ *
+ *   engine                   none            canvas          under
+ *   edge 157, headed         1174/1200/24    1171/1199/25    1156/1198/1198
+ *                            909/1107/58 *   1121/1200/35    1140/1198/1199
+ *                            1188/1200/11    1080/1129/49 *  1142/1198/1198
+ *   chromium 156, headless   1187/1200/13    1119/1199/36    1146/1200/1199
+ *                            1171/1200/22    1099/1199/24    1180/1200/1199
+ *                            529/883/25 *    1147/1199/10    1184/1201/1199
+ *
+ *   * the box's load starved that run: its frames fell short of the source's 1200.
+ *
+ * the rule: a cover keeps the callbacks and frames within 5% of the bare
+ * video, and its drops rise by no more than 1% of frames. under fails it in
+ * every run: with the video at opacity 0 both engines count every frame
+ * dropped, and the watchdog, which counts totalVideoFrames minus
+ * droppedVideoFrames, would call a live picture frozen. the canvas keeps the
+ * frames wherever the run was not starved. in edge it holds the rule in the
+ * one unstarved 20 s pair (callbacks 0.3% fewer, one more drop); of three 5 s
+ * pairs one held (2.2% fewer callbacks), one read 11% more callbacks with the
+ * canvas, and one was starved. in headless chromium it fails every unstarved
+ * pair: 6% fewer callbacks at 20 s and 6–11% at 5 s, and drops up by 1.9% and
+ * 3.3% of frames in one pair each. so under the rule neither cover holds in
+ * chromium, and the canvas path waits on the owner: ship the canvas on edge's
+ * result (headless chromium has no display and is no viewer's engine), or
+ * not. task 4.1's matrix, alone on the box, is the unloaded repeat.
  */
 
 /** the most source texels averaged per axis: exact down to 1/7, evenly sampled below that. */
