@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 0/54 complete
+**Progress**: 15/55 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -39,7 +39,7 @@ House rules for every task:
 
 ## Wave 0: worktree, branch, preconditions
 
-- [ ] **Task 0.1: Worktree, branch, tracked plan copy, release states and the owner's answers**
+- [x] **Task 0.1: Worktree, branch, tracked plan copy, release states and the owner's answers**
   - Files: `dev/active/machine-scope/plan.md`, `tasks.md` and `context.md`, copied into the worktree and force-added. No product files.
   - Do:
     1. From the main checkout (`C:/Users/admin/Documents/Git-restored/Owlette`), run `git fetch origin`. Record whether two releases have merged into origin/dev, using `git show origin/dev:docs/changelog.md | grep -n "^## \["` and `git log origin/dev --oneline -40`:
@@ -61,7 +61,7 @@ House rules for every task:
 
 ## Wave 1: whole-site positive controls on today's rules
 
-- [ ] **Task 1.1: Whole-site read controls in the rules suite, on 2.11.0**
+- [x] **Task 1.1: Whole-site read controls in the rules suite, on 2.11.0**
   - Files: `web/__tests__/rules/siteReadControls.test.ts` (new)
   - Depends on: 0.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Then pin everything a whole-site member, a whole-site admin and a superadmin can read today, so that task 2.2 cannot quietly break any of it. Today the rules suite pins reads on only five paths (research tests.md §4).
@@ -99,7 +99,7 @@ House rules for every task:
 
 ## Wave 2: beside release 2 (files release 2 does not touch)
 
-- [ ] **Task 2.1: `web/lib/machineAccess.ts`, the one reading of a machine scope**
+- [x] **Task 2.1: `web/lib/machineAccess.ts`, the one reading of a machine scope**
   - Files: `web/lib/machineAccess.ts` (new), `web/__tests__/lib/machineAccess.test.ts` (new)
   - Depends on: 0.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Write a pure module with no firebase imports. The browser and the server both import it, so the server, the dashboard and the read-path script read a member row exactly as the rules do.
@@ -134,7 +134,7 @@ House rules for every task:
         - `null` is refused without `allowNull`, and gives `{ok:true,value:null}` with it.
   - Done when: `cd web && npx jest __tests__/lib/machineAccess.test.ts` passes, and eslint and tsc are clean.
 
-- [ ] **Task 2.2: firestore.rules 2.12.0, machine scope**
+- [x] **Task 2.2: firestore.rules 2.12.0, machine scope**
   - Files: `firestore.rules`, `web/__tests__/rules/machineScope.test.ts` (new)
   - Depends on: 1.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. The owner gave an explicit go to change firestore.rules for this release (decision 2). The swoop mode needs no rules change (decision 14).
@@ -236,7 +236,7 @@ House rules for every task:
     - `cd web && npm run test:rules` is green: task 1.1's file, every pre-existing rules test, and the new file.
     - `git diff --stat` shows no change to `firestore.indexes.json` or `firebase.json`.
 
-- [ ] **Task 2.3: the read-path check covers machine scope against deployed rules**
+- [x] **Task 2.3: the read-path check covers machine scope against deployed rules**
   - Files: `scripts/check-membership-read-path.mjs`
   - Depends on: 0.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Extend the read-only checker (research rules.md §9).
@@ -267,7 +267,7 @@ House rules for every task:
       - `--env=dev --list-scoped` prints no rows.
     - Otherwise the Log says "creds unavailable, not run".
 
-- [ ] **Task 2.4: per-site usage needs whole-site standing**
+- [x] **Task 2.4: per-site usage needs whole-site standing**
   - Files: `functions/src/telemetry.ts`, `functions/test/telemetry.test.ts`
   - Depends on: 0.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -284,7 +284,7 @@ House rules for every task:
 
 ## Wave 3: rebase onto release 2
 
-- [ ] **Task 3.1: Rebase onto dev with release 2 merged, and record what releases 1 and 2 shipped**
+- [x] **Task 3.1: Rebase onto dev with release 2 merged, and record what releases 1 and 2 shipped**
   - Files: none of the product's (git only). The `release names` block goes in your Log reply.
   - Depends on: release 2 merged into origin/dev (release 1 before it), and waves 0–2.
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -327,7 +327,7 @@ House rules for every task:
 
 ## Wave 4: the decision core, the writer, browser data, vocabulary
 
-- [ ] **Task 4.1: The decision core: machine scope beside release 2's swoop mode, in one standing**
+- [x] **Task 4.1: The decision core: machine scope beside release 2's swoop mode, in one standing**
   - Files:
     - `web/lib/capabilities.ts`, `web/lib/sitePolicy.server.ts`
     - in `web/lib/authorizedHandler.server.ts`, `web/app/api/_shared.ts` and `web/lib/apiAuth.server.ts`: the `siteStanding(...)` expressions only
@@ -407,7 +407,7 @@ House rules for every task:
     - **Then** run these untouched: `web/__tests__/lib/authorizationParity.test.ts`, `authorizedHandler.test.ts`, `apiAuth.test.ts` and `__tests__/api/scopeEnforcement.test.ts`. They must stay green, parity's read-count pins (L465-490) included, because no row in them carries machineIds.
   - Done when: those suites and `cd web && npx jest __tests__/lib __tests__/api` are green, and tsc and eslint are clean on the five code files.
 
-- [ ] **Task 4.2: The membership writer stores machine scope**
+- [x] **Task 4.2: The membership writer stores machine scope**
   - Files: `web/lib/membership.server.ts`, `web/__tests__/lib/membership.test.ts`
   - Depends on: 2.1, 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Extend release 2's writer.
@@ -454,7 +454,7 @@ House rules for every task:
     - `cd web && npx jest __tests__/api/sites-members.test.ts __tests__/api/membershipEscalation.test.ts` is still green (behaviour unchanged);
     - tsc and eslint are clean.
 
-- [ ] **Task 4.3: The browser data layer: membership scope and scoped machine listeners**
+- [x] **Task 4.3: The browser data layer: membership scope and scoped machine listeners**
   - Files: `web/hooks/useFirestore.ts`, `web/__tests__/hooks/useMachines.scope.test.ts` (new), `web/__tests__/hooks/useSiteMemberships.scope.test.ts` (new)
   - Depends on: 2.1, 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Release 2 changed other functions in this file (the lifted `createSite`); leave them alone.
@@ -489,7 +489,7 @@ House rules for every task:
       - an identical snapshot keeps the same Map instance.
   - Done when: the new tests and every existing `__tests__/hooks/useMachines.*.test.ts` pass, and tsc and eslint are clean.
 
-- [ ] **Task 4.4: Alert emails respect machine scope (owner decision 10)**
+- [x] **Task 4.4: Alert emails respect machine scope (owner decision 10)**
   - Files:
     - `web/lib/adminUtils.server.ts`
     - `web/app/api/agent/alert/route.ts`, `web/app/api/alerts/trigger/route.ts`
@@ -529,7 +529,7 @@ House rules for every task:
       - Add one scoped case to each existing test of the other alert routes. Where a route has no test, cover it through adminUtils and health-check, and say so in the Log.
   - Done when: the touched tests pass; `cd web && npx jest __tests__/api __tests__/lib` is green; tsc and eslint are clean.
 
-- [ ] **Task 4.5: Browser hooks: alert toasts and autonomous chats follow scope**
+- [x] **Task 4.5: Browser hooks: alert toasts and autonomous chats follow scope**
   - Files: `web/hooks/useAgentAlertToasts.ts`, `web/hooks/useHoot.ts`, `web/__tests__/hooks/useAgentAlertToasts.test.ts` (new), `web/__tests__/hooks/useHoot.autonomous.test.ts` (new)
   - Depends on: 2.1, 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -547,7 +547,7 @@ House rules for every task:
       - `useOwletteChat` with `includeAutonomous:false` runs only the user query; with true it runs both, as it does today.
   - Done when: the new tests pass along with `__tests__/hooks/useHoot.*.test.ts`, and eslint is clean.
 
-- [ ] **Task 4.6: The e2e seed helper takes a machine scope**
+- [x] **Task 4.6: The e2e seed helper takes a machine scope**
   - Files: `web/e2e/helpers/seed.ts`
   - Depends on: 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -558,7 +558,7 @@ House rules for every task:
     - No spec changes. Every existing caller is unchanged.
   - Done when: `cd web && npx eslint e2e/helpers/seed.ts` is clean, and `npx playwright test --list` still lists the suite. Do not run the rig.
 
-- [ ] **Task 4.7: ADR 0016 and the glossary**
+- [x] **Task 4.7: ADR 0016 and the glossary**
   - Files: `docs/adr/0016-members-can-be-scoped-to-machines.md` (new), `GLOSSARY.md`
   - Depends on: 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Write the ADR in `docs/adr/0013-*`'s format: a `#` title, one paragraph, then `## Consequences` bullets. The number is fixed: 0015 is release 2's add-member search rule.
@@ -596,7 +596,7 @@ House rules for every task:
     - the glossary has both new entries, the four amendments and the flagged ambiguity;
     - nothing else in GLOSSARY.md changed.
 
-- [ ] **Task 4.8: MachineAccessField, the machines half of a person's access**
+- [x] **Task 4.8: MachineAccessField, the machines half of a person's access**
   - Files: `web/components/admin/sites/MachineAccessField.tsx` (new), `web/__tests__/components/admin/sites/MachineAccessField.test.tsx` (new)
   - Depends on: 2.1, 3.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. This is a route-agnostic field. Task 7.9 renders it inside release 2's `MemberAccessFields`.
@@ -1293,6 +1293,15 @@ House rules for every task:
       - **23.** A scoped member set to swoop control holds nothing site-wide: the members GET, and `GET /api/sites/{siteId}/swoop/sessions` if the file can import it, give 403 with the switch on and off. CONTROL: a whole-site admin gets 200.
   - Done when: the suite is green.
 
+- [ ] **Task 7.12: The dashboard hides swoop from someone whose swoop mode is none**
+  - Files: `web/contexts/AuthContext.tsx`, `web/components/MachineContextMenu.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`, `web/app/dashboard/page.tsx`, and the tests beside them that assert the swoop entries
+  - Depends on: 7.1, 7.2 and 7.5, which hold these files first. It runs after them, never beside them.
+  - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
+    - Owner ruling, 2026-11-07: someone whose effective swoop mode on a site is `none` sees no swoop entry for that site's machines (the card's swoop button, the menu item and the list view's swoop control). This answers release 2's question 6 ("the dashboard reads the mode in release 3"). It reverses context decision 16's "the dashboard does not read the mode" for this one case. The server still decides (`evaluateSwoopAccess`); this only stops the dashboard offering what the API refuses, as `swoopOff` already does.
+    - AuthContext exposes `swoopMode(siteId)`, the effective mode from the member row it already reads: `effectiveSwoopMode(role, parseSwoopMode(row.swoop), membersMayWatch)` from `web/lib/swoopMode.ts`. A superadmin and an owner always have `control`. Read `membersMayWatch` where `swoopOff` is read today, and change no listener for it.
+    - Hide the entries where the mode is `none`, exactly where `swoopOff` hides them now. Watch and control both keep the entry, because the viewer steps down to watching on `capability_missing`.
+  - Done when: component tests show a member set to none sees no swoop entry, a member set to watch and a default member on a `membersMayWatch` site still see it, and a superadmin sees it on a site where they hold no row; the touched suites, eslint and tsc are green.
+
 ## Wave 8: the actor maps required, the contract, the docs
 
 - [ ] **Task 8.1: `machineScopes` and `swoopModes` become required on UserActor**
@@ -1729,3 +1738,92 @@ House rules for every task:
 - Start with task 0.1.
 - 2026-11-04 ~03:40, decisions by Claude under the owner's standing rulings (the owner may override):
   - scoped admins cannot remove their machine or uninstall on it (site-wide); autonomous hoot chats stay hidden from scoped members; SDK/CLI machineIds later (same answer as release 2's Q7); the three small leaks (excludedMachineIds ids, uids in commands/pending, step-up windows outliving a narrowing) are accepted and documented; scoped members may see roost names for their machines; the 30-machine cap stands; version 4.1.28; a machine that leaves and pairs back starts with no member grants; whether TEC-B4A moves back to TEC is the owner's call after release 3.
+- 2026-11-04 ~04:05, task 0.1 (by the orchestrator): release 1 (4.1.26) NOT merged yet (branch fix/swoop-second-viewer-joins at 53516e53 plus follow-on commits in flight); release 2 (4.1.27) NOT merged (feat/admin-sites, wave 1 running). Worktree ../Owlette-machine-scope-wt on feat/machine-scope cut from origin/dev ab4689bb; plan committed as 9abafa74; web and functions npm ci run. Answers: Q2 = no (scoped admins cannot remove/uninstall), Q3 = hidden (autonomous chats), Q4 = later (SDK/CLI). Waves 1-2 may proceed; wave 3 waits for release 2's merge.
+- 2026-11-04 ~04:30, task 1.1 done (commit 2003d61c): web/__tests__/rules/siteReadControls.test.ts, 139 whole-site read controls on rules 2.11.0; npm run test:rules 338/338 twice. Note for 2.2: chats/c1 has no userId (autonomous branch only); logs/lb has machineId null and must stay readable whole-site.
+- 2026-11-04 ~05:20, wave 2 done (4/4): 2.1 729e7298 (web/lib/machineAccess.ts, 21 tests), 2.2 51c5a305 (firestore.rules 2.12.0 + machineScope.test.ts 147 cases; red 44 on 2.11.0; npm run test:rules 485/485), 2.3 d0e44f2a (read-path script --scoped/--list-scoped; dev has 0 scoped rows; the scoped section is unproven until rules 2.12.0 deploy), 2.4 56c581eb (usage function needs whole-site standing, red-first, functions 357/357).
+  Follow-up 2.5 (orchestrator): memberHoldsMachine must guard `data.machineIds is list` (a map value passes `in` by key); add the rules test case. Wave 3 waits for release 2's merge.
+- Hardening note for 2.2: the client SDK does not enforce the 30-value `in` cap (firebase 12.19); the emulator rejects 31 with invalid-argument.
+- 2026-11-04 ~06:00, follow-up 2.5 done (commit eb87cad0): memberHoldsMachine guards `machineIds is list`; red on 51c5a305 (a `{IN: true}` row could read machines/IN, config/IN and list by documentId in [IN]), green after: npm run test:rules 499/499. Waves 0-2 complete on feat/machine-scope (last commit eb87cad0); wave 3 (rebase) waits for release 2's merge to dev.
+- 2026-11-07, task 3.1 done (task-executor): `feat/machine-scope` rebased onto origin/dev fccd85b9 with no conflict. Release 1 (bd426370) and release 2 (bb032cab) are in its history; head 72b3b66e (plan 50bbc873, then a13aca3c, 7df68fdb, e689347a, 896653c5, 9fa9fb01, 72b3b66e). Dev's rules are still 2.11.0. Lockfiles unchanged. test:rules 501/501, machineAccess 21/21, functions 357/357, tsc clean. **Version is now 4.1.29**: swoop-clarity takes 4.1.28 (owner, 2026-11-07, "both in parallel").
+  `release names`: the full block is in this session's 3.1 report. The deviations below are what waves 4 on must follow:
+  - Release 1's revocation ends the **whole** session (`endReason 'revoked'`, `endedFor`), and the others rejoin. It does not remove seats, so a narrowing reaches a shared session in ~2 s for everyone. Decision 14's "one lease plus 30 s" is wrong, and 5.4's `keepMachineIds` builds on the whole-session end.
+  - The viewer email gate keys on the site role (`superadmin || owner || admin`, session GET route.ts:99-100), not SITE_MEMBER_MANAGE. 6.6 or 7.5 must re-key it to whole-site standing, or a scoped admin gets emails.
+  - **Open, owner's call:** release 2's question 6 was answered "the dashboard reads the mode in release 3" (hide swoop entries from someone set to none; admin-sites tasks.md:1336). This plan's decision 16 says the dashboard does not read the mode, and no task carries it.
+  - The escalation blocks end at 17, so the next is 18 (7.11 says 19).
+  - `siteStanding` takes `[siteId, standing]` pairs and returns `swoopModes` only when non-empty: users/me's call is `siteStanding([])`, and 8.1 changes the optional.
+  - The wrapper's `authToActor` parameter type (`authorizedHandler.server.ts:253-257`) must widen in 4.1 to carry `machineScopes`.
+  - `useSiteMachines` was not extracted; site settings' `SiteMachinesList` fetches `GET /api/sites/{siteId}/machines`.
+  - `siteStanding` is also called from hoot (`provision-key:74`, `cancel-tool:184`, `hoot-utils.server.ts:235`) and talons (`store.server.ts:626`). 4.1 covers them.
+- 2026-11-07, owner rulings: release 2 Q6 holds, so the dashboard hides swoop from someone set to none. That is new task 7.12 (after 7.1, 7.2 and 7.5), reversing context decision 16 for this case only. Version 4.1.29. 55 tasks.
+
+#### release names (task 3.1, 2026-11-07; worktree at fccd85b9 + 7, line numbers as of the rebase)
+**Release 2, the swoop mode**
+- `web/lib/swoopMode.ts`: `SWOOP_MODES = ['none','view','control'] as const`, `type SwoopMode`, `SWOOP_MODE_LABELS` = `{none:'no swoop', view:'watch', control:'control'}`, `parseSwoopMode(raw)` (undefined → null; a bad value → `'none'`), `grantedSwoopMode(role, mode)` (owner always `'control'`; otherwise the mode, or by role: member `'view'`, admin `'control'`), `effectiveSwoopMode(role, mode, membersMayWatch)` (a member with no mode on a site with `membersMayWatch` off gets `'none'`).
+- `web/lib/capabilities.ts`:
+  - `MemberStanding { role: SiteRole | null; swoopMode: SwoopMode | null }`.
+  - `siteStanding(bySite: Iterable<readonly [string, MemberStanding]>)` → `{ siteRoles, swoopModes? }`, null-prototype records. A null role is skipped, an owner's mode is dropped, and `swoopModes` is present only when non-empty.
+  - `UserActor.swoopModes?` (optional). `explicitSwoopMode(actor, siteId)` reads own properties only.
+  - The override in `hasCapability(actor, capability, siteId?)` (319-344) sits in the site-scoped branch, after the own-property `siteRoles` lookup and its undefined check, before the `SiteRoleCapabilityMatrix` lookup. Its condition is `(capability === MACHINE_REMOTE_VIEW || capability === MACHINE_REMOTE_CONTROL) && siteRole !== 'owner'`, then `mode = explicitSwoopMode(...)`; if `mode !== null` it returns `CONTROL ? mode === 'control' : mode !== 'none'`. There is no machineId parameter yet.
+- `web/lib/sitePolicy.server.ts`: `SiteAccessFacts.swoopMode`. `deriveSwoopMode(memberData, role)` is null unless the role is admin or member, otherwise `parseSwoopMode(memberData?.swoop)`. `deriveMembership` is exported. `listUserStanding(uid)` returns a null-prototype **record** `Record<string, MemberStanding & {role: SiteRole}>`; callers pass `Object.entries(...)`.
+- Who calls `siteStanding`:
+  - the wrapper, `authorizedHandler.server.ts:620` (`authorizedSiteHandler`). Its `authToActor` parameter type at 253-257 is the literal `{ siteRoles; swoopModes? }`, and **4.1 must widen it** to carry `machineScopes`;
+  - `_shared.ts:419` (`requireSiteCapability`), `apiAuth.server.ts:469` (`assertUserHasSiteCapability`), `member-candidates/route.ts:105`;
+  - `hoot/provision-key/route.ts:74` and `hoot/cancel-tool/route.ts:184` (from `access.siteRole`/`access.swoopMode`), `hoot-utils.server.ts:235` `actionContextForHoot` (from `options.userSiteRole`/`options.userSwoopMode`), and `talons/store.server.ts:626` `loadSuccessorActor` (from `deriveSwoopMode`).
+  - hoot's `SiteAccessLevel` carries flat `siteRole` and `swoopMode`, not `standing`. Literal `{ siteRoles: {} }` actors are at `users/me/route.ts:80` (its planned `siteStanding({})` must be `siteStanding([])`) and the wrapper's `loadUserActor`.
+- The wrapper's swoop refusal: `capabilityExempt = BYPASS_EXEMPT_CAPABILITIES.has(options.capability)` (MACHINE_REMOTE_CONTROL, MACHINE_REMOTE_VIEW, SWOOP_SETTINGS_MANAGE). On a deny it returns `problem({type: Forbidden, title:'forbidden', status:403, detail:'capability not granted', code:'capability_missing'})`; any other capability gets `problemForbidden('capability not granted')`. The wrapper's 404s (`problemNotFound`) carry code `not_found`. The viewer's `REVOKED_REFUSALS` (`useSwoopSession.ts:230`: `not_found`, `user_inactive`, `members_may_not_watch`) reads that as access removed.
+- `evaluateSwoopAccess`: `members_may_not_watch` applies only for a member with `explicitSwoopMode === null` and `!settings.membersMayWatch`. It runs after `hasCapability(actor, cap, siteId)`, with no machineId.
+- Kill (`.../swoop/kill`), `GET /api/sites/{siteId}/swoop/sessions` (names and emails via `viewerNames`) and the new `POST .../swoop/sessions/{sid}/kick` `{viewerId}` are all on SWOOP_SETTINGS_MANAGE. The session GET adds per-viewer `kickable = hasCapability(SWOOP_SETTINGS_MANAGE) && not self`.
+- The pill email gate runs on the server, in the session GET (`web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route.ts:96-100`). Names go only to people seated in the session. Emails go to `superadmin || owner || admin` by site role, **not SITE_MEMBER_MANAGE**, so 6.6 or 7.5 re-keys it to whole-site standing. Its test is `web/__tests__/api/swoop/sessions.test.ts` ("naming the people in it"). The machine doc mirrors `swoopSeats` (`{uid, displayName, ctl}`, never an email) via `syncMachineSwoopViewers`.
+
+**Release 2, membership**
+- `updateMember({ siteId, uid, role?: AssignableRole, swoop?: SwoopMode | null, db? })` (`web/lib/membership.server.ts:149`) → `MembershipResult<{ before, after }>`, each a `MemberAccess { role: MemberRole; swoop: SwoopMode | null }`. `swoop: null` writes `FieldValue.delete()`, and an owner row gives `is_owner`. `addMember` takes `swoop?`, and `MemberDoc.swoop?` exists.
+- The PATCH revocation (`members/[uid]/route.ts:448-463`): `had`/`has = grantedSwoopMode(...)`, `lostSwoop = had !== 'none' && has === 'none'`, `lostControl = had === 'control' && has !== 'control'`. It fires on either, with reason `before.role !== after.role ? 'role_changed' : 'swoop_changed'`, and `controlOnly: true` unless `lostSwoop`. It is a void call, not awaited.
+- The PATCH's "neither" 400: `problemValidation('role or swoop is required', { 'body.role': ['provide role, swoop or both'], 'body.swoop': [...same] })`. A bad swoop gives `'swoop must be none, view, control or null'`. The POST validates with `SWOOP_MODES.find(...)`, refuses null with `'swoop must be none, view or control'`, and writes the mode on a new row only.
+- The audit verbs are in `emitMutation` attributes (`kind: 'site_member_mutated'`): `verb: role !== undefined ? 'member_role_changed' : 'member_swoop_changed'`.
+- The member-candidates route is `GET /api/sites/{siteId}/member-candidates` on SITE_MEMBER_MANAGE; API keys are refused.
+- The revocation reason type: `'member_removed' | 'role_changed' | 'swoop_changed'`.
+
+**Release 2, UI and helpers**
+- `useSiteMembers`: `SiteMember.swoop: SwoopMode | null`, `AddSiteMemberInput = { role; swoop?: SwoopMode } & ({uid} | {email})`, `updateMember(uid, patch: UpdateSiteMemberInput { role?: AddableSiteMemberRole; swoop?: SwoopMode | null })`.
+- In `web/components/admin/sites/`:
+  - `SiteMembersSection({ siteId })`;
+  - `MemberAccessFields({ idPrefix, role, swoop: SwoopChoice, onRoleChange, onSwoopChange, membersMayWatch, disabled? })`, which also exports `SwoopChoice = 'default' | SwoopMode`, `toSwoopChoice` and `fromSwoopChoice`;
+  - `AddMemberDialog({ siteId, membersMayWatch, onOpenChange, addMember })`;
+  - `ChangeAccessDialog({ member, membersMayWatch, onOpenChange, updateMember })`, which also exports `memberLabel`.
+  - `SegmentedControl<T>({ label, options, value, onChange })` is at `web/components/admin/SegmentedControl.tsx`.
+- `useSiteMachines` does not exist. Site settings' `SiteMachinesList` fetches `GET /api/sites/{siteId}/machines`. The sections are general, members, machines, swoop (`SiteSwitches`) and danger.
+- Smaller names:
+  - `siteTalonSuccessors(members, excludeUid?)` (`web/lib/talonSuccessors.ts:69`) keeps owner and admin rows.
+  - `SiteList` labels a site with `accessFor(site)`: `isSiteOwner ? 'owner' : isSiteAdmin ? 'admin' : 'member'`.
+  - `SiteSettings`' member-only copy shows when `!held && !isSiteAdmin(site.id)`.
+  - `/admin/sites/{siteId}?section=members` comes from `siteSettingsPath` in `web/lib/siteSettingsPath.ts`.
+- `grantMembership` / `seedMemberRow` (`web/e2e/helpers/seed.ts:187`, `:213`) take `extra?: { swoop?: SwoopMode }`, spread into the row.
+- The escalation blocks are **13–17** in `membershipEscalation.test.ts`, so the next is 18. `web/__tests__/lib/sitePolicy.test.ts` exists. ADR 0015 is release 2's, and 0016 is free. GLOSSARY added Swoop mode, Site settings and Kick, and changed Site role, Viewer, Kill and Session.
+
+**Release 1**
+- `revokeSwoopSessionsForUser` (`web/lib/swoop/revokeViewerSessions.server.ts:135`) ends the **whole** session for every unended session the user sits in (control seats only when `controlOnly`): `endReason 'revoked'`, `endedFor: uid`, via `endSwoopSessionForUser`. It uses the sid-scoped kill broadcast, or the polled `swoop_kill` if the broadcast fails, and everyone else rejoins and is decided again. It writes the audit row with `endReason: args.reason`, never throws, and returns `{ revokedSids }`. `removeSwoopViewers` serves only a person leaving their own seat and `viewer_left`.
+- The session GET's viewer names come from `viewerNames([session])`, only when the caller holds a seat. Each entry has `displayName`, `email` behind `withEmail`, and `kickable`; the response also carries `endedFor`.
+- "Left the site" fires only on the create route's 404 `machine_not_found` (`swoop/sessions/route.ts:259-265`, a missing machine doc) or on the record's `endReason: 'machine_removed'`, which `removeMachine` writes and `leftTheSite()` (`useSwoopSession.ts:256`) reads. A refused read gives `'refused'` or null, never "left". The viewer page reads `useMachines(siteId)` only for `osFamily` (`app/swoop/[siteId]/[machineId]/page.tsx:65-66`), and `SwoopPicker` lists from `useMachines(siteId)`.
+
+- 2026-11-07, wave 4 done (8/8) on `feat/machine-scope`, beside swoop-clarity's wave 2. No emulator ran.
+  - 4.1 ebb5782b, the decision core. Four departures, all for later tasks to read:
+    - `siteStanding` returns `machineScopes` only when some site is scoped, then with an entry for every site. Always-present would break release 2's unchanged `toEqual` cases, `authorizedHandler.test.ts:295` and `hoot-utils.test.ts:2268`.
+    - `machineIds ?? null` in `siteStanding` keeps release-2 test literals that lack the field reading as whole site. **8.1** gives those literals `machineIds: null`, drops the `??` (the one fail-open default) and makes `machineScopes` always present.
+    - tsc named four builders outside the task's list:
+      - `talons/store.server.ts` now uses `memberStanding`. That is **5.5's edit, done early**; 5.5 adds its tests and doesn't redo it.
+      - hoot's `actionContextForHoot`, `hoot/cancel-tool` and `hoot/provision-key` pass `machineIds: null`. Until **5.3** (`userStanding`) and **6.4** (`access.standing`) replace exactly those three lines, a scoped person gets a whole-site hoot actor (for example, provision-key's site-level MACHINE_EXEC_COMMAND). Their comments say the real standing is threaded in.
+    - A cross-product oracle covers 1,368 cases, and a mutation that lets site-wide capabilities through for a scoped actor fails 329 of them.
+  - 4.2 1658597a: `MemberDoc.machineIds`, `invalid_machine_ids` and `MemberAccess.machineIds`. `addMember`/`updateMember` normalize the list, null deletes it, and a role or swoop change keeps the scope. `pruneMachineFromMembers` keeps `[]` and writes one batch (500 writes at most, enough). An invalid list is refused before the owner check.
+  - 4.3 1ea3fb6b: `useSiteMemberships` gains `scopeMap`. `useMachines(siteId, machineIds?)` queries `documentId() in`, and `[]` opens nothing. Beyond the Do: `useMachines`' `error` is keyed to site and scope, so a refusal never carries over (7.1 relies on it).
+  - 4.4 6f660624: `getSiteAlertRecipients` reads the member rows, and each recipient carries `machineIds`. `recipientWantsMachine` replaces every mute check. Three unused email helpers are deleted. A talon run on one machine counts a recipient left out by scope as muted, and a site-level run skips scoped recipients. Open: the display and process digests take the timezone from the site's first alerting machine, which may be outside a scoped recipient's scope.
+  - 4.5 9a0dfbbb: `useAgentAlertToasts(…, machineIds?)` and `useOwletteChat({ includeAutonomous })` (default true; **7.6** makes it required). **7.1** passes the scope as the fourth argument.
+  - 4.6 d33194a3: seed `extra.machineIds`. Latent: `session.spec.ts:485` has a TS2554 that tsc never checks (e2e is excluded).
+  - 4.7 84ea77c4: ADR 0016 and the glossary. Three departures, all following the shipped code:
+    - narrowing ends the whole swoop session within about 2 s, and everyone rejoins;
+    - Kick is amended to "whole-site owner or admin";
+    - Site role "takes away everything site-wide; it never widens what the role allows".
+    - The ADR quotes the 404 text 'machine not found or no access', so **5.1** must use exactly that string.
+  - 4.8 54127762: `MachineAccessField`.
+    - `disabled` is a `<fieldset disabled>` wrapper.
+    - A visible `aria-hidden` "access" label is unasked; the owner's UX review decides.
+    - The picker's test id is `add-member-machines-machines` (9.3's e2e uses it).
