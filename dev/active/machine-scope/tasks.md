@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 15/55 complete
+**Progress**: 22/55 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -625,7 +625,7 @@ House rules for every task:
 
 ## Wave 5: gates, hoot, swoop, builders, AuthContext, leaving machines
 
-- [ ] **Task 5.1: authorizedSiteHandler: machine scope is part of site access**
+- [x] **Task 5.1: authorizedSiteHandler: machine scope is part of site access**
   - Files: `web/lib/authorizedHandler.server.ts`, `web/__tests__/lib/authorizedHandler.test.ts`
   - Depends on: 4.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. The actor already carries the scope (task 4.1).
@@ -673,7 +673,7 @@ House rules for every task:
       - `siteDocReads` stays 1.
   - Done when: the authorizedHandler tests are green; `cd web && npx jest` is green (route suites that mock the wrapper are unaffected); tsc and eslint are clean.
 
-- [ ] **Task 5.2: The `_shared` and apiAuth gates learn machine scope**
+- [x] **Task 5.2: The `_shared` and apiAuth gates learn machine scope**
   - Files: `web/app/api/_shared.ts`, `web/lib/apiAuth.server.ts`, `web/__tests__/api/_shared.test.ts`, `web/__tests__/lib/apiAuth.test.ts`, `web/__tests__/api/scopeEnforcement.test.ts`
   - Depends on: 4.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. The capability builders already carry the scope (task 4.1); this task adds the gates.
@@ -708,7 +708,7 @@ House rules for every task:
       - `scopeEnforcement.test.ts`: its mock, which has no machineIds, keeps passing as whole site. Add one scoped case per gate.
   - Done when: these suites and all of `__tests__/api` are green (route suites mock these gates), and tsc and eslint are clean.
 
-- [ ] **Task 5.3: hoot reaches only the machines in scope**
+- [x] **Task 5.3: hoot reaches only the machines in scope**
   - Files:
     - `web/lib/hoot-utils.server.ts`, `web/lib/hootStream.server.ts`
     - `web/lib/hoot/turnRunner.server.ts`, `web/lib/hoot/followupSweep.server.ts`
@@ -755,7 +755,7 @@ House rules for every task:
       - hoot-turn: a scoped caller asking for `['m2']` gets 400 unknown_machine.
   - Done when: these suites and `__tests__/api/hoot-*.test.ts`, `__tests__/api/chat.test.ts` and `__tests__/lib/talons` are green, and tsc and eslint are clean.
 
-- [ ] **Task 5.4: swoop: the policy passes the machine, and revocation narrows by machine**
+- [x] **Task 5.4: swoop: the policy passes the machine, and revocation narrows by machine**
   - Files: `web/lib/swoop/policy.server.ts`, `web/lib/swoop/revokeViewerSessions.server.ts`, `web/__tests__/lib/swoop/policy.server.test.ts`, `web/__tests__/lib/swoop/lease.test.ts`, `web/__tests__/hooks/useSwoopSession.test.tsx`
   - Depends on: 4.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Re-read both files first. Release 1 changed how a seat leaves a session, and release 2 added the mode check and the `swoop_changed` reason. Keep both mechanisms and add only the machine.
@@ -791,7 +791,7 @@ House rules for every task:
     - **Tests, useSwoopSession.test.tsx**, beside 'a policy refusal on the mint is final' (~354): `mint = { status: 404, body: { detail: 'machine not found or no access' } }`, with no code, puts the state in error with that detail and `retryIn` null. There is no second mint after 60 s, and no "this machine has left the site." (release 1's copy).
   - Done when: these suites and `__tests__/api/swoop/*.test.ts` are green, and tsc and eslint are clean.
 
-- [ ] **Task 5.5: The talons store and users/me state a standing**
+- [x] **Task 5.5: The talons store and users/me state a standing**
   - Files: `web/lib/talons/store.server.ts`, `web/app/api/users/me/route.ts`, `web/__tests__/lib/talons/store.test.ts`
   - Depends on: 4.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -803,7 +803,7 @@ House rules for every task:
       - reassigning to a whole-site admin is ok.
   - Done when: the talons store tests and `__tests__/api/sites-talons*.test.ts` are green, and tsc and eslint are clean.
 
-- [ ] **Task 5.6: AuthContext: machineScope, isMachineAdmin and siteRole**
+- [x] **Task 5.6: AuthContext: machineScope, isMachineAdmin and siteRole**
   - Files: `web/contexts/AuthContext.tsx`, `web/__tests__/contexts/AuthContext.test.ts`
   - Depends on: 4.3
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Release 2 does not touch this file, and the dashboard does not read the swoop mode (release 2, decision 26).
@@ -831,7 +831,7 @@ House rules for every task:
       - siteRole returns the row's role, scoped or not.
   - Done when: the AuthContext tests and `__tests__/contexts/AuthContext.accessResolution.test.tsx` are green, and tsc and eslint are clean.
 
-- [ ] **Task 5.7: A machine id leaves every scope when its machine leaves, or pairs anew**
+- [x] **Task 5.7: A machine id leaves every scope when its machine leaves, or pairs anew**
   - Files:
     - `web/lib/actions/removeMachine.server.ts`, `web/lib/pairingPlan.server.ts`
     - `web/app/api/agent/auth/device-code/poll/route.ts`, `web/app/api/agent/auth/exchange/route.ts`
@@ -1827,3 +1827,48 @@ House rules for every task:
     - `disabled` is a `<fieldset disabled>` wrapper.
     - A visible `aria-hidden` "access" label is unasked; the owner's UX review decides.
     - The picker's test id is `add-member-machines-machines` (9.3's e2e uses it).
+- 2026-11-07, wave 5 done (7/7). No emulator ran.
+  - **Git in a shared tree:** two plain `git commit`s swept up 5.7's staged files (5.4's 0b8d1403, then 5.1's f512c63f). Both agents soft-reset and recommitted their own paths, and the orchestrator committed 5.7 on its own. Nothing was lost. **Every executor brief from wave 6 on says to commit with `git commit --only -F <msg> -- <paths>`.**
+  - 5.1 a3a6660b: the wrapper's scope step runs after the actor is built and before `securityConfig.read()`.
+    - Off the scope: 404 'machine not found or no access', audited `machine_out_of_scope`.
+    - On a site-wide route or capability: the capability refusal, audited `machine_scope_site_wide`.
+    - `capabilityRefusal(capability)` is shared, and `hasCapability` gets the route's machineId.
+    - `display-settings` (MACHINE_CONFIG_WRITE, no machineId) now refuses scoped callers, per decision 10.
+    - 93/93, with 18 of the new cases red on the old wrapper.
+  - 5.2 b1adbbf1:
+    - `assertUserHasSiteAccess` returns `machineIds`.
+    - `requireSiteAuthAndScope({ machineScope: 'deny' | 'admit' })` denies by default (403 'capability not granted').
+    - New `requireSiteMachineAuthAndScope`: 404 off the scope.
+    - `requireMachineAuthAndScope` gives the 404 after the agent short-circuit.
+    - Roost refuses scoped callers, reads included. Chat returns `machineIds`; platform and agent return null.
+    - The `requireSiteCapability` case is tested through the exported wrappers (WEBHOOK_MANAGE, DISTRIBUTION_MANAGE) because the function is private; MACHINE_ENROLL is pinned on `assertUserHasSiteCapability`.
+    - **For wave 6:**
+      - `requireSiteMachineAuthAndScope` audits key use and runs the plan gate (402 on a site without api keys) before its 404, unlike `requireMachineAuthAndScope`. Nothing leaks, but wave 6 may align them by passing the machineId in.
+      - Until wave 6 opts them in, scoped members get 403 on the machines list, machine detail, deployments, step-up GET, logs, logs/{id} and GET site (fail-closed, as planned).
+  - 5.3 fc78cbe8: `SiteAccessLevel.standing`.
+    - `listSiteMachines`/`resolveHootTargets` take `machineScope` (named so per GLOSSARY, not `scope`).
+    - `buildExecutableTools` hides `SITE_WIDE_SERVER_TOOLS` (five tools) from a scoped caller.
+    - hootStream's machine mode gives 404 before any read. Follow-ups narrow to the owner's current scope.
+    - `actionContextForHoot` uses `userStanding`.
+    - **6.4 still replaces `machineIds: null` in hoot/cancel-tool and hoot/provision-key**; until then provision-key hands a scoped person a whole-site actor.
+    - **Open (8.1):** `turnRunner.server.ts:553` reads `standing?.machineIds ?? null` because `asyncTurns.integration.test.ts:300`'s fixture has no `standing` (a strict read fails its 14 tests). Add `standing` there, then make the read strict.
+    - The flat `siteRole`/`swoopMode` on `SiteAccessLevel` stay until 6.4, and no task deletes them after: **8.1 removes them.**
+    - The conversation routes wrap the new 404 as "hoot stream unavailable" / `cortex_unavailable`, so **6.4** may want a plain not-found there.
+  - 5.4 8958eccb:
+    - `evaluateSwoopAccess` passes the machineId, still before members_may_not_watch and step_up_required.
+    - `revokeSwoopSessionsForUser` gains `keepMachineIds` and `'scope_changed'`.
+    - It follows the shipped code: no seat removal, so a narrowed shared session ends for everyone within about 2 s and the others rejoin.
+    - A 96-case scope × machine cross-check (22 red on the old call). **For 6.3:** the members PATCH passes `keepMachineIds` with reason `'scope_changed'` when it narrows.
+  - 5.5 2509478b:
+    - The store needed no change (4.1's edit); users/me uses `siteStanding([])`.
+    - Talon successors: a scoped admin and a member set to control are refused `insufficient_role`.
+    - **For 8.1:** the "builds the same successor actor as before" `toEqual` has no `machineScopes`.
+  - 5.6 17dcff1d:
+    - AuthContext's `isSiteAdmin`/`isSiteOwner`/`administersAnySite` mean whole site (a required `scopeMap` parameter).
+    - It adds `machineScope`, `isMachineAdmin` and `siteRole`, plus an exported `computeSiteRole` so the role tests run without mounting.
+    - Room is left for 7.12's `swoopMode`, which also needs the row's `swoop` from `useSiteMemberships`.
+    - None of the 53 `useAuth` mocks has the new fields; each wave-7 task adds them where it reads them.
+  - 5.7 42413d88:
+    - removeMachine prunes after the swoop sweep. `stampPairedAt` became `recordPairing`, which prunes only when the machine doc was missing.
+    - A failed read prunes nothing; this is unspecified, deliberate and tested. removeMachine is the primary path, and pruning on a contention error would strip a machine still on the site.
+- Wave 5 build check on the merged tree: tsc clean, full jest 477 suites (10955 tests) green.
