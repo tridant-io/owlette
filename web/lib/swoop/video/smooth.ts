@@ -1,0 +1,321 @@
+/**
+ * swoop smooth scaling — a webgl2 area average for a picture shown below 1:1.
+ *
+ * chromium and webkit draw a `<video>` with a bilinear filter and no mipmaps.
+ * at 1:1 that is a copy and at 1:2 on whole device pixels a clean 2x2 average,
+ * so the element draws those sizes itself. at any other size below 1:1 each
+ * screen pixel blends the nearest machine pixels and skips the rest: below
+ * half size thin strokes drop out, and between half and full size their
+ * weights go uneven, which is the stair-stepped text of a window smaller than
+ * the machine's screen. this renderer draws such a frame on a canvas over the
+ * video instead, averaging every machine pixel under each screen pixel,
+ * weighted by how much of it the screen pixel covers. that is the exact box
+ * filter at any ratio, with no mip chain to build per frame and no blur
+ * between levels. it averages in the encoded colour space, as the browser and
+ * both systems' scalers do.
+ *
+ * it reverses plan D17's "no canvas in the shipping path"
+ * (dev/active/swoop/plan.md) for minification only: see
+ * dev/active/swoop-clarity/plan.md, C2 and C5. the `<video>` stays the
+ * decoder, the composited source and the fallback; this file draws only the
+ * frame it is handed, from the one rvfc chain the receiver owns.
+ *
+ * it imports nothing and uses erasable typescript only, because the probe
+ * (agent/swoop/spikes/smooth-probe) serves this very file to browsers through
+ * node's `stripTypeScriptTypes`, so what the probe measures is what ships
+ * (plan C16).
+ *
+ * measurements: task 2.5 records the cover it chose here, and tasks 4.1
+ * (chromium, edge) and 3.4 (safari) record their rows here. the webkitgtk
+ * check (task 5.2) is logged in dev/active/swoop-clarity/tasks.md.
+ */
+
+/** the most source texels averaged per axis: exact down to 1/7, evenly sampled below that. */
+const MAX_TAPS = 8;
+
+/** warp over rdp or in a vm, llvmpipe on a linux vm, swiftshader in headless ci. */
+const SOFTWARE_RENDERER = /swiftshader|llvmpipe|softpipe|warp|basic render|software/i;
+
+// no `desynchronized`: it trades tearing for latency, and only the probe's
+// measurements may argue for it (plan, backlog).
+const CONTEXT: WebGLContextAttributes = {
+  alpha: true,
+  premultipliedAlpha: true,
+  antialias: false,
+  depth: false,
+  stencil: false,
+  preserveDrawingBuffer: false,
+};
+
+// one triangle over the whole canvas, from gl_VertexID alone.
+const VERTEX_SHADER = `#version 300 es
+void main() {
+  gl_Position = vec4(float((gl_VertexID & 1) << 2) - 1.0, float((gl_VertexID & 2) << 1) - 1.0, 0.0, 1.0);
+}
+`;
+
+const FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+const int MAX_TAPS = ${MAX_TAPS};
+
+uniform sampler2D frame;
+// the picture's rect in device pixels: x and y from the canvas's bottom-left corner, then width and height.
+uniform ivec4 dest;
+uniform ivec2 source;
+
+out vec4 colour;
+
+// areaTaps() in smooth.ts, line for line.
+int areaTaps(int index, int destSize, int srcSize, out int texel[MAX_TAPS], out float weight[MAX_TAPS]) {
+  int start = index * srcSize;
+  int end = start + srcSize;
+  int first = start / destSize;
+  int last = (end - 1) / destSize;
+  if (last - first < MAX_TAPS) {
+    for (int t = first; t <= last; t++) {
+      texel[t - first] = t;
+      weight[t - first] = float(min(end, (t + 1) * destSize) - max(start, t * destSize)) / float(srcSize);
+    }
+    return last - first + 1;
+  }
+  for (int k = 0; k < MAX_TAPS; k++) {
+    texel[k] = (start * 2 * MAX_TAPS + (2 * k + 1) * srcSize) / (2 * MAX_TAPS * destSize);
+    weight[k] = 1.0 / float(MAX_TAPS);
+  }
+  return MAX_TAPS;
+}
+
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy) - dest.xy;
+  if (any(lessThan(p, ivec2(0))) || any(greaterThanEqual(p, dest.zw))) {
+    colour = vec4(0.0);
+    return;
+  }
+  int tx[MAX_TAPS];
+  float wx[MAX_TAPS];
+  int ty[MAX_TAPS];
+  float wy[MAX_TAPS];
+  int nx = areaTaps(p.x, dest.z, source.x, tx, wx);
+  // gl_FragCoord counts rows up from the bottom; the frame's row 0 is its top.
+  int ny = areaTaps(dest.w - 1 - p.y, dest.w, source.y, ty, wy);
+  vec4 sum = vec4(0.0);
+  for (int j = 0; j < ny; j++) {
+    vec4 row = vec4(0.0);
+    for (int i = 0; i < nx; i++) {
+      row += wx[i] * texelFetch(frame, ivec2(tx[i], ty[j]), 0);
+    }
+    sum += wy[j] * row;
+  }
+  colour = sum;
+}
+`;
+
+export interface SmoothTap {
+  texel: number;
+  weight: number;
+}
+
+/**
+ * the source texels one output pixel averages on one axis, and their weights,
+ * for whole sizes. the fragment shader's `areaTaps`, line for line, in
+ * integers: positions are in units of 1/destSize of a texel, so texel t spans
+ * [t·destSize, (t+1)·destSize) and output pixel `index` covers
+ * [index·srcSize, (index+1)·srcSize). up to MAX_TAPS texels each get the
+ * share of that footprint they cover; a wider footprint is sampled at the
+ * centres of MAX_TAPS equal slices.
+ */
+export function areaTaps(index: number, destSize: number, srcSize: number): SmoothTap[] {
+  const start = index * srcSize;
+  const end = start + srcSize;
+  const first = Math.floor(start / destSize);
+  const last = Math.floor((end - 1) / destSize);
+  const taps: SmoothTap[] = [];
+  if (last - first < MAX_TAPS) {
+    for (let t = first; t <= last; t++) {
+      taps.push({ texel: t, weight: (Math.min(end, (t + 1) * destSize) - Math.max(start, t * destSize)) / srcSize });
+    }
+    return taps;
+  }
+  for (let k = 0; k < MAX_TAPS; k++) {
+    taps.push({ texel: Math.floor((start * 2 * MAX_TAPS + (2 * k + 1) * srcSize) / (2 * MAX_TAPS * destSize)), weight: 1 / MAX_TAPS });
+  }
+  return taps;
+}
+
+/** the renderer a throwaway context reports, per caveat setting; null without webgl2. */
+const probed = new Map<boolean, string | null>();
+
+function probeRenderer(allowSoftware: boolean): string | null {
+  const cached = probed.get(allowSoftware);
+  if (cached !== undefined) return cached;
+  let renderer: string | null = null;
+  if (typeof document !== 'undefined') {
+    const gl = document.createElement('canvas').getContext('webgl2', { failIfMajorPerformanceCaveat: !allowSoftware });
+    if (gl) {
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+      // browsers cap the live contexts on a page; free this one now, not at gc.
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
+  }
+  probed.set(allowSoftware, renderer);
+  return renderer;
+}
+
+/**
+ * whether this browser may draw swoop's picture through the canvas: it has
+ * rvfc, a webgl2 context that is not a major-performance-caveat one, and,
+ * unless `allowSoftware`, a renderer that is not software. cached per value.
+ */
+export function smoothAvailable({ allowSoftware = false }: { allowSoftware?: boolean } = {}): boolean {
+  // without rvfc the receiver plays with no frame chain (receiver.ts), so the
+  // canvas would redraw only on a view change and leave a stale frame over a
+  // live video.
+  if (typeof HTMLVideoElement === 'undefined' || !('requestVideoFrameCallback' in HTMLVideoElement.prototype)) {
+    return false;
+  }
+  const renderer = probeRenderer(allowSoftware);
+  return renderer !== null && (allowSoftware || !SOFTWARE_RENDERER.test(renderer));
+}
+
+/** the renderer a webgl2 context gets here, software or not (for the probe and reports); null without webgl2. */
+export function smoothRenderer(): string | null {
+  return probeRenderer(true);
+}
+
+/** a rect in the canvas's device pixels, from its top-left corner; a DOMRect is one. */
+export interface SmoothRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SmoothRenderer {
+  /** the canvas's size in device pixels. */
+  resize(width: number, height: number): void;
+  /** averages the video's current frame into `dest`, the picture's rect, transparent around it, and shows the canvas. */
+  draw(video: HTMLVideoElement, dest: SmoothRect): void;
+  /** hides the canvas so the video shows; the next draw shows it again. */
+  hide(): void;
+  dispose(): void;
+  /** the context is lost (until the browser restores it) or the renderer disposed: callers show the video. */
+  readonly lost: boolean;
+}
+
+interface Pipeline {
+  program: WebGLProgram;
+  texture: WebGLTexture;
+  dest: WebGLUniformLocation | null;
+  source: WebGLUniformLocation | null;
+}
+
+function compile(gl: WebGL2RenderingContext, type: number, text: string): WebGLShader | null {
+  const shader = gl.createShader(type);
+  if (shader) {
+    gl.shaderSource(shader, text);
+    gl.compileShader(shader);
+  }
+  return shader;
+}
+
+function build(gl: WebGL2RenderingContext): Pipeline | null {
+  const program = gl.createProgram();
+  const vertex = compile(gl, gl.VERTEX_SHADER, VERTEX_SHADER);
+  const fragment = compile(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER);
+  const texture = gl.createTexture();
+  if (program && vertex && fragment) {
+    gl.attachShader(program, vertex);
+    gl.attachShader(program, fragment);
+    gl.linkProgram(program);
+  }
+  gl.deleteShader(vertex);
+  gl.deleteShader(fragment);
+  if (!program || !texture || !gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    gl.deleteProgram(program);
+    gl.deleteTexture(texture);
+    return null;
+  }
+  gl.useProgram(program);
+  gl.uniform1i(gl.getUniformLocation(program, 'frame'), 0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  // texelFetch ignores filtering, but the default mipmapped min filter leaves a
+  // one-level texture incomplete, and an incomplete texture reads black.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  return {
+    program,
+    texture,
+    dest: gl.getUniformLocation(program, 'dest'),
+    source: gl.getUniformLocation(program, 'source'),
+  };
+}
+
+/** a renderer on `canvas`, hidden until its first draw; null without webgl2 or when the shaders do not build. */
+export function createSmoothRenderer(canvas: HTMLCanvasElement): SmoothRenderer | null {
+  const gl = canvas.getContext('webgl2', CONTEXT);
+  let pipeline = gl && build(gl);
+  if (!gl || !pipeline) return null;
+
+  let shown = true;
+  const hide = () => {
+    if (!shown) return;
+    canvas.style.visibility = 'hidden';
+    shown = false;
+  };
+  const onLost = (event: Event) => {
+    // without preventDefault the browser never restores the context.
+    event.preventDefault();
+    pipeline = null;
+    hide();
+  };
+  const onRestored = () => {
+    pipeline = build(gl);
+  };
+  canvas.addEventListener('webglcontextlost', onLost);
+  canvas.addEventListener('webglcontextrestored', onRestored);
+  hide();
+
+  return {
+    resize(width, height) {
+      // assigning a canvas size clears it, even an unchanged one.
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+    },
+    draw(video, dest) {
+      if (!pipeline || !video.videoWidth || !video.videoHeight) return;
+      const x = Math.round(dest.x);
+      const y = Math.round(dest.y);
+      const width = Math.round(dest.width);
+      const height = Math.round(dest.height);
+      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, video);
+      gl.uniform2i(pipeline.source, video.videoWidth, video.videoHeight);
+      gl.uniform4i(pipeline.dest, x, gl.drawingBufferHeight - y - height, width, height);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (!shown) {
+        canvas.style.visibility = '';
+        shown = true;
+      }
+    },
+    hide,
+    dispose() {
+      canvas.removeEventListener('webglcontextlost', onLost);
+      canvas.removeEventListener('webglcontextrestored', onRestored);
+      hide();
+      if (pipeline) {
+        gl.deleteProgram(pipeline.program);
+        gl.deleteTexture(pipeline.texture);
+        pipeline = null;
+      }
+    },
+    get lost() {
+      return !pipeline;
+    },
+  };
+}
