@@ -45,7 +45,10 @@ import { emitApiKeyUsed } from '@/lib/auditLogClient';
 import {
   requireDistributionManageCapability,
   requireSiteAuthAndScope,
+  requireSiteMachineAuthAndScope,
+  requireMachineAuthAndScope,
   requireRoostAuthAndScope,
+  requireChatAuthAndScope,
   requireAgentOrSiteAuthAndScope,
   requirePlatformAuthAndScope,
   applyAuthDeprecations,
@@ -666,5 +669,88 @@ describe('requireAgentOrSiteAuthAndScope — operator fallthrough', () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.response.status).toBe(400);
+  });
+});
+
+describe('machine scope: a key owned by a member scoped to m1', () => {
+  function scopedKey(scopes: ApiKeyScope[]): void {
+    mockedResolveAuth.mockResolvedValue(authFromScopes(scopes));
+    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: ['m1'] });
+  }
+
+  async function expectRefusal(
+    result: { ok: true } | { ok: false; response: NextResponse },
+    status: number,
+    detail: string,
+  ): Promise<void> {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(status);
+      expect((await result.response.json()).detail).toBe(detail);
+    }
+  }
+
+  it('the suite mock, which carries no machineIds, reads as the whole site', async () => {
+    mockedResolveAuth.mockResolvedValue(sessionAuth());
+    const result = await requireSiteAuthAndScope(makeRequest(), SITE_ID, 'read');
+    expect(result.ok && result.machineIds).toBeNull();
+  });
+
+  it('requireSiteAuthAndScope refuses it 403 although the key holds the site scope', async () => {
+    scopedKey([{ resource: 'site', id: SITE_ID, permissions: ['read'] }]);
+    await expectRefusal(
+      await requireSiteAuthAndScope(makeRequest(), SITE_ID, 'read'),
+      403,
+      'capability not granted',
+    );
+    expect(mockedAuditEmit).not.toHaveBeenCalled();
+  });
+
+  it('requireSiteMachineAuthAndScope answers 404 on m2', async () => {
+    scopedKey([{ resource: 'site', id: SITE_ID, permissions: ['read'] }]);
+    await expectRefusal(
+      await requireSiteMachineAuthAndScope(makeRequest(), SITE_ID, 'm2', 'read'),
+      404,
+      'machine not found or no access',
+    );
+  });
+
+  it('requireMachineAuthAndScope answers 404 on m2 to a machine=* key', async () => {
+    scopedKey([{ resource: 'machine', id: '*', permissions: ['write'] }]);
+    await expectRefusal(
+      await requireMachineAuthAndScope(makeRequest(), SITE_ID, 'm2', 'write'),
+      404,
+      'machine not found or no access',
+    );
+  });
+
+  it('requireRoostAuthAndScope refuses a read 403', async () => {
+    scopedKey([{ resource: 'roost', id: '*', permissions: ['read'] }]);
+    await expectRefusal(
+      await requireRoostAuthAndScope(makeRequest(), SITE_ID, ROOST_ID, 'read'),
+      403,
+      'capability not granted',
+    );
+  });
+
+  it('requireChatAuthAndScope admits it with its machines', async () => {
+    scopedKey([{ resource: 'chat', id: SITE_ID, permissions: ['read'] }]);
+    const result = await requireChatAuthAndScope(makeRequest(), SITE_ID, 'read');
+    expect(result.ok && result.machineIds).toEqual(['m1']);
+  });
+
+  it("requireAgentOrSiteAuthAndScope's user path inherits the default refusal", async () => {
+    scopedKey([{ resource: 'site', id: SITE_ID, permissions: ['read'] }]);
+    await expectRefusal(
+      await requireAgentOrSiteAuthAndScope(makeRequest(), SITE_ID, 'read'),
+      403,
+      'capability not granted',
+    );
+  });
+
+  it('requirePlatformAuthAndScope carries no machine scope', async () => {
+    mockedResolveAuth.mockResolvedValue(sessionAuth());
+    const result = await requirePlatformAuthAndScope(makeRequest(), 'user', 'read');
+    expect(result.ok && result.machineIds).toBeNull();
   });
 });

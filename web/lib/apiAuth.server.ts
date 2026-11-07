@@ -426,7 +426,12 @@ export async function assertActiveUser(
 export async function assertUserHasSiteAccess(
   userId: string,
   siteId: string
-): Promise<{ siteId: string; siteData: Record<string, unknown> | null }> {
+): Promise<{
+  siteId: string;
+  siteData: Record<string, unknown> | null;
+  /** the caller's machine scope on the site; null for the whole site */
+  machineIds: readonly string[] | null;
+}> {
   const outcome = await resolveSiteAccess(userId, siteId);
 
   if (!outcome.ok) {
@@ -442,7 +447,7 @@ export async function assertUserHasSiteAccess(
     }
   }
 
-  return { siteId, siteData: outcome.facts.siteData };
+  return { siteId, siteData: outcome.facts.siteData, machineIds: outcome.facts.machineIds };
 }
 
 /**
