@@ -548,9 +548,8 @@ export function startTurn(
       // only ever removes machines (see `narrowToLiveMachines`), so an approved
       // tool call cannot reach a machine the approver never saw.
       // the listing is cut to the person's scope as well, though callers resolve
-      // within it: a machine dropped from the scope since then drops out here. an
-      // access literal from before `standing` (an untyped test) is the whole site.
-      const machineScope = params.access.standing?.machineIds ?? null;
+      // within it: a machine dropped from the scope since then drops out here.
+      const machineScope = params.access.standing.machineIds;
       const siteMachines = await listSiteMachines(db, params.siteId, machineScope);
       const resolved = narrowToLiveMachines(params.resolved, siteMachines);
       if (resolved.ids.length === 0) throw noLiveMachinesError(params.turnTarget, resolved);

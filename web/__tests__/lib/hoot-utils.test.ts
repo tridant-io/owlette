@@ -2242,7 +2242,7 @@ describe('verifyUserSiteAccess', () => {
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSuperadmin).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
-    expect(access.siteRole).toBeNull();
+    expect(access.standing.role).toBeNull();
   });
 
   it('an owner membership grants ownership and site-admin', async () => {
@@ -2252,7 +2252,7 @@ describe('verifyUserSiteAccess', () => {
       member: member('owner'),
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
-    expect(access.siteRole).toBe('owner');
+    expect(access.standing.role).toBe('owner');
     expect(access.isSiteOwner).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
   });
@@ -2276,24 +2276,24 @@ describe('verifyUserSiteAccess', () => {
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSiteAdmin).toBe(false);
-    expect(access.siteRole).toBe('member');
+    expect(access.standing.role).toBe('member');
   });
 
-  it('returns the swoop mode the member row carries, beside the site role', async () => {
+  it('returns the swoop mode the member row carries, in the standing beside the site role', async () => {
     const heldToView = makeAccessDb({
       users: { role: 'member' },
       sites: {},
       member: { ...member('admin'), swoop: 'view' },
     });
-    await expect(verifyUserSiteAccess(heldToView, 'u1', 's1')).resolves.toMatchObject({
-      siteRole: 'admin',
-      swoopMode: 'view',
-    });
+    const held = await verifyUserSiteAccess(heldToView, 'u1', 's1');
+    expect(held.standing).toMatchObject({ role: 'admin', swoopMode: 'view' });
+    // the standing is the one place they live
+    expect(held).not.toHaveProperty('siteRole');
+    expect(held).not.toHaveProperty('swoopMode');
 
     const byRole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('admin') });
     await expect(verifyUserSiteAccess(byRole, 'u1', 's1')).resolves.toMatchObject({
-      siteRole: 'admin',
-      swoopMode: null,
+      standing: { role: 'admin', swoopMode: null },
     });
   });
 
@@ -2403,7 +2403,7 @@ describe('the hoot actor', () => {
   it('carries an admin held to view, so it never controls', async () => {
     const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active', swoop: 'view' });
 
-    expect(actor.swoopModes?.s1).toBe('view');
+    expect(actor.swoopModes.s1).toBe('view');
     expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
     // the mode changes swoop and nothing else
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1')).toBe(true);
@@ -2418,20 +2418,25 @@ describe('the hoot actor', () => {
       machineIds: ['m1'],
     });
 
-    expect(actor.machineScopes?.s1).toEqual(['m1']);
-    expect(actor.swoopModes?.s1).toBe('view');
+    expect(actor.machineScopes.s1).toEqual(['m1']);
+    expect(actor.swoopModes.s1).toBe('view');
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(true);
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm2')).toBe(false);
     // nothing site-wide, whatever the role
     expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 's1')).toBe(false);
   });
 
-  it('builds the same actor as before from a row with no mode', async () => {
+  it('builds an actor with no mode and the whole site from a row that carries neither', async () => {
     const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active' });
 
-    expect(actor).toEqual({ type: 'user', userId: 'u1', role: 'member', siteRoles: { s1: 'admin' } });
-    expect(actor).not.toHaveProperty('swoopModes');
-    expect(actor).not.toHaveProperty('machineScopes');
+    expect(actor).toEqual({
+      type: 'user',
+      userId: 'u1',
+      role: 'member',
+      siteRoles: { s1: 'admin' },
+      swoopModes: {},
+      machineScopes: { s1: null },
+    });
   });
 
   it('denies every site-scoped capability with no standing', async () => {

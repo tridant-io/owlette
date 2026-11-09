@@ -298,8 +298,8 @@ const mockListUserStanding = jest.fn(async (uid: string) => {
   for (const [path, row] of docs) {
     const match = MEMBER_ROW_PATH.exec(path);
     if (!match || match[2] !== uid) continue;
-    const role = deriveMembership(row);
-    if (role !== null) bySite[match[1]] = { role, swoopMode: deriveSwoopMode(row, role) };
+    const standing = memberStanding(row);
+    if (standing.role !== null) bySite[match[1]] = standing;
   }
   return bySite;
 });
@@ -311,7 +311,7 @@ jest.mock('@/lib/sitePolicy.server', () => ({
 import { GET as membersGET, POST as membersPOST } from '@/app/api/sites/[siteId]/members/route';
 import { GET as candidatesGET } from '@/app/api/sites/[siteId]/member-candidates/route';
 import type { MemberStanding } from '@/lib/capabilities';
-import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { memberStanding } from '@/lib/sitePolicy.server';
 import {
   DELETE as memberDELETE,
   PATCH as memberPATCH,

@@ -1410,13 +1410,13 @@ describe('reassignTalons', () => {
     await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
 
     const successor = gateActorFor('successor-uid');
-    expect(successor.swoopModes?.[SITE]).toBe('view');
+    expect(successor.swoopModes[SITE]).toBe('view');
     expect(hasCapability(successor, Capability.MACHINE_REMOTE_CONTROL, SITE)).toBe(false);
     // the mode changes swoop and nothing else: they still inherit
     expect(storedTalon('t1').createdBy).toBe('successor-uid');
   });
 
-  it('builds the same successor actor as before from a row with no mode', async () => {
+  it('builds a successor actor with no mode and the whole site from a row that carries neither', async () => {
     seedSuccessor('successor-uid');
     seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
 
@@ -1428,8 +1428,9 @@ describe('reassignTalons', () => {
       userId: 'successor-uid',
       role: 'admin',
       siteRoles: { [SITE]: 'admin' },
+      swoopModes: {},
+      machineScopes: { [SITE]: null },
     });
-    expect(successor).not.toHaveProperty('swoopModes');
   });
 
   describe('machine scope', () => {
@@ -1460,7 +1461,7 @@ describe('reassignTalons', () => {
       seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
 
       await expectInsufficientRole();
-      expect(gateActorFor('successor-uid').swoopModes?.[SITE]).toBe('control');
+      expect(gateActorFor('successor-uid').swoopModes[SITE]).toBe('control');
     });
 
     it('accepts a whole-site admin', async () => {

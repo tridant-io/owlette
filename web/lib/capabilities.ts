@@ -124,21 +124,19 @@ export type UserActor = {
   /**
    * explicit swoop modes by site, from the member row's `swoop`. a site absent
    * here follows its role. only MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL
-   * read it. built only through `siteStanding`.
+   * read it. required, and written only by `siteStanding`, so the compiler names
+   * any builder that skips it: a dropped mode hands an admin held to view their
+   * control back.
    */
-  swoopModes?: Readonly<Record<string, SwoopMode>>;
+  swoopModes: Readonly<Record<string, SwoopMode>>;
   /**
    * machine scopes by site, from the member row's `machineIds`: the machines
-   * the person reaches there, or null for the whole site. only `siteStanding`
-   * writes it, and only when some site is scoped; it then holds an entry for
-   * every site in `siteRoles`.
-   *
-   * a site in `siteRoles` with no entry in a present map reaches nothing. an
-   * actor with no map at all reads as the whole site everywhere: what
-   * `siteStanding` builds when no site is scoped, and every test literal. task
-   * 8.1 makes it required.
+   * the person reaches there, or null for the whole site. `siteStanding` writes
+   * an entry for every site in `siteRoles`. a site with no entry reaches
+   * nothing. required, so the compiler names any builder that skips
+   * `siteStanding`: a dropped scope hands a scoped member the whole site.
    */
-  machineScopes?: Readonly<Record<string, readonly string[] | null>>;
+  machineScopes: Readonly<Record<string, readonly string[] | null>>;
 };
 
 export type SystemActor = {
@@ -168,17 +166,15 @@ export interface MemberStanding {
  * to the code scanner (js/remote-property-injection, 311-313 and 425-429),
  * however the object was made. pairs say the same thing without one.
  *
- * `swoopModes` is returned only when some site has a mode, and `machineScopes`
- * only when some site is scoped, so an actor built from rows that carry neither
- * is the actor from before the fields existed. once one site is scoped,
- * `machineScopes` holds an entry for every site in `siteRoles`, null for the
- * whole site, owner rows included: the rules scope an owner row that carries
- * the field, and the writers never put it there.
+ * all three maps are always returned. `swoopModes` holds the sites with a
+ * mode. `machineScopes` holds an entry for every site in `siteRoles`, null for
+ * the whole site, owner rows included: the rules scope an owner row that
+ * carries the field, and the writers never put it there.
  */
 export function siteStanding(bySite: Iterable<readonly [string, MemberStanding]>): {
   siteRoles: Record<string, SiteRole>;
-  swoopModes?: Record<string, SwoopMode>;
-  machineScopes?: Record<string, readonly string[] | null>;
+  swoopModes: Record<string, SwoopMode>;
+  machineScopes: Record<string, readonly string[] | null>;
 } {
   const roles: Array<readonly [string, SiteRole]> = [];
   const modes: Array<readonly [string, SwoopMode]> = [];
@@ -188,14 +184,12 @@ export function siteStanding(bySite: Iterable<readonly [string, MemberStanding]>
     roles.push([siteId, role]);
     // the owner always controls, so an owner row's mode is never carried
     if (role !== 'owner' && swoopMode !== null) modes.push([siteId, swoopMode]);
-    // a standing literal from before the field (an untyped test) is the whole
-    // site, as an actor with no map is
-    scopes.push([siteId, machineIds ?? null]);
+    scopes.push([siteId, machineIds]);
   }
   return {
     siteRoles: recordOf(roles),
-    ...(modes.length > 0 ? { swoopModes: recordOf(modes) } : {}),
-    ...(scopes.some(([, ids]) => ids !== null) ? { machineScopes: recordOf(scopes) } : {}),
+    swoopModes: recordOf(modes),
+    machineScopes: recordOf(scopes),
   };
 }
 
@@ -344,9 +338,10 @@ export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | nul
 }
 
 /**
- * the machines a person reaches on a site, or null for the whole site. an
- * actor with no map is the whole site; a present map without the site, or an
- * entry that is neither null nor a list, reaches nothing.
+ * the machines a person reaches on a site, or null for the whole site. a map
+ * without the site, or an entry that is neither null nor a list, reaches
+ * nothing. the map is required, so only a test literal, which tsc never
+ * checks, can lack it; such an actor reads as the whole site.
  */
 export function machineScopeOf(actor: UserActor, siteId: string): readonly string[] | null {
   if (!actor.machineScopes) return null;

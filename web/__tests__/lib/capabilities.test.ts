@@ -13,6 +13,7 @@ import {
   machineScopeOf,
   siteStanding,
   type Actor,
+  type MemberStanding,
   type SiteRole,
   type SystemActorName,
   type UserActor,
@@ -690,45 +691,53 @@ describe("hasCapability — a person's swoop mode (owner rulings 13-14)", () => 
 });
 
 describe('siteStanding', () => {
-  it('carries each site role, and a mode only where the row has one', () => {
+  it('carries each site role, a mode only where the row has one, and every scope', () => {
     expect(
       siteStanding([
-        ['site_a', { role: 'member', swoopMode: 'control' }],
-        ['site_b', { role: 'admin', swoopMode: null }],
+        ['site_a', { role: 'member', swoopMode: 'control', machineIds: null }],
+        ['site_b', { role: 'admin', swoopMode: null, machineIds: null }],
       ]),
     ).toEqual({
       siteRoles: { site_a: 'member', site_b: 'admin' },
       swoopModes: { site_a: 'control' },
+      machineScopes: { site_a: null, site_b: null },
     });
   });
 
-  it('skips a site with no role, and its mode with it', () => {
-    expect(siteStanding([['site_a', { role: null, swoopMode: 'control' }]])).toEqual({ siteRoles: {} });
+  it('skips a site with no role, and its mode and scope with it', () => {
+    expect(siteStanding([['site_a', { role: null, swoopMode: 'control', machineIds: ['m1'] }]])).toEqual({
+      siteRoles: {},
+      swoopModes: {},
+      machineScopes: {},
+    });
   });
 
   it("drops an owner's mode", () => {
-    expect(siteStanding([['site_a', { role: 'owner', swoopMode: 'none' }]])).toEqual({
+    expect(siteStanding([['site_a', { role: 'owner', swoopMode: 'none', machineIds: null }]])).toEqual({
       siteRoles: { site_a: 'owner' },
+      swoopModes: {},
+      machineScopes: { site_a: null },
     });
   });
 
-  it('returns no swoopModes key when no site has a mode', () => {
+  it('returns all three maps, swoopModes empty, when no site has a mode', () => {
     const standing = siteStanding([
-      ['site_a', { role: 'member', swoopMode: null }],
-      ['site_b', { role: 'owner', swoopMode: 'view' }],
-      ['site_c', { role: null, swoopMode: 'control' }],
+      ['site_a', { role: 'member', swoopMode: null, machineIds: null }],
+      ['site_b', { role: 'owner', swoopMode: 'view', machineIds: null }],
+      ['site_c', { role: null, swoopMode: 'control', machineIds: null }],
     ]);
-    expect(Object.keys(standing)).toEqual(['siteRoles']);
+    expect(Object.keys(standing).sort()).toEqual(['machineScopes', 'siteRoles', 'swoopModes']);
+    expect(Object.keys(standing.swoopModes)).toEqual([]);
   });
 
   it('keeps __proto__ as an own key, and leaves Object.prototype untouched', () => {
     const prototypeBefore = Object.getOwnPropertyNames(Object.prototype).sort();
-    const standing = siteStanding([['__proto__', { role: 'admin', swoopMode: 'view' }]]);
+    const standing = siteStanding([['__proto__', { role: 'admin', swoopMode: 'view', machineIds: null }]]);
 
     expect(Object.prototype.hasOwnProperty.call(standing.siteRoles, '__proto__')).toBe(true);
     expect(standing.siteRoles['__proto__']).toBe('admin');
     expect(Object.prototype.hasOwnProperty.call(standing.swoopModes, '__proto__')).toBe(true);
-    expect(standing.swoopModes?.['__proto__']).toBe('view');
+    expect(standing.swoopModes['__proto__']).toBe('view');
     expect(Object.getOwnPropertyNames(Object.prototype).sort()).toEqual(prototypeBefore);
     expect(Object.getPrototypeOf({})).toBe(Object.prototype);
 
@@ -739,7 +748,7 @@ describe('siteStanding', () => {
     expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, '__proto__')).toBe(true);
   });
 
-  it('writes a machine scope for every site in siteRoles once one is scoped, and none for a null role', () => {
+  it('writes a machine scope for every site in siteRoles, and none for a null role', () => {
     const standing = siteStanding([
       ['site_a', { role: 'member', swoopMode: 'control', machineIds: ['m1', 'm2'] }],
       ['site_b', { role: 'admin', swoopMode: null, machineIds: null }],
@@ -747,16 +756,25 @@ describe('siteStanding', () => {
       ['site_d', { role: null, swoopMode: null, machineIds: ['m1'] }],
     ]);
     expect(standing.machineScopes).toEqual({ site_a: ['m1', 'm2'], site_b: null, site_c: ['m3'] });
-    expect(Object.keys(standing.machineScopes ?? {}).sort()).toEqual(Object.keys(standing.siteRoles).sort());
+    expect(Object.keys(standing.machineScopes).sort()).toEqual(Object.keys(standing.siteRoles).sort());
   });
 
-  it('returns no machineScopes key when every site is the whole site', () => {
+  it('writes null for a whole-site site, and all three maps when no site is given', () => {
     const standing = siteStanding([
       ['site_a', { role: 'admin', swoopMode: null, machineIds: null }],
       ['site_b', { role: null, swoopMode: null, machineIds: ['m1'] }],
     ]);
-    expect(Object.keys(standing)).toEqual(['siteRoles']);
-    expect(Object.keys(siteStanding([]))).toEqual(['siteRoles']);
+    expect(standing.machineScopes).toEqual({ site_a: null });
+    expect(siteStanding([])).toEqual({ siteRoles: {}, swoopModes: {}, machineScopes: {} });
+  });
+
+  it('reads a standing with no machineIds as no machines, never as the whole site', () => {
+    // only an untyped literal can leave it out; a missing scope must not widen
+    const standing = siteStanding([['site_a', { role: 'admin', swoopMode: null } as unknown as MemberStanding]]);
+    const actor = userActor(standing);
+    expect(machineScopeOf(actor, 'site_a')).toEqual([]);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm1')).toBe(false);
+    expect(hasCapability(actor, Capability.SITE_MEMBER_MANAGE, 'site_a')).toBe(false);
   });
 });
 

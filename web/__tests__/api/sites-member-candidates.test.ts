@@ -316,15 +316,16 @@ describe('GET /api/sites/{siteId}/member-candidates', () => {
       });
 
       it("rebuilds every standing map, so the wrapper's one-site scope map is not kept", async () => {
-        // the wrapper's actor names only this site, and once task 8.1 makes the
-        // map always present it carries this site's scope too. kept, that map
-        // would read site-b as no machines and drop its people.
+        // the wrapper's actor names only this site, and its map always carries
+        // this site's scope too. kept, that map would read site-b as no
+        // machines and drop its people.
         mockCtx = {
           actor: {
             type: 'user',
             userId: SELF,
             role: 'member',
             siteRoles: { [TARGET]: 'admin' },
+            swoopModes: {},
             machineScopes: { [TARGET]: null },
           },
           auth: { userId: SELF, keyContext: null },
@@ -336,6 +337,32 @@ describe('GET /api/sites/{siteId}/member-candidates', () => {
         expect(uidsOf(body)).toEqual(['uid-y']);
         expect(mockReads).not.toHaveBeenCalledWith('sites/site-c/members');
       });
+    });
+
+    it("rebuilds every standing map with nothing scoped, so the wrapper's scope map is never kept", async () => {
+      // with no site scoped the rebuilt standing still writes machineScopes, so
+      // the spread replaces the wrapper's one-site map rather than keeping it
+      seedRow(TARGET, SELF, 'admin');
+      seedRow('site-b', SELF, 'admin');
+      seedRow('site-b', 'uid-y', 'member');
+      for (const uid of [SELF, 'uid-y']) seedUser(uid);
+      mockCtx = {
+        actor: {
+          type: 'user',
+          userId: SELF,
+          role: 'member',
+          siteRoles: { [TARGET]: 'admin' },
+          swoopModes: {},
+          machineScopes: { [TARGET]: null },
+        },
+        auth: { userId: SELF, keyContext: null },
+      };
+
+      const { status, body } = await list();
+
+      expect(status).toBe(200);
+      expect(uidsOf(body)).toEqual(['uid-y']);
+      expect(mockReads).toHaveBeenCalledWith('sites/site-b/members');
     });
   });
 

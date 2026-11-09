@@ -299,7 +299,14 @@ describe('authorizedSiteHandler — happy path', () => {
     expect(res.status).toBe(200);
     expect(handler).toHaveBeenCalledTimes(1);
     const ctx = handler.mock.calls[0][1];
-    expect(ctx.actor).toEqual({ type: 'user', userId: 'uid_alice', role: 'admin', siteRoles: { ['site-a']: 'admin' } });
+    expect(ctx.actor).toEqual({
+      type: 'user',
+      userId: 'uid_alice',
+      role: 'admin',
+      siteRoles: { ['site-a']: 'admin' },
+      swoopModes: {},
+      machineScopes: { ['site-a']: null },
+    });
     expect(ctx.siteId).toBe('site-a');
     expect(typeof ctx.correlationId).toBe('string');
     expect(ctx.correlationId).toMatch(/^[0-9a-f]{22}$/);
@@ -760,7 +767,7 @@ describe.each([
 
     expect(onMachine.res.status).toBe(200);
     expect(siteWide.res.status).toBe(200);
-    expect(onMachine.handler.mock.calls[0][1].actor).not.toHaveProperty('machineScopes');
+    expect(onMachine.handler.mock.calls[0][1].actor.machineScopes).toEqual({ ['site-a']: null });
   });
 });
 

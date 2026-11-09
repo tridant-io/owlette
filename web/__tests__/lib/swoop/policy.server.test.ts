@@ -336,6 +336,7 @@ describe('swoop mode', () => {
       role: 'member',
       siteRoles: { [SITE]: siteRole },
       swoopModes: { [SITE]: mode },
+      machineScopes: { [SITE]: null },
     };
   }
 

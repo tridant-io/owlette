@@ -6,7 +6,7 @@
 import { createHash } from 'crypto';
 import { tool, jsonSchema } from 'ai';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
-import { resolveSiteAccess, standingOf, type MembershipRole } from '@/lib/sitePolicy.server';
+import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
   EXISTING_COMMAND_MAPPINGS,
@@ -37,7 +37,6 @@ import {
   type Role,
   type SystemActorName,
 } from '@/lib/capabilities';
-import type { SwoopMode } from '@/lib/swoopMode';
 import { timestampToIso } from '@/lib/firestoreTime.server';
 import {
   cancelFollowup,
@@ -402,18 +401,12 @@ export interface SiteAccessLevel {
   /** GLOBAL `users/{uid}.role`, unnormalised. Carries no site privilege. */
   role: string | null;
   /**
-   * PER-SITE standing from `sites/{siteId}/members/{uid}`, or null for none.
-   * This is what grants; `role` above does not. The same as `standing.role`.
-   */
-  siteRole: MembershipRole;
-  /** the member row's swoop mode, null when it carries none. the same as `standing.swoopMode`. */
-  swoopMode: SwoopMode | null;
-  /**
-   * the member row's whole standing: role, swoop mode and machine scope. callers
-   * building a `UserActor` pass it to `siteStanding` as it is: without it every
-   * site-scoped capability denies, and a part dropped hands back what the row
-   * takes away (control to an admin held to view, the whole site to a scoped
-   * member).
+   * the member row's whole standing: its site role (null for none), which is
+   * what grants and `role` above does not, its swoop mode and its machine
+   * scope. callers building a `UserActor` pass it to `siteStanding` as it is:
+   * without it every site-scoped capability denies, and a part dropped hands
+   * back what the row takes away (control to an admin held to view, the whole
+   * site to a scoped member).
    */
   standing: MemberStanding;
   isSuperadmin: boolean;
@@ -508,8 +501,6 @@ export async function verifyUserSiteAccess(
   // doc with no role stays `null` rather than becoming 'member'.
   return {
     role: facts.rawRole,
-    siteRole: facts.membershipRole,
-    swoopMode: facts.swoopMode,
     standing: standingOf(facts),
     isSuperadmin,
     isSiteAdmin,

@@ -109,7 +109,14 @@ const MEMBER: BuildExecutableToolsOptions = {
 /** The store context a chat-authored talon must be written with. */
 const adminStoreContext = {
   siteId: SITE,
-  actor: { type: 'user', userId: 'uid_alice', role: 'admin', siteRoles: { [SITE]: 'admin' } },
+  actor: {
+    type: 'user',
+    userId: 'uid_alice',
+    role: 'admin',
+    siteRoles: { [SITE]: 'admin' },
+    swoopModes: {},
+    machineScopes: { [SITE]: null },
+  },
   auditActor: 'cortex:user_uid_alice',
   via: 'cortex',
   chatId: CHAT,
