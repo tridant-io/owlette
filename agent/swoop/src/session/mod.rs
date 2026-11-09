@@ -126,13 +126,13 @@
 //!
 //! # Rotation
 //!
-//! Nothing in this pipeline rotates a frame — `gpu::scale` leaves the video
-//! processor's rotation off and says so, and Task 6.4 owns applying it. The
-//! browser therefore sees the **un-rotated texture**, so [`PointerSpace`] and
-//! [`OutputGeometry`] are both built with the output's real rotation and the
-//! rotation is applied in the coordinate transform instead of to the picture.
-//! On a non-rotated monitor the two choices are identical, which is exactly why
-//! it is written down here.
+//! Every frame reaches this session upright. Desktop Duplication's texture is
+//! a rotated output's framebuffer un-rotated, and capture turns it on the GPU
+//! before anything else sees it (`capture`'s own `# Rotation`); macOS hands it
+//! over upright already. The browser therefore draws the desktop as it is
+//! displayed, the source size is the desktop rect's, and [`PointerSpace`] and
+//! [`OutputGeometry`] are built with no rotation over that size: a viewer's
+//! point is that point of the desktop, on a turned panel as on any other.
 //!
 //! # Hardware test (manual, `#[ignore]`d)
 //!
@@ -1181,8 +1181,9 @@ mod host {
 
     /// Capture and input → session.
     enum FromWorker {
-        /// The duplication is open. Carries the un-rotated texture size, which
-        /// is what the encoder and the browser are sized from.
+        /// The duplication is open. Carries the frame size, the desktop as it
+        /// is displayed, which is what the encoder and the browser are sized
+        /// from.
         Opened { width: u32, height: u32 },
         /// Capture or encode could not start at all.
         Failed(Exit),
@@ -1191,7 +1192,7 @@ mod host {
         StoppedAtHost,
         Frame(Box<EncodedFrame>),
         Cursor(channel::Cursor),
-        /// The source's texture size changed under a rebuild; the session
+        /// The source's frame size changed under a rebuild; the session
         /// re-plans and re-sends [`ToCapture::Encode`].
         SourceSize { width: u32, height: u32 },
         /// Which backend the selection chain actually opened on. Sent when it
@@ -1379,7 +1380,7 @@ mod host {
             }
         };
 
-        // The texture size, which on a rotated output is not the mode's. This
+        // The frame size, a rotated output's turned upright. This
         // is also the last thing that can produce exit 12 or 13, so `ready`
         // goes out once it has arrived and **before** the room is dialled: a
         // machine whose relay is down should still tell the service what it can
@@ -1398,9 +1399,6 @@ mod host {
             }
         };
 
-        // The browser sees the un-rotated texture — nothing in this pipeline
-        // rotates a frame — so the pointer space carries the output's real
-        // rotation and applies it in the transform instead.
         let _ = ipc::emit(
             &mut io::stdout(),
             &Event::Ready {
@@ -5565,6 +5563,195 @@ mod host {
         impl Drop for Popup {
             fn drop(&mut self) {
                 let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) };
+            }
+        }
+
+        /// Every attached output that is rotated. With none, a rotation test
+        /// would pass having proved nothing, so it fails and says what is owed.
+        #[cfg(windows)]
+        fn rotated_outputs(proof: &str) -> Vec<OutputInfo> {
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
+            let rotated: Vec<OutputInfo> = outputs
+                .iter()
+                .filter(|output| output.rotation != crate::capture::Rotation::Identity)
+                .cloned()
+                .collect();
+            if rotated.is_empty() {
+                let attached: Vec<String> = outputs
+                    .iter()
+                    .map(|output| format!("{} {:?}", output.device_name, output.rotation))
+                    .collect();
+                panic!(
+                    "skipped: no rotated output is attached ({}), so {proof} is owed",
+                    attached.join(", ")
+                );
+            }
+            rotated
+        }
+
+        /// A rotated display streams upright: on every rotated output, the
+        /// frame the capture pass hands its encoder is the desktop rect's
+        /// size, and a popup at the desktop's top-left is at the frame's
+        /// top-left, painted white and then black. Leave that corner alone
+        /// while it runs.
+        ///
+        /// ```text
+        /// cd agent/swoop
+        /// cargo test -- --ignored rotat --test-threads=1 --nocapture
+        /// ```
+        ///
+        /// Expected on TEC-A4D, whose DISPLAY2 is rotate270: `swoop rotation:
+        /// \\.\DISPLAY2 Rotate270, frame 2160x3840, fed 2160x3840, the popup at
+        /// its top-left`. With no rotated output it fails with `skipped: ...`.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "paints a window on this box's rotated display and captures it"]
+        fn a_rotated_display_streams_upright() {
+            use windows::core::Interface;
+            use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+
+            use crate::capture::Duplication;
+            use crate::gpu::scale::Readback;
+
+            for output in rotated_outputs("the upright frame's proof") {
+                let rect = output.desktop_rect;
+                let (width, height) = (rect.width() as u32, rect.height() as u32);
+                let mut source = Duplication::open(&output, RebuildSignal::new())
+                    .unwrap_or_else(|e| panic!("duplicate {}: {e:#}", output.device_name));
+                let popup = Popup::open(rect.left, rect.top);
+                let mut scaler: Option<Downscaler> = None;
+                let mut fed_size = (0, 0);
+                for white in [true, false] {
+                    popup.paint(white);
+                    let deadline = Instant::now() + Duration::from_secs(3);
+                    loop {
+                        assert!(
+                            Instant::now() < deadline,
+                            "{}: the popup at the desktop's top-left never reached the frame's",
+                            output.device_name
+                        );
+                        let Some(frame) = source.next_frame(ACQUIRE_TIMEOUT_MS).expect("acquire") else {
+                            continue;
+                        };
+                        assert_eq!(
+                            (frame.width, frame.height),
+                            (width, height),
+                            "{} {:?}: the frame is not the desktop rect's size",
+                            output.device_name,
+                            output.rotation
+                        );
+                        // the capture pass's own step: a tier over h.264's
+                        // ceiling is fed through its scaler
+                        let fed = match scale::plan((width, height), crate::displays::policy::ceiling(Codec::H264)) {
+                            Plan::AsIs => frame,
+                            Plan::Downscale { width, height } => scaler
+                                .get_or_insert_with(|| Downscaler::open(&frame, width, height).expect("a scaler"))
+                                .scale(&frame)
+                                .expect("a scaled frame"),
+                            Plan::Refuse => panic!("{width}x{height} has no legal encode size"),
+                        };
+                        fed_size = (fed.width, fed.height);
+                        let raw = fed.handle as *mut std::ffi::c_void;
+                        // SAFETY: borrowed from the source or the scaler, both alive.
+                        let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("the fed texture");
+                        let device = unsafe { texture.GetDevice() }.expect("its device");
+                        // the popup's middle, where the fed frame has it
+                        let half = (Popup::SIZE / 2) as u32;
+                        let (x, y) = (half * fed.width / width, half * fed.height / height);
+                        let pixel = Readback::bgra(&device, fed.width, fed.height)
+                            .expect("a readback")
+                            .read(texture, |pixels, pitch| {
+                                let at = y as usize * pitch + x as usize * 4;
+                                [pixels[at], pixels[at + 1], pixels[at + 2]]
+                            })
+                            .expect("the fed frame's pixels");
+                        let painted = if white { pixel.iter().all(|&c| c >= 250) } else { pixel.iter().all(|&c| c <= 5) };
+                        if painted {
+                            break;
+                        }
+                    }
+                }
+                println!(
+                    "swoop rotation: {} {:?}, frame {width}x{height}, fed {}x{}, the popup at its top-left",
+                    output.device_name, output.rotation, fed_size.0, fed_size.1
+                );
+            }
+        }
+
+        /// A tap on a rotated display lands where it was tapped: a pointer move
+        /// at a viewer point, sent through the session's input thread with the
+        /// pointer space the session builds for that output, puts the system
+        /// pointer at that point of the desktop rect. The pointer is put back
+        /// where it was, pass or fail.
+        ///
+        /// Expected on TEC-A4D: `swoop rotation: \\.\DISPLAY2 Rotate270, (0.25,
+        /// 0.75) -> (-1620, 1741)` and `(0.9, 0.1) -> (-217, -754)`. With no
+        /// rotated output it fails with `skipped: ...`.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "moves the real mouse pointer on this box's rotated display"]
+        fn a_tap_on_a_rotated_display_lands_where_it_was_tapped() {
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+
+            struct PutBack(POINT);
+            impl Drop for PutBack {
+                fn drop(&mut self) {
+                    let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+                }
+            }
+
+            let outputs = rotated_outputs("the tap's proof");
+            let mut was = POINT::default();
+            unsafe { GetCursorPos(&mut was) }.expect("the pointer's position");
+            let _put_back = PutBack(was);
+
+            for output in outputs {
+                let rect = output.desktop_rect;
+                let stop = Arc::new(AtomicBool::new(false));
+                let (tx, _rx) = bounded::<FromWorker>(WORKER_QUEUE);
+                let (input_tx, input_rx) = bounded::<ToInput>(8);
+                let handle = {
+                    let stop = Arc::clone(&stop);
+                    let space = PointerSpace::from_output(&output);
+                    thread::spawn(move || input_thread(space, tx, input_rx, stop))
+                };
+                for (x, y) in [(0.25f32, 0.75f32), (0.9, 0.1)] {
+                    input_tx
+                        .send(ToInput::Inject(vec![InputEvent::MouseMove { x, y }]))
+                        .expect("the input thread is running");
+                    // the picture is the desktop as displayed, so a viewer
+                    // point is that point of the desktop rect
+                    let want = (
+                        rect.left + (f64::from(x) * f64::from(rect.width() - 1)).round() as i32,
+                        rect.top + (f64::from(y) * f64::from(rect.height() - 1)).round() as i32,
+                    );
+                    let deadline = Instant::now() + Duration::from_secs(1);
+                    let mut at = POINT::default();
+                    loop {
+                        unsafe { GetCursorPos(&mut at) }.expect("the pointer's position");
+                        // one pixel of slack: SendInput rounds through 0..65535
+                        if (at.x - want.0).abs() <= 1 && (at.y - want.1).abs() <= 1 {
+                            break;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "{} {:?}: ({x}, {y}) put the pointer at ({}, {}), not {want:?}",
+                            output.device_name,
+                            output.rotation,
+                            at.x,
+                            at.y
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    println!(
+                        "swoop rotation: {} {:?}, ({x}, {y}) -> ({}, {})",
+                        output.device_name, output.rotation, at.x, at.y
+                    );
+                }
+                stop.store(true, Ordering::Relaxed);
+                let _ = input_tx.send(ToInput::Stop);
+                let _ = handle.join();
             }
         }
 

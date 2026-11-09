@@ -18,15 +18,18 @@
 //! `DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709`), which is what every decoder
 //! defaults to for H.264/HEVC and what the encoder's media type declares.
 //!
-//! # Rotation is not this module's business
+//! # Rotation
 //!
-//! Everything here is in *texture* space. A rotated output hands back a texture
-//! transposed against its `ModeDesc` — the spike 0.8 box's rotate270 panel
-//! reports a 2160x3840 mode and produces a 3840x2160 texture — so sizes come
-//! from `Frame::width`/`Frame::height`, which capture takes from the texture
-//! description, never from a mode. The video processor's own rotation is left
-//! off: applying rotation is Task 6.4's job, and turning it on here would
-//! silently transpose the very case that is already easy to get wrong.
+//! A rotated output hands back its texture un-rotated: the spike 0.8 box's
+//! rotate270 panel reports a 2160x3840 mode and produces a 3840x2160 texture.
+//! Capture turns it upright with [`Downscaler::rotate`], the video
+//! processor's stream rotation at the same pixels (`OPTIMAL_SPEED`, since it
+//! is not a downscale), or [`rotate_bgra_cpu`] on a device whose video
+//! processor cannot rotate or that has none. Both turn it clockwise by the
+//! rotation, which is how the output displays it. Every other caller here is
+//! handed the upright frame, so the downscale and the NV12 convert never see
+//! a rotation, and sizes still come from `Frame::width`/`Frame::height`,
+//! never from a mode.
 //!
 //! # Filter: which usage each caller takes
 //!
@@ -60,13 +63,18 @@
 //! BGRA pattern by half and assert the two halves survive at the right side
 //! of the output, so a transposed or mirrored blit fails them
 //! (`gpu scale: 256x128 -> 128x64`), and convert it to NV12 at BT.709
-//! limited luma. `each_usage_prints_its_blit_time_and_its_filter` asserts
-//! nothing: for each usage it prints the p50 of 120 BGRA blits at 3840x2160
-//! -> 1920x1080 and -> 2560x1440, the p50 of 120 same-size NV12 converts at
-//! 3840x2160 and 2560x1440, and the mean and spread of 1-px black and white
-//! stripes scaled 3:1. `cpu_scale_times_a_four_k_shrink_to_720p` prints the
+//! limited luma. `the_video_processor_turns_a_rotated_frame_upright` turns a
+//! four-colour pattern each way to the CPU rotation's quadrants, then
+//! downscales and converts the upright frame.
+//! `each_usage_prints_its_blit_time_and_its_filter` asserts nothing: for each
+//! usage it prints the p50 of 120 BGRA blits at 3840x2160 -> 1920x1080 and
+//! -> 2560x1440, the p50 of 120 same-size NV12 converts at 3840x2160 and
+//! 2560x1440, and the mean and spread of 1-px black and white stripes scaled
+//! 3:1. `cpu_scale_times_a_four_k_shrink_to_720p` prints the
 //! CPU path's p50, in a release build only. Timings are worth reading only
 //! from the second command, one test at a time and nothing else on the box.
+
+use crate::capture::Rotation;
 
 /// The largest frame a backend will encode, on each axis.
 ///
@@ -217,6 +225,28 @@ pub fn scale_bgra_cpu(src: &[u8], src_pitch: usize, from: (u32, u32), to: (u32, 
     }
 }
 
+/// `src`, the `from`-sized BGRA texture of a `rotation` output with rows
+/// `src_pitch` bytes apart, turned upright into `dst`, packed at
+/// `rotation.swap_axes(from)`. An output displays its texture turned
+/// clockwise by its rotation: a rotate90 texel at `(x, y)` is shown at
+/// `(height - 1 - y, x)`, where Microsoft's duplication sample draws it.
+pub fn rotate_bgra_cpu(src: &[u8], src_pitch: usize, from: (u32, u32), rotation: Rotation, dst: &mut [u8]) {
+    let (w, h) = (from.0 as usize, from.1 as usize);
+    let width = rotation.swap_axes(from).0 as usize;
+    for (y, row) in dst.as_chunks_mut::<4>().0.chunks_exact_mut(width).enumerate() {
+        for (x, pixel) in row.iter_mut().enumerate() {
+            // the texel shown here
+            let (sx, sy) = match rotation {
+                Rotation::Identity => (x, y),
+                Rotation::Rotate90 => (y, h - 1 - x),
+                Rotation::Rotate180 => (w - 1 - x, h - 1 - y),
+                Rotation::Rotate270 => (w - 1 - y, x),
+            };
+            pixel.copy_from_slice(&src[sy * src_pitch + sx * 4..][..4]);
+        }
+    }
+}
+
 /// The source rows' weights, in 1/256: a column's sum is then at most
 /// 255 << 8, which a u16 lane holds. Their rounding can move a pixel by about
 /// a level against an exact average, which no one sees; finer weights would
@@ -302,9 +332,12 @@ mod imp {
         D3D11_BIND_SHADER_RESOURCE, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
         D3D11_MAP_READ, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
         D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-        D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+        D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
+        D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION,
         D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
+        D3D11_VIDEO_PROCESSOR_ROTATION_180, D3D11_VIDEO_PROCESSOR_ROTATION_270,
+        D3D11_VIDEO_PROCESSOR_ROTATION_90,
         D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE, D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
         D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
     };
@@ -314,6 +347,7 @@ mod imp {
         DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC,
     };
 
+    use super::Rotation;
     use crate::gpu::Frame;
     use crate::ipc::Exit;
 
@@ -342,6 +376,10 @@ mod imp {
         /// path to convert to NV12 with.
         #[error("this device has no video processor")]
         NoVideoProcessor,
+        /// Rotation is an optional video processor feature; a BGRA rotate
+        /// without it runs on the CPU instead.
+        #[error("this device's video processor cannot rotate")]
+        CannotRotate,
         #[error("{call} failed: {0}", .source)]
         D3d {
             call: &'static str,
@@ -382,10 +420,12 @@ mod imp {
     /// The video processor is used rather than a compute shader because it is
     /// the driver's own scaler — better than a bilinear tap at the 2x-and-worse
     /// factors a Mosaic canvas needs — and because it converts to NV12 in the
-    /// same blit ([`Downscaler::open_nv12`]). A device with no video processor
-    /// — WARP, on a virtual machine or a box with no GPU — still downscales
-    /// BGRA, through [`Readback`] and [`super::scale_bgra_cpu`]; it has no NV12
-    /// output, which the software encoder converts for itself.
+    /// same blit ([`Downscaler::open_nv12`]) and turns a rotated output's
+    /// texture upright ([`Downscaler::rotate`]). A device with no video
+    /// processor — WARP, on a virtual machine or a box with no GPU — still
+    /// downscales and turns BGRA, through [`Readback`],
+    /// [`super::scale_bgra_cpu`] and [`super::rotate_bgra_cpu`]; it has no
+    /// NV12 output, which the software encoder converts for itself.
     pub struct Downscaler {
         device: ID3D11Device,
         engine: Engine,
@@ -396,7 +436,11 @@ mod imp {
 
     enum Engine {
         Video(VideoPath),
-        Cpu { readback: Readback, scaled: Vec<u8> },
+        Cpu {
+            readback: Readback,
+            scaled: Vec<u8>,
+            rotation: Rotation,
+        },
     }
 
     struct VideoPath {
@@ -429,6 +473,23 @@ mod imp {
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
                 DOWNSCALE_USAGE,
+                Rotation::Identity,
+            )
+        }
+
+        /// Open a scaler that turns a `rotation` output's `frame` upright, as
+        /// BGRA at the size the output is displayed. The same pixels moved,
+        /// not a downscale, so it takes `OPTIMAL_SPEED` as the convert does.
+        pub fn rotate(frame: &Frame, rotation: Rotation) -> Result<Self, ScaleError> {
+            let (width, height) = rotation.swap_axes((frame.width, frame.height));
+            Self::open_as(
+                frame,
+                width,
+                height,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+                D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+                rotation,
             )
         }
 
@@ -446,10 +507,13 @@ mod imp {
                 DXGI_FORMAT_NV12,
                 DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
                 D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+                Rotation::Identity,
             )
         }
 
-        /// Module-private so the hardware test can open either usage.
+        /// Module-private so the hardware test can open either usage. Only
+        /// [`Downscaler::rotate`] passes a `rotation`, with the size turned
+        /// and nothing scaled, which is all the CPU path turns.
         pub(super) fn open_as(
             frame: &Frame,
             width: u32,
@@ -457,13 +521,14 @@ mod imp {
             format: DXGI_FORMAT,
             color_space: DXGI_COLOR_SPACE_TYPE,
             usage: D3D11_VIDEO_USAGE,
+            rotation: Rotation,
         ) -> Result<Self, ScaleError> {
             let raw = frame.handle as *mut c_void;
             let texture = texture_of(&raw)?;
             let device = unsafe { texture.GetDevice() }.map_err(d3d("GetDevice"))?;
             let output = create_output(&device, width, height, format)?;
-            let engine = match device.cast::<ID3D11VideoDevice>() {
-                Ok(video_device) => Engine::Video(VideoPath::open(
+            let video = match device.cast::<ID3D11VideoDevice>() {
+                Ok(video_device) => VideoPath::open(
                     &device,
                     video_device,
                     &output,
@@ -471,15 +536,23 @@ mod imp {
                     (width, height),
                     color_space,
                     usage,
-                )?),
-                Err(_) if format == DXGI_FORMAT_B8G8R8A8_UNORM => {
-                    ::log::info!("swoop: this device has no video processor; downscaling on the cpu");
+                )
+                .and_then(|video| video.rotate(rotation).map(|()| video)),
+                Err(_) => Err(ScaleError::NoVideoProcessor),
+            };
+            let engine = match video {
+                Ok(video) => Engine::Video(video),
+                Err(why @ (ScaleError::NoVideoProcessor | ScaleError::CannotRotate))
+                    if format == DXGI_FORMAT_B8G8R8A8_UNORM =>
+                {
+                    ::log::info!("swoop: {why}; this runs on the cpu");
                     Engine::Cpu {
                         readback: Readback::bgra(&device, frame.width, frame.height)?,
                         scaled: vec![0; width as usize * height as usize * 4],
+                        rotation,
                     }
                 }
-                Err(_) => return Err(ScaleError::NoVideoProcessor),
+                Err(e) => return Err(e),
             };
             Ok(Self {
                 device,
@@ -516,10 +589,15 @@ mod imp {
 
             match &mut self.engine {
                 Engine::Video(video) => video.blt(texture, frame.handle)?,
-                Engine::Cpu { readback, scaled } => {
-                    let (source, target) = (self.source, self.target);
-                    readback.read(texture, |pixels, pitch| {
-                        super::scale_bgra_cpu(pixels, pitch, source, target, scaled)
+                Engine::Cpu {
+                    readback,
+                    scaled,
+                    rotation,
+                } => {
+                    let (source, target, rotation) = (self.source, self.target, *rotation);
+                    readback.read(texture, |pixels, pitch| match rotation {
+                        Rotation::Identity => super::scale_bgra_cpu(pixels, pitch, source, target, scaled),
+                        rotation => super::rotate_bgra_cpu(pixels, pitch, source, rotation, scaled),
                     })?;
                     // SAFETY: `scaled` is the output's whole subresource,
                     // rows packed at its width.
@@ -636,6 +714,30 @@ mod imp {
                 output_view,
                 input_view: None,
             })
+        }
+
+        /// Turn the stream by `rotation` on every blit, clockwise, as the
+        /// output displays its texture. The destination rect is already the
+        /// turned size. Rotation is an optional video processor feature, so
+        /// it is asked for first.
+        fn rotate(&self, rotation: Rotation) -> Result<(), ScaleError> {
+            let turn = match rotation {
+                Rotation::Identity => return Ok(()),
+                Rotation::Rotate90 => D3D11_VIDEO_PROCESSOR_ROTATION_90,
+                Rotation::Rotate180 => D3D11_VIDEO_PROCESSOR_ROTATION_180,
+                Rotation::Rotate270 => D3D11_VIDEO_PROCESSOR_ROTATION_270,
+            };
+            let mut caps = D3D11_VIDEO_PROCESSOR_CAPS::default();
+            unsafe { self.enumerator.GetVideoProcessorCaps(&mut caps) }
+                .map_err(d3d("GetVideoProcessorCaps"))?;
+            if caps.FeatureCaps & D3D11_VIDEO_PROCESSOR_FEATURE_CAPS_ROTATION.0 as u32 == 0 {
+                return Err(ScaleError::CannotRotate);
+            }
+            unsafe {
+                self.video
+                    .VideoProcessorSetStreamRotation(&self.processor, 0, true, turn)
+            };
+            Ok(())
         }
 
         /// One `VideoProcessorBlt` of `texture` into the output.
@@ -1079,6 +1181,32 @@ mod tests {
         }
     }
 
+    /// A 3x2 picture whose every pixel is its own, turned each way, with its
+    /// rows padded as a mapped surface pads them. A rotated output displays
+    /// its texture turned clockwise by the rotation.
+    #[test]
+    fn the_cpu_rotation_turns_a_texture_into_the_displayed_picture() {
+        let pixel = |n: u8| [n, n, n, 255];
+        let (a, b, c, d, e, f) = (pixel(1), pixel(2), pixel(3), pixel(4), pixel(5), pixel(6));
+        let pad = 8;
+        let mut src = Vec::new();
+        for row in [[a, b, c], [d, e, f]] {
+            src.extend(row.concat());
+            src.extend(std::iter::repeat_n(0xee, pad));
+        }
+        let turned = |rotation| {
+            let mut out = vec![0u8; 3 * 2 * 4];
+            rotate_bgra_cpu(&src, 3 * 4 + pad, (3, 2), rotation, &mut out);
+            out
+        };
+        assert_eq!(turned(Rotation::Identity), [a, b, c, d, e, f].concat());
+        // 2x3: the left column, bottom up, is the top row
+        assert_eq!(turned(Rotation::Rotate90), [d, a, e, b, f, c].concat());
+        assert_eq!(turned(Rotation::Rotate180), [f, e, d, c, b, a].concat());
+        // 2x3: the right column, top down, is the top row
+        assert_eq!(turned(Rotation::Rotate270), [c, f, b, e, a, d].concat());
+    }
+
     /// The CPU path's cost on a 4K desktop at mf-sw's 720p cap; task 4.1
     /// holds its p50 to 10 ms. A debug build's time means nothing, so it
     /// times only with `--release`.
@@ -1129,7 +1257,8 @@ mod gpu_tests {
         DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC,
     };
 
-    use super::Downscaler;
+    use super::{bgra_to_nv12_cpu, rotate_bgra_cpu, Downscaler};
+    use crate::capture::Rotation;
     use crate::gpu::Frame;
 
     const SRC: (u32, u32) = (256, 128);
@@ -1345,6 +1474,118 @@ mod gpu_tests {
         assert_eq!(at(112, 32), (0, 0, 255), "right half stays red");
     }
 
+    /// `width`x`height` BGRA in four quadrants: red top-left, green top-right,
+    /// blue bottom-left, white bottom-right, so any turn or mirror moves one.
+    fn quadrants((width, height): (u32, u32)) -> Vec<u8> {
+        let mut pixels: Vec<u8> = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(match (x < width / 2, y < height / 2) {
+                    (true, true) => &[0, 0, 255, 255],
+                    (false, true) => &[0, 255, 0, 255],
+                    (true, false) => &[255, 0, 0, 255],
+                    (false, false) => &[255, 255, 255, 255],
+                });
+            }
+        }
+        pixels
+    }
+
+    /// The middle of each quadrant of a `width`x`height` picture: far from
+    /// the edges between them, where a filter blends.
+    fn middles((width, height): (u32, u32)) -> [(u32, u32); 4] {
+        let (x, y) = (width / 4, height / 4);
+        [(x, y), (3 * x, y), (x, 3 * y), (3 * x, 3 * y)]
+    }
+
+    /// The `bytes`-wide pixel at `(x, y)` of a packed `width`-wide picture.
+    fn at(pixels: &[u8], width: u32, bytes: u32, (x, y): (u32, u32)) -> &[u8] {
+        let i = ((y * width + x) * bytes) as usize;
+        &pixels[i..i + bytes as usize]
+    }
+
+    /// [`readback`] of a frame's texture, which whoever made the frame still
+    /// holds.
+    fn pixels_of(device: &ID3D11Device, frame: &Frame) -> Vec<u8> {
+        let raw = frame.handle as *mut std::ffi::c_void;
+        // SAFETY: borrowed from the frame's maker, which is still alive.
+        let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("the frame's texture");
+        readback(device, texture)
+    }
+
+    /// Turn a four-colour `size` picture on `device` each way, and hand
+    /// `check` each upright frame with the CPU rotation's pixels for it. Each
+    /// is the displayed size, and the downscale a tier runs after it keeps
+    /// every quadrant where the upright picture has it.
+    fn each_turn(device: &ID3D11Device, size: (u32, u32), mut check: impl FnMut(Rotation, &Frame, &[u8])) {
+        let pixels = quadrants(size);
+        let source = texture(device, size, &pixels);
+        let frame = Frame {
+            handle: source.as_raw() as usize,
+            width: size.0,
+            height: size.1,
+            captured_qpc: 1234,
+        };
+        for rotation in [Rotation::Rotate90, Rotation::Rotate180, Rotation::Rotate270] {
+            let shown = rotation.swap_axes(size);
+            let mut upright = Downscaler::rotate(&frame, rotation).expect("a rotation");
+            assert_eq!(upright.target(), shown, "{rotation:?}");
+            let turned = upright.scale(&frame).expect("an upright frame");
+            assert_eq!((turned.width, turned.height), shown, "{rotation:?}");
+            assert_eq!(turned.captured_qpc, frame.captured_qpc);
+            let mut want = vec![0u8; pixels.len()];
+            rotate_bgra_cpu(&pixels, size.0 as usize * 4, size, rotation, &mut want);
+            check(rotation, &turned, &want);
+
+            let half = (shown.0 / 2, shown.1 / 2);
+            let mut scaler = Downscaler::open(&turned, half.0, half.1).expect("a downscaler");
+            let small = pixels_of(device, &scaler.scale(&turned).expect("a downscaled frame"));
+            for (x, y) in middles(half) {
+                assert_eq!(
+                    at(&small, half.0, 4, (x, y)),
+                    at(&want, shown.0, 4, (2 * x, 2 * y)),
+                    "{rotation:?} downscaled at ({x}, {y})"
+                );
+            }
+        }
+    }
+
+    /// WARP has no video processor, so a rotated output's frame is turned
+    /// upright on the CPU, to exactly the CPU rotation's pixels, and the area
+    /// average takes it from there. No GPU needed, so not ignored.
+    #[test]
+    fn warp_turns_a_rotated_frame_upright_on_the_cpu() {
+        let device = device_of(D3D_DRIVER_TYPE_WARP);
+        each_turn(&device, (64, 32), |rotation, turned, want| {
+            assert_eq!(pixels_of(&device, turned), want, "{rotation:?}");
+        });
+    }
+
+    /// The video processor turns a rotated output's frame upright as the CPU
+    /// rotation does, and the downscale a tier runs and the NV12 convert
+    /// mf-hw runs after it both see the upright picture.
+    #[test]
+    #[ignore = "needs a gpu"]
+    fn the_video_processor_turns_a_rotated_frame_upright() {
+        let device = device();
+        each_turn(&device, SRC, |rotation, turned, want| {
+            let shown = (turned.width, turned.height);
+            let got = pixels_of(&device, turned);
+            for point in middles(shown) {
+                assert_eq!(at(&got, shown.0, 4, point), at(want, shown.0, 4, point), "{rotation:?} at {point:?}");
+            }
+
+            let mut convert = Downscaler::open_nv12(turned, shown.0, shown.1).expect("an nv12 convert");
+            let luma = pixels_of(&device, &convert.scale(turned).expect("a converted frame"));
+            let mut levels = vec![0u8; want.len() * 3 / 8];
+            bgra_to_nv12_cpu(want, shown.0 as usize * 4, shown, &mut levels);
+            for point in middles(shown) {
+                let (got, want) = (at(&luma, shown.0, 1, point)[0], at(&levels, shown.0, 1, point)[0]);
+                assert!(got.abs_diff(want) <= 3, "{rotation:?} luma at {point:?} is {got}, not {want}");
+            }
+        });
+    }
+
     /// A scaler as [`Downscaler::open`] makes it, or a convert as
     /// [`Downscaler::open_nv12`] does, but at `usage`.
     fn open_at(frame: &Frame, to: (u32, u32), nv12: bool, usage: D3D11_VIDEO_USAGE) -> Downscaler {
@@ -1353,7 +1594,8 @@ mod gpu_tests {
         } else {
             (DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
         };
-        Downscaler::open_as(frame, to.0, to.1, format, color_space, usage).expect("a scaler")
+        Downscaler::open_as(frame, to.0, to.1, format, color_space, usage, Rotation::Identity)
+            .expect("a scaler")
     }
 
     /// The p50 of 120 blits, each from its submit until the GPU signals it
