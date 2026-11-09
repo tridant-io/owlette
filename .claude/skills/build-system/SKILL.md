@@ -181,6 +181,7 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # Prints each finalize response, then the `files` keys on /api/installer/latest; a
 # failure stops the run and names what is left.
 # Notes default to the version's `## [X.Y.Z]` changelog section (--notes overrides).
+# Notes that went out stale are corrected with --notes-only (no files), never by re-uploading.
 # With installer R2 set on the server the files land on download(-staging).tridant.io/owlette/,
 # immutable (409 installer_published on a re-upload: bump the version); without it,
 # Firebase Storage. --set-latest also registers the release with tridant id and prints a

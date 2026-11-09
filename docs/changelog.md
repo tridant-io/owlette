@@ -33,6 +33,14 @@ a rule under it and an x to clear it. Hoot's conversation search is an enclosed
 field with the same magnifier and x, and focusing it tints its border rather
 than lighting it up. Nothing to update on the machine.
 
+### added — a release's notes can be corrected
+
+`PATCH /api/installer/{version}` changes a published version's release notes,
+on the version and on the latest release when it is that one, and
+`scripts/upload-installer.mjs --notes-only` sends the version's changelog
+section through it. The installer files never change. Nothing to update on the
+machine.
+
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site
 

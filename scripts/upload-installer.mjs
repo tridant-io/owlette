@@ -8,11 +8,16 @@
  *
  * Usage:
  *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…
+ *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] --notes-only
  *
  *   <file>   Owlette-Installer-vX.Y.Z.exe | .pkg | .deb — the platform is the
  *            extension (windows_x64 / macos_arm64 / linux_x64), one file each.
  *   --notes  the release notes; without it, the version's `## [X.Y.Z]` section of
  *            docs/changelog.md. They are what tridant id shows for the release.
+ *   --notes-only   sends no files: replaces a published version's release notes
+ *                  (PATCH /api/installer/{version}), on the latest pointer too when
+ *                  it is that version, and syncs it with tridant id again. Notes
+ *                  that went out stale are corrected this way, never by re-uploading.
  *   --set-latest   promotes the version once the LAST file has finalized, so the
  *                  latest pointer carries every entry rather than the first one,
  *                  and registers it with tridant id.
@@ -46,14 +51,15 @@ const EXTENSIONS = Object.keys(PLATFORM_BY_EXT).join(', ');
 function usage(message) {
   console.error(`error: ${message}\n`);
   console.error(
-    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…',
+    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…\n' +
+      '       node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] --notes-only',
   );
   process.exit(1);
 }
 
 // --- arguments ----------------------------------------------------------------
 const args = process.argv.slice(2);
-const options = { env: undefined, version: undefined, notes: undefined, setLatest: false, keyTag: '', allowUnsigned: false };
+const options = { env: undefined, version: undefined, notes: undefined, notesOnly: false, setLatest: false, keyTag: '', allowUnsigned: false };
 const paths = [];
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
@@ -72,16 +78,18 @@ for (let i = 0; i < args.length; i += 1) {
   if (name === 'env') options.env = value();
   else if (name === 'version') options.version = value();
   else if (name === 'notes') options.notes = value();
+  else if (name === 'notes-only') options.notesOnly = true;
   else if (name === 'set-latest') options.setLatest = true;
   else if (name === 'key-tag') options.keyTag = value();
   else if (name === 'allow-unsigned') options.allowUnsigned = true;
   else usage(`unknown option --${name}`);
 }
 
-const { env, version, setLatest, keyTag } = options;
+const { env, version, notesOnly, setLatest, keyTag } = options;
 if (env !== 'dev' && env !== 'prod') usage('--env must be dev or prod');
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) usage('--version must be X.Y.Z');
-if (paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
+if (notesOnly && paths.length > 0) usage('--notes-only takes no files');
+if (!notesOnly && paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
 if (!/^[a-z0-9-]*$/.test(keyTag)) usage('--key-tag may hold only a-z, 0-9 and -');
 
 /** The body of the version's `## [X.Y.Z]` section, without its heading. */
@@ -235,6 +243,12 @@ function putBytes(url, path, size) {
   });
 }
 
+function printTridant(result) {
+  if (!result.tridant) return;
+  const { status, error } = result.tridant;
+  console.log(`tridant id: ${status}${error ? ` (${error})` : ''}`);
+}
+
 // --- the upload -------------------------------------------------------------------
 async function uploadOne(target, promote) {
   const { path, fileName, platform, size } = target;
@@ -254,21 +268,29 @@ async function uploadOne(target, promote) {
   });
   console.log(`  finalized${promote ? ' and promoted to latest' : ''}:`);
   console.log(JSON.stringify(finalized, null, 2));
-  if (finalized.tridant) {
-    const { status, error } = finalized.tridant;
-    console.log(`tridant id: ${status}${error ? ` (${error})` : ''}`);
-  }
+  printTridant(finalized);
+}
+
+async function correctNotes() {
+  const updated = await api('PATCH', `/api/installer/${version}`, { body: { releaseNotes: notes } });
+  console.log(`release notes set on v${version}${updated.latest ? ' and on latest' : ''}:`);
+  console.log(JSON.stringify(updated, null, 2));
+  printTridant(updated);
 }
 
 let done = 0;
 try {
-  for (const [index, target] of targets.entries()) {
-    await uploadOne(target, setLatest && index === targets.length - 1);
-    done += 1;
+  if (notesOnly) {
+    await correctNotes();
+  } else {
+    for (const [index, target] of targets.entries()) {
+      await uploadOne(target, setLatest && index === targets.length - 1);
+      done += 1;
+    }
+    const latest = await api('GET', '/api/installer/latest');
+    const files = latest?.files && typeof latest.files === 'object' ? Object.keys(latest.files) : [];
+    console.log(`latest: v${latest?.version ?? '?'}  files: ${files.join(', ') || '(none)'}`);
   }
-  const latest = await api('GET', '/api/installer/latest');
-  const files = latest?.files && typeof latest.files === 'object' ? Object.keys(latest.files) : [];
-  console.log(`latest: v${latest?.version ?? '?'}  files: ${files.join(', ') || '(none)'}`);
 } catch (error) {
   console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
   const left = targets.slice(done).map((target) => target.fileName);
