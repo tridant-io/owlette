@@ -3,11 +3,11 @@
  * @jest-environment jsdom
  *
  * SiteMembersSection, a site's members section: the table of members with
- * their site role and effective swoop, the row menus (change access on rows
- * other than your own and the owner's, remove on every row but the owner's),
- * removal with talon successors from the site's own owners and admins, the
- * owner refusal matched by its code, and the add and change access dialogs
- * mounted only while open.
+ * their site role, effective swoop and machine scope, the row menus (change
+ * access on rows other than your own and the owner's, remove on every row but
+ * the owner's), removal with talon successors from the site's own owners and
+ * admins, the owner refusal matched by its code, and the add and change access
+ * dialogs mounted only while open, with the site's machines.
  */
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -15,6 +15,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
 import type { AddMemberDialog } from '@/components/admin/sites/AddMemberDialog';
 import type { ChangeAccessDialog } from '@/components/admin/sites/ChangeAccessDialog';
+import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import {
   SiteMemberApiError,
   useSiteMembers,
@@ -42,6 +43,8 @@ jest.mock('@/hooks/useSiteMembers', () => ({
 jest.mock('@/hooks/useTalonReassign', () => ({ useTalonReassign: jest.fn() }));
 
 jest.mock('@/hooks/useSwoopSettings', () => ({ useSwoopSettings: jest.fn() }));
+
+jest.mock('@/hooks/useSiteMachines', () => ({ useSiteMachines: jest.fn() }));
 
 type AddDialogProps = Parameters<typeof AddMemberDialog>[0];
 type AccessDialogProps = Parameters<typeof ChangeAccessDialog>[0];
@@ -78,20 +81,41 @@ window.HTMLElement.prototype.scrollIntoView = jest.fn();
 type User = ReturnType<typeof userEvent.setup>;
 
 function member(uid: string, overrides: Partial<SiteMember>): SiteMember {
-  return { uid, email: null, displayName: null, role: 'member', globalRole: 'user', swoop: null, ...overrides };
+  return {
+    uid,
+    email: null,
+    displayName: null,
+    role: 'member',
+    globalRole: 'user',
+    swoop: null,
+    machineIds: null,
+    ...overrides,
+  };
 }
+
+function machine(id: string, name: string): SiteMachine {
+  return { id, name, online: true, lastHeartbeat: null, agentVersion: null };
+}
+
+const MACHINES = [machine('IN', 'lobby wall'), machine('IN2', 'kiosk')];
 
 const OLIVE = member('u-olive', { email: 'olive@example.com', displayName: 'olive park', role: 'owner' });
 // the signed-in admin
 const ME = member('me', { email: 'me@example.com', role: 'admin' });
 // an admin held to watch
 const ADA = member('u-ada', { email: 'ada@example.com', displayName: 'ada lin', role: 'admin', swoop: 'view' });
-// a member by role
-const KIM = member('u-kim', { email: 'kim@example.com', displayName: 'kim ortiz' });
-// a member set to control, whose account role is admin: a grant elsewhere that is nothing here
-const MAX = member('u-max', { displayName: 'max reyes', globalRole: 'admin', swoop: 'control' });
-// no email and no name on file
-const GHOST = member('u-ghost', {});
+// a member by role, limited to one machine
+const KIM = member('u-kim', { email: 'kim@example.com', displayName: 'kim ortiz', machineIds: ['IN'] });
+// a member set to control, whose account role is admin: a grant elsewhere that is nothing here. one of
+// their two machines has left the site
+const MAX = member('u-max', {
+  displayName: 'max reyes',
+  globalRole: 'admin',
+  swoop: 'control',
+  machineIds: ['IN2', 'gone'],
+});
+// no email and no name on file, and every machine they had has gone
+const GHOST = member('u-ghost', { machineIds: [] });
 
 const MEMBERS = [OLIVE, ME, ADA, KIM, MAX, GHOST];
 
@@ -122,6 +146,7 @@ beforeEach(() => {
     reassignSiteTalons: jest.fn(),
   });
   watching(true);
+  jest.mocked(useSiteMachines).mockReturnValue({ machines: MACHINES, error: null, refresh: jest.fn() });
 });
 
 function watching(membersMayWatch: boolean) {
@@ -148,7 +173,7 @@ function rowOf(text: string): HTMLElement {
   return row;
 }
 
-function cellOf(text: string, column: 'member' | 'role' | 'swoop' | 'actions'): HTMLElement {
+function cellOf(text: string, column: 'member' | 'role' | 'swoop' | 'access' | 'actions'): HTMLElement {
   const index = screen.getAllByRole('columnheader').findIndex((header) => header.textContent === column);
   return within(rowOf(text)).getAllByRole('cell')[index];
 }
@@ -171,14 +196,16 @@ describe('the frame and the table', () => {
     renderSection();
 
     expect(screen.getByRole('region', { name: 'members' })).toHaveTextContent(
-      'the people who can reach this site, their role and their swoop.',
+      'the people who can reach this site, their role, their swoop and their access.',
     );
     expect(useSiteMembers).toHaveBeenCalledWith('elm-gate');
     expect(useSwoopSettings).toHaveBeenCalledWith('elm-gate');
+    expect(useSiteMachines).toHaveBeenCalledWith('elm-gate');
     expect(screen.getAllByRole('columnheader').map((header) => header.textContent)).toEqual([
       'member',
       'role',
       'swoop',
+      'access',
       'actions',
     ]);
   });
@@ -235,7 +262,7 @@ describe('the swoop column', () => {
   it('says a member by role watches, marked by role', () => {
     renderSection();
 
-    expect(cellOf('kim ortiz', 'swoop')).toHaveTextContent(/^watch · by role$/);
+    expect(cellOf('kim ortiz', 'swoop')).toHaveTextContent(/^watch · by role · 1 machine$/);
     expect(within(cellOf('kim ortiz', 'swoop')).getByText('· by role')).toHaveClass('text-muted-foreground');
   });
 
@@ -243,28 +270,82 @@ describe('the swoop column', () => {
     watching(false);
     renderSection();
 
-    expect(cellOf('kim ortiz', 'swoop')).toHaveTextContent(/^no swoop · by role$/);
+    expect(cellOf('kim ortiz', 'swoop')).toHaveTextContent(/^no swoop · by role · 1 machine$/);
   });
 
   it('shows an explicit mode as itself: control on a member, watch on an admin held to view', () => {
     watching(false);
     renderSection();
 
-    expect(cellOf('max reyes', 'swoop')).toHaveTextContent(/^control$/);
-    expect(cellOf('ada lin', 'swoop')).toHaveTextContent(/^watch$/);
+    expect(cellOf('max reyes', 'swoop')).toHaveTextContent(/^control · 2 machines$/);
+    expect(cellOf('ada lin', 'swoop')).toHaveTextContent(/^watch · whole site$/);
   });
 
   it('says an admin by role controls', () => {
     renderSection();
 
-    expect(cellOf('me@example.com', 'swoop')).toHaveTextContent(/^control · by role$/);
+    expect(cellOf('me@example.com', 'swoop')).toHaveTextContent(/^control · by role · whole site$/);
   });
 
   it("reads control on the owner's row and nothing more", () => {
     watching(false);
     renderSection();
 
-    expect(cellOf('olive park', 'swoop')).toHaveTextContent(/^control$/);
+    expect(cellOf('olive park', 'swoop')).toHaveTextContent(/^control · whole site$/);
+  });
+});
+
+describe('the access column', () => {
+  it('reads whole site, a count of machines, or no machines', () => {
+    renderSection();
+
+    expect(cellOf('olive park', 'access')).toHaveTextContent(/^whole site$/);
+    expect(cellOf('ada lin', 'access')).toHaveTextContent(/^whole site$/);
+    expect(cellOf('kim ortiz', 'access')).toHaveTextContent(/^1 machine$/);
+    expect(cellOf('max reyes', 'access')).toHaveTextContent(/^2 machines$/);
+    expect(cellOf('no email on file', 'access')).toHaveTextContent(/^no machines$/);
+  });
+
+  it('shows from md up, and below md rides the role line after the swoop', () => {
+    renderSection();
+
+    expect(cellOf('kim ortiz', 'access')).toHaveClass('hidden', 'md:table-cell');
+    expect(within(cellOf('kim ortiz', 'swoop')).getByText('· 1 machine')).toHaveClass('md:hidden');
+  });
+
+  it("lists a scoped row's machines by name in a tooltip, and an id the site no longer has as the id", async () => {
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SiteMembersSection siteId="elm-gate" />
+      </TooltipProvider>,
+    );
+
+    await userEvent.hover(within(cellOf('max reyes', 'access')).getByText('2 machines'));
+
+    const tooltip = await screen.findByRole('tooltip');
+    expect(within(tooltip).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['kiosk', 'gone']);
+  });
+
+  it('names a scope by its ids until the machines load', async () => {
+    jest.mocked(useSiteMachines).mockReturnValue({ machines: null, error: null, refresh: jest.fn() });
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SiteMembersSection siteId="elm-gate" />
+      </TooltipProvider>,
+    );
+
+    await userEvent.hover(within(cellOf('kim ortiz', 'access')).getByText('1 machine'));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('IN');
+  });
+
+  it('gives the whole site and no machines no tooltip', () => {
+    renderSection();
+
+    // a tooltip trigger carries radix's data-state
+    expect(within(cellOf('kim ortiz', 'access')).getByText('1 machine')).toHaveAttribute('data-state');
+    expect(within(cellOf('ada lin', 'access')).getByText('whole site')).not.toHaveAttribute('data-state');
+    expect(within(cellOf('no email on file', 'access')).getByText('no machines')).not.toHaveAttribute('data-state');
   });
 });
 
@@ -317,7 +398,12 @@ describe('adding and changing access', () => {
     await user.click(screen.getByRole('button', { name: 'add member' }));
 
     expect(screen.getByRole('dialog', { name: 'add member' })).toBeInTheDocument();
-    expect(mockAddDialog).toMatchObject({ siteId: 'elm-gate', membersMayWatch: false, addMember: hook.addMember });
+    expect(mockAddDialog).toMatchObject({
+      siteId: 'elm-gate',
+      membersMayWatch: false,
+      machines: MACHINES,
+      addMember: hook.addMember,
+    });
 
     act(() => mockAddDialog?.onOpenChange(false));
     expect(screen.queryByRole('dialog', { name: 'add member' })).toBeNull();
@@ -332,10 +418,28 @@ describe('adding and changing access', () => {
     await user.click(screen.getByRole('menuitem', { name: 'change access...' }));
 
     expect(screen.getByRole('dialog', { name: 'change access' })).toBeInTheDocument();
-    expect(mockAccessDialog).toMatchObject({ member: KIM, membersMayWatch: true, updateMember: hook.updateMember });
+    expect(mockAccessDialog).toMatchObject({
+      siteId: 'elm-gate',
+      member: KIM,
+      membersMayWatch: true,
+      machines: MACHINES,
+      updateMember: hook.updateMember,
+    });
 
     act(() => mockAccessDialog?.onOpenChange(false));
     expect(screen.queryByRole('dialog', { name: 'change access' })).toBeNull();
+  });
+
+  it('hands both dialogs no machines while the machines load', async () => {
+    jest.mocked(useSiteMachines).mockReturnValue({ machines: null, error: null, refresh: jest.fn() });
+    const user = renderSection();
+
+    await user.click(screen.getByRole('button', { name: 'add member' }));
+    expect(mockAddDialog?.machines).toEqual([]);
+
+    await openMenu(user, 'kim@example.com');
+    await user.click(screen.getByRole('menuitem', { name: 'change access...' }));
+    expect(mockAccessDialog?.machines).toEqual([]);
   });
 });
 
