@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 22/55 complete
+**Progress**: 32/57 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -860,7 +860,7 @@ House rules for every task:
 
 ## Wave 6: routes and route suites
 
-- [ ] **Task 6.1: Machine routes on the `_shared` gates check scope, and an inventory keeps it so**
+- [x] **Task 6.1: Machine routes on the `_shared` gates check scope, and an inventory keeps it so**
   - Files:
     - `web/app/api/sites/[siteId]/machines/route.ts`, `web/app/api/sites/[siteId]/machines/[machineId]/route.ts` (GET only)
     - `web/app/api/sites/[siteId]/machines/[machineId]/deployments/route.ts`, `web/app/api/sites/[siteId]/machines/[machineId]/swoop/step-up/route.ts` (GET only)
@@ -884,7 +884,7 @@ House rules for every task:
       - the inventory passes on today's tree, and fails on a fixture string that calls `requireSiteAuthAndScope(` (test the matcher itself).
   - Done when: these suites and all of `__tests__/api` are green.
 
-- [ ] **Task 6.2: Site logs and the site document for scoped callers**
+- [x] **Task 6.2: Site logs and the site document for scoped callers**
   - Files: `web/app/api/sites/[siteId]/logs/route.ts`, `web/app/api/sites/[siteId]/logs/[logId]/route.ts`, `web/app/api/sites/[siteId]/route.ts` (GET only), `web/__tests__/api/site-logs.test.ts`, `web/__tests__/api/sites.test.ts`
   - Depends on: 5.2
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -905,7 +905,7 @@ House rules for every task:
       - whole site is unchanged.
   - Done when: these suites are green.
 
-- [ ] **Task 6.3: The members API reads and writes machine scope beside the swoop mode**
+- [x] **Task 6.3: The members API reads and writes machine scope beside the swoop mode**
   - Files: `web/app/api/sites/[siteId]/members/route.ts`, `web/app/api/sites/[siteId]/members/[uid]/route.ts`, `web/__tests__/api/sites-members.test.ts`, `web/__tests__/lib/actions/transferSiteOwnership.test.ts`
   - Depends on: 4.2, 5.1, 5.4
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Build on release 2's handlers: the `swoop` field, the in-handler SITE_MEMBER_MANAGE re-checks and `updateMember`. Change only what machine scope needs.
@@ -962,7 +962,7 @@ House rules for every task:
       - transferSiteOwnership.test.ts: a scoped successor's member row is written WITHOUT machineIds or swoop, because an owner is whole site and always controls. The existing `tx.set` (transferSiteOwnership.server.ts:140-146) already does this; the test pins it.
   - Done when: these suites and `__tests__/api/membershipEscalation.test.ts` are green, and tsc and eslint are clean.
 
-- [ ] **Task 6.4: hoot routes refuse machines outside scope**
+- [x] **Task 6.4: hoot routes refuse machines outside scope**
   - Files: `web/app/api/hoot/cancel-tool/route.ts`, `web/app/api/hoot/provision-key/route.ts`, `web/app/api/hoot/conversations/route.ts`, `web/app/api/chat/new/route.ts`, `web/__tests__/api/hoot-cancel-tool.test.ts`, `web/__tests__/api/hoot-provision-key.test.ts`, `web/__tests__/api/chat.test.ts`
   - Depends on: 5.2, 5.3
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -982,7 +982,7 @@ House rules for every task:
       - whole site is unchanged.
   - Done when: these suites are green.
 
-- [ ] **Task 6.5: Talons whose author is limited to some machines stop**
+- [x] **Task 6.5: Talons whose author is limited to some machines stop**
   - Files: `web/lib/talons/author.server.ts`, `web/__tests__/lib/talons/author.test.ts`
   - Depends on: 5.3
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -995,7 +995,7 @@ House rules for every task:
       - a whole-site author is unchanged.
   - Done when: `__tests__/lib/talons` is green, and tsc and eslint are clean.
 
-- [ ] **Task 6.6: swoop and site-wide route suites prove the scope with the real wrapper**
+- [x] **Task 6.6: swoop and site-wide route suites prove the scope with the real wrapper**
   - Files:
     - `web/__tests__/api/swoop/sessions.test.ts`, `web/__tests__/api/swoop/site-sessions.test.ts`, `web/__tests__/api/swoop/settings-and-kill.test.ts`, `web/__tests__/api/swoop/lease.test.ts`
     - `web/__tests__/api/display-settings.test.ts`, `web/__tests__/api/site-audit-log.test.ts`, `web/__tests__/api/quota-events.test.ts`
@@ -1022,7 +1022,7 @@ House rules for every task:
     - The ASH route suites that mock the wrapper inline (sites-deployments, sites-talons, sites-agent-tokens, sites-alerts, presets) would test nothing here. Task 5.1's wrapper tests cover them: every wrapper route without a machineId refuses a scoped caller.
   - Done when: these suites are green.
 
-- [ ] **Task 6.7: The parity matrix covers machine scope on all three gates**
+- [x] **Task 6.7: The parity matrix covers machine scope on all three gates**
   - Files: `web/__tests__/lib/authorizationParity.test.ts`
   - Depends on: 5.1, 5.2
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1036,7 +1036,7 @@ House rules for every task:
     - The read-count pins (L465-490) are unchanged.
   - Done when: the parity suite is green.
 
-- [ ] **Task 6.8: Member candidates leave out sites where the caller is scoped**
+- [x] **Task 6.8: Member candidates leave out sites where the caller is scoped**
   - Files: `web/__tests__/api/sites-member-candidates.test.ts`, and the candidates route only if the new case fails
   - Depends on: 4.1, 5.1
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1046,6 +1046,21 @@ House rules for every task:
       - The mocked `ctx.actor` carries the wrapper's real shape: `siteRoles` and `machineScopes` for T only. A's members still come back. This proves the route rebuilds the standing from `siteStanding`'s whole output, and does not spread only `siteRoles` over `ctx.actor`.
     - If the second case fails, fix the route so the actor spreads every map `siteStanding` returns, add the route file to your commit, and say so in the Log.
   - Done when: the candidates suite is green.
+
+
+#### Added 2026-11-09 by the orchestrator: two gaps wave 6 found that no task owned
+
+- [x] **Task 6.9: A scoped admin in a swoop session gets no viewer emails**
+  - Files: `web/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route.ts`, `web/__tests__/api/swoop/sessions.test.ts`
+  - Depends on: 5.1, 6.6
+  - Do: First read the house rules at the top of this file, and the Log's `release names` block (the pill email gate). Today the session GET's gate is `withEmail = ctx.actor.role === 'superadmin' || siteRole === 'owner' || siteRole === 'admin'` (route.ts ~96-100). It keys on the site role, so an admin limited to some machines, seated in a session on one of their machines, gets every viewer's email. 6.6 confirmed this red with a probe. Re-key it to whole-site standing: a superadmin, or an owner or admin whose machine scope is null. Read the scope with `machineScopeOf(ctx.actor, siteId)` from `web/lib/capabilities.ts`; the wrapper builds the actor with `siteStanding`, so `machineScopes` is present when the target is scoped. Names are unchanged: they still go to everyone seated. `kickable` stays on SWOOP_SETTINGS_MANAGE, which a scoped admin never holds (the wrapper's scope step refuses site-wide capabilities). Test, in the "naming the people in it" describe: narrow ADMIN's row to `[MACHINE]` (through `mocks.memberDocs`, as 6.6 did), call `viewersAs(ADMIN)`, and expect the four names and no `email` on any viewer. The existing "gives an admin in it every email too" case is the whole-site control, unchanged.
+  - Done when: the new case was red before the change and is green after; `__tests__/api/swoop` is green; eslint and tsc are clean.
+
+- [x] **Task 6.10: Resuming a hoot conversation on a machine outside scope answers a plain 404**
+  - Files: `web/app/api/hoot/conversations/[conversationId]/route.ts`, `web/app/api/chat/[conversationId]/route.ts`, `web/__tests__/api/chat.test.ts`
+  - Depends on: 5.3, 6.4
+  - Do: First read the house rules at the top of this file. Both routes wrap any `runHootStream` failure as a problem titled 'hoot stream unavailable' with code `cortex_unavailable` (conversations route.ts ~200-208, chat route.ts ~199-207), keeping the status. 5.3's machine-mode refusal, a 404 with 'machine not found or no access', therefore reaches the caller with that title and code. Since 6.4 refuses an out-of-scope machine when a conversation is created, this happens only when a person resumes a conversation pinned to a machine they have since lost. When `runHootStream` fails with status 404, answer with `problemNotFound('machine not found or no access')` (the ADR 0016 text) in each route's existing problem shape. Every other failure keeps today's wrapping. Test both routes (chat.test.ts already drives both create routes; follow its `describe.each` pattern for the resume routes): a resume whose stream refuses 404 gives the plain not-found title and code `not_found`, and a 503 from the stream still gives 'hoot stream unavailable' / `cortex_unavailable`.
+  - Done when: the new cases were red before the change and are green after; `__tests__/api/chat.test.ts` and the `hoot-*` suites are green; eslint and tsc are clean.
 
 ## Wave 7: the browser
 
@@ -1294,7 +1309,7 @@ House rules for every task:
   - Done when: the suite is green.
 
 - [ ] **Task 7.12: The dashboard hides swoop from someone whose swoop mode is none**
-  - Files: `web/contexts/AuthContext.tsx`, `web/components/MachineContextMenu.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`, `web/app/dashboard/page.tsx`, and the tests beside them that assert the swoop entries
+  - Files: `web/contexts/AuthContext.tsx`, `web/hooks/useFirestore.ts` (useSiteMemberships exposes the row's `swoop`, per 5.6's note), `web/components/MachineContextMenu.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`, `web/app/dashboard/page.tsx`, and the tests beside them that assert the swoop entries
   - Depends on: 7.1, 7.2 and 7.5, which hold these files first. It runs after them, never beside them.
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
     - Owner ruling, 2026-11-07: someone whose effective swoop mode on a site is `none` sees no swoop entry for that site's machines (the card's swoop button, the menu item and the list view's swoop control). This answers release 2's question 6 ("the dashboard reads the mode in release 3"). It reverses context decision 16's "the dashboard does not read the mode" for this one case. The server still decides (`evaluateSwoopAccess`); this only stops the dashboard offering what the API refuses, as `swoopOff` already does.
@@ -1872,3 +1887,36 @@ House rules for every task:
     - removeMachine prunes after the swoop sweep. `stampPairedAt` became `recordPairing`, which prunes only when the machine doc was missing.
     - A failed read prunes nothing; this is unspecified, deliberate and tested. removeMachine is the primary path, and pruning on a contention error would strip a machine still on the site.
 - Wave 5 build check on the merged tree: tsc clean, full jest 477 suites (10955 tests) green.
+- 2026-11-09, wave 6 done (8/8), every commit made with `git commit --only` (no sweeps). No emulator ran.
+  - 6.1 cdd995bd: the machines list admits scoped callers and keeps only in-scope machines with their currentRoosts. Detail, deployments and step-up GET use `requireSiteMachineAuthAndScope`, giving 404 off the scope; `site=` keys still work. New `machineRouteGates.test.ts`: an inventory of all 30 `[machineId]` route files. Each must name one of the five machine gates or be a pure re-export whose target is a machine route (beyond the Do), and none may call `requireSiteAuthAndScope(`. Five cases fail on HEAD's routes. **Still open:** `requireSiteMachineAuthAndScope` runs the key audit and the plan gate (402) before its 404. Nothing leaks, and it is for whoever next owns `_shared.ts`.
+  - 6.2 461f1720:
+    - The logs GET, logs/{id} GET and site GET admit scoped callers.
+    - An empty scope, or a machineId filter outside the scope, gives an empty page with no read, after query validation.
+    - Otherwise the query carries `machineId in scope`, and `include` drops rows with no machine.
+    - logs/{id} gives a missing log's 404 for rows with no machine and rows outside the scope.
+    - A scoped admin's site PATCH is 403 (pinned beyond the list).
+  - 6.3 52a3b548:
+    - The members GET returns `machineIds`.
+    - POST validates the list, refuses scoping yourself (403 `cannot_modify_own_membership`), and refuses unknown ids (400 `unknown machine: <ids>`) through an exported `refuseUnknownMachines`. It audits `requestedMachineIds`.
+    - PATCH takes `{role?, swoop?, machineIds?}`, with null widening, and fires one revocation per PATCH (`controlOnly`, `keepMachineIds`, `scope_changed` when it only narrows). The verbs are `member_role_changed`, `member_swoop_changed` and `member_access_changed`.
+    - The owner's 409 detail names access.
+    - **Departure:** the revoke reason keeps release 2's `before.role !== after.role`. Transfer pins a successor owner row with no scope and no mode.
+  - 6.4 3d7f5b4f:
+    - cancel-tool and provision-key build their actor from `access.standing`. **This closes 4.1's whole-site hole on provision-key.**
+    - Both give 404 off the scope before any read. provision-key checks `hasCapability(…, siteId, machineId)`.
+    - The hoot/conversations and chat/new POSTs give 404 off the scope before idempotency.
+    - No production code reads `SiteAccessLevel.siteRole`/`.swoopMode` any more. **8.1:** remove them and move `hoot-utils.test.ts` 2245/2255/2279 to `standing.role`.
+    - The resume routes' 404 wrapping became task 6.10.
+  - 6.5 a3594643: `resolveTalonAuthor` throws `creator_access_revoked` for an author whose scope is not null. **Pre-existing gap, backlog:** only talons with a hoot output or a visual check re-resolve their author, so command, email or webhook-only talons keep firing after the author is scoped or removed. Copy at `talons/types.ts:283` and the comment at `hootOutput.server.ts:198` are left for the docs tasks.
+  - 6.6 2f1fbf91 (test only):
+    - The scope is proven through the real wrapper on swoop create (404 `not_found` off the scope with no proof verified or write; step-up then 201 on m1), lease, kill, the site sessions list, swoop settings and display-settings.
+    - It is also proven through the real `_shared` gate on the audit log, quota, quota history and the events stream, each with whole-site controls.
+    - Rows are narrowed via `mocks.memberDocs`, because `seedMember`'s `extra` lacks `machineIds`.
+    - **Found:** a scoped admin gets every viewer email (a probe showed it red), which became task 6.9.
+  - 6.7 6d4b32f0: the parity matrix gains paths A′ (the wrapper with a machineId) and C (`requireMachineAuthAndScope`). The same 403 on A and B, then 200 in scope, the same 404 off it and 200 for the whole site. The red check against the pre-wave-5 gates was argued from the code, not run.
+  - 6.8 1dfe8c51 (test only): the candidates route already leaves sites where the caller is scoped out. Two cases fail on a mutant route that spreads only `siteRoles`. 4.1's stale-map edge at `route.ts:105` remains: it fails closed, can't happen today, and 8.1 removes it.
+- Tasks 6.9 (the swoop viewer email gate) and 6.10 (a plain 404 when resuming a hoot conversation) were added for the two gaps wave 6 found that no task owned.
+- Claude's decision of 2026-11-04 stands: scoped members see roost names on their own machines (6.1 called it open; it is decided).
+  - 6.9 957ecea7: the session GET gives viewer emails only to a superadmin, or to an owner or admin whose machineScopeOf is null. The scoped-admin case was red on user-admin@example.test first; it also pins kickable false for every viewer. swoop 263/263.
+  - 6.10 94cad4cc: both resume routes answer a 404 from runHootStream with problemNotFound('machine not found or no access'); any other refusal keeps cortex_unavailable, and the two routes' edits are identical. Both 404 cases were red first; chat.test 54/54, hoot-* 148/148. The prompt is still appended and audited before the 404, as designed.
+- Wave 6 build check (with 6.9 and 6.10): tsc clean, full jest 478 suites (11056 tests) green.
