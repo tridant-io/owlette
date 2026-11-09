@@ -16,6 +16,8 @@
 // routes:
 //   GET  /                     the probe page (its query parameters: public/probe.js)
 //   GET  /probe.js             the harness
+//   GET  /worker.js            cover=canvas-worker: smooth.js in a worker on an offscreen canvas
+//   GET  /gpu.js               cover=webgpu: the same area average in webgpu (a candidate, not what ships)
 //   GET  /clock.html           a millisecond clock and barcode, for glass-to-glass checks
 //   GET  /smooth.js            web/lib/swoop/video/smooth.ts, types stripped
 //   GET  /health               {"ok":true}
@@ -56,6 +58,8 @@ const STATIC = new Map([
   ['/', ['public/index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['public/index.html', 'text/html; charset=utf-8']],
   ['/probe.js', ['public/probe.js', 'text/javascript; charset=utf-8']],
+  ['/worker.js', ['public/worker.js', 'text/javascript; charset=utf-8']],
+  ['/gpu.js', ['public/gpu.js', 'text/javascript; charset=utf-8']],
   ['/clock.html', ['public/clock.html', 'text/html; charset=utf-8']],
 ]);
 

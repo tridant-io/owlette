@@ -7,23 +7,43 @@
 //   node server.mjs                                       # in another terminal
 //   node drive.mjs matrix --seconds 5 --source 1920x1080 --box 1000x562
 //   node drive.mjs latency --shots 30 --source 3840x2160 --box 1300x731
+//   node drive.mjs matrix --seconds 20 --runs 3 --engines edge --sender chromium --covers canvas,canvas-worker --quiet 10
 //
-// matrix   each cover (none, canvas, under) for --seconds, in playwright's
-//          chromium (headless, on d3d11) and in edge (headed); prints each run
-//          and whether a cover keeps the video's rvfc callbacks and
-//          totalVideoFrames within 5% of cover=none, with droppedVideoFrames
-//          rising by no more than 1% of frames.
-// latency  --shots screenshots each with cover=none and cover=canvas, in edge
-//          unless --engines says otherwise. each shot holds the barcode the
-//          picture shows and the page's live one; live - shown is the time the
-//          picture is behind, and the difference of the two covers' medians is
-//          what the canvas adds.
+// matrix   cover=none, then each of --covers (default canvas,under), for
+//          --seconds, --runs times, in playwright's chromium (headless, on
+//          d3d11) and in edge (headed); prints each run and whether a cover
+//          keeps the video's rvfc callbacks and totalVideoFrames within 5% of
+//          that repetition's cover=none, with droppedVideoFrames rising by no
+//          more than 1% of frames; then a table of every run.
+// latency  --shots screenshots each with cover=none and each of --covers
+//          (default canvas), in edge unless --engines says otherwise. each
+//          shot holds the barcode the picture shows and the page's live one;
+//          live - shown is the time the picture is behind, and the difference
+//          of a cover's median and none's is what that cover adds.
 //
-// --engines chromium,edge picks the browsers; PROBE_URL points at another
-// server (default http://127.0.0.1:17460). every page run lands in runs/
-// through server.mjs, and latency posts its summary there too. playwright
-// comes from web/node_modules: this probe installs nothing.
+// --engines chromium,edge picks the browsers. --sender chromium moves the
+// source and its encoder into a page of a separate headless chromium, so the
+// measured browser only receives, decodes and draws, as a viewer of a remote
+// machine does (without it the source shares the measured page, task 2.5's
+// setup). with a sender, --receiver says what else the measured page does
+// every frame: idle (nothing, as swoop's viewer today), raf (an empty
+// animation-frame loop, as task 3.1's measuring double rAF would add) or strip
+// (a loop that repaints the dom strip; latency mode always paints it).
+// --quiet N reads the cpu load before each run and waits, re-reading every two
+// minutes, until it is at or under N percent; the load read is recorded in
+// every run either way (windows only). each run also samples the
+// machine's cpu every second while it runs: a run whose max passes
+// --clean-max (default 30, which leaves room for the probe's own browsers) or
+// whose source fell under 60 fps is not clean, and the closing summary
+// counts clean runs only. --quiet-gpu N and --clean-gpu-max N (default 80) do
+// the same for nvidia's gpu utilization, sampled every two seconds: another
+// app's gpu work starves the source and the compositor as cpu load does.
+// PROBE_URL points at another server (default http://127.0.0.1:17460). every
+// page run lands in runs/ through server.mjs, and each mode posts its summary
+// there too. playwright comes from web/node_modules: this probe installs nothing.
 
+import { execFile, execFileSync } from 'node:child_process';
+import { cpus } from 'node:os';
 import { inflateSync } from 'node:zlib';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -42,14 +62,20 @@ const ENGINES = {
   chromium: { headless: true, args: ['--use-angle=d3d11'] },
   edge: { headless: false, channel: 'msedge' },
 };
-const COVERS = ['none', 'canvas', 'under'];
+// the sender's host candidates as plain addresses, so the measured browser can
+// reach them without resolving an mdns name.
+const SENDER = { headless: true, args: ['--use-angle=d3d11', '--disable-features=WebRtcHideLocalIpsWithMdns'] };
 const BITS = 16;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function usage(problem) {
   console.error(`drive.mjs: ${problem}`);
-  console.error('usage: node drive.mjs matrix|latency [--seconds 5] [--source 1920x1080] [--box 1000x562] [--shots 30] [--engines chromium,edge]');
+  console.error(
+    'usage: node drive.mjs matrix|latency [--seconds 5] [--source 1920x1080] [--box 1000x562] [--shots 30] ' +
+      '[--engines chromium,edge] [--covers canvas,under] [--runs 1] [--sender chromium] [--receiver idle|raf|strip] ' +
+      '[--quiet 10] [--quiet-gpu 50] [--clean-max 30] [--clean-gpu-max 80]',
+  );
   process.exit(64);
 }
 
@@ -69,6 +95,14 @@ function parseArgs(argv) {
     box: '1000x562',
     shots: 30,
     engines: mode === 'latency' ? ['edge'] : ['chromium', 'edge'],
+    covers: mode === 'latency' ? ['canvas'] : ['canvas', 'under'],
+    runs: 1,
+    sender: null,
+    receiver: 'idle',
+    quiet: null,
+    cleanMax: 30,
+    quietGpu: null,
+    cleanGpuMax: 80,
   };
   for (let i = 1; i < argv.length; i += 2) {
     const value = argv[i + 1];
@@ -77,29 +111,149 @@ function parseArgs(argv) {
     else if (argv[i] === '--box') args.box = value;
     else if (argv[i] === '--shots') args.shots = Number(value) || args.shots;
     else if (argv[i] === '--engines') args.engines = String(value).split(',');
+    else if (argv[i] === '--covers') args.covers = String(value).split(',').filter((c) => c !== 'none');
+    else if (argv[i] === '--runs') args.runs = Number(value) || args.runs;
+    else if (argv[i] === '--sender') args.sender = value;
+    else if (argv[i] === '--receiver') args.receiver = value;
+    else if (argv[i] === '--quiet') args.quiet = Number(value);
+    else if (argv[i] === '--clean-max') args.cleanMax = Number(value);
+    else if (argv[i] === '--quiet-gpu') args.quietGpu = Number(value);
+    else if (argv[i] === '--clean-gpu-max') args.cleanGpuMax = Number(value);
     else usage(`unknown flag ${argv[i]}`);
   }
   parseSize(args.source, '--source');
   parseSize(args.box, '--box');
   for (const engine of args.engines) if (!ENGINES[engine]) usage(`unknown engine ${engine}`);
+  if (args.sender && args.sender !== 'chromium') usage('--sender takes chromium');
+  if (!['idle', 'raf', 'strip'].includes(args.receiver)) usage('--receiver takes idle, raf or strip');
   return args;
 }
 
 const args = parseArgs(process.argv.slice(2));
 const [boxW, boxH] = parseSize(args.box, '--box');
 
+/** the machine's cpu load in percent (windows), or null where it cannot be read. */
+function cpuLoad() {
+  try {
+    const out = execFileSync(
+      'powershell',
+      ['-NoProfile', '-Command', '(Get-CimInstance Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average'],
+      { encoding: 'utf8', timeout: 30000 },
+    );
+    const load = Number(out.trim());
+    return Number.isFinite(load) ? load : null;
+  } catch {
+    return null;
+  }
+}
+
+/** nvidia's gpu utilization in percent, or null without nvidia-smi: other apps' gpu work is context for a run. */
+function gpuLoad() {
+  try {
+    const out = execFileSync('nvidia-smi', ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'], { encoding: 'utf8', timeout: 10000 });
+    const load = Number(out.trim().split('\n')[0]);
+    return Number.isFinite(load) ? load : null;
+  } catch {
+    return null;
+  }
+}
+
+/** the cpu and gpu load before a run; with --quiet (and --quiet-gpu), waits for them to fall to that or under. */
+async function quietLoad() {
+  let load = cpuLoad();
+  let gpu = gpuLoad();
+  const busy = () =>
+    (args.quiet !== null && load !== null && load > args.quiet) || (args.quietGpu !== null && gpu !== null && gpu > args.quietGpu);
+  while (busy()) {
+    console.log(`cpu load ${load}%, gpu ${gpu}%, over --quiet ${args.quiet}% / --quiet-gpu ${args.quietGpu ?? '-'}%: waiting two minutes`);
+    await sleep(120000);
+    load = cpuLoad();
+    gpu = gpuLoad();
+  }
+  console.log(`cpu load ${load ?? '?'}%, gpu ${gpu ?? '?'}%`);
+  return { cpu: load, gpu };
+}
+
+/** the gpu's utilization every two seconds across a run (nvidia-smi), as max percent; null without it. */
+function gpuSampler() {
+  let max = null;
+  const timer = setInterval(() => {
+    execFile('nvidia-smi', ['--query-gpu=utilization.gpu', '--format=csv,noheader,nounits'], { timeout: 5000 }, (err, out) => {
+      const value = err ? NaN : Number(String(out).trim().split('\n')[0]);
+      if (Number.isFinite(value)) max = Math.max(max ?? 0, value);
+    });
+  }, 2000);
+  return () => {
+    clearInterval(timer);
+    return max;
+  };
+}
+
+/**
+ * the whole machine's cpu use across a run, from the kernel's per-core times
+ * every second: mean and max percent. it includes the probe's own browsers, so
+ * it is read against a clean run's level, not against zero.
+ */
+function cpuSampler() {
+  const totals = () => cpus().reduce((acc, c) => {
+    const busy = c.times.user + c.times.nice + c.times.sys + c.times.irq;
+    return { busy: acc.busy + busy, all: acc.all + busy + c.times.idle };
+  }, { busy: 0, all: 0 });
+  const first = totals();
+  let last = first;
+  let max = 0;
+  const timer = setInterval(() => {
+    const now = totals();
+    const all = now.all - last.all;
+    if (all > 0) max = Math.max(max, ((now.busy - last.busy) / all) * 100);
+    last = now;
+  }, 1000);
+  return () => {
+    clearInterval(timer);
+    const end = totals();
+    return { mean: Math.round(((end.busy - first.busy) / Math.max(1, end.all - first.all)) * 100), max: Math.round(max) };
+  };
+}
+
+/** a page in the sender browser streaming the source; drive.mjs hands its offer to the measured page. */
+async function openSender(senderBrowser) {
+  const context = await senderBrowser.newContext({ viewport: { width: 320, height: 240 } });
+  const page = await context.newPage();
+  page.on('console', (m) => {
+    if (m.type() === 'error') console.error(`  sender console: ${m.text()}`);
+  });
+  await page.goto(`${PAGE}/?${new URLSearchParams({ role: 'send', source: args.source, label: 'sender' })}`, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.probeSignal, null, { timeout: 30000 });
+  return { page, close: () => context.close() };
+}
+
 /** one page run; `during` runs while the page is measuring. */
-async function runPage(browser, { cover, seconds, label }, during) {
+async function runPage(browser, { cover, seconds, label, load, senderBrowser, strip }, during) {
   // the picture, the strip under it and the state line, with room to spare.
   const context = await browser.newContext({ viewport: { width: boxW + 16, height: boxH + 140 } });
+  const sender = senderBrowser ? await openSender(senderBrowser) : null;
   try {
     const page = await context.newPage();
     page.on('console', (m) => {
       if (m.type() === 'error') console.error(`  console: ${m.text()}`);
     });
     const query = new URLSearchParams({ source: args.source, box: args.box, cover, seconds: String(seconds), label });
+    if (load?.cpu !== null && load?.cpu !== undefined) query.set('load', String(load.cpu));
+    if (load?.gpu !== null && load?.gpu !== undefined) query.set('gpu', String(load.gpu));
+    if (sender) {
+      query.set('role', 'receive');
+      if (strip || args.receiver === 'strip') query.set('strip', '1');
+      if (args.receiver === 'raf') query.set('raf', '1');
+    }
     await page.goto(`${PAGE}/?${query}`, { waitUntil: 'load' });
     const state = () => page.evaluate(() => document.getElementById('state')?.textContent ?? '');
+    if (sender) {
+      await page.waitForFunction(() => window.probeSignal || /^error/.test(document.getElementById('state')?.textContent ?? ''), null, { timeout: 30000 });
+      if (!(await page.evaluate(() => Boolean(window.probeSignal)))) throw new Error(`${label}: ${await state()}`);
+      const offer = await sender.page.evaluate(() => window.probeSignal.offer());
+      const answer = await page.evaluate((sdp) => window.probeSignal.answer(sdp), offer);
+      await sender.page.evaluate((sdp) => window.probeSignal.accept(sdp), answer);
+    }
     if (during) {
       await page.waitForFunction(() => /^(measuring|done|error)/.test(document.getElementById('state')?.textContent ?? ''), null, { timeout: 60000 });
       if ((await state()) === 'measuring') {
@@ -113,16 +267,20 @@ async function runPage(browser, { cover, seconds, label }, during) {
     return result;
   } finally {
     await context.close();
+    await sender?.close();
   }
 }
 
 const fmt = (s) => (s ? `p50 ${s.p50.toFixed(2)} p95 ${s.p95.toFixed(2)} max ${s.max.toFixed(2)} (n ${s.n})` : '--');
 
 function printRun(engine, r) {
+  const inbound = r.rtc?.inbound;
   console.log(
     `${engine} ${r.cover}: renderer ${r.smoothRenderer} | smoothAvailable ${r.smoothAvailable} | drew ${r.drew} | ` +
       `${r.frame} ${r.codec ?? '?'} ${r.decoder ?? ''} | callbacks ${r.rvfcCallbacks} frames ${r.totalVideoFrames} ` +
-      `dropped ${r.droppedVideoFrames} | draw ms ${fmt(r.drawMs)} | gpu ms ${r.gpuTimer ? fmt(r.gpuMs) : 'no timer'}` +
+      `dropped ${r.droppedVideoFrames} | presented ${r.presentedFrames} coalesced ${r.coalescedCallbacks} ` +
+      `| raf skipped ${r.rafCadence?.skipped ?? '-'} | received ${inbound?.framesReceived ?? '-'} decoded ${inbound?.framesDecoded ?? '-'} ` +
+      `jitter ${inbound?.interFrameJitterMs?.toFixed(2) ?? '-'} ms | draw ms ${fmt(r.drawMs)} | gpu ms ${r.gpuTimer ? fmt(r.gpuMs) : 'no timer'}` +
       `${r.notes.length ? ` | ${r.notes.join('; ')}` : ''}`,
   );
 }
@@ -138,15 +296,118 @@ function holds(bare, covered) {
   );
 }
 
-async function matrix(browser, engine) {
-  const runs = {};
-  for (const cover of COVERS) {
-    runs[cover] = await runPage(browser, { cover, seconds: args.seconds, label: `${engine}-${cover}-${args.source}-${args.box}` });
-    printRun(engine, runs[cover]);
+/** what a run says against its repetition's cover=none: '' for none itself. */
+function verdictOf(bare, run) {
+  if (run.cover === 'none') return run.error ? `error: ${run.error}` : '';
+  if (run.error) return `error: ${run.error}`;
+  if (bare.error) return 'no baseline';
+  if (!run.drew) return 'never drew';
+  return holds(bare, run) ? 'holds' : 'fails';
+}
+
+const pct = (a, b) => (b ? `${(((a - b) / b) * 100).toFixed(1)}%` : '-');
+
+/** per cover, the clean runs only, against the clean cover=none runs' median. */
+function printCleanSummary(rows) {
+  const median = (values) => {
+    const v = values.slice().sort((a, b) => a - b);
+    return v.length ? (v.length % 2 ? v[(v.length - 1) / 2] : (v[v.length / 2 - 1] + v[v.length / 2]) / 2) : null;
+  };
+  console.log('');
+  console.log('clean runs only (cpu and gpu max during the run within --clean-max and --clean-gpu-max, source at 60 fps), medians:');
+  for (const engine of [...new Set(rows.map((r) => r.engine))]) {
+    const clean = rows.filter((r) => r.engine === engine && !r.run.error && r.run.clean);
+    const bare = clean.filter((r) => r.run.cover === 'none').map((r) => r.run);
+    const bareCallbacks = median(bare.map((r) => r.rvfcCallbacks));
+    const bareShown = median(bare.map((r) => r.totalVideoFrames - r.droppedVideoFrames));
+    for (const cover of [...new Set(clean.map((r) => r.run.cover))]) {
+      const runs = clean.filter((r) => r.run.cover === cover).map((r) => r.run);
+      const callbacks = median(runs.map((r) => r.rvfcCallbacks));
+      console.log(
+        `${engine} ${cover.padEnd(19)} n ${runs.length}  callbacks ${callbacks} (${pct(callbacks, bareCallbacks)} vs none)  ` +
+          `coalesced ${median(runs.map((r) => r.coalescedCallbacks))}  dropped ${median(runs.map((r) => r.droppedVideoFrames))}  ` +
+          `frames ${median(runs.map((r) => r.totalVideoFrames))}  ` +
+          (cover === 'none' ? `shown ${bareShown}` : `drawn ${median(runs.map((r) => r.draws ?? 0))} (${pct(median(runs.map((r) => r.draws ?? 0)), bareShown)} vs none shown)`),
+      );
+    }
   }
-  const verdict = (cover) => (runs[cover].drew ? (holds(runs.none, runs[cover]) ? 'holds' : 'does not hold') : 'never drew');
-  const chosen = holds(runs.none, runs.canvas) ? 'canvas' : holds(runs.none, runs.under) ? 'under' : null;
-  console.log(`${engine}: canvas ${verdict('canvas')}, under ${verdict('under')}: cover ${chosen ?? 'none holds, so the canvas path cannot ship'}`);
+}
+
+/** one row per run, each cover against its own repetition's cover=none. */
+function printTable(rows) {
+  console.log('');
+  console.log(
+    'engine  rep cover               cpu s/mean/max gpu s/max  clean callbacks (vs none)   frames (vs none)   dropped (+%frames)  presented coalesced rafskip received  drawn (vs none shown)      draw p50/p95   verdict',
+  );
+  for (const { engine, rep, run, bare } of rows) {
+    const verdict = verdictOf(bare, run);
+    if (run.error || bare.error) {
+      console.log([engine.padEnd(7), String(rep).padEnd(3), run.cover.padEnd(19), verdict].join(' '));
+      continue;
+    }
+    const extra = run.droppedVideoFrames - bare.droppedVideoFrames;
+    console.log(
+      [
+        engine.padEnd(7),
+        String(rep).padEnd(3),
+        run.cover.padEnd(19),
+        `${run.cpuLoadAtStart ?? '?'}/${run.cpuDuring?.mean ?? '?'}/${run.cpuDuring?.max ?? '?'} ${run.gpuLoadAtStart ?? '?'}/${run.gpuMaxDuring ?? '?'}`.padEnd(23),
+        (run.clean ? 'yes' : run.sourceShort ? 'src' : 'no').padEnd(5),
+        `${run.rvfcCallbacks} (${run.cover === 'none' ? '-' : pct(run.rvfcCallbacks, bare.rvfcCallbacks)})`.padEnd(21),
+        `${run.totalVideoFrames} (${run.cover === 'none' ? '-' : pct(run.totalVideoFrames, bare.totalVideoFrames)})`.padEnd(18),
+        `${run.droppedVideoFrames} (${run.cover === 'none' ? '-' : `${((extra / run.totalVideoFrames) * 100).toFixed(1)}%`})`.padEnd(19),
+        String(run.presentedFrames).padEnd(9),
+        String(run.coalescedCallbacks).padEnd(9),
+        String(run.rafCadence?.skipped ?? '-').padEnd(7),
+        String(run.rtc?.inbound?.framesReceived ?? '-').padEnd(9),
+        // the distinct frames the canvas drew, against the frames the bare video showed.
+        (run.draws === null ? '-' : `${run.draws} (${pct(run.draws, bare.totalVideoFrames - bare.droppedVideoFrames)})`).padEnd(26),
+        (run.drawMs ? `${run.drawMs.p50.toFixed(2)}/${run.drawMs.p95.toFixed(2)}` : '-').padEnd(14),
+        verdict,
+      ].join(' '),
+    );
+  }
+}
+
+/** a run is evidence only if nothing else loaded the box during it and the source kept its 60 fps. */
+function judgeRun(run) {
+  const expected = 60 * run.seconds;
+  run.sourceShort = (run.rtc?.inbound?.framesReceived ?? run.totalVideoFrames) < 0.98 * expected;
+  run.clean =
+    !run.sourceShort && run.cpuDuring.max <= args.cleanMax && (run.gpuMaxDuring === null || run.gpuMaxDuring <= args.cleanGpuMax);
+}
+
+async function matrix(browser, engine, senderBrowser, rows) {
+  for (let rep = 1; rep <= args.runs; rep += 1) {
+    const runs = {};
+    for (const cover of ['none', ...args.covers]) {
+      const label = `${engine}-${cover}-${args.sender ? `remote-${args.receiver}-` : ''}${args.source}-${args.box}`;
+      try {
+        // every run waits for a quiet box, not just every repetition: other jobs come and go.
+        // a headless sender can lose windows' fine timer and paint at ~47 fps for a
+        // whole run; such a run measures the sender, so it runs again (twice at most).
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const load = await quietLoad();
+          const sampled = cpuSampler();
+          const gpuSampled = gpuSampler();
+          runs[cover] = await runPage(browser, { cover, seconds: args.seconds, label, load, senderBrowser });
+          runs[cover].cpuDuring = sampled();
+          runs[cover].gpuMaxDuring = gpuSampled();
+          judgeRun(runs[cover]);
+          printRun(engine, runs[cover]);
+          if (!runs[cover].sourceShort) break;
+          console.log(`${engine} ${cover}: the source sent ${runs[cover].rtc?.inbound?.framesReceived} frames, under 60 fps: again`);
+        }
+      } catch (err) {
+        // one cover a browser cannot run (webgpu in the headless shell) does not end the matrix.
+        runs[cover] = { cover, error: String(err.message).split('\n')[0] };
+        console.log(`${engine} ${cover}: ${runs[cover].error}`);
+      }
+      rows.push({ engine, rep, run: runs[cover], bare: runs.none });
+    }
+    const verdicts = args.covers.map((cover) => `${cover} ${verdictOf(runs.none, runs[cover])}`);
+    console.log(`${engine} rep ${rep}: ${verdicts.join(', ')}`);
+  }
 }
 
 // ------------------------------------------------------------ the two clocks
@@ -260,14 +521,16 @@ function percentile(values, p) {
   return v.length ? v[Math.min(v.length, Math.max(1, Math.ceil((p / 100) * v.length))) - 1] : null;
 }
 
-async function latency(browser, engine) {
+async function latency(browser, engine, senderBrowser) {
   const covers = {};
-  for (const cover of ['none', 'canvas']) {
+  const load = await quietLoad();
+  for (const cover of ['none', ...args.covers]) {
     const samples = [];
     let unreadable = 0;
     // about a second a shot, so the page is still measuring at the last one.
     const seconds = Math.max(args.seconds, args.shots + 5);
-    const run = await runPage(browser, { cover, seconds, label: `latency-${engine}-${cover}-${args.source}-${args.box}` }, async (page) => {
+    const label = `latency-${engine}-${cover}-${args.sender ? 'remote-' : ''}${args.source}-${args.box}`;
+    const run = await runPage(browser, { cover, seconds, label, load, senderBrowser, strip: true }, async (page) => {
       // the page owns the barcode's geometry: its strip's cell, in screenshot pixels.
       const cell = await page.evaluate(() => document.getElementById('strip').firstElementChild.getBoundingClientRect().width * devicePixelRatio);
       for (let i = 0; i < args.shots; i += 1) {
@@ -282,17 +545,23 @@ async function latency(browser, engine) {
     covers[cover] = { shots: args.shots, unreadable, median: percentile(samples, 50), p95: percentile(samples, 95), samples };
     console.log(`${engine} ${cover}: live - shown median ${covers[cover].median} ms, p95 ${covers[cover].p95} ms (${samples.length} of ${args.shots} shots read)`);
   }
-  const difference = covers.none.median !== null && covers.canvas.median !== null ? covers.canvas.median - covers.none.median : null;
-  console.log(`${engine}: canvas - none, medians: ${difference ?? '--'} ms`);
+  const differences = {};
+  for (const cover of args.covers) {
+    differences[cover] = covers.none.median !== null && covers[cover].median !== null ? covers[cover].median - covers.none.median : null;
+    console.log(`${engine}: ${cover} - none, medians: ${differences[cover] ?? '--'} ms`);
+  }
   const summary = {
-    label: `latency-${engine}-${args.source}-${args.box}`,
+    label: `latency-${engine}-${args.sender ? 'remote-' : ''}${args.source}-${args.box}`,
     mode: 'latency',
     engine,
     version: browser.version(),
     source: args.source,
     box: args.box,
+    sender: args.sender,
+    cpuLoadAtStart: load.cpu,
+    gpuLoadAtStart: load.gpu,
     covers,
-    medianDifferenceMs: difference,
+    medianDifferenceMs: differences,
   };
   const res = await fetch(`${PAGE}/result`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(summary) });
   console.log(`${engine}: summary ${(await res.json()).written}`);
@@ -301,13 +570,35 @@ async function latency(browser, engine) {
 const health = await fetch(`${PAGE}/health`).catch(() => null);
 if (!health?.ok) usage(`no probe server at ${PAGE}; start node server.mjs first`);
 
-for (const engine of args.engines) {
-  const browser = await chromium.launch(ENGINES[engine]);
-  try {
-    console.log(`${engine}: ${browser.version()}`);
-    if (args.mode === 'matrix') await matrix(browser, engine);
-    else await latency(browser, engine);
-  } finally {
-    await browser.close();
+const senderBrowser = args.sender ? await chromium.launch(SENDER) : null;
+const rows = [];
+try {
+  if (senderBrowser) console.log(`sender: playwright chromium ${senderBrowser.version()}, headless`);
+  for (const engine of args.engines) {
+    const browser = await chromium.launch(ENGINES[engine]);
+    try {
+      console.log(`${engine}: ${browser.version()}`);
+      if (args.mode === 'matrix') await matrix(browser, engine, senderBrowser, rows);
+      else await latency(browser, engine, senderBrowser);
+    } finally {
+      await browser.close();
+    }
   }
+} finally {
+  await senderBrowser?.close();
+}
+
+if (args.mode === 'matrix') {
+  printTable(rows);
+  printCleanSummary(rows);
+  const summary = {
+    label: `matrix-${args.engines.join('+')}-${args.sender ? `remote-${args.receiver}-` : ''}${args.source}-${args.box}`,
+    receiver: args.sender ? args.receiver : null,
+    mode: 'matrix',
+    seconds: args.seconds,
+    sender: args.sender,
+    rows: rows.map(({ engine, rep, run, bare }) => ({ engine, rep, verdict: verdictOf(bare, run), run })),
+  };
+  const res = await fetch(`${PAGE}/result`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(summary) });
+  console.log(`summary ${(await res.json()).written}`);
 }
