@@ -20,11 +20,22 @@ jest.mock('@/contexts/AuthContext', () => ({
     mfaFactors: { totp: true, passkeys: 0 },
     isSiteAdmin: () => siteAdmin,
     isSiteOwner: () => siteOwner,
+    machineScope: () => null,
+    isMachineAdmin: () => siteAdmin,
+    siteRole: () => (siteOwner ? 'owner' : siteAdmin ? 'admin' : 'member'),
   }),
 }));
 
+// what the machine read answers, and what it was asked for
+const PERMISSION_DENIED = 'Missing or insufficient permissions.';
+let machineRead: { machines: unknown[]; loading: boolean; error: string | null };
+const machineReads: unknown[][] = [];
+
 jest.mock('@/hooks/useFirestore', () => ({
-  useMachines: () => ({ machines: [], loading: false, error: null }),
+  useMachines: (...args: unknown[]) => {
+    machineReads.push(args);
+    return machineRead;
+  },
 }));
 
 jest.mock('next/navigation', () => ({
@@ -46,13 +57,15 @@ let reply: { status: number; body: unknown };
 beforeEach(() => {
   siteAdmin = false;
   siteOwner = false;
+  machineRead = { machines: [], loading: false, error: null };
+  machineReads.length = 0;
   reply = { status: 403, body: refusal };
   (globalThis as unknown as { fetch: typeof fetch }).fetch = jest.fn(
     async () => ({ ok: false, status: reply.status, json: async () => reply.body }) as Response,
   ) as unknown as typeof fetch;
 });
 
-async function openViewer() {
+async function mountViewer() {
   const params = Promise.resolve({ siteId: SITE, machineId: 'machine-1' });
   await act(async () => {
     render(
@@ -64,6 +77,10 @@ async function openViewer() {
   await act(async () => {
     for (let i = 0; i < 20; i += 1) await Promise.resolve();
   });
+}
+
+async function openViewer() {
+  await mountViewer();
   return screen.getByRole('alert');
 }
 
@@ -121,4 +138,50 @@ it('the way back to the dashboard is in the notice and on the bar', async () => 
     'href',
     '/dashboard',
   );
+});
+
+/**
+ * a scoped member may read only their own machines, and the api answers a
+ * machine outside their scope as one that is not there. "this machine has left
+ * the site" is release 1's, and fires only on its own signals: the create's
+ * `machine_not_found` and a record ended as `machine_removed`.
+ */
+describe('a machine outside the machine scope', () => {
+  it('reads only its own machine document, for a whole-site admin too', async () => {
+    siteAdmin = true;
+    await openViewer();
+    expect(machineReads.length).toBeGreaterThan(0);
+    for (const args of machineReads) expect(args).toEqual([SITE, ['machine-1']]);
+  });
+
+  it('a machine read the rules refuse says nothing about the machine leaving', async () => {
+    machineRead = { machines: [], loading: false, error: PERMISSION_DENIED };
+    // the session ask is still on its way: only the read has answered
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = jest.fn(
+      () => new Promise<Response>(() => undefined),
+    ) as unknown as typeof fetch;
+    await mountViewer();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/left the site/)).toBeNull();
+  });
+
+  it.each([
+    ["the wrapper's 404", { code: 'not_found', detail: 'machine not found or no access' }],
+    ['a 404 with no code', { detail: 'machine not found or no access' }],
+  ])('%s at create is final on its own sentence, with the way back, and never says the machine left', async (_what, body) => {
+    machineRead = { machines: [], loading: false, error: PERMISSION_DENIED };
+    reply = { status: 404, body };
+    const notice = await openViewer();
+    expect(notice).toHaveTextContent('machine not found or no access');
+    expect(notice).not.toHaveTextContent(/left the site|reconnecting in/);
+    expect(within(notice).getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("release 1's machine_not_found at create still says the machine has left the site", async () => {
+    reply = { status: 404, body: { code: 'machine_not_found', detail: 'machine not found' } };
+    const notice = await openViewer();
+    expect(notice).toHaveTextContent('this machine has left the site.');
+    expect(within(notice).getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+  });
 });
