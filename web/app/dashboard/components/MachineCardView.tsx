@@ -90,6 +90,8 @@ interface MachineCardViewProps {
   onSwoopApp?: (machineId: string) => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
   swoopOff?: boolean;
+  /** the viewer's swoop mode here is none: the menu offers no swoop (MachineContextMenu). */
+  noSwoop?: boolean;
   onSiteSettings?: () => void;
   /** the viewer's plan on this site (`useSitePlan`); unset is unrestricted. */
   sitePlan?: SitePlan;
@@ -120,6 +122,7 @@ interface MachineCardProps extends MachineCardHandlers {
   isSiteAdmin: boolean;
   isMachineAdmin: boolean;
   swoopOff?: boolean;
+  noSwoop?: boolean;
   cardPref: DeviceSelection;
   onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
@@ -177,6 +180,7 @@ const MachineCard = memo(function MachineCard({
   isSiteAdmin,
   isMachineAdmin,
   swoopOff,
+  noSwoop,
   cardPref,
   onSetCardPref,
   onToggleStats,
@@ -465,6 +469,7 @@ const MachineCard = memo(function MachineCard({
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
                 onSwoopApp={onSwoopApp ? () => onSwoopApp(machineId) : undefined}
                 swoopOff={swoopOff}
+                noSwoop={noSwoop}
                 onSiteSettings={onSiteSettings}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
@@ -1289,6 +1294,7 @@ export function MachineCardView({
   siteTimeFormat = '12h',
   schedulesFollowSiteTime,
   swoopOff,
+  noSwoop,
   sitePlan,
   ...handlers
 }: MachineCardViewProps) {
@@ -1326,6 +1332,7 @@ export function MachineCardView({
           isSiteAdmin={canSiteAdmin}
           isMachineAdmin={isMachineAdmin(currentSiteId, machine.machineId)}
           swoopOff={swoopOff}
+          noSwoop={noSwoop}
           cardPref={prefs.cardView[machine.machineId] ?? NO_CARD_PREF}
           onSetCardPref={setCardPref}
           schedulesFollowSiteTime={schedulesFollowSiteTime}

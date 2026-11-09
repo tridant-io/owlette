@@ -264,6 +264,8 @@ interface MachineRowProps {
   onSwoopApp?: () => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
   swoopOff?: boolean;
+  /** the viewer's swoop mode here is none: the menu offers no swoop (MachineContextMenu). */
+  noSwoop?: boolean;
   onSiteSettings?: () => void;
   showLocalClock?: boolean;
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
@@ -304,6 +306,7 @@ export const MachineRow = memo(function MachineRow({
   onSwoop,
   onSwoopApp,
   swoopOff,
+  noSwoop,
   onSiteSettings,
   showLocalClock,
   listPref,
@@ -775,6 +778,7 @@ export const MachineRow = memo(function MachineRow({
               onSwoop={onSwoop}
               onSwoopApp={onSwoopApp}
               swoopOff={swoopOff}
+              noSwoop={noSwoop}
               onSiteSettings={onSiteSettings}
               onViewDisplays={onMetricClick ? () => onMetricClick('display') : undefined}
               rebootSchedule={machine.rebootSchedule}

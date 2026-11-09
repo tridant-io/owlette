@@ -28,6 +28,7 @@ import * as Sentry from '@sentry/nextjs';
 import type { MfaFactorInventory } from '@/lib/mfaFactors.server';
 import { useSiteMemberships, unionMembership, type SiteRole } from '@/hooks/useFirestore';
 import { scopeCovers } from '@/lib/machineAccess';
+import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import { emitMembershipFallback, emitMembershipListenerError } from '@/lib/membershipMetrics';
 
 function arraysEqual(a: string[], b: string[]): boolean {
@@ -370,6 +371,27 @@ export function computeSiteRole(
   return roleMap.get(siteId) ?? null;
 }
 
+/**
+ * the caller's effective swoop mode on `siteId`, given the site's
+ * `membersMayWatch`. a superadmin holds no member rows and always controls; no
+ * row, or an unresolved session, is none.
+ *
+ * exported so it's testable without AuthProvider.
+ */
+export function computeSwoopMode(
+  role: UserRole | null,
+  roleMap: Map<string, SiteRole>,
+  swoopMap: Map<string, SwoopMode>,
+  siteId: string,
+  membersMayWatch: boolean
+): SwoopMode {
+  if (role === 'superadmin') return 'control';
+  if (role === null) return 'none';
+  const siteRole = roleMap.get(siteId);
+  if (siteRole === undefined) return 'none';
+  return effectiveSwoopMode(siteRole, swoopMap.get(siteId) ?? null, membersMayWatch);
+}
+
 export interface UserPreferences {
   temperatureUnit: 'C' | 'F'; // Default: 'C'
   timezone: string; // IANA timezone (e.g. 'America/New_York'). Default: browser-detected. Used as the display reference frame when timeDisplayMode === 'user'.
@@ -443,6 +465,12 @@ interface AuthContextType {
   /** the role map's value for `siteId`, scoped or not. for labels only, never a gate. */
   siteRole: (siteId: string) => SiteRole | null;
   /**
+   * the caller's effective swoop mode on `siteId`; `membersMayWatch` comes from
+   * the site's swoop settings. the dashboard offers no swoop at none, and the
+   * server still decides.
+   */
+  swoopMode: (siteId: string, membersMayWatch: boolean) => SwoopMode;
+  /**
    * Sites the user has access to, or `undefined` until access has RESOLVED: the
    * user doc (role, legacy `sites[]`, `lastSiteId`) and the membership listener
    * have both delivered for the signed-in uid. Before that the projection is a
@@ -483,6 +511,7 @@ const AuthContext = createContext<AuthContextType>({
   machineScope: () => null,
   isMachineAdmin: () => false,
   siteRole: () => null,
+  swoopMode: () => 'none',
   userSites: [],
   lastSiteId: null,
   lastMachineIds: {},
@@ -1274,7 +1303,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Per-site membership — THE source of site access from here on. One
   // collectionGroup listener replaces reading `users/{uid}.sites[]`.
-  const { roleMap, scopeMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
+  const { roleMap, scopeMap, swoopMap, loading: membershipLoading, error: membershipError } = useSiteMemberships(user?.uid);
 
   // A listener that is not running degrades every user to the legacy array. The
   // union hides that today, so without this it stays silent right up until wave
@@ -1340,6 +1369,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     (siteId: string) => computeSiteRole(roleMap, siteId),
     [roleMap]
   );
+  const swoopMode = useCallback(
+    (siteId: string, membersMayWatch: boolean) =>
+      computeSwoopMode(role, roleMap, swoopMap, siteId, membersMayWatch),
+    [role, roleMap, swoopMap]
+  );
 
   const value = useMemo(() => ({
     user,
@@ -1352,6 +1386,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     machineScope,
     isMachineAdmin,
     siteRole,
+    swoopMode,
     userSites,
     lastSiteId,
     lastMachineIds,
@@ -1370,7 +1405,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateLastSite,
     updateLastMachine,
     deleteAccount,
-  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
+  }), [user, loading, role, isSuperadmin, isSiteAdmin, administersAnySite, isSiteOwner, machineScope, isMachineAdmin, siteRole, swoopMode, userSites, lastSiteId, lastMachineIds, requiresMfaSetup, mfaFactors, userPreferences, signIn, signUp, signInWithGoogle, signOut, updateUserProfile, updateUserPhoto, updatePassword, sendPasswordReset, updateUserPreferences, updateLastSite, updateLastMachine, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -12,6 +12,9 @@
  * Who may act is per machine too (machine scope, ADR 0016): an admin limited
  * to some machines gets commands and process editing on those, and the menu
  * learns they are not a whole-site admin; a member gets neither.
+ *
+ * Someone whose swoop mode on the site is none: both views tell the menu, which
+ * then offers no swoop (MachineContextMenu.test.tsx).
  */
 
 import React from 'react';
@@ -328,5 +331,16 @@ describe('machine scope on both views', () => {
       else expect(found).toBeNull();
     }
     expect(menuPropsFor('kiosk-2')).toMatchObject({ isSiteAdmin: false, isMachineAdmin: acts });
+  });
+});
+
+describe('swoop mode on both views', () => {
+  it.each([true, false])('hands the menu noSwoop %p on a card and on a list row', (noSwoop) => {
+    renderCards(undefined, { noSwoop });
+    expect(menuPropsFor('kiosk-1')).toMatchObject({ noSwoop });
+
+    mockMenuProps.mockClear();
+    renderRow({ noSwoop });
+    expect(menuPropsFor('kiosk-2')).toMatchObject({ noSwoop });
   });
 });

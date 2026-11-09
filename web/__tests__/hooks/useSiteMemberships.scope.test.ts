@@ -96,3 +96,56 @@ describe('useSiteMemberships — scopeMap', () => {
     expect(result.current.scopeMap.get('scoped')).toEqual(['m1']);
   });
 });
+
+// the dashboard hides swoop from someone whose mode on a site is none, so the
+// row's mode is read the way the server reads it: a bad value is none.
+describe('useSiteMemberships — swoopMap', () => {
+  it('holds a row that carries a mode and leaves one without out', () => {
+    const { result } = renderHook(() => useSiteMemberships(UID));
+
+    deliver([
+      row('none', { status: 'active', role: 'member', swoop: 'none' }),
+      row('view', { status: 'active', role: 'admin', swoop: 'view' }),
+      row('default', { status: 'active', role: 'member' }),
+      row('gone', { status: 'removed', role: 'member', swoop: 'control' }),
+    ]);
+
+    expect(result.current.swoopMap.get('none')).toBe('none');
+    expect(result.current.swoopMap.get('view')).toBe('view');
+    expect(result.current.swoopMap.has('default')).toBe(false);
+    expect(result.current.swoopMap.has('gone')).toBe(false);
+  });
+
+  it('reads a bad value as none', () => {
+    const { result } = renderHook(() => useSiteMemberships(UID));
+
+    deliver([row('bad', { status: 'active', role: 'member', swoop: 'watch' })]);
+
+    expect(result.current.swoopMap.get('bad')).toBe('none');
+  });
+
+  it('keeps the same map for an identical snapshot, and a new one when a mode changes', () => {
+    const { result } = renderHook(() => useSiteMemberships(UID));
+
+    deliver([row('s', { status: 'active', role: 'member', swoop: 'view' })]);
+    const first = result.current.swoopMap;
+    deliver([row('s', { status: 'active', role: 'member', swoop: 'view' })]);
+
+    expect(result.current.swoopMap).toBe(first);
+
+    deliver([row('s', { status: 'active', role: 'member', swoop: 'none' })]);
+    expect(result.current.swoopMap).not.toBe(first);
+    expect(result.current.swoopMap.get('s')).toBe('none');
+  });
+
+  it("drops the previous user's modes on a sign-out", () => {
+    const { result, rerender } = renderHook(({ uid }) => useSiteMemberships(uid), {
+      initialProps: { uid: UID as string | undefined },
+    });
+    deliver([row('s', { status: 'active', role: 'member', swoop: 'none' })]);
+
+    rerender({ uid: undefined });
+
+    expect(result.current.swoopMap.size).toBe(0);
+  });
+});

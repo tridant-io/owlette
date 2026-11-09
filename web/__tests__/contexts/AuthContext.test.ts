@@ -20,9 +20,11 @@ import {
   computeMachineScope,
   computeIsMachineAdmin,
   computeSiteRole,
+  computeSwoopMode,
   shouldListenerBootstrap,
 } from '@/contexts/AuthContext';
 import type { SiteRole } from '@/hooks/useFirestore';
+import type { SwoopMode } from '@/lib/swoopMode';
 
 const SITE_IN = 'site-A';
 const SITE_OUT = 'site-B';
@@ -220,6 +222,38 @@ describe('machine scope', () => {
     it('is null with no row', () => {
       expect(computeSiteRole(NO_SITES, SITE_IN)).toBeNull();
     });
+  });
+});
+
+describe('computeSwoopMode', () => {
+  const modes = (entries: Record<string, SwoopMode>) =>
+    new Map<string, SwoopMode>(Object.entries(entries));
+  const NO_MODES = modes({});
+
+  it.each<[string, SwoopMode, Map<string, SiteRole>, Map<string, SwoopMode>, boolean]>([
+    ['a member set to none', 'none', MEMBER_ON_A, modes({ [SITE_IN]: 'none' }), true],
+    ['a member set to watch, members may not watch', 'view', MEMBER_ON_A, modes({ [SITE_IN]: 'view' }), false],
+    ['a member with no mode, members may watch', 'view', MEMBER_ON_A, NO_MODES, true],
+    ['a member with no mode, members may not watch', 'none', MEMBER_ON_A, NO_MODES, false],
+    ['an admin with no mode', 'control', ADMIN_ON_A, NO_MODES, false],
+    ['an admin set to none', 'none', ADMIN_ON_A, modes({ [SITE_IN]: 'none' }), true],
+    ['the owner, even with a stray none', 'control', OWNER_ON_A, modes({ [SITE_IN]: 'none' }), false],
+    ['someone with no row', 'none', NO_SITES, NO_MODES, true],
+  ])('%s is %s', (_label, expected, roleMap, swoopMap, membersMayWatch) => {
+    expect(computeSwoopMode('member', roleMap, swoopMap, SITE_IN, membersMayWatch)).toBe(expected);
+  });
+
+  it('a superadmin controls on a site where they hold no row', () => {
+    expect(computeSwoopMode('superadmin', NO_SITES, NO_MODES, SITE_IN, false)).toBe('control');
+  });
+
+  it('is none while the session is unresolved', () => {
+    expect(computeSwoopMode(null, MEMBER_ON_A, NO_MODES, SITE_IN, true)).toBe('none');
+  });
+
+  it("another site's mode does not reach this one", () => {
+    const both = roles({ [SITE_IN]: 'member', [SITE_OUT]: 'member' });
+    expect(computeSwoopMode('member', both, modes({ [SITE_OUT]: 'none' }), SITE_IN, true)).toBe('view');
   });
 });
 

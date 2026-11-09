@@ -19,6 +19,7 @@ import { db } from '@/lib/firebase';
 import { logger } from '@/lib/logger';
 import { MAX_MACHINE_SCOPE, parseMachineIds } from '@/lib/machineAccess';
 import { isMachineOsFamily, type MachineOsFamily } from '@/lib/machineOs';
+import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import {
   parseActiveHours,
   POWER_COUNTDOWN_SECONDS,
@@ -738,6 +739,11 @@ export interface SiteMemberships {
    * machines, as the rules read a malformed scope.
    */
   scopeMap: Map<string, readonly string[]>;
+  /**
+   * siteId -> the swoop mode the caller's row carries, only for rows that carry
+   * one. a site absent here leaves the mode to the role.
+   */
+  swoopMap: Map<string, SwoopMode>;
   loading: boolean;
   /**
    * Non-null when the listener was refused or failed.
@@ -769,6 +775,12 @@ function scopeMapsEqual(
   return true;
 }
 
+function swoopMapsEqual(a: Map<string, SwoopMode>, b: Map<string, SwoopMode>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [k, v] of a) if (b.get(k) !== v) return false;
+  return true;
+}
+
 /**
  * The caller's site memberships, live.
  *
@@ -780,12 +792,13 @@ function scopeMapsEqual(
  *
  * the `members.uid` COLLECTION_GROUP field override in firestore.indexes.json is
  * what makes the query servable: automatic single-field indexing does not extend
- * to collection-group scope (scripts/check-membership-read-path.mjs). role and
- * scope are read in memory, over tens of documents.
+ * to collection-group scope (scripts/check-membership-read-path.mjs). role,
+ * scope and swoop mode are read in memory, over tens of documents.
  */
 export function useSiteMemberships(userId?: string): SiteMemberships {
   const [roleMap, setRoleMap] = useState<Map<string, SiteRole>>(() => new Map());
   const [scopeMap, setScopeMap] = useState<Map<string, readonly string[]>>(() => new Map());
+  const [swoopMap, setSwoopMap] = useState<Map<string, SwoopMode>>(() => new Map());
   // `db` is a module constant, so its absence is knowable at first render.
   const [loading, setLoading] = useState(Boolean(db));
   const [error, setError] = useState<string | null>(db ? null : 'Firebase not configured');
@@ -800,6 +813,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
     setSubscribedUid(userId);
     setRoleMap(new Map());
     setScopeMap(new Map());
+    setSwoopMap(new Map());
     setLoading(Boolean(db));
     setError(db ? null : 'Firebase not configured');
   }
@@ -822,6 +836,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
       (snapshot) => {
         const next = new Map<string, SiteRole>();
         const nextScopes = new Map<string, readonly string[]>();
+        const nextModes = new Map<string, SwoopMode>();
         snapshot.forEach((memberDoc) => {
           // sites/{siteId}/members/{uid} — the grandparent is the site.
           const siteId = memberDoc.ref.parent.parent?.id;
@@ -832,9 +847,12 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
           next.set(siteId, data.role as SiteRole);
           const scope = parseMachineIds(data);
           if (scope !== null) nextScopes.set(siteId, scope);
+          const mode = parseSwoopMode(data.swoop);
+          if (mode !== null) nextModes.set(siteId, mode);
         });
         setRoleMap((prev) => (roleMapsEqual(prev, next) ? prev : next));
         setScopeMap((prev) => (scopeMapsEqual(prev, nextScopes) ? prev : nextScopes));
+        setSwoopMap((prev) => (swoopMapsEqual(prev, nextModes) ? prev : nextModes));
         setLoading(false);
       },
       (err) => {
@@ -847,7 +865,7 @@ export function useSiteMemberships(userId?: string): SiteMemberships {
     return () => unsubscribe();
   }, [userId]);
 
-  return { roleMap, scopeMap, loading, error };
+  return { roleMap, scopeMap, swoopMap, loading, error };
 }
 
 export interface MembershipUnion {

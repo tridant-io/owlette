@@ -22,6 +22,9 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { markThisMachine } from '@/lib/swoop/thisMachine';
 import { activeHoursGuardOf, type ActiveHoursGuard, type PowerCommandOptions, type PowerCommandSent } from '@/lib/activeHours';
+import { computeSwoopMode, type UserRole } from '@/contexts/AuthContext';
+import type { SiteRole } from '@/hooks/useFirestore';
+import type { SwoopMode } from '@/lib/swoopMode';
 
 // jsdom ships no ResizeObserver; Radix's dropdown positioning constructs one.
 global.ResizeObserver = class {
@@ -37,6 +40,8 @@ window.HTMLElement.prototype.setPointerCapture = jest.fn();
 window.HTMLElement.prototype.releasePointerCapture = jest.fn();
 
 jest.mock('@/contexts/AuthContext', () => ({
+  // the real one: the swoop mode cases below derive noSwoop as the dashboard does
+  computeSwoopMode: jest.requireActual('@/contexts/AuthContext').computeSwoopMode,
   useAuth: () => ({
     userPreferences: { mutedMachines: [] },
     updateUserPreferences: jest.fn(),
@@ -74,6 +79,7 @@ async function openMenu(props: {
   controlLocked?: boolean;
   swoopLocked?: boolean;
   swoopOff?: boolean;
+  noSwoop?: boolean;
   onSiteSettings?: () => void;
   activeHoursGuard?: ActiveHoursGuard | null;
   onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
@@ -213,6 +219,65 @@ describe('MachineContextMenu — swoop off for the site', () => {
     await openMenu({ swoopCapable: false, swoopOff: true, ...ADMIN });
 
     expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
+  });
+});
+
+// the dashboard hands the menu noSwoop when the viewer's effective swoop mode on
+// the site is none (computeSwoopMode). the server still decides; this only stops
+// the menu offering what it refuses. watch keeps the entry: the viewer asks for
+// control and steps down to watching on capability_missing.
+describe('MachineContextMenu — swoop mode', () => {
+  const MEMBER = new Map<string, SiteRole>([['site-A', 'member']]);
+  const NO_ROWS = new Map<string, SiteRole>();
+
+  /** noSwoop as the dashboard derives it for the person on site-A. */
+  function noSwoopFor(role: UserRole, roleMap: Map<string, SiteRole>, mode: SwoopMode | null, membersMayWatch: boolean) {
+    const swoopMap = new Map<string, SwoopMode>(mode ? [['site-A', mode]] : []);
+    return computeSwoopMode(role, roleMap, swoopMap, 'site-A', membersMayWatch) === 'none';
+  }
+
+  it.each<[string, UserRole, Map<string, SiteRole>, SwoopMode | null, boolean]>([
+    ['a member set to watch', 'member', MEMBER, 'view', true],
+    ['a member set to watch, where members may not watch by default', 'member', MEMBER, 'view', false],
+    ['a member with no mode, where members may watch', 'member', MEMBER, null, true],
+    ['a superadmin on a site where they hold no row', 'superadmin', NO_ROWS, null, false],
+  ])('keeps swoop for %s', async (_label, role, roleMap, mode, membersMayWatch) => {
+    await openMenu({ swoopCapable: true, swoopViewers: 2, noSwoop: noSwoopFor(role, roleMap, mode, membersMayWatch) });
+
+    expect(screen.getByTestId('machine-context-menu-swoop')).toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-swoop-pill')).toHaveTextContent('2');
+    expect(screen.queryByTestId('machine-context-menu-live-view')).not.toBeInTheDocument();
+  });
+
+  it.each<[string, SwoopMode | null, boolean]>([
+    ['a member set to none', 'none', true],
+    ['a member with no mode, where members may not watch', null, false],
+  ])('offers %s no swoop, with live view as on a machine without a streamer', async (_label, mode, membersMayWatch) => {
+    await openMenu({
+      swoopCapable: true,
+      swoopViewers: 2,
+      onSwoopApp: jest.fn(),
+      noSwoop: noSwoopFor('member', MEMBER, mode, membersMayWatch),
+    });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-app')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('machine-context-menu-swoop-pill')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+  });
+
+  it('drops the swoop-is-off row too, since turning the switch on would not help', async () => {
+    await openMenu({ swoopCapable: true, noSwoop: true, swoopOff: true });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop-off')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
+  });
+
+  it("drops the plan's swoop row too, since an upgrade would not help", async () => {
+    await openMenu({ swoopCapable: true, noSwoop: true, swoopLocked: true });
+
+    expect(screen.queryByTestId('machine-context-menu-swoop-upgrade')).not.toBeInTheDocument();
+    expect(screen.getByTestId('machine-context-menu-live-view')).toBeInTheDocument();
   });
 });
 

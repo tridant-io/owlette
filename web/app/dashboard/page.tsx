@@ -115,7 +115,7 @@ export default function DashboardPage() {
   const processFormRef = useScrollFade<HTMLDivElement>();
 
   const router = useRouter();
-  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
+  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, swoopMode, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
   const { sites, loading: sitesLoading, createSite, updateSite } = useSites(user?.uid, userSites, isSuperadmin);
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
@@ -917,6 +917,9 @@ export default function DashboardPage() {
   const swoopSettings = useSwoopSettings(currentSiteId);
   // not while loading: the hook reads off until the snapshot lands.
   const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
+  // membersMayWatch reads true until the snapshot lands, so while it loads only
+  // an explicit none hides swoop, as swoopOff waits for it too
+  const noSwoop = swoopMode(currentSiteId, swoopSettings.settings.membersMayWatch) === 'none';
   // The online flag is read when the dialog opens, not when the row was bound.
   const onRemoveMachineById = useStableCallback((machineId: string) => {
     const machine = machines.find((m) => m.machineId === machineId);
@@ -1243,6 +1246,7 @@ export default function DashboardPage() {
                   onSwoop={onSwoop}
                   onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
+                  noSwoop={noSwoop}
                   onSiteSettings={onSiteSettings}
                   sitePlan={sitePlan}
                 />
@@ -1277,6 +1281,7 @@ export default function DashboardPage() {
                         userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
                         swoopOff={swoopOff}
+                        noSwoop={noSwoop}
                         onSiteSettings={onSiteSettings}
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
