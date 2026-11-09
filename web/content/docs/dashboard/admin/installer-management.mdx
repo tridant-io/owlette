@@ -44,6 +44,8 @@ one upload is one file. upload each platform's file under the same version numbe
 
 **write the release notes on the first file.** a version's release notes, uploader and date come from its first upload, and later uploads keep them: notes typed on the second or third file are dropped.
 
+**correcting the notes later.** a published version's notes can be corrected with `PATCH /api/installer/{version}` (`installer=*:write`), on the version and on the latest version when it is that one, or from the repo with `node scripts/upload-installer.mjs --env dev --version X.Y.Z --notes-only`, which sends that version's changelog section. the files themselves never change.
+
 **upload every platform before promoting.** each upload with **set as latest (all platforms)** ticked makes that version latest with the files it has so far. promote after the Windows file alone and `/download?os=macos` answers `404` "no macos build in v4.1.6" until the Mac file lands and the version is promoted again. the simplest order is to upload every file with the box cleared, then use `set as latest` on the version's row. once a version is latest its row has no `set as latest`, so a file added to it later needs the box ticked on that upload.
 
 uploading a version number that was soft-deleted starts a fresh record: new notes and date, and only the files uploaded from then on. a file it already had on the download host can only come back with the same bytes.
@@ -134,7 +136,7 @@ each version is `installer_metadata/data/versions/{version}`:
 | `version` | the `X.Y.Z` version |
 | `files` | one entry per platform, keyed `windows_x64`, `macos_arm64` or `linux_x64`, each with `download_url`, `checksum_sha256`, `file_size`, `file_name` (the served name on the download host; on Firebase Storage, the name you uploaded) and `uploaded_at` |
 | `download_url`, `checksum_sha256`, `file_size` | the Windows file's values again, for older readers. a version with no Windows file has none |
-| `release_notes` | the notes from the version's first upload, or `null` |
+| `release_notes` | the notes from the version's first upload or a later correction, or `null` |
 | `uploaded_at` / `release_date` | when the version's first upload was finalized |
 | `uploaded_by` | the user ID of whoever requested the version's first upload; for an API key, the key's owner |
 | `deletedAt`, `deletedBy` | `null` while active; set by a delete |
