@@ -421,10 +421,13 @@ describe('recipientWantsMachine', () => {
     expect(recipientWantsMachine(recipient([], []), 'm1')).toBe(false);
   });
 
-  it('reads null, or a recipient built without the field, as the whole site', () => {
+  it('reads null as the whole site', () => {
     expect(recipientWantsMachine(recipient([], null), 'any')).toBe(true);
+  });
+
+  it('reaches no machine for a recipient built without the field', () => {
     const handBuilt = { userId: 'u1', email: 'u1@owlette.test', ccEmails: [], mutedMachines: [] };
-    expect(recipientWantsMachine(handBuilt as unknown as Parameters<typeof recipientWantsMachine>[0], 'any')).toBe(true);
+    expect(recipientWantsMachine(handBuilt as unknown as Parameters<typeof recipientWantsMachine>[0], 'any')).toBe(false);
   });
 });
 

@@ -17,8 +17,9 @@ export interface SiteRecipient {
 
 /** false when the recipient muted the machine or their machine scope does not reach it */
 export function recipientWantsMachine(recipient: SiteRecipient, machineId: string): boolean {
-  // `?? null`: a recipient built without the field (tests) reads as the whole site
-  return !recipient.mutedMachines.includes(machineId) && scopeCovers(recipient.machineIds ?? null, machineId);
+  // a recipient built without the field reaches no machine; scopeCovers would throw on it
+  if (recipient.machineIds === undefined) return false;
+  return !recipient.mutedMachines.includes(machineId) && scopeCovers(recipient.machineIds, machineId);
 }
 
 /** One user, resolved as the recipient of an alert that has no site to scope it to. */

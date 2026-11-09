@@ -385,7 +385,7 @@ on a machine in their scope, every scoped member gets screenshots and live view,
 
 because nothing site-wide reaches a scoped member:
 
-- talons need a whole-site author and a whole-site successor: a scoped member cannot author, manage or inherit one, and a talon that checks its author when it fires is switched off (`creator_access_revoked`) once that author is scoped ([talons](/docs/dashboard/talons))
+- talons need a whole-site author and a whole-site successor: a scoped member cannot author, manage or inherit one, and every talon re-checks its author before any of its outputs fires, so it switches off (`creator_access_revoked`) at its next run, with nothing fired, once that author is scoped ([talons](/docs/dashboard/talons))
 - viewer emails on a swoop session go only to a superadmin or a whole-site owner or admin. a scoped admin seated in a session sees the other viewers' names, never their emails, and cannot kick, kill or list the site's sessions
 - the site's activity log, the machines list and hoot's **all machines** cover only their machines; deployments, roost, chunks, quota, the events stream, webhooks, the audit log and the site's settings, members and presets answer `403`
 

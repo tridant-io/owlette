@@ -155,7 +155,7 @@ async function executeEmailOutput(ctx: TalonOutputContext): Promise<TalonRunOutp
         muted += 1;
         continue;
       }
-    } else if ((recipient.machineIds ?? null) !== null) {
+    } else if (recipient.machineIds !== null) {
       continue;
     }
 

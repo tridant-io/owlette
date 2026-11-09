@@ -175,7 +175,7 @@ owlette site remove-member <siteId> <uid> [--talon-successor <uid>]
 |---|---|---|---|
 | `--talon-successor <uid>` | string | no | reassign the talons this member authored to another user before removing them |
 
-talons the person authored **survive** the removal — they belong to the site — but a talon with a hoot output re-checks its author's access on every run, so it starts failing once the author is gone. when talons are left in place the CLI prints a `WARNING <n> talon(s) authored by <uid> were left in place` line. reassignment never happens unless you pass `--talon-successor`.
+talons the person authored **survive** the removal — they belong to the site — but every talon re-checks its author's access on every run, before any of its outputs fires, so each one switches off at its next run, with nothing fired, once the author is gone. when talons are left in place the CLI prints a `WARNING <n> talon(s) authored by <uid> were left in place` line. reassignment never happens unless you pass `--talon-successor`.
 
 the server refuses to remove the site owner (`409 cannot_remove_owner` — transfer ownership first) and to remove yourself (`403 cannot_modify_own_membership`). this verb sends no `Idempotency-Key`; the route is idempotent on its own.
 

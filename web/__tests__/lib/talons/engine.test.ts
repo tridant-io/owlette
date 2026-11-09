@@ -716,8 +716,8 @@ describe('outputs', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: ['cc@example.com'], mutedMachines: [] },
-      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: ['m1'] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: ['cc@example.com'], mutedMachines: [], machineIds: null },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: ['m1'], machineIds: null },
     ]);
 
     const talon = seedTalon('t1', {
@@ -776,13 +776,39 @@ describe('outputs', () => {
     expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'] });
   });
 
+  it('emails a recipient built without a machine scope on neither a machine run nor a site-level run', async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+    ]);
+    seedMachine('m1', true, 'LOBBY-01');
+
+    const machineRun = await runTalon(
+      db,
+      seedTalon('t1', { trigger: { type: 'event', eventTypes: ['process_crash'] }, cooldownMinutes: 0 }),
+      { siteId: SITE, now: NOW, machineId: 'm1' },
+    );
+    const siteRun = await runTalon(db, seedTalon('t2'), { siteId: SITE, now: NOW });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(outputByType(machineRun[0].outputs, 'email')).toMatchObject({
+      status: 'skipped',
+      detail: 'all_recipients_muted',
+    });
+    expect(outputByType(siteRun[0].outputs, 'email')).toMatchObject({
+      status: 'skipped',
+      detail: 'no_recipients',
+    });
+  });
+
   it('reports an in-band resend rejection as a failed output', async () => {
     const send = jest
       .fn()
       .mockResolvedValue({ data: null, error: { name: 'validation_error', message: 'bad domain' } });
     mockGetResend.mockReturnValue({ emails: { send } });
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = seedTalon('t1');
 
@@ -799,7 +825,7 @@ describe('outputs', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     mockValidateWebhookUrl.mockResolvedValue({
       ok: false,
@@ -1022,7 +1048,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -1045,7 +1071,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);

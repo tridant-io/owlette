@@ -308,7 +308,7 @@ describe('GET /api/cron/health-check', () => {
     knownSites.add('node-pa');
     setSite({ name: 'node-pa' });
     getSiteAlertRecipientsMock.mockResolvedValue([
-      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
   });
 
