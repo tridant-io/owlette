@@ -49,12 +49,16 @@ interface MachineContextMenuProps {
    */
   rebootDeferredUntil?: number;
   /**
-   * Site-scoped admin gate. When false the menu hides every write action
-   * (restart/shutdown/cancel, revoke token, remove machine) and keeps only the
-   * user-scoped + read-only items. Contract:
+   * whole-site admin gate: revoke token, remove machine and "turn on swoop…",
+   * which reach past this machine. Contract:
    * dev/active/permission-model-split/manual-smoke-checklist.md.
    */
   isSiteAdmin?: boolean;
+  /**
+   * admin on this machine, whole site or scoped (`isMachineAdmin` in
+   * AuthContext): restart, shutdown, cancel and schedule restarts.
+   */
+  isMachineAdmin?: boolean;
   onRemoveMachine: () => void;
   onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
@@ -147,6 +151,7 @@ export function MachineContextMenu({
   shuttingDown,
   rebootDeferredUntil,
   isSiteAdmin,
+  isMachineAdmin,
   onRemoveMachine,
   onRestart,
   onShutdown,
@@ -332,7 +337,7 @@ export function MachineContextMenu({
         </Tooltip>
         {/* wider for the "remote control · part of core" row, which overflows w-52 */}
         <DropdownMenuContent align="end" className={cn('border-border bg-raised', controlLocked ? 'w-60' : 'w-52')}>
-          {isOnline && isSiteAdmin && !planLocked && (
+          {isOnline && isMachineAdmin && !planLocked && (
             <>
               {rebooting ? (
                 cancelRestartItem
@@ -416,7 +421,7 @@ export function MachineContextMenu({
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}
-          {!isOnline && isSiteAdmin && !planLocked && (
+          {!isOnline && isMachineAdmin && !planLocked && (
             <>
               {/* Offline machines can still be scheduled: the restart schedule is
                   written to the config doc and the agent applies it from local

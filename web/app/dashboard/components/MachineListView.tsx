@@ -356,7 +356,8 @@ export const MachineRow = memo(function MachineRow({
   const memoryTotalGb =
     resolvedMemoryTotalGb !== null ? Math.round(resolvedMemoryTotalGb * 10) / 10 : null;
   const isDemo = !!useDemoContext();
-  const { userPreferences: fullPrefs } = useAuth();
+  const { userPreferences: fullPrefs, isMachineAdmin } = useAuth();
+  const canAdminMachine = isMachineAdmin(currentSiteId, machine.machineId);
   const isMuted = fullPrefs.mutedMachines.includes(machine.machineId);
   const sparklineData = useAllSparklineData(currentSiteId, planLocked ? null : machine.machineId);
 
@@ -525,7 +526,7 @@ export const MachineRow = memo(function MachineRow({
             rebootDeferredUntil={machine.rebootDeferredUntil}
             machineTimezone={machine.machineTimezone}
             compact
-            isSiteAdmin={isSiteAdmin}
+            isMachineAdmin={canAdminMachine}
             onCancel={onCancelRestart}
           />
         </TableCell>
@@ -761,6 +762,7 @@ export const MachineRow = memo(function MachineRow({
               shuttingDown={machine.shuttingDown}
               rebootDeferredUntil={machine.rebootDeferredUntil}
               isSiteAdmin={isSiteAdmin}
+              isMachineAdmin={canAdminMachine}
               onRemoveMachine={onRemoveMachine}
               onRestart={onRestart}
               onShutdown={onShutdown}
@@ -858,7 +860,7 @@ export const MachineRow = memo(function MachineRow({
                               <>
                                 {/* Desktop controls (lg+) */}
                                 <div className="hidden lg:flex items-center gap-3 ml-4 flex-shrink-0">
-                                  {!isSiteAdmin ? (
+                                  {!canAdminMachine ? (
                                     // Non-admins are read-only: static mode pill, no toggle (which would 403).
                                     <div className="flex items-center h-8">
                                       <span className={`flex items-center px-3 text-sm font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
@@ -925,7 +927,7 @@ export const MachineRow = memo(function MachineRow({
                                     })}
                                   </div>
                                   )}
-                                  {isSiteAdmin && (
+                                  {canAdminMachine && (
                                     <>
                                   <Button
                                     variant="ghost"
@@ -978,7 +980,7 @@ export const MachineRow = memo(function MachineRow({
                                 </div>
                                 {/* Compact controls (<lg) */}
                                 <div className="flex lg:hidden items-center gap-2 sm:ml-2 flex-shrink-0">
-                                  {!isSiteAdmin ? (
+                                  {!canAdminMachine ? (
                                     // Non-admins are read-only: static mode pill, no write menu.
                                     <span className={`flex items-center px-2.5 h-8 text-xs font-medium rounded-md border bg-card ${currentMode === 'always' ? 'text-success border-success-border' : currentMode === 'scheduled' ? 'text-info border-info-border' : 'text-muted-foreground border-border'}`}>
                                       {currentMode === 'always' ? 'always on' : currentMode === 'scheduled' ? 'scheduled' : 'off'}
@@ -1101,7 +1103,7 @@ export const MachineRow = memo(function MachineRow({
                     ))}
                   </div>
                   {/* add process Button — admin-only write action */}
-                  {isSiteAdmin && (
+                  {canAdminMachine && (
                     <div className="flex justify-center pt-3">
                       <Button
                         variant="ghost"
@@ -1118,7 +1120,7 @@ export const MachineRow = memo(function MachineRow({
               ) : (
                 <div className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                   <p className="mb-4 text-sm">No processes configured for this machine</p>
-                  {isSiteAdmin && (
+                  {canAdminMachine && (
                     <Button
                       variant="ghost"
                       size="sm"

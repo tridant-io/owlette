@@ -19,7 +19,7 @@ interface MachineStatusPillProps {
   /** the list's fixed 72px status cell: a held restart shows its time without the words. */
   compact?: boolean;
   onCancel?: () => Promise<void>;
-  isSiteAdmin?: boolean;
+  isMachineAdmin?: boolean;
 }
 
 const CANCEL_LOCKOUT_THRESHOLD = 5; // Hide cancel in final 5s — Windows shutdown /a is unreliable
@@ -98,7 +98,7 @@ export function MachineStatusPill({
   machineTimezone,
   compact,
   onCancel,
-  isSiteAdmin,
+  isMachineAdmin,
 }: MachineStatusPillProps) {
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
@@ -152,7 +152,7 @@ export function MachineStatusPill({
     // a phone's card header has no more room than the list cell, so the words go there too
     const text = compact ? time : <><span className="hidden sm:inline">restart at </span>{time}</>;
     if (cancellingAt === deferredUntil) return <CancellingPill fill={DEFERRED_FILL} />;
-    if (!isSiteAdmin || !onCancel) {
+    if (!isMachineAdmin || !onCancel) {
       return (
         <Badge
           role="img"
@@ -220,7 +220,7 @@ export function MachineStatusPill({
 
   if (cancellingAt === scheduledAt) return <CancellingPill fill={COUNTDOWN_FILL} />;
 
-  const canCancel = isSiteAdmin && !!onCancel && remaining > CANCEL_LOCKOUT_THRESHOLD;
+  const canCancel = isMachineAdmin && !!onCancel && remaining > CANCEL_LOCKOUT_THRESHOLD;
 
   // Final 5s, non-admin, or no cancel handler: no interaction.
   if (!canCancel) {
