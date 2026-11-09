@@ -315,6 +315,18 @@ function authedKey(scopes: Scope[], uid = 'admin-uid', role = 'superadmin'): voi
   });
 }
 
+/** a session for a member whose row carries `machineIds`; absent, the whole site. */
+function authedMember(uid: string, machineIds?: string[]): void {
+  seedUser(uid, { role: 'member' });
+  if (machineIds) {
+    putDoc(`sites/${SITE}/members/${uid}`, {
+      ...(docStore[`sites/${SITE}/members/${uid}`] as Record<string, unknown>),
+      machineIds,
+    });
+  }
+  mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
+}
+
 function siteScope(permission: string): Scope {
   return { resource: 'site', id: SITE, permissions: [permission] };
 }
@@ -553,5 +565,77 @@ describe('DELETE /api/sites/{siteId}/machines/{machineId}', () => {
     expect(res.status).toBe(403);
     expect(body.code).toBe('scope_insufficient');
     expect(docStore[`sites/${SITE}/machines/${MACHINE}`]).not.toBeNull();
+  });
+});
+
+describe('machine scope on the machines list, detail and deployments', () => {
+  const M1 = 'm1';
+  const M2 = 'm2';
+  const listMachines = () =>
+    listMachinesGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines`),
+      { params: Promise.resolve({ siteId: SITE }) },
+    );
+  const detail = (machineId: string) =>
+    machineGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}`),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+  const deployments = (machineId: string) =>
+    machineDeploymentsGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/deployments`),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  beforeEach(() => {
+    seedSite();
+    seedMachine(M1, { name: 'One' });
+    seedMachine(M2, { name: 'Two' });
+    seedRoost('roost-both', { name: 'Show', targets: [M1, M2], currentVersionId: null, versionCounter: 1 });
+  });
+
+  it('lists only the machines in scope, each with the roosts that target it', async () => {
+    authedMember('scoped', [M1]);
+
+    const res = await listMachines();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.machines.map((m: { id: string }) => m.id)).toEqual([M1]);
+    expect(body.machines[0].currentRoosts).toEqual([
+      { roostId: 'roost-both', name: 'Show', currentVersionId: null, versionCounter: 1 },
+    ]);
+  });
+
+  it('lists every machine for a whole-site member, as before', async () => {
+    authedMember('whole');
+
+    const body = await (await listMachines()).json();
+
+    expect(body.machines.map((m: { id: string }) => m.id)).toEqual([M1, M2]);
+  });
+
+  it('answers detail and deployments for a machine in scope', async () => {
+    authedMember('scoped', [M1]);
+
+    const detailRes = await detail(M1);
+    const deploymentsRes = await deployments(M1);
+
+    expect(detailRes.status).toBe(200);
+    expect((await detailRes.json()).id).toBe(M1);
+    expect(deploymentsRes.status).toBe(200);
+    expect((await deploymentsRes.json()).deployments).toEqual([
+      expect.objectContaining({ roostId: 'roost-both' }),
+    ]);
+  });
+
+  it('answers a machine outside the scope as one that is not there', async () => {
+    authedMember('scoped', [M1]);
+
+    for (const res of [await detail(M2), await deployments(M2)]) {
+      const body = await res.json();
+      expect(res.status).toBe(404);
+      expect(body.detail).toBe('machine not found or no access');
+    }
   });
 });

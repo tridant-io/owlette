@@ -2,12 +2,15 @@
  * GET /api/sites/{siteId}/machines — every machine in the site with online status
  * and a `currentRoosts` summary: the roosts targeting it plus their
  * currentVersionId, so "what is this machine running" reads at a glance.
+ * a scoped member gets only the machines in their machine scope, each with its
+ * `currentRoosts`: a roost that targets their machine is about their machine.
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { Timestamp } from 'firebase-admin/firestore';
 import { problemFromError } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { scopeCovers } from '@/lib/machineAccess';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
@@ -27,7 +30,7 @@ interface RoostSummary {
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();
@@ -58,7 +61,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    const machines = machinesSnap.docs.map((d) => {
+    const inMachineScope = machinesSnap.docs.filter((d) => scopeCovers(auth.machineIds, d.id));
+    const machines = inMachineScope.map((d) => {
       const data = d.data();
       const lastHeartbeat = data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null;
       return {
