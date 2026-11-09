@@ -97,7 +97,7 @@ everything that spans the site needs the whole site:
 narrowing, from the whole site to some machines or to fewer machines, takes effect at once:
 
 - **swoop.** every swoop session they are in on a machine you take away ends within a couple of seconds, for everyone in it, because one streamer serves the whole session; everyone else reconnects on their own, and their viewer says **your access to this machine was removed.** their sessions on the machines they keep carry on. the dialog says **a swoop session they are in on a machine you take away ends.**
-- **talons.** talons span the site, so the ones they wrote stop: a talon with a hoot output or a visual check switches itself off at its next run, as it does when its author is removed. when you move someone from **whole site** to **some machines**, the dialog says how many talons they wrote on the site, for example **they wrote 2 talons, which stop at their next run once their access is limited. reassign them to keep them.**
+- **talons.** talons span the site, so the ones they wrote stop: every talon they wrote switches itself off at its next run, before any of its outputs fires, as it does when its author is removed. when you move someone from **whole site** to **some machines**, the dialog says how many talons they wrote on the site, for example **they wrote 2 talons, which stop at their next run once their access is limited. reassign them to keep them.**
 
 the API equivalent is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "machineIds": ["kiosk-01", "kiosk-02"] }`, and `null` gives back the whole site. `POST /api/sites/{siteId}/members` takes `machineIds` when you add someone; leave it out for the whole site. an ID that is not a machine of the site is refused (`400`, `unknown machine: …`). the CLI and the SDKs do not set it yet.
 
@@ -139,7 +139,7 @@ two rows cannot be removed:
 
 ### talon reassignment
 
-talons belong to the site, but a talon with a hoot output or a visual check re-checks its **author's** access on every run. once its author has been removed, it switches itself off on its next run.
+talons belong to the site, but every talon re-checks its **author's** access on every run, before any of its outputs fires. once its author has been removed, it switches itself off on its next run.
 
 when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker, which lists this site's owners and admins whose access is the whole site. choosing a successor moves authorship before the membership change; the section then says how many talons moved. if the server refuses the successor, nothing is removed.
 
