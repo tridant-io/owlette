@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 32/57 complete
+**Progress**: 45/57 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -1064,7 +1064,7 @@ House rules for every task:
 
 ## Wave 7: the browser
 
-- [ ] **Task 7.1: The dashboard page: scoped data, and what a scoped person sees when there is nothing**
+- [x] **Task 7.1: The dashboard page: scoped data, and what a scoped person sees when there is nothing**
   - Files: `web/app/dashboard/page.tsx`, `web/app/dashboard/components/MachinesNotice.tsx` (new), `web/__tests__/app/dashboard-machines-notice.test.tsx` (new)
   - Depends on: 4.3, 4.5, 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Release 2 owns this page's site-settings wiring; touch nothing else here. The machine cards and rows compute per-machine admin themselves (task 7.2), so the page passes them nothing new.
@@ -1088,7 +1088,7 @@ House rules for every task:
       - both components render their exact copy, with theme classes only.
   - Done when: the test and `cd web && npx jest __tests__/app` are green, and lint and tsc are clean. Task 9.1's e2e proves the page.
 
-- [ ] **Task 7.2: Machine cards, rows, menus and pills: per-machine admin actions**
+- [x] **Task 7.2: Machine cards, rows, menus and pills: per-machine admin actions**
   - Files:
     - `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`
     - `web/components/MachineContextMenu.tsx`, `web/components/MachineStatusPill.tsx`
@@ -1127,7 +1127,7 @@ House rules for every task:
       - a member sees none of them.
   - Done when: these suites and `cd web && npx jest __tests__/app __tests__/components` are green, and lint and tsc are clean.
 
-- [ ] **Task 7.3: DisplayLayoutPanel acts on its machine**
+- [x] **Task 7.3: DisplayLayoutPanel acts on its machine**
   - Files: `web/components/charts/DisplayLayoutPanel.tsx`, `web/__tests__/components/DisplayLayoutPanel.test.tsx`
   - Depends on: 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1139,7 +1139,7 @@ House rules for every task:
       - a member sees none.
   - Done when: the suite is green, and lint and tsc are clean.
 
-- [ ] **Task 7.4: The nav and the site lists for scoped sites**
+- [x] **Task 7.4: The nav and the site lists for scoped sites**
   - Files:
     - `web/components/PageHeader.tsx`, `web/hooks/useCurrentSite.ts`, `web/components/NoSitesEmptyState.tsx`
     - `web/app/deployments/page.tsx`, `web/app/roosts/RoostsPageClient.tsx`, `web/app/talons/page.tsx`
@@ -1163,7 +1163,7 @@ House rules for every task:
       - mocks gain `machineScope`.
   - Done when: these suites are green, and lint and tsc are clean.
 
-- [ ] **Task 7.5: The swoop picker and viewer read only what they may**
+- [x] **Task 7.5: The swoop picker and viewer read only what they may**
   - Files:
     - `web/components/swoop/SwoopPicker.tsx`, `web/app/swoop/[siteId]/[machineId]/page.tsx`
     - `web/hooks/useSwoopSession.ts`, only if step 3 below needs it
@@ -1187,7 +1187,7 @@ House rules for every task:
       - mocks gain `machineScope`, `isMachineAdmin` and `siteRole`.
   - Done when: these suites are green, and lint and tsc are clean.
 
-- [ ] **Task 7.6: The hoot page lists in-scope machines and skips autonomous chats on a scoped site**
+- [x] **Task 7.6: The hoot page lists in-scope machines and skips autonomous chats on a scoped site**
   - Files: `web/app/hoot/components/HootChatView.tsx`, `web/hooks/useHoot.ts`, `web/__tests__/components/HootChatView.test.tsx`, `web/__tests__/hooks/useHoot.autonomous.test.ts`
   - Depends on: 4.3, 4.5, 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1201,7 +1201,7 @@ House rules for every task:
       - mocks gain `machineScope`.
   - Done when: the suites are green, and lint and tsc are clean.
 
-- [ ] **Task 7.7: The logs page queries by machine for scoped sites**
+- [x] **Task 7.7: The logs page queries by machine for scoped sites**
   - Files: `web/app/logs/page.tsx`, `web/lib/logFilters.ts`, `web/__tests__/lib/logFilters.test.ts`
   - Depends on: 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1216,7 +1216,7 @@ House rules for every task:
     - **Tests:** planActionFilter with maxInValues 1 and two selected gives `clientSide: true`; the default is unchanged.
   - Done when: the logFilters tests are green, and lint and tsc are clean. Task 9.1's e2e proves the page.
 
-- [ ] **Task 7.8: Schedule dialogs read machines only when open, and only in scope**
+- [x] **Task 7.8: Schedule dialogs read machines only when open, and only in scope**
   - Files: `web/components/RestartScheduleDialog.tsx`, `web/components/ApplyScheduleToMachinesDialog.tsx`, `web/__tests__/components/RestartScheduleDialog.test.tsx` (new), `web/__tests__/components/ApplyScheduleToMachinesDialog.test.tsx` (new)
   - Depends on: 4.3, 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1227,7 +1227,7 @@ House rules for every task:
       - ApplyScheduleToMachinesDialog passes `machineScope(siteId)`. With useMachines returning `[IN, IN2]` and the current machine IN, it lists IN2 only, and the select-all row counts one.
   - Done when: the new tests and `__tests__/components` are green, and lint and tsc are clean.
 
-- [ ] **Task 7.9: The members section: access beside role and swoop mode**
+- [x] **Task 7.9: The members section: access beside role and swoop mode**
   - Files:
     - release 2's `web/components/admin/sites/SiteMembersSection.tsx`, `MemberAccessFields.tsx`, `AddMemberDialog.tsx` and `ChangeAccessDialog.tsx`
     - `web/hooks/useSiteMembers.ts`
@@ -1274,7 +1274,7 @@ House rules for every task:
         - the owner's row and your own row have no "change access...", as in release 2.
   - Done when: these suites are green, and lint and tsc are clean.
 
-- [ ] **Task 7.10: The site list, the site settings page and talon successors learn scope**
+- [x] **Task 7.10: The site list, the site settings page and talon successors learn scope**
   - Files: release 2's `web/components/admin/sites/SiteList.tsx` and `SiteSettings.tsx`, `web/lib/talonSuccessors.ts`, `web/__tests__/components/admin/sites/SiteList.test.tsx`, `SiteSettings.test.tsx`, `web/__tests__/lib/talonSuccessors.test.ts`
   - Depends on: 4.8, 5.6
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1294,7 +1294,7 @@ House rules for every task:
       - Mocks gain `machineScope` and `siteRole`.
   - Done when: these suites are green, and lint and tsc are clean.
 
-- [ ] **Task 7.11: Escalation blocks for machine scope**
+- [x] **Task 7.11: Escalation blocks for machine scope**
   - Files: `web/__tests__/api/membershipEscalation.test.ts`
   - Depends on: 5.1, 6.3
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1308,7 +1308,7 @@ House rules for every task:
       - **23.** A scoped member set to swoop control holds nothing site-wide: the members GET, and `GET /api/sites/{siteId}/swoop/sessions` if the file can import it, give 403 with the switch on and off. CONTROL: a whole-site admin gets 200.
   - Done when: the suite is green.
 
-- [ ] **Task 7.12: The dashboard hides swoop from someone whose swoop mode is none**
+- [x] **Task 7.12: The dashboard hides swoop from someone whose swoop mode is none**
   - Files: `web/contexts/AuthContext.tsx`, `web/hooks/useFirestore.ts` (useSiteMemberships exposes the row's `swoop`, per 5.6's note), `web/components/MachineContextMenu.tsx`, `web/app/dashboard/components/MachineCardView.tsx`, `web/app/dashboard/components/MachineListView.tsx`, `web/app/dashboard/page.tsx`, and the tests beside them that assert the swoop entries
   - Depends on: 7.1, 7.2 and 7.5, which hold these files first. It runs after them, never beside them.
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1496,7 +1496,7 @@ House rules for every task:
     - every heading still sits under `[Unreleased]`. Project memory: entries can land in a released section;
     - the avoid-word grep over the edited docs finds nothing.
 
-- [ ] **Task 8.6: The SDKs and the CLI carry machine scope (only if the owner said now)**
+- [x] **Task 8.6: The SDKs and the CLI carry machine scope (only if the owner said now)** (skipped: owner Q4, later)
   - Files:
     - `sdks/node/src/resources/members.ts`, `sdks/node/__tests__/resources.test.ts`, `sdks/node/README.md`
     - `sdks/python/roost/resources/members.py`, `sdks/python/tests/test_members.py`
@@ -1920,3 +1920,35 @@ House rules for every task:
   - 6.9 957ecea7: the session GET gives viewer emails only to a superadmin, or to an owner or admin whose machineScopeOf is null. The scoped-admin case was red on user-admin@example.test first; it also pins kickable false for every viewer. swoop 263/263.
   - 6.10 94cad4cc: both resume routes answer a 404 from runHootStream with problemNotFound('machine not found or no access'); any other refusal keeps cortex_unavailable, and the two routes' edits are identical. Both 404 cases were red first; chat.test 54/54, hoot-* 148/148. The prompt is still appended and audited before the 404, as designed.
 - Wave 6 build check (with 6.9 and 6.10): tsc clean, full jest 478 suites (11056 tests) green.
+- 2026-11-09 **correction:** the escalation blocks in membershipEscalation.test.ts run **13–18** (release 2's block 18, 'nobody sets their own swoop mode or the owner's', is f885a9d1). 3.1's 'end at 17', and the wave-4 log that repeated it, were wrong. 7.11 numbered its blocks 19–23, which is correct.
+- 2026-11-09, wave 7 done (12/12). Commits used `--only`, new files `git add -N` first. No emulator and no browser ran: 9.1 and 9.3's e2e and the owner's UX sitting (wave 12) prove the pages.
+  - 7.1 aaa9a794: the dashboard passes the scope to useMachines and useAgentAlertToasts and opens no deployments listener when scoped. Getting-started is hidden. `MachinesNotice` shows "no machines here for you yet" or "machines couldn't load: …". Departure: the error drops a trailing full stop.
+  - 7.2 51be8c45: cards, rows, menu and pill gate per-machine actions on `isMachineAdmin`. Revoke, remove and "turn on swoop…" stay on `isSiteAdmin` (Q2). The pill's prop is renamed. Side effect: a signed-in superadmin on /demo sees row edit controls whose handlers do nothing (demo cards already did).
+  - 7.3 47e0bead: DisplayLayoutPanel's writes gate on `isMachineAdmin(siteId, machineId)`.
+  - 7.4 af46a114: the nav hides talons, roost and deploy on a scoped site. `useCurrentSite({ wholeSiteOnly })` drops scoped sites, and `limitedOnly` drives `NoSitesEmptyState limited` ("this page needs whole-site access"). Talons' inline card became the shared one.
+  - 7.5 be16dc3a: SwoopPicker reads `useMachines(siteId, machineScope(siteId))`; the viewer reads `[machineId]`. "Left the site" stays keyed to `machine_not_found` and `machine_removed`. **Gap (owner UX):** the picker ignores `useMachines`' error, so a refused read or a pruned `[]` reads "no machines in this site yet".
+  - 7.6 f32074b4: HootChatView passes the scope and `includeAutonomous: scope === null` (now required). **8.1:** `useHoot.pin` and `useHoot.stop` tests omit the flag.
+  - 7.7 8d93b8c6: the logs page adds `machineId in scope` and reads nothing for `[]`. Beyond the Do, it also reads nothing for a picked out-of-scope machine. `planActionFilter` takes `maxInValues`. **Backlog, pre-existing:** a refused logs listener leaves stale rows on screen.
+  - 7.8 0fec87c5: both schedule dialogs read machines only while open, with the scope (beyond the Do for RestartScheduleDialog, so no whole-site listener is refused).
+  - 7.9 be2cef36:
+    - `useSiteMachines` is extracted from `SiteMachinesList`.
+    - `useSiteMembers` carries `machineIds`.
+    - `MemberAccessFields` renders `MachineAccessField`.
+    - SiteMembersSection has an access column (md and up) or a ` · {access}` suffix below md.
+    - Both dialogs send scope; change-access adds the narrowing footnote and the talon warnings; the dialogs scroll on short screens.
+    - Full jest 483 suites green.
+    - **Owner UX notes:**
+      - a `[]` row cannot take a role-only change until a machine or the whole site is chosen;
+      - the narrowing footnote repeats release 2's when both show;
+      - 4.8's `aria-hidden` "access" label is still there.
+  - 7.10 22c061e7: `siteTalonSuccessors` drops scoped rows. SiteList labels a scoped row "{role} · {n} machine(s)" with no gear. SiteSettings shows "your access to {name} is limited to some machines, and its settings need the whole site. ask its owner or an admin." (GLOSSARY wording, not the plan's).
+  - 7.11 6074e5e6: escalation blocks **19–23** (18 already existed): scoped admins off the member surface; nobody widens their own row; the owner can't be scoped; a scoped admin's key gets 404 on m2; a scoped controller holds nothing site-wide. All five have positive controls. A negative control (wrapper with no scope step) turns 17 refusals red. **8.1:** the file's `mockListUserStanding` literal lacks `machineIds`.
+  - 7.12 0b3e85bf: `useSiteMemberships` adds `swoopMap`. AuthContext adds `computeSwoopMode` and `swoopMode(siteId, membersMayWatch)`. **Departure:** it takes `membersMayWatch` because AuthContext reads no swoop settings. The page passes it from `useSwoopSettings`, so no new listener. MachineContextMenu gates every swoop row, the pill and `showScreen` on `swoopCapable && !noSwoop`, so a person set to none gets live view.
+- Wave 7 build check: tsc clean, full jest 483 suites (11215 tests) green, eslint shows no errors.
+- 2026-11-09, **task 8.6 is skipped**: owner Q4 (2026-11-04) puts SDK/CLI machineIds later.
+- **Handed to 8.1 by earlier waves.** 8.1's Files widen to cover these:
+  1. `web/lib/capabilities.ts`: `siteStanding` always returns `machineScopes` (an entry for every site in `siteRoles`), and drops the fail-open `machineIds ?? null` (4.1). The test literals without `machineIds` that this breaks are in `swoop/policy.server.test.ts`, `sites-member-candidates*.test.ts`, `membershipEscalation.test.ts` (`mockListUserStanding` ~302, 7.11), `capabilities.test.ts`, `authorizedHandler.test.ts:295`, `hoot-utils.test.ts:2268` and `talons/store.test.ts` ("builds the same successor actor as before", 5.5). Give them `machineIds: null` / `machineScopes`.
+  2. `web/lib/hoot/turnRunner.server.ts:553`: make `standing.machineIds` a strict read, and give `web/__tests__/lib/hoot/asyncTurns.integration.test.ts:300`'s fixture a `standing` (5.3).
+  3. `web/lib/hoot-utils.server.ts`: remove `SiteAccessLevel`'s flat `siteRole`/`swoopMode`, which no production code reads any more (6.4). Move `hoot-utils.test.ts` 2245/2255/2279 to `access.standing.role`.
+  4. `web/__tests__/hooks/useHoot.pin.test.ts` and `useHoot.stop.test.ts`: pass `includeAutonomous` (7.6).
+  5. `web/__tests__/api/sites-member-candidates.test.ts`: once `machineScopes` is always present, add 6.8's case 2 with nothing scoped (`member-candidates/route.ts:105` stale-map edge).
