@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 14/24 complete
+**Progress**: 15/24 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -172,7 +172,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     (b) Safari: on TEC-MBA run the probe's server over ssh (`node agent/swoop/spikes/smooth-probe/server.mjs`; check `node --version` is 22.13 or later first), then open Safari in the owner's GUI domain through a LaunchAgent job (memory `reference_mba_access.md`: scp a plist to `~/Library/LaunchAgents/`, `launchctl bootout` an earlier copy, `launchctl bootstrap gui/$(id -u) <plist>`) whose program is `/usr/bin/open -a Safari '<url>'`, once per run: `http://127.0.0.1:17460/?source=3840x2160&box=1300x731&cover=none&seconds=5&label=safari-none`, then `cover=canvas` and `cover=under`, and the same three at `source=1920x1080&box=1000x562`. The MBA's display is dpr 2, so a 1300x731 css box is 2600x1462 device pixels. Read the results from `runs/` over ssh, then boot the job out. Record Safari's rows in smooth.ts's module doc: renderer, `smoothAvailable()`, rVFC callbacks, total and dropped frames per cover, draw p50/p95/max. If Safari cannot be opened this way, say so there and in the Log; WebKit stays off by default either way (plan C6), and task 8.1's section D measures owlette swoop on the Mac.
   - Done when: on TEC-MBA the ignored videotoolbox tests pass with the stripes test; vt_transfer.rs's module doc carries the stripes and timing results each way; smooth.ts's module doc carries Safari's rows or why there are none; `npx eslint web/lib/swoop/video/smooth.ts` clean; `git diff --stat` lists only the two files.
 
-- [ ] **Task 3.5: a rotated display streams upright, and a tap on it lands where it was tapped**
+- [x] **Task 3.5: a rotated display streams upright, and a tap on it lands where it was tapped**
   - Files: `agent/swoop/src/gpu/scale.rs`, `agent/swoop/src/capture/mod.rs`, `agent/swoop/src/displays/enumerate.rs`, `agent/swoop/src/displays/mod.rs`, `agent/swoop/src/input/mod.rs`, `agent/swoop/src/cursor/mod.rs`, `agent/swoop/src/session/mod.rs`
   - Depends on: Tasks 1.3, 2.4 and 3.3, which hold scale.rs and session/mod.rs first. It starts once 3.3 has committed (or the Log says 3.3 is skipped), never beside it.
   - Do: Added 2026-11-07 on the owner's ruling (ship it in 4.1.28). From a phone on TEC-A4D, a portrait monitor showed sideways, and taps on it did nothing, while taps on its landscape monitor worked. The evidence is in `C:\ProgramData\Owlette\logs\swoop\swoop.log` at 2026-11-07 15:35Z: display 1 logs `texture 3840x2160 at (-2160,-1138) Rotate270`, then `capture of \\.\DISPLAY2 opened ... at 3840x2160`. The viewer got the un-rotated texture, because nothing in the streamer rotates a frame: session/mod.rs's "# Rotation" and scale.rs's "Rotation is not this module's business" both defer it to the swoop plan's task 6.4, which never applied it. This box is the rig: DISPLAY2 is Rotate270, 2160x3840 at (-2160,-1138), 120 dpi.
@@ -331,3 +331,14 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - **Owed:** the ignored hardware test `a_still_screen_refines_after_motion_on_nvenc` only passes on a still screen. VS Code repaints a 9x9 spot on DISPLAY1 at about 60 Hz while agent sessions run, so run it detached once every session is idle. Task 5.2 meets the same problem.
   - Note: an NVENC session opened after the MF probes in one process fails with NV_ENC_ERR_INVALID_VERSION, so tests run NVENC first. Production is unaffected.
 - 2026-11-09: **DISPLAY2, the portrait monitor that 3.5 uses as its rig, is not attached**; only DISPLAY1 enumerates. 3.5 runs now, test-first with unit tests, and its two hardware tests (upright frame, tap lands) are owed until the owner reconnects the portrait monitor.
+- 2026-11-09, from another session's `fix/swoop-keys-lost` (not yet on dev): it makes swoop-input reliable and ordered, and drops input.ts's 100/500 ms modifier-release re-send. Once it reaches dev and is merged in, two comments in `web/e2e/specs/swoop/session.spec.ts`'s phone test go stale: 'the channel is unordered: what arrived after a mark, in the order it was sent' and 'a modifier's release goes again later (input.ts)'. **The next task that edits session.spec.ts (3.2 or 5.1) rewords them** if that fix has been merged in by then. The assertions still pass either way.
+- 2026-11-09, 3.5 3567ab97: a rotated output streams upright.
+  - **Departure from the Do:** capture turns its copy upright (`Live::upright` → `Downscaler::rotate`, the video processor's stream rotation at the same size; `rotate_bgra_cpu` where it can't), instead of the session's per-tier downscale. `Downscaler::open` is the platform seam, shared with macOS's vt_transfer. It turns each frame once, however many tiers there are. Spec review accepted it.
+  - PointerSpace and OutputGeometry use Identity at the displayed size, `texture()` returns the desktop rect, and a rotated output's dirty and move rects are dropped.
+  - Tests: five space tests red first, then green. CPU and WARP rotations pass. On the 2080 Ti the GPU rotation matches the CPU's, and so do the downscale and NV12 after it. clippy clean, cargo test 507.
+  - **Owed (DISPLAY2 not attached):**
+    1. `a_rotated_display_streams_upright` red on a checkout of 568c16d0 (not a stash; the stash list is shared).
+    2. `cargo test -- --ignored rotat --test-threads=1 --nocapture` green on 3567ab97.
+    3. The drawn pointer sits under the real one on the portrait panel, which proves Desktop Duplication's PointerPosition is in the desktop's orientation.
+    4. The owner's 8.1 F check.
+  - **Unexplained:** why the taps did nothing. The old transform matched Microsoft's duplication sample.
