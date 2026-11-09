@@ -155,52 +155,6 @@ describe('auto', () => {
   });
 });
 
-describe('auto in owlette swoop', () => {
-  const TOKEN = 'owlette-swoop-viewer/4.1.28';
-  const WINDOWS_APP = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0 ${TOKEN}`;
-  const LINUX_APP = `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Safari/605.1.15 ${TOKEN}`;
-  const MAC_APP = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) ${TOKEN}`;
-  const BROWSER = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
-
-  afterEach(() => {
-    localStorage.clear();
-    delete document.documentElement.dataset.swoopBar;
-    jest.restoreAllMocks();
-    windowSize(1024, 768);
-  });
-
-  it('counts the title row against a side bar’s height', () => {
-    // owlette swoop's default 16:9 window: in a browser a left bar leaves the picture 695 px
-    // tall against a top bar's 671. the title row costs a side bar 32 px of height, 17 less
-    // than a top bar costs, so the side still wins: the row changes the sum, not the answer
-    expect(autoPosition(1280, 720)).toBe('left');
-    expect(autoPosition(1280, 720, 16 / 9, 32)).toBe('left');
-    // the row comes off the height: one dearer than a top bar would put the bar on top
-    expect(autoPosition(1280, 720, 16 / 9, 60)).toBe('top');
-  });
-
-  it.each([
-    ['the windows app', WINDOWS_APP, 32],
-    ['the linux app', LINUX_APP, 32],
-    ['the mac app', MAC_APP, 0],
-    ['a browser', BROWSER, 0],
-  ])('gets the same answer from the inline script as from the page in %s', (_case, ua, row) => {
-    jest.spyOn(navigator, 'userAgent', 'get').mockReturnValue(ua);
-    for (const width of [640, 800, 1024, 1280, 1366, 1440, 1600, 1920, 2560, 3440]) {
-      for (const height of [480, 600, 720, 768, 800, 900, 1000, 1080, 1200, 1440]) {
-        windowSize(width, height);
-        const expected = autoPosition(width, height, 16 / 9, row);
-        delete document.documentElement.dataset.swoopBar;
-        new Function(BAR_POSITION_SCRIPT)();
-        expect([width, height, currentBarPosition()]).toEqual([width, height, expected]);
-        delete document.documentElement.dataset.swoopBar;
-        applyBarPosition();
-        expect([width, height, currentBarPosition()]).toEqual([width, height, expected]);
-      }
-    }
-  });
-});
-
 describe('the root layout boot script', () => {
   afterEach(() => {
     delete document.documentElement.dataset.swoopBar;

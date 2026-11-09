@@ -18,8 +18,6 @@
  * shape — keeps it.
  */
 
-import { viewerAppPlatform } from '@/lib/swoop/viewerApp';
-
 export type SwoopBarPosition = 'top' | 'left' | 'right';
 export type SwoopBarChoice = SwoopBarPosition | 'auto';
 
@@ -28,12 +26,11 @@ const listeners = new Set<() => void>();
 
 // the bar's own size, for the sum auto makes: a top bar is a 32 px button row
 // with 8 px padding and a border; a side bar is `w-11`. below tailwind's md
-// the bar is always on top.
+// the bar is always on top. in owlette swoop on windows and linux a side bar
+// also takes the 32 px title row above the picture; it is left out because it
+// never changes the answer: where it would bind, a top bar costs 49 px.
 const TOP_BAR_PX = 49;
 const SIDE_BAR_PX = 44;
-// in owlette swoop on windows and linux a side bar's window controls sit in a
-// title row across the top, `SwoopWindowStrip`'s `h-8`, which the page starts below
-const APP_TITLE_ROW_PX = 32;
 const MD_PX = 768;
 // until a picture arrives, auto assumes the common shape
 const DEFAULT_ASPECT = 16 / 9;
@@ -42,31 +39,21 @@ let aspect = DEFAULT_ASPECT;
 
 /**
  * where `auto` puts the bar in a window this size: the side that leaves the
- * picture taller, top on a tie. `titleRowPx` is what a side bar costs in height
- * besides. the inline script below makes the same sum, and a test holds the two
- * to the same answers.
+ * picture taller, top on a tie. the inline script below makes the same sum, and
+ * a test holds the two to the same answers.
  */
-export function autoPosition(
-  width: number,
-  height: number,
-  pictureAspect = DEFAULT_ASPECT,
-  titleRowPx = 0,
-): 'top' | 'left' {
+export function autoPosition(width: number, height: number, pictureAspect = DEFAULT_ASPECT): 'top' | 'left' {
   if (width < MD_PX) return 'top';
   const onTop = Math.min(width / pictureAspect, height - TOP_BAR_PX);
-  const beside = Math.min((width - SIDE_BAR_PX) / pictureAspect, height - titleRowPx);
+  const beside = Math.min((width - SIDE_BAR_PX) / pictureAspect, height);
   return beside > onTop ? 'left' : 'top';
 }
 
-/**
- * run inline, before the page paints. anything but a stored side or top is
- * auto. the title row is owlette swoop's on anything but a mac (viewerApp.ts).
- */
+/** run inline, before the page paints. anything but a stored side or top is auto. */
 export const BAR_POSITION_SCRIPT =
   `try{var p;try{p=localStorage.getItem('${KEY}')}catch(e){}` +
-  `if(p!=='top'&&p!=='left'&&p!=='right'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT},u=navigator.userAgent,` +
-  `r=u.indexOf('owlette-swoop-viewer/')>=0&&u.indexOf('Macintosh')<0?${APP_TITLE_ROW_PX}:0;` +
-  `p=w>=${MD_PX}&&Math.min((w-${SIDE_BAR_PX})/a,h-r)>Math.min(w/a,h-${TOP_BAR_PX})?'left':''}` +
+  `if(p!=='top'&&p!=='left'&&p!=='right'){var w=innerWidth,h=innerHeight,a=${DEFAULT_ASPECT};` +
+  `p=w>=${MD_PX}&&Math.min((w-${SIDE_BAR_PX})/a,h)>Math.min(w/a,h-${TOP_BAR_PX})?'left':''}` +
   `if(p==='left'||p==='right')document.documentElement.dataset.swoopBar=p}catch(e){}`;
 
 /**
@@ -97,9 +84,7 @@ export function currentBarPosition(): SwoopBarPosition {
 /** mark <html> with where the bar is; true when that moved it. */
 function mark(): boolean {
   const choice = readBarChoice();
-  const platform = viewerAppPlatform();
-  const titleRow = platform === 'windows' || platform === 'linux' ? APP_TITLE_ROW_PX : 0;
-  const position = choice === 'auto' ? autoPosition(innerWidth, innerHeight, aspect, titleRow) : choice;
+  const position = choice === 'auto' ? autoPosition(innerWidth, innerHeight, aspect) : choice;
   if (position === currentBarPosition()) return false;
   if (position === 'top') delete document.documentElement.dataset.swoopBar;
   else document.documentElement.dataset.swoopBar = position;
