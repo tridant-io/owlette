@@ -89,6 +89,9 @@ const { env, version, notesOnly, setLatest, keyTag } = options;
 if (env !== 'dev' && env !== 'prod') usage('--env must be dev or prod');
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) usage('--version must be X.Y.Z');
 if (notesOnly && paths.length > 0) usage('--notes-only takes no files');
+if (notesOnly && (setLatest || keyTag || options.allowUnsigned)) {
+  usage('--notes-only promotes, tags and uploads nothing: drop --set-latest, --key-tag and --allow-unsigned');
+}
 if (!notesOnly && paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
 if (!/^[a-z0-9-]*$/.test(keyTag)) usage('--key-tag may hold only a-z, 0-9 and -');
 
@@ -198,7 +201,8 @@ async function api(method, route, { body, idempotencyKey } = {}) {
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   // a 2xx with no body has been seen once on a cold route; the idempotency key
-  // makes the retry replay the same result, so one more try is safe
+  // makes the retry replay the same result, and a notes change without one only
+  // sets the same notes again, so one more try is safe
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(`${baseUrl}${route}`, {
       method,

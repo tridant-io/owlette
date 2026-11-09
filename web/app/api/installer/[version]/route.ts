@@ -19,8 +19,9 @@
  * version is 404, like a missing one.
  *
  * the version is synced with tridant id again, as the delete does: the import
- * upserts by version, so a registered release takes the new notes. the outcome
- * is `tridant`, and a tridant id failure never fails the change.
+ * upserts by version, so a listed release takes the new notes (null clears them
+ * there too), while one a rollback yanked keeps its old copy until it is listed
+ * again. the outcome is `tridant`, and a tridant id failure never fails the change.
  *
  * auth: api key with `installer=*:write` (what the upload that first sets the
  * notes needs), or a superadmin session/id-token. no Idempotency-Key: setting
@@ -45,6 +46,17 @@ import {
 
 const VERSION_REGEX = /^\d+\.\d+\.\d+$/;
 const MIN_ACTIVE_VERSIONS = 2;
+
+/** the answer to a version that is missing or soft-deleted, the same from every method. */
+function versionNotFound(version: string) {
+  return problem({
+    type: ProblemType.NotFound,
+    title: 'version not found',
+    status: 404,
+    detail: `installer version ${version} does not exist`,
+    instance: `/api/installer/${version}`,
+  });
+}
 
 interface RouteParams {
   params: Promise<{ version: string }>;
@@ -114,13 +126,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     });
 
     if (result.kind === 'not_found') {
-      return problem({
-        type: ProblemType.NotFound,
-        title: 'version not found',
-        status: 404,
-        detail: `installer version ${version} does not exist`,
-        instance: `/api/installer/${version}`,
-      });
+      return versionNotFound(version);
     }
 
     if (result.kind === 'latest_protected') {
@@ -227,13 +233,7 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     });
 
     if (result.kind === 'not_found') {
-      return problem({
-        type: ProblemType.NotFound,
-        title: 'version not found',
-        status: 404,
-        detail: `installer version ${version} does not exist`,
-        instance: `/api/installer/${version}`,
-      });
+      return versionNotFound(version);
     }
 
     emitMutation({

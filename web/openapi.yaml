@@ -2262,9 +2262,10 @@ paths:
         corrected; `null` clears them. A soft-deleted version is `404`, like a
         missing one. Any other body field is ignored.
 
-        The version is then synced with tridant id again, so a registered
-        release shows the new notes (`tridant`); a tridant id failure never
-        fails the change. No `Idempotency-Key`: sending the same notes again
+        The version is then synced with tridant id again, so a listed release
+        shows the new notes (`null` clears them there too), while one a
+        rollback yanked keeps its old copy until it is listed again
+        (`tridant`); a tridant id failure never fails the change. No `Idempotency-Key`: sending the same notes again
         changes nothing.
 
         Superadmin-only; API-key callers need `installer=*:write`.
