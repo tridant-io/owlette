@@ -1,6 +1,8 @@
 /**
  * GET    /api/sites/{siteId}/logs
  *        Cursor-paginated operational logs from `sites/{siteId}/logs`.
+ *        a scoped member gets only the rows of the machines in their machine
+ *        scope, queried by `machineId in`; rows with no machine are whole site.
  *
  * DELETE /api/sites/{siteId}/logs
  *        Clear matching operational logs. Requires site admin scope and an
@@ -204,8 +206,9 @@ function logMatches(
 export async function GET(request: NextRequest, { params }: { params: Promise<RouteParams> }) {
   try {
     const { siteId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
+    const scope = auth.machineIds;
 
     const searchParams = request.nextUrl.searchParams;
     const action = normalizeOptionalQueryString(searchParams, 'action');
@@ -235,6 +238,14 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
     if (!parsedPagination.ok) return parsedPagination.response;
     const { pageSize, pageToken } = parsedPagination.pagination;
 
+    // nothing this caller may see: answer before any read
+    if (scope !== null && (scope.length === 0 || (machineId !== undefined && !scope.includes(machineId)))) {
+      return applyAuthDeprecations(
+        NextResponse.json(withPaginationFields({ siteId, logs: [] }, '')),
+        auth.scopeCheck,
+      );
+    }
+
     const db = getAdminDb();
     const logsCol = db.collection('sites').doc(siteId).collection('logs');
     const filters = { action, machineId, level, sinceMs, untilMs };
@@ -245,6 +256,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
       batchLimit: Math.min(MAX_PAGE_SIZE + 1, Math.max(pageSize + 1, pageSize * 3 + 1)),
       fetchPage: async (cursor, limit) => {
         let query = logsCol.orderBy('timestamp', 'desc');
+        // in the query, not only in `include`: a filter there alone would page
+        // through the whole site's logs for a member who reaches one machine
+        if (scope !== null) query = query.where('machineId', 'in', scope);
         if (sinceMs !== undefined) {
           query = query.where('timestamp', '>=', Timestamp.fromDate(new Date(sinceMs)));
         }
@@ -262,6 +276,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
       include: (doc) => {
         const data = doc.data();
         const log = serializeLogEntry(doc.id, siteId, data);
+        if (scope !== null && (log.machineId === null || !scope.includes(log.machineId))) return false;
         return logMatches(log, filters, data.timestamp);
       },
     });
