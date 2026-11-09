@@ -4,12 +4,14 @@
  * and stores in config.json.
  *
  * Body: `{ siteId, machineId, apiKey (raw LLM key), provider: 'anthropic' | 'openai' }`.
- * Auth: MACHINE_EXEC_COMMAND on the site — the same bar the first-party command
+ * Auth: MACHINE_EXEC_COMMAND on the machine — the same bar the first-party command
  * route holds, because this IS a command dispatch. It previously required only site
  * ACCESS, and after the per-site-roles migration `member` means read-only, so a
  * read-only member could queue a command making any machine on the site overwrite
  * its stored LLM credential. `firestore.rules` reserves `commands/pending` to the
  * service account and the machine's own agent, so this route is the boundary.
+ * A machine outside the caller's machine scope answers 404 'machine not found or
+ * no access' before that check (ADR 0016).
  *
  * Audits `site_mutated` / `llm_key.provision` (machine-targeted, matching
  * `machine.remove` / `agent_token.revoke`) the moment the command is queued —
@@ -23,6 +25,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
 import { Capability, hasCapability, siteStanding, type Actor } from '@/lib/capabilities';
+import { scopeCovers } from '@/lib/machineAccess';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
 import { requireEntitlement } from '@/lib/plan.server';
@@ -66,14 +69,17 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const db = getAdminDb();
 
     const access = await verifyUserSiteAccess(db, userId, siteId);
+    if (!scopeCovers(access.standing.machineIds, machineId)) {
+      return NextResponse.json({ error: 'machine not found or no access' }, { status: 404 });
+    }
     const actor: Actor = {
       type: 'user',
       userId,
       role: access.role === 'superadmin' || access.role === 'admin' ? access.role : 'member',
       // Per-site standing decides; the global role beside it grants nothing.
-      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode, machineIds: null }]]),
+      ...siteStanding([[siteId, access.standing]]),
     };
-    if (!hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, siteId)) {
+    if (!hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, siteId, machineId)) {
       return NextResponse.json(
         { error: 'capability not granted' },
         { status: 403 },

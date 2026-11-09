@@ -25,6 +25,7 @@ const mockRequireChatAuthDefault = () => ({
   userId: 'user-1',
   auth: { userId: 'user-1', keyContext: null },
   scopeCheck: { isLegacy: false },
+  machineIds: null as readonly string[] | null,
 });
 
 jest.mock('@/app/api/_shared', () => {
@@ -146,6 +147,7 @@ import {
   DELETE as deleteDELETE,
 } from '@/app/api/hoot/conversations/[conversationId]/route';
 import { POST as chatAliasSendPOST } from '@/app/api/chat/[conversationId]/route';
+import { POST as chatNewPOST } from '@/app/api/chat/new/route';
 import { problemPlanRequired } from '@/lib/apiErrors';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 
@@ -437,6 +439,63 @@ describe('POST /api/hoot/conversations', () => {
       ),
     );
     expect(res.headers.get('Idempotent-Replayed')).toBe('true');
+  });
+});
+
+// POST /api/hoot/conversations and its /api/chat/new copy - machine scope
+
+describe.each([
+  ['/api/hoot/conversations', newPOST],
+  ['/api/chat/new', chatNewPOST],
+])('POST %s — machine scope', (path, create) => {
+  function createRequest(body: Record<string, unknown>) {
+    return jsonReq(`http://localhost${path}`, 'POST', { siteId: SITE, ...body }, {
+      'idempotency-key': 'scope',
+    });
+  }
+
+  function scopedTo(machineIds: readonly string[] | null) {
+    mockRequireChatAuth.mockResolvedValueOnce({ ...mockRequireChatAuthDefault(), machineIds });
+  }
+
+  it('404 for a machine outside the scope, with nothing written', async () => {
+    scopedTo(['m1']);
+    const res = await create(createRequest({ machineId: 'm2' }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      status: 404,
+      detail: 'machine not found or no access',
+    });
+    expect(mockWithIdempotency).not.toHaveBeenCalled();
+    expect(mockCreateConversation).not.toHaveBeenCalled();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('201 pinned to a machine inside the scope', async () => {
+    scopedTo(['m1']);
+    const res = await create(createRequest({ machineId: 'm1' }));
+    expect(res.status).toBe(201);
+    expect(mockCreateConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: SITE, machineId: 'm1' }),
+    );
+  });
+
+  it('201 for a site-wide conversation, which hoot narrows to the scope', async () => {
+    scopedTo(['m1']);
+    const res = await create(createRequest({}));
+    expect(res.status).toBe(201);
+    expect(mockCreateConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ siteId: SITE, machineId: undefined }),
+    );
+  });
+
+  it('leaves a whole-site caller unchanged on any machine', async () => {
+    scopedTo(null);
+    const res = await create(createRequest({ machineId: 'm2' }));
+    expect(res.status).toBe(201);
+    expect(mockCreateConversation).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: 'm2' }),
+    );
   });
 });
 
