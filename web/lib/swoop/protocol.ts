@@ -78,9 +78,14 @@ export interface SwoopChannelConfig {
  * clipboard rides `swoop-control` rather than taking a sixth — the transport
  * caps buffering at 128 KiB across all channels, so fewer channels is one
  * pacing budget instead of five competing ones.
+ *
+ * `swoop-input` is reliable and ordered: a key press lost on a link that drops
+ * packets never types at all, and one that overtakes the key before it types
+ * the two the wrong way round. the reliability is the browser's to choose, so
+ * every host takes it as it is.
  */
 export const SWOOP_CHANNELS: readonly SwoopChannelConfig[] = [
-  { label: 'swoop-input', ordered: false, maxRetransmits: 0, binary: false },
+  { label: 'swoop-input', ordered: true, binary: false },
   { label: 'swoop-cursor', ordered: false, maxRetransmits: 0, binary: false },
   { label: 'swoop-control', ordered: true, binary: false },
   { label: 'swoop-feedback', ordered: false, maxPacketLifeTime: 250, binary: false },
