@@ -130,9 +130,10 @@ interface UseChatOptions {
   /**
    * list the site's autonomous chats beside the person's own. they are
    * whole-site (rules 2.12.0), so pass false for a scoped member: the read
-   * would be refused.
+   * would be refused. required, so a new caller can't open that listener by
+   * leaving it out.
    */
-  includeAutonomous?: boolean;
+  includeAutonomous: boolean;
   onChatPersisted?: (chatId: string) => void;
   onChatLoaded?: (result: ChatLoadedTarget) => void;
 }
@@ -143,7 +144,7 @@ export function useOwletteChat({
   siteId,
   selection,
   siteMachineIds,
-  includeAutonomous = true,
+  includeAutonomous,
   onChatPersisted,
   onChatLoaded,
 }: UseChatOptions) {

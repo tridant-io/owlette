@@ -93,14 +93,14 @@ function fire(kind: 'user' | 'autonomous', docs: FakeDoc[]) {
   act(() => listener.next({ docs }));
 }
 
-function mountHook(includeAutonomous?: boolean) {
+function mountHook(includeAutonomous: boolean) {
   return renderHook(
-    (props: { includeAutonomous?: boolean }) =>
+    (props: { includeAutonomous: boolean }) =>
       useOwletteChat({
         siteId: SITE_ID,
         selection: ALL_MACHINES,
         siteMachineIds: [],
-        ...(props.includeAutonomous === undefined ? {} : { includeAutonomous: props.includeAutonomous }),
+        includeAutonomous: props.includeAutonomous,
       }),
     { initialProps: { includeAutonomous } },
   );
@@ -124,11 +124,8 @@ describe('useOwletteChat includeAutonomous', () => {
     expect(result.current.conversations.map((c) => c.id)).toEqual(['mine-0']);
   });
 
-  it.each([
-    ['true', true],
-    ['omitted', undefined],
-  ])('with %s, runs both queries and waits for both, as today', (_label, includeAutonomous) => {
-    const { result } = mountHook(includeAutonomous);
+  it('with true, runs both queries and waits for both, as today', () => {
+    const { result } = mountHook(true);
 
     expect(mockChatListeners).toHaveLength(2);
     expect(mockChatListeners.filter((l) => isUsers(l.query))).toHaveLength(1);
