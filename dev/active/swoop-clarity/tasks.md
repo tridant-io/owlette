@@ -318,3 +318,10 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     - **Next: re-run `drive.mjs matrix` with the box to itself** once machine-scope wave 5 is done. If canvas passes in both, it ships. If it passes only in Edge, the owner decides: ship on Edge's result (headless Chromium is no viewer's engine) or not.
     - For 4.1: run `latency` at 1920x1080 into 1000x562 too. At 4K the loopback's own encoder holds about 250–330 ms of frames, so 4K keeps only the draw-p95 gate.
 - Wave 2 build check on the merged tree: clippy -D warnings clean, cargo test --locked 498 passed, tsc clean, full jest 474 suites (9319 tests) green, and useSwoopSession.test.tsx 81/81 three times in a row, so 2.3's load flake did not reproduce on a quiet box.
+- 2026-11-07, the cover matrix re-run with the box to itself (CPU 0% at start), three 20 s runs, 1920x1080 into 1000x562:
+  - Edge 157 headed, canvas: **fails all three** (callbacks 1122/995*, 900/1196 with frames 1133 and dropped 40, 1106/1196 with dropped 32 vs 3). *Run 1's none baseline read only 995 callbacks.
+  - Headless Chromium 156, canvas: holds 2 of 3 (1139/1184, 1137/1188), fails 1 (1122/1182).
+  - under fails everywhere (every frame dropped). The draw itself is cheap: p50 0.2 ms CPU, about 0.1–0.2 ms GPU.
+  - Under the plan's rule the canvas path cannot ship as built.
+- 2026-11-09, **owner ruling: investigate first**, rather than dropping the canvas or shipping it off by default. A research task (Opus) is finding the cause of the Edge cost and trying other draw paths (rAF after rVFC, VideoFrame or OffscreenCanvas in a worker, WebGPU importExternalTexture, context attributes). Its decisive numbers come only from a quiet box. It commits under `agent/swoop/spikes/smooth-probe/` only; smooth.ts changes come back as a proposal for task 3.1. **3.1 and 3.2's smooth scaling half wait on it.** 3.3 (still sharpens, a go per 2.1) runs now. 3.5 follows 3.3.
+- 2026-11-09: **3.4 is on hold, because the MBA (192.168.88.46) times out on ssh.** It needs the MBA awake on the LAN.
