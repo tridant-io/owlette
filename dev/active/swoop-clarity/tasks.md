@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 13/24 complete
+**Progress**: 14/24 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -152,7 +152,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     5. The footer keeps "bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it." (true for every fielded agent: 4.1.28 lowers frame rate and bitrate, older agents resolution too) and adds "size and smooth scaling only change how the picture is drawn on this computer." Lowercase copy. The bar does not change; the phone's one-row bar keeps this menu behind its three-dot button.
   - Done when: `npx jest __tests__/components/SwoopQualityMenu.test.tsx` covers choosing sharp (the store holds it, the row shows it), unticking smooth scaling (the store holds off), the item disabled when it cannot draw, neither calling `session.send`, a new session keeping both, and the trigger named "quality and display"; eslint on the four files and tsc clean; `npx playwright test --list e2e/specs/swoop/session.spec.ts e2e/specs/swoop/bar-position.spec.ts` loads (this task runs no Playwright against the emulators; 3.1's run or 5.1's proves the specs); `grep -rn "quality ceiling" web/e2e web/__tests__ web/components` finds nothing.
 
-- [ ] **Task 3.3: on NVENC, a picture that stops moving sharpens in half a second**
+- [x] **Task 3.3: on NVENC, a picture that stops moving sharpens in half a second**
   - Files: `agent/swoop/src/session/mod.rs`
   - Depends on: Task 2.1 (its still-frame result), Task 2.4
   - Do: First read task 2.1's report. If the premise held at neither P1 nor the text preset (the QP fell by less than 8 across 30 still frames), do not build this: mark the task skipped with the numbers in this file's Log, and task 6.1 leaves it out of the docs (plan C11). Otherwise: a picture that stops moving is re-sent only by the floor, every `FLOOR_INTERVAL` (500 ms, mod.rs:578-625), so the CBR encoder wins back the detail a motion frame crushed over several seconds. Extend `FloorTimer` (plan C11):
@@ -325,3 +325,9 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - Under the plan's rule the canvas path cannot ship as built.
 - 2026-11-09, **owner ruling: investigate first**, rather than dropping the canvas or shipping it off by default. A research task (Opus) is finding the cause of the Edge cost and trying other draw paths (rAF after rVFC, VideoFrame or OffscreenCanvas in a worker, WebGPU importExternalTexture, context attributes). Its decisive numbers come only from a quiet box. It commits under `agent/swoop/spikes/smooth-probe/` only; smooth.ts changes come back as a proposal for task 3.1. **3.1 and 3.2's smooth scaling half wait on it.** 3.3 (still sharpens, a go per 2.1) runs now. 3.5 follows 3.3.
 - 2026-11-09: **3.4 is on hold, because the MBA (192.168.88.46) times out on ssh.** It needs the MBA awake on the LAN.
+- 2026-11-09, 3.3 c4354ca0: on NVENC, a picture that stops moving sharpens over 500 ms.
+  - How: FloorTimer tracks motion (three fresh frames within 100 ms open the window), and `feeds()` sends repeats once there has been no fresh frame for max(50 ms, two rung intervals), at one rung interval apart. Outside the window it is today's floor. Constants: REFINE_FOR 500 ms, MOTION_SPAN 100 ms, QUIET_MIN 50 ms. The stale ToCapture::Tiers doc is fixed.
+  - Checks: six pure tests; clippy clean; cargo test 504; release build ok.
+  - **Owed:** the ignored hardware test `a_still_screen_refines_after_motion_on_nvenc` only passes on a still screen. VS Code repaints a 9x9 spot on DISPLAY1 at about 60 Hz while agent sessions run, so run it detached once every session is idle. Task 5.2 meets the same problem.
+  - Note: an NVENC session opened after the MF probes in one process fails with NV_ENC_ERR_INVALID_VERSION, so tests run NVENC first. Production is unaffected.
+- 2026-11-09: **DISPLAY2, the portrait monitor that 3.5 uses as its rig, is not attached**; only DISPLAY1 enumerates. 3.5 runs now, test-first with unit tests, and its two hardware tests (upright frame, tap lands) are owed until the owner reconnects the portrait monitor.
