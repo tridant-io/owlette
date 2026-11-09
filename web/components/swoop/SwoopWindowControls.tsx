@@ -137,7 +137,7 @@ export function SwoopWindowControls({ className, leaving }: { className?: string
         }}
       >
         {confirming !== null && (
-          <DialogContent>
+          <DialogContent showCloseButton={false}>
             <DialogHeader>
               <DialogTitle>leave {confirming} and close the window?</DialogTitle>
               <DialogDescription>you leave the session. anyone else in it stays connected.</DialogDescription>
