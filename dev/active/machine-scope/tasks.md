@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 45/57 complete
+**Progress**: 53/61 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -1319,7 +1319,7 @@ House rules for every task:
 
 ## Wave 8: the actor maps required, the contract, the docs
 
-- [ ] **Task 8.1: `machineScopes` and `swoopModes` become required on UserActor**
+- [x] **Task 8.1: `machineScopes` and `swoopModes` become required on UserActor**
   - Files: `web/lib/capabilities.ts`, and every production builder tsc names
   - Depends on: all of waves 4–7
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. No other wave-8 task touches a `.ts` file under `web/`; task 8.6 touches only `sdks/` and `cli/`, and docs pages. So this task owns every `.ts` change under `web/` in this wave.
@@ -1330,7 +1330,7 @@ House rules for every task:
     - Update the field docs: required, so the compiler names any builder that forgets them.
   - Done when: tsc is clean, no builder writes an ad-hoc actor, and jest is green.
 
-- [ ] **Task 8.2: openapi**
+- [x] **Task 8.2: openapi**
   - Files: `web/openapi.yaml`
   - Depends on: waves 5–7
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. Release 2 already gave the Site Members operations their operationIds, `swoop`, and its candidates path; build on them.
@@ -1358,7 +1358,7 @@ House rules for every task:
       - The member-level reads that become whole-site only, where "any member" becomes "any whole-site member; a caller with a machine scope gets `403`": listAuditRecords (:6139), getSiteQuota (:6059), listRoosts (:3683), streamEvents (:6717) and listWebhookSubscriptions (:6258).
   - Done when: `cd web && npm run validate:api` and `npx jest __tests__/api/openapi.test.ts` pass.
 
-- [ ] **Task 8.3: Docs: the access model, the data model, the rules, setup, agent and API pages**
+- [x] **Task 8.3: Docs: the access model, the data model, the rules, setup, agent and API pages**
   - Files:
     - `web/content/docs/reference/authentication.mdx`, `web/content/docs/reference/firestore-data-model.mdx`, `web/content/docs/reference/agent-commands.mdx`
     - `web/content/docs/setup/firestore-rules.mdx`, `web/content/docs/setup/firebase.mdx`, `web/content/docs/agent/remote-commands.mdx`
@@ -1398,7 +1398,7 @@ House rules for every task:
     - `git grep -n -i -E "allowlist|full member|partial member|unscoped member" -- <this task's files>` finds nothing;
     - task 10.1's `public/docs-links.spec.ts` run is what proves the links.
 
-- [ ] **Task 8.4: Docs: the product pages**
+- [x] **Task 8.4: Docs: the product pages**
   - Files:
     - release 2's members page (`web/content/docs/dashboard/admin/member-management.mdx`) and `web/content/docs/dashboard/admin/index.mdx`
     - `web/content/docs/dashboard/swoop.mdx`, `web/content/docs/dashboard/hoot.mdx`, `web/content/docs/reference/hoot-tools.mdx`
@@ -1441,7 +1441,7 @@ House rules for every task:
     - the avoid-word grep (as in task 8.3) over this task's files finds nothing;
     - task 10.1's docs-links run proves the links.
 
-- [ ] **Task 8.5: The records: readme, changelogs, skills, protocol, coverage, product, runbooks**
+- [x] **Task 8.5: The records: readme, changelogs, skills, protocol, coverage, product, runbooks**
   - Files:
     - `README.md`, `docs/changelog.md`, `web/content/docs/changelog.mdx`
     - `.claude/skills/firebase-integration/SKILL.md`, `.claude/skills/codebase-map/SKILL.md`
@@ -1518,6 +1518,35 @@ House rules for every task:
       - **Tests**, in each package's style.
       - **The docs pages** follow.
   - Done when: if "now", each package's own tests pass (`cd sdks/node && npm test`; the Python SDK's runner per its README; `cd cli && npm test`). If "later", the Log line says deferred.
+
+
+#### Added 2026-11-09 by the orchestrator
+
+- [x] **Task 8.7: Every talon re-checks its author before any output fires**
+  - Files: `web/lib/talons/engine.server.ts`, `web/__tests__/lib/talons/engine.test.ts`, `web/content/docs/dashboard/talons.mdx`, `web/content/docs/dashboard/admin/member-management.mdx` (only the talon lines)
+  - Depends on: 6.5, 8.4
+  - Do: First read the house rules at the top of this file. **Owner ruling, 2026-11-09:** fix it in 4.1.29. Today only talons with a hoot output or a visual check call `resolveTalonAuthor` (hootOutput.server.ts:286, visualCheck.server.ts:184). A talon whose outputs are only command, email or webhook keeps firing after its author is limited to some machines (6.5) or leaves the site (pre-existing). The single execution path is `engine.server.ts` (trigger → condition → outputs). Resolve the author once per run, before the first output, using `resolveTalonAuthor(db, siteId, talon)`. A `TalonAuthorError` whose reason is in `CREATOR_DISABLED_REASONS` (`creator_access_revoked` and the rest) ends the run and disables the talon the same way a hoot output's refusal does today. Find that path and reuse it, so the card shows the same reason. Don't resolve twice in a run: hand the resolved author to the hoot and visual-check outputs if they take it; if they don't, leave their own call alone and say so. Docs: `talons.mdx` and the talon lines of `member-management.mdx` (8.4 wrote "stops for hoot-output and visual-check talons only") now say every talon switches off at its next run when its author is limited to some machines or leaves the site. The changelog entry 8.5 wrote ("limiting someone's access stops the talons they wrote") and the change-access dialog's warning are then true as written; check both and leave them.
+  - Done when: engine tests show a command-only talon, an email-only talon and a webhook-only talon each refused and disabled with `creator_access_revoked` once the author is scoped, and once the author's row is gone. They are red before the change. A whole-site author's talons still fire. The talons suites are green; eslint and tsc are clean.
+
+- [x] **Task 8.8: The `_shared` access adapter fails closed on a missing scope**
+  - Files: `web/app/api/_shared.ts` (the `machineIds: access.machineIds ?? null` at ~518-519 only), and the test suites that mock `assertUserHasSiteAccess` without `machineIds` (find them with a grep)
+  - Depends on: 5.2, 8.1
+  - Do: First read the house rules at the top of this file. 8.1 removed `siteStanding`'s fail-open `machineIds ?? null`. `_shared.ts` keeps a second one, and its comment says suites mock the adapter with no `machineIds`. Production always returns `machineIds` (5.2), so only tests reach it, but it is a fail-open default. Remove it: read `access.machineIds` as it is, with a type that makes it required. Give every mock of `assertUserHasSiteAccess` that lacks the field `machineIds: null`. Don't change any route's behaviour.
+  - Done when: no `?? null` default on `machineIds` remains in `_shared.ts`; tsc forces the field; the full web jest is green; eslint is clean.
+
+
+- [x] **Task 8.9: Alert recipients fail closed on a missing scope**
+  - Files: `web/lib/adminUtils.server.ts` (`recipientWantsMachine`, ~20-21), `web/lib/talons/outputs.server.ts` (~158), the test suites that build a `SiteRecipient` without `machineIds` (find them with a grep), and two docs lines 8.7 left stale: `web/content/docs/cli/reference/site.mdx` (~178) and `web/content/docs/reference/authentication.mdx` (~388)
+  - Depends on: 4.4, 8.7, 8.8
+  - Do: First read the house rules at the top of this file. 8.8 found two more test-only fail-open defaults like the ones 8.1 and 8.8 removed: `recipientWantsMachine` reads `recipient.machineIds ?? null` (its comment: "a recipient built without the field (tests) reads as the whole site"), and `talons/outputs.server.ts:158` reads `(recipient.machineIds ?? null) !== null`. `SiteRecipient.machineIds` is already typed as required. Remove both defaults, so a recipient without the field reaches no machine and a site-level talon run skips it. Give every recipient literal in the tests `machineIds: null` where it should be whole site. Don't change behaviour for a recipient that carries the field.
+  - Done when: neither default remains; a new case shows a recipient with no `machineIds` gets nothing, red before the change; the full web jest is green; eslint and tsc are clean.
+
+
+- [ ] **Task 8.10: `machineScopeOf` fails closed, and two stale talon comments**
+  - Files: `web/lib/capabilities.ts` (`machineScopeOf` only, ~342-347), the test suites whose actor literals carry `siteRoles` but no `machineScopes` (find them with a grep), `web/app/api/sites/[siteId]/talons/authored/route.ts` (the comment at ~5-8 only), `web/lib/actions/deleteUser.server.ts` (the comment at ~12 only)
+  - Depends on: 8.1, 8.7, 8.9
+  - Do: First read the house rules at the top of this file. After 8.1, 8.8 and 8.9, a missing scope reaches nothing everywhere except `machineScopeOf`, which still reads an actor with no `machineScopes` map as the whole site (`if (!actor.machineScopes) return null`). 8.1 kept that branch for test literals that tsc never checks. Every production builder now spreads `siteStanding`, so the map is always present (8.1 verified this). Make the branch fail closed: an actor with no map reaches no machine (`[]`), except a superadmin, who stays whole-site. Give every test literal that relied on the old reading `machineScopes` (null per site for whole-site actors). Also fix the two comments that still say "a talon with a hoot output … starts failing": since 8.7 every talon re-checks its author before any output fires and switches off with nothing fired.
+  - Done when: a new `capabilities.test.ts` case shows an actor with no map reaches no machine, red before the change; a superadmin is unchanged; the full web jest is green; eslint and tsc are clean.
 
 ## Wave 9: e2e specs, authored in parallel (nothing here runs the rig)
 
@@ -1952,3 +1981,13 @@ House rules for every task:
   3. `web/lib/hoot-utils.server.ts`: remove `SiteAccessLevel`'s flat `siteRole`/`swoopMode`, which no production code reads any more (6.4). Move `hoot-utils.test.ts` 2245/2255/2279 to `access.standing.role`.
   4. `web/__tests__/hooks/useHoot.pin.test.ts` and `useHoot.stop.test.ts`: pass `includeAutonomous` (7.6).
   5. `web/__tests__/api/sites-member-candidates.test.ts`: once `machineScopes` is always present, add 6.8's case 2 with nothing scoped (`member-candidates/route.ts:105` stale-map edge).
+- 2026-11-09, wave 8 done (8.1–8.5; 8.6 skipped).
+  - 8.1 2d3ab540: `machineScopes` and `swoopModes` are required, `siteStanding` always writes both, and a missing `machineIds` reaches nothing. Every hand-off item is done, and `SiteAccessLevel`'s flat fields are gone. Full jest 483/11217.
+  - 8.2 309cc0f3: openapi follows what shipped. No uniqueItems (the server dedupes).
+  - 8.3 76aea60f and 8.4 1360105a: docs follow what shipped (the whole-session end in about 2 s, whole-site-only viewer emails, swoop hidden at none). Each page passes fumadocs-mdx. The avoid-word grep still hits old, unrelated 'allowlist' lines (command types, roost destinations, registry paths).
+  - 8.5 13db0c20: readme, changelogs (under [Unreleased]), skills, PROTOCOL §10, COVERAGE, PRODUCT and runbooks, including the prod rules-first order and the rollback trap. **For 9.1 and 9.3:** the `mobile-chromium` project only matches `mobile/*.spec.ts`, so put any phone check in a `mobile/` spec. **For 12.1:** grep both changelogs' `## [` headings after 4.1.28 merges.
+- Owner ruling, 2026-11-09: every talon re-checks its author (task 8.7). Task 8.8 removes `_shared.ts`'s fail-open `?? null`.
+  - 8.8 3e8722ba: `_shared`'s adapter reads `machineIds` strictly. 17 suites' mocks gained `machineIds: null`. scopeEnforcement's case now asserts 403 for a missing scope, red first. Full jest 483/11228. On the admit path a missing field throws in `scopeCovers` (a 500, which grants nothing and is unreachable in production). Task 8.9 added for the two recipient defaults it found.
+  - 8.7 33c6f60d: the engine resolves the author once per run, after the condition and before the first output; a refusal is recorded on each output the way runHootOutput records its own, and settleTalon disables and audits. A non-author error gives `author_check_failed` and fires nothing (fails closed). Red first: 10 of 66. Talons 562, full jest 483/11228. The docs (talons.mdx, member-management) say every talon. Left as is: hoot and visual-check still resolve the author themselves (up to 3 reads a run). system:-authored plain talons now switch off as creator_not_a_user with ai-key card copy (no live creator). Stale docs lines folded into 8.9.
+  - 8.9 69781266: `recipientWantsMachine` and talons' site-level check drop the `?? null`. A recipient with no `machineIds` reaches no machine; an undefined guard returns false, because `scopeCovers` throws, which would drop other recipients' alerts. Both cases were red first. site.mdx:178 and authentication.mdx:388 are fixed. Full jest 483/11230. Kept: `adminUtils.server.ts` ~129/~152 `?? null` are production reads for legacy `users.sites[]` users (4.4). **Backlog:** a legacy `users.sites[]` entry with no member row still gets whole-site alerts, and `row.active` is not checked there. That needs drifted data. Task 8.10 added (machineScopeOf, two comments).
+- 2026-11-09, PR #479 (dev noindex) merged to dev by owlette-0b on the owner's 'merge 479' as 955fd3f1. **Verified live:** dev.owlette.app / and /register send `x-robots-tag: noindex, nofollow`; owlette.app sends none.
