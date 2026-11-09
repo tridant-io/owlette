@@ -392,6 +392,28 @@ describe('keyboard', () => {
     expect(h.sent()).toHaveLength(2);
   });
 
+  it("toggles the host's caps lock each time a mac's does, though a mac sends only a down as it locks and only an up as it unlocks", () => {
+    const h = harness({ viewerIsMac: true });
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock', { modifierCapsLock: true }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock', { modifierCapsLock: false }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up', 'CapsLock:down', 'CapsLock:up']);
+  });
+
+  it("toggles the host once for a mac browser's press that comes with both halves", () => {
+    const h = harness({ viewerIsMac: true });
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock', { modifierCapsLock: true }));
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock', { modifierCapsLock: true }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+  });
+
+  it("passes a pc's caps lock through as it comes, a down and an up for each press", () => {
+    const h = harness();
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock'));
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock'));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+  });
+
   it('sends nothing while an IME composition owns the keyboard', () => {
     const h = harness();
     h.target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
