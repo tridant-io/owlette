@@ -536,6 +536,61 @@ describe.each([
   });
 });
 
+// POST /api/hoot/conversations/{conversationId} and its /api/chat twin - machine scope
+
+describe.each([
+  ['/api/hoot/conversations', sendPOST],
+  ['/api/chat', chatAliasSendPOST],
+])('POST %s/{conversationId} — machine scope', (base, send) => {
+  function resume(key: string) {
+    return send(
+      jsonReq(
+        `http://localhost${base}/${CONV}`,
+        'POST',
+        { role: 'user', content: 'restart the kiosk' },
+        { 'idempotency-key': key },
+      ),
+      ctx(),
+    );
+  }
+
+  beforeEach(() => {
+    mockGetConversation.mockResolvedValue(mockConversation({ machineId: 'm2' }));
+  });
+
+  it('404 not_found when the pinned machine has left the caller\'s scope', async () => {
+    mockRunHootStream.mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      error: 'machine not found or no access',
+    });
+    const res = await resume('scope1');
+    expect(mockRunHootStream).toHaveBeenCalledWith(expect.objectContaining({ machineId: 'm2' }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({
+      title: 'not found',
+      status: 404,
+      detail: 'machine not found or no access',
+      code: 'not_found',
+    });
+  });
+
+  it('keeps hoot stream unavailable for any other refusal', async () => {
+    mockRunHootStream.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      error: 'machine "m2" appears to be offline.',
+    });
+    const res = await resume('scope2');
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      title: 'hoot stream unavailable',
+      status: 503,
+      code: 'cortex_unavailable',
+    });
+  });
+});
+
 // POST /api/hoot/conversations/{conversationId} - send + stream
 
 describe('POST /api/hoot/conversations/{conversationId}', () => {
