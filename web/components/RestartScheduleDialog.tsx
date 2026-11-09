@@ -146,8 +146,9 @@ export default function RestartScheduleDialog({
   onOpenChange,
   currentSchedule,
 }: RestartScheduleDialogProps) {
-  const { userPreferences } = useAuth();
-  const { updateRestartSchedule } = useMachines(siteId);
+  const { userPreferences, machineScope } = useAuth();
+  // every card mounts this dialog, so it listens only while open
+  const { updateRestartSchedule } = useMachines(open ? siteId : '', machineScope(siteId));
   const { presets, createPreset, updatePreset, deletePreset } = useRestartPresets(siteId);
 
   const [enabled, setEnabled] = useState(false);
