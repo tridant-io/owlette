@@ -120,4 +120,15 @@ describe('siteTalonSuccessors', () => {
       { uid: 'u2', label: 'u2' },
     ]);
   });
+
+  it('drops a scoped admin, even one scoped to no machines, and keeps whole-site owners and admins', () => {
+    // the server refuses a scoped successor `insufficient_role`: TALON_MANAGE is site-wide
+    const uids = siteTalonSuccessors([
+      ...MEMBERS,
+      { uid: 'scoped-admin', email: 'scoped@example.com', displayName: null, role: 'admin', machineIds: ['m1'] },
+      { uid: 'empty-admin', email: 'empty@example.com', displayName: null, role: 'admin', machineIds: [] },
+      { uid: 'whole-admin', email: 'whole@example.com', displayName: null, role: 'admin', machineIds: null },
+    ]).map((c) => c.uid);
+    expect(uids).toEqual(['amy-admin', 'bea-admin', 'whole-admin', 'zoe-owner']);
+  });
 });
