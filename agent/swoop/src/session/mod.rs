@@ -94,6 +94,18 @@
 //! frames/s) and a hardware decoder handed nothing stalls, so [`FloorTimer`]
 //! hands the last picture to the encoder again every [`FLOOR_INTERVAL`].
 //!
+//! On NVENC the floor also sharpens. A scroll is coded at the QP the bitrate
+//! allows, and a CBR encoder wins that detail back only from repeats of the
+//! picture, so once motion (three fresh frames inside 100 ms) stops, the last
+//! picture is repeated on the loop's first wake after each rung interval for
+//! [`REFINE_FOR`], then at the floor. The repeats wait until no fresh frame
+//! has come for 50 ms or two frame intervals, whichever is longer, so a video
+//! is coded from its own frames; a caret or a clock never opens the window.
+//! [`feeds`] decides it per tier. mf-sw would pay each repeat in the machine's
+//! CPU, mf-hw's rate control is unmeasured on Intel and AMD, and VideoToolbox
+//! sends its settle keyframe instead ([`settles`]), so they keep the plain
+//! floor.
+//!
 //! # Capture and the linger
 //!
 //! §6 keeps the process alive for about a minute after the last viewer leaves,
@@ -581,7 +593,28 @@ impl Default for IdrPolicy {
 /// Duplication answers `DXGI_ERROR_WAIT_TIMEOUT` and the 0.8 box measured an
 /// idle output at 0.28 frames/s. A repeat of a still picture is a few hundred
 /// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
+///
+/// On NVENC a picture that has just stopped moving is repeated faster than
+/// this for [`REFINE_FOR`] ([`FloorTimer::refine_due`]); everywhere else, and
+/// outside that window, this is the whole floor.
 pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long a picture that stopped moving is repeated at its rung's rate, from
+/// the last fresh frame of the motion. Motion is coded at whatever QP the
+/// bitrate allowed, and only a repeat lets a CBR encoder win back the detail
+/// it crushed: at the floor's 2 Hz that takes seconds, at the rung's rate half
+/// a second (NVENC's quarter-res two-pass, swoop-clarity task 2.1's
+/// still-frame test). Each repeat stays inside its frame's share of the bitrate.
+pub const REFINE_FOR: Duration = Duration::from_millis(500);
+
+/// Three fresh frames inside this are motion: a scroll, a drag, a video. A
+/// caret, a clock or typing never puts three so close together.
+const MOTION_SPAN: Duration = Duration::from_millis(100);
+
+/// The shortest quiet before a refining repeat, whatever the rung: a 24–60 fps
+/// source is coded from its own frames while it moves, and the encoder never
+/// runs at the rung's rate on top of it.
+const QUIET_MIN: Duration = Duration::from_millis(50);
 
 /// How long after the last big move a Mac tier sends its settle keyframe.
 const SETTLE_AFTER: Duration = Duration::from_secs(1);
@@ -608,20 +641,70 @@ pub fn settles(moved_at: Option<Instant>, now: Instant) -> bool {
 #[derive(Debug)]
 pub struct FloorTimer {
     last: Instant,
+    /// The screen's last three fresh frames, oldest first.
+    recent: [Option<Instant>; 3],
+    /// The end of the refinement window the last motion opened.
+    refine_until: Option<Instant>,
 }
 
 impl FloorTimer {
     pub fn new(now: Instant) -> Self {
-        Self { last: now }
+        Self {
+            last: now,
+            recent: [None; 3],
+            refine_until: None,
+        }
     }
 
     pub fn fed(&mut self, now: Instant) {
         self.last = now;
     }
 
+    /// A fresh frame from the screen, whether or not the rate gate passes it.
+    /// One that makes three inside [`MOTION_SPAN`] (re)opens the refinement
+    /// window; a lone one only restarts the quiet.
+    pub fn fresh(&mut self, now: Instant) {
+        self.recent = [self.recent[1], self.recent[2], Some(now)];
+        if self.recent[0].is_some_and(|first| now.saturating_duration_since(first) <= MOTION_SPAN) {
+            self.refine_until = Some(now + REFINE_FOR);
+        }
+    }
+
     pub fn due(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.last) >= FLOOR_INTERVAL
     }
+
+    /// Whether a refining repeat is due: inside the window, once no fresh frame
+    /// has come for max([`QUIET_MIN`], two of `interval`), one `interval`
+    /// after the last frame the encoder was handed.
+    pub fn refine_due(&self, now: Instant, interval: Duration) -> bool {
+        let (Some(until), Some(seen)) = (self.refine_until, self.recent[2]) else {
+            return false;
+        };
+        now < until
+            && now.saturating_duration_since(seen) >= QUIET_MIN.max(interval * 2)
+            && now.saturating_duration_since(self.last) >= interval
+    }
+}
+
+/// The capture loop's per-tier decision: whether this turn hands the encoder a
+/// frame, at one per `interval` (the tier's rung). A fresh frame is the
+/// screen's motion before it is the gate's, so it is recorded before the rate
+/// gate decides; a repeat is the floor's, or with `refine` (NVENC only) a
+/// refining one. The caller marks the floor fed once the encoder took it.
+pub fn feeds(
+    floor: &mut FloorTimer,
+    gate: &mut RateGate,
+    fresh: bool,
+    now: Instant,
+    interval: Duration,
+    refine: bool,
+) -> bool {
+    if fresh {
+        floor.fresh(now);
+        return gate.admit(now, interval);
+    }
+    floor.due(now) || (refine && floor.refine_due(now, interval))
 }
 
 /// How early a frame may arrive against its rung's slot and still go to the
@@ -958,8 +1041,8 @@ mod host {
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 
     use super::{
-        codec_wire_name, feature_room, limits_for, moved, pick_codec, settles, tier_encodes, tiers,
-        CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
+        codec_wire_name, feature_room, feeds, limits_for, moved, pick_codec, settles, tier_encodes,
+        tiers, CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
         Joining, Outbox, RateGate, SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
@@ -1132,11 +1215,12 @@ mod host {
     enum ToCapture {
         /// The whole tier set: one encoder per entry, keyed by codec class.
         ///
-        /// A tier whose codec is already running and whose size is unchanged
-        /// keeps its encoder; a **size** change drops it, because a new size is
-        /// a new encoder whose first frame is an IRAP and nothing from the old
-        /// one may follow it. Bitrate and frame rate move in place. A codec not
-        /// named here has lost its last viewer and its encoder closes.
+        /// A tier whose codec is already running and whose size and frame rate
+        /// are unchanged keeps its encoder; a **size** or **frame-rate** change
+        /// drops it (`TierPass::retarget`), because the new encoder is opened
+        /// at them and its first frame is an IRAP that nothing from the old one
+        /// may follow. The bitrate moves in place. A codec not named here has
+        /// lost its last viewer and its encoder closes.
         Tiers(Vec<TierEncode>),
         /// Force one keyframe out of one tier's encoder.
         Idr(Codec),
@@ -3993,7 +4077,8 @@ mod host {
         /// once; every later open reports a change or says nothing.
         reported: Option<(u32, u32)>,
         /// Which backend the last encoder opened on, so a rebuild that lands on
-        /// the same one is not re-reported to the session.
+        /// the same one is not re-reported to the session. It also decides
+        /// whether the floor refines, for every tier of the pass.
         backend: Option<&'static str>,
     }
 
@@ -4008,7 +4093,8 @@ mod host {
         /// belongs to the size it was opened for.
         scaler: Option<Downscaler>,
         force_irap: bool,
-        /// When this tier's encoder was last handed anything, for the floor.
+        /// When this tier's encoder was last handed anything, and when the
+        /// screen last moved, for the floor and its refinement.
         floor: FloorTimer,
         /// Its rung's frame rate, over the fresh frames.
         gate: RateGate,
@@ -4316,15 +4402,13 @@ mod host {
 
             let mut rebuilt = false;
             let count = tiers.len();
+            let refine = ctx.backend == Some("nvenc");
             for tier in tiers.iter_mut() {
-                if fresh {
-                    // The ladder's frame-rate rung, and the only place it can be
-                    // enforced: a CBR encoder handed every frame just spends the
-                    // same budget on all of them.
-                    if !tier.gate.admit(now, frame_interval(tier.want.fps)) {
-                        continue;
-                    }
-                } else if !tier.floor.due(now) {
+                // the ladder's frame-rate rung is enforced here, and only here:
+                // a CBR encoder handed every frame just spends the same budget
+                // on all of them
+                let interval = frame_interval(tier.want.fps);
+                if !feeds(&mut tier.floor, &mut tier.gate, fresh, now, interval, refine) {
                     continue;
                 }
 
@@ -5272,6 +5356,218 @@ mod host {
             assert!(resumed >= 1, "the resume did not re-open the duplication");
         }
 
+        /// Swoop-clarity task 3.3 on the real capture thread: a picture that
+        /// stops moving is repeated at its rung's rate for half a second on
+        /// NVENC, and only at the floor on any other backend (mf-sw here).
+        ///
+        /// **Do not touch the mouse or keyboard while it runs**, and leave the
+        /// rest of the primary display still: anything else that repaints there
+        /// is a fresh frame (a spinner counts, even under the popup), and the
+        /// test refuses to judge a screen that sent more than 2 frames in 350 ms
+        /// before the popup moved.
+        ///
+        /// ```text
+        /// cd agent/swoop
+        /// cargo test --lib session::host::tests::a_still_screen_refines -- --ignored --nocapture
+        /// ```
+        ///
+        /// Expected on the dev box: `swoop refine: in 350 ms of a still screen
+        /// nvenc sent A frames and mf-sw B; 100 to 450 ms after the last paint,
+        /// N and M` with A and B ≤ 2, N ≥ 10 and M ≤ 2.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "paints a window on this box's real desktop, captures it and opens its encoder"]
+        fn a_still_screen_refines_after_motion_on_nvenc() {
+            // nvenc first: on the dev box an nvenc session opened after this
+            // process probed the media foundation rungs fails
+            // NV_ENC_ERR_INVALID_VERSION
+            let probed = select::probe_chain();
+            let mut soft = probed.clone();
+            let (on, on_still, refined) = frames_after_motion(probed);
+            while !soft.iter().any(|caps| caps.backend == "mf-sw") && select::probe_further(&mut soft) {}
+            let soft: Vec<BackendCaps> = soft.into_iter().filter(|caps| caps.backend == "mf-sw").collect();
+            let (off, off_still, floored) = frames_after_motion(soft);
+            println!(
+                "swoop refine: in 350 ms of a still screen {} sent {on_still} frames and {} {off_still}; \
+                 100 to 450 ms after the last paint, {refined} and {floored}",
+                on.unwrap_or("nothing"),
+                off.unwrap_or("nothing")
+            );
+            assert_eq!(on, Some("nvenc"), "the probed chain did not encode on nvenc");
+            assert_eq!(off, Some("mf-sw"), "the filtered chain did not encode on mf-sw");
+            // a display that repaints on its own feeds fresh frames all along,
+            // and the counts below would pass or fail for the wrong reason
+            assert!(
+                on_still <= 2 && off_still <= 2,
+                "the primary display is not still: something on it repaints on its own"
+            );
+            assert!(refined >= 10, "nvenc did not repeat the still picture at its rung");
+            assert!(floored <= 2, "mf-sw repeated a still picture faster than the floor");
+        }
+
+        /// One capture thread on the primary display over `backends`, with a
+        /// popup on it: left still, then painted white and black in turn every
+        /// 16 ms for a second, then still again. The backend the thread
+        /// reported, and how many encoded frames arrived in 350 ms of the first
+        /// stillness and between 100 and 450 ms after the last paint.
+        #[cfg(windows)]
+        fn frames_after_motion(backends: Vec<BackendCaps>) -> (Option<&'static str>, usize, usize) {
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
+            let output = primary(&outputs).clone();
+            let caps = select::codec_caps(&backends);
+            assert!(!caps.is_empty(), "no encoder backend in {backends:?}");
+            let codec = caps[0].codec;
+            let limits = limits_for(&caps, codec).expect("the codec it just reported");
+
+            let clock = HostClock::new(
+                platform::clock::hz().expect("a host clock"),
+                crate::bundle::TimeAnchor::new(0),
+                0,
+            );
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = bounded::<FromWorker>(WORKER_QUEUE);
+            let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
+            let handle = {
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || {
+                    capture_thread(output, backends, clock, tx, capture_rx, stop, Arc::default())
+                })
+            };
+            let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
+                Ok(FromWorker::Opened { width, height }) => (width, height),
+                _ => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("capture did not open within {CAPTURE_OPEN_TIMEOUT:?}");
+                }
+            };
+            let encoded = match scale::plan(source, limits) {
+                Plan::AsIs => source,
+                Plan::Downscale { width, height } => (width, height),
+                Plan::Refuse => panic!("{source:?} has no legal encode size"),
+            };
+            capture_tx
+                .send(ToCapture::Tiers(vec![one_tier(codec, encoded)]))
+                .expect("the capture thread is running");
+
+            // the primary display's top-left is the desktop's origin
+            let popup = Popup::open(100, 100);
+            let mut backend = None;
+            // the encoder opens, and anything the popup's arrival started ends
+            arrivals(&rx, Instant::now() + Duration::from_secs(1), &mut backend);
+            let still = arrivals(&rx, Instant::now() + Duration::from_millis(350), &mut backend).len();
+            let moving = Instant::now() + Duration::from_secs(1);
+            let mut white = false;
+            let painted = loop {
+                white = !white;
+                popup.paint(white);
+                let painted = Instant::now();
+                arrivals(&rx, painted + Duration::from_millis(16), &mut backend);
+                if Instant::now() >= moving {
+                    break painted;
+                }
+            };
+            let seen = arrivals(&rx, painted + Duration::from_millis(600), &mut backend);
+            drop(popup);
+
+            stop.store(true, Ordering::Relaxed);
+            let _ = capture_tx.send(ToCapture::Stop);
+            let _ = handle.join();
+
+            let counted = (painted + Duration::from_millis(100))..=(painted + Duration::from_millis(450));
+            (backend, still, seen.iter().filter(|at| counted.contains(at)).count())
+        }
+
+        /// When each encoded frame arrived before `until`, noting the backend
+        /// if the capture thread reports one meanwhile.
+        #[cfg(windows)]
+        fn arrivals(rx: &Receiver<FromWorker>, until: Instant, backend: &mut Option<&'static str>) -> Vec<Instant> {
+            let mut seen = Vec::new();
+            while let Some(left) = until.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(FromWorker::Frame(_)) => seen.push(Instant::now()),
+                    Ok(FromWorker::Backend(name)) => *backend = Some(name),
+                    Ok(FromWorker::Failed(exit)) => panic!("capture failed: {}", exit.code()),
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            seen
+        }
+
+        /// A topmost 200x200 popup the test paints, closed when it drops. A
+        /// system `STATIC` window, so there is no class to register, shown
+        /// without taking the focus.
+        #[cfg(windows)]
+        struct Popup(windows::Win32::Foundation::HWND);
+
+        #[cfg(windows)]
+        impl Popup {
+            const SIZE: i32 = 200;
+
+            fn open(x: i32, y: i32) -> Self {
+                use windows::core::w;
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    CreateWindowExW, ShowWindow, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+                    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+                };
+
+                let hwnd = unsafe {
+                    CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                        w!("STATIC"),
+                        w!(""),
+                        WS_POPUP,
+                        x,
+                        y,
+                        Self::SIZE,
+                        Self::SIZE,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                }
+                .expect("a popup on this desktop");
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+                Self(hwnd)
+            }
+
+            /// Fill it white or black, after the messages it is owed.
+            fn paint(&self, white: bool) {
+                use windows::Win32::Foundation::{COLORREF, RECT};
+                use windows::Win32::Graphics::Gdi::{
+                    CreateSolidBrush, DeleteObject, FillRect, GdiFlush, GetDC, ReleaseDC,
+                };
+                use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, MSG, PM_REMOVE};
+
+                let area = RECT {
+                    left: 0,
+                    top: 0,
+                    right: Self::SIZE,
+                    bottom: Self::SIZE,
+                };
+                unsafe {
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&msg);
+                    }
+                    let dc = GetDC(Some(self.0));
+                    let brush = CreateSolidBrush(COLORREF(if white { 0x00ff_ffff } else { 0 }));
+                    FillRect(dc, &area, brush);
+                    let _ = DeleteObject(brush.into());
+                    let _ = GdiFlush();
+                    ReleaseDC(Some(self.0), dc);
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        impl Drop for Popup {
+            fn drop(&mut self) {
+                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) };
+            }
+        }
+
         // linux has no chain yet, so nothing to override
         #[cfg(all(feature = "testhooks", any(windows, target_os = "macos")))]
         #[test]
@@ -5694,6 +5990,168 @@ mod tests {
         floor.fed(now);
         assert!(!floor.due(now + Duration::from_millis(499)));
         assert!(floor.due(now + FLOOR_INTERVAL));
+    }
+
+    const RUNG_60: Duration = Duration::from_micros(1_000_000 / 60);
+    const RUNG_30: Duration = Duration::from_micros(1_000_000 / 30);
+
+    /// Fresh frames every `period_us` for `count` frames, from the start.
+    fn every(period_us: u64, count: u64) -> Vec<Duration> {
+        (0..count).map(|k| Duration::from_micros(k * period_us)).collect()
+    }
+
+    /// One tier of the capture loop over a script, through [`feeds`]: the loop
+    /// wakes at each fresh frame and every millisecond between, until `end`.
+    /// The real loop wakes every 8 ms plus its encode, so its repeats land on
+    /// the first wake after each interval; this grain is the logic's own. The
+    /// fresh frames the encoder was handed, and the repeats, as offsets from
+    /// the start.
+    fn handed(
+        fresh: &[Duration],
+        end: Duration,
+        interval: Duration,
+        refine: bool,
+    ) -> (Vec<Duration>, Vec<Duration>) {
+        let t0 = Instant::now();
+        let mut floor = FloorTimer::new(t0);
+        let mut gate = RateGate::default();
+        let mut ticks: Vec<Duration> = (0..=end.as_millis() as u64)
+            .map(Duration::from_millis)
+            .chain(fresh.iter().copied())
+            .collect();
+        ticks.sort();
+        ticks.dedup();
+        let (mut frames, mut repeats) = (Vec::new(), Vec::new());
+        for at in ticks {
+            let is_fresh = fresh.binary_search(&at).is_ok();
+            if feeds(&mut floor, &mut gate, is_fresh, t0 + at, interval, refine) {
+                floor.fed(t0 + at);
+                if is_fresh {
+                    frames.push(at);
+                } else {
+                    repeats.push(at);
+                }
+            }
+        }
+        (frames, repeats)
+    }
+
+    /// The gaps between consecutive repeats, after the first.
+    fn gaps(repeats: &[Duration]) -> Vec<Duration> {
+        repeats.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    }
+
+    /// A scroll that stops is sharpened at the rung's rate for half a second
+    /// and then left to the floor; while it moves its own frames are enough.
+    #[test]
+    fn a_scroll_that_stops_is_repeated_at_its_rung_for_half_a_second_then_at_the_floor() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, Duration::from_millis(2_600), RUNG_60, true);
+        assert_eq!(frames, scroll, "a 60 Hz scroll on a 60 fps rung goes through whole");
+        assert!(repeats.iter().all(|at| *at > last), "a repeat while it scrolled");
+
+        let (refined, floor): (Vec<Duration>, Vec<Duration>) =
+            repeats.iter().copied().partition(|at| *at < last + REFINE_FOR);
+        let first = refined[0] - last;
+        assert!(
+            first >= QUIET_MIN && first < QUIET_MIN + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert!((26..=28).contains(&refined.len()), "{} refining repeats", refined.len());
+        for gap in gaps(&refined) {
+            assert!(gap >= RUNG_60 && gap <= RUNG_60 + Duration::from_millis(1), "a {gap:?} gap");
+        }
+        // then exactly today's floor, from the last refining repeat
+        let tail: Vec<Duration> = [*refined.last().expect("refined")].into_iter().chain(floor).collect();
+        assert_eq!(tail.len(), 3);
+        assert_eq!(gaps(&tail), vec![FLOOR_INTERVAL; 2]);
+    }
+
+    /// A 30 fps video on a 60 fps rung is coded from its own frames, never at
+    /// 60 on top of them, and still sharpens once it stops.
+    #[test]
+    fn a_slower_source_is_never_repeated_between_its_own_frames() {
+        let video = every(33_333, 30);
+        let last = *video.last().expect("a video");
+        let (frames, repeats) = handed(&video, last + REFINE_FOR, RUNG_60, true);
+        assert_eq!(frames, video);
+        assert!(repeats.iter().all(|at| *at >= last + QUIET_MIN), "a repeat between its frames");
+        assert!((26..=28).contains(&repeats.len()), "{} repeats once it stopped", repeats.len());
+    }
+
+    /// A clock or a blinking caret is never motion, so its picture keeps the
+    /// plain floor.
+    #[test]
+    fn a_frame_now_and_then_never_opens_the_window() {
+        let ticking = every(530_000, 6);
+        let end = Duration::from_secs(4);
+        let refined = handed(&ticking, end, RUNG_60, true);
+        assert_eq!(refined, handed(&ticking, end, RUNG_60, false));
+        assert!(gaps(&refined.1).iter().all(|gap| *gap >= FLOOR_INTERVAL));
+    }
+
+    /// A caret blinking while the scroll's window is open delays the next
+    /// repeat by the quiet, and the window still closes where the scroll put
+    /// it.
+    #[test]
+    fn a_lone_frame_in_the_window_restarts_the_quiet_and_never_extends_it() {
+        let mut script = every(16_667, 60);
+        let last = *script.last().expect("a scroll");
+        let caret = last + Duration::from_millis(200);
+        script.push(caret);
+        let (frames, repeats) = handed(&script, Duration::from_millis(2_000), RUNG_60, true);
+        assert_eq!(frames.last(), Some(&caret), "the caret is coded as it comes");
+
+        let after: Vec<Duration> = repeats.iter().copied().filter(|at| *at > caret).collect();
+        let resumed = after[0] - caret;
+        assert!(
+            resumed >= QUIET_MIN && resumed < QUIET_MIN + Duration::from_millis(1),
+            "the repeats resumed {resumed:?} after the caret"
+        );
+        let (refined, floor): (Vec<Duration>, Vec<Duration>) =
+            after.into_iter().partition(|at| *at < last + REFINE_FOR);
+        assert!(refined.len() >= 10, "only {} refining repeats after the caret", refined.len());
+        assert_eq!(
+            floor[0] - *refined.last().expect("refined"),
+            FLOOR_INTERVAL,
+            "the caret kept the window open past the scroll's half second"
+        );
+    }
+
+    /// On a 30 fps rung the quiet is two of its intervals and the repeats come
+    /// at its rate, and the gate still holds the scroll to 30.
+    #[test]
+    fn a_slower_rung_refines_at_its_own_rate() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, last + REFINE_FOR, RUNG_30, true);
+        assert!((29..=31).contains(&frames.len()), "the gate took {} of 60", frames.len());
+        let first = repeats[0] - last;
+        assert!(
+            first >= RUNG_30 * 2 && first < RUNG_30 * 2 + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert!((12..=14).contains(&repeats.len()), "{} refining repeats", repeats.len());
+        for gap in gaps(&repeats) {
+            assert!(gap >= RUNG_30 && gap <= RUNG_30 + Duration::from_millis(1), "a {gap:?} gap");
+        }
+    }
+
+    /// Every backend but NVENC keeps the floor as it was.
+    #[test]
+    fn without_refinement_a_scroll_that_stops_gets_only_the_floor() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, Duration::from_millis(2_600), RUNG_60, false);
+        assert_eq!(frames, scroll);
+        assert_eq!(repeats.len(), 3);
+        let first = repeats[0] - last;
+        assert!(
+            first >= FLOOR_INTERVAL && first < FLOOR_INTERVAL + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert_eq!(gaps(&repeats), vec![FLOOR_INTERVAL; 2]);
     }
 
     /// Frames out, pings in and no `fb` back is a decoder that stopped
