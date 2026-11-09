@@ -38,7 +38,7 @@ jest.mock('firebase-admin/firestore', () => ({
 const mockRequireSession = jest.fn().mockResolvedValue('user-123');
 const mockAssertUserHasSiteAccess = jest
   .fn()
-  .mockResolvedValue({ siteId: 'site-1', siteData: {} });
+  .mockResolvedValue({ siteId: 'site-1', siteData: {}, machineIds: null });
 
 jest.mock('@/lib/apiAuth.server', () => {
   class _ApiAuthError extends Error {
@@ -810,6 +810,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
     mockAssertUserHasSiteAccess.mockResolvedValue({
       siteId: 'site-1',
       siteData: {},
+      machineIds: null,
     });
     mockRunTransaction.mockImplementation(async (fn: (tx: unknown) => unknown) =>
       fn(mockTransaction),
@@ -1082,7 +1083,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
   describe('the machine limit', () => {
     /** an interactive code for `machineId`, authorised onto site-1, which owner-1 pays for. */
     function interactiveCode(machineId: string) {
-      mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' } });
+      mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' }, machineIds: null });
       mockTransactionGet.mockResolvedValue({
         exists: true,
         data: () => ({

@@ -54,7 +54,7 @@ const SITE = 'site-alpha';
 beforeEach(() => {
   jest.clearAllMocks();
   mockResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   mocks.get.mockResolvedValue(docSnapshot('any', {}));
   mocks.collectionGet.mockResolvedValue(querySnapshot([]));
 });

@@ -126,7 +126,7 @@ beforeEach(() => {
   mockUsers = {};
   mockGetEntitlements.mockResolvedValue(FREE);
   mockResolveAuth.mockResolvedValue(SESSION);
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA, machineIds: null });
   mockResolveSiteAccess.mockResolvedValue({
     ok: true,
     facts: { siteData: SITE_DATA, globalRole: 'member', membershipRole: 'owner', swoopMode: null, machineIds: null },

@@ -161,7 +161,7 @@ function mockPlatformRole(role: 'superadmin' | 'admin' | 'member' | null): void 
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {} });
+  mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {}, machineIds: null });
   mockPlatformRole('superadmin');
 });
 
@@ -690,10 +690,14 @@ describe('machine scope: a key owned by a member scoped to m1', () => {
     }
   }
 
-  it('the suite mock, which carries no machineIds, reads as the whole site', async () => {
+  it('requireSiteAuthAndScope refuses an access answer with no machineIds, not reading it as the whole site', async () => {
     mockedResolveAuth.mockResolvedValue(sessionAuth());
-    const result = await requireSiteAuthAndScope(makeRequest(), SITE_ID, 'read');
-    expect(result.ok && result.machineIds).toBeNull();
+    mockedAssertSite.mockResolvedValue({ siteId: SITE_ID, siteData: {} } as never);
+    await expectRefusal(
+      await requireSiteAuthAndScope(makeRequest(), SITE_ID, 'read'),
+      403,
+      'capability not granted',
+    );
   });
 
   it('requireSiteAuthAndScope refuses it 403 although the key holds the site scope', async () => {

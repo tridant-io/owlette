@@ -136,7 +136,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   signedUrlCalls.length = 0;
   mockResolveAuth.mockResolvedValue(authedSession());
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   mocks.siteDocs.clear();
   mocks.memberDocs.clear();
   mocks.userDocs.clear();

@@ -188,7 +188,7 @@ jest.mock('@/lib/apiAuth.server', () => {
     // The wrapper emits the api-key audit event since task 1.6; a no-op here
     // because this suite asserts authorization, not audit fan-out.
     auditApiKeyUse: jest.fn(),
-    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: 'site-a', siteData: {} })),
+    assertUserHasSiteAccess: jest.fn(async () => ({ siteId: 'site-a', siteData: {}, machineIds: null })),
   };
 });
 
@@ -258,7 +258,7 @@ beforeEach(() => {
   setMember('admin');
   customerDoc = { exists: false, data: () => undefined };
   requireScopeMock.mockReturnValue({ isLegacy: false });
-  assertUserHasSiteAccessMock.mockResolvedValue({ siteId: 'site-a', siteData: {} });
+  assertUserHasSiteAccessMock.mockResolvedValue({ siteId: 'site-a', siteData: {}, machineIds: null });
 });
 
 function makeRequest(url = 'http://localhost/api/sites/site-a/test', method = 'POST'): NextRequest {

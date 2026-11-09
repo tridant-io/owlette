@@ -57,7 +57,7 @@ function makeAuthed() {
     userId: 'user-1',
     keyContext: null, // session-style: no scope check
   });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 beforeEach(() => {

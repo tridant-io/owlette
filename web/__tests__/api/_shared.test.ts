@@ -170,7 +170,7 @@ describe('_shared.ts (v2 route helpers)', () => {
 
   describe('requireSiteScope', () => {
     it('returns null when the user has access', async () => {
-      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null });
+      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null, machineIds: null });
       const result = await requireSiteScope('user-1', 'site_abc');
       expect(result).toBeNull();
     });

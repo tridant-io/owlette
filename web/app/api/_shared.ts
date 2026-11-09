@@ -515,8 +515,7 @@ async function assertSiteAccessOrProblem(
 > {
   try {
     const access = await assertUserHasSiteAccess(userId, siteId);
-    // suites mock the adapter with no machineIds, which reads as the whole site
-    return { ok: true, siteData: access.siteData, machineIds: access.machineIds ?? null };
+    return { ok: true, siteData: access.siteData, machineIds: access.machineIds };
   } catch (err) {
     if (err instanceof ApiAuthError) {
       // An INACTIVE caller is 403, not the collapsed 404 (Wave 1 task 1.3).
