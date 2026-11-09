@@ -6,7 +6,7 @@ keywords: ["workflow", "notification", "automation rule", "if this then that", "
 
 talons are owlette's automations — the owl's instrument of action. each talon is a small pipeline: **when** something happens (the trigger), **optionally check** something (the condition), **then do** something (the outputs). talons live at `/talons` in the dashboard, are scoped to a site, and can target every machine in the site or a chosen subset.
 
-you can build a talon in the visual editor, **start from a template**, or simply ask hoot — "every morning at 8, screenshot the wall and email me if the loop isn't playing" becomes a talon you can inspect and edit like any other. creating, editing, enabling, disabling and deleting talons takes a site admin or owner.
+you can build a talon in the visual editor, **start from a template**, or simply ask hoot — "every morning at 8, screenshot the wall and email me if the loop isn't playing" becomes a talon you can inspect and edit like any other. creating, editing, enabling, disabling and deleting talons takes a site admin or owner whose access is the whole site.
 
 ---
 
@@ -30,14 +30,14 @@ a visual check needs a machine that can take a screenshot. a Mac needs Screen Re
 
 a talon has one to five outputs; each is attempted and recorded independently on the run.
 
-- **email** — emails the site's users who have **talon alerts** switched on in [account settings](/docs/dashboard/account-settings#alerts), skipping anyone who muted the machine, with per-recipient unsubscribe links.
+- **email** — emails the site's users who have **talon alerts** switched on in [account settings](/docs/dashboard/account-settings#alerts), skipping anyone who muted the machine or whose access does not cover it, with per-recipient unsubscribe links. a site-wide run, which names no one machine, skips everyone limited to some machines.
 - **webhook** — a signed POST to your endpoint. the signing secret is generated server-side and is never readable from the dashboard.
 - **hoot** — hands hoot a directive (up to 1000 characters) to carry out against the machine, in a chat you can open and read afterwards. by default the turn is **read-only** (tier-1 tools): it can look at the machine and report, not change it. arming **let hoot act** on the output raises it to tier 2 — process control, screenshots, service management, Windows Update policy. tier 3 (raw shell, file writes) is never available to an unattended run, whatever the flag says. these two levels are the whole range — there is no per-directive tool list. on a Mac or Linux machine, hoot's Windows-only tools refuse (see [hoot tools](/docs/reference/hoot-tools#platforms)).
 - **command** — queues a process command (restart, start or stop) against the machines in scope. it is the same power class as an armed hoot output.
 
 a hoot output aimed at one machine is **skipped**, not failed, when that machine is offline (`machine_offline`) or hoot is switched off on it from the hoot header (`hoot_disabled`): the reason is recorded on the run, nothing is dispatched, and the talon keeps its clean record. a site-wide directive runs against the machines that are online **with hoot enabled** at the time, and the ones the switch held back are listed on the run — it is skipped the same way when none are online (`no_machines_online`) or when every online machine has hoot switched off (`no_hoot_enabled_machines`).
 
-the identity that pays and acts is the talon's **creator**, re-checked on every run. a creator who is no longer a user, was deleted, lost access to the site, or removed their LLM key switches the talon off on the first run that finds out, and the card reads **switched off — …** with the reason. removing a member who wrote talons — from a site's [members](/docs/dashboard/admin/member-management) section, or a user's site access or account from [users](/docs/dashboard/admin/user-management) — offers to hand their talons to a successor first, and handing them over re-arms the ones that were switched off for their creator.
+the identity that pays and acts is the talon's **creator**, re-checked on every run. a creator who is no longer a user, was deleted, lost access to the site, or removed their LLM key switches the talon off on the first run that finds out, and the card reads **switched off — …** with the reason. so does a creator whose access was [limited to some machines](/docs/dashboard/admin/member-management#machine-scope), since a talon spans the site: a talon with a hoot output or a visual check switches off at its next run, with the reason **the person who created this talon no longer has access to this site**. removing a member who wrote talons — from a site's [members](/docs/dashboard/admin/member-management) section, or a user's site access or account from [users](/docs/dashboard/admin/user-management) — offers to hand their talons to a successor first, and handing them over re-arms the ones that were switched off for their creator.
 
 ## the talon card
 
