@@ -10,6 +10,23 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### added — a member can be limited to some machines
+
+A site admin can now give someone access to only some of the site's machines, up
+to 30: in the site's members section, **change access...** → **some machines**, or
+the same choice when adding them. That person sees only those machines on the
+dashboard, in swoop, in hoot and in the activity log, gets alert emails only for
+them, and acts on them at their site role, with their swoop mode applying there:
+give a member **control** and they can take control of just those machines.
+Nothing that spans machines reaches them, whatever their role: no site settings,
+members, deployments, roost, talons, webhooks, audit log or admin panel. Their API
+keys carry the same limit. Everyone else keeps the whole site, as before. A
+machine that is removed or leaves the site drops out of everyone's access, and
+limiting someone's access stops the talons they wrote. The API takes `machineIds`
+on `POST /api/sites/{siteId}/members` and `PATCH /api/sites/{siteId}/members/{uid}`
+(`null` gives back the whole site) and returns it from the members list.
+Firestore rules 2.12.0 enforce the same limit on every read.
+
 ### changed — the site filter is a search row
 
 Past ten sites, the filter in the site switcher and in owlette swoop's site
