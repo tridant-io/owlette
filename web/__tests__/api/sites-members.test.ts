@@ -33,6 +33,7 @@ jest.mock('@/lib/authorizedHandler.server', () => ({
             userId: 'user-1',
             role: 'admin',
             siteRoles: { [params.siteId]: 'admin' },
+            machineScopes: { [params.siteId]: null },
           },
           siteId: params.siteId,
           correlationId: 'corr-test',

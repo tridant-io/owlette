@@ -341,10 +341,11 @@ export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | nul
  * the machines a person reaches on a site, or null for the whole site. a map
  * without the site, or an entry that is neither null nor a list, reaches
  * nothing. the map is required, so only a test literal, which tsc never
- * checks, can lack it; such an actor reads as the whole site.
+ * checks, can lack it; such an actor reaches nothing too. a superadmin without
+ * one stays whole-site, though every caller answers a superadmin before asking.
  */
 export function machineScopeOf(actor: UserActor, siteId: string): readonly string[] | null {
-  if (!actor.machineScopes) return null;
+  if (!actor.machineScopes) return actor.role === 'superadmin' ? null : [];
   // own properties only, for the reason `hasCapability` gives for siteRoles
   if (!Object.prototype.hasOwnProperty.call(actor.machineScopes, siteId)) return [];
   const scope = actor.machineScopes[siteId];

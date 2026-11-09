@@ -49,14 +49,23 @@ const GLOBAL_CAPABILITIES: Capability[] = ALL_CAPABILITIES.filter(
   (c) => !SITE_SCOPED.includes(c)
 );
 
+/** whole site on every site in siteRoles, as siteStanding writes it, unless overridden. */
 function userActor(overrides: Partial<UserActor> = {}): UserActor {
+  const siteRoles = overrides.siteRoles ?? {};
   return {
     type: 'user',
     userId: 'uid_default',
     role: 'member',
-    siteRoles: {},
+    siteRoles,
+    swoopModes: {},
+    machineScopes: Object.fromEntries(Object.keys(siteRoles).map((siteId) => [siteId, null])),
     ...overrides,
   };
+}
+
+/** only an untyped literal can leave the map out; a missing scope must not widen. */
+function noMapActor(role: UserActor['role'], siteRole: SiteRole): UserActor {
+  return { type: 'user', userId: 'uid_default', role, siteRoles: { site_a: siteRole }, swoopModes: {} } as unknown as UserActor;
 }
 
 function systemActor(overrides: Partial<SystemActor> = {}): SystemActor {
@@ -552,6 +561,8 @@ describe('hasCapability — discriminated union routing', () => {
       userId: 'uid_x',
       role: 'admin',
       siteRoles: { ['site_a']: 'admin' },
+      swoopModes: {},
+      machineScopes: { site_a: null },
     };
     expect(hasCapability(actor, Capability.DEPLOYMENT_MANAGE, 'site_a')).toBe(true);
   });
@@ -810,8 +821,13 @@ describe('MACHINE_CAPABILITIES', () => {
 });
 
 describe('machineScopeOf', () => {
-  it('is null with no map, and fails closed on a map without the site', () => {
-    expect(machineScopeOf(userActor({ siteRoles: { site_a: 'admin' } }), 'site_a')).toBeNull();
+  it('reads an actor with no map as no machines, and a superadmin with none as the whole site', () => {
+    expect(machineScopeOf(noMapActor('member', 'admin'), 'site_a')).toEqual([]);
+    expect(machineScopeOf(noMapActor('admin', 'owner'), 'site_a')).toEqual([]);
+    expect(machineScopeOf(noMapActor('superadmin', 'member'), 'site_a')).toBeNull();
+  });
+
+  it('fails closed on a map without the site', () => {
     expect(machineScopeOf(userActor({ machineScopes: {} }), 'site_a')).toEqual([]);
     expect(machineScopeOf(userActor({ machineScopes: { site_b: null } }), 'site_a')).toEqual([]);
   });
@@ -992,10 +1008,22 @@ describe('hasCapability — machine scope after the role and the swoop mode (own
     }
   });
 
-  it('an actor with no machineScopes key gives exactly the matrix, with or without a machine', () => {
+  it('an actor with no machineScopes key holds nothing site-scoped, with or without a machine', () => {
+    for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+      const actor = noMapActor('member', siteRole);
+      for (const cap of ALL_CAPABILITIES) {
+        const expected = !isSiteScopedCapability(cap) && GlobalRoleCapabilityMatrix.member.includes(cap);
+        for (const machineId of [undefined, 'm2']) {
+          expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(expected);
+        }
+      }
+    }
+  });
+
+  it('a whole-site actor gives exactly the matrix, with or without a machine', () => {
     for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
       const actor = userActor({ siteRoles: { site_a: siteRole } });
-      expect(actor).not.toHaveProperty('machineScopes');
+      expect(actor.machineScopes).toEqual({ site_a: null });
       for (const cap of ALL_CAPABILITIES) {
         const today = isSiteScopedCapability(cap)
           ? SiteRoleCapabilityMatrix[siteRole].includes(cap)

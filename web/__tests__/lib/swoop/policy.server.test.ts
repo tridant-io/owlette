@@ -66,9 +66,9 @@ import {
 const SITE = 'site-a';
 const MACHINE = 'machine-x';
 
-const member: Actor = { type: 'user', userId: 'm', role: 'member', siteRoles: { [SITE]: 'member' } };
-const admin: Actor = { type: 'user', userId: 'a', role: 'member', siteRoles: { [SITE]: 'admin' } };
-const owner: Actor = { type: 'user', userId: 'o', role: 'member', siteRoles: { [SITE]: 'owner' } };
+const member: Actor = { type: 'user', userId: 'm', role: 'member', siteRoles: { [SITE]: 'member' }, machineScopes: { [SITE]: null } };
+const admin: Actor = { type: 'user', userId: 'a', role: 'member', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
+const owner: Actor = { type: 'user', userId: 'o', role: 'member', siteRoles: { [SITE]: 'owner' }, machineScopes: { [SITE]: null } };
 const outsider: Actor = { type: 'user', userId: 'x', role: 'member', siteRoles: {} };
 
 const ON: SwoopSiteSettings = { ...SWOOP_SETTINGS_DEFAULTS, enabled: true };

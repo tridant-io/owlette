@@ -316,8 +316,8 @@ const SITE = 'site-a';
 const TALONS_PATH = `sites/${SITE}/talons`;
 const SECRETS_PATH = `sites/${SITE}/talon_secrets`;
 
-const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' } };
-const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' } };
+const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
+const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' }, machineScopes: { [SITE]: null } };
 
 let fake: FakeFirestore;
 let db: Firestore;
@@ -601,6 +601,7 @@ describe('createTalon', () => {
       userId: 'admin-elsewhere',
       role: 'admin',
       siteRoles: { ['site-b']: 'admin' },
+      machineScopes: { ['site-b']: null },
     };
     await expectStoreError(
       createTalon(
@@ -943,7 +944,7 @@ describe('updateTalon', () => {
 
     await updateTalon(
       db,
-      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' } }),
+      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } }),
       't1',
       talonInput({ outputs: [{ type: 'cortex', directive: 'restart the show' }] }),
     );
