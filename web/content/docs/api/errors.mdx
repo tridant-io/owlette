@@ -63,7 +63,7 @@ these can come from almost any route.
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
-| `not_found` | 404 | absent, or hidden from this caller | check the ID and the caller's access |
+| `not_found` | 404 | absent, or hidden from this caller. a machine outside the caller's machine scope says `machine not found or no access` | check the ID and the caller's access |
 | `validation_failed` | 400 | body, query, path, or header validation failed | fix the request using `detail` and `errors` |
 | `forbidden_field` | 400 | the body has a field this operation does not accept | remove it |
 | `unsupported_version` | 400 | `Roost-Version` names a date the server does not support | send a date from `supported`, or omit the header |
@@ -121,6 +121,8 @@ the site owner's plan decides, except when creating a site, creating or rotating
 ### forbidden
 
 the caller is authenticated, but lacks the site role or capability the operation needs, or their account has been deactivated. a site the caller cannot access at all answers `404`, not `403`.
+
+a caller whose access to the site is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403` on the site-wide routes, such as settings, members, deployments, roost and webhooks, whatever their role; the machines list and the site's logs answer with only their machines. a machine outside that scope answers `404 not_found` (`machine not found or no access`), exactly as a machine that does not exist does.
 
 a missing swoop capability (watching, control or the swoop settings) answers [`capability_missing`](#capability_missing) instead.
 
@@ -319,7 +321,7 @@ see [swoop](/docs/dashboard/swoop).
 | <span id="successor_already_owner" />`successor_already_owner` | 409 | the successor already owns the site |
 | <span id="target_is_owner" />`target_is_owner` | 409 | adding the site's owner as a member |
 | <span id="cannot_remove_owner" />`cannot_remove_owner` | 409 | removing the site's owner; transfer ownership first |
-| <span id="cannot_change_owner_role" />`cannot_change_owner_role` | 409 | changing the owner's role |
+| <span id="cannot_change_owner_role" />`cannot_change_owner_role` | 409 | changing the owner's role, swoop mode or machine scope: they come with ownership, so transfer it instead |
 | <span id="cannot_modify_own_membership" />`cannot_modify_own_membership` | 403 | changing or removing your own membership; ask another admin |
 | <span id="site_member_manage_required" />`site_member_manage_required` | 403 | the caller may not manage this site's members |
 | <span id="talon_manage_required" />`talon_manage_required` | 403 | moving a departing member's talons needs the talon-manage capability |

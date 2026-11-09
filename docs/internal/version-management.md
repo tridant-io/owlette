@@ -58,7 +58,7 @@ owlette uses **independent component versioning** for flexibility while maintain
 
 #### firestore rules version (`firestore.rules`)
 
-**Current:** 2.2.0
+**Current:** 2.12.0
 
 **Tracks:** Breaking changes to security rules or data schema.
 

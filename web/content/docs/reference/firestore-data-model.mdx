@@ -1,12 +1,14 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride", "machineIds", "machine scope"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
 
-"site members" means anyone with an active row in `sites/{siteId}/members` (`canAccessSite`), "site admins" a row whose role is `owner` or `admin` (`isSiteAdmin`), and "the agent" a paired agent acting on its own site and machine.
+"site members" means anyone with an active row in `sites/{siteId}/members` (`canAccessSite`). "whole-site members" are site members whose row carries no [machine scope](/docs/reference/authentication#machine-scope) (`canAccessWholeSite`), "scoped members" those whose row carries one, and "members whose access covers the machine" are the whole-site members plus any member whose `machineIds` lists that machine (`canAccessMachine`). "site admins" means a whole-site row whose role is `owner` or `admin` (`isSiteAdmin`), and "the agent" a paired agent acting on its own site and machine.
+
+a scoped member reads documents under their own machines and nothing that spans machines, with these exceptions, kept readable to every site member on purpose because they say nothing about other machines: the site document, `settings/swoop`, `settings/display` and `settings/cortex` (hoot settings), and the schedule and reboot presets. a refused swoop settings read would hide swoop, and the machine config dialogs read the presets.
 
 ---
 
@@ -109,7 +111,7 @@ the site. **access**: site members read; writes are server only.
 
 ### `sites/{siteId}/members/{uid}`
 
-the row that grants site access. `canAccessSite()` and `isSiteAdmin()` resolve entirely from it; `sites/{siteId}.owner` and `users/{uid}.sites` are read by no rule.
+the row that grants site access. `canAccessSite()`, `canAccessWholeSite()`, `canAccessMachine()` and `isSiteAdmin()` resolve entirely from it; `sites/{siteId}.owner` and `users/{uid}.sites` are read by no rule.
 
 **access**: a user may read only their own rows (`collectionGroup('members').where('uid','==',me)`, through a recursive `{path=**}/members/{memberUid}` rule); the full roster is served by the API under `SITE_MEMBER_MANAGE`. all writes are server only, through `web/lib/membership.server.ts`.
 
@@ -118,13 +120,14 @@ the row that grants site access. `canAccessSite()` and `isSiteAdmin()` resolve e
 | `uid` | string | duplicated as a field, not only as the document ID, so the collection-group query can prove the rule. |
 | `role` | string | `owner`, `admin` or `member`. `owner` is written only at site creation and by ownership transfer. |
 | `swoop` | string | optional. `none`, `view` or `control`: the person's own swoop mode. absent means the role decides; never on the owner's row. any other value reads as `none`. |
+| `machineIds` | string[] | optional. the person's [machine scope](/docs/reference/authentication#machine-scope): 1 to 30 machine IDs of the site, sorted, without repeats. absent means the whole site; never on the owner's row. `[]`, or a value that is not a list, reaches no machine. widening deletes the field. removing a machine, or pairing one whose machine document had gone, drops its ID from every row. |
 | `status` | string | `active`. |
 | `addedAt` | timestamp | |
 | `addedBy` | string | uid of whoever granted access. |
 
 ### `sites/{siteId}/settings/{settingId}`
 
-per-site settings. **access**: site members read; writes are server only.
+per-site settings. **access**: site members read `swoop`, `display` and `cortex`; only whole-site members read `alerts`; writes are server only.
 
 | doc ID | written by | fields |
 | --- | --- | --- |
@@ -137,7 +140,7 @@ per-site settings. **access**: site members read; writes are server only.
 
 ### `sites/{siteId}/logs/{logId}`
 
-the site's activity log, the one the dashboard shows. **access**: site members and the site's agents read; the server and the site's agents create (an agent only for its own `machineId`, and `timestamp`, `action`, `level` and `machineId` are required); only the server deletes.
+the site's activity log, the one the dashboard shows. **access**: members whose access covers the entry's `machineId` read, so a scoped member lists it with `machineId` pinned (`==` or `in`) to their machines, and an entry with no `machineId` is for whole-site members only; the site's agents read too; the server and the site's agents create (an agent only for its own `machineId`, and `timestamp`, `action`, `level` and `machineId` are required); only the server deletes.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -200,7 +203,7 @@ deliveries are queued in the top-level `webhook_deliveries/{deliveryId}__{subscr
 
 presence, status, metrics, process state, reboot state and capability flags all live on the machine document; there are no `presence` or `status` child documents. the document ID is the machine ID: its hostname when first paired, kept from then on.
 
-**access**: site members read; the agent reads and writes its own machine; control-plane writes from the web go through API routes.
+**access**: members whose access covers the machine read; the agent reads and writes its own machine; control-plane writes from the web go through API routes.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -230,7 +233,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `lastScreenshot` | map or null | `{ url, timestamp, sizeKB }`, the latest screenshot. |
 | `liveView` | map | `{ active, interval, startedAt, expiresAt }`, unix seconds, while live view runs. |
 | `swoopViewers` | number | viewers across live swoop sessions with an unexpired lease, recomputed by the server when sessions change (not on every lease renewal, so it can lag). missing until the first session. |
-| `swoopSeats` | array | the seats `swoopViewers` counts, as `{ uid, displayName, ctl }`, written with it, so the swoop picker can name who is in the session. `displayName` is null when the account has none or is gone, and there is no email: every member of the site reads this document. missing until a session changes on the machine. |
+| `swoopSeats` | array | the seats `swoopViewers` counts, as `{ uid, displayName, ctl }`, written with it, so the swoop picker can name who is in the session. `displayName` is null when the account has none or is gone, and there is no email: every member whose access covers the machine reads this document. missing until a session changes on the machine. |
 | `configChangeFlag` | boolean | set by the server after process-config writes. nothing in the agent reads it. |
 | `metrics` | map | the current metrics payload, below. |
 
@@ -256,7 +259,7 @@ current agents delete the legacy singular `metrics.cpu`, `metrics.disk` and `met
 
 ### `.../commands/pending` and `.../commands/completed`
 
-the command queue: two singleton documents under `sites/{siteId}/machines/{machineId}/commands/`, each holding command IDs as top-level map fields. **access**: site members read; the server and the agent write. the full command list is in [agent commands](/docs/reference/agent-commands).
+the command queue: two singleton documents under `sites/{siteId}/machines/{machineId}/commands/`, each holding command IDs as top-level map fields. **access**: members whose access covers the machine read; the server and the agent write. the full command list is in [agent commands](/docs/reference/agent-commands).
 
 ```json
 {
@@ -286,7 +289,7 @@ a pending `reboot_machine`, `shutdown_machine` or `install_software` may carry `
 
 ### `.../hardware/{docId}`
 
-**access**: site members read; the agent writes its own.
+**access**: members whose access covers the machine read; the agent writes its own.
 
 | doc ID | notes |
 | --- | --- |
@@ -296,7 +299,7 @@ a pending `reboot_machine`, `shutdown_machine` or `install_software` may carry `
 
 ### `.../screenshots/{screenshotId}`
 
-screenshot history, written by the server after an upload. **access**: site members read.
+screenshot history, written by the server after an upload. **access**: members whose access covers the machine read.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -309,7 +312,7 @@ the history keeps the newest 20.
 
 ### `.../installed_software/{softwareId}`
 
-the software inventory, written by the agent. the agent deletes and rewrites the whole collection on each sync; the document ID is `{name}_{version}`. **access**: site members read; the agent writes its own.
+the software inventory, written by the agent. the agent deletes and rewrites the whole collection on each sync; the document ID is `{name}_{version}`. **access**: members whose access covers the machine read and delete; the agent writes its own.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -325,7 +328,7 @@ the source is the registry on Windows, application bundles under `/Applications`
 
 ### `.../metrics_history/{bucketId}`
 
-metric history for the charts, appended by a Cloud Function on every machine-document write. **access**: site members read; the agent and the server write.
+metric history for the charts, appended by a Cloud Function on every machine-document write. **access**: members whose access covers the machine read; the agent and the server write.
 
 buckets are **hourly**, keyed `YYYY-MM-DD-HH`. older daily buckets keyed `YYYY-MM-DD` are still read.
 
@@ -338,13 +341,13 @@ buckets are **hourly**, keyed `YYYY-MM-DD-HH`. older daily buckets keyed `YYYY-M
 
 ### `.../logs/{logId}`
 
-per-machine log shipping, separate from the site activity log. written only when the machine's local config sets `logging.firebase_shipping.enabled`. **access**: site members read; the agent creates (append only); the server updates and deletes.
+per-machine log shipping, separate from the site activity log. written only when the machine's local config sets `logging.firebase_shipping.enabled`. **access**: members whose access covers the machine read; the agent creates (append only); the server updates and deletes.
 
 fields: `timestamp` (unix seconds), `level`, `message`, `logger`, `filename`, `line`, `server_timestamp`, `machine_id`, `site_id`.
 
 ### `.../cortex/active-chat`
 
-the bridge to local hoot on the agent, used by the public conversations API. **access**: site members read; the server and the agent write.
+the bridge to local hoot on the agent, used by the public conversations API. **access**: members whose access covers the machine read; the server and the agent write.
 
 the web writes `pendingMessage`, `chatId`, `machineName`, `messages[]` (`{ role, content }`), optional `images`, `status: "pending"`, `response` and `updatedAt`. the agent moves `status` through `processing`, `streaming`, `complete` or `error`, and fills `response` (`{ content, complete, parts }`).
 
@@ -375,7 +378,7 @@ a daily cron (`/api/cron/swoop-retention`) closes sessions whose leases have exp
 
 ### `config/{siteId}/machines/{machineId}`
 
-process configuration and other settings that sync between the dashboard and the machine's `config.json`. **access**: the agent reads and writes its own; site members read; the server writes dashboard changes.
+process configuration and other settings that sync between the dashboard and the machine's `config.json`. **access**: the agent reads and writes its own; members whose access covers the machine read; the server writes dashboard changes.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -390,7 +393,7 @@ the `firebase`, `environment` and `sentry` sections of `config.json` stay on the
 
 ### preset collections
 
-**access**: site members read; writes are server only.
+**access**: site members read the schedule and reboot presets; only whole-site members read the distribution and talon presets; writes are server only.
 
 | path | purpose | fields |
 | --- | --- | --- |
@@ -405,7 +408,7 @@ the `firebase`, `environment` and `sentry` sections of `config.json` stay on the
 
 ### `sites/{siteId}/deployments/{deploymentId}`
 
-software deployment records. **access**: site members read; the server creates, updates, cancels, retries and deletes them.
+software deployment records. **access**: whole-site members read; the server creates, updates, cancels, retries and deletes them.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -425,7 +428,7 @@ target statuses: `pending`, `closing_processes`, `downloading`, `installing`, `c
 
 ### `sites/{siteId}/installer_templates/{templateId}`
 
-site deployment templates. **access**: site members read; writes are server only.
+site deployment templates. **access**: whole-site members read; writes are server only.
 
 fields: `name`, `installer_name`, `installer_url`, `silent_flags`, `verify_path`, `close_processes`, `parallel_install`, `sha256_checksum`, `createdAt`, `updatedAt`.
 
@@ -453,7 +456,7 @@ owlette's own installer releases. **access**: public read; writes are server onl
 
 ### `sites/{siteId}/roosts/{roostId}`
 
-a roost: the v2 project sync model. **access**: site members read; every write is server only, through `/api/roosts/**`.
+a roost: the v2 project sync model. **access**: whole-site members read; every write is server only, through `/api/roosts/**`.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -471,13 +474,13 @@ a roost: the v2 project sync model. **access**: site members read; every write i
 
 ### `.../versions/{versionId}`
 
-immutable version metadata; the body itself lives in R2. **access**: site members read; client writes are denied.
+immutable version metadata; the body itself lives in R2. **access**: whole-site members read; client writes are denied.
 
 fields: `versionId` (content-addressed SHA-256 of the canonical body), `versionNumber` (1-indexed within the roost), `description`, `versionUrl`, `createdAt`, `createdBy`, `totalSize`, `totalFiles`, `parentVersionId`.
 
 ### `.../target_state/{machineId}`
 
-what each target machine reports. **access**: site members read and delete stale rows; the machine's agent creates and updates its own.
+what each target machine reports. **access**: whole-site members read and delete stale rows; the machine's agent creates and updates its own.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -519,7 +522,7 @@ chunk bytes and version bodies live in R2, never in Firestore:
 
 every dashboard hoot conversation, and the autonomous and talon conversations. IDs are `chat_{ms}_{random}` for a user chat, `auto_{ms}_{machine}` for an autonomous investigation, and `talon_{ms}_{runId}` for a talon's hoot output.
 
-**access**: the owner reads, creates, updates and deletes their own; any site member reads an autonomous chat on their site.
+**access**: the owner reads, creates, updates and deletes their own; any whole-site member reads an autonomous chat on their site.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -576,7 +579,7 @@ fields: `token` (`shr_…`), `chatId`, `siteId`, `createdBy`, `createdAt`, `expi
 
 | path | access | holds |
 | --- | --- | --- |
-| `sites/{siteId}/cortex-events/{eventId}` | site members read; the server and the site's agents write (an agent only for its own machine) | an investigation: `machineId`, `machineName`, `processName`, `eventType`, `errorMessage`, `timestamp`, `chatId`, `status` (`investigating`, `resolved`, `escalated`, `failed`), `summary`, `actions[]`, `resolvedAt`, `durationMs`. a local investigation adds `source: "local"`, `escalationPending` and `escalatedAt`; the escalation sweep adds `escalationSent` and `escalationProcessedAt`. |
+| `sites/{siteId}/cortex-events/{eventId}` | whole-site members read; the server and the site's agents write (an agent only for its own machine) | an investigation: `machineId`, `machineName`, `processName`, `eventType`, `errorMessage`, `timestamp`, `chatId`, `status` (`investigating`, `resolved`, `escalated`, `failed`), `summary`, `actions[]`, `resolvedAt`, `durationMs`. a local investigation adds `source: "local"`, `escalationPending` and `escalatedAt`; the escalation sweep adds `escalationSent` and `escalationProcessedAt`. |
 | `sites/{siteId}/cortex-state/lock` | server only | `{ activeSessions, lastUpdated }`, the per-site concurrency counter. |
 | `sites/{siteId}/cortex-nonces/{nonce}` | server only | `{ machineId, processName, timestamp }`, so a duplicate alert is refused. |
 
@@ -599,7 +602,7 @@ past 200 embedded messages, older ones spill to `chat_conversations/{conversatio
 
 ## talons
 
-**access**: site members read talons and their runs; every write is server only. see [talons](/docs/dashboard/talons).
+**access**: whole-site members read talons and their runs; every write is server only. see [talons](/docs/dashboard/talons).
 
 ### `sites/{siteId}/talons/{talonId}`
 
