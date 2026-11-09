@@ -1421,6 +1421,23 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
       ]);
     });
 
+    // an admin limited to some machines holds the site role but not the whole site
+    it('names everyone in it to a scoped admin, with no email', async () => {
+      const key = `${SITE}/${ADMIN}`;
+      mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: [MACHINE] });
+
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
+    });
+
     // a superadmin holds no site role and sees every email, as the admin list does
     it('gives a superadmin in it the names and every email', async () => {
       const SUPER = 'user-super';
