@@ -219,8 +219,8 @@ export function DisplayLayoutPanel({
   controlLocked,
   onClose,
 }: DisplayLayoutPanelProps) {
-  const { isSiteAdmin, user } = useAuth();
-  const canSiteAdmin = isSiteAdmin(siteId);
+  const { isMachineAdmin, user } = useAuth();
+  const canAdminMachine = isMachineAdmin(siteId, machineId);
   const { profile, assigned, autoRestore, remoteApplyEnabled, loading, error } = useDisplayState(siteId, machineId);
   // `applying` disables every write button so in-flight repeat-clicks are blocked.
   const actions = useDisplayActions(siteId, machineId);
@@ -463,7 +463,7 @@ export function DisplayLayoutPanel({
   const draftHasMonitors = !!draft && draft.length > 0;
   if (
     mode === 'edit' &&
-    (!canSiteAdmin ||
+    (!canAdminMachine ||
       (!hasAssignedLayout &&
         !draftHasMonitors &&
         !pendingSeedFromLive))
@@ -914,7 +914,7 @@ export function DisplayLayoutPanel({
             nothing stored yet. store the current live arrangement as-is, or
             start from live to tweak before saving.
           </p>
-          {canSiteAdmin && (
+          {canAdminMachine && (
             <div className="flex items-center gap-2">
               <Button
                 variant="outline"
@@ -1089,7 +1089,7 @@ export function DisplayLayoutPanel({
             )}
           </div>
 
-          {canSiteAdmin && (
+          {canAdminMachine && (
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
@@ -1122,7 +1122,7 @@ export function DisplayLayoutPanel({
               wherever the operator noticed it. When auto-restore is enabled,
               its status chip occupies the same slot as the manual restore
               action. */}
-          {canSiteAdmin && mode === 'view' && activeTab !== 'events' && (
+          {canAdminMachine && mode === 'view' && activeTab !== 'events' && (
             <div className="flex items-center gap-1.5">
               {/* Restore setup flow: test -> store -> restore. Test is a
                   pre-enable safety check; once restore is enabled, real
@@ -1308,7 +1308,7 @@ export function DisplayLayoutPanel({
             </div>
           )}
 
-          {canSiteAdmin && mode === 'edit' && (
+          {canAdminMachine && mode === 'edit' && (
             <div className="flex items-center gap-1.5">
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1399,7 +1399,7 @@ export function DisplayLayoutPanel({
           </div>
         )}
 
-        {breakerTripped && canSiteAdmin && (
+        {breakerTripped && canAdminMachine && (
           <div
             className="mt-3 flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm"
             role="alert"
@@ -1425,7 +1425,7 @@ export function DisplayLayoutPanel({
           </div>
         )}
 
-        {breakerTripped && !canSiteAdmin && (
+        {breakerTripped && !canAdminMachine && (
           <div
             className="mt-3 flex items-center gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-sm"
             role="status"
