@@ -1023,54 +1023,6 @@ describe('releases', () => {
       expect(edges(h)).toEqual(['ControlLeft:down', 'AltRight:down', 'KeyQ:down']);
     });
   });
-
-  describe("a modifier's release sent again, since swoop-input never retransmits", () => {
-    beforeEach(() => jest.useFakeTimers());
-    afterEach(() => jest.useRealTimers());
-
-    it('goes again at 100 ms and 500 ms, so one lost on the way, or overtaking its press, still lands', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      h.clear();
-      jest.advanceTimersByTime(99);
-      expect(h.sent()).toHaveLength(0);
-      jest.advanceTimersByTime(1);
-      expect(edges(h)).toEqual(['ControlLeft:up']);
-      jest.advanceTimersByTime(400);
-      expect(edges(h)).toEqual(['ControlLeft:up', 'ControlLeft:up']);
-    });
-
-    it('stays quiet once the modifier is down again', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      jest.advanceTimersByTime(100);
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.clear();
-      jest.advanceTimersByTime(1_000);
-      expect(h.sent()).toHaveLength(0);
-    });
-
-    it('never goes again for a letter or a mouse button: the host injects every up it gets, held or not', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'KeyA'));
-      h.target.dispatchEvent(keyEvent('keyup', 'KeyA'));
-      h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 50, clientY: 50 }));
-      h.target.dispatchEvent(pointerEvent('pointerup', { clientX: 50, clientY: 50 }));
-      h.clear();
-      jest.advanceTimersByTime(1_000);
-      expect(h.sent()).toHaveLength(0);
-    });
-
-    it('is dropped on detach', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      h.capture.detach();
-      expect(jest.getTimerCount()).toBe(0);
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------

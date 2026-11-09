@@ -33,6 +33,13 @@ a rule under it and an x to clear it. Hoot's conversation search is an enclosed
 field with the same magnifier and x, and focusing it tints its border rather
 than lighting it up. Nothing to update on the machine.
 
+### fixed — swoop types every key you type, on a link that drops packets
+
+On a link that lost some of its packets, swoop lost some of the keys typed
+through it: a sentence reached the machine with letters missing. Swoop's input
+now goes reliably and in order, so every key lands, in the order it was typed.
+Nothing to update on the machine: reload the swoop page.
+
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site
 
