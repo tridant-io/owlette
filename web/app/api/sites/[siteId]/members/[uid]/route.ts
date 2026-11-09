@@ -47,6 +47,8 @@ import {
 import { removeMember, updateMember } from '@/lib/membership.server';
 import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
 import { grantedSwoopMode, SWOOP_MODES } from '@/lib/swoopMode';
+import { MAX_MACHINE_SCOPE, normalizeMachineIdsInput } from '@/lib/machineAccess';
+import { refuseUnknownMachines } from '../route';
 
 // The talon store pulls in `node:crypto` for webhook secret minting.
 export const runtime = 'nodejs';
@@ -327,27 +329,34 @@ export const DELETE = authorizedSiteHandler<RouteParams>({
 });
 
 /**
- * PATCH /api/sites/{siteId}/members/{uid}  `{role?, swoop?}`, at least one
+ * PATCH /api/sites/{siteId}/members/{uid}  `{role?, swoop?, machineIds?}`, at least one
  *
- * Changes a member's per-site role, their swoop mode, or both. New in Wave 2
- * task 2.3 — before this there was no way to change a per-site role at all,
- * because there was no per-site role to change: it was derived from the global
- * role at read time, so "make this person a site admin here" meant promoting
- * them globally on every site they belong to. That is the leak per-site roles
- * exist to close.
+ * Changes a member's per-site role, their swoop mode, their machine scope, or
+ * any of them together, in one transaction. New in Wave 2 task 2.3 — before
+ * this there was no way to change a per-site role at all, because there was no
+ * per-site role to change: it was derived from the global role at read time, so
+ * "make this person a site admin here" meant promoting them globally on every
+ * site they belong to. That is the leak per-site roles exist to close.
  *
  * `swoop` is `none`, `view` or `control`, or null for the role's default, which
- * deletes the field. a role change keeps an explicit mode, so an admin set to
- * control who is demoted keeps control. a change that loses control ends the
- * seats they hold control in, and one that loses swoop altogether ends every
- * seat.
+ * deletes the field. `machineIds` lists 1-30 machines of this site, the only
+ * ones the member then reaches; null deletes it, which gives them the whole
+ * site again. a change to one field keeps the others, so an admin set to
+ * control who is demoted keeps control, and a scoped member who is promoted
+ * stays scoped.
+ *
+ * one PATCH fires one swoop revocation, whatever it took away. losing swoop
+ * altogether ends every seat they hold. losing control, by role or by mode,
+ * ends the seats they control. narrowing the scope ends every seat on a machine
+ * that left it, audited `scope_changed`. a seat ends its whole session, and the
+ * others in it rejoin.
  *
  * `'owner'` is not assignable. Ownership moves only through
  * POST /api/sites/{siteId}/transfer-ownership, which is transactional and
  * re-reads the owner row; `updateMember` refuses an owner as a source as well, so
  * an admin can neither promote themselves into ownership nor demote the owner
- * out of it, nor set the owner's swoop mode. Both halves are enforced inside the
- * transaction that writes.
+ * out of it, nor set the owner's swoop mode or machine scope. Both halves are
+ * enforced inside the transaction that writes.
  *
  * Neither of those covered `member` → `admin` on the caller's OWN row, which is
  * what `refuseSelfMembershipChange` closes.
@@ -389,13 +398,16 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
     if (!parsed.ok) return parsed.response;
 
 
-    const body = parsed.body as { role?: unknown; swoop?: unknown } | null;
+    const body = parsed.body as { role?: unknown; swoop?: unknown; machineIds?: unknown } | null;
     const role = body?.role;
     const rawSwoop = body?.swoop;
-    if (role === undefined && rawSwoop === undefined) {
-      return problemValidation('role or swoop is required', {
-        'body.role': ['provide role, swoop or both'],
-        'body.swoop': ['provide role, swoop or both'],
+    const rawMachineIds = body?.machineIds;
+    if (role === undefined && rawSwoop === undefined && rawMachineIds === undefined) {
+      const atLeastOne = ['provide at least one of role, swoop, machineIds'];
+      return problemValidation('role, swoop or machineIds is required', {
+        'body.role': atLeastOne,
+        'body.swoop': atLeastOne,
+        'body.machineIds': atLeastOne,
       });
     }
     if (role !== undefined && role !== 'admin' && role !== 'member') {
@@ -409,6 +421,19 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
         'body.swoop': ['must be one of: none, view, control, or null for the role default'],
       });
     }
+    const scopeInput =
+      rawMachineIds === undefined
+        ? undefined
+        : normalizeMachineIdsInput(rawMachineIds, { allowNull: true });
+    if (scopeInput && !scopeInput.ok) {
+      return problemValidation(scopeInput.error, { 'body.machineIds': [scopeInput.error] });
+    }
+    // undefined leaves the scope alone, and null widens it to the whole site
+    const machineIds = scopeInput?.value;
+    if (machineIds) {
+      const unknownMachines = await refuseUnknownMachines(getAdminDb(), siteId, machineIds);
+      if (unknownMachines) return unknownMachines;
+    }
 
     return await withIdempotency(
       request,
@@ -418,7 +443,7 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
       },
       parsed.raw,
       async () => {
-        const result = await updateMember({ siteId, uid, role, swoop });
+        const result = await updateMember({ siteId, uid, role, swoop, machineIds });
 
         if (!result.ok) {
           if (result.failure.kind === 'is_owner') {
@@ -427,7 +452,7 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
               title: 'cannot change the site owner\'s role',
               status: 409,
               detail:
-                'the owner\'s role and swoop come with ownership; transfer ownership via POST /api/sites/{siteId}/transfer-ownership instead',
+                'the owner\'s role, swoop and access come with ownership; transfer ownership via POST /api/sites/{siteId}/transfer-ownership instead',
               instance: `/api/sites/${siteId}/members/${uid}`,
               code: 'cannot_change_owner_role',
             });
@@ -437,27 +462,44 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
             // the membership is missing, not that the account does not exist.
             return problemNotFound(`user ${uid} is not a member of site ${siteId}`);
           }
+          if (result.failure.kind === 'invalid_machine_ids') {
+            return problemValidation('machineIds is invalid', {
+              'body.machineIds': [
+                `must list between 1 and ${MAX_MACHINE_SCOPE} machine ids, or null for the whole site`,
+              ],
+            });
+          }
           return problemValidation('role must be admin or member', {
             'body.role': ['must be one of: admin, member'],
           });
         }
 
-        // after the write, never awaited, as in DELETE. a watch they still hold
-        // survives a lost control, hence `controlOnly`. `membersMayWatch` is not
-        // consulted: this PATCH did not change it, and the lease enforces it.
+        // one revocation for everything this PATCH took away, after the write and
+        // never awaited, as in DELETE. a lost watch ends every seat, so it
+        // carries neither filter. a lost control keeps the watch they still hold
+        // (`controlOnly`), and a narrowing keeps the machines still in scope
+        // (`keepMachineIds`). `membersMayWatch` is not consulted: this PATCH did
+        // not change it, and the lease enforces it.
         const { before, after } = result.value;
         const had = grantedSwoopMode(before.role, before.swoop);
         const has = grantedSwoopMode(after.role, after.swoop);
-        const lostSwoop = had !== 'none' && has === 'none';
-        const lostControl = had === 'control' && has !== 'control';
-        if (lostSwoop || lostControl) {
+        const watchLost = had !== 'none' && has === 'none';
+        const controlLost = had === 'control' && has !== 'control';
+        const keepMachineIds = after.machineIds;
+        const narrowed =
+          keepMachineIds !== null &&
+          (before.machineIds === null ||
+            before.machineIds.some((id) => !keepMachineIds.includes(id)));
+        const lossReason = before.role !== after.role ? 'role_changed' : 'swoop_changed';
+        if (watchLost || controlLost || narrowed) {
           void revokeSwoopSessionsForUser({
             siteId,
             uid,
             actor: ctx.actor,
             auditActor: auditActorIdentifier(ctx.auth),
-            reason: before.role !== after.role ? 'role_changed' : 'swoop_changed',
-            ...(lostSwoop ? {} : { controlOnly: true }),
+            reason: watchLost || controlLost ? lossReason : 'scope_changed',
+            ...(!watchLost && controlLost ? { controlOnly: true } : {}),
+            ...(!watchLost && narrowed ? { keepMachineIds } : {}),
             ...(ctx.correlationId ? { correlationId: ctx.correlationId } : {}),
           });
         }
@@ -470,14 +512,26 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
           attributes: {
             endpoint: `/api/sites/${siteId}/members/${uid}`,
             method: 'PATCH',
-            verb: role !== undefined ? 'member_role_changed' : 'member_swoop_changed',
+            verb:
+              role !== undefined
+                ? 'member_role_changed'
+                : swoop !== undefined
+                  ? 'member_swoop_changed'
+                  : 'member_access_changed',
             ...(role !== undefined ? { role } : {}),
             ...(swoop !== undefined ? { swoop } : {}),
+            ...(machineIds !== undefined ? { machineIds } : {}),
           },
         });
 
         return applyAuthDeprecations(
-          NextResponse.json({ siteId, uid, role: after.role, swoop: after.swoop }),
+          NextResponse.json({
+            siteId,
+            uid,
+            role: after.role,
+            swoop: after.swoop,
+            machineIds: after.machineIds,
+          }),
           ctx.scopeCheck,
         );
       },
