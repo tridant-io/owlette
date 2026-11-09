@@ -15,6 +15,15 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Copy, Minus, Square, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { cn } from '@/lib/utils';
 import { closeViewerWindow, currentViewerWindow } from '@/lib/swoop/viewerWindow';
@@ -35,13 +44,24 @@ export const TRAFFIC_LIGHTS_INSET_PX = 86;
 export const dragRegion = { 'data-tauri-drag-region': 'deep' } as const;
 
 const BUTTON =
-  'inline-flex w-[46px] cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
+  'inline-flex h-6 w-[46px] cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
 
-/** minimize, maximize or restore, and close, on windows and linux; nothing on macos or in a browser. */
-export function SwoopWindowControls({ className }: { className?: string }) {
+/**
+ * minimize, maximize or restore, and close, on windows and linux; nothing on
+ * macos or in a browser. the buttons are half the bar's height and sit at its
+ * top edge: the lower half of the bar is a band with nothing to hit, so they
+ * stay clear of a remote fullscreen app's own buttons at the top of the
+ * picture (owner, 2026-11-09). the band is plain bar, so it drags the window.
+ *
+ * `leaving` is the machine's name while this page holds a seat in a session:
+ * close then asks first. alt+f4, the taskbar and the app's own close do not.
+ */
+export function SwoopWindowControls({ className, leaving }: { className?: string; leaving?: string | null }) {
   const platform = useViewerAppPlatform();
   const drawn = platform === 'windows' || platform === 'linux';
   const [maximized, setMaximized] = useState(false);
+  // the name as it was when close was pressed: the dialog keeps it if the session ends meanwhile
+  const [confirming, setConfirming] = useState<string | null>(null);
 
   useEffect(() => {
     if (!drawn) return;
@@ -78,7 +98,7 @@ export function SwoopWindowControls({ className }: { className?: string }) {
 
   if (!drawn) return null;
   return (
-    <div data-testid="window-controls" className={cn('flex shrink-0 items-stretch', className)}>
+    <div data-testid="window-controls" className={cn('flex shrink-0 items-start', className)}>
       <button
         type="button"
         aria-label="minimize"
@@ -86,7 +106,7 @@ export function SwoopWindowControls({ className }: { className?: string }) {
         className={cn(BUTTON, 'hover:bg-accent focus-visible:bg-accent')}
         onClick={minimize}
       >
-        <Minus aria-hidden className="size-4" />
+        <Minus aria-hidden className="size-3.5" />
       </button>
       <button
         type="button"
@@ -96,7 +116,7 @@ export function SwoopWindowControls({ className }: { className?: string }) {
         className={cn(BUTTON, 'hover:bg-accent focus-visible:bg-accent')}
         onClick={toggle}
       >
-        {maximized ? <Copy aria-hidden className="size-3.5 -scale-x-100" /> : <Square aria-hidden className="size-3.5" />}
+        {maximized ? <Copy aria-hidden className="size-3 -scale-x-100" /> : <Square aria-hidden className="size-3" />}
       </button>
       <button
         type="button"
@@ -106,39 +126,85 @@ export function SwoopWindowControls({ className }: { className?: string }) {
           BUTTON,
           'hover:bg-danger-solid hover:text-danger-solid-foreground focus-visible:bg-danger-solid focus-visible:text-danger-solid-foreground',
         )}
-        onClick={close}
+        onClick={leaving ? () => setConfirming(leaving) : close}
       >
-        <X aria-hidden className="size-4" />
+        <X aria-hidden className="size-3.5" />
       </button>
+      <Dialog
+        open={confirming !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirming(null);
+        }}
+      >
+        {confirming !== null && (
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>leave {confirming} and close the window?</DialogTitle>
+              <DialogDescription>you leave the session. anyone else in it stays connected.</DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirming(null)}>
+                cancel
+              </Button>
+              <Button
+                variant="destructive"
+                data-testid="window-close-confirm"
+                onClick={() => {
+                  setConfirming(null);
+                  close();
+                }}
+              >
+                close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
     </div>
   );
 }
 
 /**
- * the window's controls where no bar runs along the top: a slim strip across
- * the top of the window holding only the controls, with a short drag handle
- * beside them. the strip lets every other press through to what is under it,
- * so a picture there stays the machine's. on macos the traffic lights are the
+ * the window's controls where no bar runs along the top. as a `titleRow` (the
+ * session page with its bar on a side, on windows and linux) it is a slim
+ * title row in the bar's tone across the top of the window, the controls at
+ * its right end and every other press dragging the window; the page starts
+ * below it, so none of the picture is under it. otherwise (the login page) it
+ * holds only the controls and a short drag handle beside them, and lets every
+ * other press through to what is under it. on macos the traffic lights are the
  * system's, so the strip is only their room. nothing in a browser.
  */
-export function SwoopWindowStrip({ className }: { className?: string }) {
+export function SwoopWindowStrip({
+  className,
+  titleRow = false,
+  leaving,
+}: {
+  className?: string;
+  titleRow?: boolean;
+  leaving?: string | null;
+}) {
   const platform = useViewerAppPlatform();
   if (!platform) return null;
+  const row = titleRow && platform !== 'mac';
   return (
     <div
       data-testid="swoop-window-strip"
+      {...(row ? dragRegion : {})}
       className={cn(
-        'pointer-events-none fixed inset-x-0 top-0 z-40 flex h-8',
+        'fixed inset-x-0 top-0 z-40 flex h-8',
+        row ? 'pointer-events-auto bg-card shadow-[inset_0_-1px_0_0_var(--border)]' : 'pointer-events-none',
         platform === 'mac' ? 'justify-start' : 'justify-end',
         className,
       )}
     >
       {platform === 'mac' ? (
         <div {...dragRegion} className="pointer-events-auto" style={{ width: TRAFFIC_LIGHTS_INSET_PX }} />
+      ) : row ? (
+        <SwoopWindowControls leaving={leaving} />
       ) : (
         <>
           <div {...dragRegion} data-testid="swoop-window-drag" className="pointer-events-auto w-40" />
-          <SwoopWindowControls className="pointer-events-auto bg-background/60 backdrop-blur-sm" />
+          <SwoopWindowControls leaving={leaving} className="pointer-events-auto bg-background/60 backdrop-blur-sm" />
         </>
       )}
     </div>
