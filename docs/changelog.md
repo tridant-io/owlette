@@ -10,6 +10,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — schedule days and restart times the agent cannot match are refused
+
+A process schedule day sent through the API as `Monday` or `TUE` was stored as
+sent and never ran; it is now stored as `mon` or `tue`, and anything that is not
+a weekday is refused. A restart schedule accepted `99:99`, `24:00` or `Monday`,
+and the agent skipped it; those are refused too, naming the field. A schedule
+saved earlier with such a day gets the same refusal the next time it is saved,
+until the day is corrected. Nothing to update on the machine.
+
 ### fixed — a webhook switched off after ten failures can be turned back on
 
 A webhook that failed ten times in a row was switched off for good: neither the
