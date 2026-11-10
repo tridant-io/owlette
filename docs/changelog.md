@@ -10,6 +10,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — hoot reads the agent's log
+
+Asked for a machine's agent log, hoot could read a different log from the same
+folder, such as the one submit issue writes, and report on that. It now reads
+the agent's log. Arrives with the next agent version.
+
 ### fixed — display changes are refused while NVIDIA Mosaic is on
 
 A display change sent from the dashboard to a machine running NVIDIA Mosaic is
