@@ -1,5 +1,5 @@
 # fleet mcp — Tasks
-**Progress**: 0/36 complete
+**Progress**: 2/36 complete (0.2, 0.3); 0.1 blocked on machine-scope, 0.4 half done (Linux measured, macOS owed)
 
 Rules every task obeys:
 - Read `context.md` first: it holds the decisions, the session file contract and the fleet API contract.
@@ -15,22 +15,22 @@ Rules every task obeys:
 
 ## Wave 0: Gates — measure before building
 
-- [ ] **Task 0.1: machine-scope is on dev**
+- [ ] **Task 0.1: machine-scope is on dev** (checked 2026-11-10: blocked, see `gates/0.1-machine-scope.md`)
   - Files: `dev/active/fleet-mcp/gates/0.1-machine-scope.md` (new)
   - Do: Check whether `feat/machine-scope` is merged into `origin/dev` (`git merge-base --is-ancestor origin/feat/machine-scope origin/dev`, or find its merge commit). If merged, record from dev: the exports of `web/lib/machineAccess.ts` (`parseMachineIds`, `scopeCovers`, `normalizeMachineIdsInput`, `MAX_MACHINE_SCOPE`) with their signatures, the final `Actor` union and `hasCapability` signature in `web/lib/capabilities.ts`, and which capabilities are machine-class versus site-wide. If not merged, write "blocked" and stop: waves 1 and later wait.
   - Done when: the gate file names the merge commit and the signatures, or says blocked.
 
-- [ ] **Task 0.2: `mcp` stdio spike with the installed interpreter**
+- [x] **Task 0.2: `mcp` stdio spike with the installed interpreter** (2026-11-10, `gates/0.2-mcp-stdio.md`)
   - Files: `dev/active/fleet-mcp/gates/0.2-mcp-stdio.md` (new); throwaway scripts under `dev/scratch/fleet-mcp-spike/` (gitignored)
   - Do: Using `C:\ProgramData\Owlette\python\python.exe` (the console interpreter, not `pythonw.exe`) and the `mcp` 2.2.0 already installed there (install nothing), write a throwaway stdio server whose tool list is built at request time from a Python list, with a `call_tool` handler that echoes. Record the canonical imports in 2.2.0 for: the low-level server with `list_tools` / `call_tool` handlers, the stdio transport, and the `Tool`, `TextContent` and `ImageContent` types (`server/fastmcp.py` and `server/mcpserver/` both exist in the package; say which is current). Record whether progress notifications are available for a long call. Drive it with a throwaway client built on `mcp.client.stdio` from the same package: initialize, list, call. Measure launch-to-initialized time over five runs. Confirm nothing but protocol reaches stdout (log to stderr). Do not register anything with Claude Code in this task.
   - Done when: the gate file has the imports, the timings, a list-and-call transcript, and any surprise.
 
-- [ ] **Task 0.3: Rules tests for the new documents (no rules edit)**
+- [x] **Task 0.3: Rules tests for the new documents (no rules edit)** (2026-11-10, `gates/0.3-rules.md`: no rules change needed)
   - Files: `web/__tests__/rules/fleet.test.ts` (new)
   - Do: Using the harness in `web/__tests__/rules/harness.ts` (see `denials.test.ts` and `membership.test.ts` for the shape), assert against the unmodified `firestore.rules`: (a) `fleet_sessions/{id}` denies get, list and every write to a signed-in site member, to an agent token (`role: 'agent'` with `site_id` and `machine_id` claims) and to an unauthenticated client; (b) `sites/{siteId}/settings/fleet` is readable by a member of that site, not readable by a non-member, and not writable by any client. Record what an agent token of the same site may do with (b). If an expectation fails, do not edit the rules: stop and report, because a rules change needs the owner's explicit request.
   - Done when: `cd web && npm run test:rules` passes with the new file, or a written report names the failing expectation.
 
-- [ ] **Task 0.4: macOS and Linux access spike**
+- [ ] **Task 0.4: macOS and Linux access spike** (Linux measured 2026-11-10, macOS owed, see `gates/0.4-posix-access.md`)
   - Files: `dev/active/fleet-mcp/gates/0.4-posix-access.md` (new)
   - Do: On the MacBook and the kiosk VM (access notes are in the owner's session memory, not in this repo), as the logged-in console user and not root, check read-only: whether the user can execute the bundled interpreter (`/Library/Application Support/Owlette/runtime/python/bin/python3`; `/opt/owlette/python/bin/python3`) and `import mcp`; the user's groups against `_owlette` (macOS) and `owlette` (Linux); owner, group and mode of the data root, `ipc/` and `ipc/requests`; which account the service runs as. Then, with sudo, create one test file under `ipc/fleet/` owned by the console user with mode 0400, confirm the user can read it and another account cannot, and remove it. Change nothing else on either device.
   - Done when: the gate file states per platform, with command output, whether the interpreter is launchable by the console user and the exact owner, group and mode the session file and its directory need.
@@ -238,3 +238,4 @@ Depends on: Wave 12, Wave 10.
 ### 2026-11-10
 - Plan created from six research passes (server authority, agent local side, hoot task handoff, surface inventory, server execution seam, agent packaging). Ready for wave 0.
 - Assumptions 1–6 in `plan.md` are the owner's to rule on; the name blocks tasks 3.2, 4.3 and 5.2.
+- Wave 0 started on branch `feat/fleet-mcp`. 0.2 done: mcp 2.2.0's low-level `Server` works over stdio with the bundled interpreter, about 1.6 s to initialize; on Windows a stray `print` reaches the wire unless `sys.stdout` is pointed at stderr inside `stdio_server()`. 0.3 done: 49 rules tests pass and no rules change is needed. 0.1 blocked: machine-scope is not on dev. 0.4: Linux measured on the kiosk, macOS owed (the MacBook did not answer).
