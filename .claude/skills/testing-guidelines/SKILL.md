@@ -159,5 +159,5 @@ required before `dev` is merged to `main`. Prerequisites, credentials and what i
 3. **Test error paths** — Firebase operations fail in production
 4. **Don't test shadcn/ui** — test your composition of primitives, not the primitives
 5. **API route tests use `/** @jest-environment node */`** — server code, not jsdom
-6. **Integration tests need `.env.test`** — never commit credentials
+6. **The live smoke suite's credentials are gitignored** — never commit them
 7. **A bug fix starts with a failing test**
