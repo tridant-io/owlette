@@ -396,6 +396,35 @@ describe('GET /api/cron/health-check', () => {
     expect(first).toBe(second);
   });
 
+  it('still fires the webhook and the talon when nobody on the site takes the email', async () => {
+    // A site that routes offline alerts to a webhook or a talon and has turned the
+    // email off for every user has no recipients, and must still hear about it.
+    getSiteAlertRecipientsMock.mockResolvedValue([]);
+    setSite({
+      name: 'node-pa',
+      health: {
+        offlineAlert: { pendingIds: ['SILENT-1'], pendingUpdatedAt: ts(now - 8 * MIN) },
+      },
+    });
+    mockMachinesGet.mockResolvedValue({ size: 1, docs: [alertDoc('SILENT-1')] });
+
+    await GET(request('cron-secret'));
+
+    expect(fireWebhooksMock).toHaveBeenCalledWith(
+      'node-pa',
+      expect.anything(),
+      'machine.offline',
+      expect.objectContaining({ machine: expect.objectContaining({ id: 'SILENT-1' }) }),
+      expect.anything(),
+    );
+    expect(tapTalonMatcherMock).toHaveBeenCalledWith(
+      expect.anything(),
+      'node-pa',
+      { kind: 'event', eventType: 'machine_offline', machineId: 'SILENT-1' },
+      expect.anything(),
+    );
+  });
+
   it('does NOT email while the pending set is still settling (records pending, no email)', async () => {
     // Brand-new pending machine, no prior site state → the settle timer starts now.
     mockMachinesGet.mockResolvedValue({

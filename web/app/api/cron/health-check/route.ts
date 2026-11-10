@@ -497,6 +497,27 @@ export async function GET(request: NextRequest) {
 
   for (const plan of sendPlans) {
     try {
+      // Before the email, which has two early exits below: webhooks and
+      // `machine_offline` talons must fire even with no email recipients. This is
+      // the only dispatcher — an offline machine can't report itself offline.
+      for (const m of plan.webhookMachines) {
+        fireWebhooks(
+          plan.siteId,
+          plan.siteName,
+          'machine.offline',
+          {
+            machine: { id: m.machineId, name: m.machineId, lastSeen: new Date(m.lastHeartbeatMs).toISOString() },
+          },
+          planMemo,
+        ).catch(console.error);
+
+        tapTalonMatcher(db, plan.siteId, {
+          kind: 'event',
+          eventType: 'machine_offline',
+          machineId: m.machineId,
+        }, planMemo);
+      }
+
       const recipients = await getSiteAlertRecipients(plan.siteId, 'healthAlerts', planMemo);
       if (recipients.length === 0) {
         console.warn(`[cron/health-check] No recipients for site ${plan.siteId}`);
@@ -545,28 +566,6 @@ export async function GET(request: NextRequest) {
         `[cron/health-check] Alert sent for site ${plan.siteId}: ` +
           `${plan.sections.notResponding.length} not responding, ${recipients.length} recipient(s)`
       );
-
-      // Fire webhooks for each not-responding machine (non-blocking).
-      for (const m of plan.webhookMachines) {
-        fireWebhooks(
-          plan.siteId,
-          plan.siteName,
-          'machine.offline',
-          {
-            machine: { id: m.machineId, name: m.machineId, lastSeen: new Date(m.lastHeartbeatMs).toISOString() },
-          },
-          planMemo,
-        ).catch(console.error);
-
-        // Deliberately with the webhook fan-out, not the email branch:
-        // `machine_offline` talons must fire even with no email recipients. This
-        // is the only dispatcher — an offline machine can't report itself offline.
-        tapTalonMatcher(db, plan.siteId, {
-          kind: 'event',
-          eventType: 'machine_offline',
-          machineId: m.machineId,
-        }, planMemo);
-      }
     } catch (error) {
       console.error(`[cron/health-check] Failed to send alert for site ${plan.siteId}:`, error);
     }

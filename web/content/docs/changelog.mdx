@@ -7,6 +7,12 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — offline webhooks and talons fire when nobody takes the email
+
+On a site where every user had turned the offline email off, a machine going
+offline sent no `machine.offline` webhook and started no talon either. Both now
+fire whatever the email settings are. Nothing to update on the machine.
+
 ### fixed — the missing-executable alert keeps appearing
 
 Once a site had more than twenty missing-executable alerts in its logs, a new
