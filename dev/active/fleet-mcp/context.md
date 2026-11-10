@@ -27,7 +27,7 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 - `agent/src/fleet_mcp.py` — the stdio MCP server (never name a file `mcp.py`: it shadows the package; `mcp_tools.py` already exists and is hoot's tool table)
 - `agent/tests/unit/test_fleet_session.py`, `test_fleet_mcp.py`, `test_mcp_surface.py`
 - `desktop/src/components/ConnectAgentDialog.tsx`
-- `docs/adr/0014-a-granted-machine-acts-on-its-site-through-the-server.md`
+- `docs/adr/0017-a-granted-machine-acts-on-its-site-through-the-server.md`
 - a docs page under `web/content/docs/agent/` (file name follows the feature's final name)
 
 ### Modify
@@ -96,13 +96,17 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 
 ## Fleet API contract (tasks 3.1 and 4.2 must agree)
 
-All three take `Authorization: Bearer <fleet session token>`.
+The session route is the one the service calls, with the agent's own ID token:
+
+- `POST /api/agent/fleet/session` → `200 { "token": "owf_…", "expiresAt": <epoch seconds>, "ttlSeconds": 900 }`, or `403 fleet_not_granted`
+
+The other three take `Authorization: Bearer <fleet session token>`.
 
 - `GET /api/agent/fleet/tools` → `{ "tools": [{ "name", "description", "inputSchema" }], "site": { "id" }, "machine": { "id" } }`
 - `POST /api/agent/fleet/call` with `Idempotency-Key`, body `{ "tool": "…", "params": { "machine": "…", … } }` → `200 { "status": "completed", "content": [...] }` for a tool the server answers itself, or `202 { "callId": "…" }`
 - `GET /api/agent/fleet/calls/{callId}` → `{ "status": "pending" | "in_progress" | "completed" | "failed", "content"?: [...], "error"?: "…" }`
 
-Errors are RFC 7807 problems with a `code`: `fleet_session_invalid` (401), `fleet_not_granted`, `tool_not_allowed`, `target_not_granted` (403), `hoot_disabled`, `machine_offline` (409), `plan_required` (402).
+Errors are RFC 7807 problems with a `code`: `fleet_session_invalid` (401), `fleet_not_granted`, `tool_not_allowed`, `machine_not_granted` (403), `hoot_disabled`, `machine_offline` (409), `plan_required` (402).
 
 ## Next Steps
 

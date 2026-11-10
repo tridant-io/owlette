@@ -15,12 +15,12 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 - **Waves 1 and later wait for machine-scope.** `feat/machine-scope` rewrites the access core (`web/lib/capabilities.ts`, `web/lib/sitePolicy.server.ts`, the actor builders) and was not on dev on 2026-11-10. This plan adds an actor type to the same files and reuses machine-scope's `machineIds` helpers, so it builds on dev with machine-scope merged.
 - **macOS and Linux are unmeasured.** On macOS the bundled interpreter sits in a directory a user outside the service group cannot enter. Gate 0.4 measures both platforms before wave 7 builds anything.
 - **The name blocks the UI copy, the glossary entry and the docs page** (tasks 3.2, 4.3, 5.2).
-- **Any process in the logged-in user's session can use the machine's grant.** Nothing on the machine can tell the script from another process run by the same user. The grant, the tier cap, the audit log and the instant cut bound it (assumption 2, ADR 0014).
+- **Any process in the logged-in user's session can use the machine's grant.** Nothing on the machine can tell the script from another process run by the same user. The grant, the tier cap, the audit log and the instant cut bound it (assumption 2, ADR 0017).
 
 ## Approach
 
 ### Principal
-- A new actor type, `{ type: 'machine', siteId, machineId, maxTier, targets }`, exists only on new routes under `/api/agent/fleet/`. The existing site routes are untouched: `authorizedSiteHandler` assumes a user throughout (`ctx.actor.userId` is read across the action cores), so the fleet routes get their own wrapper.
+- A new actor type, `{ type: 'machine', siteId, machineId, maxTier, machineIds }`, exists only on new routes under `/api/agent/fleet/`. The existing site routes are untouched: `authorizedSiteHandler` assumes a user throughout (`ctx.actor.userId` is read across the action cores), so the fleet routes get their own wrapper.
 - A machine actor holds two capabilities, `MACHINE_VIEW` and `MACHINE_EXEC_COMMAND`, on its own site only. It never holds a site-wide capability and never carries an active-hours override (ADR 0013).
 
 ### Credential
@@ -29,8 +29,8 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 - The server stores only the token's SHA-256, in the top-level collection `fleet_sessions`. Removing a grant, switching the site off, revoking a machine's agent token or removing the machine deletes its sessions, which cuts a live client on its next call.
 
 ### Grant
-- One document per site, `sites/{siteId}/settings/fleet`: `{ enabled, senders: { [machineId]: { maxTier, targets } } }`. Off by default.
-- `maxTier` is hoot's tool tier (1 reads, 2 bounded changes, 3 privileged), default 2. `targets` is a machine-scope `machineIds` list; absent means the whole site.
+- One document per site, `sites/{siteId}/settings/fleet`: `{ enabled, senders: { [machineId]: { maxTier, machineIds } } }`. Off by default.
+- `maxTier` is hoot's tool tier (1 reads, 2 bounded changes, 3 privileged), default 2. `machineIds` is a machine-scope list of the machines the sender may act on; absent means the whole site.
 - A target with hoot switched off (`cortexEnabled: false`) refuses fleet calls, so the existing per-machine switch is also the per-target switch.
 - A new site-wide capability, `FLEET_SETTINGS_MANAGE` (owner and site admin), gates the settings route. API keys cannot change the grant.
 
@@ -56,7 +56,7 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 | wave | what | tasks |
 |---|---|---|
 | 0 | gates: machine-scope on dev, `mcp` stdio spike, rules tests, macOS and Linux access | 4 |
-| 1 | server base: machine actor, grant parser, session store, catalog, ADR 0014 | 5 |
+| 1 | server base: machine actor, grant parser, session store, catalog, ADR 0017 | 5 |
 | 2 | grant write path, fleet request handler, session route, dispatch | 4 |
 | 3 | tools, call and poll routes; grant UI with e2e; session cleanup | 3 |
 | 4 | agent on Windows: session keeper, the stdio script; docs | 3 |

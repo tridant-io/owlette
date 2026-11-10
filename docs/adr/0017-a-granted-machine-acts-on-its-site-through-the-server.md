@@ -1,0 +1,12 @@
+# A granted machine acts on its site through the server
+
+An AI assistant running on a paired machine (Claude Code, or any MCP client) can operate machines in its site without an API key once a site owner or site admin grants that machine (fleet mcp, a working name the owner's name for the feature replaces). The agent on a granted machine fetches a fleet session, an opaque token that lasts 15 minutes and works only on the fleet routes under `/api/agent/fleet/`, and writes it to a file the signed-in user can read. An MCP server shipped with the agent uses it to list and call tools, and the server queues each machine tool call as a command on one machine. Machines still never connect to each other, nothing listens on a port and no new host is reached (ADR 0003), and an agent's Firestore access stays scoped to its own machine (ADR 0001): the MCP server never holds the agent token. The price of needing no API key: a compromised granted machine reaches the machines its grant names, up to its tier, until a site owner or site admin removes the grant, and any process the signed-in user runs on it can use the grant.
+
+## Consequences
+
+- Off by default. A site owner or site admin grants a machine, an API key never can, and a machine without a grant gets no fleet session.
+- Tier and reach are set per granted machine: tool tier 2 unless a site owner or site admin raises it, the whole site unless machines are named. No fleet tool acts on a machine that has hoot turned off.
+- Every machine tool call goes through the server's shared command path, so it is refused on an offline machine. Every fleet call is audited as `machine:<machineId>` with the tool and the machine it acted on.
+- Removing a grant, turning the feature off, revoking the machine's agent token or removing the machine deletes its fleet sessions, and the server re-checks the grant on every call, so a change cuts a live MCP client within one call.
+- A machine never overrides active hours (ADR 0013): a reboot, shutdown or deployment it sends into any machine's active hours, its own included, is refused like any other with no person behind it. Tier 3's shell tools can still restart a machine themselves, the gap ADR 0013 records, which is one reason tier 3 is never the default.
+- The machine principal exists only on the fleet routes, where it may view and command machines in its own site and holds nothing site-wide. No other route accepts a fleet session.
