@@ -3,7 +3,7 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
 import logger from '@/lib/logger';
-import { machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
+import { ensureAgentAuthUser, machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
 
 /**
  * POST /api/agent/auth/exchange — first step of agent pairing: trade the
@@ -68,6 +68,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const agentUid = `agent_${siteId}_${machineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
 
     const adminAuth = getAdminAuth();
+    await ensureAgentAuthUser(adminAuth, agentUid);
     const customToken = await adminAuth.createCustomToken(agentUid, {
       role: 'agent',
       site_id: siteId,
