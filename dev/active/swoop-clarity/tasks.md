@@ -382,3 +382,4 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     - 6.1 adds a PROTOCOL.md §10 sentence ('ice still checking with no pair 60 s after it began … is let go the same way, with reason: "timeout"').
     - 7.1's changelog gets a line.
     - Backlog: a viewer whose `bind_peer` fails has no peer and no limit (another possible nameless pill); a streamer-side verify deadline; queueing to a stuck peer during the 60 s; web `presence.ts` labelling unverified seats (owner's call).
+- 2026-11-10, **owner ruling: swoop-clarity ships as 4.1.29**, after machine-scope (now 4.1.28). 0f9250d4 renumbers PROTOCOL.md, nvenc/mod.rs and the presenter/receiver docs. The branch stays named release/4.1.28 until 7.1, which renumbers the plan headings, changelog and sync-versions to 4.1.29.
