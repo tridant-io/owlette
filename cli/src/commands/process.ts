@@ -72,33 +72,7 @@ const VALID_SCHEDULE_MODES = ['off', 'always', 'scheduled'] as const;
 type ScheduleMode = (typeof VALID_SCHEDULE_MODES)[number];
 
 export function registerProcessCommands(program: Command): void {
-  const proc =
-    (program.commands.find((c) => c.name() === 'process') as Command | undefined) ??
-    program.command('process').description('process lifecycle on machines');
-
-  // Overwrite any earlier stub description so help text stays canonical.
-  proc.description('process lifecycle on machines');
-
-  // Drop any stubs left by earlier file-load ordering.
-  for (const verb of [
-    'list',
-    'get',
-    'create',
-    'update',
-    'delete',
-    'kill',
-    'restart',
-    'start',
-    'stop',
-    'schedule',
-  ] as const) {
-    const existing = proc.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = proc.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const proc = program.command('process').description('process lifecycle on machines');
 
   // list
 

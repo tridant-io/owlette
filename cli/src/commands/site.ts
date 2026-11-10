@@ -48,30 +48,7 @@ interface SiteDetail {
 }
 
 export function registerSiteCommands(program: Command): void {
-  const site =
-    (program.commands.find((c) => c.name() === 'site') as Command | undefined) ??
-    program.command('site').description('list + inspect sites');
-
-  // Overwrite any earlier stub so help text is registration-order independent.
-  site.description('list + inspect sites');
-
-  // Remove any stubs left by earlier file-load ordering.
-  for (const verb of [
-    'list',
-    'get',
-    'members',
-    'add-member',
-    'set-role',
-    'remove-member',
-    'transfer-ownership',
-  ] as const) {
-    const existing = site.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = site.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const site = program.command('site').description('list + inspect sites');
 
   site
     .command('list')

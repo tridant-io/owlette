@@ -49,29 +49,11 @@ interface DeploymentDetail extends DeploymentListItem {
 }
 
 export function registerDeployCommands(program: Command): void {
-  const deploy =
-    (program.commands.find((c) => c.name() === 'deploy') as Command | undefined) ??
-    program
-      .command('deploy')
-      .description(
-        'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
-      );
-
-  // Re-set regardless of registration order: the help text must disambiguate
-  // `owlette deploy` from `owlette roost deploy`.
-  deploy.description(
-    'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
-  );
-
-  // Drop any stub verbs left from earlier file-load ordering.
-  for (const verb of ['create', 'list', 'get', 'retry', 'cancel', 'uninstall', 'delete'] as const) {
-    const existing = deploy.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = deploy.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const deploy = program
+    .command('deploy')
+    .description(
+      'classic installer deploys — see `owlette roost deploy` for content-addressed deploys',
+    );
 
   const create = deploy
     .command('create')
