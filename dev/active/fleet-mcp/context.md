@@ -96,15 +96,23 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 
 ## Fleet API contract (tasks 3.1 and 4.2 must agree)
 
-The session route is the one the service calls, with the agent's own ID token:
+The session route is the one the agent calls, with its own ID token:
 
 - `POST /api/agent/fleet/session` → `200 { "token": "owf_…", "expiresAt": <epoch seconds>, "ttlSeconds": 900 }`, or `403 fleet_not_granted`
 
 The other three take `Authorization: Bearer <fleet session token>`.
 
 - `GET /api/agent/fleet/tools` → `{ "tools": [{ "name", "description", "inputSchema" }], "site": { "id" }, "machine": { "id" } }`
-- `POST /api/agent/fleet/call` with `Idempotency-Key`, body `{ "tool": "…", "params": { "machine": "…", … } }` → `200 { "status": "completed", "content": [...] }` for a tool the server answers itself, or `202 { "callId": "…" }`
+- `POST /api/agent/fleet/call` with `Idempotency-Key`, body `{ "tool": "…", "params": { "machine": "…", … } }` → `200 { "status": "completed", "content": [...] }` for a tool the server answers itself, or `202 { "callId": "…", "timeoutSeconds": <number> }`
 - `GET /api/agent/fleet/calls/{callId}` → `{ "status": "pending" | "in_progress" | "completed" | "failed", "content"?: [...], "error"?: "…" }`
+
+Rules the script relies on, so that new tools and new result kinds never need an agent release:
+
+- **How long to wait is the server's to say.** `timeoutSeconds` in the 202 is how long this call may run. The script polls for that long plus 30 seconds (capped at an hour plus 30), or 90 seconds when the field is absent. It never infers a bound from a tool's arguments.
+- **Every content item may carry `text`.** Known kinds are `text` and `image_url` (`{ "type": "image_url", "url": "https://…", "text": "…" }`). A script that does not know an item's `type` shows its `text`, so a new kind degrades to words, not to nothing.
+- **A terminal read is the last one.** The server deletes the result when it hands over a `completed` or `failed` status, to keep the machine's one results document small. A repeat of that read answers 404, which the script reports as a result it could not collect. A 429 or a 5xx on a poll is a dropped poll: the script keeps polling.
+- **`callId` is opaque and arrives percent-encoded** in the poll path, colons included (`cmd%3Amachine-2%3Aabc`). The route decodes it.
+- **A refusal on any fleet route is remembered** by the script and shown by `fleet_status`, so an assistant can see why it has no tools.
 
 Errors are RFC 7807 problems with a `code`: `fleet_session_invalid` (401), `fleet_not_granted`, `tool_not_allowed`, `machine_not_granted` (403), `hoot_disabled`, `machine_offline` (409), `plan_required` (402).
 
