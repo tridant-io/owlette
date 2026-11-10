@@ -141,4 +141,3 @@ For specific operational procedures, see the dedicated runbooks:
 - [web/e2e/README.md](../web/e2e/README.md)
 - [docs/internal/version-management.md](internal/version-management.md)
 - GUI automation machine setup (internal, unpublished): [docs/internal/gui-automation-machine-setup.md](internal/gui-automation-machine-setup.md) — provisioning a Windows box for native GUI automation (video capture + the full-machine e2e gate); executable form: `scripts/bootstrap-gui-automation.ps1`
-- Full-machine e2e harness (install→pair→GUI→uninstall release gate): [e2e-machine/README.md](../e2e-machine/README.md) — setting up e2e testing on a new computer; Wave 0 auth spike is runnable today

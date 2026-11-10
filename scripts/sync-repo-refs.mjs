@@ -43,7 +43,6 @@ const SCAN_ROOTS = [
   'cli',
   'desktop',
   'docs',
-  'e2e-machine',
   'examples',
   'functions',
   'infra',

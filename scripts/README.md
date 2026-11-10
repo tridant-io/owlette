@@ -29,7 +29,7 @@ migrations live in `migrations/`; the Hyper-V capture/e2e VM pipeline lives in
 |---|---|
 | `check-no-token-logs.mjs` | `.github/workflows/no-token-logs.yml` |
 | `check-claude-hooks.mjs` | `.github/workflows/claude-hooks.yml`: every `.claude/hooks` file parses, writes stdout only through `lib/hook-output.mjs`, and emits valid hook JSON; every skill, agent and command has frontmatter Claude Code will load |
-| `check-firebase-admin-namespace.mjs` | `.github/workflows/admin-sdk-guard.yml`: fail on the `firebase-admin` root namespace under `scripts/` and `e2e-machine/` (removed in v14). Self-tests with `--test`. |
+| `check-firebase-admin-namespace.mjs` | `.github/workflows/admin-sdk-guard.yml`: fail on the `firebase-admin` root namespace under `scripts/` (removed in v14). Self-tests with `--test`. |
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes`, run by hand; no workflow runs it. The standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | run by hand; no workflow runs it. CI enforces the same allowlist through the lint rule in `web/eslint.config.mjs` and its jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
 | `check-status-page-ready.mjs` | Deploy runbooks + `infra/cron-jobs.json` (Instatus status-page readiness) |
@@ -71,5 +71,4 @@ only rollback input) sit alongside them.
 
 25 numbered PS1 stages, `18b` to `18d` included (create → provision → golden
 checkpoint → drive installer → verify → record), plus `vm/ubuntu/` for the
-Linux kiosk VM. See `docs/internal/hyper-v-capture-vm.md` and
-`e2e-machine/RUNBOOK.md`.
+Linux kiosk VM. See `docs/internal/hyper-v-capture-vm.md`.

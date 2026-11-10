@@ -2,7 +2,7 @@
 
 two trees, one rule. **published product docs live in `web/content/docs/`** — that tree is app source. it is edited like code, it rides the web build, and a change there triggers CI and an auto-deploy to dev.owlette.app or owlette.app. treat it as shipping code, never as a scratchpad.
 
-**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `e2e-machine/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
+**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
 
 ## start here
 
