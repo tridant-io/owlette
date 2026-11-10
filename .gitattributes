@@ -1,2 +1,5 @@
 # run from git bash on windows, where a crlf checkout would stop it on its first line
 scripts/setup-ci-signing.sh text eol=lf
+# npm rewrites a bin script's first line to lf on install, which leaves a crlf
+# checkout showing as modified after every `npm ci`
+cli/bin/owlette text eol=lf
