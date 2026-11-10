@@ -93,19 +93,21 @@ describe('SwoopWindowControls', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  it('draws the buttons half the bar high at its top edge, so the lower half is a band with nothing to hit', () => {
+  it('fills its row by default, and with half takes 24 px at the top of it', () => {
     as(WINDOWS_APP);
     fakeBridge();
     render(<SwoopWindowControls className="self-stretch" />);
-    const controls = screen.getByTestId('window-controls');
-    expect(controls).toHaveClass('items-start', 'self-stretch');
-    expect(controls).not.toHaveClass('items-stretch');
+    expect(screen.getByTestId('window-controls')).toHaveClass('items-stretch', 'self-stretch');
+    for (const button of screen.getAllByRole('button')) {
+      expect(button).toHaveClass('w-[46px]');
+      expect(button).not.toHaveClass('h-6');
+    }
+    cleanup();
+
+    render(<SwoopWindowControls half />);
     for (const button of screen.getAllByRole('button')) {
       expect(button).toHaveClass('h-6', 'w-[46px]');
     }
-    // the container is no control, so tauri's drag script lets a press on its lower half drag the window
-    expect(controls).not.toHaveAttribute('tabindex');
-    expect(controls).not.toHaveAttribute('role');
   });
 
   it('asks before it closes while the page holds a seat in a session, and cancel keeps the window', async () => {
@@ -191,14 +193,13 @@ describe('SwoopWindowControls', () => {
     expect(inset).toHaveAttribute('data-tauri-drag-region', 'deep');
   });
 
-  it('on macos keeps the strip only the traffic lights’ room, title row or not', () => {
+  it('on macos keeps the strip only the traffic lights’ room, half or not', () => {
     as(MAC_APP);
     fakeBridge();
-    render(<SwoopWindowStrip titleRow />);
+    render(<SwoopWindowStrip half />);
     const strip = screen.getByTestId('swoop-window-strip');
-    expect(strip).toHaveClass('pointer-events-none');
-    expect(strip).not.toHaveClass('bg-card');
-    expect(strip).not.toHaveAttribute('data-tauri-drag-region');
+    expect(strip).toHaveClass('pointer-events-none', 'h-8');
+    expect(strip).not.toHaveClass('h-6');
     expect(strip.children).toHaveLength(1);
   });
 });
@@ -227,27 +228,24 @@ describe('SwoopWindowStrip', () => {
   it.each([
     ['windows', WINDOWS_APP],
     ['linux', LINUX_APP],
-  ])('as a title row on %s, is the drag surface across in the bar’s tone, its controls at the right end', (_os, ua) => {
+  ])('at half height on %s, is 24 px with its controls, and still lets presses through', (_os, ua) => {
     as(ua);
     fakeBridge();
-    render(<SwoopWindowStrip titleRow />);
+    render(<SwoopWindowStrip half />);
 
     const strip = screen.getByTestId('swoop-window-strip');
-    expect(strip).toHaveAttribute('data-tauri-drag-region', 'deep');
-    expect(strip).toHaveClass('pointer-events-auto', 'fixed', 'inset-x-0', 'top-0', 'h-8', 'justify-end', 'bg-card');
-    expect(strip).toHaveClass('shadow-[inset_0_-1px_0_0_var(--border)]');
-    expect(strip).not.toHaveClass('pointer-events-none');
-    // no handle: the whole row drags
-    expect(screen.queryByTestId('swoop-window-drag')).toBeNull();
-    expect(strip.children).toHaveLength(1);
-    expect(strip.firstElementChild).toBe(screen.getByTestId('window-controls'));
+    expect(strip).toHaveClass('pointer-events-none', 'fixed', 'inset-x-0', 'top-0', 'h-6', 'justify-end');
+    expect(strip).not.toHaveClass('h-8');
+    expect(strip).not.toHaveAttribute('data-tauri-drag-region');
+    expect(screen.getByTestId('swoop-window-drag')).toHaveClass('pointer-events-auto', 'w-40');
+    for (const button of screen.getAllByRole('button')) expect(button).toHaveClass('h-6');
   });
 
   it('passes the session it holds a seat in to its close', async () => {
     as(WINDOWS_APP);
     const { appWindow } = fakeBridge();
     const user = userEvent.setup();
-    render(<SwoopWindowStrip titleRow leaving="TEC-B4A" />);
+    render(<SwoopWindowStrip half leaving="TEC-B4A" />);
     await user.click(screen.getByRole('button', { name: 'close' }));
     expect(screen.getByRole('dialog')).toHaveTextContent('leave TEC-B4A and close the window?');
     expect(appWindow.close).not.toHaveBeenCalled();

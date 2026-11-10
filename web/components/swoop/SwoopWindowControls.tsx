@@ -44,19 +44,26 @@ export const TRAFFIC_LIGHTS_INSET_PX = 86;
 export const dragRegion = { 'data-tauri-drag-region': 'deep' } as const;
 
 const BUTTON =
-  'inline-flex h-6 w-[46px] cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
+  'inline-flex w-[46px] cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none';
 
 /**
  * minimize, maximize or restore, and close, on windows and linux; nothing on
- * macos or in a browser. the buttons are half the bar's height and sit at its
- * top edge: the lower half of the bar is a band with nothing to hit, so they
- * stay clear of a remote fullscreen app's own buttons at the top of the
- * picture (owner, 2026-11-09). the band is plain bar, so it drags the window.
+ * macos or in a browser. they fill their row's height, or with `half` take
+ * 24 px at its top: the session page's side-bar strip, which floats over the
+ * picture, so they cover as little of it as they can (owner, 2026-11-10).
  *
  * `leaving` is the machine's name while this page holds a seat in a session:
  * close then asks first. alt+f4, the taskbar and the app's own close do not.
  */
-export function SwoopWindowControls({ className, leaving }: { className?: string; leaving?: string | null }) {
+export function SwoopWindowControls({
+  className,
+  half = false,
+  leaving,
+}: {
+  className?: string;
+  half?: boolean;
+  leaving?: string | null;
+}) {
   const platform = useViewerAppPlatform();
   const drawn = platform === 'windows' || platform === 'linux';
   const [maximized, setMaximized] = useState(false);
@@ -98,25 +105,29 @@ export function SwoopWindowControls({ className, leaving }: { className?: string
 
   if (!drawn) return null;
   return (
-    <div data-testid="window-controls" className={cn('flex shrink-0 items-start', className)}>
+    <div data-testid="window-controls" className={cn('flex shrink-0 items-stretch', className)}>
       <button
         type="button"
         aria-label="minimize"
         data-testid="window-minimize"
-        className={cn(BUTTON, 'hover:bg-accent focus-visible:bg-accent')}
+        className={cn(BUTTON, half && 'h-6', 'hover:bg-accent focus-visible:bg-accent')}
         onClick={minimize}
       >
-        <Minus aria-hidden className="size-3.5" />
+        <Minus aria-hidden className={half ? 'size-3.5' : 'size-4'} />
       </button>
       <button
         type="button"
         aria-label={maximized ? 'restore' : 'maximize'}
         data-testid="window-maximize"
         data-maximized={maximized || undefined}
-        className={cn(BUTTON, 'hover:bg-accent focus-visible:bg-accent')}
+        className={cn(BUTTON, half && 'h-6', 'hover:bg-accent focus-visible:bg-accent')}
         onClick={toggle}
       >
-        {maximized ? <Copy aria-hidden className="size-3 -scale-x-100" /> : <Square aria-hidden className="size-3" />}
+        {maximized ? (
+          <Copy aria-hidden className={cn(half ? 'size-3' : 'size-3.5', '-scale-x-100')} />
+        ) : (
+          <Square aria-hidden className={half ? 'size-3' : 'size-3.5'} />
+        )}
       </button>
       <button
         type="button"
@@ -124,11 +135,12 @@ export function SwoopWindowControls({ className, leaving }: { className?: string
         data-testid="window-close"
         className={cn(
           BUTTON,
+          half && 'h-6',
           'hover:bg-danger-solid hover:text-danger-solid-foreground focus-visible:bg-danger-solid focus-visible:text-danger-solid-foreground',
         )}
         onClick={leaving ? () => setConfirming(leaving) : close}
       >
-        <X aria-hidden className="size-3.5" />
+        <X aria-hidden className={half ? 'size-3.5' : 'size-4'} />
       </button>
       <Dialog
         open={confirming !== null}
@@ -165,46 +177,46 @@ export function SwoopWindowControls({ className, leaving }: { className?: string
 }
 
 /**
- * the window's controls where no bar runs along the top. as a `titleRow` (the
- * session page with its bar on a side, on windows and linux) it is a slim
- * title row in the bar's tone across the top of the window, the controls at
- * its right end and every other press dragging the window; the page starts
- * below it, so none of the picture is under it. otherwise (the login page) it
- * holds only the controls and a short drag handle beside them, and lets every
- * other press through to what is under it. on macos the traffic lights are the
- * system's, so the strip is only their room. nothing in a browser.
+ * the window's controls where no bar runs along the top: a slim strip across
+ * the top of the window holding only the controls, with a short drag handle
+ * beside them. the strip lets every other press through to what is under it,
+ * so a picture there stays the machine's. `half` makes the strip and its
+ * controls 24 px high (the session page with its bar on a side). on macos the
+ * traffic lights are the system's, so the strip is only their room. nothing
+ * in a browser.
  */
 export function SwoopWindowStrip({
   className,
-  titleRow = false,
+  half = false,
   leaving,
 }: {
   className?: string;
-  titleRow?: boolean;
+  half?: boolean;
   leaving?: string | null;
 }) {
   const platform = useViewerAppPlatform();
   if (!platform) return null;
-  const row = titleRow && platform !== 'mac';
+  const mac = platform === 'mac';
   return (
     <div
       data-testid="swoop-window-strip"
-      {...(row ? dragRegion : {})}
       className={cn(
-        'fixed inset-x-0 top-0 z-40 flex h-8',
-        row ? 'pointer-events-auto bg-card shadow-[inset_0_-1px_0_0_var(--border)]' : 'pointer-events-none',
-        platform === 'mac' ? 'justify-start' : 'justify-end',
+        'pointer-events-none fixed inset-x-0 top-0 z-40 flex',
+        half && !mac ? 'h-6' : 'h-8',
+        mac ? 'justify-start' : 'justify-end',
         className,
       )}
     >
-      {platform === 'mac' ? (
+      {mac ? (
         <div {...dragRegion} className="pointer-events-auto" style={{ width: TRAFFIC_LIGHTS_INSET_PX }} />
-      ) : row ? (
-        <SwoopWindowControls leaving={leaving} />
       ) : (
         <>
           <div {...dragRegion} data-testid="swoop-window-drag" className="pointer-events-auto w-40" />
-          <SwoopWindowControls leaving={leaving} className="pointer-events-auto bg-background/60 backdrop-blur-sm" />
+          <SwoopWindowControls
+            half={half}
+            leaving={leaving}
+            className="pointer-events-auto bg-background/60 backdrop-blur-sm"
+          />
         </>
       )}
     </div>

@@ -48,14 +48,13 @@ through it: a sentence reached the machine with letters missing. Swoop's input
 now goes reliably and in order, so every key lands, in the order it was typed.
 Nothing to update on the machine: reload the swoop page.
 
-### changed — owlette swoop's window buttons stay clear of the picture
+### changed — owlette swoop's window buttons cover less of the picture
 
-In owlette swoop on Windows and Linux, minimize, maximize and close are now half
-the bar's height and sit at its top edge, so the lower half of the bar keeps
-them away from a fullscreen app's own buttons at the top of the picture. With
-the bar on a side, they sit in a slim title row above the picture instead of
-over its top corner. The close button asks first while you are in a session.
-Nothing to update on the machine or in owlette swoop.
+In owlette swoop on Windows and Linux, with the bar down a side, minimize,
+maximize and close are now half height at the window's top right, so they cover
+less of the picture's top corner and the picture keeps the window's full height.
+The close button asks first while you are in a session. Nothing to update on the
+machine or in owlette swoop.
 
 ### fixed — caps lock from a mac stays in step
 
