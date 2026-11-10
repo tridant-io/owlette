@@ -123,8 +123,8 @@ Known gap:
 - Roost has `sites/{siteId}.roostEnabled`; agent equivalent UNKNOWN.
 ## per-surface rollback recipes
 Before commands, confirm current branch, target environment, bad SHA, known-good SHA, and who is watching verification.
-### machine scope trap (4.1.29 on)
-Code from before 4.1.29 ignores `machineIds` on member rows, so any rollback past it widens every scoped member to the whole site at once.
+### machine scope trap (4.1.28 on)
+Code from before 4.1.28 ignores `machineIds` on member rows, so any rollback past it widens every scoped member to the whole site at once.
 Check first (`--env=dev` for dev):
 ```bash
 node scripts/check-membership-read-path.mjs --env=prod --list-scoped

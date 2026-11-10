@@ -156,11 +156,11 @@ Recommended checks:
 The web follows the rules, never the other way round.
 Railway deploys `main` on push, and the rules and functions are manual (see "manual deploy boundaries"), so this ordering is a step someone takes, not something the merge does.
 
-### machine scope (rules 2.12.0, web 4.1.29)
+### machine scope (rules 2.12.0, web 4.1.28)
 
-4.1.29's web reads `machineIds` on member rows and expects prod's rules to enforce it.
+4.1.28's web reads `machineIds` on member rows and expects prod's rules to enforce it.
 Prod ran rules 2.11.0 before it, and 2.11.0 has no notion of a scope: over those rules a scoped member reads the whole site straight from Firestore (every machine, log and deployment, and for a scoped admin the audit log and webhooks too), while the dashboard and the API show them only their machines.
-So before `dev` is merged into `main` for 4.1.29 or later:
+So before `dev` is merged into `main` for 4.1.28 or later:
 
 1. Deploy rules 2.12.0 to prod:
 

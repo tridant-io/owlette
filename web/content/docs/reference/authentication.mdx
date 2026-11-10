@@ -356,7 +356,7 @@ superadmins set global roles at `/admin/users` ([user management](/docs/dashboar
 
 ### machine scope
 
-a `members` row may also carry `machineIds`: a list of 1 to 30 of the site's machines, its **machine scope**. someone whose row carries one is a **scoped member**, whatever their role, and a scoped admin is a scoped member whose role is admin. without the field the row is **whole site**, so every row written before 4.1.29 is unchanged. in the dashboard a scoped row's access reads "N machines" and the person's access is "limited to some machines" ([member management](/docs/dashboard/admin/member-management)).
+a `members` row may also carry `machineIds`: a list of 1 to 30 of the site's machines, its **machine scope**. someone whose row carries one is a **scoped member**, whatever their role, and a scoped admin is a scoped member whose role is admin. without the field the row is **whole site**, so every row written before 4.1.28 is unchanged. in the dashboard a scoped row's access reads "N machines" and the person's access is "limited to some machines" ([member management](/docs/dashboard/admin/member-management)).
 
 - `[]`, or a value that is not a list, reaches no machine: the field fails closed
 - writers store the ids sorted and without repeats, each a machine of the site. widening back to the whole site is `PATCH {"machineIds": null}`, which deletes the field rather than writing `null` or `[]`
