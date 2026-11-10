@@ -138,6 +138,25 @@ class TestWriteConfig:
         assert 'firebase.site_id' in str(excinfo.value)
         assert self._read(config_file)['firebase']['site_id'] == 'test-site'
 
+    def test_a_config_that_could_not_be_read_is_never_written_over(self, config_file, monkeypatch):
+        # A lock that outlasts the retries, or a torn write, reads as {}. Writing
+        # that back would drop every other section, `firebase` with it, and the
+        # machine would come up unpaired.
+        before = config_file.read_text()
+        monkeypatch.setattr(shared_utils, 'read_json_from_file', lambda *args, **kwargs: {})
+
+        with pytest.raises(OSError):
+            shared_utils.write_config(['cortex'], {'enabled': True})
+
+        assert config_file.read_text() == before
+
+    def test_a_config_that_does_not_exist_yet_is_created(self, config_file):
+        config_file.unlink()
+
+        shared_utils.write_config(['environment'], 'dev')
+
+        assert self._read(config_file) == {'environment': 'dev'}
+
     def test_the_new_value_is_published_to_the_read_cache(self, config_file):
         shared_utils.write_config(['cortex', 'enabled'], True)
 

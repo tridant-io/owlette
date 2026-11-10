@@ -9405,8 +9405,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 launch_mode:
                   type: string
@@ -9497,8 +9497,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 autolaunch: { type: boolean }
                 launch_mode:
@@ -11441,8 +11441,10 @@ components:
             ignore it. Not validated by the API; reads back as `Show` when never set.
         time_delay:
           type: string
+          description: Seconds to wait before a relaunch, as a string. Always a number of zero or more.
         time_to_init:
           type: string
+          description: Seconds the process is given to start, as a string. Always a number of zero or more.
         relaunch_attempts:
           type: string
           description: Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`.
@@ -11494,8 +11496,8 @@ components:
             type: object
             required: [start, stop]
             properties:
-              start: { type: string }
-              stop: { type: string }
+              start: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "09:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
+              stop: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "17:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
 
     ScheduleTimeRange:
       description: A single start/stop time range within a schedule.

@@ -7,6 +7,23 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — a schedule time or launch delay the agent could not read no longer stops it
+
+A process schedule with a time no clock has (`24:00`), or a launch delay or
+init timeout left empty in the dashboard's edit form, made the agent stop and
+start again over and over, so nothing on that machine was kept running. The
+dashboard and the API now refuse a time like that and store the default for an
+empty field, so no machine is sent one. Nothing to update on the machine; the
+agent's own guard, which skips a value it cannot read, arrives with the next
+version.
+
+### fixed — a config file that could not be read is no longer written over
+
+Saving hoot's key at a moment when the machine's config file could not be read
+(another program holding it, for one) wrote the file back with only hoot's
+section, and the machine came up unpaired. The agent now leaves the file as it
+is and reports that the key was not saved. Arrives with the next agent version.
+
 ### changed — the site filter is a search row
 
 Past ten sites, the filter in the site switcher and in owlette swoop's site

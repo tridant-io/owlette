@@ -82,6 +82,29 @@ const UPDATE_ALLOWED_FIELDS = new Set<string>([
   'autolaunch',
 ]);
 
+// the agent builds a clock time from each end of a range every tick, and an hour
+// or minute no clock has raises there and ends its main loop. `9:00` was always
+// accepted and works on the agent, so it still is: it is stored as `09:00`, the
+// form both schedule editors write.
+const CLOCK_TIME_RE = /^(\d{1,2}):(\d{1,2})$/;
+
+function clockTime(value: unknown): string | null {
+  const match = typeof value === 'string' ? CLOCK_TIME_RE.exec(value) : null;
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+  return `${match[1].padStart(2, '0')}:${match[2].padStart(2, '0')}`;
+}
+
+// seconds as a person types them. the agent hands both fields to float() at every
+// launch, and versions in the field raise on anything it refuses, which ends their
+// main loop: so nothing float() refuses is stored. empty is a cleared form field.
+const SECONDS_DEFAULTS = { time_delay: '0', time_to_init: '10' } as const;
+const SECONDS_RE = /^(\d+(\.\d*)?|\.\d+)$/;
+type SecondsField = keyof typeof SECONDS_DEFAULTS;
+
+function isSecondsField(field: string): field is SecondsField {
+  return field in SECONDS_DEFAULTS;
+}
+
 function validationError(code: string, detail: string): ProcessPayloadValidationResult<never> {
   return { ok: false, error: { status: 400, code, detail } };
 }
@@ -131,6 +154,20 @@ function readString(
   return { ok: true, value };
 }
 
+function readSeconds(
+  body: Record<string, unknown>,
+  key: SecondsField,
+): ProcessPayloadValidationResult<string | undefined> {
+  const result = readString(body, key);
+  if (!result.ok || result.value === undefined) return result;
+  const typed = result.value.trim();
+  if (typed === '') return { ok: true, value: SECONDS_DEFAULTS[key] };
+  if (!SECONDS_RE.test(typed)) {
+    return validationError('invalid_field', `Field \`${key}\` must be a number of seconds, zero or more.`);
+  }
+  return { ok: true, value: typed };
+}
+
 export function validateScheduleBlocks(
   value: unknown,
   fieldName = 'schedules',
@@ -170,19 +207,15 @@ export function validateScheduleBlocks(
 
     const ranges: ScheduleBlock['ranges'] = [];
     for (const [rangeIndex, range] of block.ranges.entries()) {
-      if (
-        !isPlainObject(range) ||
-        typeof range.start !== 'string' ||
-        range.start.length === 0 ||
-        typeof range.stop !== 'string' ||
-        range.stop.length === 0
-      ) {
+      const start = isPlainObject(range) ? clockTime(range.start) : null;
+      const stop = isPlainObject(range) ? clockTime(range.stop) : null;
+      if (start === null || stop === null) {
         return validationError(
           'invalid_field',
-          `Field \`${fieldName}[${blockIndex}].ranges[${rangeIndex}]\` must include string start and stop.`,
+          `Field \`${fieldName}[${blockIndex}].ranges[${rangeIndex}]\` must include start and stop as 24-hour \`HH:MM\`.`,
         );
       }
-      ranges.push({ start: range.start, stop: range.stop });
+      ranges.push({ start, stop });
     }
 
     const cleanBlock: ScheduleBlock = { days: [...block.days], ranges };
@@ -250,8 +283,7 @@ export function validateCreateProcessFields(
     cwd: '',
     priority: 'Normal',
     visibility: 'Show',
-    time_delay: '0',
-    time_to_init: '10',
+    ...SECONDS_DEFAULTS,
     relaunch_attempts: '3',
     launch_mode: 'off',
     schedules: null,
@@ -259,7 +291,7 @@ export function validateCreateProcessFields(
 
   for (const field of STRING_FIELDS) {
     if (field === 'name' || field === 'exe_path') continue;
-    const result = readString(body, field);
+    const result = isSecondsField(field) ? readSeconds(body, field) : readString(body, field);
     if (!result.ok) return result;
     if (result.value !== undefined) value[field] = result.value;
   }
@@ -305,9 +337,9 @@ export function validateUpdateProcessFields(
   const value: ValidatedUpdateProcessFields = {};
   for (const field of STRING_FIELDS) {
     if (!(field in body)) continue;
-    const result = readString(body, field, {
-      nonEmpty: field === 'name' || field === 'exe_path',
-    });
+    const result = isSecondsField(field)
+      ? readSeconds(body, field)
+      : readString(body, field, { nonEmpty: field === 'name' || field === 'exe_path' });
     if (!result.ok) return result;
     value[field] = result.value;
   }
