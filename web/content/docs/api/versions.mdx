@@ -595,7 +595,7 @@ curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/deployments/8d969eef6ecad3c29a3
   -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`GET /api/roosts/{roostId}/deployments` lists rollout records, newest first, in `rollouts` (repeated as `items`). `page_size` defaults to 20 with a maximum of 100. filter with `stage=scheduled`, `canary`, `complete` or `aborted` (`fleet` is not accepted as a filter and returns `400 validation_failed`). each item has `rolloutId`, `versionId`, `stage`, `canaryCount`, `fleetCount`, `extractRoot`, `versionUrl`, `triggeredBy`, `startedAt`, `completedAt`, `abortedAt`, `abortReason` and `scheduledAt`.
+`GET /api/roosts/{roostId}/deployments` lists rollout records, newest first, in `rollouts` (repeated as `items`). `page_size` defaults to 20 with a maximum of 100. filter with `stage=scheduled`, `canary`, `fleet`, `complete` or `aborted`. each item has `rolloutId`, `versionId`, `stage`, `canaryCount`, `fleetCount`, `extractRoot`, `versionUrl`, `triggeredBy`, `startedAt`, `completedAt`, `abortedAt`, `abortReason` and `scheduledAt`.
 
 the list holds one record per version: publishes, deploys and rollbacks all write the record for their version, a later deploy of the same version replaces a finished one, and [resync](#resync) deletes it. `triggeredBy` is set only for deploys.
 

@@ -32,7 +32,7 @@ interface RouteParams {
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
-const VALID_STAGES = new Set(['scheduled', 'canary', 'complete', 'aborted']);
+const VALID_STAGES = ['scheduled', 'canary', 'fleet', 'complete', 'aborted'];
 
 async function readSiteDocForGate(siteId: string): Promise<Record<string, unknown> | null> {
   const snap = await getAdminDb().collection('sites').doc(siteId).get();
@@ -68,8 +68,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     const { pageSize, pageToken } = parsedPagination.pagination;
 
     const stageFilter = request.nextUrl.searchParams.get('stage');
-    if (stageFilter && !VALID_STAGES.has(stageFilter)) {
-      return problemValidation('stage must be one of scheduled, canary, complete, aborted', {
+    if (stageFilter && !VALID_STAGES.includes(stageFilter)) {
+      return problemValidation(`stage must be one of ${VALID_STAGES.join(', ')}`, {
         'query.stage': ['invalid stage'],
       });
     }

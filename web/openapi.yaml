@@ -4577,8 +4577,8 @@ paths:
           required: false
           schema:
             type: string
-            enum: [scheduled, canary, complete, aborted]
-          description: Filter by rollout stage. `fleet` is not accepted as a filter.
+            enum: [scheduled, canary, fleet, complete, aborted]
+          description: Filter by rollout stage.
       responses:
         '200':
           description: Paginated deployments.
