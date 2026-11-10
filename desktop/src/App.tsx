@@ -139,15 +139,13 @@ function App() {
   }, [])
 
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
-  useEffect(() => {
-    startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
-  }, [])
 
   // macOS Screen Recording and Accessibility, re-read whenever the window
   // comes back: Screen Recording takes effect on relaunch, but the banner
   // should at least stop showing once the user has switched it on and come back.
   // Accessibility takes effect at once, so its notice also re-reads it on a
-  // timer while it shows.
+  // timer while it shows. start on login too: the tray toggles the same
+  // shortcut while the window is hidden, and hiding does not unmount it.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
   const [accessibility, setAccessibility] = useState<boolean | null>(null)
   const readAccessibility = useCallback(() => {
@@ -162,6 +160,7 @@ function App() {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
       readAccessibility()
       readClipboardSharing()
+      startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
     }
     read()
     window.addEventListener('focus', read)
@@ -677,7 +676,15 @@ function App() {
           hostname={host}
           starting={health.starting}
           // macos: launchd keeps the agent running; this app cannot start it
-          onStart={IS_MAC ? undefined : () => void health.start()}
+          onStart={
+            IS_MAC
+              ? undefined
+              : () => {
+                  void health.start().catch((cause: unknown) =>
+                    toast.error('could not start the service', { description: message(cause) }),
+                  )
+                }
+          }
           onJoin={() => setMenuDialog('join')}
         />
 

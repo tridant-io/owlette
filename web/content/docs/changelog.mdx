@@ -7,6 +7,15 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — three things in the owlette app
+
+The start service button in the app's footer showed nothing when the start
+failed; it now says why. The start on login checkbox in the app's menu kept its
+old value after a change from the tray until the app restarted; it now follows
+the tray. The 15-minute steppers beside a schedule time ignored Enter and Space
+and did not say which time they moved; they work from the keyboard and name the
+time. Arrives with the next agent version.
+
 ### fixed — two answers from the owlette CLI
 
 `owlette key list` stopped with "Invalid time value" for anyone who had a key;
