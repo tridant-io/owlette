@@ -58,7 +58,7 @@ node scripts/sync-versions.js            # show every version surface
 node scripts/sync-versions.js X.Y.Z      # bump them all
 ```
 
-The script's own `VERSION_FILES` / `CARGO_TOMLS` tables are the list (product + agent VERSION, the web and desktop `package.json`, `tauri.conf.json`, the desktop, host and swoop `Cargo.toml`, plus the version strings in `README.md`, `.claude/CLAUDE.md` and `docs/internal/version-management.md`). `firestore.rules` is versioned independently.
+The script's own `VERSION_FILES` / `CARGO_TOMLS` tables are the list (product + agent VERSION, the web and desktop `package.json`, `tauri.conf.json`, the desktop, host and swoop `Cargo.toml`, the two version fields at the top of the web and desktop `package-lock.json`, plus the version strings in `README.md` and `.claude/CLAUDE.md`). `firestore.rules` is versioned independently.
 
 Version → `OWLETTE_VERSION` env var → Inno Setup reads it → installer filename + registry.
 
@@ -116,7 +116,6 @@ alerts that were already fixed on `dev` is what made nobody look. The
 # 1. Update changelog, bump version, commit. Do not push yet (see step 6).
 # Edit docs/changelog.md AND web/content/docs/changelog.mdx → add [X.Y.Z] section to both
 node scripts/sync-versions.js X.Y.Z
-# ignore the next steps it prints (bare `screenshots:desktop`, push to main) — this recipe replaces them
 # `git add -u`, not `-A`: only the tracked files the bump changed, never another
 # session's untracked work that happens to sit in the checkout
 git add -u && git commit -m "release: X.Y.Z"
