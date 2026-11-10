@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 53/61 complete
+**Progress**: 57/62 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -1542,7 +1542,7 @@ House rules for every task:
   - Done when: neither default remains; a new case shows a recipient with no `machineIds` gets nothing, red before the change; the full web jest is green; eslint and tsc are clean.
 
 
-- [ ] **Task 8.10: `machineScopeOf` fails closed, and two stale talon comments**
+- [x] **Task 8.10: `machineScopeOf` fails closed, and two stale talon comments**
   - Files: `web/lib/capabilities.ts` (`machineScopeOf` only, ~342-347), the test suites whose actor literals carry `siteRoles` but no `machineScopes` (find them with a grep), `web/app/api/sites/[siteId]/talons/authored/route.ts` (the comment at ~5-8 only), `web/lib/actions/deleteUser.server.ts` (the comment at ~12 only)
   - Depends on: 8.1, 8.7, 8.9
   - Do: First read the house rules at the top of this file. After 8.1, 8.8 and 8.9, a missing scope reaches nothing everywhere except `machineScopeOf`, which still reads an actor with no `machineScopes` map as the whole site (`if (!actor.machineScopes) return null`). 8.1 kept that branch for test literals that tsc never checks. Every production builder now spreads `siteStanding`, so the map is always present (8.1 verified this). Make the branch fail closed: an actor with no map reaches no machine (`[]`), except a superadmin, who stays whole-site. Give every test literal that relied on the old reading `machineScopes` (null per site for whole-site actors). Also fix the two comments that still say "a talon with a hoot output … starts failing": since 8.7 every talon re-checks its author before any output fires and switches off with nothing fired.
@@ -1550,7 +1550,7 @@ House rules for every task:
 
 ## Wave 9: e2e specs, authored in parallel (nothing here runs the rig)
 
-- [ ] **Task 9.1: e2e: the scoped journeys**
+- [x] **Task 9.1: e2e: the scoped journeys**
   - Files: `web/e2e/specs/sites/machine-scope.spec.ts` (new)
   - Depends on: 4.6, waves 5–7
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. New user-facing behaviour ships with e2e (owner rule).
@@ -1596,7 +1596,7 @@ House rules for every task:
     - **Both projects.** It runs on chromium and mobile-chromium. Where an assertion is desktop-only, use the drawer, or skip on `testInfo.project.name === 'mobile-chromium'` with a reason.
   - Done when: `cd web && npx eslint e2e/specs/sites/machine-scope.spec.ts` is clean, and `npx playwright test --list e2e/specs/sites/machine-scope.spec.ts --project=chromium --project=mobile-chromium` lists every test. Task 10.1 runs it.
 
-- [ ] **Task 9.2: e2e: swoop under machine scope and swoop mode**
+- [x] **Task 9.2: e2e: swoop under machine scope and swoop mode**
   - Files: `web/e2e/specs/swoop/session.spec.ts`
   - Depends on: 4.6, waves 5–7
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1631,7 +1631,7 @@ House rules for every task:
     - **afterAll:** remove the three rows, the two machines with their `swoop_sessions` and `commands`, and the users and Auth users, following the file's own cleanup.
   - Done when: eslint is clean on the file, and `npx playwright test --list e2e/specs/swoop/session.spec.ts --project=chromium --project=mobile-chromium` lists the describe.
 
-- [ ] **Task 9.3: e2e: editing access in the members section, a phone included**
+- [x] **Task 9.3: e2e: editing access in the members section, a phone included**
   - Files: `web/e2e/specs/sites/member-access.spec.ts` (new)
   - Depends on: 4.6, waves 5–7
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`.
@@ -1666,6 +1666,13 @@ House rules for every task:
       - delete the machines and their `swoop_sessions`/`commands`, the talon doc, the member rows, the site doc, and the users docs and Auth users;
       - reset `users/{uid}.lastSiteId` if it changed (release 2's contamination note).
   - Done when: eslint is clean, and `--list` shows every test on both projects.
+
+
+- [ ] **Task 9.4: The existing members e2e follows the access column, and four stale talon comments**
+  - Files: `web/e2e/specs/sites/site-members.spec.ts`, plus the comment lines only in `web/app/api/sites/[siteId]/members/[uid]/route.ts` (~9-11), `web/lib/talons/store.server.ts` (~553-556), `web/app/api/users/[uid]/talons/route.ts` (~5-6), `web/hooks/useTalonReassign.ts` (~8-9)
+  - Depends on: 7.9, 8.7, 8.10
+  - Do: First read the house rules at the top of this file. 9.3 found that `site-members.spec.ts` has probably been red since 7.9 (be2cef36). Its `COLUMNS` has no `access`, so `'actions'` now reads the access cell (~line 300). Its swoop-cell `toHaveText` checks (~254, 262, 270, 301) read the full text, which now includes the md:hidden ` · {access}` suffix. Update the spec to 7.9's table: add the access column, and match the swoop cell without the suffix (or assert the suffix where the viewport shows it). Don't weaken an assertion. Also rewrite the four comments that still say "a talon with a hoot output … stops dead / starts failing". Since 8.7, every talon re-checks its author before any output fires and switches off at its next run with nothing fired.
+  - Done when: eslint is clean on every touched file, tsc is clean, and `npx playwright test --list e2e/specs/sites/site-members.spec.ts` loads. 10.1 runs the spec on the rig.
 
 ## Wave 10: one rig run
 
@@ -1991,3 +1998,10 @@ House rules for every task:
   - 8.7 33c6f60d: the engine resolves the author once per run, after the condition and before the first output; a refusal is recorded on each output the way runHootOutput records its own, and settleTalon disables and audits. A non-author error gives `author_check_failed` and fires nothing (fails closed). Red first: 10 of 66. Talons 562, full jest 483/11228. The docs (talons.mdx, member-management) say every talon. Left as is: hoot and visual-check still resolve the author themselves (up to 3 reads a run). system:-authored plain talons now switch off as creator_not_a_user with ai-key card copy (no live creator). Stale docs lines folded into 8.9.
   - 8.9 69781266: `recipientWantsMachine` and talons' site-level check drop the `?? null`. A recipient with no `machineIds` reaches no machine; an undefined guard returns false, because `scopeCovers` throws, which would drop other recipients' alerts. Both cases were red first. site.mdx:178 and authentication.mdx:388 are fixed. Full jest 483/11230. Kept: `adminUtils.server.ts` ~129/~152 `?? null` are production reads for legacy `users.sites[]` users (4.4). **Backlog:** a legacy `users.sites[]` entry with no member row still gets whole-site alerts, and `row.active` is not checked there. That needs drifted data. Task 8.10 added (machineScopeOf, two comments).
 - 2026-11-09, PR #479 (dev noindex) merged to dev by owlette-0b on the owner's 'merge 479' as 955fd3f1. **Verified live:** dev.owlette.app / and /register send `x-robots-tag: noindex, nofollow`; owlette.app sends none.
+- 2026-11-10:
+  - 8.10 d4fce676: `machineScopeOf` reads an actor with no map as `[]`; a superadmin stays whole-site. Red first. Literals in agent-tokens, sites-members, swoop policy and talons store gain `machineScopes`. Full jest 483/11232. Two comments fixed; four more are left for 9.4.
+  - Wave 9 (specs only, no rig):
+    - 9.1 3bf32876: sites/machine-scope.spec.ts (10, chromium) and mobile/machine-scope.spec.ts (4). `/admin` has no page, so the bounce check uses /admin/sites. It adds 7.12 (mode none gives live view), 7.10 (a fourth user who administers a second site whole) and 8.7 (a scoped admin's command talon re-run is disabled).
+    - 9.2 52285e92: session.spec.ts's `machine scope` describe (5): the scoped watcher, the scoped controller, the scoped admin with 6.9 emails and kill/kick/list, narrowing ends the whole session (record ended/revoked/endedFor within 5 s), and mode none on the dashboard. Its tests run in order.
+    - 9.3 96ac62e7: sites/member-access.spec.ts (7) and mobile/member-access.spec.ts (2: fits a phone, scrolls on a short screen). The 6.3 API refusals and the `[]` save gate are added. The narrowed record reads `revoked` with `endedFor`, and `scope_changed` is on the audit row.
+  - **For 10.1:** run the new specs and `sites/site-members.spec.ts` (9.4) too. Untried selectors are listed in the 9.1 and 9.3 reports: the nested apply dialog, the page switcher, the superadmin talon re-run's `runs` shape, /hoot with only a user key, and the picker popover inside a modal.
