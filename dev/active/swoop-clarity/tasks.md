@@ -342,3 +342,18 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     3. The drawn pointer sits under the real one on the portrait panel, which proves Desktop Duplication's PointerPosition is in the desktop's orientation.
     4. The owner's 8.1 F check.
   - **Unexplained:** why the taps did nothing. The old transform matched Microsoft's duplication sample.
+- 2026-11-09 update: `fix/swoop-keys-lost` fixes the two session.spec.ts comments itself (~1147; the `.sort` by seq is also gone). **Drop the reword from 3.2 and 5.1.** When dev is merged into release/4.1.28, take that branch's version of those lines.
+- 2026-11-10, **the canvas investigation** (probe commit 400a7702, spike folder only; logs and traces in the session scratchpad's `canvas-investigation/`):
+  - **Cause:** a cover that reads the frame while the video is still composited makes Chromium's rendering step race the video compositor's own tick. Callbacks coalesce (lag +16 ms) whatever the draw path: canvas, rAF, worker, VideoFrame, WebGPU zero-copy and desynchronized all do it. Draw cost is not the cause (0.2 ms CPU, 0.1 ms GPU).
+  - **Fix:** the video at opacity 0 under the canvas (`under`) removes the race; callbacks hold in Edge and headless. But Chromium then counts every frame as dropped (`ShouldSubmit()` is false for an uncomposited video), which is an artifact.
+  - **Recommended changes:**
+    - smooth.ts's draw trigger and context are unchanged. `draw` sets `video.style.opacity='0'` when it first shows the canvas, and `hide()` restores it.
+    - 3.1's presenter exposes `drawnFrames`, and useSwoopSession's `shownFrames()` becomes `(total − dropped) + drawnFrames`.
+    - stall.ts's `StallSample` gains `shownFrames`, with tests (drops climbing while the canvas draws are not a stall; draws stopping while the host sends are).
+  - **This bends:**
+    - 2.5's dropped clause, restated as: draws within 5% of none's (total − dropped);
+    - 3.1's 'watchdog untouched';
+    - the plan's preferred cover: it picks the Risks list's second option.
+  - **Probe artifacts fixed:** a same-page source, a DOM repaint every frame, and a headless 47 fps timer.
+  - **Not measured:** glass to glass, WebView2 itself, 4K, Safari, and three clean Edge runs per cover.
+  - **The owner decides** whether to proceed.
