@@ -1,19 +1,8 @@
-//! GPU device and frame types. Task 4.5 fills the convert/scale path.
+//! The captured frame on the GPU, and the convert/scale path.
 
 pub mod scale;
 #[cfg(target_os = "macos")]
 pub mod vt_transfer;
-
-/// The graphics device capture and encode share.
-///
-/// One device per streamer: Desktop Duplication hands out textures owned by the
-/// adapter it was opened on, and NVENC registers those same textures, so a
-/// second device would mean a copy through system memory on every frame.
-pub struct Device {
-    /// Adapter LUID, the only field that is meaningful on every OS — it is how
-    /// a capture source and an encoder agree they are on the same GPU.
-    pub adapter_luid: i64,
-}
 
 /// One captured frame, still on the GPU.
 ///
