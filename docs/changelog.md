@@ -10,6 +10,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — swoop refused sessions after a few failed starts
+
+A swoop session that failed before its streamer started still counted toward
+the limit on streamer starts, twice, so a short outage could leave the machine
+refusing swoop for a while. Only real starts count now. Arrives with the next
+agent version.
+
 ### changed — download links stay out of the agent's logs
 
 A failed installer or roost download wrote its signed link into the agent's log
