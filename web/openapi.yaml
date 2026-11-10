@@ -1266,10 +1266,11 @@ paths:
       summary: talons one person authored on this site
       description: |
         The departure preview. Removing a member touches nothing under
-        `sites/{siteId}`, so their talons survive the removal — but a talon
-        with a `cortex` output re-resolves its AUTHOR's site access on every
-        run, so it starts failing the moment they lose access. Call this before
-        removing a member to learn what that removal will break.
+        `sites/{siteId}`, so their talons survive the removal — but every
+        talon re-resolves its AUTHOR's site access before any output fires,
+        so each one switches off at its next run, with nothing fired, once they
+        lose whole-site access. Call this before removing or limiting a member
+        to learn what that change will switch off.
 
         Names only — this is not a second way to read a talon. Bounded by the
         20-talon per-site cap.
@@ -10134,8 +10135,9 @@ paths:
       description: |
         The account-deletion preview. `DELETE /api/users/{uid}` refuses to
         orphan the SITES a user owns but says nothing about the automations
-        they wrote, and a talon with a `cortex` output resolves its author's
-        site access on every run — so soft-deleting the author stops it.
+        they wrote, and every talon resolves its author's site access before
+        any output fires — so soft-deleting the author switches each one off at
+        its next run, with nothing fired.
 
         One collection-group query rather than a walk of the user's site
         membership: a superadmin's `sites[]` can be empty while they author
@@ -10883,9 +10885,9 @@ paths:
         transfer ownership first with `POST /api/sites/{siteId}/transfer-ownership`.
 
         Talons the departing member authored survive the removal — nothing
-        under `sites/{siteId}` is touched — but a talon with a `cortex` output
-        re-resolves its AUTHOR's site access on every run, so it starts failing
-        the moment they lose access. `talonCount` is therefore always in the
+        under `sites/{siteId}` is touched — but every talon re-resolves its
+        AUTHOR's site access before any output fires, so each one switches off
+        at its next run, with nothing fired. `talonCount` is therefore always in the
         response, and `?talonSuccessorUid=<uid>` moves those talons to a
         successor *before* the membership write, so the automation never has a
         moment where its author has no access. A refused successor answers
