@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — two answers from the owlette CLI
+
+`owlette key list` stopped with "Invalid time value" for anyone who had a key;
+it lists the keys again. `owlette site add-member` said "added" when the person
+was already a member and nothing had changed; it now says they keep their role
+and names the command that changes it, `owlette site set-role`. Nothing to
+update on the machine.
+
 ### fixed — three sentences that were out of date
 
 The page for AI assistants called owlette Windows-only in three places; it

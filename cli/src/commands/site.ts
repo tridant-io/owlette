@@ -220,7 +220,6 @@ export function registerSiteCommands(program: Command): void {
       const data = (await res.json().catch(() => ({}))) as {
         uid?: string;
         roleHonored?: boolean;
-        globalRole?: string;
         detail?: string;
       };
       if (!res.ok) {
@@ -233,15 +232,16 @@ export function registerSiteCommands(program: Command): void {
         process.stdout.write(JSON.stringify(data, null, 2) + '\n');
         return;
       }
-      process.stdout.write(`owlette: ${data.uid ?? '?'} added to ${siteId} as ${opts.role}\n`);
-      // Said loudly on purpose: the membership landed but the elevated role did
-      // not, and silence here would read as unqualified success.
-      if (opts.role === 'admin' && data.roleHonored === false) {
+      // Said loudly on purpose: the server answers 200 but wrote nothing, because
+      // the target was already a member, and silence would read as success.
+      if (data.roleHonored === false) {
         process.stdout.write(
-          `owlette: WARNING role 'admin' was NOT honored - ${data.uid ?? 'the user'} has global ` +
-            `role '${data.globalRole ?? 'member'}'. Use "owlette user promote" to change that.\n`,
+          `owlette: WARNING role '${opts.role}' was NOT honored - ${data.uid ?? 'the user'} is ` +
+            `already a member of ${siteId} and keeps their role. Use "owlette site set-role" to change it.\n`,
         );
+        return;
       }
+      process.stdout.write(`owlette: ${data.uid ?? '?'} added to ${siteId} as ${opts.role}\n`);
     });
 
   site
