@@ -8,7 +8,7 @@ the cortex CLI pins that a 3.0.0+ installer needs or Cortex is dead on every fre
 `installer_metadata/cortex_cli` for everything fielded before it
 (`docs/internal/cortex-cli-provisioning.md`). Two runbooks disagreed on the order:
 `docs/runbooks/talons.md:75-99` says indexes first, wait for `Enabled`, register the cron last, while
-`docs/runbooks/production-deploy.md:152-206` deploys the web app at step 6 and Firestore at step 8 —
+`docs/runbooks/production-deploy.md` (steps 6-8) deploys the web app at step 6 and Firestore at step 8 —
 the exact reversal that talons.md exists to prevent.
 
 This file is the single answer to "what else do I have to do by hand, and in what order". It is the
@@ -36,7 +36,7 @@ work simply never happens. Those are the rows that bite.
 | Cloud Functions (all exports) | manual | `firebase deploy --only functions --project prod` | yes | **SILENT** for the fleet — old revisions keep running, new behaviour never ships. The deploy itself fails loudly if the predeploy build breaks (`firebase.json:17-19`). |
 | Cloud Scheduler jobs (9 `onSchedule` functions) | manual (side effect of the functions deploy) | `firebase deploy --only functions --project prod`, then `gcloud scheduler jobs list --project owlette-prod-90a12 --location us-central1` | yes | **SILENT** — a scheduler job only exists in a project after that function has been deployed there. A function only ever deployed to dev has no prod job and nothing says so. |
 | `functions/.env.<projectId>` | manual (local file) | `ls functions/.env.owlette-prod-90a12` before deploying | yes | **SILENT and dangerous** — `functions/.gitignore` blocks all `.env*`, so a clean checkout deploys functions with the secrets missing and the deploy still reports success. A missing `CORTEX_INTERNAL_SECRET` 503s the internal HTTPS functions (`functions/src/lib/requireInternalSecret.ts:14-18`) **and silently kills two talon paths**: `talonLogEvents.ts:91-95` and `metricsHistory.ts:559-563` each log a warning and then resolve *successfully*, so every display talon, every `process_restarted` talon, and every threshold alert simply stops firing. |
-| cron-job.org scheduled jobs (7 endpoints) | manual (vendor UI) | no CLI — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, all seven** — talons never fire, queued alerts never email, retention never deletes (which makes the privacy policy untrue), status-ping never publishes. A wrong secret answers 401 and also fires nothing. |
+| cron-job.org scheduled jobs (the 10 endpoints in `infra/cron-jobs.json`) | manual (vendor UI) | no CLI — see [per-environment bootstrap](#per-environment-bootstrap) | yes | **SILENT, all ten** — talons never fire, queued alerts never email, retention never deletes (which makes the privacy policy untrue), status-ping never publishes. A wrong secret answers 401 and also fires nothing. |
 | Cloudflare failover LB (monitor + 2 pools + LB) | manual | `cd infra/cloudflare`, `cp terraform.tfvars.example terraform.tfvars` (fill it in), `export CLOUDFLARE_API_TOKEN=…`, then `terraform init && terraform plan && terraform apply` | account-wide | LOUD at apply on a bad token or missing add-on. **SILENT afterwards** — state is local `*.tfstate` (gitignored), so a second machine applying without it recreates resources or drifts. |
 | Cloudflare Load Balancing add-on | one-time bootstrap | dashboard only: Traffic → Load Balancing → enable | account-wide | LOUD — the API rejects LB creation until the add-on is on, so `terraform apply` errors rather than half-building. |
 | `owlette.app` as a domain on the Vercel standby | one-time bootstrap | `cd web && vercel domains add owlette.app` | account-wide | **SILENT until the day it matters** — both pools rewrite `Host: owlette.app`; if Vercel does not accept that host the standby answers wrong only once Railway has already failed. |
@@ -69,7 +69,7 @@ work simply never happens. Those are the rows that bite.
 committed — the exe bakes its own version into its filename):
 
 ```bash
-API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
+API_KEY=$(grep '^OWLETTE_API_KEY_PROD=' .claude/.env.local | cut -d= -f2)   # dev: '^OWLETTE_API_KEY='
 BASE_URL="https://owlette.app"   # dev: https://dev.owlette.app
 VERSION="X.Y.Z"
 SHA256=$(sha256sum agent/build/installer_output/Owlette-Installer-v$VERSION.exe | cut -d' ' -f1)
@@ -131,7 +131,7 @@ Worth knowing before you read a green Cloud Scheduler dashboard as proof of anyt
 |---|---|---|
 | `chunkGcNightly` | `getDefaultStore()` throws `R2 object store not wired — blocked on wave 0.5` (`chunkGc.ts:315`) | per-site error caught, summary of all-skipped sites |
 | `reconcileQuota` | `getDefaultStorageMetrics()` throws `R2 storage metrics not wired — blocked on wave 0.5` (`quotaEnforce.ts:403`) | completes green with `sites=0` reconciled |
-| `exportAuditDaily` | `getDefaultExporter()` throws `BigQuery audit sink not wired — deferred to wave 0.6` (`auditLog.ts:313`) | logs `records=0`, exits successfully |
+| `exportAuditDaily` | `getDefaultExporter()` returns no sink (BigQuery is not wired), so the run returns before reading any audit record (`auditLog.ts`) | logs `daily export skipped: no audit sink is wired`, exits successfully |
 | `exportSecurityBoundaryAuditDevDaily` | returns early outside `owlette-dev-3838a` (`securityBoundaryAuditExport.ts:135-140`) | logs `skipping — prod export infra not yet provisioned` |
 
 The in-Firestore audit chain remains authoritative, and 7-year retention holds because nothing prunes
@@ -320,9 +320,8 @@ curl -si https://owlette.app/api/health
 ```
 
 `/api/health` is unauthenticated and returns 200 only when the origin can reach Firestore — it is the
-Cloudflare load balancer's readiness probe and the single best "is prod alive" check. (Note that
-[production-deploy.md](production-deploy.md) still says at `:213-214` and `:412` that this route does
-not exist; it does — `web/app/api/health/route.ts`.) The API key for the R2 smoke must carry
+Cloudflare load balancer's readiness probe and the single best "is prod alive" check
+(`web/app/api/health/route.ts`). The API key for the R2 smoke must carry
 `site=<siteId>:write` scope.
 
 ---
@@ -408,9 +407,8 @@ The three targets are `railway-dev` (serves dev.owlette.app), `railway-prod` (se
 `vercel-prod` are a mirror pair whose values must be identical; `railway-dev` is independent.
 `scripts/env-manifest.json` is the canonical key registry (keys and metadata only, never values) and
 `scripts/sync-env.mjs` reconciles live state against it (`status` / `check` / `diff` / `sync`, dry-run
-by default, `--apply` to write). There are **four** `must-match` secrets — `SESSION_SECRET`,
-`MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`, and `TURNSTILE_SECRET`. Trust the manifest over the skill
-here: the skill's prose still says three, having been written before the Turnstile gate shipped. The
+by default, `--apply` to write). There are **eleven** `must-match` vars; the manifest's `classes` entry
+names each one and what breaks when it differs. The
 limitation that makes all of this dangerous: Vercel stores sensitive vars write-only, so the tool can
 prove a key exists but never that its value matches — a green `check` is not proof. Re-running
 `sync vercel-prod --apply` (idempotent) after every prod secret rotation is the only guarantee. Never

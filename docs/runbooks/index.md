@@ -31,7 +31,7 @@ Use [production-deploy.md](production-deploy.md) for the normal production relea
 - Storage rules deploy
 - post-deploy checks
 
-Use [agent-installer-release.md](agent-installer-release.md) when the Windows agent installer changes:
+Use [agent-installer-release.md](agent-installer-release.md) when an agent installer version ships (Windows, macOS, Linux):
 
 - version bump timing
 - installer build steps
@@ -78,13 +78,12 @@ If you find them stale, update them - these are not sacred.
 
 For the "why" behind some decisions, see:
 
+- [/docs/adr/](../adr/) - one record per settled decision, such as the custom Firestore REST client and device-code pairing
 - [architecture (published docs)](../../web/content/docs/architecture.mdx)
-- [/agent/CLAUDE.md](../../agent/CLAUDE.md)
-- [/.claude/CLAUDE.md](../../.claude/CLAUDE.md)
+- [/.claude/CLAUDE.md](../../.claude/CLAUDE.md) - repository operating rules and the agent and web landmines (service state initialization is row 1 of the table in [hotfix-rollback.md](hotfix-rollback.md))
 - [/docs/README.md](../README.md) - what lives in each docs tree
 
-Those docs cover context such as the custom Firestore REST client, machine-bound
-encryption, service state initialization, and repository operating rules.
+`/agent/CLAUDE.md` is not one of them: it is local hoot's runtime prompt, not coding guidance.
 
 ## known gaps
 
@@ -92,8 +91,8 @@ The runbooks are not exhaustive.
 Specific gaps each acknowledges:
 
 - production-deploy: functions/rules/storage deploys are manual.
-- agent-installer-release: Windows builds sign only with `OWLETTE_SIGN=1` or on a CI tag, not by default; demote-to-older-version may require re-running 3-step finalize.
+- agent-installer-release: Windows builds sign only with `OWLETTE_SIGN=1` or on a CI tag, not by default.
 - hotfix-rollback: many specific gaps listed inline, including cherry-pick playbook and agent fleet self-update kill switch.
-- dev-to-prod-workflow: tag discipline lapsed; branch protection unknown.
+- dev-to-prod-workflow: tags are complete only from v4.1.5; branch protection unknown.
 
 If you fill any gap, update both the runbook and the corresponding known gaps section.

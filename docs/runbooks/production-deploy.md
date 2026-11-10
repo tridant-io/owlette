@@ -79,17 +79,15 @@ rules.
    node scripts/sync-versions.js X.Y.Z
    ```
 
-   The script updates these files together:
-
-   - `/VERSION`
-   - `/agent/VERSION`
-   - `/web/package.json`
+   The script updates every version surface together; the list is in
+   [version-management.md](../internal/version-management.md).
 
    It does not update `firestore.rules`. Firestore rules carry their own
    `security-schema` version and are versioned independently.
 
-   If no version argument is supplied, the script defaults to a patch bump. Do
-   not assume that every new feature is a minor release.
+   With no version argument the script only prints the current versions; it
+   never picks the next one. Do not assume that every new feature is a minor
+   release.
 
    If this production release is coordinated with a later agent installer
    release, the version bump and BOTH changelog updates must happen before
@@ -298,10 +296,9 @@ rules.
 
 11. Tag the release and record completion.
 
-    Tag discipline has lapsed. Only `v2.0.43`, `v2.0.46`, and `v2.0.47` exist,
-    while releases `2.6.0` through `2.11.0` are not tagged. Resume tagging for
-    production releases so rollback, audit, and release comparison work are
-    easier later.
+    Every release from `v4.1.5` on is tagged (4.1.12 never shipped); earlier
+    ones mostly are not, prod's 3.3.6 among them. Tag each production release
+    so rollback, audit, and release comparison work are easier later.
 
     Do not use the CLI package tag pattern unless releasing the CLI package.
     Tags matching `cli-v[0-9]+.[0-9]+.[0-9]+` trigger the npm publish workflow.
@@ -480,7 +477,12 @@ Required production reminders:
   buckets.
 - `INSTATUS_*` variables are optional, but the status-page readiness check needs
   the relevant values when status integration is expected to work.
-- `CORTEX_INTERNAL_SECRET` is optional.
+- `CORTEX_INTERNAL_SECRET` is required: every server-to-server call into
+  `/api/talons/internal/match`, `/api/alerts/trigger`, `/api/hoot/autonomous`
+  and `/api/hoot/escalation` presents it, and the Functions runtime holds the
+  same value (`web/lib/hootInternalSecret.ts`). Without it talons and
+  threshold alerts stop firing, silently
+  ([manual-infrastructure.md](manual-infrastructure.md)).
 - Keep dev and prod Railway service variables separate; do not copy blindly
   between services.
 
@@ -499,15 +501,18 @@ Required production reminders:
 - Storage rules deploys are 100% manual.
 - There is no automated post-deploy smoke job. The maintainer running the
   release must run smoke scripts manually.
-- Tag discipline has lapsed. Resume production release tags to make future
-  rollback and audit work easier.
+- Release tags are complete only from `v4.1.5`; prod's 3.3.6 has none. Tag
+  each production release to make future rollback and audit work easier.
 - The mapping from Railway production service environment variables to
   `owlette-prod-90a12` is not pinned in the repo. Verify it directly in Railway,
   especially before your first production deploy.
 - A dev-service-points-at-prod-Firebase footgun has not been ruled out by repo
   configuration alone.
-- `npm ci` must use `--legacy-peer-deps` because `@ai-sdk/react@3.0.136` has a
-  peer range that excludes the pinned `react@19.2.0`.
+- Web installs pass `--legacy-peer-deps` (`web/.npmrc`, `web/nixpacks.toml`
+  and the e2e and openapi workflows). The reason they record, `@ai-sdk/react`
+  3.x excluding `react@19.2.0`, no longer holds (`react` 19.3.1,
+  `@ai-sdk/react` ^4.0.110); prove a clean `npm ci` without it before dropping
+  the flag.
 - Do not add `turbopack.root` to `next.config.ts` to silence the root lockfile
   warning. That previously caused a 59 GB node fork-bomb on 2026-04-29.
 - Firestore rules are versioned independently from `/VERSION`, `/agent/VERSION`,
