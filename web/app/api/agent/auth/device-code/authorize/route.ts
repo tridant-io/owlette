@@ -12,7 +12,7 @@ import {
   encryptDeviceCodeCredentials,
 } from '@/lib/deviceCodeCrypto';
 import logger from '@/lib/logger';
-import { machineLimitRefusal } from '@/lib/pairingPlan.server';
+import { ensureAgentAuthUser, machineLimitRefusal } from '@/lib/pairingPlan.server';
 
 /**
  * POST /api/agent/auth/device-code/authorize
@@ -121,6 +121,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       const agentUid = `agent_${siteId}_${machineId}`.replace(/[^a-zA-Z0-9_]/g, '_');
 
       const adminAuth = getAdminAuth();
+      await ensureAgentAuthUser(adminAuth, agentUid);
       const customToken = await adminAuth.createCustomToken(agentUid, {
         role: 'agent',
         site_id: siteId,
