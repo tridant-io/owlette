@@ -1415,8 +1415,8 @@ describe('startTurn — which agents hold a restart for active hours', () => {
       { id: 'machine-3', data: () => ({ online: true }) },
     ];
     const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
-    (hootUtils.listSiteMachines as jest.Mock).mockImplementation((_db: unknown, siteId: string) =>
-      listSiteMachines(machinesDb, siteId),
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
     );
 
     await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));

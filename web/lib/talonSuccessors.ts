@@ -68,7 +68,7 @@ export function eligibleTalonSuccessors(
  *
  * a row with a machine scope is out whatever its role: TALON_MANAGE is site-wide,
  * so the server refuses a scoped admin as `insufficient_role`. an empty list is
- * still a scope (no machines), so any array drops the row.
+ * still a scope (no machines), so anything but null drops the row.
  */
 export function siteTalonSuccessors(
   members: readonly {
@@ -76,14 +76,14 @@ export function siteTalonSuccessors(
     email: string | null;
     displayName: string | null;
     role: string;
-    machineIds?: readonly string[] | null;
+    machineIds: readonly string[] | null;
   }[],
   excludeUid?: string,
 ): TalonSuccessorOption[] {
   return members
     .filter((member) => {
       if (member.uid === excludeUid) return false;
-      if (Array.isArray(member.machineIds)) return false;
+      if (member.machineIds !== null) return false;
       return member.role === 'owner' || member.role === 'admin';
     })
     .map((member) => ({ uid: member.uid, label: label(member) }))

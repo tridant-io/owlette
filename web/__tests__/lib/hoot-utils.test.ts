@@ -587,7 +587,7 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-04' },
     ]);
 
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([
       { id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false },
       { id: 'kiosk-02', online: false, hootEnabled: false, activeHoursGuard: false },
       { id: 'kiosk-03', online: true, hootEnabled: true, activeHoursGuard: false },
@@ -598,7 +598,7 @@ describe('listSiteMachines', () => {
 
   it('reports an empty site as no machines', async () => {
     const { db } = createSiteMachinesDb([]);
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([]);
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([]);
   });
 
   it("carries each machine's reported timezone, so a turn's prompt costs no extra read", async () => {
@@ -609,7 +609,7 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-03', online: true, machine_timezone_iana: 5 },
     ]);
 
-    const [withZone, withoutZone, badZone] = await listSiteMachines(db, 's1');
+    const [withZone, withoutZone, badZone] = await listSiteMachines(db, 's1', null);
     expect(withZone.timezone).toBe('America/New_York');
     expect(withoutZone.timezone).toBeUndefined();
     expect(badZone.timezone).toBeUndefined();
@@ -628,7 +628,7 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-06', online: true, capabilities: { activeHoursGuard: 1 } },
     ]);
 
-    const machines = await listSiteMachines(db, 's1');
+    const machines = await listSiteMachines(db, 's1', null);
     expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false, false, false]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
   });
@@ -647,6 +647,14 @@ describe('listSiteMachines', () => {
     await expect(listSiteMachines(db, 's1', [])).resolves.toEqual([]);
     const whole = await listSiteMachines(db, 's1', null);
     expect(whole.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-02', 'kiosk-03']);
+  });
+
+  it('refuses a missing scope rather than reading it as the whole site', async () => {
+    const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }]);
+
+    await expect(
+      listSiteMachines(db, 's1', undefined as unknown as readonly string[] | null),
+    ).rejects.toThrow(TypeError);
   });
 });
 
@@ -720,7 +728,7 @@ describe('resolveHootTargets', () => {
   it('resolves "all machines" to every online, hoot-enabled machine', async () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -737,7 +745,7 @@ describe('resolveHootTargets', () => {
   it('resolves an explicit subset, in the order it was asked for', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
   });
@@ -745,7 +753,7 @@ describe('resolveHootTargets', () => {
   it('keeps a single explicit machine off the fan-out path', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
   });
@@ -755,7 +763,7 @@ describe('resolveHootTargets', () => {
     // the exact offline copy e2e pins all hang off fanOut.
     const { db } = createSiteMachinesDb([{ id: 'only-01', online: true }]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['only-01'], fanOut: false } });
   });
@@ -765,6 +773,7 @@ describe('resolveHootTargets', () => {
 
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01', 'kiosk-01', 'kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01', 'kiosk-02'] } });
@@ -777,7 +786,7 @@ describe('resolveHootTargets', () => {
   ])('refuses %s with 400 and never widens to the site', async (_label, requested, offenders) => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    await expect(resolveHootTargets(db, 's1', { requested })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 400,
       reason: 'unknown_machine',
@@ -796,7 +805,7 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: requested as string[] }),
+      resolveHootTargets(db, 's1', { requested: requested as string[], machineScope: null }),
     ).resolves.toEqual({ ok: false, status: 400, reason: 'invalid_target', machineIds: [] });
     // A malformed id would be a path traversal against sites/{id}/machines.
     expect(machinesGet).not.toHaveBeenCalled();
@@ -809,7 +818,7 @@ describe('resolveHootTargets', () => {
     }));
     const { db } = createSiteMachinesDb(fleet);
 
-    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id) });
+    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id), machineScope: null });
 
     expect(result).toMatchObject({ ok: true });
     expect((result as { resolved: { ids: string[] } }).resolved.ids).toHaveLength(
@@ -823,7 +832,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'], machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -844,7 +853,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: true, cortexEnabled: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -862,7 +871,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'machine_offline',
@@ -873,7 +882,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 423 when the kill switch is the whole reason', async () => {
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toEqual({
       ok: false,
       status: 423,
       reason: 'hoot_disabled',
@@ -886,7 +895,7 @@ describe('resolveHootTargets', () => {
     // single-machine status code must not move.
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: false, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toMatchObject({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toMatchObject({
       status: 503,
       reason: 'machine_offline',
     });
@@ -895,7 +904,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 503 when the site has no machines at all', async () => {
     const { db } = createSiteMachinesDb([]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'no_machines',
@@ -909,6 +918,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
@@ -922,6 +932,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01'],
       mentions: ['kiosk-03'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
@@ -933,6 +944,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-03', 'kiosk-01'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
@@ -941,7 +953,7 @@ describe('resolveHootTargets', () => {
   it('ignores an empty mention list and keeps the selection', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'] } });
   });
@@ -957,7 +969,7 @@ describe('resolveHootTargets', () => {
       const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }, machine]);
 
       await expect(
-        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'] }),
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: null }),
       ).resolves.toEqual({ ok: false, status, reason, machineIds: ['kiosk-02'] });
     },
   );
@@ -966,7 +978,7 @@ describe('resolveHootTargets', () => {
     const { db } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'unknown_machine', machineIds: ['kiosk-99'] });
   });
 
@@ -974,7 +986,7 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'invalid_target' });
     expect(machinesGet).not.toHaveBeenCalled();
   });
@@ -1084,6 +1096,17 @@ describe('buildExecutableTools', () => {
     expect(offered).toEqual(expect.arrayContaining(['update_process', 'get_system_presets', 'schedule_followup']));
   });
 
+  it('offers no site-wide tool when the scope is missing, rather than reading it as the whole site', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      {} as BuildExecutableToolsOptions & { machineScope: readonly string[] | null },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+  });
+
   it('names exactly the five site-wide tools, each a tool that exists', () => {
     // a renamed tool would silently fall out of the set and be offered again
     expect([...SITE_WIDE_SERVER_TOOLS].sort()).toEqual(
@@ -1110,7 +1133,7 @@ describe('buildExecutableTools', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', 'm1', 'c1', allTools, false, [],
-      { requireTier3Approval: false },
+      { ...WHOLE_SITE, requireTier3Approval: false },
     );
     for (const def of allTools) {
       expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(false);

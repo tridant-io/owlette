@@ -157,7 +157,7 @@ export interface BuildExecutableToolsOptions {
    * SITE_WIDE_SERVER_TOOLS from the model. separate from `userStanding`
    * because the conversations API builds its actor without site standing, yet
    * must still hide them. `buildExecutableTools` requires it, so no caller
-   * forgets it; `undefined` in an untyped test literal reads as the whole site.
+   * forgets it, and anything but null there is a scope.
    * the server-side tools never read it, so the autonomous path leaves it out.
    */
   machineScope?: readonly string[] | null;
@@ -395,7 +395,8 @@ export async function resolveSiteKeyOwner(
 
 /**
  * A user's access level against a site; picks the Hoot tool tier they may drive.
- * `isSiteAdmin` mirrors AuthContext's `isSiteAdmin(siteId)`.
+ * `isSiteAdmin` is the role alone, unlike AuthContext's `isSiteAdmin(siteId)`,
+ * which also needs the whole site.
  */
 export interface SiteAccessLevel {
   /** GLOBAL `users/{uid}.role`, unnormalised. Carries no site privilege. */
@@ -490,10 +491,11 @@ export async function verifyUserSiteAccess(
 
   const isSuperadmin = facts.globalRole === 'superadmin';
   const isSiteOwner = facts.membershipRole === 'owner';
-  // Mirrors AuthContext.computeIsSiteAdmin: per-site standing decides, and the
-  // global role contributes nothing but superadmin. This previously read
-  // `globalRole === 'admin' && membershipRole !== null`, which is how one global
-  // admin held tier-3 Hoot on every site it was assigned to.
+  // Per-site standing decides, and the global role contributes nothing but
+  // superadmin. The machine scope does not count here (see `isSiteAdmin` on
+  // SiteAccessLevel), which is where AuthContext's isSiteAdmin differs. This
+  // previously read `globalRole === 'admin' && membershipRole !== null`, which
+  // is how one global admin held tier-3 Hoot on every site it was assigned to.
   const isSiteAdmin =
     isSuperadmin || facts.membershipRole === 'owner' || facts.membershipRole === 'admin';
 
@@ -635,10 +637,9 @@ export async function listSiteMachines(
     .collection('machines')
     .get();
 
-  // Array.isArray, not `!== null`: an untyped test that leaves it out is the whole site
-  const docs = Array.isArray(machineScope)
-    ? snapshot.docs.filter((doc) => machineScope.includes(doc.id))
-    : snapshot.docs;
+  const docs = machineScope === null
+    ? snapshot.docs
+    : snapshot.docs.filter((doc) => machineScope.includes(doc.id));
   return docs.map((doc) => machineSummary(doc.id, doc.data()));
 }
 
@@ -2157,7 +2158,8 @@ export function buildExecutableTools(
 
   const guarded = new Set(options.activeHoursGuardIds ?? []);
   const targets = siteMode ? onlineMachines : [machineId];
-  const scoped = Array.isArray(options.machineScope);
+  // anything but null is a scope, so a missing one hides the site-wide tools too
+  const scoped = options.machineScope !== null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const tools: Record<string, any> = {};
