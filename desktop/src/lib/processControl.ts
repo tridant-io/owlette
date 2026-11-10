@@ -64,8 +64,24 @@ export interface StopDeps {
 /** The host's wording when a pid turns out to be running something else entirely. */
 const IDENTITY_MISMATCH = 'refusing to terminate'
 
+/**
+ * The host's wording when that refusal was on the service's record (`RECORD_MISMATCH` in
+ * `process_ctl.rs`, windows only). Only this one proves the row stale: a name refusal can as
+ * well mean the entry's exe path changed.
+ */
+const RECORD_MISMATCH = 'no longer the process the service recorded'
+
+function says(error: unknown, words: string): boolean {
+  return String(error instanceof Error ? error.message : error).includes(words)
+}
+
 function isIdentityMismatch(error: unknown): boolean {
-  return String(error instanceof Error ? error.message : error).includes(IDENTITY_MISMATCH)
+  return says(error, IDENTITY_MISMATCH)
+}
+
+/** matched at the start: a name refusal quotes the live image path, which could contain the words */
+function isRecordMismatch(error: unknown, pid: number): boolean {
+  return String(error instanceof Error ? error.message : error).startsWith(`pid ${pid} is ${RECORD_MISMATCH}`)
 }
 
 /**
@@ -95,8 +111,12 @@ async function terminateAs(pid: number, images: string[], recorded: RecordedIden
  * Stop the live instance of `entry`, marking the exit as the operator's. See the module note.
  *
  * Candidates are tried in turn: a pid the host reports as already gone is skipped, not a
- * failure — the table keeps dead generations around, and the identity check is what tells
- * them apart. Only when none of them is alive is there nothing to stop.
+ * failure — the table keeps dead generations around. So is one the host proves is no longer the
+ * process the service recorded, but after that only rows with a record of their own are tried:
+ * a recordless row is checked by name alone, which another entry's instance of the same exe
+ * passes. Any other refusal ends the walk, as it always has, and off windows the host makes no
+ * record refusal, so there every refusal ends it. Only when none of them is alive is there
+ * nothing to stop; a record refusal is still reported then, since it says more than "not found".
  */
 export async function stopProcess(
   entry: ProcessEntry,
@@ -110,13 +130,21 @@ export async function stopProcess(
   }
 
   const states = await deps.readStates()
+  let stale: unknown = null
   for (const pid of candidatePidsForProcess(states, entry.id)) {
-    const result =
-      mode === 'restart'
-        ? await restartPid(pid, states, entry, images, deps)
-        : await killPid(pid, states, entry, images, deps)
-    if (result) return result
+    if (stale && !recordedIdentity(states[String(pid)])) continue
+    try {
+      const result =
+        mode === 'restart'
+          ? await restartPid(pid, states, entry, images, deps)
+          : await killPid(pid, states, entry, images, deps)
+      if (result) return result
+    } catch (cause) {
+      if (!isRecordMismatch(cause, pid)) throw cause
+      stale = cause
+    }
   }
+  if (stale) throw stale
   throw new NoLiveInstanceError(name)
 }
 

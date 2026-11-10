@@ -51,6 +51,11 @@ const ERROR_INVALID_PARAMETER: u32 = 87;
 #[cfg(windows)]
 const UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
 
+/// what a refusal on the service's record says: the only refusal the desktop
+/// walks past to an older row (`RECORD_MISMATCH` in `processControl.ts`).
+#[cfg(windows)]
+const RECORD_MISMATCH: &str = "is no longer the process the service recorded";
+
 /// what the service recorded about the process it bound to a pid, at launch or
 /// adoption (`read_process_identity` in `agent/src/shared_utils.py`), as that
 /// pid's `app_states.json` row carries it.
@@ -246,7 +251,7 @@ pub fn terminate_pid(
       .map_err(|error| format!("could not read the identity of process {pid}: {error}"))?;
     if !record_matches(recorded, created, &exe) {
       return Err(format!(
-        "pid {pid} is no longer the process the service recorded — refusing to terminate it"
+        "pid {pid} {RECORD_MISMATCH} — refusing to terminate it"
       ));
     }
   }
@@ -762,7 +767,8 @@ mod tests {
   #[test]
   fn a_pid_that_is_not_the_recorded_process_is_refused_before_anything_else() {
     // the record is checked first, so a host that skipped it would refuse on
-    // the name instead, and this fails without touching our own process
+    // the name instead, and this fails without touching our own process. the
+    // text is spelled out: the desktop's walk keys on it (processControl.ts)
     let recorded = RecordedIdentity {
       create_time: 1.5,
       exe: None,

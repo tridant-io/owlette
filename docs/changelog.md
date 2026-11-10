@@ -10,6 +10,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — on Windows, kill and restart in the desktop app reach the running instance
+
+When the newest row for a process held a pid that Windows had since given to
+something else, kill and restart stopped there with "refusing to terminate".
+They now move on to the instance the service actually recorded. Arrives with
+the next agent version.
+
 ### fixed — on Windows, kill and restart in the desktop app cannot close the wrong process
 
 A pid that Windows had handed to another instance of the same program (two

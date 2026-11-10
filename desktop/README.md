@@ -564,6 +564,13 @@ again after its sweep dropped it. So does a pre-3.3.0 agent. On macOS and Linux
 the record is not checked yet: psutil's creation time there is not one this app
 reads the same way.
 
+The app tries the entry's rows in turn, live ones first. A row whose pid has
+gone is skipped for the next. So is one refused on its record (Windows only),
+but after that only rows with a record are tried, since the name check alone
+would pass another entry's instance of the same exe. Any other refusal stops
+the walk and is reported, as is a record refusal when no row held a live
+instance.
+
 ## Drag and drop
 
 Dropping a file, an app or a Unity build folder anywhere on the window
