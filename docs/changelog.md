@@ -10,6 +10,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+
+## [4.1.28] - 2026-11-10
 ### added — a member can be limited to some machines
 
 A site admin can now give someone access to only some of the site's machines, up
