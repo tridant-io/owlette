@@ -48,7 +48,13 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
-import { Capability, hasCapability, type Actor, type UserActor } from '@/lib/capabilities';
+import {
+  Capability,
+  hasCapability,
+  machineScopeOf,
+  type Actor,
+  type UserActor,
+} from '@/lib/capabilities';
 import {
   TalonStoreError,
   countTalonsAuthoredBy,
@@ -310,8 +316,8 @@ const SITE = 'site-a';
 const TALONS_PATH = `sites/${SITE}/talons`;
 const SECRETS_PATH = `sites/${SITE}/talon_secrets`;
 
-const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' } };
-const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' } };
+const ADMIN: Actor = { type: 'user', userId: 'admin-uid', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
+const MEMBER: Actor = { type: 'user', userId: 'member-uid', role: 'member', siteRoles: { [SITE]: 'member' }, machineScopes: { [SITE]: null } };
 
 let fake: FakeFirestore;
 let db: Firestore;
@@ -595,6 +601,7 @@ describe('createTalon', () => {
       userId: 'admin-elsewhere',
       role: 'admin',
       siteRoles: { ['site-b']: 'admin' },
+      machineScopes: { ['site-b']: null },
     };
     await expectStoreError(
       createTalon(
@@ -937,7 +944,7 @@ describe('updateTalon', () => {
 
     await updateTalon(
       db,
-      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' } }),
+      ctxFor({ type: 'user', userId: 'second-admin', role: 'admin', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } }),
       't1',
       talonInput({ outputs: [{ type: 'cortex', directive: 'restart the show' }] }),
     );
@@ -1404,13 +1411,13 @@ describe('reassignTalons', () => {
     await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
 
     const successor = gateActorFor('successor-uid');
-    expect(successor.swoopModes?.[SITE]).toBe('view');
+    expect(successor.swoopModes[SITE]).toBe('view');
     expect(hasCapability(successor, Capability.MACHINE_REMOTE_CONTROL, SITE)).toBe(false);
     // the mode changes swoop and nothing else: they still inherit
     expect(storedTalon('t1').createdBy).toBe('successor-uid');
   });
 
-  it('builds the same successor actor as before from a row with no mode', async () => {
+  it('builds a successor actor with no mode and the whole site from a row that carries neither', async () => {
     seedSuccessor('successor-uid');
     seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
 
@@ -1422,8 +1429,51 @@ describe('reassignTalons', () => {
       userId: 'successor-uid',
       role: 'admin',
       siteRoles: { [SITE]: 'admin' },
+      swoopModes: {},
+      machineScopes: { [SITE]: null },
     });
-    expect(successor).not.toHaveProperty('swoopModes');
+  });
+
+  describe('machine scope', () => {
+    // TALON_MANAGE is site-wide, because a talon spans the site's machines. the
+    // store's rejection reason surfaces only as its detail.
+    async function expectInsufficientRole(): Promise<void> {
+      await expect(
+        reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'successor_invalid',
+        message: expect.stringContaining('must be a site admin'),
+      });
+      expect(storedTalon('t1').createdBy).toBe('leaver-uid');
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    }
+
+    it('refuses a scoped admin with insufficient_role', async () => {
+      seedSuccessor('successor-uid', {}, 'admin', { machineIds: ['m1'] });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toEqual(['m1']);
+    });
+
+    it('refuses a member set to swoop control: a mode never grants TALON_MANAGE', async () => {
+      seedSuccessor('successor-uid', { role: 'member' }, 'member', { swoop: 'control' });
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await expectInsufficientRole();
+      expect(gateActorFor('successor-uid').swoopModes[SITE]).toBe('control');
+    });
+
+    it('accepts a whole-site admin', async () => {
+      seedSuccessor('successor-uid');
+      seedTalon('t1', { name: 'alpha', createdBy: 'leaver-uid' });
+
+      await reassignTalons(db, ctxFor(), 'successor-uid', { fromUid: 'leaver-uid' });
+
+      expect(storedTalon('t1').createdBy).toBe('successor-uid');
+      expect(machineScopeOf(gateActorFor('successor-uid'), SITE)).toBeNull();
+    });
   });
 
   it('writes nothing when one talon in the selection is missing', async () => {

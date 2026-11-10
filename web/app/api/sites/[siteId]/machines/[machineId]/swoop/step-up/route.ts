@@ -25,7 +25,7 @@ import { problem, problemFromError, ProblemType } from '@/lib/apiErrors';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
-  requireSiteAuthAndScope,
+  requireSiteMachineAuthAndScope,
 } from '@/app/api/_shared';
 import { ApiAuthError } from '@/lib/apiAuth.server';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
@@ -132,7 +132,7 @@ export async function GET(
 ): Promise<NextResponse> {
   try {
     const { siteId, machineId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteMachineAuthAndScope(request, siteId, machineId, 'read');
     if (!auth.ok) return auth.response;
     const keyRefusal = apiKeyRefusal(auth);
     if (keyRefusal) return keyRefusal;

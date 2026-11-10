@@ -267,3 +267,28 @@ describe('PATCH display-settings', () => {
     expect(mocks.set).not.toHaveBeenCalled();
   });
 });
+
+// the setting reaches every machine on the site, so a scoped admin holds it
+// nowhere: the route has no machine for the scope to cover (ADR 0016).
+describe('display-settings — a scoped admin', () => {
+  beforeEach(() => {
+    const key = `${SITE}/${ADMIN}`;
+    mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: [MACHINE] });
+  });
+
+  it.each([
+    ['GET', () => GET(createMockRequest(url), siteContext())],
+    ['PATCH', () => patch({ keepAwake: false })],
+  ] as const)('refuses %s with 403, writing nothing', async (_verb, call) => {
+    const res = await call();
+
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ code: 'forbidden', detail: 'capability not granted' });
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'machine_scope_site_wide' }),
+    );
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(commandWrites()).toHaveLength(0);
+  });
+});

@@ -44,7 +44,7 @@ const SHOWN_PEOPLE = 2;
 type CardState ='ready' | 'offline' | 'incapable' | 'site-off' | 'this-machine';
 
 export function SwoopPicker() {
-  const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite } = useAuth();
+  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, userSites, lastSiteId, updateLastSite } = useAuth();
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
   // the dashboard's restore, so both open on the same site: the saved site from
   // firestore or this browser, else the first — derived rather than set from an
@@ -60,7 +60,7 @@ export function SwoopPicker() {
   const [sitePickerOpen, setSitePickerOpen] = useState(false);
   const sitePickerId = useId();
   const [filter, setFilter] = useState('');
-  const { machines, loading: machinesLoading } = useMachines(siteId);
+  const { machines, loading: machinesLoading } = useMachines(siteId, machineScope(siteId));
   const { settings: swoop, loading: swoopLoading } = useSwoopSettings(siteId);
   // the app's home has no dashboard to go back to, and its top bar is the window's title bar.
   const platform = useViewerAppPlatform();

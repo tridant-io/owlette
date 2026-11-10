@@ -18,6 +18,7 @@ const mockGetSiteAlertRecipients = jest.fn();
 const mockGetResend = jest.fn();
 const mockValidateWebhookUrl = jest.fn();
 const mockRunHootOutput = jest.fn();
+const mockVerifyUserSiteAccess = jest.fn();
 const mockFetch = jest.fn();
 
 let correlationCounter = 0;
@@ -74,6 +75,7 @@ jest.mock('@/lib/talons/visualCheck.server', () => {
 jest.mock('@/lib/adminUtils.server', () => ({
   __esModule: true,
   getSiteAlertRecipients: (...args: unknown[]) => mockGetSiteAlertRecipients(...args),
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 jest.mock('@/app/api/unsubscribe/route', () => ({
   __esModule: true,
@@ -90,12 +92,27 @@ jest.mock('@/lib/webhookUrl', () => ({
   __esModule: true,
   validateWebhookUrl: (...args: unknown[]) => mockValidateWebhookUrl(...args),
 }));
-jest.mock('@/lib/hoot-utils.server', () => ({
-  __esModule: true,
-  resolveLlmConfig: jest.fn(),
-  COMMAND_POLL_INTERVAL_MS: 0,
-  COMMAND_TIMEOUT_MS: 30000,
-}));
+// the author check runs for real through `author.server`; only the access read
+// beneath it is stubbed, with a `SiteAccessError` stand-in matching name + code.
+jest.mock('@/lib/hoot-utils.server', () => {
+  class SiteAccessError extends Error {
+    readonly code: string;
+    constructor(code: string, message: string) {
+      super(message);
+      this.name = 'SiteAccessError';
+      this.code = code;
+    }
+  }
+  return {
+    __esModule: true,
+    SiteAccessError,
+    verifyUserSiteAccess: (...args: unknown[]) => mockVerifyUserSiteAccess(...args),
+    resolveLlmConfig: jest.fn(),
+    assertLlmKeyAvailable: jest.fn(),
+    COMMAND_POLL_INTERVAL_MS: 0,
+    COMMAND_TIMEOUT_MS: 30000,
+  };
+});
 // Hoot's detached turn runner is pinned in `hootOutput.test.ts`; mocked here so
 // these tests stay about the engine.
 jest.mock('@/lib/talons/hootOutput.server', () => ({
@@ -113,6 +130,19 @@ import { runTalon, describeTrigger, STALE_RUN_MS } from '@/lib/talons/engine.ser
 import type { StoredTalon } from '@/lib/talons/store.server';
 import type { TalonDoc, TalonRunDoc, TalonRunOutput } from '@/lib/talons/types';
 import { TalonVisualCheckError } from '@/lib/talons/visualCheck.server';
+
+const { SiteAccessError } = jest.requireMock('@/lib/hoot-utils.server') as {
+  SiteAccessError: new (code: string, message: string) => Error;
+};
+
+/** A whole-site admin, which is what every talon's author is unless a test says otherwise. */
+const WHOLE_SITE_ACCESS = {
+  role: 'admin',
+  standing: { role: 'admin', swoopMode: null, machineIds: null },
+  isSuperadmin: false,
+  isSiteAdmin: true,
+  isSiteOwner: false,
+};
 
 type DocData = Record<string, unknown>;
 type Filter = { field: string; value: unknown };
@@ -321,6 +351,8 @@ beforeEach(() => {
   mockDispatchAndAwait.mockReset();
   mockEvaluateVisualCheck.mockReset();
   mockRunHootOutput.mockResolvedValue({ status: 'sent', chatId: 'talon_1755172800000_r1' });
+  mockVerifyUserSiteAccess.mockReset();
+  mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ACCESS);
   mockGetResend.mockReturnValue(null);
   mockGetSiteAlertRecipients.mockResolvedValue([]);
   mockValidateWebhookUrl.mockResolvedValue({
@@ -684,8 +716,8 @@ describe('outputs', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: ['cc@example.com'], mutedMachines: [] },
-      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: ['m1'] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: ['cc@example.com'], mutedMachines: [], machineIds: null },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: ['m1'], machineIds: null },
     ]);
 
     const talon = seedTalon('t1', {
@@ -710,13 +742,73 @@ describe('outputs', () => {
     });
   });
 
+  it("emails a machine's run only to recipients whose machine scope reaches it", async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m1'] },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m2'] },
+    ]);
+
+    const talon = seedTalon('t1', {
+      trigger: { type: 'event', eventTypes: ['process_crash'] },
+      cooldownMinutes: 0,
+    });
+    seedMachine('m1', true, 'LOBBY-01');
+
+    await runTalon(db, talon, { siteId: SITE, now: NOW, machineId: 'm1' });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'] });
+  });
+
+  it('skips scoped recipients on a site-level run, since they hold nothing site-wide', async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'u2', email: 'b@example.com', ccEmails: [], mutedMachines: [], machineIds: ['m1'] },
+    ]);
+
+    await runTalon(db, seedTalon('t1'), { siteId: SITE, now: NOW });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toMatchObject({ to: ['a@example.com'] });
+  });
+
+  it('emails a recipient built without a machine scope on neither a machine run nor a site-level run', async () => {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+    ]);
+    seedMachine('m1', true, 'LOBBY-01');
+
+    const machineRun = await runTalon(
+      db,
+      seedTalon('t1', { trigger: { type: 'event', eventTypes: ['process_crash'] }, cooldownMinutes: 0 }),
+      { siteId: SITE, now: NOW, machineId: 'm1' },
+    );
+    const siteRun = await runTalon(db, seedTalon('t2'), { siteId: SITE, now: NOW });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(outputByType(machineRun[0].outputs, 'email')).toMatchObject({
+      status: 'skipped',
+      detail: 'all_recipients_muted',
+    });
+    expect(outputByType(siteRun[0].outputs, 'email')).toMatchObject({
+      status: 'skipped',
+      detail: 'no_recipients',
+    });
+  });
+
   it('reports an in-band resend rejection as a failed output', async () => {
     const send = jest
       .fn()
       .mockResolvedValue({ data: null, error: { name: 'validation_error', message: 'bad domain' } });
     mockGetResend.mockReturnValue({ emails: { send } });
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = seedTalon('t1');
 
@@ -733,7 +825,7 @@ describe('outputs', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     mockValidateWebhookUrl.mockResolvedValue({
       ok: false,
@@ -956,7 +1048,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -979,7 +1071,7 @@ describe('visual_check condition', () => {
     const { client, send } = workingResend();
     mockGetResend.mockReturnValue(client);
     mockGetSiteAlertRecipients.mockResolvedValue([
-      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
     const talon = visualTalon({ scope: { machineIds: ['m1'] } });
     seedMachine('m1', true);
@@ -1251,6 +1343,151 @@ describe('unrecoverable author problems', () => {
     // A skip does not even touch the counter, let alone the enabled flag.
     expect(talonDoc('t1')).toMatchObject({ enabled: true, consecutiveFailures: 2 });
     expect(talonDoc('t1').disabledReason).toBeUndefined();
+  });
+});
+
+describe('every talon re-checks its author before any output fires', () => {
+  type PlainOutput = 'command' | 'email' | 'webhook';
+
+  const OUTPUT_BY_KIND: Record<PlainOutput, TalonDoc['outputs'][number]> = {
+    command: { type: 'command', commandType: 'restart_process', processName: 'TouchDesigner' },
+    email: { type: 'email' },
+    webhook: { type: 'webhook', url: 'https://hooks.example.com/t' },
+  };
+
+  const AUTHOR_STATES: [string, () => void][] = [
+    [
+      'limited to some machines',
+      () =>
+        mockVerifyUserSiteAccess.mockResolvedValue({
+          ...WHOLE_SITE_ACCESS,
+          standing: { ...WHOLE_SITE_ACCESS.standing, machineIds: ['m1'] },
+        }),
+    ],
+    [
+      'gone from the site',
+      () =>
+        mockVerifyUserSiteAccess.mockRejectedValue(
+          new SiteAccessError('no_site_access', 'You do not have access to this site'),
+        ),
+    ],
+  ];
+
+  /** One output of `kind`, with everything it needs to land if it were allowed to. */
+  function plainTalon(kind: PlainOutput) {
+    const { client, send } = workingResend();
+    mockGetResend.mockReturnValue(client);
+    mockGetSiteAlertRecipients.mockResolvedValue([
+      { userId: 'u1', email: 'a@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+    ]);
+    fake.docs.set(`sites/${SITE}/talon_secrets/t1`, { talonId: 't1', secret: 'whsec_x' });
+    seedMachine('m1', true);
+    mockDispatchAndAwait.mockResolvedValue({
+      status: 'completed',
+      commandId: 'cmd_1',
+      entry: { status: 'success', result: 'Process restarted' },
+    });
+    const talon = seedTalon('t1', { outputs: [OUTPUT_BY_KIND[kind]] });
+    return { talon, send };
+  }
+
+  const cases = (['command', 'email', 'webhook'] as const).flatMap((kind) =>
+    AUTHOR_STATES.map(([label, arrange]) => [kind, label, arrange] as const),
+  );
+
+  it.each(cases)(
+    'refuses a %s-only talon and switches it off once its author is %s',
+    async (kind, _label, arrange) => {
+      arrange();
+      const { talon, send } = plainTalon(kind);
+
+      const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+      // nothing reached a machine, an inbox or an endpoint
+      expect(mockDispatchAndAwait).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      // recorded the way a hoot output records its own author refusal
+      expect(summaries[0]).toMatchObject({
+        status: 'failed',
+        disabledReason: 'creator_access_revoked',
+        outputs: [
+          {
+            type: kind,
+            status: 'failed',
+            detail: 'creator_access_revoked',
+            error: expect.stringContaining('admin-uid'),
+            disabledReason: 'creator_access_revoked',
+          },
+        ],
+      });
+      expect(runDocs()[0]).toMatchObject({
+        status: 'failed',
+        disabledReason: 'creator_access_revoked',
+      });
+      expect(talonDoc('t1')).toMatchObject({
+        enabled: false,
+        consecutiveFailures: 1,
+        disabledReason: 'creator_access_revoked',
+      });
+      expect(mockEmitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: 'system:talon_runner',
+          attributes: expect.objectContaining({
+            verb: 'talon.disable',
+            reason: 'creator_access_revoked',
+          }),
+        }),
+      );
+    },
+  );
+
+  it.each(['command', 'email', 'webhook'] as const)(
+    "still fires a whole-site author's %s-only talon",
+    async (kind) => {
+      const { talon, send } = plainTalon(kind);
+
+      const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+      const delivery = { command: mockDispatchAndAwait, email: send, webhook: mockFetch }[kind];
+      expect(mockVerifyUserSiteAccess).toHaveBeenCalledWith(db, 'admin-uid', SITE);
+      expect(summaries[0].status).toBe('succeeded');
+      expect(summaries[0].outputs).toEqual([expect.objectContaining({ type: kind, status: 'sent' })]);
+      expect(delivery).toHaveBeenCalledTimes(1);
+      expect(talonDoc('t1')).toMatchObject({ enabled: true, consecutiveFailures: 0 });
+      expect(talonDoc('t1').disabledReason).toBeUndefined();
+    },
+  );
+
+  it('fires nothing but keeps the talon on when the author check cannot be read', async () => {
+    mockVerifyUserSiteAccess.mockRejectedValue(new Error('DEADLINE_EXCEEDED'));
+    const { talon, send } = plainTalon('email');
+
+    const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+    // fails closed, but an unreachable database is not the author's fault
+    expect(send).not.toHaveBeenCalled();
+    expect(summaries[0].outputs).toEqual([
+      { type: 'email', status: 'failed', detail: 'author_check_failed', error: 'DEADLINE_EXCEEDED' },
+    ]);
+    expect(talonDoc('t1')).toMatchObject({ enabled: true, consecutiveFailures: 1 });
+    expect(talonDoc('t1').disabledReason).toBeUndefined();
+  });
+
+  it('leaves a passing visual check to its own author check, since no output fires', async () => {
+    const talon = seedTalon('t1', {
+      condition: { type: 'visual_check', expectation: 'the loop is playing' },
+      scope: { machineIds: ['m1'] },
+    });
+    seedMachine('m1', true);
+    mockEvaluateVisualCheck.mockResolvedValue({ verdict: 'pass', confidence: 0.9, reason: 'fine' });
+
+    await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+    // the visual check resolves its own author before the capture; with no
+    // output to fire, the engine has nothing to gate
+    expect(mockVerifyUserSiteAccess).not.toHaveBeenCalled();
   });
 });
 

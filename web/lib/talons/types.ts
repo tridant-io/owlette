@@ -281,7 +281,7 @@ export const TALON_DISABLED_REASON_COPY: Readonly<Record<TalonDisabledReason, st
   creator_deleted:
     'the person who created this talon no longer has an account',
   creator_access_revoked:
-    'the person who created this talon no longer has access to this site',
+    'the person who created this talon no longer has whole-site access to this site',
   creator_missing_llm_key:
     'the person who created this talon has no ai key saved in settings → hoot',
   repeated_failures: 'it failed too many times in a row',

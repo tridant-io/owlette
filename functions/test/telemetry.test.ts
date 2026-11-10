@@ -455,7 +455,7 @@ describe('isAuthorizedForSiteUsage', () => {
     };
   }
 
-  it('allows an active member of the site', async () => {
+  it('allows an active whole-site member of the site', async () => {
     assert.equal(await isAuthorizedForSiteUsage('Bearer t', 'site-a', deps()), true);
   });
 
@@ -488,6 +488,27 @@ describe('isAuthorizedForSiteUsage', () => {
       })),
       false,
     );
+  });
+
+  it('refuses a scoped member: cost data is site-wide', async () => {
+    assert.equal(
+      await isAuthorizedForSiteUsage('Bearer t', 'site-a', deps({
+        getMember: async () => ({ status: 'active', machineIds: ['m1'] }),
+      })),
+      false,
+    );
+  });
+
+  it('fails closed on an empty or malformed machine scope', async () => {
+    for (const machineIds of [[], null]) {
+      assert.equal(
+        await isAuthorizedForSiteUsage('Bearer t', 'site-a', deps({
+          getMember: async () => ({ status: 'active', machineIds }),
+        })),
+        false,
+        `machineIds: ${JSON.stringify(machineIds)}`,
+      );
+    }
   });
 
   it('refuses a soft-deleted account holding a still-valid token', async () => {

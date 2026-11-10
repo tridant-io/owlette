@@ -3,7 +3,7 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
 import logger from '@/lib/logger';
-import { ensureAgentAuthUser, machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
+import { ensureAgentAuthUser, machineLimitRefusal, recordPairing } from '@/lib/pairingPlan.server';
 
 /**
  * POST /api/agent/auth/exchange — first step of agent pairing: trade the
@@ -173,7 +173,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       return NextResponse.json({ error: 'Registration code already used' }, { status: 401 });
     }
 
-    await stampPairedAt(siteId, machineId);
+    await recordPairing(siteId, machineId);
 
     logger.info(`Agent token exchanged: site=${siteId}, machine=${machineId}, uid=${agentUid}`);
 

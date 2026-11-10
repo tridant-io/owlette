@@ -16,19 +16,34 @@ import { createSite, type Site } from '@/hooks/useFirestore';
 import { SiteList } from '@/components/admin/sites/SiteList';
 import SitesPage from '@/app/admin/sites/page';
 
-let mockAuth = { isSuperadmin: false, adminOf: [] as string[], ownerOf: [] as string[] };
+let mockAuth: {
+  isSuperadmin: boolean;
+  adminOf: string[];
+  ownerOf: string[];
+  scopes?: Record<string, string[]>;
+} = { isSuperadmin: false, adminOf: [], ownerOf: [] };
 const mockUpdateLastSite = jest.fn();
-jest.mock('@/contexts/AuthContext', () => ({
-  // as AuthContext: an owner administers their site, and a superadmin administers and owns every site
-  useAuth: () => ({
-    user: { uid: 'me' },
-    isSuperadmin: mockAuth.isSuperadmin,
-    isSiteAdmin: (siteId: string) =>
-      mockAuth.isSuperadmin || mockAuth.adminOf.includes(siteId) || mockAuth.ownerOf.includes(siteId),
-    isSiteOwner: (siteId: string) => mockAuth.isSuperadmin || mockAuth.ownerOf.includes(siteId),
-    updateLastSite: mockUpdateLastSite,
-  }),
-}));
+jest.mock('@/contexts/AuthContext', () => {
+  const scopeOf = (siteId: string) => (mockAuth.isSuperadmin ? null : (mockAuth.scopes?.[siteId] ?? null));
+  return {
+    // as AuthContext: an owner administers their site, a superadmin administers and owns every site,
+    // and a scoped row administers nothing (isSiteAdmin and isSiteOwner mean the whole site)
+    useAuth: () => ({
+      user: { uid: 'me' },
+      isSuperadmin: mockAuth.isSuperadmin,
+      isSiteAdmin: (siteId: string) =>
+        mockAuth.isSuperadmin ||
+        (scopeOf(siteId) === null && (mockAuth.adminOf.includes(siteId) || mockAuth.ownerOf.includes(siteId))),
+      isSiteOwner: (siteId: string) =>
+        mockAuth.isSuperadmin || (scopeOf(siteId) === null && mockAuth.ownerOf.includes(siteId)),
+      machineScope: scopeOf,
+      // every listed site is one the caller belongs to, so a site they neither own nor administer is a member's
+      siteRole: (siteId: string) =>
+        mockAuth.ownerOf.includes(siteId) ? 'owner' : mockAuth.adminOf.includes(siteId) ? 'admin' : 'member',
+      updateLastSite: mockUpdateLastSite,
+    }),
+  };
+});
 
 let mockSites: { sites: Site[]; sitesLoading: boolean; sitesError: string | null; currentSiteId: string };
 const mockSelectSite = jest.fn();
@@ -150,6 +165,25 @@ describe('gears and roles', () => {
     const memberRow = rowFor('site-b');
     expect(within(memberRow).getByText('member')).toBeInTheDocument();
     expect(within(memberRow).queryByRole('link')).toBeNull();
+  });
+
+  it("reads a scoped admin's row as admin with its machine count, and gives it no gear", () => {
+    mockAuth.scopes = { 'site-a': ['m1'] };
+    renderList();
+
+    const row = rowFor('site-a');
+    expect(within(row).getByText('admin · 1 machine')).toBeInTheDocument();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(screen.getAllByRole('link')).toHaveLength(1);
+  });
+
+  it("reads a scoped member's row as member with its machine count", () => {
+    mockAuth.scopes = { 'site-b': ['m1', 'm2'] };
+    renderList();
+
+    const row = rowFor('site-b');
+    expect(within(row).getByText('member · 2 machines')).toBeInTheDocument();
+    expect(within(row).queryByRole('link')).toBeNull();
   });
 
   it('shows anyone but a superadmin no owner column', () => {

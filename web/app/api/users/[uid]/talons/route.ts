@@ -2,9 +2,10 @@
  * GET /api/users/{uid}/talons — every talon this user authored, fleet-wide.
  *
  * `DELETE /api/users/{uid}` refuses to orphan the SITES a user owns but says
- * nothing about their automations, and a hoot-output talon re-resolves its
- * author's access on every run, so soft-deleting the author stops it dead.
- * This is the count the delete confirmation needs to name that consequence.
+ * nothing about their automations, and every talon re-checks its author before
+ * any output fires, so after the author is soft-deleted each one switches off
+ * at its next run with nothing fired. This is the count the delete
+ * confirmation needs to name that consequence.
  *
  * One collection-group query, NOT a walk of `users/{uid}.sites[]` — a
  * superadmin's membership array can be empty while they author fleet-wide,

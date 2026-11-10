@@ -16,20 +16,31 @@ import type { SiteSection } from '@/lib/siteSettingsPath';
 import { SiteSettings } from '@/components/admin/sites/SiteSettings';
 import SiteSettingsPage from '@/app/admin/sites/[siteId]/page';
 
-let mockAuth = { isSuperadmin: false, adminOf: [] as string[], ownerOf: [] as string[] };
+let mockAuth: {
+  isSuperadmin: boolean;
+  adminOf: string[];
+  ownerOf: string[];
+  scopes?: Record<string, string[]>;
+} = { isSuperadmin: false, adminOf: [], ownerOf: [] };
 const mockUserSites = ['site-a', 'site-b', 'site-c'];
 jest.mock('@/contexts/AuthContext', () => ({
   // as AuthContext: an owner administers their site, a superadmin administers and
-  // owns every site, and each render's gates read that render's standing
+  // owns every site, a scoped row administers nothing (isSiteAdmin and isSiteOwner
+  // mean the whole site), and each render's gates read that render's standing
   useAuth: () => {
     const auth = mockAuth;
+    const scopeOf = (siteId: string) => (auth.isSuperadmin ? null : (auth.scopes?.[siteId] ?? null));
     return {
       user: { uid: 'me' },
       userSites: mockUserSites,
       isSuperadmin: auth.isSuperadmin,
       isSiteAdmin: (siteId: string) =>
-        auth.isSuperadmin || auth.adminOf.includes(siteId) || auth.ownerOf.includes(siteId),
-      isSiteOwner: (siteId: string) => auth.isSuperadmin || auth.ownerOf.includes(siteId),
+        auth.isSuperadmin ||
+        (scopeOf(siteId) === null && (auth.adminOf.includes(siteId) || auth.ownerOf.includes(siteId))),
+      isSiteOwner: (siteId: string) => auth.isSuperadmin || (scopeOf(siteId) === null && auth.ownerOf.includes(siteId)),
+      machineScope: scopeOf,
+      siteRole: (siteId: string) =>
+        auth.ownerOf.includes(siteId) ? 'owner' : auth.adminOf.includes(siteId) ? 'admin' : 'member',
     };
   },
 }));
@@ -178,6 +189,24 @@ describe('states', () => {
     expect(screen.queryByRole('group', { name: 'site settings sections' })).toBeNull();
     expect(screen.queryByTestId(/-section$/)).toBeNull();
     expect(screen.queryByRole('button', { name: /^copy site ID/ })).toBeNull();
+  });
+
+  it.each([
+    ['admin', 'site-a', 'Alpha'],
+    ['member', 'site-b', 'bravo'],
+  ])('tells a scoped %s the settings need the whole site, with no sections', (_role, siteId, name) => {
+    mockAuth.scopes = { [siteId]: ['m1'] };
+    renderSettings(siteId);
+
+    expect(screen.getByRole('heading', { level: 1, name })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `your access to ${name} is limited to some machines, and its settings need the whole site. ask its owner or an admin.`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/you're a member/)).toBeNull();
+    expect(screen.queryByRole('group', { name: 'site settings sections' })).toBeNull();
+    expect(screen.queryByTestId(/-section$/)).toBeNull();
   });
 });
 

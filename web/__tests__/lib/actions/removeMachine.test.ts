@@ -45,6 +45,11 @@ jest.mock('@/lib/swoop/audit.server', () => ({
   recordSwoopSessionEnded: (...a: unknown[]) => mockRecordEnded(...a),
 }));
 
+const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/membership.server', () => ({
+  pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
+}));
+
 import { removeMachine } from '@/lib/actions/removeMachine.server';
 
 const AUDIT_ACTOR = 'user:admin-uid';
@@ -547,6 +552,49 @@ describe('removeMachine — the sessions swoop had on it', () => {
     expect(loggerWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining('swoop'),
       expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1' }) }),
+    );
+  });
+});
+
+/**
+ * machine ids start as hostnames and get reused, so a removed machine's id
+ * leaves every member's machine scope: a machine that pairs back under it
+ * starts with no member's grant.
+ */
+describe('removeMachine — machine scopes', () => {
+  it('prunes the id from every machine scope on its site, through the same db', async () => {
+    const fake = buildFakeDb();
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(mockPrune).toHaveBeenCalledTimes(1);
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-a', machineId: 'm1', db: fake.db });
+  });
+
+  it('prunes nothing when the removal itself fails', async () => {
+    const fake = buildFakeDb();
+    fake.setBatchCommitFailure(new Error('batch_blew_up'));
+
+    await expect(
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
+    ).rejects.toThrow('batch_blew_up');
+
+    expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed prune and removes the machine all the same', async () => {
+    const fake = buildFakeDb([{ id: 'tok-1', siteId: 'site-a', machineId: 'm1' }]);
+    mockPrune.mockRejectedValueOnce(new Error('members query down'));
+
+    const result = await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(result.machineId).toBe('m1');
+    expect(fake.batchOps).toContainEqual({ op: 'delete', path: 'agent_refresh_tokens/tok-1' });
+    expect(mockEmitMutation).toHaveBeenCalledTimes(1);
+    expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('machine scope prune'),
+      expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1', err: 'members query down' }) }),
     );
   });
 });

@@ -5,7 +5,10 @@
  *      the per-site role from the GLOBAL role, which reported a real site-admin
  *      as a plain member forever. each member also carries `swoop`, their own
  *      swoop mode: null when the role decides (always, on the owner's row), and
- *      `none` for a malformed value, so a hand edit never reads as a grant.
+ *      `none` for a malformed value, so a hand edit never reads as a grant. and
+ *      `machineIds`, their machine scope: null for the whole site, else the
+ *      machines they reach, read as the rules read it, so `[]` or a malformed
+ *      value is no machines.
  *
  * POST /api/sites/{siteId}/members  `{uid | email, role}` — writes the member
  *      row through `addMember`, so the requested role is STORED rather than
@@ -16,7 +19,9 @@
  *      whether the row was actually written at the requested role — adding an
  *      existing member is a 200 no-op, not a promotion. the body may also carry
  *      `swoop` (`none`, `view` or `control`), written on a new row only; the
- *      no-op writes no mode either.
+ *      no-op writes no mode either. `machineIds`, 1-30 machines of this site,
+ *      makes the new row a scoped member; absent means the whole site. like the
+ *      mode it is written on a new row only, and nobody scopes themselves.
  *
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
@@ -46,7 +51,8 @@ import {
   refuseWithoutSiteMemberManage,
 } from '../../../_shared';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
-import { deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { deriveMachineIds, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { normalizeMachineIdsInput } from '@/lib/machineAccess';
 import { SWOOP_MODES, type SwoopMode } from '@/lib/swoopMode';
 
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
@@ -61,6 +67,7 @@ interface AddMemberBody {
   email?: unknown;
   role?: unknown;
   swoop?: unknown;
+  machineIds?: unknown;
 }
 
 /** Which identifier the caller supplied; resolved to a uid before any write. */
@@ -77,6 +84,24 @@ interface UserDoc {
 
 /** Per-site standing, read from the row that grants it. */
 type MemberRole = 'owner' | 'admin' | 'member';
+
+/**
+ * a 400 naming each id that is not a machine of this site, or null when every
+ * one is. one getAll, however long the list. PATCH /members/{uid} shares it.
+ */
+export async function refuseUnknownMachines(
+  db: FirebaseFirestore.Firestore,
+  siteId: string,
+  machineIds: readonly string[],
+): Promise<NextResponse | null> {
+  const machines = db.collection('sites').doc(siteId).collection('machines');
+  const snaps = await db.getAll(...machineIds.map((id) => machines.doc(id)));
+  const unknown = machineIds.filter((_, i) => !snaps[i].exists);
+  if (unknown.length === 0) return null;
+  return problemValidation('machineIds must name machines on this site', {
+    'body.machineIds': [`unknown machine: ${unknown.join(', ')}`],
+  });
+}
 
 export const GET = authorizedSiteHandler<RouteParams>({
   capability: 'SITE_MEMBER_MANAGE',
@@ -117,6 +142,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
       globalRole: string;
       displayName: string | null;
       swoop: SwoopMode | null;
+      machineIds: readonly string[] | null;
     }> = [];
 
     const activeRows = memberRowsSnap.docs.filter(
@@ -145,6 +171,7 @@ export const GET = authorizedSiteHandler<RouteParams>({
         displayName:
           typeof data.displayName === 'string' ? data.displayName : null,
         swoop: deriveSwoopMode(row.data() ?? null, rowRole),
+        machineIds: deriveMachineIds(row.data() ?? null, rowRole),
       });
     });
 
@@ -250,6 +277,16 @@ export const POST = authorizedSiteHandler<RouteParams>({
           });
         }
 
+        const scopeInput =
+          body.machineIds === undefined
+            ? undefined
+            : normalizeMachineIdsInput(body.machineIds, { allowNull: false });
+        if (scopeInput && !scopeInput.ok) {
+          return problemValidation(scopeInput.error, { 'body.machineIds': [scopeInput.error] });
+        }
+        // allowNull is off, so a valid list is never null
+        const requestedMachineIds = scopeInput?.value ?? undefined;
+
         // An email is only an alias for a uid — resolve it through Admin Auth,
         // then every downstream step is the uid path unchanged.
         let targetUid: string;
@@ -268,6 +305,20 @@ export const POST = authorizedSiteHandler<RouteParams>({
             }
             throw authErr;
           }
+        }
+
+        // scoping yourself changes the row that decides what you may do, which
+        // PATCH /members/{uid} refuses too (`refuseSelfMembershipChange`)
+        if (requestedMachineIds !== undefined && targetUid === ctx.actor.userId) {
+          return problem({
+            type: ProblemType.Forbidden,
+            title: 'cannot modify your own membership',
+            status: 403,
+            detail:
+              'you cannot set your own machine access on this site; ask another admin on this site',
+            instance: `/api/sites/${siteId}/members`,
+            code: 'cannot_modify_own_membership',
+          });
         }
 
         const db = getAdminDb();
@@ -306,6 +357,11 @@ export const POST = authorizedSiteHandler<RouteParams>({
           });
         }
 
+        if (requestedMachineIds !== undefined) {
+          const unknownMachines = await refuseUnknownMachines(db, siteId, requestedMachineIds);
+          if (unknownMachines) return unknownMachines;
+        }
+
         // Wave 2 task 2.3: through the single writer, which dual-writes the member
         // document and the legacy `sites[]` entry in one batch.
         //
@@ -323,6 +379,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           uid: targetUid,
           role: assignableRole,
           swoop: requestedSwoop,
+          machineIds: requestedMachineIds,
           addedBy: ctx.actor.userId,
         });
         if (!added.ok && added.failure.kind !== 'already_member') {
@@ -365,6 +422,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
             verb: 'member_added',
             requestedRole,
             ...(requestedSwoop !== undefined ? { requestedSwoop } : {}),
+            ...(requestedMachineIds !== undefined ? { requestedMachineIds } : {}),
             roleHonored,
             globalRole: targetGlobalRole,
           },

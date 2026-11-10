@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getSiteLabel, recipientWantsMachine, type SiteRecipient } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
@@ -232,11 +232,9 @@ function buildOfflineEmail(
   });
 }
 
-/** Drop muted machines from every section; caller skips a now-empty page trigger. */
-function filterSectionsForRecipient(sections: OfflineSections, mutedMachines: string[]): OfflineSections {
-  if (mutedMachines.length === 0) return sections;
-  const muted = new Set(mutedMachines);
-  const keep = (r: OfflineRow) => !muted.has(r.machineId);
+/** Drop machines the recipient muted or cannot reach from every section; caller skips a now-empty page trigger. */
+function filterSectionsForRecipient(sections: OfflineSections, recipient: SiteRecipient): OfflineSections {
+  const keep = (r: OfflineRow) => recipientWantsMachine(recipient, r.machineId);
   return {
     notResponding: sections.notResponding.filter(keep),
     shuttingDown: sections.shuttingDown.filter(keep),
@@ -513,8 +511,8 @@ export async function GET(request: NextRequest) {
       // One email per user so each gets their own unsubscribe link.
       for (const recipient of recipients) {
         try {
-          const sections = filterSectionsForRecipient(plan.sections, recipient.mutedMachines);
-          // Muted every triggering machine = opted out, even if context remains.
+          const sections = filterSectionsForRecipient(plan.sections, recipient);
+          // Muted or out of scope on every triggering machine = nothing to page, even if context remains.
           if (sections.notResponding.length === 0) continue;
 
           const total = sections.notResponding.length + sections.shuttingDown.length + sections.stillOffline.length;
