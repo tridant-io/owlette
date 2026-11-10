@@ -15,16 +15,27 @@ name: agent tests
 #     (versitygw, test/infra/docker-compose.yml). That is the only place the
 #     manifest-fetch -> chunk-download -> assemble pipeline is exercised
 #     against real S3-compatible storage.
+#
+# agent/host and agent/swoop are rust, tested by rust-build.yml. pytest reads
+# only the swoop protocol vectors from there, plus one web routing table.
 on:
   pull_request:
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
   push:
     branches: [main, dev]
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
 
