@@ -45,6 +45,7 @@ const mockStats = {
   stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 const mockVideoRef = createRef<HTMLVideoElement>();
+const mockCanvasRef = createRef<HTMLCanvasElement>();
 const mockStageRef = createRef<HTMLDivElement>();
 const mockStepUp = { required: false, enrolled: true, submitProof: jest.fn(), cancel: jest.fn() };
 jest.mock('@/hooks/useSwoopSession', () => ({
@@ -54,6 +55,7 @@ jest.mock('@/hooks/useSwoopSession', () => ({
     stats: mockStats,
     session: null,
     videoRef: mockVideoRef,
+    canvasRef: mockCanvasRef,
     stageRef: mockStageRef,
     stepUp: mockStepUp,
     end: jest.fn(),

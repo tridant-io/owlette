@@ -9,6 +9,11 @@
  * autoplay and runs the single `requestVideoFrameCallback` chain. this
  * component only places it and hands the hook the ref.
  *
+ * over the video lies smooth scaling's canvas, which the presenter draws a
+ * picture shown below 1:1 on and hides otherwise. while it draws, it sets the
+ * video to opacity 0 under it (`video/smooth.ts` says why); it takes no
+ * pointer, so input still lands on the stage.
+ *
  * the wrapper is what input capture binds to, which is why it is focusable and
  * why the fullscreen/keyboard-lock gesture in the toolbar targets it. input
  * capture itself is attached by the `input` feature in `lib/swoop/features.ts`
@@ -63,6 +68,8 @@ export interface SwoopStageProps {
   stall?: SwoopStallRecovery;
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** smooth scaling's canvas, over the video. */
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   /**
    * where keyboard focus goes when it leaves the stage — escape twice, see
    * `InputCapture.onEscapeTwice`. without it the stage only lets focus go.
@@ -153,13 +160,14 @@ export function SwoopStage({
   stall = 'none',
   stageRef,
   videoRef,
+  canvasRef,
   onLeave,
   children,
 }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const areaRef = useRef<HTMLDivElement | null>(null);
-  useSwoopView({ videoRef, areaRef });
+  useSwoopView({ videoRef, areaRef, session });
   // in the app the way back from a settled notice is the picker
   const inApp = useViewerAppPlatform() !== null;
   // the way out, said on each entry into fullscreen and only where it is not
@@ -266,6 +274,7 @@ export function SwoopStage({
           video's box is useSwoopView's alone: max-w-none keeps preflight's max-width off it */}
       <div ref={areaRef} data-testid="swoop-area" className="relative h-full w-full">
         <video ref={videoRef} muted playsInline className="absolute max-w-none object-fill" aria-label="remote screen" />
+        <canvas ref={canvasRef} aria-hidden className="pointer-events-none absolute inset-0 size-full" />
       </div>
       {recovering && (
         <p role="status" className={washed}>

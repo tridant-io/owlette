@@ -29,8 +29,9 @@ const wired: {
 
 /**
  * what the faked receiver reports: the host's records, rvfc, and `getStats()`
- * answers in turn; the element's own state; and the frame callback the hook
- * handed the receiver.
+ * answers in turn; the element's own state; the frame and present callbacks
+ * the hook handed the receiver; and the faked presenter: what it was made
+ * with, the presents it was handed, and the frames smooth scaling's canvas drew.
  */
 const picture = {
   metaRecords: 0,
@@ -40,6 +41,10 @@ const picture = {
   reattach: jest.fn(async () => undefined),
   element: { paused: false, readyState: 4 },
   onFrame: null as ((observation: unknown) => void) | null,
+  onPresent: null as ((metadata: VideoFrameCallbackMetadata) => void) | null,
+  presenter: null as { video: unknown; options: unknown } | null,
+  presents: [] as unknown[][],
+  drawnFrames: 0,
 };
 
 jest.mock('@/contexts/AuthContext', () => ({
@@ -75,8 +80,12 @@ jest.mock('@/lib/swoop/signaling', () => ({
 
 jest.mock('@/lib/swoop/video/receiver', () => ({
   SwoopReceiver: class {
-    constructor(options: { onFrame?: (observation: unknown) => void }) {
+    constructor(options: {
+      onFrame?: (observation: unknown) => void;
+      onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
+    }) {
       picture.onFrame = options.onFrame ?? null;
+      picture.onPresent = options.onPresent ?? null;
     }
     attachTrack() {}
     async start() {}
@@ -101,7 +110,19 @@ jest.mock('@/lib/swoop/video/receiver', () => ({
 }));
 
 jest.mock('@/lib/swoop/video/presenter', () => ({
-  createPresenter: () => ({ detach: () => undefined, observe: () => undefined, stats: () => ({}) }),
+  createPresenter: (video: unknown, options: unknown) => {
+    picture.presenter = { video, options };
+    return {
+      detach: () => undefined,
+      observe: () => undefined,
+      present: (...args: unknown[]) => picture.presents.push(args),
+      invalidate: () => undefined,
+      get drawnFrames() {
+        return picture.drawnFrames;
+      },
+      stats: () => ({}),
+    };
+  },
 }));
 
 jest.mock('@/lib/swoop/features', () => ({
@@ -118,6 +139,7 @@ jest.mock('@/lib/swoop/features', () => ({
 }));
 
 import { useSwoopSession, type UseSwoopSession } from '@/hooks/useSwoopSession';
+import { smoothActive } from '@/hooks/useSwoopView';
 import { STEP_UP_WINDOW_OPEN } from '@/lib/swoop/stepUp';
 
 const SITE = 'site-1';
@@ -173,11 +195,12 @@ let swoop: UseSwoopSession;
 
 function Page({ onCommit }: { onCommit: (session: UseSwoopSession) => void }) {
   const session = useSwoopSession(SITE, MACHINE);
-  const { stageRef, videoRef } = session;
+  const { stageRef, videoRef, canvasRef } = session;
   useEffect(() => onCommit(session));
   return (
     <div ref={stageRef}>
       <video ref={videoRef} />
+      <canvas ref={canvasRef} />
     </div>
   );
 }
@@ -1196,7 +1219,7 @@ describe('useSwoopSession — a picture that froze', () => {
 
   beforeEach(() => {
     sessionStorage.clear();
-    Object.assign(picture, { metaRecords: 0, rvfcCallbacks: 0, codec: 'hevc', stats: [] });
+    Object.assign(picture, { metaRecords: 0, rvfcCallbacks: 0, codec: 'hevc', stats: [], drawnFrames: 0 });
     Object.assign(picture.element, { paused: false, readyState: 4 });
     picture.reattach.mockReset();
     picture.reattach.mockImplementation(async () => undefined);
@@ -1321,6 +1344,79 @@ describe('useSwoopSession — a picture that froze', () => {
     }
     expect(swoop.state).toBe('connected');
     expect(reports()).toHaveLength(0);
+  });
+
+  /**
+   * smooth scaling's canvas draws every frame the host sends, over a video at
+   * opacity 0 that chromium counts every frame of as dropped.
+   */
+  async function drawOnCanvas(seconds: number) {
+    for (let i = 0; i < seconds; i += 1) {
+      picture.metaRecords += 60;
+      quality.totalVideoFrames += 60;
+      quality.droppedVideoFrames += 60;
+      picture.rvfcCallbacks += 60;
+      picture.drawnFrames += 60;
+      await advance(1000);
+    }
+  }
+
+  it('never fires while smooth scaling’s canvas draws, though the element counts every frame dropped', async () => {
+    await open();
+    await connect();
+    await drawOnCanvas(12);
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.stall).toEqual({ recovery: 'none', episodes: 0, kind: null });
+    expect(reports()).toHaveLength(0);
+  });
+
+  it('declares a picture whose canvas stops drawing while the host still sends', async () => {
+    await open();
+    await connect();
+    await drawOnCanvas(3);
+    for (let i = 0; i < 5; i += 1) {
+      picture.metaRecords += 60;
+      quality.totalVideoFrames += 60;
+      quality.droppedVideoFrames += 60;
+      await advance(1000);
+    }
+    expect(reports()).toHaveLength(1);
+    expect(swoop.stats.stall.episodes).toBe(1);
+  });
+
+  it('counts a frame the canvas drew after a reattach as the picture back', async () => {
+    picture.stats = [...RENDER_STATS];
+    picture.reattach.mockImplementation(async () => {
+      // the reloaded element counts from zero, and under the canvas shows none of its own
+      quality.totalVideoFrames = 0;
+      quality.droppedVideoFrames = 0;
+    });
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reattaching');
+
+    picture.drawnFrames += 30;
+    await advance(2000);
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.stall.recovery).toBe('none');
+  });
+
+  it('does not take the canvas’s earlier draws for a reloaded element’s new frames', async () => {
+    picture.stats = [...RENDER_STATS];
+    picture.drawnFrames = 100;
+    picture.reattach.mockImplementation(async () => {
+      quality.totalVideoFrames = 0;
+      quality.droppedVideoFrames = 0;
+    });
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reattaching');
+
+    await advance(2000);
+    expect(swoop.state).toBe('ended');
+    expect(swoop.stats.stall.recovery).toBe('reconnecting');
   });
 
   it('reattaches a picture that decodes but never paints, and keeps the session once frames show', async () => {
@@ -1545,6 +1641,20 @@ describe('useSwoopSession — frames', () => {
     expect(seen).toEqual([{ frameId: 1 }]);
     expect(logged).toHaveBeenCalledWith(expect.stringContaining('[swoop]'), expect.any(Error));
     logged.mockRestore();
+  });
+});
+
+describe('useSwoopSession — smooth scaling’s canvas', () => {
+  it('builds the presenter on the video and the canvas, drawn while smooth scaling is active, from every presented frame', async () => {
+    await open();
+    const canvas = swoop.canvasRef.current;
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    expect(picture.presenter).toEqual({ video: swoop.videoRef.current, options: { canvas, smooth: smoothActive } });
+
+    const metadata = { presentedFrames: 3 } as VideoFrameCallbackMetadata;
+    picture.presents = [];
+    picture.onPresent!(metadata);
+    expect(picture.presents).toEqual([[metadata]]);
   });
 });
 

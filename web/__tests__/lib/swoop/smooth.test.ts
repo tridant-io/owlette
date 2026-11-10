@@ -199,7 +199,7 @@ function recordingGl(linked = true) {
 }
 
 function frame(width: number, height: number) {
-  return { videoWidth: width, videoHeight: height } as HTMLVideoElement;
+  return { videoWidth: width, videoHeight: height, style: { opacity: '' } } as unknown as HTMLVideoElement;
 }
 
 describe('createSmoothRenderer', () => {
@@ -247,13 +247,33 @@ describe('createSmoothRenderer', () => {
     expect(canvas.style.visibility).toBe('hidden');
   });
 
+  // composited under the canvas, the video's own tick races the draw and rvfc callbacks coalesce
+  it('takes the video out of the composite while the canvas shows, and gives it back on hide', () => {
+    webgl2(() => recordingGl().gl);
+    const canvas = document.createElement('canvas');
+    const renderer = createSmoothRenderer(canvas)!;
+    const video = frame(3840, 2160);
+    expect(video.style.opacity).toBe('');
+    renderer.draw(video, { x: 0, y: 0, width: 1000, height: 562 });
+    expect(video.style.opacity).toBe('0');
+    renderer.draw(video, { x: 0, y: 0, width: 1000, height: 562 });
+    expect(video.style.opacity).toBe('0');
+    renderer.hide();
+    expect(video.style.opacity).toBe('');
+    renderer.draw(video, { x: 0, y: 0, width: 1000, height: 562 });
+    renderer.dispose();
+    expect(video.style.opacity).toBe('');
+  });
+
   it('draws nothing before the first frame', () => {
     const { gl, count } = recordingGl();
     webgl2(() => gl);
     const canvas = document.createElement('canvas');
-    createSmoothRenderer(canvas)!.draw(frame(0, 0), { x: 0, y: 0, width: 100, height: 100 });
+    const video = frame(0, 0);
+    createSmoothRenderer(canvas)!.draw(video, { x: 0, y: 0, width: 100, height: 100 });
     expect(count('drawArrays')).toBe(0);
     expect(canvas.style.visibility).toBe('hidden');
+    expect(video.style.opacity).toBe('');
   });
 
   it('is lost and hidden when the context goes, and draws again once it is restored', () => {
@@ -262,13 +282,15 @@ describe('createSmoothRenderer', () => {
     const canvas = document.createElement('canvas');
     const renderer = createSmoothRenderer(canvas)!;
     const dest = { x: 0, y: 0, width: 640, height: 360 };
-    renderer.draw(frame(1280, 720), dest);
+    const video = frame(1280, 720);
+    renderer.draw(video, dest);
 
     const lost = new Event('webglcontextlost', { cancelable: true });
     canvas.dispatchEvent(lost);
     expect(lost.defaultPrevented).toBe(true);
     expect(renderer.lost).toBe(true);
     expect(canvas.style.visibility).toBe('hidden');
+    expect(video.style.opacity).toBe('');
     renderer.draw(frame(1280, 720), dest);
     expect(count('drawArrays')).toBe(1);
 

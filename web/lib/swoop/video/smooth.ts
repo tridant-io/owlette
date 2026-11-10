@@ -17,8 +17,8 @@
  * it reverses plan D17's "no canvas in the shipping path"
  * (dev/active/swoop/plan.md) for minification only: see
  * dev/active/swoop-clarity/plan.md, C2 and C5. the `<video>` stays the
- * decoder, the composited source and the fallback; this file draws only the
- * frame it is handed, from the one rvfc chain the receiver owns.
+ * decoder and the fallback; this file draws only the frame it is handed, from
+ * the one rvfc chain the receiver owns.
  *
  * it imports nothing and uses erasable typescript only, because the probe
  * (agent/swoop/spikes/smooth-probe) serves this very file to browsers through
@@ -29,13 +29,24 @@
  * rows here. the webkitgtk check (task 5.2) is logged in
  * dev/active/swoop-clarity/tasks.md.
  *
- * the cover (task 2.5, 2026-11-07) is an open question for the owner. the
- * only candidate is an opaque canvas over the visible video, which stays the
- * composited source, the frame count the freeze watchdog reads, and the
- * fallback. the probe streamed a 1920x1080 source into a 1000x562 css box at
- * dpr 1, three 20 s runs per engine, both engines on this box's rtx 2080 ti
- * through d3d11 (not swiftshader), while other tasks' builds and tests loaded
- * the box. each cell is rvfc callbacks / totalVideoFrames / droppedVideoFrames:
+ * the cover is the video at opacity 0 under the canvas (`under`; the owner's
+ * ruling of 2026-11-10). a canvas over a video that is still composited makes
+ * chromium's rendering step race the video compositor's own tick, and rvfc
+ * callbacks coalesce whatever draws the frame: a canvas, rAF, a worker, a
+ * `VideoFrame`, webgpu's zero-copy import and `desynchronized` all did it in
+ * the probe (commit 400a7702), while the draw itself costs about 0.2 ms of
+ * cpu and 0.1 ms of gpu. a video at opacity 0 is not composited, so the race
+ * goes and the callbacks hold. chromium then counts every frame of it as
+ * dropped (an uncomposited video submits nothing), so the freeze watchdog
+ * counts this renderer's draws as shown (`video/stall.ts`). `draw` fades the
+ * video in the same task as the canvas's first frame, and `hide` gives it
+ * back, which context loss and `dispose` go through too.
+ *
+ * task 2.5's matrix (2026-11-07), before that cause was known: the probe
+ * streamed a 1920x1080 source into a 1000x562 css box at dpr 1, three 20 s
+ * runs per engine, both engines on this box's rtx 2080 ti through d3d11 (not
+ * swiftshader), while other tasks' builds and tests loaded the box. each cell
+ * is rvfc callbacks / totalVideoFrames / droppedVideoFrames:
  *
  *   engine                   none            canvas          under
  *   edge 157, headed         1174/1200/24    1171/1199/25    1156/1198/1198
@@ -47,20 +58,13 @@
  *
  *   * the box's load starved that run: its frames fell short of the source's 1200.
  *
- * the rule: a cover keeps the callbacks and frames within 5% of the bare
- * video, and its drops rise by no more than 1% of frames. under fails it in
- * every run: with the video at opacity 0 both engines count every frame
- * dropped, and the watchdog, which counts totalVideoFrames minus
- * droppedVideoFrames, would call a live picture frozen. the canvas keeps the
- * frames wherever the run was not starved. in edge it holds the rule in the
- * one unstarved 20 s pair (callbacks 0.3% fewer, one more drop); of three 5 s
- * pairs one held (2.2% fewer callbacks), one read 11% more callbacks with the
- * canvas, and one was starved. in headless chromium it fails every unstarved
- * pair: 6% fewer callbacks at 20 s and 6–11% at 5 s, and drops up by 1.9% and
- * 3.3% of frames in one pair each. so under the rule neither cover holds in
- * chromium, and the canvas path waits on the owner: ship the canvas on edge's
- * result (headless chromium has no display and is no viewer's engine), or
- * not. task 4.1's matrix, alone on the box, is the unloaded repeat.
+ * under that matrix's rule (callbacks and frames within 5% of the bare video,
+ * drops up by no more than 1% of frames) the canvas missed in headless
+ * chromium and, rerun on a quiet box, in edge too; under kept its callbacks
+ * and frames and failed only on the drops, which are the artifact above. the
+ * rule is now: callbacks and totalVideoFrames within 5% of none's, and the
+ * canvas's draws within 5% of none's frames less its drops. task 4.1's matrix,
+ * alone on the box, measures it.
  */
 
 /** the most source texels averaged per axis: exact down to 1/7, evenly sampled below that. */
@@ -230,9 +234,13 @@ export interface SmoothRect {
 export interface SmoothRenderer {
   /** the canvas's size in device pixels. */
   resize(width: number, height: number): void;
-  /** averages the video's current frame into `dest`, the picture's rect, transparent around it, and shows the canvas. */
+  /**
+   * averages the video's current frame into `dest`, the picture's rect,
+   * transparent around it, and shows the canvas over the video, which it sets
+   * to opacity 0.
+   */
   draw(video: HTMLVideoElement, dest: SmoothRect): void;
-  /** hides the canvas so the video shows; the next draw shows it again. */
+  /** hides the canvas and gives the video its opacity back; the next draw shows it again. */
   hide(): void;
   dispose(): void;
   /** the context is lost (until the browser restores it) or the renderer disposed: callers show the video. */
@@ -296,9 +304,13 @@ export function createSmoothRenderer(canvas: HTMLCanvasElement): SmoothRenderer 
   if (!gl || !pipeline) return null;
 
   let shown = true;
+  // the video under the canvas, at opacity 0 while the canvas shows
+  let covered: HTMLVideoElement | null = null;
   const hide = () => {
     if (!shown) return;
     canvas.style.visibility = 'hidden';
+    if (covered) covered.style.opacity = '';
+    covered = null;
     shown = false;
   };
   const onLost = (event: Event) => {
@@ -333,6 +345,9 @@ export function createSmoothRenderer(canvas: HTMLCanvasElement): SmoothRenderer 
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       if (!shown) {
         canvas.style.visibility = '';
+        // in the same task as the canvas's first frame, so no frame shows both or neither
+        video.style.opacity = '0';
+        covered = video;
         shown = true;
       }
     },

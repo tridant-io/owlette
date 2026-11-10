@@ -10,11 +10,15 @@
  * laid out again whenever anything it reads can change: the area's size (its
  * exact device size where the browser reports one), the window, fullscreen, the
  * frame's size, the screen's dpr, the bar moving the area without resizing it,
- * and this browser's size and smooth scaling settings.
+ * and this browser's size and smooth scaling settings. each layout, and each
+ * change of the local zoom, tells the session's presenter, so smooth scaling's
+ * canvas follows the box and redraws the frame it shows.
  */
 
 import { useEffect, type RefObject } from 'react';
 import { subscribeBarPosition } from '@/lib/swoop/barPosition';
+import type { SwoopSession } from '@/lib/swoop/features';
+import { swoopTouch } from '@/lib/swoop/touch';
 import { layoutPicture } from '@/lib/swoop/view';
 import { readSize, readSmooth, subscribeView } from '@/lib/swoop/viewStore';
 import { smoothAvailable } from '@/lib/swoop/video/smooth';
@@ -33,9 +37,12 @@ export const smoothActive = (): boolean => readSmooth() && smoothCanDraw();
 export function useSwoopView({
   videoRef,
   areaRef,
+  session,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
   areaRef: RefObject<HTMLDivElement | null>;
+  /** the live session, whose presenter draws smooth scaling's canvas over the box; null before one. */
+  session?: SwoopSession | null;
 }): void {
   useEffect(() => {
     const video = videoRef.current;
@@ -59,6 +66,7 @@ export function useSwoopView({
       style.top = `${box.top}px`;
       style.width = `${box.width}px`;
       style.height = `${box.height}px`;
+      session?.presenter.invalidate();
     };
 
     const resizes =
@@ -97,9 +105,12 @@ export function useSwoopView({
     video.addEventListener('resize', layout);
     const offBar = subscribeBarPosition(layout);
     const offView = subscribeView(layout);
+    // a pinch moves the picture without laying it out again
+    const offZoom = session ? swoopTouch(session)?.zoom.subscribe(() => session.presenter.invalidate()) : undefined;
     layout();
 
     return () => {
+      offZoom?.();
       offView();
       offBar();
       video.removeEventListener('resize', layout);
@@ -108,5 +119,5 @@ export function useSwoopView({
       resolution?.removeEventListener('change', onDpr);
       resizes?.disconnect();
     };
-  }, [videoRef, areaRef]);
+  }, [videoRef, areaRef, session]);
 }
