@@ -1,5 +1,5 @@
 # machine-scope — Tasks
-**Progress**: 57/62 complete
+**Progress**: 59/62 complete
 
 Read before any task. /execute passes an agent only a task's Files, Do and Done when, so every Do starts by sending you back here.
 - `plan.md` and `context.md` in `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/`.
@@ -1668,7 +1668,7 @@ House rules for every task:
   - Done when: eslint is clean, and `--list` shows every test on both projects.
 
 
-- [ ] **Task 9.4: The existing members e2e follows the access column, and four stale talon comments**
+- [x] **Task 9.4: The existing members e2e follows the access column, and four stale talon comments**
   - Files: `web/e2e/specs/sites/site-members.spec.ts`, plus the comment lines only in `web/app/api/sites/[siteId]/members/[uid]/route.ts` (~9-11), `web/lib/talons/store.server.ts` (~553-556), `web/app/api/users/[uid]/talons/route.ts` (~5-6), `web/hooks/useTalonReassign.ts` (~8-9)
   - Depends on: 7.9, 8.7, 8.10
   - Do: First read the house rules at the top of this file. 9.3 found that `site-members.spec.ts` has probably been red since 7.9 (be2cef36). Its `COLUMNS` has no `access`, so `'actions'` now reads the access cell (~line 300). Its swoop-cell `toHaveText` checks (~254, 262, 270, 301) read the full text, which now includes the md:hidden ` · {access}` suffix. Update the spec to 7.9's table: add the access column, and match the swoop cell without the suffix (or assert the suffix where the viewport shows it). Don't weaken an assertion. Also rewrite the four comments that still say "a talon with a hoot output … stops dead / starts failing". Since 8.7, every talon re-checks its author before any output fires and switches off at its next run with nothing fired.
@@ -1676,7 +1676,7 @@ House rules for every task:
 
 ## Wave 10: one rig run
 
-- [ ] **Task 10.1: Build once, and run the new specs and the docs links**
+- [x] **Task 10.1: Build once, and run the new specs and the docs links**
   - Files: the three specs from wave 9. Product files only to fix a real defect, each logged with the task that owns the file and a regression test.
   - Depends on: waves 8–9
   - Do: First read the house rules at the top of `C:/Users/admin/Documents/Git-restored/Owlette/dev/active/machine-scope/tasks.md`. This is the only task in its wave, so it owns the rig.
@@ -2005,3 +2005,5 @@ House rules for every task:
     - 9.2 52285e92: session.spec.ts's `machine scope` describe (5): the scoped watcher, the scoped controller, the scoped admin with 6.9 emails and kill/kick/list, narrowing ends the whole session (record ended/revoked/endedFor within 5 s), and mode none on the dashboard. Its tests run in order.
     - 9.3 96ac62e7: sites/member-access.spec.ts (7) and mobile/member-access.spec.ts (2: fits a phone, scrolls on a short screen). The 6.3 API refusals and the `[]` save gate are added. The narrowed record reads `revoked` with `endedFor`, and `scope_changed` is on the audit row.
   - **For 10.1:** run the new specs and `sites/site-members.spec.ts` (9.4) too. Untried selectors are listed in the 9.1 and 9.3 reports: the nested apply dialog, the page switcher, the superadmin talon re-run's `runs` shape, /hoot with only a user key, and the picker popover inside a modal.
+  - 9.4 eb95fc97: site-members.spec.ts `COLUMNS` gains `access`, and its swoop-cell checks use `useInnerText` (the md:hidden suffix stays out, still exact); four talon comments fixed. The orchestrator fixed the openapi (3 spots) and ManageUserSitesDialog wording in 53be63f3 (validate:api ok).
+- 2026-11-10, 10.1 (no commit, nothing to fix): one build and one run on shifted ports (auth 19099, firestore 18080/ws 19150, storage 19199, hub 14400, logging 14500, app 3110/3111), beside swoop-clarity's rig. **66/66 passed first time**: sites/machine-scope 10, swoop/session 27 (machine scope 5/5), sites/member-access 7, sites/site-members 15, docs-links 1 (chromium); mobile/machine-scope 4, mobile/member-access 2 (mobile-chromium). Wave 9's untried selectors all held.
