@@ -24,7 +24,7 @@
  *   `presentationTime` instead.
  * - **one `requestVideoFrameCallback` chain, and nothing paced from rAF.**
  *   D17's arm-B reading was that rvfc observes and never schedules, with no
- *   canvas in the shipping path. from 4.1.28 smooth scaling's canvas mirrors
+ *   canvas in the shipping path. from 4.1.29 smooth scaling's canvas mirrors
  *   the element for a picture shown below 1:1, and `onPresent` draws it from
  *   this chain, one draw per presented frame
  *   (dev/active/swoop-clarity/plan.md, C2). otherwise the element presents.

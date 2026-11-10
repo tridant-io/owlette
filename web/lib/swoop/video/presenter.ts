@@ -8,7 +8,7 @@
  * `desynchronized` 2d canvas, the `ImageBitmapRenderingContext` fallback and
  * the `frame.close()` discipline D17 describes are arm-A-only and are not here.
  *
- * D17's arm-B reading also said no canvas in the shipping path. from 4.1.28 a
+ * D17's arm-B reading also said no canvas in the shipping path. from 4.1.29 a
  * webgl2 canvas mirrors the video for minification
  * (dev/active/swoop-clarity/plan.md, C2): browsers draw a video with a
  * bilinear filter and no mipmaps, which is exact at 1:1 and at 1:2 on whole
