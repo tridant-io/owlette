@@ -57,6 +57,16 @@ export function LiveViewModal({
   const isStartingRef = useRef(false);
   const isStoppingRef = useRef(false);
 
+  // the dashboard keeps one modal and swaps its machine: reset during render, so a
+  // new machine never shows the last one's picture or live state
+  const [stateFor, setStateFor] = useState(machineId);
+  if (stateFor !== machineId) {
+    setStateFor(machineId);
+    setScreenshot(null);
+    setLiveViewActive(false);
+    setExpiresAt(null);
+  }
+
   const clearPendingTimeout = () => {
     if (pendingTimeoutRef.current) {
       clearTimeout(pendingTimeoutRef.current);
