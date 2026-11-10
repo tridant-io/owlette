@@ -18,17 +18,16 @@ test.describe('developer section (landing)', () => {
     ).toBeVisible();
   });
 
-  test('three code tabs render and switching swaps the visible code', async ({ page }) => {
+  test('both code tabs render and switching swaps the visible code', async ({ page }) => {
     await page.goto('/#developers');
 
     const section = page.locator('section#developers');
     const curlTab = section.getByRole('tab', { name: 'curl', exact: true });
     const cliTab = section.getByRole('tab', { name: 'cli', exact: true });
-    const tsTab = section.getByRole('tab', { name: 'typescript', exact: true });
 
+    await expect(section.getByRole('tab')).toHaveCount(2);
     await expect(curlTab).toBeVisible();
     await expect(cliTab).toBeVisible();
-    await expect(tsTab).toBeVisible();
 
     // Default tab is curl — the curl invocation should be on screen.
     await expect(curlTab).toHaveAttribute('aria-selected', 'true');
@@ -36,21 +35,15 @@ test.describe('developer section (landing)', () => {
     await expect(codeBlock).toContainText('curl -X POST');
     await expect(codeBlock).toContainText('Idempotency-Key');
 
-    // Switch to cli — code should swap to the owlette CLI invocation.
+    // Switch to cli — code should swap to the owlette CLI invocation. The
+    // sample must only name things a visitor can run: neither package is on
+    // npm, so no `npm i -g @owlette/…` and no SDK import.
     await cliTab.click();
     await expect(cliTab).toHaveAttribute('aria-selected', 'true');
+    await expect(codeBlock).toContainText('owlette auth login');
     await expect(codeBlock).toContainText('owlette process restart');
     await expect(codeBlock).not.toContainText('curl -X POST');
-
-    // Switch to typescript — code should swap to the SDK sample. The sample
-    // must instantiate `Owlette` and never expose a `Roost` symbol — guarding
-    // the SDK class name against drift.
-    await tsTab.click();
-    await expect(tsTab).toHaveAttribute('aria-selected', 'true');
-    await expect(codeBlock).toContainText("import { Owlette } from '@owlette/sdk'");
-    await expect(codeBlock).toContainText('new Owlette(');
-    await expect(codeBlock).not.toContainText('Roost');
-    await expect(codeBlock).not.toContainText('owlette process restart');
+    await expect(codeBlock).not.toContainText('@owlette/');
   });
 
   test('bottom CTAs link to the API reference and CLI repo', async ({ page }) => {

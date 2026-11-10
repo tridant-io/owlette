@@ -7,6 +7,13 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — the landing page's developer samples
+
+The developer section showed install commands for npm packages that are not
+published yet, and a sign-in command that does not exist. It now shows the API
+and the CLI installed from source, and signs in with `owlette auth login`.
+Nothing to update on the machine.
+
 ### fixed — machine.offline for a connection failure, and none for a pending restart
 
 When an agent reported a connection failure, its `machine.offline` webhook was
