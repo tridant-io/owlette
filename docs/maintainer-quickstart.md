@@ -1,6 +1,6 @@
 # maintainer quickstart
 
-This is the canonical first-time path for an engineer cloning Owlette to develop or self-host it; use [README.md](../README.md) for the product overview. It links to the existing setup and operations docs instead of duplicating their deeper procedures. AI-agent operating notes live in [.claude/CLAUDE.md](../.claude/CLAUDE.md) and [agent/CLAUDE.md](../agent/CLAUDE.md), but those are not a replacement for this human onboarding path.
+This is the canonical first-time path for an engineer cloning Owlette to develop or self-host it; use [README.md](../README.md) for the product overview. It links to the existing setup and operations docs instead of duplicating their deeper procedures. Claude Code's operating rules live in [.claude/CLAUDE.md](../.claude/CLAUDE.md) and the settled decisions in [docs/adr/](adr/); neither replaces this human onboarding path. [agent/CLAUDE.md](../agent/CLAUDE.md) is local hoot's runtime prompt, not coding guidance.
 
 ## prerequisites
 
@@ -50,7 +50,6 @@ None of these are committed. Create the ones for the work you are doing; files w
 | `functions/.env.<projectId>` — one per project in [.firebaserc](../.firebaserc) (`owlette-dev-3838a`, `owlette-prod-90a12`) | `functions/.env.example` | Cloud Functions deploys. A missing file still deploys "successfully" with the functions silently broken — see [manual-infrastructure.md](runbooks/manual-infrastructure.md) |
 | `test/integration/.env.test` | `test/integration/.env.test.example` | integration tests |
 | `scripts/.env.local` | none | `scripts/upload-cortex-cli.mjs` and `scripts/migrations/audit-legacy-api-keys.mjs`: `FIREBASE_PROJECT_ID_{DEV,PROD}`, `FIREBASE_CLIENT_EMAIL_{DEV,PROD}`, `FIREBASE_PRIVATE_KEY_{DEV,PROD}` (falls back to the unsuffixed trio in `web/.env.local`) |
-| `.claude/.env.tridant` | none | `scripts/dev/rotate-tridant-env.sh` and `rotate-functions-env.sh`: `R2_S3_ENDPOINT`, `R2_APP_S3_ACCESS_KEY_ID`, `R2_APP_S3_SECRET_ACCESS_KEY`, `NEXT_PUBLIC_TURNSTILE_SITE_KEY_TRIDANT`, `TURNSTILE_SECRET_TRIDANT` |
 | `infra/cloudflare/terraform.tfvars` | `infra/cloudflare/terraform.tfvars.example` | Cloudflare load balancer — see [.claude/skills/cf-load-balancing/SKILL.md](../.claude/skills/cf-load-balancing/SKILL.md) |
 | `dev/video-tutorials/voiceover/.env` | `.env.example` in that folder | tutorial voiceover generation only |
 
@@ -62,7 +61,7 @@ Only needed for the operations named; day-to-day dev needs none beyond `gh`.
 |-----|---------------------|----------|
 | `gh` | `gh auth login` | `/preflight` security-alert gate (`scripts/check-security-alerts.mjs`), watching CI runs |
 | `firebase` | `firebase login` | rules, indexes, and functions deploys ([setup/firebase.mdx](../web/content/docs/setup/firebase.mdx)); the local emulators need no login |
-| `railway` | `railway login` | `scripts/sync-env.mjs` and the rotation scripts ([.claude/skills/env-management/SKILL.md](../.claude/skills/env-management/SKILL.md)) |
+| `railway` | `railway login` | `scripts/sync-env.mjs` ([.claude/skills/env-management/SKILL.md](../.claude/skills/env-management/SKILL.md)) |
 | `vercel` | `vercel login`, then `vercel link` in `web/` | `scripts/sync-env.mjs` against the Vercel failover project |
 | `gcloud` | `gcloud auth login` | one-time infrastructure bootstrap in [manual-infrastructure.md](runbooks/manual-infrastructure.md) |
 | `terraform` | no login — export `CLOUDFLARE_API_TOKEN` in the shell (never in a file) | `infra/cloudflare` |
@@ -101,7 +100,7 @@ Run the checks for what you changed:
 
 ## week-1: ship a new installer
 
-Treat [docs/internal/version-management.md](internal/version-management.md) and [docs/changelog.md](changelog.md) as authoritative for releases and release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust for the desktop app and `owlette-host`. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
+The release recipe is [agent-installer-release.md](runbooks/agent-installer-release.md), [docs/internal/version-management.md](internal/version-management.md) says what a version bump writes, and [docs/changelog.md](changelog.md) is the release history. The full installer build downloads its own embedded Python 3.11.8, finds Inno Setup through `%ISCC%`, PATH, or the default install path, and needs Rust for the desktop app and `owlette-host`. The build, the 3-step API upload, and the release ordering rules are in [agent-installer-release.md](runbooks/agent-installer-release.md).
 
 ## credentials bootstrap order
 
@@ -115,7 +114,7 @@ Treat [docs/internal/version-management.md](internal/version-management.md) and 
 
 ## machine-bound state — do not copy across machines
 
-> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to the agent's local Cortex LLM key, which rides the same cipher and migrates with it.
+> The agent's encrypted token store, `/ProgramData/Owlette/.tokens.enc`, is bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux; see [agent/src/secure_storage.py](../agent/src/secure_storage.py) for reference. A store written before the hostname term was dropped is re-encrypted on first load, with the original kept as `.tokens.enc.v1` for one minor. On any machine transfer, the agent must be re-paired via device code, not migrated. The same rule applies to local hoot's LLM key, which rides the same cipher and migrates with it.
 
 ## known portability gaps (open work)
 
