@@ -26,9 +26,7 @@ const listeners = new Set<() => void>();
 
 // the bar's own size, for the sum auto makes: a top bar is a 32 px button row
 // with 8 px padding and a border; a side bar is `w-11`. below tailwind's md
-// the bar is always on top. in owlette swoop on windows and linux a side bar
-// also takes the 32 px title row above the picture; it is left out because it
-// never changes the answer: where it would bind, a top bar costs 49 px.
+// the bar is always on top.
 const TOP_BAR_PX = 49;
 const SIDE_BAR_PX = 44;
 const MD_PX = 768;

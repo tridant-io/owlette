@@ -28,10 +28,8 @@ import {
 } from '@/lib/swoop/barPosition';
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import { closeViewerWindow, isSessionWindow } from '@/lib/swoop/viewerWindow';
-import { cn } from '@/lib/utils';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { SwoopStatsOverlay } from '@/components/swoop/SwoopStatsOverlay';
@@ -79,9 +77,6 @@ export default function SwoopPage({
   }, []);
   // the menus' and tooltips' side; the layout follows `data-swoop-bar`.
   const position = useSyncExternalStore(subscribeBarPosition, currentBarPosition, barOnTop);
-  // on windows and linux a side bar's window controls sit in a title row the page starts below
-  const platform = useViewerAppPlatform();
-  const titleRow = platform === 'windows' || platform === 'linux';
   // auto sums with the window and the picture, so both are watched
   useEffect(() => {
     window.addEventListener('resize', applyBarPosition);
@@ -127,12 +122,7 @@ export default function SwoopPage({
   }, [over, router]);
 
   return (
-    <main
-      className={cn(
-        'flex h-full w-full flex-col md:bar-left:flex-row md:bar-right:flex-row-reverse',
-        titleRow && 'md:bar-side:pt-8',
-      )}
-    >
+    <main className="flex h-full w-full flex-col md:bar-left:flex-row md:bar-right:flex-row-reverse">
       <SwoopToolbar
         ref={toolbarRef}
         machineId={machineId}

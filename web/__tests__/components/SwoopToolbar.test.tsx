@@ -665,7 +665,7 @@ describe('SwoopToolbar inside owlette swoop', () => {
     expect(screen.queryByTestId('swoop-window-strip')).toBeNull();
   });
 
-  it('drags the window and ends in its controls on top; on a side they move to a title row of their own', () => {
+  it('drags the window and ends in its controls on top; on a side they move to a half-height strip of their own', () => {
     as(app('Windows NT 10.0; Win64; x64'));
     renderBar('connected');
     const bar = screen.getByTestId('session-bar');
@@ -680,12 +680,15 @@ describe('SwoopToolbar inside owlette swoop', () => {
     // on top: the bar's last control, gone when the bar is on a side
     expect(onTop.parentElement).toBe(bar);
     expect(onTop).toHaveClass('md:bar-side:hidden');
-    // on a side: the title row across the top, and only then
+    // on a side: the strip across the top, and only then; it lets presses through to the picture
     expect(strip).toContainElement(onSide);
-    expect(strip).toHaveClass('hidden', 'md:bar-side:flex', 'bg-card');
-    expect(strip).toHaveAttribute('data-tauri-drag-region', 'deep');
-    // the page starts below the title row, so a side bar on either edge needs no room of its own
-    expect(bar).not.toHaveClass('md:bar-right:pt-11');
+    expect(strip).toHaveClass('hidden', 'md:bar-side:flex', 'pointer-events-none', 'h-6');
+    expect(strip).not.toHaveAttribute('data-tauri-drag-region');
+    // half height on a side only: the top bar's buttons fill the bar
+    for (const button of within(onSide).getAllByRole('button')) expect(button).toHaveClass('h-6');
+    for (const button of within(onTop).getAllByRole('button')) expect(button).not.toHaveClass('h-6');
+    // a right bar starts below the strip's controls, which share its edge; a left bar is clear of them
+    expect(bar).toHaveClass('md:bar-right:pt-9');
     expect(bar).not.toHaveClass('md:bar-left:pt-11');
     // the session's own buttons are still all there
     expect(screen.getByRole('button', { name: /end session/i })).toBeInTheDocument();
@@ -728,7 +731,7 @@ describe('SwoopToolbar inside owlette swoop', () => {
       as(app('Windows NT 10.0; Win64; x64'));
       const user = userEvent.setup();
       renderAt(state, retryIn);
-      // the bar's own controls and the side bar's title row both ask
+      // the bar's own controls and the side bar's strip both ask
       for (const controls of screen.getAllByTestId('window-controls')) {
         await user.click(within(controls).getByRole('button', { name: 'close' }));
         expect(screen.getByRole('dialog')).toHaveTextContent('leave TEC-B4A and close the window?');

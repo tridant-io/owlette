@@ -4,11 +4,12 @@
  * window through the app's bridge, `window.__TAURI__`. playwright has no
  * bridge, so a stand-in records what the page asks of its window.
  *
- * the session bar is the title bar on top, its buttons half its height at its
- * top edge; on a side the controls move to a slim title row above the picture.
- * the picker's header and the login page carry the same controls. in a browser
- * none of it exists. fullscreen in the app says how to leave it from inside
- * the stage; a browser leaves that to chrome.
+ * the session bar is the title bar on top, its buttons its full height; on a
+ * side the controls move to a half-height strip across the top that lets
+ * presses through everywhere else, so the picture keeps the window's full
+ * height. the picker's header and the login page carry the same controls, at
+ * full height. in a browser none of it exists. fullscreen in the app says how
+ * to leave it from inside the stage; a browser leaves that to chrome.
  *
  * no streamer and no swoop on site-A here: the page refuses the session and
  * stays put with its bar, which is all the title bar needs.
@@ -76,7 +77,7 @@ async function fakeBridge(page: Page): Promise<void> {
 const bridgeCalls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __tauriCalls: string[] }).__tauriCalls);
 
-const barAt = (page: Page, position: 'top' | 'left') =>
+const barAt = (page: Page, position: 'top' | 'left' | 'right') =>
   page.addInitScript((p) => localStorage.setItem('owlette.swoop.barPosition', p), position);
 
 /**
@@ -115,26 +116,13 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     expect(box.y).toBe(0);
     expect(box.x + box.width).toBeGreaterThan(1599);
 
-    // half the bar's height, at its top edge
+    // the bar's full height: half height is for a side bar's strip only
     const closeButton = controls.getByRole('button', { name: 'close' });
+    const barBox = (await bar.boundingBox())!;
     for (const name of ['minimize', 'maximize', 'close']) {
       const button = (await controls.getByRole('button', { name }).boundingBox())!;
-      expect([name, button.y, button.height]).toEqual([name, 0, 24]);
+      expect([name, button.y, button.height]).toEqual([name, 0, barBox.height]);
     }
-    // under them, the lower half of the bar: a band with nothing to hit, which drags the window
-    const close = (await closeButton.boundingBox())!;
-    const band = await page.evaluate(
-      ([x, y]) => {
-        const hit = document.elementFromPoint(x, y);
-        return {
-          inBar: hit?.closest('[data-testid="session-bar"]') != null,
-          onButton: hit?.closest('button') != null,
-          drags: hit?.closest('[data-tauri-drag-region="deep"]') != null,
-        };
-      },
-      [close.x + close.width / 2, 36] as const,
-    );
-    expect(band).toEqual({ inBar: true, onButton: false, drags: true });
 
     await page.mouse.move(800, 450);
     await expect(page.locator('html')).toHaveClass(/\bdark\b/);
@@ -150,7 +138,9 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     await test.info().attach('top', { body: await page.screenshot(), contentType: 'image/png' });
   });
 
-  test('with the bar on a side, the controls sit in a title row above the picture', async ({ page }) => {
+  test('with the bar on a side, half-height controls float at the top right and the picture keeps the full height', async ({
+    page,
+  }) => {
     await barAt(page, 'left');
     await page.goto(SESSION);
     const strip = page.getByTestId('swoop-window-strip');
@@ -161,24 +151,33 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     await expect(page.getByTestId('session-badge')).toHaveText('disconnected');
 
     const row = (await strip.boundingBox())!;
-    expect([row.y, row.height]).toEqual([0, 32]);
+    expect([row.y, row.height]).toEqual([0, 24]);
     const box = (await controls.boundingBox())!;
     expect(box.x + box.width).toBeGreaterThan(1599);
-    const close = (await controls.getByRole('button', { name: 'close' }).boundingBox())!;
-    expect([close.y, close.height]).toEqual([0, 24]);
+    for (const name of ['minimize', 'maximize', 'close']) {
+      const button = (await controls.getByRole('button', { name }).boundingBox())!;
+      expect([name, button.y, button.height]).toEqual([name, 0, 24]);
+    }
 
-    // nothing is under the row: the picture and the side bar both start below it
+    // nothing above them: the picture and the side bar run the window's full height
     const stage = (await page.locator('video[aria-label="remote screen"]').locator('..').boundingBox())!;
-    expect(stage.y).toBeGreaterThanOrEqual(row.y + row.height);
+    expect([stage.y, stage.height]).toEqual([0, 900]);
     const bar = (await page.getByTestId('session-bar').boundingBox())!;
-    expect(bar.y).toBeGreaterThanOrEqual(row.y + row.height);
+    expect([bar.y, bar.height]).toEqual([0, 900]);
 
-    // the row itself, not what is under it, takes a press in its middle: it drags the window
-    const middle = await page.evaluate(() => {
-      const hit = document.elementFromPoint(800, 16);
-      return { testId: hit?.getAttribute('data-testid'), drag: hit?.getAttribute('data-tauri-drag-region') };
-    });
-    expect(middle).toEqual({ testId: 'swoop-window-strip', drag: 'deep' });
+    // the strip takes no press outside the controls and their drag handle: the
+    // picture under the rest of it stays the machine's
+    const handle = (await strip.getByTestId('swoop-window-drag').boundingBox())!;
+    const outsideStrip = await page.evaluate(
+      (points) =>
+        points.map(([x, y]) => !document.elementFromPoint(x, y)?.closest('[data-testid="swoop-window-strip"]')),
+      [
+        [800, 12],
+        [100, 4],
+        [handle.x - 8, 12],
+      ],
+    );
+    expect(outsideStrip).toEqual([true, true, true]);
 
     await page.mouse.move(800, 450);
     await expect(page.locator('html')).toHaveClass(/\bdark\b/);
@@ -190,6 +189,27 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     await controls.getByRole('button', { name: 'close' }).click();
     expect(await bridgeCalls(page)).toEqual(['close']);
     await test.info().attach('left', { body: await page.screenshot(), contentType: 'image/png' });
+  });
+
+  test('a right bar starts below the half-height controls on the edge they share', async ({ page }) => {
+    await barAt(page, 'right');
+    await page.goto(SESSION);
+    const bar = page.getByTestId('session-bar');
+    await expect(page.getByTestId('swoop-window-strip').getByTestId('window-controls')).toBeVisible();
+    await expect(page.getByTestId('session-badge')).toHaveText('disconnected');
+
+    const box = (await bar.boundingBox())!;
+    expect([box.y, box.height]).toEqual([0, 900]);
+    expect(box.x + box.width).toBeGreaterThan(1599);
+    // the bar's first control, the way back, sits clear of the strip's 24 px
+    const first = (await bar.locator('a:visible, button:visible').first().boundingBox())!;
+    expect(first.y).toBeGreaterThanOrEqual(24);
+
+    await page.mouse.move(800, 450);
+    await test.info().attach('window buttons, right bar', {
+      body: await page.screenshot({ clip: { x: 1600 - 360, y: 0, width: 360, height: 96 }, animations: 'disabled' }),
+      contentType: 'image/png',
+    });
   });
 
   test('fullscreen says how to leave it, inside the stage, then lets the notice go', async ({ page }) => {

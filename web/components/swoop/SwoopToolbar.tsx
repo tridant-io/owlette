@@ -43,9 +43,10 @@
  * inside owlette swoop the bar is also the window's title bar: it drags the
  * window, and on top it ends in the window's controls (on macos it starts
  * after the traffic lights instead). on a side, the controls move to a slim
- * title row across the top of the window, above the picture and the bar, so
- * none of the picture is under them. while a session holds a seat, their
- * close asks first.
+ * strip across the top of the window that holds nothing else, at half height,
+ * so they cover as little of the picture as they can and the picture keeps
+ * the window's full height. while a session holds a seat, their close asks
+ * first.
  */
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
@@ -636,8 +637,9 @@ export function SwoopToolbar({
           platform && '[&>*]:motion-safe:animate-in [&>*]:fade-in-0 [&>*]:animation-duration-300',
           'md:bar-side:w-11 md:bar-side:shrink-0 md:bar-side:flex-col md:bar-side:flex-nowrap md:bar-side:border-b-0',
           'md:bar-side:px-0 md:bar-side:py-3 md:bar-left:border-r md:bar-right:border-l',
-          // a left bar starts below the traffic lights; on windows and linux the page starts below the title row
+          // a side bar starts below the strip's controls on the edge they share
           platform === 'mac' && 'md:bar-left:pt-11',
+          (platform === 'windows' || platform === 'linux') && 'md:bar-right:pt-9',
         )}
       >
         {platform === 'mac' && (
@@ -733,8 +735,8 @@ export function SwoopToolbar({
         )}
 
         <SwoopWindowControls leaving={leaving} className="-my-2 -mr-3 self-stretch md:bar-side:hidden" />
-        {/* fixed to the window, so it takes no room in the bar; the page leaves it its row */}
-        <SwoopWindowStrip titleRow leaving={leaving} className="hidden md:bar-side:flex" />
+        {/* fixed to the window, so it takes no room in the bar */}
+        <SwoopWindowStrip half leaving={leaving} className="hidden md:bar-side:flex" />
       </div>
     </SwoopBarMenuPlacement.Provider>
   );
