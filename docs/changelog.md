@@ -10,6 +10,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — download links stay out of the agent's logs
+
+A failed installer or roost download wrote its signed link into the agent's log
+and into the error the dashboard shows. The link is now cut off after its path.
+Arrives with the next agent version.
+
 ### fixed — the agent reconnects on a network that only lets https out
 
 After a dropped connection the agent looked for the internet by reaching a

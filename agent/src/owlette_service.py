@@ -5991,7 +5991,7 @@ class OwletteService:
                         logging.debug(f"Auto-derived verify_path from /DIR: {verify_path}")
 
                 logging.info(f"Starting software installation: {installer_name}")
-                logging.debug(f"URL: {installer_url}")
+                logging.debug(f"URL: {installer_utils.redact_query_strings(installer_url)}")
                 logging.debug(f"Flags: {silent_flags}")
                 logging.debug(f"Timeout: {timeout_seconds} seconds")
                 if expected_sha256:
@@ -8794,7 +8794,7 @@ class OwletteService:
         logging.info(f"Current version: {shared_utils.APP_VERSION}")
         logging.info(f"Target version: {target_version}")
         logging.info("="*60)
-        logging.debug(f"Installer URL: {installer_url}")
+        logging.debug(f"Installer URL: {installer_utils.redact_query_strings(installer_url)}")
         logging.debug(f"Checksum: {expected_sha256[:16]}...")
 
         os_family = shared_utils.get_os_family_arch()[0]

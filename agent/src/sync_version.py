@@ -29,6 +29,7 @@ from typing import Any, Iterable, List, Optional, Set
 import requests
 
 import shared_utils
+from installer_utils import redact_query_strings
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +233,11 @@ def _http_fetch(url: str) -> bytes:
                     chunks_buf.append(chunk)
             return b''.join(chunks_buf)
         except (requests.RequestException, ValueError) as e:
-            last_exc = e
+            last_exc = VersionError(redact_query_strings(e))
             if attempt < _FETCH_RETRIES:
                 wait = _FETCH_BACKOFF_BASE_S * (2 ** (attempt - 1))
                 logger.warning(
-                    f"sync_version: fetch attempt {attempt} failed ({e}); "
+                    f"sync_version: fetch attempt {attempt} failed ({last_exc}); "
                     f"retrying in {wait}s"
                 )
                 time.sleep(wait)
