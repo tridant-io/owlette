@@ -42,6 +42,14 @@ Start-Transcript -Path $log -Force | Out-Null
 Write-Host "transcript: $log" -ForegroundColor Cyan
 
 try {
+  # -RemoveOld recursively deletes C:\Users\<OldUser>, so take only a plain
+  # account name: an empty or path-like value would widen the target, and
+  # windows drops a trailing dot or space when it resolves the path.
+  if ($RemoveOld -and ($OldUser -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9 ._-]*[A-Za-z0-9_-])?\z' -or
+      $OldUser -in @($NewUser, 'Public', 'Default', 'Default User', 'All Users'))) {
+    throw "-OldUser '$OldUser' is not the plain name of a removable account."
+  }
+
   $vm = Get-VM -Name $Name -ErrorAction Stop
   if ($vm.State -ne 'Running') { throw "VM '$Name' is $($vm.State); start it first." }
 
@@ -157,9 +165,11 @@ try {
         # resolves once the account is deleted - so even an administrator gets
         # access-denied and Remove-Item -Force fails silently. Take ownership
         # and grant rights first, then delete.
+        Write-Host "deleting stale profile directory $stale"
         & takeown.exe /F $stale /R /A /D Y  2>&1 | Out-Null
         & icacls.exe  $stale /grant 'Administrators:(OI)(CI)F' /T /C 2>&1 | Out-Null
-        Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction SilentlyContinue
+        try { Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warning "could not delete all of ${stale}: $($_.Exception.Message) - 09-finalize-image.ps1 sweeps it after the reboot." }
       }
       [PSCustomObject]@{
         SignedInAs   = $env:USERNAME
