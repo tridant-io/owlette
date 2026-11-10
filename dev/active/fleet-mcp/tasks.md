@@ -1,0 +1,240 @@
+# fleet mcp — Tasks
+**Progress**: 0/36 complete
+
+Rules every task obeys:
+- Read `context.md` first: it holds the decisions, the session file contract and the fleet API contract.
+- "fleet mcp" is a working name. It appears in file names and code, never in UI copy or public docs until the owner names the feature. Never call this feature a "relay" (that is swoop's TURN relay) or "local hoot" (that is hoot's model loop on the agent).
+- Glossary words: machine, site, agent, desktop app, agent token, hoot, tier. Lowercase UI copy.
+- Never touch `firestore.rules`, `agent/owlette_installer.iss`, `.claude/hooks/`, `.claude/settings.json`. Never read `.tokens.enc`. No new npm, pip or cargo packages without asking.
+- Never log a token, whole or in part: not the agent token, not the fleet session token.
+- The stdio script never imports `auth_manager` or `secure_storage` and never refreshes anything.
+- Nothing blocking on the service's 5-second loop. Never import `firebase_admin` in the agent.
+- A machine actor never carries an active-hours override.
+- Web: run `npx eslint <file>` on each file you touch and keep `tsc` clean as you go. Each task ships its tests.
+- Nothing is pushed without the owner's word.
+
+## Wave 0: Gates — measure before building
+
+- [ ] **Task 0.1: machine-scope is on dev**
+  - Files: `dev/active/fleet-mcp/gates/0.1-machine-scope.md` (new)
+  - Do: Check whether `feat/machine-scope` is merged into `origin/dev` (`git merge-base --is-ancestor origin/feat/machine-scope origin/dev`, or find its merge commit). If merged, record from dev: the exports of `web/lib/machineAccess.ts` (`parseMachineIds`, `scopeCovers`, `normalizeMachineIdsInput`, `MAX_MACHINE_SCOPE`) with their signatures, the final `Actor` union and `hasCapability` signature in `web/lib/capabilities.ts`, and which capabilities are machine-class versus site-wide. If not merged, write "blocked" and stop: waves 1 and later wait.
+  - Done when: the gate file names the merge commit and the signatures, or says blocked.
+
+- [ ] **Task 0.2: `mcp` stdio spike with the installed interpreter**
+  - Files: `dev/active/fleet-mcp/gates/0.2-mcp-stdio.md` (new); throwaway scripts under `dev/scratch/fleet-mcp-spike/` (gitignored)
+  - Do: Using `C:\ProgramData\Owlette\python\python.exe` (the console interpreter, not `pythonw.exe`) and the `mcp` 2.2.0 already installed there (install nothing), write a throwaway stdio server whose tool list is built at request time from a Python list, with a `call_tool` handler that echoes. Record the canonical imports in 2.2.0 for: the low-level server with `list_tools` / `call_tool` handlers, the stdio transport, and the `Tool`, `TextContent` and `ImageContent` types (`server/fastmcp.py` and `server/mcpserver/` both exist in the package; say which is current). Record whether progress notifications are available for a long call. Drive it with a throwaway client built on `mcp.client.stdio` from the same package: initialize, list, call. Measure launch-to-initialized time over five runs. Confirm nothing but protocol reaches stdout (log to stderr). Do not register anything with Claude Code in this task.
+  - Done when: the gate file has the imports, the timings, a list-and-call transcript, and any surprise.
+
+- [ ] **Task 0.3: Rules tests for the new documents (no rules edit)**
+  - Files: `web/__tests__/rules/fleet.test.ts` (new)
+  - Do: Using the harness in `web/__tests__/rules/harness.ts` (see `denials.test.ts` and `membership.test.ts` for the shape), assert against the unmodified `firestore.rules`: (a) `fleet_sessions/{id}` denies get, list and every write to a signed-in site member, to an agent token (`role: 'agent'` with `site_id` and `machine_id` claims) and to an unauthenticated client; (b) `sites/{siteId}/settings/fleet` is readable by a member of that site, not readable by a non-member, and not writable by any client. Record what an agent token of the same site may do with (b). If an expectation fails, do not edit the rules: stop and report, because a rules change needs the owner's explicit request.
+  - Done when: `cd web && npm run test:rules` passes with the new file, or a written report names the failing expectation.
+
+- [ ] **Task 0.4: macOS and Linux access spike**
+  - Files: `dev/active/fleet-mcp/gates/0.4-posix-access.md` (new)
+  - Do: On the MacBook and the kiosk VM (access notes are in the owner's session memory, not in this repo), as the logged-in console user and not root, check read-only: whether the user can execute the bundled interpreter (`/Library/Application Support/Owlette/runtime/python/bin/python3`; `/opt/owlette/python/bin/python3`) and `import mcp`; the user's groups against `_owlette` (macOS) and `owlette` (Linux); owner, group and mode of the data root, `ipc/` and `ipc/requests`; which account the service runs as. Then, with sudo, create one test file under `ipc/fleet/` owned by the console user with mode 0400, confirm the user can read it and another account cannot, and remove it. Change nothing else on either device.
+  - Done when: the gate file states per platform, with command output, whether the interpreter is launchable by the console user and the exact owner, group and mode the session file and its directory need.
+
+## Wave 1: Server base
+Depends on: Task 0.1 (machine-scope on dev), Task 0.3.
+
+- [ ] **Task 1.1: The machine actor and `FLEET_SETTINGS_MANAGE`**
+  - Files: `web/lib/capabilities.ts`, `web/lib/auditLog.server.ts`, `web/lib/rateLimit.server.ts`, `web/lib/actions/auditActor.server.ts`, `web/app/api/_shared.ts` (the audit-string builder ~291), and only where `tsc` demands a branch: `web/lib/authorizedHandler.server.ts`, `web/lib/systemInvoker.server.ts`, `web/lib/talons/store.server.ts`, `web/lib/talons/engine.server.ts`, `web/lib/swoop/policy.server.ts`, `web/lib/actions/deleteSite.server.ts`; tests `web/__tests__/lib/capabilities.test.ts`, `auditLog.test.ts`, `rateLimit*.test.ts`, `web/__tests__/lib/actions/executeMachineCommand.test.ts`
+  - Do: Add `MachineActor { type: 'machine'; siteId: string; machineId: string; maxTier: 1 | 2 | 3; targets: string[] | null }` to the `Actor` union. `hasCapability` grants a machine actor exactly `MACHINE_VIEW` and `MACHINE_EXEC_COMMAND`, and only when `actor.siteId === siteId`; target coverage is not checked here (dispatch does it). Add `Capability.FLEET_SETTINGS_MANAGE`, held by owner and site admin, classed site-wide in machine-scope's sense (mirror `SWOOP_SETTINGS_MANAGE`). Audit: add `{ type: 'machine', siteId, machineId }` to the `AuditActor` union in `auditLog.server.ts`, to `redactActorForLog` and to `actorRoleLabel` (label `machine`); the audit string everywhere is `machine:<machineId>`. Rate limit: add a `machine` bucket with its own named limits (60 per minute for `MACHINE_EXEC_COMMAND`, 300 per minute for `MACHINE_VIEW`), and make `rateLimitSubjectKey` carry both site and machine for it so two machines never share a bucket. Leave `executeMachineCommand`'s override check as it is and add a test that an `auditActor` of `machine:x` is refused an active-hours override.
+  - Done when: tests cover the two allowed capabilities, every other capability denied (including `FLEET_SETTINGS_MANAGE`), a cross-site deny, audit redaction and label, and separate rate-limit keys for two machines; the existing capability, parity, audit and rate-limit suites pass; eslint and `tsc` are clean.
+
+- [ ] **Task 1.2: Grant parser and loader**
+  - Files: `web/lib/fleet/policy.server.ts` (new), `web/__tests__/lib/fleet/policy.test.ts` (new)
+  - Do: Copy the shape of `web/lib/swoop/policy.server.ts` (`parseSwoopSettings`, `loadSwoopSettings`). Export `FLEET_SETTINGS_DOC = 'fleet'`; `interface FleetGrant { maxTier: 1 | 2 | 3; targets: string[] | null }`; `interface FleetSettings { enabled: boolean; senders: Record<string, FleetGrant> }`; `parseFleetSettings(raw: unknown): FleetSettings` (default `{ enabled: false, senders: {} }`; a malformed sender entry is dropped; `maxTier` defaults to 2 and anything outside 1–3 becomes 2; `targets` absent means `null` (whole site), present is parsed with machine-scope's `parseMachineIds`, and a malformed list becomes `[]` so it fails closed; at most 64 senders); `loadFleetSettings(siteId, opts?: { db? })`; `fleetGrantFor(settings, machineId): FleetGrant | null` (null when disabled or not a sender); `grantCovers(grant, targetMachineId): boolean` (true when `targets` is null, else machine-scope's `scopeCovers`). A sender may target itself when its targets cover it.
+  - Done when: unit tests cover defaults, each malformed input, the tier default, disabled returning null, whole-site and listed coverage, and the 64 cap.
+
+- [ ] **Task 1.3: Fleet session store**
+  - Files: `web/lib/fleet/session.server.ts` (new), `web/__tests__/lib/fleet/session.test.ts` (new)
+  - Do: Find how API keys are generated and hashed (`web/lib/apiKey*.ts`) and reuse the hash helper. Export `FLEET_SESSION_TTL_MS` (15 minutes); `mintFleetSession(db, { siteId, machineId }): Promise<{ token: string; expiresAt: number }>` (token is `owf_` plus 32 random bytes base64url; store `fleet_sessions/{sha256hex(token)}` with `{ siteId, machineId, createdAt, expiresAt }`; then delete that machine's other sessions created more than 60 seconds ago, so a rotation never strands a call in flight); `verifyFleetSession(db, token): Promise<{ siteId: string; machineId: string } | null>` (one document get by hash; expired returns null and deletes best-effort); `revokeFleetSessions(db, { siteId, machineId? })` (equality query, batched delete). Never log the token; a log line may carry the first 8 characters of the hash.
+  - Done when: tests cover mint, verify, expiry, the 60-second rotation grace, revoke for one machine and for a site, and assert that no logger call receives the token.
+
+- [ ] **Task 1.4: The catalog**
+  - Files: `web/lib/fleet/catalog.server.ts` (new), `web/__tests__/lib/fleet/catalog.test.ts` (new)
+  - Do: Build the catalog from `allTools` in `web/lib/mcp-tools.ts`. Keep the tools that go to a machine: drop every name in `SERVER_SIDE_TOOLS` (`web/lib/hoot-utils.server.ts` ~53). Filter by `tier <= maxTier`. Strip the active-hours override pair with `withoutActiveHoursOverride`. Add a required string parameter `machine` ("the id of the machine to act on, from list_machines") to each. Prepend the fleet-native tool `list_machines` (tier 1, no parameters). Export `fleetCatalog(maxTier): McpToolDefinition[]`, `findFleetTool(name, maxTier): McpToolDefinition | null`, `splitFleetParams(params): { machine: string | null; toolParams: Record<string, unknown> }`, and `toMcpTool(def)` returning `{ name, description, inputSchema }` where `inputSchema` is the definition's `parameters`.
+  - Done when: tests assert the count per tier equals `allTools` minus the server-side names plus one; no tool exposes `override_active_hours` or `reason`; every machine tool requires `machine`; and a guard test fails if any hoot tool ever defines its own `machine` parameter.
+
+- [ ] **Task 1.5: ADR 0014**
+  - Files: `docs/adr/0014-a-granted-machine-acts-on-its-site-through-the-server.md` (new)
+  - Do: One paragraph and a Consequences list, in the format of `docs/adr/0001-agent-uses-firestore-rest-not-admin-sdk.md`. Decision: a machine a site admin has granted may act on machines in its site, only through the web server's fleet routes, holding a 15-minute fleet-only session; agents still never connect to each other (ADR 0003 holds) and an agent's Firestore access stays scoped to its own machine (ADR 0001 holds). Trade-off: a compromised granted machine reaches its targets up to its tier, and any process in the logged-in user's session can use the grant; in exchange an agent on a paired machine needs no API key. Consequences: off by default; per-sender tier and targets; every call audited as `machine:<id>`; a grant change cuts within one call; a machine never overrides active hours (ADR 0013); the machine principal exists only on the fleet routes. Name the feature once by its working name with a note that the owner's name replaces it.
+  - Done when: the file exists in the house format and contradicts no other ADR.
+
+## Wave 2: Grant write path, handler, session route, dispatch
+Depends on: Wave 1.
+
+- [ ] **Task 2.1: Grant write path**
+  - Files: `web/lib/actions/setFleetSettings.server.ts` (new), `web/app/api/sites/[siteId]/fleet-settings/route.ts` (new), `web/hooks/useFleetSettings.ts` (new), `web/__tests__/api/fleet/fleet-settings.test.ts` (new), `web/openapi.yaml` only if `swoop-settings` is documented there
+  - Do: Copy the swoop settings path end to end (`web/lib/actions/setSwoopSettings.server.ts`, `web/app/api/sites/[siteId]/swoop-settings/route.ts`, `web/hooks/useSwoopSettings.ts`). GET and PATCH go through `authorizedSiteHandler` with `Capability.FLEET_SETTINGS_MANAGE`; PATCH refuses API keys the way swoop settings does (`refuseApiKey`). `setFleetSettings(ctx, input)` validates that every sender and every listed target is a machine of the site, normalises targets with machine-scope's `normalizeMachineIdsInput`, checks `maxTier` is 1–3, writes `sites/{siteId}/settings/fleet`, and emits `site_mutated` with ids only. After the write it calls `revokeFleetSessions` for every sender that was removed or whose grant narrowed (lower tier or fewer targets), and for the whole site when `enabled` turns false. The hook listens to the document with `onSnapshot`.
+  - Done when: route tests cover owner and admin allowed, member 403, API key refused on PATCH, each validation error, and revocation on disable, removal and narrowing; `auditMutationCoverage.test.ts` passes; eslint and `tsc` clean.
+
+- [ ] **Task 2.2: The fleet request handler**
+  - Files: `web/lib/fleet/handler.server.ts` (new), `web/__tests__/lib/fleet/handler.test.ts` (new), `web/__tests__/api/auditMutationCoverage.test.ts`
+  - Do: Export `fleetHandler(options: { capability })` wrapping a route handler. Order: read `Authorization: Bearer`; `verifyFleetSession` (none or expired: 401 `fleet_session_invalid`); `loadFleetSettings` then `fleetGrantFor` (null: 403 `fleet_not_granted`, and revoke that session best-effort); build the `MachineActor`; `hasCapability`; `checkRateLimit` with the machine bucket; `requireEntitlement(siteId, 'owlette.hoot')` (refused: 402 through `problemPlanRequired`); a correlation id; then call the handler with `{ actor, siteId, machineId, grant, correlationId, db }`. Write the audit row the way `authorizedSiteHandler` does (`web/lib/authorizedHandler.server.ts` ~485-741), by calling the same audit functions rather than copying them, with the machine as actor. Errors are RFC 7807 problems from `web/lib/apiErrors`. Teach `auditMutationCoverage.test.ts` that `fleetHandler` is an audited wrapper.
+  - Done when: tests cover every refusal in order (no session, expired, site disabled, not a sender, capability, rate limit, plan), the actor's shape, and an audit row with the machine as actor.
+
+- [ ] **Task 2.3: The session route**
+  - Files: `web/app/api/agent/fleet/session/route.ts` (new), `web/lib/agentAuth.server.ts` (new, only if `agentClaims` has to move to be shared), `web/app/api/agent/swoop/_shared.ts` (only to import the moved helper), `web/__tests__/api/fleet/session.test.ts` (new)
+  - Do: POST, authenticated by the agent's ID token with `role: 'agent'` and string `site_id` and `machine_id` claims: reuse `agentClaims` from `web/app/api/agent/swoop/_shared.ts` (~42-54), moving it to `web/lib/agentAuth.server.ts` if it is not importable from there. Read `web/app/api/agent/auth/refresh/route.ts` and apply the same check it makes that this machine's pairing is still good, so a machine whose agent token was revoked cannot get a session. Then `loadFleetSettings` and `fleetGrantFor` (null: 403 `fleet_not_granted`). Rate limit with `withRateLimit` (strategy `api`). `mintFleetSession`, then answer `{ token, expiresAt, ttlSeconds }` with `Cache-Control: no-store`. Emit a mutation `fleet_session_minted` with the machine as actor. Never log the token.
+  - Done when: tests cover the happy path, a user token refused, missing claims refused, not granted, a revoked pairing refused, and no token in any log call.
+
+- [ ] **Task 2.4: Dispatch**
+  - Files: `web/lib/fleet/dispatch.server.ts` (new), `web/lib/commandStatus.server.ts` (new), `web/app/api/sites/[siteId]/machines/[machineId]/commands/[commandId]/route.ts`, `web/__tests__/lib/fleet/dispatch.test.ts` (new)
+  - Do: First move the pending/completed lookup out of the public poll route into `web/lib/commandStatus.server.ts` (statuses, the non-terminal markers `running`, `downloading`, `installing`, and the screenshot signed URL) and have the route call it; behaviour and its tests (`web/__tests__/api/sites-machines-commands.test.ts`) stay unchanged. Then: `startFleetCall(ctx, { tool, params })`: `findFleetTool` under `ctx.grant.maxTier` (none: 403 `tool_not_allowed`); `splitFleetParams`; for `list_machines` return the machines the grant covers as `{ id, online, lastHeartbeatAgeSeconds, os, agentVersion, hootEnabled }` inline; otherwise check in order `grantCovers` (403 `target_not_granted`), the machine exists in the site (404), `isHootEnabled` on the target (409 `hoot_disabled`). Map the tool: a name in `EXISTING_COMMAND_MAPPINGS` (`web/lib/mcp-tools.ts` ~1423) queues that command type with its parameters; anything else queues `mcp_tool_call` with `{ tool_name, tool_params, timeout_seconds }`, the timeout clamped to `MAX_TOOL_TIMEOUT_SECONDS`. Queue only through `executeMachineCommand` with `auditActor: 'machine:<caller>'` and the correlation id, never by writing `commands/pending` directly. Return `callId = 'cmd:' + target + ':' + commandId`. `readFleetCall(ctx, callId)`: parse; re-check `grantCovers` for the target; read once with the shared lookup; on a terminal status return `{ status, content | error }` in the result envelope from `context.md` and delete the completed entry, as `pollForResult` in `web/lib/hoot/dispatch.server.ts` does.
+  - Done when: tests cover each refusal, both mappings, the timeout clamp, the audit actor string, override keys stripped from tool parameters, a read at each status, deletion after a terminal read, and a `callId` for a target outside the grant refused; the public poll route's tests pass unchanged.
+
+## Wave 3: Routes, grant UI, cleanup
+Depends on: Wave 2.
+
+- [ ] **Task 3.1: The tools, call and poll routes**
+  - Files: `web/app/api/agent/fleet/tools/route.ts`, `web/app/api/agent/fleet/call/route.ts`, `web/app/api/agent/fleet/calls/[callId]/route.ts` (all new), `web/__tests__/api/fleet/routes.test.ts` (new), `web/scripts/validate-openapi.ts`
+  - Do: Implement the fleet API contract in `context.md` on `fleetHandler`. Tools: `MACHINE_VIEW`; return `fleetCatalog(grant.maxTier)` mapped with `toMcpTool`. Call: pick the capability by the tool's tier the way the public commands route splits view and exec (tier 1 needs `MACHINE_VIEW`, higher needs `MACHINE_EXEC_COMMAND`); require an `Idempotency-Key` and use `withIdempotency` keyed on `machine:<siteId>:<machineId>`; answer 200 with content for a tool the server answers itself, else 202 with the `callId`. Poll: `MACHINE_VIEW`; `readFleetCall`. Add the three paths to `INTERNAL_ROUTES` in `web/scripts/validate-openapi.ts`.
+  - Done when: route tests cover list, call, an idempotent replay, a tier-1 tool with view only, a tool above the grant refused, a poll at each status, and another machine's `callId` refused; eslint, `tsc` and the openapi validation are clean.
+
+- [ ] **Task 3.2: Grant UI**
+  - Files: `web/components/ManageSitesDialog.tsx`, `web/components/FleetSendersEditor.tsx` (new), `web/e2e/specs/fleet-settings.spec.ts` (new), `web/e2e/helpers/seed.ts` if a seed is needed
+  - Do: Blocked on the feature's name for its copy; build with clearly marked placeholder copy if the name is still open and flag it in the log. In the site's switches (`SiteSettingSwitch` ~70, `SiteSettingsSwitches` ~117) add a switch bound to `enabled`, shown only to holders of `FLEET_SETTINGS_MANAGE`. Under it, the senders editor: the site's machines, each with a "may send" control, a tier choice (1 reads, 2 bounded changes, 3 privileged) and its targets (whole site, or chosen machines). Choosing tier 3 shows one plain warning line: it runs shell commands on its targets with nobody approving. Use `useFleetSettings` and the PATCH route; shadcn primitives, theme tokens, `lucide-react` only, lowercase copy, and the phone layout rules (no cut-off buttons). Playwright: an owner turns it on, adds a sender at tier 2 with one target, reloads and sees it kept; a member does not see the section.
+  - Done when: the e2e spec passes locally; eslint clean; light and dark screenshots of the section at desktop and phone width are in the task log for the owner's visual review.
+
+- [ ] **Task 3.3: Session cleanup when a machine leaves**
+  - Files: `web/app/api/sites/[siteId]/agent-tokens/revoke/route.ts`, the machine-removal action under `web/lib/actions/` (find it from the machine DELETE route), `web/lib/actions/deleteSite.server.ts`, their tests
+  - Do: Call `revokeFleetSessions` when agent tokens are revoked (per machine or for the site), when a machine is removed from a site and when a site is deleted. On machine removal also drop the machine from `senders` and from every sender's `targets` in `settings/fleet`.
+  - Done when: tests assert the sessions are gone and the settings pruned after each of the three paths.
+
+## Wave 4: Agent on Windows, docs
+Depends on: Wave 3 for the contract; Task 0.2.
+
+- [ ] **Task 4.1: The session keeper**
+  - Files: `agent/src/fleet_session.py` (new), `agent/src/owlette_service.py`, `agent/src/acl_hardening.py`, `agent/src/shared_utils.py` (only if IPC directories are declared there), `agent/tests/unit/test_fleet_session.py` (new), `agent/tests/unit/test_acl_hardening.py`
+  - Do: `FleetSessionKeeper` with `refresh_once()`: POST `{api_base}/agent/fleet/session` with the service's own token from its existing `AuthManager` (`get_valid_token()`), following the POST pattern at `agent/src/firebase_client.py` ~2726, timeout 15 seconds. 200: write the session file from `context.md` atomically. 403 `fleet_not_granted`: delete the file. A network error: keep the current file until its `expiresAt`, then delete it. In `owlette_service.py` the 5-second loop only starts a single-flight daemon thread when a refresh is due, copying `_process_cortex_ipc_commands` (~2677-2778): due at service start once authenticated, every 10 minutes, and after a `site_settings_refresh` command. Delete the file on unpair and on service stop. Windows only in this task; other platforms are a no-op until wave 7. In `acl_hardening.py` add a spec row for `ipc\fleet`: SYSTEM full, Administrators full, console user read. Never log the token.
+  - Done when: unit tests with mocked `requests` cover write, rotate, delete on 403, keep-then-delete on network error, single flight, and no token in logs; the ACL test covers the new row; `agent/.venv/Scripts/python -m pytest agent/tests/` passes. On-device: once the web waves are on dev and this machine is a sender, the file appears after a service restart and disappears within 10 minutes of the grant's removal.
+
+- [ ] **Task 4.2: The stdio script**
+  - Files: `agent/src/fleet_mcp.py` (new), `agent/tests/unit/test_fleet_mcp.py` (new), `agent/tests/unit/test_mcp_surface.py` (new)
+  - Do: A stdio MCP server named `owlette`, using the imports gate 0.2 recorded. Read the session file fresh on every request (`shared_utils.get_data_path('ipc/fleet')`). `list_tools`: always include a local tool `fleet_status` (no parameters) that reports whether a session exists, the site id, the machine id, the API host and the expiry, and when there is no session says a site admin grants this machine in the site's settings; with a session, GET `/agent/fleet/tools` and add its tools. `call_tool`: POST `/agent/fleet/call` with a fresh `Idempotency-Key`; on 200 map the content; on 202 poll `/agent/fleet/calls/{callId}` every second, backing off to 3 seconds after 30, until terminal or the tool's `timeout_seconds` plus 30 seconds. On 401 re-read the session file once and retry. Map the envelope: `text` to text content, `image_url` to image content by fetching the URL. A problem response becomes an error result carrying its `detail` and `code`. Imports: `mcp`, `requests`, `shared_utils` and the standard library only. All logging to stderr. `test_mcp_surface.py` asserts, against the real installed `mcp` package, every symbol the script uses, in the manner of `agent/tests/unit/test_claude_agent_sdk_surface.py`.
+  - Done when: unit tests against a fake API cover the tool list with and without a session, an inline call, a polled call, the 401 re-read, image mapping and error mapping; the surface test passes; `python.exe fleet_mcp.py` driven by an `mcp.client.stdio` client lists tools against dev.
+
+- [ ] **Task 4.3: Docs, glossary, README, changelog**
+  - Files: a new page under `web/content/docs/agent/` and its `meta.json` entry, `GLOSSARY.md`, `README.md`, `docs/changelog.md`, `web/content/docs/reference/firestore-data-model.mdx`
+  - Do: Blocked on the feature's name. The docs page: what it is, turning it on per site, senders, tiers and targets, the setup command for Windows (macOS and Linux marked as coming), what is refused and why, what the audit log shows, and that any program run by the logged-in user can use the grant. Give the page a `keywords` frontmatter list. Glossary: an entry for the feature with its _Avoid_ line (relay, local hoot) and one for "fleet session". README: one line under features. Changelog: an Unreleased entry. Data model: `settings/fleet` and `fleet_sessions`.
+  - Done when: the docs build, the glossary and README carry the entries, and the changelog entry sits under Unreleased (check the heading after any merge).
+
+## Wave 5: Proof on dev, desktop snippet
+Depends on: Wave 4; the web waves live on dev (the owner's word to push).
+
+- [ ] **Task 5.1: Two-machine proof on dev**
+  - Files: `dev/active/fleet-mcp/proof-wave5.md` (new)
+  - Do: Ask the owner before registering the server in Claude Code and before any tier-2 action, and ask which target and which process to use. On dev, grant this dev box as a sender with one target. Register: `claude mcp add owlette -- "C:\ProgramData\Owlette\python\python.exe" "C:\ProgramData\Owlette\agent\src\fleet_mcp.py"`. Then record, from a Claude Code session: the tool list; `list_machines`; one tier-1 read on the target; one tier-2 action on the agreed process; the refusals (a machine outside the targets, a target with hoot off, a tier-3 tool at tier 2); removing the grant in the dashboard with the client connected and the next call refused within 10 seconds; the audit log rows with actor `machine:<this box>`.
+  - Done when: the proof file shows each line with its output and the audit row ids, and says plainly what was not verified.
+
+- [ ] **Task 5.2: Desktop app setup snippet**
+  - Files: `desktop/src/components/AppMenu.tsx`, `desktop/src/components/ConnectAgentDialog.tsx` (new), `desktop/src-tauri/src/commands.rs`, `desktop/src-tauri/src/lib.rs`, `desktop/src/lib/ipc.ts`, the dialog's vitest
+  - Do: Blocked on the feature's name for its copy. Add a Tauri command returning this machine's setup command, built from `paths::install_root()` and `PYTHON_REL` (`agent_cli.rs`), registered in `lib.rs` and wrapped in `src/lib/ipc.ts`. Add a menu item in `AppMenu.tsx` that opens a dialog, modelled on `ReportIssueDialog.tsx`, showing the command with a copy button (`copyText`, `src/lib/clipboard.ts`). Windows only until wave 7.
+  - Done when: the vitest passes, `npx tauri build --no-bundle` builds, and light and dark screenshots are in the task log.
+
+## Wave 6: Release (first release line)
+Depends on: Wave 5.
+
+- [ ] **Task 6.1: Release to dev**
+  - Files: version files and `docs/changelog.md` through `node scripts/sync-versions.js`; nothing else
+  - Do: Follow the build-system skill's "Agent Installer Release" and the owner's release rule: bump and changelog first, build before any push, upload to dev and verify the downloads, then merge and tag. The version number is the owner's call. Every mutating release call needs the owner's go. Run `node scripts/check-security-alerts.mjs` from a named branch first.
+  - Done when: the installer is on dev, this box has taken it through the dashboard, and task 5.1's proof passes again on the released build.
+
+## Wave 7: macOS and Linux
+Depends on: Task 0.4, Wave 6.
+
+- [ ] **Task 7.1: The session file on macOS and Linux**
+  - Files: `agent/src/fleet_session.py`, `agent/src/osadapter/posix.py` (and `darwin.py` / `linux.py` if the difference is per platform), `agent/tests/unit/test_fleet_session.py`, `agent/tests/unit/test_osadapter_contract.py`; packaging scripts only if gate 0.4 found the interpreter cannot be launched by the console user
+  - Do: Apply gate 0.4's findings. Write the session file owned by the console user (`osadapter.console_user()`) with mode 0400, in a directory that user can traverse and other accounts cannot read. Re-own it when the console user changes and delete it when nobody is logged in. If the interpreter is not launchable by the console user, stop and report the options from the gate file before changing any packaging script.
+  - Done when: unit tests cover ownership, mode, the user change and the no-user case; the agent suite passes.
+
+- [ ] **Task 7.2: Script launch and setup copy on macOS and Linux**
+  - Files: `agent/src/fleet_mcp.py` (only if a path differs), `desktop/src/components/ConnectAgentDialog.tsx`, `desktop/src-tauri/src/commands.rs`, the docs page from task 4.3
+  - Do: Make the desktop app's setup command right for macOS and Linux (interpreter and script paths from `context.md`) and drop the Windows-only guard. Update the docs page with both commands.
+  - Done when: the desktop app shows the right command on each platform, in a screenshot each.
+
+## Wave 8: macOS and Linux proof
+Depends on: Wave 7.
+
+- [ ] **Task 8.1: Proof on the MacBook and the kiosk VM, and packages**
+  - Files: `dev/active/fleet-mcp/proof-wave8.md` (new)
+  - Do: Build the pkg on the MacBook and the deb on the kiosk VM as the release rule says. Install each, grant each machine as a sender on dev, and repeat task 5.1's lines with the script launched by the console user through an `mcp.client.stdio` client (and Claude Code where it is installed). Note which tools are refused as Windows-only on these targets.
+  - Done when: the proof file shows each line per platform, and says plainly what was not verified.
+
+## Wave 9: hoot turns for a machine caller
+Depends on: Wave 3.
+
+- [ ] **Task 9.1: Audit actor passthrough for a turn's server-side tools**
+  - Files: `web/lib/hoot/turnRunner.server.ts`, `web/lib/hoot-utils.server.ts` (`actionContextForHoot` ~202, `BuildExecutableToolsOptions`), their tests
+  - Do: `startTurn` passes no audit actor to its tools (~621), so server-side tools in a turn a machine started would be audited as the LLM key's owner. Add an optional audit actor to `startTurn`'s parameters and thread it through `BuildExecutableToolsOptions` to `actionContextForHoot`, beside the existing `systemActor` option. Person-driven turns are unchanged.
+  - Done when: tests show a turn started with a machine audit actor attributes its server-side tool rows to `machine:<id>`, and existing turn tests pass unchanged.
+
+- [ ] **Task 9.2: Turn reader**
+  - Files: `web/lib/hoot/turnReader.server.ts` (new), `web/__tests__/lib/hoot/turnReader.test.ts` (new)
+  - Do: `readTurn(db, chatId, turnId): Promise<{ status: 'running' | 'complete' | 'failed'; text?: string; error?: string }>`. Read `chats/{chatId}/stream/current` (statuses in `web/lib/hoot/turnStore.server.ts` ~35). `complete` is written before the messages are saved, so report `complete` only once `chats/{chatId}.messages` holds the assistant message whose `metadata.hoot.turnId` matches; until then report `running`. `error`, `cancelled` and `superseded` are `failed`. A `running` turn whose `updatedAt` is older than `TURN_STALE_MS` is `failed`. A turn with `pendingApprovals` set is `failed` with a clear reason: nobody can approve.
+  - Done when: tests cover each status, the complete-before-saved window, the stale case and pending approvals.
+
+## Wave 10: `ask_hoot`
+Depends on: Wave 9.
+
+- [ ] **Task 10.1: `ask_hoot`**
+  - Files: `web/lib/fleet/task.server.ts` (new), `web/lib/fleet/catalog.server.ts`, `web/lib/fleet/dispatch.server.ts`, `web/__tests__/lib/fleet/task.test.ts` (new), the docs page
+  - Do: Add the tool `ask_hoot` (tier 2; parameters `prompt` and optional `machines`: a list of machine ids, absent meaning every machine the grant covers) to the catalog. `startFleetTask` follows the talon runner step by step (`web/lib/talons/hootOutput.server.ts` ~267-439): resolve the key owner with `resolveSiteKeyOwner` and confirm an LLM key exists (none: a clear error naming the site owner's hoot settings); resolve targets inside the grant, hoot-enabled and online; create the chat doc with a distinct `source`; `generateTurnId`; `acquireTurnLock`; `startTurn` with the tier capped by `unattendedToolTier` and the machine's audit actor (task 9.1); cancel the stream; return `callId = 'task:' + chatId + ':' + turnId`. `readFleetCall` gains the `task:` branch through `readTurn` (task 9.2). Budget: at most 6 tasks an hour per sender and one running task per sender at a time, refused with 429 and a reason. Docs: say whose key pays, the tier cap, the budget, and that the chat shows only in the key owner's dashboard.
+  - Done when: tests cover the happy path, no key, a target outside the grant, the tier cap, the budget and the concurrent limit, and the audit attribution.
+
+## Wave 11: Tool registry and hoot's server-side tools
+Depends on: Wave 3, Task 9.1.
+
+- [ ] **Task 11.1: Registry and server-side tools**
+  - Files: `web/lib/fleet/tools/index.ts` (new), `web/lib/fleet/tools/roost.ts`, `deployments.ts`, `schedules.ts`, `displays.ts`, `reads.ts`, `screenshots.ts` (new, each exporting an empty tool list for wave 12 to fill), `web/lib/fleet/catalog.server.ts`, `web/lib/fleet/dispatch.server.ts`, tests
+  - Do: Define `FleetTool { definition: McpToolDefinition; capability; run(ctx, params): Promise<content> }` and a registry that the catalog and dispatch both read, so a later task adds a tool by editing one area file. The registry also takes an optional result mapper per machine tool name, so an area file can shape that tool's result envelope without touching dispatch. Then expose hoot's server-side tools that need no person: `get_site_logs`, `get_system_presets`, `list_talons`, `deploy_software`, `update_process`, `add_process`, `delete_process`, through `executeServerSideTool` (`web/lib/hoot-utils.server.ts` ~1906) with the machine's audit actor (task 9.1's option) and a machine list resolved inside the grant. Leave out `schedule_followup` and `cancel_followup` (they need a chat) and `create_talon` and `set_talon_enabled` (they need a person as author).
+  - Done when: tests cover each exposed tool's tier, its refusal outside the grant and its audit actor; the catalog count test is updated; the six area files exist and register nothing yet.
+
+## Wave 12: Areas
+Depends on: Wave 11. Each task edits only its own area file and its own tests. Each tool calls the existing action core its dashboard or API route uses, takes the machine's audit actor, checks the grant for every machine it names, and declares its tier. Operations only: nothing that manages members, API keys, agent tokens, webhooks, pairing, machine removal or billing.
+
+- [ ] **Task 12.1: roost**
+  - Files: `web/lib/fleet/tools/roost.ts`, `web/__tests__/lib/fleet/tools/roost.test.ts` (new)
+  - Do: Tools to list roosts and versions (tier 1), deploy a version to targets inside the grant and roll back (tier 3), on the cores behind `web/app/api/roosts/[roostId]/deploy/route.ts` and the rollback route. A deploy whose targets fall outside the grant is refused whole.
+  - Done when: tests cover the reads, a deploy inside the grant, a deploy refused outside it, and the audit actor.
+
+- [ ] **Task 12.2: deployments and owlette updates**
+  - Files: `web/lib/fleet/tools/deployments.ts`, its test (new)
+  - Do: Tools to list deployments and read one (tier 1), cancel one (tier 2), and send `update_owlette` to a machine (tier 3), on `web/lib/actions/createDeployment.server.ts` and the command path. The agent's active-hours guard still applies and a machine can never override it; say so in the tool descriptions.
+  - Done when: tests cover each tool, the grant check and the audit actor.
+
+- [ ] **Task 12.3: reboot schedules**
+  - Files: `web/lib/fleet/tools/schedules.ts`, its test (new)
+  - Do: Tools to read and set a machine's reboot schedule, on the core behind `web/app/api/sites/[siteId]/machines/[machineId]/reboot-schedule/`. Read is tier 1, set is tier 3.
+  - Done when: tests cover both tools, the grant check and the audit actor.
+
+- [ ] **Task 12.4: displays**
+  - Files: `web/lib/fleet/tools/displays.ts`, its test (new)
+  - Do: Tools to read a machine's saved display layout and its display settings (tier 1), on the cores behind `.../display-layout/` and `sites/[siteId]/display-settings/`. Applying a topology already exists as a machine tool; do not duplicate it.
+  - Done when: tests cover the reads and the grant check.
+
+- [ ] **Task 12.5: reads — metrics history, audit log, alert rules, software inventory**
+  - Files: `web/lib/fleet/tools/reads.ts`, `web/lib/fleet/reads.server.ts` (new), their tests (new)
+  - Do: Four tier-1 tools. The dashboard reads metrics history, screenshot history and installed software straight from Firestore in hooks (`web/hooks/useHistoricalMetrics.ts`, `useScreenshotHistory.ts`, `useUninstall.ts`), and alert rules have no reader; write small server readers in `reads.server.ts` for metrics history (bounded range and point count), installed software and alert rules, and use the existing audit-log core for the audit log (rows for machines inside the grant only).
+  - Done when: tests cover each reader's bounds, the grant filter and an empty result.
+
+- [ ] **Task 12.6: screenshots as images**
+  - Files: `web/lib/fleet/tools/screenshots.ts`, its test (new)
+  - Do: Make `capture_screenshot` return an `image_url` content item (the signed read URL the public poll route already mints) so the script hands the agent an image. Add a tier-1 tool listing a machine's recent screenshots with signed URLs.
+  - Done when: tests cover the envelope and the grant check; on dev, a Claude Code session sees the picture.
+
+## Wave 13: Catalog docs, proof, release
+Depends on: Wave 12, Wave 10.
+
+- [ ] **Task 13.1: Catalog reference with a drift test, proof, release**
+  - Files: a reference page under `web/content/docs/reference/`, `web/__tests__/lib/fleet/catalogDocs.test.ts` (new), `dev/active/fleet-mcp/proof-wave13.md` (new), release files as in task 6.1
+  - Do: Write the catalog reference (every tool, its tier, its parameters) and a test that fails when the page and the registry disagree on tool names or tiers. Repeat the proof on dev for one tool from each area and for `ask_hoot`. Release as in task 6.1.
+  - Done when: the drift test passes, the proof file is complete, and the release is on dev.
+
+## Log
+### 2026-11-10
+- Plan created from six research passes (server authority, agent local side, hoot task handoff, surface inventory, server execution seam, agent packaging). Ready for wave 0.
+- Assumptions 1–6 in `plan.md` are the owner's to rule on; the name blocks tasks 3.2, 4.3 and 5.2.
