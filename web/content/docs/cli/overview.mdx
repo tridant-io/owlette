@@ -30,7 +30,7 @@ npm link            # makes `owlette` available on your PATH
 owlette --version
 ```
 
-the CLI needs Node.js 20 or later. the `bin/owlette` launcher prefers the compiled `dist/` output but falls back to running the TypeScript source through `ts-node`, so `node bin/owlette …` works without `npm run build`.
+the CLI needs Node.js 20 or later. the `bin/owlette` launcher runs the compiled `dist/` output, so from a source checkout run `npm run build` first.
 
 ---
 

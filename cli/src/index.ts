@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * CLI entrypoint: builds the commander program and dispatches argv. `bin/owlette`
- * exec's `dist/index.js`, or `ts-node src/index.ts` in development.
+ * loads `dist/index.js`, or this file through ts-node where that is installed.
  */
 
 import { Command } from 'commander';
