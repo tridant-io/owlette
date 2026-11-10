@@ -40,6 +40,7 @@ import { useDevicePrefs } from '@/hooks/useDevicePrefs';
 import { useSlidePanel } from '@/hooks/useSlidePanel';
 import { unionIds } from '@/lib/deviceResolvers';
 import { nextDuplicateName } from '@/lib/processNaming';
+import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
 import { MissingPathDialog } from './components/MissingPathDialog';
@@ -143,8 +144,7 @@ export default function DashboardPage() {
   const handleScheduleApply = (schedules: ScheduleBlock[], presetId: string | null) => {
     if (scheduleEditorTarget) {
       const { machineId, process } = scheduleEditorTarget;
-      const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as 'off' | 'always' | 'scheduled';
-      handleSetLaunchMode(machineId, process.id, process.name, currentMode, process.exe_path, schedules, presetId, `Schedule saved for "${process.name}"`);
+      handleSetLaunchMode(machineId, process.id, process.name, effectiveLaunchMode(process), process.exe_path, schedules, presetId, `Schedule saved for "${process.name}"`);
     }
     setScheduleEditorOpen(false);
     setScheduleEditorTarget(null);
@@ -1801,7 +1801,7 @@ export default function DashboardPage() {
             setScheduleEditorOpen(open);
             if (!open) setScheduleEditorTarget(null);
           }}
-          schedules={scheduleEditorTarget.process._optimisticSchedules ?? scheduleEditorTarget.process.schedules ?? null}
+          schedules={effectiveSchedules(scheduleEditorTarget.process)}
           initialPresetId={scheduleEditorTarget.process._optimisticPresetId ?? scheduleEditorTarget.process.schedulePresetId}
           onChange={handleScheduleApply}
           siteTimezone={currentSite?.timezone}
@@ -1809,7 +1809,7 @@ export default function DashboardPage() {
           // false into one `=== true`, and the dialog needs all three states.
           schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
           targetMachineAgentVersion={machines.find(m => m.machineId === scheduleEditorTarget.machineId)?.agent_version}
-          currentLaunchMode={(scheduleEditorTarget.process._optimisticLaunchMode ?? scheduleEditorTarget.process.launch_mode ?? (scheduleEditorTarget.process.autolaunch ? 'always' : 'off')) as 'off' | 'always' | 'scheduled'}
+          currentLaunchMode={effectiveLaunchMode(scheduleEditorTarget.process)}
           presets={schedulePresets}
           onCreatePreset={handleCreatePreset}
           onDeletePreset={async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); }}

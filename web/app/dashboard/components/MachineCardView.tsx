@@ -47,6 +47,7 @@ import { useDevicePrefs, type DeviceKind, type DeviceSelection } from '@/hooks/u
 import { useDisplayState } from '@/hooks/useDisplayState';
 import { DisplayCanvas } from '@/components/charts/DisplayCanvas';
 import { resolveDevice, shouldShowDeviceDropdown } from '@/lib/deviceResolvers';
+import { effectiveLaunchMode } from '@/lib/processLaunch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { Machine, Process, LaunchMode, ScheduleBlock } from '@/hooks/useFirestore';
 import type { SitePlan } from '@/hooks/useSitePlan';
@@ -1032,7 +1033,7 @@ const MachineCard = memo(function MachineCard({
                             its own row */}
                         <div className="flex grow items-center gap-2 md:gap-3 sm:ml-2 md:ml-4">
                           {(() => {
-                            const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as LaunchMode;
+                            const currentMode = effectiveLaunchMode(process);
                             const modeLabels = { off: 'off', always: 'always on', scheduled: 'scheduled' } as const;
                             const modeColor = currentMode === 'always'
                               ? 'text-success border-success-border'
