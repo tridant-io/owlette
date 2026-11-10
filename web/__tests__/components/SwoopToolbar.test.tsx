@@ -11,7 +11,7 @@
 import React from 'react';
 import { act, render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
+import { BADGE_EXIT_MS, SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { tintOf } from '@/components/swoop/SwoopPresence';
 import { ACTIVITY_CLICK_MS, ACTIVITY_MOVE_MS, attach as attachActivity } from '@/lib/swoop/activity';
 import type { SwoopBarPosition } from '@/lib/swoop/barPosition';
@@ -392,6 +392,73 @@ describe('SwoopToolbar', () => {
       </TooltipProvider>,
     );
     expect(screen.getByTestId('session-badge')).toHaveTextContent('connection lost');
+  });
+});
+
+/**
+ * the badge fades up and in when it comes and back out when it goes, quick
+ * but never a pop (owner, 2026-11-10): it stays on the bar through its fade
+ * out, saying what it said, and a new word while it shows is only new text.
+ */
+describe('SwoopToolbar badge coming and going', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  const bar = (rttUs: number, linkUp = true) => (
+    <TooltipProvider>
+      <SwoopToolbar
+        session={null}
+        machineId="TEC-B4A"
+        state="connected"
+        error={null}
+        stats={
+          {
+            signal: 'open',
+            feedback: { rttUs },
+            linkUp,
+            stall: { recovery: 'none', episodes: 0, kind: null },
+          } as unknown as SwoopStats
+        }
+        onEnd={() => {}}
+        onReconnect={() => {}}
+        statsOpen={false}
+        onToggleStats={() => {}}
+      />
+    </TooltipProvider>
+  );
+
+  it('fades the pill in when it comes, and moves it only where motion is welcome', () => {
+    const { rerender } = render(bar(20_000));
+    expect(screen.queryByTestId('session-badge')).toBeNull();
+    rerender(bar(400_000));
+    const pill = screen.getByTestId('session-badge');
+    expect(pill).toHaveAttribute('data-state', 'open');
+    // with reduced motion it never moves: its settle is motion-safe
+    const slides = [...pill.classList].filter((name) => name.includes('slide-'));
+    expect(slides.length).toBeGreaterThan(0);
+    expect(slides.every((name) => name.includes('motion-safe:'))).toBe(true);
+  });
+
+  it('keeps the pill through its fade out, saying what it said, then lets it go', () => {
+    const { rerender } = render(bar(400_000));
+    rerender(bar(20_000));
+    const pill = screen.getByTestId('session-badge');
+    expect(pill).toHaveAttribute('data-state', 'closed');
+    expect(pill).toHaveTextContent('poor connection');
+
+    act(() => jest.advanceTimersByTime(BADGE_EXIT_MS - 1));
+    expect(pill).toBeInTheDocument();
+    act(() => jest.advanceTimersByTime(1));
+    expect(screen.queryByTestId('session-badge')).toBeNull();
+  });
+
+  it('changes only its words when it has something else to say', () => {
+    const { rerender } = render(bar(400_000));
+    const pill = screen.getByTestId('session-badge');
+    rerender(bar(400_000, false));
+    expect(screen.getByTestId('session-badge')).toBe(pill);
+    expect(pill).toHaveTextContent('connection lost');
+    expect(pill).toHaveAttribute('data-state', 'open');
   });
 });
 
