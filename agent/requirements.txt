@@ -1,9 +1,8 @@
 pywin32==312 ; sys_platform == "win32"  # >=311 required by mcp 2.x (see the claude-agent-sdk note below)
 psutil==7.2.2
-email-validator==2.3.0
 cryptography==50.0.2
-# Pillow is a DIRECT dependency: screenshot_capture + owlette_service compress
-# captures to JPEG with it. It used to arrive transitively through pystray, which
+# Pillow is a DIRECT dependency: screenshot_capture compresses captures to JPEG
+# with it. It used to arrive transitively through pystray, which
 # 3.0.0 dropped along with the rest of the python UI (customtkinter, CTkListbox,
 # CTkMessagebox, CTkToolTip) when the Tauri desktop app replaced it — so it has
 # to be pinned here or the screenshot path breaks on the next clean build.
@@ -21,8 +20,9 @@ tzlocal==5.4.5  # Convert Windows registry tz names to IANA (e.g. "Pacific Stand
 # bug with no error to chase. Pinned directly so it can never be dropped.
 tzdata==2026.6
 
-# Screenshot capture
-mss==9.0.2  # Fast cross-platform screenshot library
+# Screenshot capture: the Windows grab (osadapter/win.py). macOS and Linux
+# capture through the desktop app, so neither installs it.
+mss==9.0.2 ; sys_platform == "win32"
 
 # Temperature monitoring
 # HardwareMonitor wraps LibreHardwareMonitorLib 0.9.6, which uses the signed
