@@ -550,11 +550,11 @@ export async function deleteTalon(
 }
 
 /**
- * Why reassign exists: a hoot output re-resolves the AUTHOR's site access on
- * every unattended run (`hootOutput.server.ts`) and a throw there fails the
- * run, so when the author loses access their ai talons stop silently at 3am.
- * The fire-time check is deliberately NOT weakened — this changes who the
- * author is.
+ * Why reassign exists: every talon re-checks its AUTHOR's site access before
+ * any output fires (`authorRefusal` in `engine.server.ts`), so when the author
+ * loses access each of their talons switches off at its next run with nothing
+ * fired. The fire-time check is deliberately NOT weakened — this changes who
+ * the author is.
  */
 export type TalonSuccessorRejection =
   | 'not_found'

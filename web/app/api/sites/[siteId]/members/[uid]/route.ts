@@ -6,10 +6,11 @@
  * entry in one transaction. Refuses the site owner — transfer ownership with
  * POST /api/sites/{siteId}/transfer-ownership first.
  *
- * Authored talons survive the removal (they are site-owned), but a talon with a
- * hoot output re-resolves its AUTHOR's site access every run, so it starts
- * failing silently. Hence `talonCount` always in the response, and
- * `?talonSuccessorUid=<uid>` to move them BEFORE the membership write.
+ * Authored talons survive the removal (they are site-owned), but every talon
+ * re-checks its AUTHOR's site access before any output fires, so each one
+ * switches off at its next run with nothing fired. Hence `talonCount` always
+ * in the response, and `?talonSuccessorUid=<uid>` to move them BEFORE the
+ * membership write.
  * Reassignment is never implicit — silently rewriting authorship on someone
  * else's automations is worse than an orphan the operator was told about.
  *

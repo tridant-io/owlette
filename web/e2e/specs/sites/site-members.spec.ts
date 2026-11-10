@@ -30,8 +30,9 @@ import {
 const SITE_ID = 'site-members-e2e';
 const { member, owner, admin, superadmin } = TEST_USERS;
 
-// the members table's columns, in order
-const COLUMNS = ['member', 'role', 'swoop', 'actions'] as const;
+// the members table's columns, in order. the swoop cell also holds a ` · {access}`
+// shown only below md, so its reads use innerText, which leaves hidden text out
+const COLUMNS = ['member', 'role', 'swoop', 'access', 'actions'] as const;
 
 test.describe.configure({ mode: 'serial' });
 
@@ -251,7 +252,7 @@ test.describe('the members section, as a site admin', () => {
     await openMembers(page);
     await changeAccess(page, member.email, 'swoop', 'control');
 
-    await expect(tableCell(page, member.email, 'swoop')).toHaveText('control');
+    await expect(tableCell(page, member.email, 'swoop')).toHaveText('control', { useInnerText: true });
     expect(await readMemberRow(member.uid)).toMatchObject({ swoop: 'control' });
   });
 
@@ -259,7 +260,7 @@ test.describe('the members section, as a site admin', () => {
     await openMembers(page);
     await changeAccess(page, member.email, 'swoop', 'by role');
 
-    await expect(tableCell(page, member.email, 'swoop')).toHaveText('control · by role');
+    await expect(tableCell(page, member.email, 'swoop')).toHaveText('control · by role', { useInnerText: true });
     expect(await readMemberRow(member.uid)).not.toHaveProperty('swoop');
   });
 
@@ -267,7 +268,7 @@ test.describe('the members section, as a site admin', () => {
     await openMembers(page);
     await changeAccess(page, member.email, 'role', 'member');
 
-    await expect(tableCell(page, member.email, 'swoop')).toHaveText('watch · by role');
+    await expect(tableCell(page, member.email, 'swoop')).toHaveText('watch · by role', { useInnerText: true });
   });
 
   test('your own row offers remove, not change access', async ({ page }) => {
@@ -298,6 +299,6 @@ test.describe('the members section, as the site owner', () => {
     await page.goto('/admin/sites/site-C?section=members');
 
     await expect(tableCell(page, owner.email, 'actions')).toHaveText('—');
-    await expect(tableCell(page, owner.email, 'swoop')).toHaveText('control');
+    await expect(tableCell(page, owner.email, 'swoop')).toHaveText('control', { useInnerText: true });
   });
 });
