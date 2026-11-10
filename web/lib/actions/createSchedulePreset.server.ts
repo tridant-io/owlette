@@ -121,7 +121,8 @@ export function validateSchedulePresetInput(
 
 /** `sched-{slug}-{epochMs}`, matching the client convention in useSchedulePresets.ts:139. */
 function generatePresetId(name: string): string {
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  // capped so the id stays inside the 128 characters update and delete accept
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 64).replace(/^-|-$/g, '');
   return `sched-${slug || 'preset'}-${Date.now()}`;
 }
 

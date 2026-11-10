@@ -107,6 +107,17 @@ describe('createRestartPreset', () => {
     expect(call.payload.createdAt).toBe('__SERVER_TS__');
   });
 
+  it('mints an id its own delete accepts, however long the name', async () => {
+    const { presetId } = await createRestartPreset(ctx, {
+      name: 'weekday restart '.repeat(20),
+      entries: [],
+      isBuiltIn: false,
+      order: 0,
+      createdBy: 'uid_alice',
+    });
+    await expect(deleteRestartPreset(ctx, presetId)).resolves.toMatchObject({ presetId });
+  });
+
   it('rejects bad time string', async () => {
     await expect(
       createRestartPreset(ctx, {

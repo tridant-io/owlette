@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — deleting a site removes its process configs too
+
+Deleting a site left its process configs, display layouts, restart schedules
+and presets behind. They are deleted with it, and a machine on 4.1.8 or later
+leaves the site when that happens. A preset with a very long name could be
+created but then neither edited nor deleted; its id is now short enough for
+both. Nothing to update on the machine.
+
 ### fixed — schedule days and restart times the agent cannot match are refused
 
 A process schedule day sent through the API as `Monday` or `TUE` was stored as
