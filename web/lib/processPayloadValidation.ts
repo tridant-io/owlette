@@ -94,6 +94,17 @@ function clockTime(value: unknown): string | null {
   return `${match[1].padStart(2, '0')}:${match[2].padStart(2, '0')}`;
 }
 
+// the agent matches a day by its lowercase three-letter name, so `Monday` was
+// stored and silently never ran. a day written in full or in capitals is plainly
+// that day and is stored as the name the agent matches; anything else is refused.
+const DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+
+function scheduleDay(value: unknown): string | null {
+  const typed = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  const day = DAY_NAMES.find((name) => typed === name || typed === name.slice(0, 3));
+  return day ? day.slice(0, 3) : null;
+}
+
 // seconds as a person types them. the agent hands both fields to float() at every
 // launch, and versions in the field raise on anything it refuses, which ends their
 // main loop: so nothing float() refuses is stored. empty is a cleared form field.
@@ -192,10 +203,11 @@ export function validateScheduleBlocks(
       return validationError('invalid_field', `Field \`${fieldName}[${blockIndex}]\` must be an object.`);
     }
 
-    if (!Array.isArray(block.days) || !block.days.every((day) => typeof day === 'string' && day.length > 0)) {
+    const days = Array.isArray(block.days) ? block.days.map(scheduleDay) : null;
+    if (days === null || !days.every((day): day is string => day !== null)) {
       return validationError(
         'invalid_field',
-        `Field \`${fieldName}[${blockIndex}].days\` must be an array of strings.`,
+        `Field \`${fieldName}[${blockIndex}].days\` must be an array of \`mon\` … \`sun\`.`,
       );
     }
     if (!Array.isArray(block.ranges) || block.ranges.length === 0) {
@@ -218,7 +230,7 @@ export function validateScheduleBlocks(
       ranges.push({ start, stop });
     }
 
-    const cleanBlock: ScheduleBlock = { days: [...block.days], ranges };
+    const cleanBlock: ScheduleBlock = { days, ranges };
     if (block.name !== undefined) {
       if (typeof block.name !== 'string') {
         return validationError('invalid_field', `Field \`${fieldName}[${blockIndex}].name\` must be a string.`);

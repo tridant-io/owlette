@@ -91,4 +91,23 @@ describe('validateScheduleBlocks', () => {
       expect(result.error.detail).toContain('schedules[0].ranges[0]');
     }
   });
+
+  // the agent matches a day by its lowercase three-letter name; anything else was
+  // stored and silently never ran.
+  it('stores a day written another way as its three-letter name', () => {
+    const days = ['mon', 'Tue', 'WEDNESDAY', ' thursday ', 'sun'];
+    expect(validateScheduleBlocks([{ days, ranges: [{ start: '09:00', stop: '17:00' }] }])).toEqual({
+      ok: true,
+      value: [{ days: ['mon', 'tue', 'wed', 'thu', 'sun'], ranges: [{ start: '09:00', stop: '17:00' }] }],
+    });
+  });
+
+  it.each([['funday'], ['mo'], ['tues'], ['']])('refuses the day %p', (day) => {
+    const result = validateScheduleBlocks([{ days: ['mon', day], ranges: [{ start: '09:00', stop: '17:00' }] }]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('invalid_field');
+      expect(result.error.detail).toContain('schedules[0].days');
+    }
+  });
 });

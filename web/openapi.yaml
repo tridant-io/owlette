@@ -11488,7 +11488,7 @@ components:
           type: number
         days:
           type: array
-          items: { type: string }
+          items: { type: string, example: "mon", description: "`mon` … `sun`. A full or capitalised English day name is stored as its three-letter name; anything else is refused." }
         ranges:
           type: array
           minItems: 1
