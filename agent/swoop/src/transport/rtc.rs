@@ -1,8 +1,9 @@
 //! The str0m peer connection: one per viewer, the browser offers and the host
 //! answers (plan.md D8). Arm B of gate G1 — an RTP media track rendered into a
 //! `<video>` element — lifted from the bake-off host's measured arm B
-//! (`spikes/bakeoff-host/src/sinks/rtp_track.rs`) and reshaped around the
-//! product's [`VideoSink`] seam, five data channels and [`SendPacer`].
+//! (`spikes/bakeoff-host/src/sinks/rtp_track.rs`, since removed; git has it)
+//! and reshaped around the product's [`VideoSink`] seam, five data channels and
+//! [`SendPacer`].
 //!
 //! # The three settings that decide whether arm B is fast
 //!
