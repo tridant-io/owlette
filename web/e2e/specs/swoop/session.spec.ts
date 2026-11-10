@@ -1146,11 +1146,11 @@ test.describe('through a host, on a phone', () => {
       });
       const at = (x: number, y: number) => ({ x: picture.left + x * picture.width, y: picture.top + y * picture.height });
       const middleX = () => picture.left + picture.width / 2;
-      // the channel is unordered: what arrived after a mark, in the order it was sent
+      // what arrived after a mark: the channel is ordered, so in the order it was sent
       const lastSeq = () => Math.max(0, ...host.inputs.map((m) => m.seq));
-      const after = (seq: number) => host.inputs.filter((m) => m.seq > seq).sort((a, b) => a.seq - b.seq);
+      const after = (seq: number) => host.inputs.filter((m) => m.seq > seq);
       const buttons = (seq: number) => after(seq).filter((m) => m.t === 'b').map((m) => `${m.button}:${m.down ? 'down' : 'up'}`);
-      // a modifier's release goes again later (input.ts), so a key already up is not counted twice
+      // a release whose press came before the mark is not counted
       const keys = (seq: number) => {
         const down = new Set<string>();
         const out: string[] = [];

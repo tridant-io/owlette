@@ -4,11 +4,12 @@
  * window through the app's bridge, `window.__TAURI__`. playwright has no
  * bridge, so a stand-in records what the page asks of its window.
  *
- * the session bar is the title bar on top; on a side the controls move to a
- * slim strip across the top that lets presses through everywhere else. the
- * picker's header and the login page carry the same controls. in a browser
- * none of it exists. fullscreen in the app says how to leave it from inside
- * the stage; a browser leaves that to chrome.
+ * the session bar is the title bar on top, its buttons its full height; on a
+ * side the controls move to a half-height strip across the top that lets
+ * presses through everywhere else, so the picture keeps the window's full
+ * height. the picker's header and the login page carry the same controls, at
+ * full height. in a browser none of it exists. fullscreen in the app says how
+ * to leave it from inside the stage; a browser leaves that to chrome.
  *
  * no streamer and no swoop on site-A here: the page refuses the session and
  * stays put with its bar, which is all the title bar needs.
@@ -76,7 +77,7 @@ async function fakeBridge(page: Page): Promise<void> {
 const bridgeCalls = (page: Page) =>
   page.evaluate(() => (window as unknown as { __tauriCalls: string[] }).__tauriCalls);
 
-const barAt = (page: Page, position: 'top' | 'left') =>
+const barAt = (page: Page, position: 'top' | 'left' | 'right') =>
   page.addInitScript((p) => localStorage.setItem('owlette.swoop.barPosition', p), position);
 
 /**
@@ -106,46 +107,108 @@ test.describe('inside owlette swoop — admin on site-A', () => {
     await expect(controls).toBeVisible();
     await expect(bar).toHaveAttribute('data-tauri-drag-region', 'deep');
     await expect(page.getByTestId('swoop-window-strip')).toBeHidden();
+    // the refused session holds no seat, so close below closes at once
+    await expect(page.getByTestId('session-badge')).toHaveText('disconnected');
 
     // flush with the window's top right corner, as windows draws them
     const box = (await controls.boundingBox())!;
     expect(box.y).toBe(0);
     expect(box.x + box.width).toBeGreaterThan(1599);
 
+    // the bar's full height: half height is for a side bar's strip only
+    const closeButton = controls.getByRole('button', { name: 'close' });
+    const barBox = (await bar.boundingBox())!;
+    for (const name of ['minimize', 'maximize', 'close']) {
+      const button = (await controls.getByRole('button', { name }).boundingBox())!;
+      expect([name, button.y, button.height]).toEqual([name, 0, barBox.height]);
+    }
+
+    await page.mouse.move(800, 450);
+    await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+    await test.info().attach('window buttons, top bar', {
+      body: await page.screenshot({ clip: { x: 1600 - 360, y: 0, width: 360, height: 96 }, animations: 'disabled' }),
+      contentType: 'image/png',
+    });
+
     await controls.getByRole('button', { name: 'minimize' }).click();
     await controls.getByRole('button', { name: 'maximize' }).click();
-    await controls.getByRole('button', { name: 'close' }).click();
+    await closeButton.click();
     expect(await bridgeCalls(page)).toEqual(['minimize', 'toggleMaximize', 'close']);
     await test.info().attach('top', { body: await page.screenshot(), contentType: 'image/png' });
   });
 
-  test('with the bar on a side, only the controls sit in a strip across the top', async ({ page }) => {
+  test('with the bar on a side, half-height controls float at the top right and the picture keeps the full height', async ({
+    page,
+  }) => {
     await barAt(page, 'left');
     await page.goto(SESSION);
     const strip = page.getByTestId('swoop-window-strip');
     const controls = strip.getByTestId('window-controls');
     await expect(controls).toBeVisible();
     await expect(page.getByTestId('session-bar').locator(BAR_CONTROLS)).toBeHidden();
+    // the refused session holds no seat, so close below closes at once
+    await expect(page.getByTestId('session-badge')).toHaveText('disconnected');
 
+    const row = (await strip.boundingBox())!;
+    expect([row.y, row.height]).toEqual([0, 24]);
     const box = (await controls.boundingBox())!;
-    expect(box.y).toBe(0);
-    expect(box.height).toBeLessThanOrEqual(32);
     expect(box.x + box.width).toBeGreaterThan(1599);
+    for (const name of ['minimize', 'maximize', 'close']) {
+      const button = (await controls.getByRole('button', { name }).boundingBox())!;
+      expect([name, button.y, button.height]).toEqual([name, 0, 24]);
+    }
+
+    // nothing above them: the picture and the side bar run the window's full height
+    const stage = (await page.locator('video[aria-label="remote screen"]').locator('..').boundingBox())!;
+    expect([stage.y, stage.height]).toEqual([0, 900]);
+    const bar = (await page.getByTestId('session-bar').boundingBox())!;
+    expect([bar.y, bar.height]).toEqual([0, 900]);
 
     // the strip takes no press outside the controls and their drag handle: the
     // picture under the rest of it stays the machine's
-    const outsideStrip = await page.evaluate(() =>
+    const handle = (await strip.getByTestId('swoop-window-drag').boundingBox())!;
+    const outsideStrip = await page.evaluate(
+      (points) =>
+        points.map(([x, y]) => !document.elementFromPoint(x, y)?.closest('[data-testid="swoop-window-strip"]')),
       [
-        [800, 16],
+        [800, 12],
         [100, 4],
-        [1600 - 138 - 160 - 8, 16],
-      ].map(([x, y]) => !document.elementFromPoint(x, y)?.closest('[data-testid="swoop-window-strip"]')),
+        [handle.x - 8, 12],
+      ],
     );
     expect(outsideStrip).toEqual([true, true, true]);
+
+    await page.mouse.move(800, 450);
+    await expect(page.locator('html')).toHaveClass(/\bdark\b/);
+    await test.info().attach('window buttons, side bar', {
+      body: await page.screenshot({ clip: { x: 1600 - 360, y: 0, width: 360, height: 96 }, animations: 'disabled' }),
+      contentType: 'image/png',
+    });
 
     await controls.getByRole('button', { name: 'close' }).click();
     expect(await bridgeCalls(page)).toEqual(['close']);
     await test.info().attach('left', { body: await page.screenshot(), contentType: 'image/png' });
+  });
+
+  test('a right bar starts below the half-height controls on the edge they share', async ({ page }) => {
+    await barAt(page, 'right');
+    await page.goto(SESSION);
+    const bar = page.getByTestId('session-bar');
+    await expect(page.getByTestId('swoop-window-strip').getByTestId('window-controls')).toBeVisible();
+    await expect(page.getByTestId('session-badge')).toHaveText('disconnected');
+
+    const box = (await bar.boundingBox())!;
+    expect([box.y, box.height]).toEqual([0, 900]);
+    expect(box.x + box.width).toBeGreaterThan(1599);
+    // the bar's first control, the way back, sits clear of the strip's 24 px
+    const first = (await bar.locator('a:visible, button:visible').first().boundingBox())!;
+    expect(first.y).toBeGreaterThanOrEqual(24);
+
+    await page.mouse.move(800, 450);
+    await test.info().attach('window buttons, right bar', {
+      body: await page.screenshot({ clip: { x: 1600 - 360, y: 0, width: 360, height: 96 }, animations: 'disabled' }),
+      contentType: 'image/png',
+    });
   });
 
   test('fullscreen says how to leave it, inside the stage, then lets the notice go', async ({ page }) => {
@@ -391,6 +454,58 @@ test.describe('inside owlette swoop — the step-up passed in the browser', () =
       // no streamer in the emulator: the page waits for the host, with no dialog over it
       await expect(appPage.getByText(/connecting/i).first()).toBeVisible();
       await expect(appPage.getByRole('dialog')).toHaveCount(0);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // a granted session is what holds a seat, and this describe is where the spec gets one
+  test('closing the window while the session holds a seat asks first, and cancel keeps it', async ({
+    page,
+    browser,
+  }) => {
+    const { user, secret } = await seedTotpAdmin('close');
+    await browserSignIn(page, user, secret);
+    const code = await mintAppLink(page);
+
+    const app = await browser.newContext({
+      baseURL: E2E_BASE_URL,
+      storageState: { cookies: [], origins: [] },
+      userAgent: APP_UA,
+      viewport: { width: 1600, height: 900 },
+    });
+    try {
+      const appPage = await app.newPage();
+      await fakeBridge(appPage);
+      await barAt(appPage, 'top');
+      const first = appPage.waitForResponse(
+        (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST',
+        { timeout: 45_000 },
+      );
+      await appPage.goto(`/app-link?code=${code}&next=${encodeURIComponent(STEP_SESSION)}`);
+      await expect(appPage).toHaveURL(new RegExp(`${STEP_SESSION}$`), { timeout: 20_000 });
+      const grant = await first;
+      expect(grant.status(), await grant.text()).toBe(201);
+      // no streamer in the emulator, so connecting is as far as a session gets here: the seat is held from the grant
+      await expect(appPage.getByText(/connecting/i).first()).toBeVisible();
+
+      const close = appPage.getByTestId('session-bar').locator(BAR_CONTROLS).getByRole('button', { name: 'close' });
+      const dialog = appPage.getByRole('dialog');
+      await close.click();
+      await expect(dialog.getByRole('heading', { name: `leave ${STEP_MACHINE} and close the window?` })).toBeVisible();
+      await expect(dialog).toContainText('you leave the session. anyone else in it stays connected.');
+      await dialog.getByRole('button', { name: 'cancel' }).click();
+      await expect(dialog).toBeHidden();
+      // escape is a cancel too
+      await close.click();
+      await expect(dialog).toBeVisible();
+      await appPage.keyboard.press('Escape');
+      await expect(dialog).toBeHidden();
+      expect(await bridgeCalls(appPage)).toEqual([]);
+
+      await close.click();
+      await dialog.getByTestId('window-close-confirm').click();
+      expect(await bridgeCalls(appPage)).toEqual(['close']);
     } finally {
       await app.close();
     }

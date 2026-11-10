@@ -36,6 +36,8 @@
  */
 
 import crypto from 'crypto';
+import dgram from 'dgram';
+import os from 'os';
 import { expect, type Browser, type BrowserContext, type Page, type WebSocketRoute } from '@playwright/test';
 import { getAdminDb } from './emulator';
 
@@ -146,6 +148,80 @@ function hostFingerprintMac(sid: string, viewerId: string, hostFingerprint: stri
     ),
   );
   return crypto.createHmac('sha256', k).update(input).digest('base64url');
+}
+
+/**
+ * a udp relay between one viewer and the host, each told only the relay's
+ * address, so a spec can drop a share of what the viewer sends, as a poor link
+ * does. stun is never dropped: a lost connectivity check only slows ice.
+ */
+class LossyLink {
+  /** the share of the viewer's datagrams dropped from now on, `0..1`. */
+  loss = 0;
+  /** the viewer's datagrams dropped so far. */
+  dropped = 0;
+
+  private viewer: dgram.RemoteInfo | null = null;
+  private host: dgram.RemoteInfo | null = null;
+
+  private constructor(
+    readonly address: string,
+    /** where the viewer sends. */
+    private readonly viewerSide: dgram.Socket,
+    /** where the host sends. */
+    private readonly hostSide: dgram.Socket,
+  ) {
+    viewerSide.on('message', (packet, from) => {
+      this.viewer = from;
+      if (!this.host) return;
+      // rfc 7983: a first byte under 4 is stun
+      if (packet[0] > 3 && Math.random() < this.loss) {
+        this.dropped += 1;
+        return;
+      }
+      hostSide.send(packet, this.host.port, this.host.address);
+    });
+    hostSide.on('message', (packet, from) => {
+      this.host = from;
+      if (this.viewer) viewerSide.send(packet, this.viewer.port, this.viewer.address);
+    });
+  }
+
+  static async open(): Promise<LossyLink> {
+    // a real interface: chrome gathers no loopback candidates to send from
+    const address = Object.values(os.networkInterfaces())
+      .flat()
+      .find((nic) => nic?.family === 'IPv4' && !nic.internal)?.address;
+    if (!address) throw new Error('a lossy link needs an ipv4 interface that is not loopback');
+    const bound = async (): Promise<dgram.Socket> => {
+      const socket = dgram.createSocket('udp4');
+      await new Promise<void>((resolve) => socket.bind(0, address, resolve));
+      return socket;
+    };
+    return new LossyLink(address, await bound(), await bound());
+  }
+
+  get viewerPort(): number {
+    return this.viewerSide.address().port;
+  }
+
+  get hostPort(): number {
+    return this.hostSide.address().port;
+  }
+
+  close(): void {
+    this.viewerSide.close();
+    this.hostSide.close();
+  }
+}
+
+/** an sdp whose only candidate is `address:port`: through a lossy link, each side knows the relay alone. */
+function onlyCandidate(sdp: string, address: string, port: number): string {
+  const lines = sdp.split('\r\n').filter((line) => !line.startsWith('a=candidate:') && line !== 'a=end-of-candidates');
+  // bundled, so the first section's transport is the one
+  const mid = lines.findIndex((line) => line.startsWith('a=mid:'));
+  lines.splice(mid + 1, 0, `a=candidate:1 1 udp 2122260223 ${address} ${port} typ host`, 'a=end-of-candidates');
+  return lines.join('\r\n');
 }
 
 /** one viewer socket in the room, as its verified token names it. */
@@ -328,7 +404,7 @@ export class FakeSwoopHost {
   readonly problems: string[] = [];
   /** the viewer tokens the host verified on `swoop-control`. */
   readonly leases: VerifiedLease[] = [];
-  /** every `swoop-input` message, in arrival order; the channel is unordered, so sort by `seq`. */
+  /** every `swoop-input` message, in arrival order, which on an ordered channel is the order it was sent. */
   readonly inputs: ReceivedInput[] = [];
 
   private readonly sockets = new Set<RoomSocket>();
@@ -347,9 +423,14 @@ export class FakeSwoopHost {
     private readonly machineId: string,
     private readonly context: BrowserContext,
     private readonly hostPage: Page,
+    /** the relay the media path runs through, with `lossy`; null when it runs direct. */
+    readonly link: LossyLink | null,
   ) {}
 
-  /** a host for one machine, streaming at `size` (640x360 if none), and its room on the viewer page's socket. */
+  /**
+   * a host for one machine, streaming at `size` (640x360 if none), and its room on the viewer
+   * page's socket. `lossy` puts one viewer behind a `LossyLink`.
+   */
   static async start(args: {
     browser: Browser;
     viewer: Page;
@@ -357,10 +438,12 @@ export class FakeSwoopHost {
     machineId: string;
     size?: FrameSize;
     detail?: boolean;
+    lossy?: boolean;
   }): Promise<FakeSwoopHost> {
     const context = await args.browser.newContext();
     const hostPage = await context.newPage();
-    const host = new FakeSwoopHost(args.siteId, args.machineId, context, hostPage);
+    const link = args.lossy ? await LossyLink.open() : null;
+    const host = new FakeSwoopHost(args.siteId, args.machineId, context, hostPage, link);
     await hostPage.exposeFunction('swoopHostOut', (message: HostOut) => host.fromHostPage(message));
     const setup: Parameters<typeof installHostPage>[0] = [HOST_COLOUR, 'swoopHostOut', args.size ?? DEFAULT_SIZE, !!args.detail];
     await hostPage.evaluate(installHostPage, setup);
@@ -411,6 +494,7 @@ export class FakeSwoopHost {
 
   async stop(): Promise<void> {
     this.unsubscribe();
+    this.link?.close();
     await this.context.close();
   }
 
@@ -466,7 +550,8 @@ export class FakeSwoopHost {
       // an offer into a room with no host is dropped; `host-ready` asks for it again.
       if (!this.hostSid) return;
       if (message.type === 'offer') this.enqueue(() => this.onOffer(socket.id, message.sdp ?? ''));
-      if (message.type === 'candidate') {
+      // through a lossy link the host knows the relay alone
+      if (message.type === 'candidate' && !this.link) {
         const { candidate, sdpMid, sdpMLineIndex } = message;
         const init: RTCIceCandidateInit = { candidate, sdpMid, sdpMLineIndex };
         this.enqueue(() =>
@@ -542,16 +627,17 @@ export class FakeSwoopHost {
       this.toViewers(cached.answer);
       return;
     }
+    const { link } = this;
     const answerSdp = await this.hostPage.evaluate(
       ([v, s]) => (window as unknown as HostWindow).swoopHost.answer(v, s),
-      [viewer, sdp] as const,
+      [viewer, link ? onlyCandidate(sdp, link.address, link.hostPort) : sdp] as const,
     );
     const hostFingerprint = sdpFingerprint(answerSdp);
     if (!hostFingerprint) throw new Error('the host answer has no fingerprint');
     const answer = {
       type: 'answer',
       to: viewer,
-      sdp: answerSdp,
+      sdp: link ? onlyCandidate(answerSdp, link.address, link.viewerPort) : answerSdp,
       mac: hostFingerprintMac(this.hostSid!, viewer, hostFingerprint),
     };
     this.answers.set(viewer, { offer: sdp, fingerprint, answer });

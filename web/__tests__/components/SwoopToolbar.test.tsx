@@ -665,7 +665,7 @@ describe('SwoopToolbar inside owlette swoop', () => {
     expect(screen.queryByTestId('swoop-window-strip')).toBeNull();
   });
 
-  it('drags the window and ends in its controls on top; on a side they move to a strip of their own', () => {
+  it('drags the window and ends in its controls on top; on a side they move to a half-height strip of their own', () => {
     as(app('Windows NT 10.0; Win64; x64'));
     renderBar('connected');
     const bar = screen.getByTestId('session-bar');
@@ -680,14 +680,80 @@ describe('SwoopToolbar inside owlette swoop', () => {
     // on top: the bar's last control, gone when the bar is on a side
     expect(onTop.parentElement).toBe(bar);
     expect(onTop).toHaveClass('md:bar-side:hidden');
-    // on a side: the strip across the top, and only then
+    // on a side: the strip across the top, and only then; it lets presses through to the picture
     expect(strip).toContainElement(onSide);
-    expect(strip).toHaveClass('hidden', 'md:bar-side:flex');
-    // a right bar starts below the strip's controls, which share its edge
-    expect(bar).toHaveClass('md:bar-right:pt-11');
+    expect(strip).toHaveClass('hidden', 'md:bar-side:flex', 'pointer-events-none', 'h-6');
+    expect(strip).not.toHaveAttribute('data-tauri-drag-region');
+    // half height on a side only: the top bar's buttons fill the bar
+    for (const button of within(onSide).getAllByRole('button')) expect(button).toHaveClass('h-6');
+    for (const button of within(onTop).getAllByRole('button')) expect(button).not.toHaveClass('h-6');
+    // a right bar starts below the strip's controls, which share its edge; a left bar is clear of them
+    expect(bar).toHaveClass('md:bar-right:pt-9');
     expect(bar).not.toHaveClass('md:bar-left:pt-11');
     // the session's own buttons are still all there
     expect(screen.getByRole('button', { name: /end session/i })).toBeInTheDocument();
+  });
+
+  describe('closing the window', () => {
+    let close: jest.Mock;
+    beforeEach(() => {
+      close = jest.fn(() => Promise.resolve());
+      const appWindow = { close, isMaximized: () => Promise.resolve(false), onResized: () => Promise.resolve(() => {}) };
+      (window as { __TAURI__?: unknown }).__TAURI__ = { window: { getCurrentWindow: () => appWindow } };
+    });
+    afterEach(() => {
+      delete (window as { __TAURI__?: unknown }).__TAURI__;
+    });
+
+    const renderAt = (state: SwoopSessionState, retryIn: number | null) =>
+      render(
+        <TooltipProvider>
+          <SwoopToolbar
+            session={null}
+            machineId="TEC-B4A"
+            state={state}
+            error={null}
+            retryIn={retryIn}
+            onEnd={() => {}}
+            onReconnect={() => {}}
+            statsOpen={false}
+            onToggleStats={() => {}}
+          />
+        </TooltipProvider>,
+      );
+
+    it.each([
+      ['connecting', 'connecting', null],
+      ['connected', 'connected', null],
+      ['counting down to a reconnect after an end', 'ended', 7],
+      ['counting down to a reconnect after a failure', 'error', 3],
+    ] as const)('asks first while the session holds a seat: %s', async (_case, state, retryIn) => {
+      as(app('Windows NT 10.0; Win64; x64'));
+      const user = userEvent.setup();
+      renderAt(state, retryIn);
+      // the bar's own controls and the side bar's strip both ask
+      for (const controls of screen.getAllByTestId('window-controls')) {
+        await user.click(within(controls).getByRole('button', { name: 'close' }));
+        expect(screen.getByRole('dialog')).toHaveTextContent('leave TEC-B4A and close the window?');
+        await user.click(screen.getByRole('button', { name: 'cancel' }));
+      }
+      expect(close).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['idle', null],
+      ['authorizing', null],
+      ['ended', null],
+      ['error', null],
+    ] as const)('closes at once with no seat held: %s', async (state, retryIn) => {
+      as(app('Windows NT 10.0; Win64; x64'));
+      const user = userEvent.setup();
+      renderAt(state, retryIn);
+      const [onTop] = screen.getAllByTestId('window-controls');
+      await user.click(within(onTop).getByRole('button', { name: 'close' }));
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(close).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('on macos starts after the traffic lights and draws no window buttons', () => {

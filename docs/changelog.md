@@ -33,6 +33,37 @@ a rule under it and an x to clear it. Hoot's conversation search is an enclosed
 field with the same magnifier and x, and focusing it tints its border rather
 than lighting it up. Nothing to update on the machine.
 
+### added — a release's notes can be corrected
+
+`PATCH /api/installer/{version}` changes a published version's release notes,
+on the version and on the latest release when it is that one, and
+`scripts/upload-installer.mjs --notes-only` sends the version's changelog
+section through it. The installer files never change. Nothing to update on the
+machine.
+
+### fixed — swoop types every key you type, on a link that drops packets
+
+On a link that lost some of its packets, swoop lost some of the keys typed
+through it: a sentence reached the machine with letters missing. Swoop's input
+now goes reliably and in order, so every key lands, in the order it was typed.
+Nothing to update on the machine: reload the swoop page.
+
+### changed — owlette swoop's window buttons cover less of the picture
+
+In owlette swoop on Windows and Linux, with the bar down a side, minimize,
+maximize and close are now half height at the window's top right, so they cover
+less of the picture's top corner and the picture keeps the window's full height.
+The close button asks first while you are in a session. Nothing to update on the
+machine or in owlette swoop.
+
+### fixed — caps lock from a mac stays in step
+
+Caps lock turned on and off on a mac viewing another machine through swoop
+could leave that machine's caps lock the other way round: still on after you
+turned it off, then off when you turned it on. A mac tells the browser only
+half of each caps lock press, and swoop now sends the machine the whole press.
+Nothing to update on the machine: reload the swoop page.
+
 ## [4.1.27] - 2026-11-04
 ### added — each person's swoop on a site
 

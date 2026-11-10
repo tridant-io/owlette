@@ -349,6 +349,16 @@ describe('swoop peer — offer', () => {
     expect(h.state.channels.find((c) => c.label === 'swoop-meta')?.binaryType).toBe('arraybuffer');
   });
 
+  it('opens swoop-input reliable and ordered: a key lost on the way never types, and one overtaking another types the two swapped', async () => {
+    const h = peerHarness();
+    await h.peer.start();
+
+    expect(h.state.channels.find((c) => c.label === 'swoop-input')?.init).toEqual({
+      ordered: true,
+      protocol: 'owlette.swoop.v1',
+    });
+  });
+
   it('adds a recvonly video and a recvonly audio transceiver and offers first', async () => {
     const h = peerHarness();
     await h.peer.start();
