@@ -10,6 +10,22 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — small things in the dashboard
+
+A failed clear logs now says why. The screenshot and live view dialogs could
+show the previous machine's picture; they show the machine they were opened on,
+and a picked history screenshot stays picked. swoop's bar said disconnected
+while a failed start was being retried; it counts down, as the picture area
+does. An owlette update sent again to a machine that had timed out kept reading
+"may have failed"; it reads updating. A metrics chart could draw the range you
+had just switched away from. A failed sign-in, sign-up or Google sign-in showed
+two messages, and a new account was told "you can now sign in" while already
+signed in. Switching site while an alert rules save was on its way showed one
+site's rules under the other. The deploy dialog asked for the installer URL when
+only its file name was missing; it asks for the file name. /demo, /swoop and the
+swoop sign-in pages name their browser tab, and the sitemap lists the docs and
+legal pages. Nothing to update on the machine.
+
 ### fixed — api answers that were wrong or missing
 
 The machine detail API, and `owlette machine get`, always returned an empty

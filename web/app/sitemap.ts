@@ -1,4 +1,5 @@
 import type { MetadataRoute } from 'next';
+import { source } from '@/lib/source';
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const baseUrl = 'https://owlette.app';
@@ -34,11 +35,15 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: 'weekly',
       priority: 0.8,
     },
-    {
-      url: `${baseUrl}/download`,
-      lastModified: new Date(),
-      changeFrequency: 'monthly',
+    ...source.getPages().map((page) => ({
+      url: `${baseUrl}${page.url}`,
+      changeFrequency: 'weekly' as const,
       priority: 0.6,
-    },
+    })),
+    ...['/privacy', '/terms', '/legal/dmca'].map((path) => ({
+      url: `${baseUrl}${path}`,
+      changeFrequency: 'yearly' as const,
+      priority: 0.2,
+    })),
   ];
 }
