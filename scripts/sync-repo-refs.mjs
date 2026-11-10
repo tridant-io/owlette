@@ -47,10 +47,9 @@ const SCAN_ROOTS = [
   'examples',
   'functions',
   'infra',
-  'monitoring',
   'scripts',
   'sdks',
-  'site',
+  'test',
   'web',
 ];
 
