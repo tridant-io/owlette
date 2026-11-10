@@ -29,8 +29,8 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 - The server stores only the token's SHA-256, in the top-level collection `fleet_sessions`. Removing a grant, switching the site off, revoking a machine's agent token or removing the machine deletes its sessions, which cuts a live client on its next call.
 
 ### Grant
-- One document per site, `sites/{siteId}/settings/fleet`: `{ enabled, senders: { [machineId]: { maxTier, machineIds } } }`. Off by default.
-- `maxTier` is hoot's tool tier (1 reads, 2 bounded changes, 3 privileged), default 2. `machineIds` is a machine-scope list of the machines the sender may act on; absent means the whole site.
+- One document per site, `sites/{siteId}/settings/fleet`: `{ enabled, senders: { [machineId]: { maxTier, machineIds | wholeSite } } }`. Off by default.
+- `maxTier` is hoot's tool tier (1 reads, 2 bounded changes, 3 privileged), default 2. `machineIds` is a machine-scope list of the machines the sender may act on. A sender with no list reaches nothing: the whole site is an explicit `wholeSite: true`, never a default (machine-scope's owner pushed back on absent meaning everything for a principal that can run commands, and was right).
 - A target with hoot switched off (`cortexEnabled: false`) refuses fleet calls, so the existing per-machine switch is also the per-target switch.
 - A new site-wide capability, `FLEET_SETTINGS_MANAGE` (owner and site admin), gates the settings route. API keys cannot change the grant.
 

@@ -5,7 +5,7 @@ An AI assistant running on a paired machine (Claude Code, or any MCP client) can
 ## Consequences
 
 - Off by default. A site owner or site admin grants a machine, an API key never can, and a machine without a grant gets no fleet session.
-- Tier and reach are set per granted machine: tool tier 2 unless a site owner or site admin raises it, the whole site unless machines are named. No fleet tool acts on a machine that has hoot turned off.
+- Tier and reach are set per granted machine: tool tier 2 unless a site owner or site admin raises it, and only the machines they name. A granted machine with no machines named reaches nothing; the whole site is a choice they make, never the default. No fleet tool acts on a machine that has hoot turned off.
 - Every machine tool call goes through the server's shared command path, so it is refused on an offline machine. Every fleet call is audited as `machine:<machineId>` with the tool and the machine it acted on.
 - Removing a grant, turning the feature off, revoking the machine's agent token or removing the machine deletes its fleet sessions, and the server re-checks the grant on every call, so a change cuts a live MCP client within one call.
 - A machine never overrides active hours (ADR 0013): a reboot, shutdown or deployment it sends into any machine's active hours, its own included, is refused like any other with no person behind it. Tier 3's shell tools can still restart a machine themselves, the gap ADR 0013 records, which is one reason tier 3 is never the default.
