@@ -10,6 +10,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — retrying a deployment closes the apps first, like the first attempt
+
+A deployment set to close processes and hold their projects during the install
+did neither when it was retried, so the retry installed over the running app.
+A retry now does both. Nothing to update on the machine.
+
 ### fixed — offline webhooks and talons fire when nobody takes the email
 
 On a site where every user had turned the offline email off, a machine going

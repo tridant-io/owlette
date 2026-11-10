@@ -131,6 +131,12 @@ export const POST = authorizedSiteHandler<RouteParams>({
         const verifyPath =
           typeof data.verify_path === 'string' ? data.verify_path : undefined;
         const parallelInstall = data.parallel_install === true;
+        // stored by createDeployment only when non-empty. a retry that left them
+        // out reinstalled over the running app, which is often why the first try failed.
+        const closeProcesses = Array.isArray(data.close_processes) ? data.close_processes : undefined;
+        const suppressProjects = Array.isArray(data.suppress_projects)
+          ? data.suppress_projects
+          : undefined;
 
         if (!installerUrl || !installerName) {
           return problem({
@@ -190,6 +196,8 @@ export const POST = authorizedSiteHandler<RouteParams>({
             };
             if (sha256) commandData.sha256_checksum = sha256;
             if (verifyPath) commandData.verify_path = verifyPath;
+            if (closeProcesses) commandData.close_processes = closeProcesses;
+            if (suppressProjects) commandData.suppress_projects = suppressProjects;
             if (parallelInstall) commandData.parallel_install = true;
             if (activeHoursOverride) commandData.activeHoursOverride = activeHoursOverride;
 
