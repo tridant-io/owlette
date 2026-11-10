@@ -10,6 +10,12 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — scrolling a page at a time through swoop
+
+A mouse wheel set to scroll a page at a time barely moved the machine: one page
+arrived as a sixty-fourth of a page. It now scrolls the page. Arrives with the
+next agent version.
+
 ### fixed — a schedule time or launch delay the agent could not read no longer stops it
 
 A process schedule with a time no clock has (`24:00`), or a launch delay or
