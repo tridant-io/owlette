@@ -37,7 +37,8 @@ export interface AdminNavItem {
   group: AdminNavGroup;
 }
 
-// in display order: grouped by job, people first and support last (owner, 2026-10-15)
+// in display order: grouped by job, people first and support last (owner, 2026-10-15);
+// sites leads the fleet, since a site holds its machines (owner, 2026-11-10)
 const NAV_ITEMS: AdminNavItem[] = [
   {
     name: 'users',
@@ -53,7 +54,7 @@ const NAV_ITEMS: AdminNavItem[] = [
     icon: Building2,
     description: 'your sites, their members and settings',
     minRole: 'admin',
-    group: 'people',
+    group: 'fleet',
   },
   {
     name: 'installers',
