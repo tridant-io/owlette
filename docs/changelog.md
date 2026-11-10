@@ -10,6 +10,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — roost writes a changed file of the same size
+
+A roost rollout or rollback skipped every file whose size had not changed, so a
+file edited without changing its length kept its old contents. A file is now
+skipped only when the version already on the machine had the same bytes. The
+integrity check reads only the version on disk instead of every older one, and
+a sync cut off by a restart no longer holds on to the chunks it downloaded.
+Arrives with the next agent version.
+
 ### fixed — swoop refused sessions after a few failed starts
 
 A swoop session that failed before its streamer started still counted toward
