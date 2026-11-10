@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 17/24 complete
+**Progress**: 18/25 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -373,3 +373,12 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - **For 4.1:** the probe imports the shipped smooth.ts, so its `canvas` cover now equals `under`, and `canvas-vf`/`canvas-poll` throw (a VideoFrame has no `.style`). Fix the probe or skip those covers.
   - The plan's 'why' is now C5a.
 - Wave 3 stands at 3.1, 3.2, 3.3 and 3.5 done. **3.4 is blocked on the MBA**, which still doesn't answer ssh.
+- 2026-11-10, **task 3.6 (added, done): a viewer stuck in ICE checking is let go.** The owner saw a nameless watch-only 'viewer' pill. It was a zombie viewer (8584a44e, TEC-A4D, 17:45:55): admitted, connected over relay, asked for a RelayPromotion restart, then silent for 2 h+, still in the roster, with SwoopMeta overflowing.
+  - **Root cause:** the browser's restart offer carries no candidates (peer.ts:632-637). str0m's ICE agent clears pairs and remote candidates and goes to Checking, and counts an agent with no remote candidates as still possible, so it never reports Disconnected. rtc.rs dropped the Checking edge, so IcePolicy's 60 s clock never started.
+  - **Fix f7027eb9:** `IceEvent::Checking` and IcePolicy's `checking_since` give up after DISCONNECTED_LIMIT (60 s) with no pair. The new log line is 'without a working ice pair for 60 s, dropping it'.
+  - **Loop:** `cargo test --locked --lib a_relayed_viewer_that_goes_quiet` (real str0m over the fake TURN, simulated time). Red: held at +300 s. Green: let go at +60.1 s. clippy clean, cargo test 518. **Seam gap:** the test stops at the GiveUp decision; the drop from there is the existing on_ice_action → end_viewer → on_viewer_gone path.
+  - **Not verified on TEC-A4D:** it needs a 4.1.28 build. Proof there is no 'queue overflowed' for a viewer not in the roster.
+  - **Follow-ups:**
+    - 6.1 adds a PROTOCOL.md §10 sentence ('ice still checking with no pair 60 s after it began … is let go the same way, with reason: "timeout"').
+    - 7.1's changelog gets a line.
+    - Backlog: a viewer whose `bind_peer` fails has no peer and no limit (another possible nameless pill); a streamer-side verify deadline; queueing to a stuck peer during the 60 s; web `presence.ts` labelling unverified seats (owner's call).
