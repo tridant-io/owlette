@@ -50,9 +50,9 @@ use owlette_swoop::transport::framing::{FrameCodec, FrameHeader, ReceiverState};
 /// release, not whatever `agent/swoop/Cargo.toml` says in this working tree.
 /// `index.json` carries the protocol version but not this one, so it is read
 /// out of the accept vector: `bundle-version-mismatch.json` is only a mismatch
-/// relative to it, and comparing against `CARGO_PKG_VERSION` instead inverts
-/// both bundle verdicts while 3.3.5 is still the crate version. Task 2.9's half
-/// reads it from the same place, so the two stay in step.
+/// relative to it, and comparing against `CARGO_PKG_VERSION` instead refuses
+/// the valid bundle whenever the crate is not on the vectors' version (3.4.0).
+/// Task 2.9's half reads it from the same place, so the two stay in step.
 fn vector_agent_version(dir: &Path) -> String {
     let valid: Value = read_json(&dir.join("bundle/bundle-valid.json"));
     valid["agentVersion"]

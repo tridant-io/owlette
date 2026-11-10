@@ -17,7 +17,8 @@ pub mod macos;
 use macos as imp;
 
 // linux gets its own plan; until then it compiles, and says so at run time.
-// macos borrows its stubs for whatever wave 4 has not built yet.
+// macos borrows three names from it: `painted_pointer`, `process` and
+// `DesktopWatcher`.
 #[cfg(not(windows))]
 pub mod unsupported;
 #[cfg(not(any(windows, target_os = "macos")))]

@@ -1048,8 +1048,9 @@ impl RtcPeer {
         Ok(())
     }
 
-    /// Start a graceful shutdown. `poll` keeps running until the peer reports
-    /// [`PeerState::Closed`], so the DTLS close and RTCP BYE go out.
+    /// Mark the peer closed. str0m 0.23.1's `disconnect` only sets its state:
+    /// no DTLS close and no RTCP BYE go out, and the session drops the peer
+    /// straight after.
     pub fn disconnect(&mut self) {
         self.rtc.disconnect();
     }
