@@ -108,14 +108,18 @@ alerts that were already fixed on `dev` is what made nobody look. The
 
 **IMPORTANT: the changelog MUST be updated before every installer build.** Add a new `## [X.Y.Z] - YYYY-MM-DD` section summarising all changes since the last release. Never build or upload an installer without a matching changelog entry.
 
+**Build before anything is pushed.** Nothing goes to GitHub for a release (no push, PR merge or tag) until all three installers are built, uploaded to dev with `--set-latest` and their downloads verified. The owner set this for 4.1.9 and it has held since: a pushed bump with no installer behind it is a release that does not exist yet. Work on a `release/X.Y.Z` branch in its own worktree, so the bump commit stays local until step 6.
+
 **BOTH changelogs, always.** `docs/changelog.md` is internal; `web/content/docs/changelog.mdx` is the one customers actually read at `/docs/changelog`. They carry the same entries and drift the moment one is updated alone — which is what every checklist that named only the first has been causing.
 
 ```bash
-# 1. Update changelog, bump version, commit, push
+# 1. Update changelog, bump version, commit. Do not push yet (see step 6).
 # Edit docs/changelog.md AND web/content/docs/changelog.mdx → add [X.Y.Z] section to both
 node scripts/sync-versions.js X.Y.Z
 # ignore the next steps it prints (bare `screenshots:desktop`, push to main) — this recipe replaces them
-git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin dev
+# `git add -u`, not `-A`: only the tracked files the bump changed, never another
+# session's untracked work that happens to sit in the checkout
+git add -u && git commit -m "release: X.Y.Z"
 
 # 2. Build installer (~5 min, non-interactive)
 # build_installer_full.bat ends with `pause` and has `pause` on every error
@@ -197,6 +201,12 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
 # 5. Smoke test — upload success is not release success. Run the runbook's
 # "post-release smoke" section (download per platform, pair a test box, tail
 # service.log and service_host.log).
+
+# 6. Only now: push the release branch, open and merge its PR into dev, then tag
+# vX.Y.Z on the merge commit and push the tag. The tag's CI build makes the GitHub
+# Release; its bytes differ from what dev serves, which is expected.
+# A release worktree has no .claude/.env.local: source the main checkout's copy
+# before step 4.
 ```
 
 **Manual curl fallback** (one file, when the script cannot run): the runbook's "the 3-step api upload (in detail)". Two traps it does not spell out: `grep OWLETTE_API_KEY` also matches `OWLETTE_API_KEY_PROD` (use `grep '^OWLETTE_API_KEY='`), and the server treats an omitted `setAsLatest` as `true`, so a bare POST promotes — the script sends `false` for every file but the last. The route requires an `Idempotency-Key` on the POST and the finalize PUT (not on the storage PUT), and the key needs the `installer=*:write` scope.
