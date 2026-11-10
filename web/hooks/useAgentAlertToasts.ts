@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { toast } from '@/lib/toast';
 import { db } from '@/lib/firebase';
 import { launchCopy, type LaunchCopy } from '@/lib/launchCopy';
@@ -62,9 +62,13 @@ export function useAgentAlertToasts(
     seenIdsRef.current = new Set();
     if (!db || !siteId) return;
 
+    // ordered, or firestore sorts by document id: log ids are random, so the
+    // limit would keep an arbitrary 20 and a new alert would rarely be one of
+    // them. backed by the (action, timestamp desc) composite index.
     const q = query(
       collection(db, 'sites', siteId, 'logs'),
       where('action', '==', 'exe_missing'),
+      orderBy('timestamp', 'desc'),
       limit(20),
     );
     let initialSnapshot = true;
