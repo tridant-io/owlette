@@ -33,7 +33,6 @@ migrations live in `migrations/`; the Hyper-V capture/e2e VM pipeline lives in
 | `scan-firestore-writes.mjs` | `web/package.json` → `npm run scan:firestore-writes`, run by hand; no workflow runs it. The standing lockdown invariant: browser control-plane writes must stay at 0 |
 | `check-system-invoker-callers.mjs` | run by hand; no workflow runs it. CI enforces the same allowlist through the lint rule in `web/eslint.config.mjs` and its jest twin (`web/__tests__/eslint/system-invoker-allowlist.test.ts`) |
 | `check-status-page-ready.mjs` | Deploy runbooks + `infra/cron-jobs.json` (Instatus status-page readiness) |
-| `checks/loc.sh` | `.github/workflows/loc-metric.yml` (non-blocking, every PR and every push to `dev`/`main`): prints the tree total and the PR's delta from its merge base. |
 
 ## checks/ — on-demand verification
 
@@ -41,8 +40,6 @@ migrations live in `migrations/`; the Hyper-V capture/e2e VM pipeline lives in
 |---|---|
 | `checks/smoke-r2-roundtrip.mjs` | R2 chunk-pipeline round-trip against a deployed env (used in deploy runbooks). |
 | `checks/security-boundary-probe.mjs` | 60s synthetic privileged-read probe against dev (`docs/runbooks/security-boundary-monitoring.md`). |
-| `checks/loc.sh` | Tracked-line metric the tri-platform and swoop plans are budgeted against: bare total, `--per-dir`, `--against <n>`, `--between <baseRef> <headRef>`. |
-| `checks/loc-baseline.txt` | The metric's anchor total at commit `a49ed4cc`, the reference point for the tri-platform and swoop ledgers. No script reads it — pass the number to `checks/loc.sh --against` by hand. |
 | `check-membership-read-path.mjs` | Read-only check that the deployed rules and index serve the dashboard's membership queries, signed in as an ordinary user. |
 
 ## migrations/ — one-shot Firestore migrations
