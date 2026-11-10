@@ -146,7 +146,9 @@ export default function RestartScheduleDialog({
   onOpenChange,
   currentSchedule,
 }: RestartScheduleDialogProps) {
-  const { userPreferences, machineScope } = useAuth();
+  const { userPreferences, machineScope, isSiteAdmin } = useAuth();
+  // presets are site-wide, so a scoped admin applies them but writes none
+  const canManagePresets = isSiteAdmin(siteId);
   // every card mounts this dialog, so it listens only while open
   const { updateRestartSchedule } = useMachines(open ? siteId : '', machineScope(siteId));
   const { presets, createPreset, updatePreset, deletePreset } = useRestartPresets(siteId);
@@ -363,7 +365,7 @@ export default function RestartScheduleDialog({
       // Persist drifted edits back to the selected custom preset so the user doesn't
       // have to click both "update preset" and "save".
       let didUpdatePreset = false;
-      if (selectedPreset && !selectedPreset.isBuiltIn && presetIsModified) {
+      if (canManagePresets && selectedPreset && !selectedPreset.isBuiltIn && presetIsModified) {
         const validEntries = entries.filter(e => e.days.length > 0);
         await updatePreset(selectedPreset.id, { entries: validEntries, enabled });
         didUpdatePreset = true;
@@ -410,12 +412,13 @@ export default function RestartScheduleDialog({
               <Label className="text-sm text-muted-foreground">presets</Label>
               <div
                 className={`flex flex-wrap items-start gap-x-1.5 gap-y-2 ${
-                  selectedPreset && !selectedPreset.isBuiltIn && !savingNewPreset && !pendingReplacePreset ? 'pb-10' : ''
+                  canManagePresets && selectedPreset && !selectedPreset.isBuiltIn && !savingNewPreset && !pendingReplacePreset ? 'pb-10' : ''
                 }`}
               >
                 {presets.map(preset => {
                   const isActive = activePresetId === preset.id;
                   const showActionRow =
+                    canManagePresets &&
                     isActive &&
                     selectedPreset &&
                     !selectedPreset.isBuiltIn &&
@@ -546,7 +549,7 @@ export default function RestartScheduleDialog({
                     </div>
                   );
                 })}
-                {!savingNewPreset && (
+                {canManagePresets && !savingNewPreset && (
                   <button
                     type="button"
                     onClick={() => setSavingNewPreset(true)}

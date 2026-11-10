@@ -23,6 +23,7 @@ import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { authHeaders, mintApiKey, revokeApiKey, type MintedApiKey } from '../../helpers/apiKey';
 import { clearSiteLogs, dedicatedUser, seedDedicatedUser, seedLogEvents } from '../../helpers/coverageSeed';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
+import { pinDashboardContext, seedMachineWithProcesses } from '../../helpers/processConfig';
 import { roleState } from '../../helpers/roles';
 import { seedMachine, seedMemberRow, seedSite, type TestUser } from '../../helpers/seed';
 import type { TalonDoc } from '@/lib/talons/types';
@@ -45,6 +46,7 @@ const MACHINES = [IN, IN2, OUT];
 const IN_LOG = `log-scope-in-${SUFFIX}`;
 const OUT_LOG = `log-scope-out-${SUFFIX}`;
 const TALON = `talon-scope-${SUFFIX}`;
+const PROC = `proc-scope-${SUFFIX}`;
 const OUT_OF_SCOPE = 'machine not found or no access';
 
 let member: TestUser;
@@ -58,7 +60,9 @@ test.beforeAll(async () => {
   await seedSite({ id: SITE, name: SITE_NAME, owner: 'someone-else', timezone: 'UTC' });
   await seedSite({ id: HOME, name: HOME_NAME, owner: 'someone-else', timezone: 'UTC' });
   // no monitors: a hardware subdoc would outlive the machine doc's delete
-  for (const machineId of MACHINES) await seedMachine(SITE, machineId, { monitorCount: 0 });
+  for (const machineId of [IN, OUT]) await seedMachine(SITE, machineId, { monitorCount: 0 });
+  // IN2 runs a process, so its card opens the process schedule editor (no monitors either)
+  await seedMachineWithProcesses(SITE, IN2, [{ id: PROC, name: PROC }]);
   // swoop on, and IN able to stream, so the menus show what a swoop mode hides
   await db.doc(`sites/${SITE}/settings/swoop`).set({ enabled: true });
   await db.doc(`sites/${SITE}/machines/${IN}`).set({ capabilities: { swoop: 1 } }, { merge: true });
@@ -103,6 +107,7 @@ test.afterAll(async () => {
     await db.doc(`sites/${SITE}/machines/${machineId}/commands/pending`).delete();
     await db.doc(`sites/${SITE}/machines/${machineId}`).delete();
   }
+  await db.doc(`config/${SITE}/machines/${IN2}`).delete();
   // the seeded rows, and the two the talon's run wrote
   await clearSiteLogs(SITE);
   await db.doc(`sites/${SITE}/talons/${TALON}`).delete();
@@ -273,6 +278,25 @@ test("a scoped admin's schedule dialogs offer only their machines", async ({ pag
   // IN is the current machine, which leaves IN2 the only other one
   await expect(apply.getByText('0 of 1 selected', { exact: true })).toBeVisible();
   await expect(apply.getByText(OUT)).toHaveCount(0);
+});
+
+test('a scoped admin applies presets but is offered none to save, since presets are site-wide', async ({ page }) => {
+  // process rows show only expanded
+  await pinDashboardContext(admin.uid, SITE);
+  await signIn(page, admin);
+
+  const menu = await openMenu(page, IN);
+  await menu.getByTestId('machine-context-menu-schedule-restarts-gear').click();
+  const restarts = page.getByRole('dialog', { name: /^restart schedule — / });
+  await expect(restarts.getByRole('button', { name: 'apply to other machines...' })).toBeVisible();
+  await expect(restarts.getByRole('button', { name: 'new preset' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(restarts).toBeHidden();
+
+  await card(page, IN2).getByRole('button', { name: `configure schedule for ${PROC}` }).click();
+  const schedule = page.getByRole('dialog', { name: 'configure schedule' });
+  await expect(schedule.getByRole('button', { name: 'save schedule' })).toBeVisible();
+  await expect(schedule.getByRole('button', { name: 'new preset' })).toHaveCount(0);
 });
 
 test("a scoped admin's commands reach their machines only, by session", async ({ page }) => {

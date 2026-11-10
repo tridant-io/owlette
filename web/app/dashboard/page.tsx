@@ -1828,9 +1828,10 @@ export default function DashboardPage() {
           targetMachineAgentVersion={machines.find(m => m.machineId === scheduleEditorTarget.machineId)?.agent_version}
           currentLaunchMode={(scheduleEditorTarget.process._optimisticLaunchMode ?? scheduleEditorTarget.process.launch_mode ?? (scheduleEditorTarget.process.autolaunch ? 'always' : 'off')) as 'off' | 'always' | 'scheduled'}
           presets={schedulePresets}
-          onCreatePreset={handleCreatePreset}
-          onDeletePreset={async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); }}
-          onUpdatePreset={async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); }}
+          // presets are site-wide: without the handlers a scoped admin applies them but writes none
+          onCreatePreset={isSiteAdmin(currentSiteId) ? handleCreatePreset : undefined}
+          onDeletePreset={isSiteAdmin(currentSiteId) ? async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); } : undefined}
+          onUpdatePreset={isSiteAdmin(currentSiteId) ? async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); } : undefined}
         />
       )}
 
