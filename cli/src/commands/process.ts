@@ -190,8 +190,8 @@ export function registerProcessCommands(program: Command): void {
     .requiredOption('--name <name>', 'human-readable name for the process')
     .requiredOption('--exe <path>', 'absolute path to the executable')
     .option('--cwd <path>', 'working directory for the process')
-    .option('--priority <priority>', 'process priority (idle|below|normal|above|high|realtime)')
-    .option('--visibility <visibility>', 'window visibility (visible|hidden|minimized|maximized)')
+    .option('--priority <priority>', 'process priority (Low|Normal|High|Realtime)')
+    .option('--visibility <visibility>', 'window visibility (Normal|Hidden)')
     .option('--launch-mode <mode>', 'launch mode (off|always|scheduled)')
     .option(
       '--idempotency-key <key>',
@@ -266,8 +266,8 @@ export function registerProcessCommands(program: Command): void {
     .option('--name <name>', 'human-readable name for the process')
     .option('--exe <path>', 'absolute path to the executable')
     .option('--cwd <path>', 'working directory for the process')
-    .option('--priority <priority>', 'process priority (idle|below|normal|above|high|realtime)')
-    .option('--visibility <visibility>', 'window visibility (visible|hidden|minimized|maximized)')
+    .option('--priority <priority>', 'process priority (Low|Normal|High|Realtime)')
+    .option('--visibility <visibility>', 'window visibility (Normal|Hidden)')
     .option('--launch-mode <mode>', 'launch mode (off|always|scheduled)')
     .option(
       '--idempotency-key <key>',
