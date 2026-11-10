@@ -34,6 +34,8 @@ interface FakeDbState {
   setMachine: (data: Record<string, unknown> | null) => void;
   // Optional override for installed_software.where().limit().get().
   setSoftware: (records: Array<Record<string, unknown>>) => void;
+  // A deployment doc under `sites/{siteId}/deployments/{id}`, keyed by its full path.
+  setDeployment: (path: string, data: Record<string, unknown>) => void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any;
 }
@@ -42,6 +44,7 @@ function buildFakeDb(): FakeDbState {
   const setCalls: SetCall[] = [];
   let machineData: Record<string, unknown> | null = { online: true };
   let softwareRecords: Array<Record<string, unknown>> = [];
+  const deployments = new Map<string, Record<string, unknown>>();
 
   function makeQuery(): unknown {
     let whereField = '';
@@ -72,6 +75,7 @@ function buildFakeDb(): FakeDbState {
       path: docPath,
       collection: (sub: string) => makeCollectionRef(`${docPath}/${sub}`),
       get: async () => {
+        if (deployments.has(docPath)) return { exists: true, data: () => deployments.get(docPath) };
         if (docPath.startsWith('sites/') && docPath.includes('/machines/') && !docPath.includes('/commands/')) {
           // The machine doc itself.
           if (machineData === null) return { exists: false, data: () => undefined };
@@ -108,6 +112,9 @@ function buildFakeDb(): FakeDbState {
     },
     setSoftware: (records) => {
       softwareRecords = records;
+    },
+    setDeployment: (path, data) => {
+      deployments.set(path, data);
     },
     db,
   };
@@ -214,6 +221,25 @@ describe('parseTriggerUninstallInput', () => {
     expect(out).toEqual({ software_name: 'X' });
     expect(Object.prototype.hasOwnProperty.call(out, 'close_processes')).toBe(false);
     expect(Object.prototype.hasOwnProperty.call(out, 'timeout_seconds')).toBe(false);
+  });
+
+  it('accepts a deployment_id and treats null as absent', () => {
+    expect(
+      parseTriggerUninstallInput({ software_name: 'X', deployment_id: 'deploy-1700000000000' }),
+    ).toEqual({ software_name: 'X', deployment_id: 'deploy-1700000000000' });
+    expect(parseTriggerUninstallInput({ software_name: 'X', deployment_id: null })).toEqual({
+      software_name: 'X',
+    });
+  });
+
+  it.each([
+    ['a path', 'deploy-1/../../other'],
+    ['empty', ''],
+    ['not a string', 42],
+  ])('rejects a deployment_id that is %s', (_label, deploymentId) => {
+    expect(() =>
+      parseTriggerUninstallInput({ software_name: 'X', deployment_id: deploymentId }),
+    ).toThrow(/deployment_id/);
   });
 });
 
@@ -448,5 +474,89 @@ describe('triggerUninstall — command write shape (parity with useUninstall.ts)
     const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
     expect(entry.installer_type).toBe('custom');
     expect(entry.verify_paths).toEqual([]);
+  });
+});
+
+describe('triggerUninstall — deployment_id', () => {
+  function fakeWithTd() {
+    const fake = buildFakeDb();
+    fake.setSoftware([
+      { name: 'TD', uninstall_command: 'unins.exe', installer_type: 'inno', install_location: 'C:/td' },
+    ]);
+    return fake;
+  }
+
+  it('carries the deployment_id onto the command when the machine is a finished target', async () => {
+    const fake = fakeWithTd();
+    fake.setDeployment('sites/site-a/deployments/deploy-1', {
+      targets: [{ machineId: 'm0', status: 'completed' }, { machineId: 'm1', status: 'failed' }],
+    });
+    const result = await triggerUninstall(
+      'site-a',
+      'm1',
+      { software_name: 'TD', deployment_id: 'deploy-1' },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    expect(entry.deployment_id).toBe('deploy-1');
+    expect(result.deployment_id).toBe('deploy-1');
+  });
+
+  // a dashboard loaded before deployment_id was read sends it for every selected machine.
+  it('queues the uninstall untied, as before, when the deployment does not target the machine', async () => {
+    const fake = fakeWithTd();
+    fake.setDeployment('sites/site-a/deployments/deploy-1', {
+      targets: [{ machineId: 'm0', status: 'completed' }],
+    });
+    const result = await triggerUninstall(
+      'site-a',
+      'm1',
+      { software_name: 'TD', deployment_id: 'deploy-1' },
+      { db: fake.db, now: () => 1 },
+    );
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    expect(Object.prototype.hasOwnProperty.call(entry, 'deployment_id')).toBe(false);
+    expect(result).not.toHaveProperty('deployment_id');
+  });
+
+  it.each([
+    ['is not on this site', null, /not found on site/],
+    [
+      'is still installing on this machine',
+      { targets: [{ machineId: 'm1', status: 'installing' }] },
+      /still installing/,
+    ],
+  ])('refuses, and writes nothing, when the deployment %s', async (_label, deployment, message) => {
+    const fake = fakeWithTd();
+    if (deployment) fake.setDeployment('sites/site-a/deployments/deploy-1', deployment);
+    await expect(
+      triggerUninstall(
+        'site-a',
+        'm1',
+        { software_name: 'TD', deployment_id: 'deploy-1' },
+        { db: fake.db, now: () => 1 },
+      ),
+    ).rejects.toMatchObject({
+      name: 'TriggerUninstallError',
+      code: 'validation_failed',
+      message: expect.stringMatching(message),
+      fieldErrors: { 'body.deployment_id': expect.any(Array) },
+    });
+    expect(fake.setCalls).toHaveLength(0);
+  });
+});
+
+describe('triggerUninstall — two versions under one name', () => {
+  // unchanged on purpose: a person picked this program in a dialog. the deployment route refuses
+  // the same case as software_ambiguous.
+  it('queues the first record, as it always has', async () => {
+    const fake = buildFakeDb();
+    fake.setSoftware([
+      { name: 'TD', version: '2023', uninstall_command: 'unins-2023.exe', installer_type: 'inno' },
+      { name: 'TD', version: '2022', uninstall_command: 'unins-2022.exe', installer_type: 'inno' },
+    ]);
+    await triggerUninstall('site-a', 'm1', { software_name: 'TD' }, { db: fake.db, now: () => 1 });
+    const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
+    expect(entry.uninstall_command).toBe('unins-2023.exe');
   });
 });

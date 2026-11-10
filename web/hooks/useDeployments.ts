@@ -275,9 +275,9 @@ export function useDeployments(siteId: string) {
     return result.retried as number;
   };
 
+  /** cancels one machine's target; the rest of the deployment carries on. */
   const cancelDeployment = async (deploymentId: string, machineId: string, installer_name: string) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
-    void machineId;
     void installer_name;
 
     const response = await fetch(`${deploymentsUrl(siteId)}/${encodeURIComponent(deploymentId)}/cancel`, {
@@ -286,7 +286,7 @@ export function useDeployments(siteId: string) {
         'content-type': 'application/json',
         'Idempotency-Key': makeIdempotencyKey(`deployment-cancel-${deploymentId}`),
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ machines: [machineId] }),
     });
     if (!response.ok) throw new Error(await readApiError(response, 'Failed to cancel deployment'));
 

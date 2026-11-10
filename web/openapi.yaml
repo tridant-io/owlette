@@ -5419,11 +5419,16 @@ paths:
         Marks every target in `pending` / `closing_processes` /
         `downloading` state as `cancelled`, removes this deployment's
         `install_software` command from those machines' pending queue, and
-        queues `cancel_installation` on them. Targets that have started
-        `installing` (or are already terminal) are left alone. Once no target
-        is in flight the deployment settles to `cancelled`, `completed`,
-        `failed` or `partial`; otherwise it stays `in_progress`.
-        `409 no_cancellable_targets` when nothing is cancellable. Requires
+        queues `cancel_installation` on them. With `machines`, only those
+        machines' targets are cancelled and the rest carry on. Targets that
+        have started `installing` (or are already terminal) are left alone.
+        Once no target is in flight the deployment settles to `cancelled`,
+        `completed`, `failed` or `partial`; otherwise it stays `in_progress`.
+        `409 no_cancellable_targets` when nothing is cancellable, or nothing
+        named in `machines` is; a malformed `machines` is `400`. The same 409
+        comes back when every target moved past `downloading` while the call
+        ran, though `cancel_installation` may already have been sent to those
+        machines. Requires
         `DEPLOYMENT_MANAGE`; API keys need `site=<siteId>:write`.
       security:
         - apiKey: []
@@ -5435,7 +5440,14 @@ paths:
         required: false
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              properties:
+                machines:
+                  type: array
+                  minItems: 1
+                  items: { type: string, minLength: 1 }
+                  description: Cancel only these machines' targets. Omit to cancel every cancellable target.
       responses:
         '200':
           description: Cancellation processed.
@@ -5470,12 +5482,23 @@ paths:
     post:
       operationId: uninstallSiteDeployment
       tags: [Deployments]
-      summary: queue uninstall_software per target
+      summary: uninstall a program from the deployment's targets
       description: |
-        Queues `uninstall_software` on every target machine, whatever its status,
-        and flips the deployment-level status to `uninstalling`. Per-target
-        reconciliation is asynchronous — poll `GET ../{deploymentId}` for
-        progress. `409 no_targets` when the deployment has no targets.
+        Looks `software_name` up, by exact name, in each target machine's
+        software list and queues its uninstall there, the same command
+        `POST /api/sites/{siteId}/machines/{machineId}/uninstall` queues, tied
+        to this deployment. Targets not queued come back in `skipped`, each with
+        a `reason`: `install_in_flight` (the target is not finished yet),
+        `machine_not_found` (the machine was removed from the site),
+        `software_not_found` (the machine does not list the program),
+        `software_ambiguous` (it lists more than one version under that name;
+        uninstall the one you mean per machine) or `software_record_invalid`
+        (its entry has no uninstall command). Each
+        queued target turns `uninstalled`, or `failed` with an `error`, when its
+        agent reports; poll `GET ../{deploymentId}`. `409 no_uninstallable_targets`
+        when no target can take it, and then nothing is queued (the problem
+        carries `skipped`). `404` when the deployment does not exist; `409
+        no_targets` when it has no targets.
 
         ### Authentication and scopes
 
@@ -5489,26 +5512,49 @@ paths:
       parameters:
         - $ref: '#/components/parameters/RequiredIdempotencyKeyHeader'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              required: [software_name]
+              properties:
+                software_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: The program's exact name in the machines' software list.
       responses:
         '200':
-          description: Uninstall queued.
+          description: Uninstall queued on the targets that list the program.
           content:
             application/json:
               schema:
                 type: object
-                required: [deploymentId, siteId, status, queued, machine_ids]
+                required: [deploymentId, siteId, status, queued, machine_ids, skipped]
                 properties:
                   deploymentId: { type: string }
                   siteId: { type: string }
-                  status: { type: string }
+                  status: { type: string, description: The deployment's status as read; this call does not change it. }
                   queued: { type: integer }
                   machine_ids:
                     type: array
                     items: { type: string }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [machineId, reason]
+                      properties:
+                        machineId: { type: string }
+                        reason:
+                          type: string
+                          enum:
+                            - install_in_flight
+                            - machine_not_found
+                            - software_not_found
+                            - software_ambiguous
+                            - software_record_invalid
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '402': { $ref: '#/components/responses/PlanRequired' }
@@ -7896,7 +7942,14 @@ paths:
         Queues an uninstall of an installed program, looked up by name in the
         machine's software inventory. `404` carries `machine_not_found` or
         `software_not_found`; `409 software_record_invalid` means the inventory
-        entry has no usable uninstall command.
+        entry has no usable uninstall command. When the machine lists more than
+        one version under the name, the first record found is used. With
+        `deployment_id`, the uninstall moves that deployment's target for this
+        machine to `uninstalled` (or `failed`) when the agent reports. A
+        `deployment_id` that is not a deployment on this site is `400`, and so is
+        one whose target for this machine has not finished installing; one that
+        does not target this machine is ignored and the uninstall is queued
+        untied.
 
         ### Authentication and scopes
 
@@ -7925,6 +7978,10 @@ paths:
                   maxItems: 32
                   items: { type: string, minLength: 1 }
                 timeout_seconds: { type: number, description: Clamped to 1-86400. }
+                deployment_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: A deployment on this site whose finished target on this machine the uninstall moves.
       responses:
         '202':
           description: Uninstall command queued.

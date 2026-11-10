@@ -10,6 +10,32 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — an uninstall started from a deployment updates that deployment
+
+Uninstall software from a deployment's menu removed the program but left the
+deployment showing completed. Each machine the deployment finished on now turns
+uninstalled, or failed with the reason, when its agent reports. Over the API,
+the machine uninstall route takes the same optional `deployment_id`. Nothing to
+update on the machine.
+
+### fixed — uninstalling a deployment over the API works, and needs the program's name
+
+`POST …/deployments/{id}/uninstall` and `owlette deploy uninstall` queued a
+command every agent rejected, which marked every machine failed. The call now
+requires `software_name` (`--software` in the CLI): a script that sends none
+gets `400 validation_failed` until it names the program. The program is
+uninstalled from each machine that finished the install, is still on the site
+and lists that exact name once; the rest come back in `skipped` with the
+reason. Nothing to update on the machine.
+
+### fixed — cancelling one machine in a deployment cancels only that machine
+
+The x on a machine in a deployment cancelled every machine still queued in it.
+It now cancels that machine only, and two cancels in quick succession no longer
+undo each other. Over the API, the cancel route takes an optional `machines`
+list, as retry does; without it every machine that can still be cancelled is,
+as before. Nothing to update on the machine.
+
 ### fixed — a deployment keeps every machine's result
 
 When several machines reported on one deployment at the same moment, only one

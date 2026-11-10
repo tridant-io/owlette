@@ -140,10 +140,10 @@ a retry does not carry the deployment's active-hours reason over: it asks its ow
 
 ## cancelling
 
-the × on a target that is `pending`, `closing_processes`, `downloading` or `installing` cancels the **whole deployment**, not that machine, and asks for no confirm:
+the × on a target that is `pending`, `closing_processes`, `downloading` or `installing` cancels **that machine only**, and asks for no confirm. the other machines in the deployment carry on:
 
-- every target still `pending`, `closing_processes` or `downloading` has its queued install removed, gets a `cancel_installation` command, and is marked `cancelled`
-- targets that are `installing` or finished are left alone. the × shows on an installing target, but when nothing cancellable remains the request is refused with `409 no_cancellable_targets`, and the page shows nothing
+- a target still `pending`, `closing_processes` or `downloading` has its queued install removed, gets a `cancel_installation` command, and is marked `cancelled`
+- a target that is `installing` cannot be cancelled. the × shows on it, but the request is refused with `409 no_cancellable_targets`, and the page shows nothing
 
 a cancel is only certain for a target the agent has not picked up. one already closing processes or downloading is marked `cancelled`, but the agent has no installer running to stop yet, so the install can carry on and the target can still end `completed`.
 
@@ -165,7 +165,7 @@ owlette sends one uninstall per machine, by program name, and looks the program 
 | macOS | the agent quits the application and removes its bundle, only for an application bundle the machine's software list shows (type `APP`) |
 | Linux | the uninstall fails |
 
-today the uninstall is not tied to the deployment: its targets keep their install states, the record never reaches `uninstalled`, and the menu keeps offering **uninstall software**.
+on a machine whose install in this deployment has finished, the uninstall is tied to the record: when the agent reports, that target's line turns `uninstalled`, or `failed` with the reason, also when several machines report at the same moment. a target turns `uninstalled` even when Windows still lists the program and asks for a reboot. once every target is `uninstalled`, the record is `uninstalled` and the menu stops offering **uninstall software**. a selected machine that is not a target, or whose install is still running, runs the uninstall without changing the record.
 
 ---
 
@@ -206,7 +206,7 @@ a target whose agent stops reporting, because it went offline or restarted mid-i
 
 ### the deployment cannot be cancelled
 
-the cancel only reaches targets still `pending`, `closing_processes` or `downloading`. once every target is installing or finished, there is nothing to cancel: use **retry failed** for failures, or **uninstall software** to remove a finished install.
+the cancel only reaches targets still `pending`, `closing_processes` or `downloading`. once a target is installing or finished, there is nothing to cancel on it: use **retry failed** for failures, or **uninstall software** to remove a finished install.
 
 ### the record cannot be deleted
 
@@ -218,4 +218,4 @@ wait until every target has finished, or cancel what can be cancelled. deleting 
 
 - **trust the source.** the agent runs installers with SYSTEM rights. deploy only installers you trust, and try new ones on one machine first
 - **agent updates** are not deployments: **update owlette**, beside **new deployment**, updates the agent itself. see [self-update](/docs/agent/self-update#from-the-dashboard)
-- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` (with an optional `machines` list), `…/cancel` and `…/uninstall` act on it; `DELETE …/{deploymentId}` removes the record. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. create and retry take `active_hours_override: { "reason" }`, which the server writes onto every install it queues, with you as `approvedBy`. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI, where `--override-active-hours --reason <text>` sends the override
+- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` and `…/cancel` (each with an optional `machines` list) act on it; `DELETE …/{deploymentId}` removes the record. `…/uninstall` takes the program's exact `software_name` from the machines' software lists and uninstalls it from every finished target that lists it; the others come back in `skipped`, and when none can take it the call is refused with `409 no_uninstallable_targets`. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. create and retry take `active_hours_override: { "reason" }`, which the server writes onto every install it queues, with you as `approvedBy`. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI, where `--override-active-hours --reason <text>` sends the override

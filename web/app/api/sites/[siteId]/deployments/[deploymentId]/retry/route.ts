@@ -19,6 +19,7 @@ import {
 import { withIdempotency } from '@/lib/idempotency';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { parseMachinesFilter } from '@/lib/machinesFilter';
 import { installerChecksumErrorToResponse } from '@/lib/installerChecksumResponse.server';
 import {
   computeInstallerChecksum,
@@ -49,22 +50,12 @@ export const POST = authorizedSiteHandler<RouteParams>({
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
-    const body = (parsed.body ?? {}) as { machines?: unknown; active_hours_override?: unknown };
+    const body = (parsed.body ?? {}) as { active_hours_override?: unknown };
 
     // Optional filter for the dashboard's per-row retry; omitted → all failed.
-    let machineFilter: Set<string> | null = null;
-    if (body.machines !== undefined) {
-      if (
-        !Array.isArray(body.machines) ||
-        body.machines.length === 0 ||
-        body.machines.some((m) => typeof m !== 'string' || m.length === 0)
-      ) {
-        return problemValidation('machines must be a non-empty string array when provided', {
-          'body.machines': ['must be a non-empty string array when provided'],
-        });
-      }
-      machineFilter = new Set(body.machines as string[]);
-    }
+    const filter = parseMachinesFilter(parsed.body);
+    if (!filter.ok) return filter.response;
+    const machineFilter = filter.machines ? new Set(filter.machines) : null;
 
     // a retry needs its own approval; the original call's override does not carry over.
     const actor = siteAuditActor(ctx);

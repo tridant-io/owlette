@@ -144,6 +144,17 @@ export function mockDbFactory(): Record<string, unknown> {
      */
     getAll: (...refs: Array<{ get: () => Promise<unknown> }>) =>
       Promise.all(refs.map((ref) => ref.get())),
+    /**
+     * Runs the callback once. `tx.get` reads through the ref, so it shares the
+     * `mocks.get` queue; `tx.update` lands on `mocks.update`.
+     */
+    runTransaction: (fn: (tx: unknown) => Promise<unknown>) =>
+      fn({
+        get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+        update: (ref: { update: (data: unknown) => unknown }, data: unknown) => {
+          ref.update(data);
+        },
+      }),
   };
 }
 
