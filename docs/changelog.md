@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — a deployment keeps every machine's result
+
+When several machines reported on one deployment at the same moment, only one
+result was kept. The others stayed installing until they were marked failed,
+or, after an uninstall, stayed completed. Each result is now applied to the
+latest record, and a machine whose result arrives while stale installs are
+being checked is no longer marked failed. Nothing to update on the machine.
+
 ### fixed — on Windows, kill and restart in the desktop app reach the running instance
 
 When the newest row for a process held a pid that Windows had since given to
