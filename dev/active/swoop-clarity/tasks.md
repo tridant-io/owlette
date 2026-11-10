@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 15/24 complete
+**Progress**: 17/24 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -128,7 +128,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
 
 ## Wave 3: the canvas path, the menu, refinement and the Mac
 
-- [ ] **Task 3.1: smooth scaling draws each presented frame below 1:1, and the stats say which path drew it**
+- [x] **Task 3.1: smooth scaling draws each presented frame below 1:1, and the stats say which path drew it**
   - Files: `web/lib/swoop/video/receiver.ts`, `web/lib/swoop/video/presenter.ts`, `web/hooks/useSwoopSession.ts`, `web/hooks/useSwoopView.ts`, `web/components/swoop/SwoopStage.tsx`, `web/app/swoop/[siteId]/[machineId]/page.tsx`, `web/components/swoop/SwoopStatsOverlay.tsx`, `web/__tests__/lib/swoop/receiver.test.ts`, `web/__tests__/lib/swoop/presenter.test.ts`, `web/__tests__/components/SwoopStage.test.tsx`, `web/__tests__/components/SwoopStatsOverlay.test.tsx`, `web/__tests__/hooks/useSwoopSession.test.tsx`, `web/__tests__/app/swoop-viewer-ended.test.tsx`, `web/__tests__/app/swoop-viewer-refused.test.tsx`
   - Depends on: Tasks 1.6, 1.7, 2.3, 2.5
   - Do:
@@ -141,7 +141,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     7. SwoopStatsOverlay.tsx: a `scaling` row after `shown at`; while the canvas draws, a `smooth scaling` row reading `+N ms (estimate)`; `capture → display` unchanged.
   - Done when: jest passes for receiver.test.ts (onPresent once per callback; a throwing subscriber keeps the chain), presenter.test.ts (with a fake renderer: 0.73 → smooth and drawn; 1:1 and 1:2 on whole pixels → exact, not drawn; 1:3 on whole pixels → exact, drawn; off, cannot draw, or lost → standard; at or above full size → standard; `invalidate` redraws once; the estimate reads `performance.now()` in the second callback, with a fake clock, and is null while not drawing), SwoopStage.test.tsx (the canvas is in the area, `pointer-events-none`, `aria-hidden`), SwoopStatsOverlay.test.tsx (the `scaling` row; the `smooth scaling` row marked "(estimate)"; `capture → display` unchanged by it), useSwoopSession.test.tsx (the wiring) and both page tests; eslint on every touched file and tsc clean; the swoop e2e set passes (this wave's one Playwright run).
 
-- [ ] **Task 3.2: size and smooth scaling in the quality menu, now "quality and display"**
+- [x] **Task 3.2: size and smooth scaling in the quality menu, now "quality and display"**
   - Files: `web/components/swoop/SwoopQualityMenu.tsx`, `web/__tests__/components/SwoopQualityMenu.test.tsx`, `web/e2e/specs/swoop/session.spec.ts`, `web/e2e/specs/swoop/bar-position.spec.ts`
   - Depends on: Tasks 1.5, 1.6, 2.3
   - Do:
@@ -364,3 +364,12 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - New stall tests: dropped climbing with total while the canvas draws is no stall; draws stopping while the host sends declares one. The stall header note on presenter counters is updated.
   - 'The freeze watchdog is untouched' no longer holds; the plan says why (owner, 2026-11-10).
   - **4.1** re-measures with the restated rule: callbacks and totalVideoFrames within 5% of none, and canvas draws within 5% of none's (total − dropped). Use the probe's `--receiver idle` and the remote sender (400a7702).
+- 2026-11-10, 3.2 5c42ec7a: the menu is 'quality and display', with a size row (fit/sharp) and a smooth scaling checkbox (the off switch), greyed out with 'not available in this browser' where `smoothCanDraw()` is false. It is per browser, never sent, and kept across sessions. The trigger was renamed in the component, its test, session.spec.ts and bar-position.spec.ts. Menu jest 11/11. **Owner UX note for 8.1:** where the box can't draw but the engine's default is on (Chromium on a software renderer), it shows ticked and greyed. At commit, swoop-viewer-refused and tsc were red on 3.1's in-progress useSwoopSession.ts; 3.1 settles them.
+- 2026-11-10, 3.1 2c3f341b: the canvas draws each presented frame below 1:1 (not 1:1 or 1:2 on whole device pixels; 1:3 and below on the grid count as exact and are drawn). The video sits at opacity 0 under it (smooth.ts `draw` and `hide`).
+  - The watchdog counts draws (`StallSample.shownFrames`), red first on the old `shownBetween`. `recoveredSince` marks the element and draw counts separately, so a reattach doesn't count old draws.
+  - The stats show `scaling` and `smooth scaling +N.N ms (estimate)`; `shownAt` is adopted.
+  - Full jest 475 suites green; swoop e2e 64/64.
+  - **The canvas probably never drew in that e2e:** every spec's picture is above 1:1, so 5.1 must prove a draw.
+  - **For 4.1:** the probe imports the shipped smooth.ts, so its `canvas` cover now equals `under`, and `canvas-vf`/`canvas-poll` throw (a VideoFrame has no `.style`). Fix the probe or skip those covers.
+  - The plan's 'why' is now C5a.
+- Wave 3 stands at 3.1, 3.2, 3.3 and 3.5 done. **3.4 is blocked on the MBA**, which still doesn't answer ssh.
