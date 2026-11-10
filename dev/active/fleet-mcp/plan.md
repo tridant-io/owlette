@@ -24,7 +24,7 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 - A machine actor holds two capabilities, `MACHINE_VIEW` and `MACHINE_EXEC_COMMAND`, on its own site only. It never holds a site-wide capability and never carries an active-hours override (ADR 0013).
 
 ### Credential
-- The script never sees the agent token. A second process that refreshes the agent token can wipe the token store, so nothing outside the service refreshes it.
+- The script never sees the agent token. It needs fleet access and nothing else, and on macOS and Linux the token store is the service's alone.
 - The service asks the server for a **fleet session**: an opaque token valid for 15 minutes and accepted only by the fleet routes. The service writes it to `ipc/fleet/session.json`, readable by the logged-in user, and renews it every 10 minutes off the 5-second loop.
 - The server stores only the token's SHA-256, in the top-level collection `fleet_sessions`. Removing a grant, switching the site off, revoking a machine's agent token or removing the machine deletes its sessions, which cuts a live client on its next call.
 

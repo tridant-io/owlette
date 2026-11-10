@@ -148,8 +148,8 @@ Depends on: Task 0.4, Wave 6.
 
 - [ ] **Task 7.1: The session file on macOS and Linux**
   - Files: `agent/src/fleet_session.py`, `agent/src/osadapter/posix.py` (and `darwin.py` / `linux.py` if the difference is per platform), `agent/tests/unit/test_fleet_session.py`, `agent/tests/unit/test_osadapter_contract.py`; packaging scripts only if gate 0.4 found the interpreter cannot be launched by the console user
-  - Do: Apply gate 0.4's findings. Write the session file owned by the console user (`osadapter.console_user()`) with mode 0400, in a directory that user can traverse and other accounts cannot read. Re-own it when the console user changes and delete it when nobody is logged in. If the interpreter is not launchable by the console user, stop and report the options from the gate file before changing any packaging script.
-  - Done when: unit tests cover ownership, mode, the user change and the no-user case; the agent suite passes.
+  - Do: Apply gate 0.4's findings. Write the session file so the console user can read it and accounts outside the service group cannot; the precedent in `context.md` is 0640 `root:<service group>` under `ipc/`, written with `shared_utils.open_new_file` and `shared_utils.grant_data_group`. Delete it when the grant goes or the machine is unpaired. If the interpreter is not launchable by the console user, stop and report the options from the gate file before changing any packaging script.
+  - Done when: unit tests cover the file's mode and group, and its removal; the agent suite passes on Linux and macOS.
 
 - [ ] **Task 7.2: Script launch and setup copy on macOS and Linux**
   - Files: `agent/src/fleet_mcp.py` (only if a path differs), `desktop/src/components/ConnectAgentDialog.tsx`, `desktop/src-tauri/src/commands.rs`, the docs page from task 4.3
