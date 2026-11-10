@@ -5,7 +5,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
 import { normalizePairPhrase } from '@/lib/pairPhrases';
-import { machineLimitRefusal, recordPairing } from '@/lib/pairingPlan.server';
+import { ensureAgentAuthUser, machineLimitRefusal, recordPairing } from '@/lib/pairingPlan.server';
 
 const MINT_CLAIM_LEASE_MS = 60_000;
 
@@ -270,6 +270,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       };
 
       const adminAuth = getAdminAuth();
+      await ensureAgentAuthUser(adminAuth, agentUid);
       const customToken = await adminAuth.createCustomToken(agentUid, claims);
 
       const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;

@@ -81,6 +81,7 @@ const mockTransactionDelete = jest.fn();
 const mockRunTransaction = jest.fn();
 const mockCreateCustomToken = jest.fn().mockResolvedValue('mock-custom-token');
 const mockSetCustomUserClaims = jest.fn().mockResolvedValue(undefined);
+const mockCreateUser = jest.fn().mockResolvedValue(undefined);
 
 // what the real plan resolver reads: site owners and the machine docs under each site
 let mockSites: Record<string, { owner: string; machines: Record<string, Record<string, unknown>> }> = {};
@@ -143,6 +144,7 @@ jest.mock('@/lib/firebase-admin', () => ({
     runTransaction: (fn: (tx: unknown) => Promise<unknown>) => mockRunTransaction(fn),
   }),
   getAdminAuth: () => ({
+    createUser: mockCreateUser,
     createCustomToken: mockCreateCustomToken,
     setCustomUserClaims: mockSetCustomUserClaims,
   }),
@@ -791,6 +793,26 @@ describe('POST /api/agent/auth/device-code/poll', () => {
       expect(mockGetEntitlements).not.toHaveBeenCalled();
       expect(mockPlanRead).not.toHaveBeenCalled();
     });
+
+    it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+      const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(status).toBe(200);
+      expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_NEW_PC' });
+      expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+        (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+      );
+    });
+
+    it('mints as usual when the auth user already exists', async () => {
+      mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+      const { status, body } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
+
+      expect(mockCreateUser).toHaveBeenCalledTimes(1);
+      expect(status).toBe(200);
+      expect(body.accessToken).toBe('mock-id-token');
+    });
   });
 });
 
@@ -1080,27 +1102,48 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  describe('the machine limit', () => {
-    /** an interactive code for `machineId`, authorised onto site-1, which owner-1 pays for. */
-    function interactiveCode(machineId: string) {
-      mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' }, machineIds: null });
-      mockTransactionGet.mockResolvedValue({
-        exists: true,
-        data: () => ({
-          status: 'pending',
-          machineId,
-          version: '4.1.7',
-          wrapVersion: 'v1',
-          deviceCode: 'a'.repeat(86),
-          expiresAt: { toMillis: () => Date.now() + 600_000 },
-        }),
-      });
-      return makeRequest('/api/agent/auth/device-code/authorize', {
-        pairPhrase: 'test-pair-phrase',
-        siteId: 'site-1',
-      });
-    }
+  /** an interactive code for `machineId`, authorised onto site-1, which owner-1 pays for. */
+  function interactiveCode(machineId: string) {
+    mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' }, machineIds: null });
+    mockTransactionGet.mockResolvedValue({
+      exists: true,
+      data: () => ({
+        status: 'pending',
+        machineId,
+        version: '4.1.7',
+        wrapVersion: 'v1',
+        deviceCode: 'a'.repeat(86),
+        expiresAt: { toMillis: () => Date.now() + 600_000 },
+      }),
+    });
+    return makeRequest('/api/agent/auth/device-code/authorize', {
+      pairPhrase: 'test-pair-phrase',
+      siteId: 'site-1',
+    });
+  }
 
+  it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+    const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+    expect(status).toBe(200);
+    expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_test_machine' });
+    expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('pairs as usual when the auth user already exists', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+    const { status, body } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(status).toBe(200);
+    expect(body.machineId).toBe('test-machine');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  describe('the machine limit', () => {
     it('refuses a new machine past the limit with 402 and marks the code refused for the agent', async () => {
       enforceFree();
       mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };

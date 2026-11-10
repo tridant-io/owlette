@@ -153,7 +153,7 @@ all five are opened by the **browser** (it is the offerer), negotiated in-band, 
 
 | label | ordered | reliability | direction | carries |
 |---|---|---|---|---|
-| `swoop-input` | false | `maxRetransmits: 0` | viewer → host | section 5 input |
+| `swoop-input` | true | reliable | viewer → host | section 5 input |
 | `swoop-cursor` | false | `maxRetransmits: 0` | host → viewer | section 5 cursor |
 | `swoop-control` | true | reliable | both | section 5 control **and** clipboard |
 | `swoop-feedback` | false | `maxPacketLifeTime: 250` | viewer → host | section 5 feedback |
@@ -263,11 +263,11 @@ swaps cmd and ctrl for a windows or linux host, and a client that is not a mac s
 host, so cmd arrives as `ControlLeft` / `ControlRight` and the mac's control as `MetaLeft` / `MetaRight`, and
 the other way round. the viewer may turn the swap off, and then every key goes as pressed.
 
-`swoop-input` is unordered and never retransmits, so a release can be lost or arrive before its own press. a
-viewer sends a modifier's release (`Control*`, `Shift*`, `Alt*`, `Meta*`) again 100 ms and 500 ms later,
-unless it has pressed that key again by then. the host injects every up it is sent, whether that viewer holds
-the key or not, and for a modifier that is already up that is a release nothing acts on. no other release is
-sent again: a second mouse up is a real release wherever the pointer has gone.
+`swoop-input` is reliable and ordered. it was unordered with `maxRetransmits: 0`, and on a link that drops
+packets that lost key presses outright: the text typed came out with letters missing, and a press that
+overtook the one before it would have typed the two swapped. a pointer move held up behind a retransmit is the
+smaller cost. the reliability is the sender's, so a host takes the channel however the browser opens it. the
+host injects every up it is sent, whether that viewer holds the key or not.
 `PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them. a
 macos host goes on from the scancode to the mac's virtual keycode through
 [`testdata/keymap-macos.json`](testdata/keymap-macos.json), so the host's keyboard layout decides what a key

@@ -36,9 +36,8 @@
  * believe is held is released on blur, on `visibilitychange`, on pointer-lock
  * exit and on detach — once each, because the held sets are cleared as the
  * releases are queued. a modifier a key or pointer event says is up is
- * released before that event goes, and a modifier's release goes twice more a
- * moment later, because `swoop-input` can lose it or deliver it before its
- * press.
+ * released before that event goes. `swoop-input` is reliable and ordered, so a
+ * release that goes lands, and after its press.
  */
 
 import type { MachineOsFamily } from '@/lib/machineOs';
@@ -79,9 +78,6 @@ const ESCAPE_TWICE_WINDOW_MS = 500;
 
 /** owlette swoop has no browser escape hold, so escape held this long leaves fullscreen there. */
 const ESCAPE_HOLD_MS = 2000;
-
-/** when a release goes again, see `repeatRelease`. */
-const RELEASE_REPEAT_MS = [100, 500] as const;
 
 const TICK_FALLBACK_MS = 16;
 
@@ -250,8 +246,6 @@ const MODIFIER_FLAGS = [
   ['shiftKey', ['ShiftLeft', 'ShiftRight']],
 ] as const;
 
-const MODIFIER_CODES: ReadonlySet<string> = new Set(MODIFIER_FLAGS.flatMap(([, codes]) => codes));
-
 /** nothing armed: one array, so a store that stays empty never says it changed. */
 const NONE_ARMED: readonly string[] = [];
 
@@ -364,33 +358,6 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     // `PendingInput & { seq }` is exactly `InputMessage`; the compiler cannot
     // see that through a spread of a union.
     queue.push({ ...message, seq: seq++ } as InputMessage);
-    repeatRelease(message);
-  };
-
-  const repeats = new Set<ReturnType<typeof setTimeout>>();
-  /**
-   * a modifier's release goes again at each of `RELEASE_REPEAT_MS`, because
-   * `swoop-input` is unordered and never retransmits (PROTOCOL.md §3): an up
-   * lost, or overtaking its own down, held it on the host until the next blur,
-   * and on a lossy link that was a ctrl that stuck, every key typed after it a
-   * shortcut. not once it is down again. modifiers only: the host injects
-   * every up it is sent, held or not, so a mouse up sent again is a real
-   * release wherever the pointer has gone, while a letter left down on the
-   * host types nothing more.
-   */
-  const repeatRelease = (message: PendingInput): void => {
-    if (message.t !== 'k' || message.down || !MODIFIER_CODES.has(message.code)) return;
-    const { code } = message;
-    for (const delay of RELEASE_REPEAT_MS) {
-      const timer = setTimeout(() => {
-        repeats.delete(timer);
-        if (heldKeys.has(code)) return;
-        // not through `enqueue`, which would repeat the repeat, forever
-        queue.push({ ...message, tsUs: nowUs(), seq: seq++ } as InputMessage);
-        flush();
-      }, delay);
-      repeats.add(timer);
-    }
   };
 
   const flush = (): void => {
@@ -508,6 +475,24 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     if (!heldKeys.has(code)) pressKey(code);
   };
 
+  /** the mac's caps lock as its last caps lock event left it; null before the first. */
+  let macCapsLocked: boolean | null = null;
+
+  /**
+   * a mac sends caps lock's down only as it locks and its up only as it
+   * unlocks, so each change in the lock is a whole press on the host, which
+   * toggles as the mac did. the lock, not the event, decides: a browser that
+   * sent both halves would otherwise toggle twice. false, with nothing sent,
+   * for any other key or viewer.
+   */
+  const pressMacCapsLock = (event: KeyboardEvent, code: string | null): boolean => {
+    if (code !== 'CapsLock' || !viewerIsMac) return false;
+    const locked = event.getModifierState('CapsLock');
+    if (locked !== macCapsLocked) pressChord([code]);
+    macCapsLocked = locked;
+    return true;
+  };
+
   // the phone keyboard's textarea sits in the stage and types through
   // `typeKey`; its own keys and compositions are not the stage's, and a
   // prevented keydown there would stop its text arriving at all.
@@ -552,6 +537,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     }
 
     const code = hostCode(event.code);
+    if (pressMacCapsLock(event, code)) return;
     // auto-repeat is forwarded: SendInput injects discrete events, so nothing
     // on the host side repeats a held key for us.
     if (code !== null) pressKey(code);
@@ -564,6 +550,7 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
     else event.preventDefault();
 
     const code = hostCode(event.code);
+    if (pressMacCapsLock(event, code)) return;
     if (code !== null) releaseKey(code);
   };
 
@@ -857,9 +844,6 @@ export function attachInputCapture(options: InputCaptureOptions): InputCapture {
       clearEscapeHold();
       releaseAll();
       cancelSchedule();
-      // the session is going, and its channel with it
-      for (const timer of repeats) clearTimeout(timer);
-      repeats.clear();
       target.removeEventListener('keydown', onKeyDown);
       target.removeEventListener('keyup', onKeyUp);
       target.removeEventListener('pointermove', onPointerMove);

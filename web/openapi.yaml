@@ -2259,6 +2259,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '500': { $ref: '#/components/responses/Problem500' }
+    patch:
+      operationId: updateInstallerReleaseNotes
+      tags: [Installer]
+      summary: Correct a version's release notes
+      description: |
+        Sets the version's `release_notes`, and the `latest` pointer's when it
+        points at this version. Nothing else on either record changes, and the
+        installer files never do. The upload applies `releaseNotes` only when it
+        creates a version, so this is how notes that went out stale are
+        corrected; `null` clears them. A soft-deleted version is `404`, like a
+        missing one. Any other body field is ignored.
+
+        The version is then synced with tridant id again, so a listed release
+        shows the new notes (`null` clears them there too), while one a
+        rollback yanked keeps its old copy until it is listed again
+        (`tridant`); a tridant id failure never fails the change. No `Idempotency-Key`: sending the same notes again
+        changes nothing.
+
+        Superadmin-only; API-key callers need `installer=*:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d+\.\d+\.\d+$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [releaseNotes]
+              properties:
+                releaseNotes:
+                  type: string
+                  nullable: true
+                  description: The new release notes; `null` clears them.
+      responses:
+        '200':
+          description: Notes set on the version, and on `latest` when it is this version
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, release_notes, latest, tridant]
+                properties:
+                  version:
+                    type: string
+                  release_notes:
+                    type: string
+                    nullable: true
+                  latest:
+                    type: boolean
+                    description: True when the `latest` pointer is this version and took the notes too.
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404':
+          description: Version not found or soft-deleted
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500': { $ref: '#/components/responses/Problem500' }
 
   /api/installer/{version}/set-latest:
     post:

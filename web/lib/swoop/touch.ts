@@ -13,15 +13,15 @@
  * | hold, slide, lift | the magnifier, with the pointer following the finger; lift clicks there, lift off the picture clicks nothing |
  * | drag | the left button, down where the finger landed, up where it lifts |
  * | two-finger tap | a right-click at the first finger |
- * | two-finger drag | the wheel; what is under the fingers follows them |
+ * | two-finger drag | the wheel; what is under the fingers follows them. zoomed in, nothing: it pans the picture |
  * | pinch | nothing: the picture zooms on this screen, and the fingers' travel pans it |
  *
  * two fingers are a pinch when their spread changes more than their midpoint
- * travels by the time one is past the slop, a scroll otherwise, and stay that
- * until they lift. a finger beyond the ones a gesture uses is ignored. a
- * watcher's fingers send nothing; they still pinch. nor does a gesture that
- * starts on the bars around the picture, as nothing a mouse does there
- * reaches the machine; a pinch there still zooms.
+ * travels by the time one is past the slop, or when the picture is zoomed in,
+ * a scroll otherwise, and stay that until they lift. a finger beyond the ones
+ * a gesture uses is ignored. a watcher's fingers send nothing; they still
+ * pinch. nor does a gesture that starts on the bars around the picture, as
+ * nothing a mouse does there reaches the machine; a pinch there still zooms.
  */
 
 import type { SwoopDetach, SwoopSession } from '@/lib/swoop/features';
@@ -233,7 +233,8 @@ export function createGestures(deps: GestureDeps): Gestures {
           if (distance(a, phase.a0) <= SLOP_PX && distance(b, phase.b0) <= SLOP_PX) return;
           const spreadChange = Math.abs(distance(a, b) - distance(phase.a0, phase.b0));
           const travel = distance(midpoint(a, b), midpoint(phase.a0, phase.b0));
-          if (spreadChange > travel) {
+          // zoomed in, a pinch's own travel is the pan: there is no other way to move the picture
+          if (spreadChange > travel || deps.zoom.get().scale > 1) {
             const pinch = {
               kind: 'pinch' as const,
               a: phase.a,

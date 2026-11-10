@@ -192,7 +192,8 @@ jest.mock('@/lib/tridantRelease.server', () => ({
 import { GET as listGET } from '@/app/api/installer/route';
 import { GET as latestGET } from '@/app/api/installer/latest/route';
 import { POST as uploadPOST, PUT as uploadPUT } from '@/app/api/installer/upload/route';
-import { DELETE as versionDELETE } from '@/app/api/installer/[version]/route';
+import { NextRequest } from 'next/server';
+import { DELETE as versionDELETE, PATCH as versionPATCH } from '@/app/api/installer/[version]/route';
 import { POST as setLatestPOST } from '@/app/api/installer/[version]/set-latest/route';
 import { POST as registerPOST } from '@/app/api/installer/[version]/register/route';
 
@@ -1026,6 +1027,186 @@ describe('DELETE /api/installer/{version}', () => {
     });
 
     expect(res.status).toBe(400);
+  });
+});
+
+// PATCH /api/installer/{version}
+
+describe('PATCH /api/installer/{version}', () => {
+  const VERSION_PATH = 'installer_metadata/data/versions/4.1.27';
+  const LATEST_PATH = 'installer_metadata/latest';
+
+  function patchNotes(version: string, body?: Record<string, unknown>) {
+    return versionPATCH(
+      createMockRequest(`http://localhost/api/installer/${version}`, { method: 'PATCH', body }),
+      { params: Promise.resolve({ version }) },
+    );
+  }
+
+  it('sets the notes on the version and on the latest pointer when it is the latest, and audits once', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.26');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+    seedLatest('4.1.27', { release_notes: 'stale' });
+    const versionBefore = { ...docStore[VERSION_PATH]?.data };
+    const latestBefore = { ...docStore[LATEST_PATH]?.data };
+
+    // any field besides releaseNotes is ignored
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh', setAsLatest: false });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toEqual({ version: '4.1.27', release_notes: 'fresh', latest: true, tridant: NOT_CONFIGURED });
+    expect(docStore[VERSION_PATH]?.data).toEqual({ ...versionBefore, release_notes: 'fresh' });
+    expect(docStore[LATEST_PATH]?.data).toEqual({ ...latestBefore, release_notes: 'fresh' });
+    expect(mockEmitMutation).toHaveBeenCalledTimes(1);
+    expect(mockEmitMutation).toHaveBeenCalledWith({
+      kind: 'installer_mutated',
+      siteId: '',
+      actor: 'apiKey:key_test',
+      targetId: '4.1.27',
+      attributes: {
+        endpoint: '/api/installer/4.1.27',
+        method: 'PATCH',
+        verb: 'notes_updated',
+        latest: true,
+      },
+    });
+    expect(mockSyncInstallerRelease).toHaveBeenCalledWith('4.1.27');
+  });
+
+  it('leaves the latest pointer alone when another version is the latest', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.26', { release_notes: 'stale' });
+    seedVersion('4.1.27');
+    seedLatest('4.1.27', { release_notes: 'the latest notes' });
+    const latestBefore = { ...docStore[LATEST_PATH]?.data };
+
+    const res = await patchNotes('4.1.26', { releaseNotes: 'fresh' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.latest).toBe(false);
+    expect(docStore['installer_metadata/data/versions/4.1.26']?.data?.release_notes).toBe('fresh');
+    expect(docStore[LATEST_PATH]?.data).toEqual(latestBefore);
+  });
+
+  it('clears the notes on null', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+    seedLatest('4.1.27', { release_notes: 'stale' });
+
+    const res = await patchNotes('4.1.27', { releaseNotes: null });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.release_notes).toBeNull();
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBeNull();
+    expect(docStore[LATEST_PATH]?.data?.release_notes).toBeNull();
+  });
+
+  it('answers 404 for a missing version', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.26');
+
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh' });
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.title).toBe('version not found');
+    expect(docStore[VERSION_PATH]).toBeUndefined();
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a soft-deleted version and leaves it as it was', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale', deletedAt: 1234 });
+    const versionBefore = { ...docStore[VERSION_PATH]?.data };
+
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh' });
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.title).toBe('version not found');
+    expect(docStore[VERSION_PATH]?.data).toEqual(versionBefore);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a missing releaseNotes', {}],
+    ['a number', { releaseNotes: 5 }],
+  ])('refuses %s with 400 on body.releaseNotes', async (_, sent) => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+
+    const res = await patchNotes('4.1.27', sent);
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.errors).toEqual({ 'body.releaseNotes': ['must be a string or null'] });
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBe('stale');
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a json string', '"fresh"'],
+    ['json null', 'null'],
+    ['not json', 'fresh'],
+  ])('refuses a body that is %s with 400', async (_, raw) => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+
+    const res = await versionPATCH(
+      new NextRequest('http://localhost/api/installer/4.1.27', {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: raw,
+      }),
+      { params: Promise.resolve({ version: '4.1.27' }) },
+    );
+
+    expect(res.status).toBe(400);
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBe('stale');
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('passes the auth refusal through for a key without installer write', async () => {
+    authedAsKeyMissingScope('read');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh' });
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.code).toBe('scope_insufficient');
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBe('stale');
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('passes the auth refusal through for a caller who is not a superadmin', async () => {
+    authedAsNonSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh' });
+
+    expect(res.status).toBe(403);
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBe('stale');
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('reports a tridant id failure without failing the change', async () => {
+    authedAsSuperadminWithKey('write');
+    seedVersion('4.1.27', { release_notes: 'stale' });
+    mockSyncInstallerRelease.mockResolvedValue({ status: 'failed', error: '503 unreachable' });
+
+    const res = await patchNotes('4.1.27', { releaseNotes: 'fresh' });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.tridant).toEqual({ status: 'failed', error: '503 unreachable' });
+    expect(docStore[VERSION_PATH]?.data?.release_notes).toBe('fresh');
   });
 });
 

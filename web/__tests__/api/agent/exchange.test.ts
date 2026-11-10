@@ -42,6 +42,7 @@ const mockTxSet = jest.fn();
 const mockStampFailure = { on: false };
 const mockPlanRead = jest.fn();
 const mockCreateCustomToken = jest.fn();
+const mockCreateUser = jest.fn();
 
 function mockSnap(path: string) {
   const data = mockDocs[path];
@@ -95,6 +96,7 @@ jest.mock('@/lib/firebase-admin', () => ({
     },
   }),
   getAdminAuth: () => ({
+    createUser: mockCreateUser,
     createCustomToken: mockCreateCustomToken,
     setCustomUserClaims: jest.fn().mockResolvedValue(undefined),
   }),
@@ -133,6 +135,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockStampFailure.on = false;
   mockCreateCustomToken.mockResolvedValue('custom-token');
+  mockCreateUser.mockResolvedValue(undefined);
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY = 'test-api-key';
   global.fetch = jest.fn().mockResolvedValue({
     ok: true,
@@ -217,6 +220,38 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(res.status).toBe(200);
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+    const res = await exchange('new-pc');
+
+    expect(res.status).toBe(200);
+    expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_new_pc' });
+    expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('signs in as usual when the auth user already exists', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+    const res = await exchange('new-pc');
+
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect((await res.json()).accessToken).toBe('id-token');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails the pairing, minting nothing, when the auth user cannot be created', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('quota exceeded'), { code: 'auth/quota-exceeded' }));
+
+    const res = await exchange('new-pc');
+
+    expect(res.status).toBe(500);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockTxUpdate).not.toHaveBeenCalled();
   });
 
   it('still hands over the credentials when the pairedAt stamp fails', async () => {

@@ -6,8 +6,11 @@
  *
  * a refusal is 402 `{ error }`, never 401/403: every fielded agent shows only
  * `error`, and a 401/403 on an agent auth route reads as a dead credential.
+ *
+ * the same three mints create the agent's auth user first, see ensureAgentAuthUser.
  */
 
+import type { Auth } from 'firebase-admin/auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
@@ -26,6 +29,20 @@ export async function machineLimitRefusal(
   if (!plansEnforced()) return null;
   const payer = await payerForSite(siteId, siteData);
   return (await machineSlotAvailable(payer, machineId)) ? null : MACHINE_LIMIT_ERROR;
+}
+
+/**
+ * creates the agent's auth user unless it exists, before the mint signs in as it.
+ * a custom-token sign-in for a uid with no user creates one, which counts as a
+ * sign-up and is refused once firebase auth's sign-up setting is off; an admin
+ * sdk create is not.
+ */
+export async function ensureAgentAuthUser(adminAuth: Auth, uid: string): Promise<void> {
+  try {
+    await adminAuth.createUser({ uid });
+  } catch (error: unknown) {
+    if ((error as { code?: string } | null)?.code !== 'auth/uid-already-exists') throw error;
+  }
 }
 
 /**

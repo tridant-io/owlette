@@ -1106,7 +1106,7 @@ test.describe('through a host, inside owlette swoop', () => {
 test.describe('through a host, on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 
-  test('one button holds the bar, a tap clicks where it lands, two fingers right-click, scroll and pinch, a hold magnifies, and the phone keyboard types', async ({
+  test('one button holds the bar, a tap clicks where it lands, two fingers right-click, scroll, pinch and pan a zoomed picture, a hold magnifies, and the phone keyboard types', async ({
     page,
     browser,
   }) => {
@@ -1144,11 +1144,11 @@ test.describe('through a host, on a phone', () => {
       });
       const at = (x: number, y: number) => ({ x: picture.left + x * picture.width, y: picture.top + y * picture.height });
       const middleX = () => picture.left + picture.width / 2;
-      // the channel is unordered: what arrived after a mark, in the order it was sent
+      // what arrived after a mark: the channel is ordered, so in the order it was sent
       const lastSeq = () => Math.max(0, ...host.inputs.map((m) => m.seq));
-      const after = (seq: number) => host.inputs.filter((m) => m.seq > seq).sort((a, b) => a.seq - b.seq);
+      const after = (seq: number) => host.inputs.filter((m) => m.seq > seq);
       const buttons = (seq: number) => after(seq).filter((m) => m.t === 'b').map((m) => `${m.button}:${m.down ? 'down' : 'up'}`);
-      // a modifier's release goes again later (input.ts), so a key already up is not counted twice
+      // a release whose press came before the mark is not counted
       const keys = (seq: number) => {
         const down = new Set<string>();
         const out: string[] = [];
@@ -1235,6 +1235,22 @@ test.describe('through a host, on a phone', () => {
       await expect(video).toHaveCSS('transform', /^matrix\(4, 0, 0, 4,/);
       expect(after(mark).filter((m) => m.t !== 'm')).toEqual([]);
       await test.info().attach('pinched', { body: await page.screenshot(), contentType: 'image/png' });
+
+      // zoomed in, two fingers moving together pan the picture and still send the machine nothing
+      // the transform's last value: its vertical offset
+      const panY = async () =>
+        Number((await video.evaluate((node) => getComputedStyle(node).transform)).match(/[-\d.]+(?=\)$)/)?.[0]);
+      const before = await panY();
+      mark = lastSeq();
+      await touch('touchStart', [{ x: middle.x - 30, y: middle.y }, { x: middle.x + 30, y: middle.y }]);
+      // 20 px, well inside the ~40 px the 4x picture can move before its edge
+      for (const drop of [5, 10, 15, 20]) {
+        await touch('touchMove', [{ x: middle.x - 30, y: middle.y + drop }, { x: middle.x + 30, y: middle.y + drop }]);
+      }
+      await touch('touchEnd', []);
+      await expect.poll(panY).toBeCloseTo(before + 20, 0);
+      await expect(video).toHaveCSS('transform', /^matrix\(4, 0, 0, 4,/);
+      expect(after(mark).filter((m) => m.t !== 'm')).toEqual([]);
       await page.getByRole('button', { name: 'fit', exact: true }).tap();
       await expect(video).toHaveCSS('transform', 'none');
 
