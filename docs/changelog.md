@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — the swoop bar's connection pill fades
+
+The pill on the swoop bar that says poor connection, connection lost,
+reconnecting or disconnected now fades up into place when it comes and fades
+out when it goes, instead of popping on and off. With reduced motion on, it
+comes and goes at once, as the rest of the app does. Nothing to update on the
+machine.
+
 ### changed — the site filter is a search row
 
 Past ten sites, the filter in the site switcher and in owlette swoop's site
