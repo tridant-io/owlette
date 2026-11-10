@@ -2979,7 +2979,7 @@ mod host {
                 }
                 IceAction::GiveUp => {
                     ::log::info!(
-                        "swoop: viewer {viewer} ice down for {} s, dropping it",
+                        "swoop: viewer {viewer} without a working ice pair for {} s, dropping it",
                         DISCONNECTED_LIMIT.as_secs()
                     );
                     let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
