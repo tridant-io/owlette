@@ -7,6 +7,14 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — machine.offline for a connection failure, and none for a pending restart
+
+When an agent reported a connection failure, its `machine.offline` webhook was
+sent only on a site where someone takes the offline email; it is now sent
+whatever the email settings are. A machine reporting that Windows has a restart
+pending was announced as `machine.offline` as well. It is online, so it sends
+its email and no webhook. Nothing to update on the machine.
+
 ### fixed — roost writes a changed file of the same size
 
 A roost rollout or rollback skipped every file whose size had not changed, so a

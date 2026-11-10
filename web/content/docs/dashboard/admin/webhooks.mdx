@@ -57,7 +57,7 @@ a subscription can list any event in the catalog, but only three are ever sent:
 
 the admin dialog marks **machine online**, **deployment completed** and **deployment failed** "(future)"; the others that never fire carry no such mark.
 
-**`machine.offline` and the offline email.** the health check sends it whatever the site's email settings are. an agent's own connection-failure report still sends it only for a site whose offline email has at least one recipient.
+**`machine.offline` and the offline email.** both senders send it whatever the site's email settings are, so a site where everyone turned **machine offline alerts** off still gets its webhook. a machine that reports a pending restart is online: it sends its email and no `machine.offline`.
 
 **older event names still arrive.** the alert sender also delivers `process.crashed`, `process.restarted` (sent when a process fails to start), `threshold.breached` (from an [alert rule](/docs/dashboard/admin/email-alerts#threshold-alert-rules)'s webhook channel) and the `display.*` events to any subscription whose events already list them. none of them is in the catalog, so a new subscription cannot select them, and an edit from the admin panel fails on a subscription that has them, because the edit sends the old names back.
 

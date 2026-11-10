@@ -184,3 +184,30 @@ describe('POST /api/agent/alert — talon tap', () => {
     });
   });
 });
+
+describe('POST /api/agent/alert — connection failure webhook', () => {
+  it('fires machine.offline when nobody takes the email', async () => {
+    // Resend is unconfigured and the site has no recipients here: both are email
+    // exits, and a site that routes this alert to a webhook must still get it.
+    const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+    expect(await res.json()).toMatchObject({ success: true, emailSent: false });
+    expect(fireWebhooksMock).toHaveBeenCalledWith(
+      SITE,
+      'test site',
+      'machine.offline',
+      { machine: { id: MACHINE, name: MACHINE } },
+    );
+  });
+
+  it('sends no machine.offline for a reboot-pending notice', async () => {
+    // the agent posts it on this branch with no eventType. the machine is online.
+    const res = await post({
+      errorCode: 'reboot_pending',
+      errorMessage: 'Reboot pending on LOBBY-01 (reasons: windows update)',
+    });
+
+    expect(res.status).toBe(200);
+    expect(fireWebhooksMock).not.toHaveBeenCalled();
+  });
+});

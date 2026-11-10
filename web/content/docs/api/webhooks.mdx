@@ -96,7 +96,7 @@ a [rollback](/docs/api/versions#rollback) moved the roost's current pointer to a
 
 ### machine.offline
 
-a machine stopped reporting. it is sent when the health check, which runs every 5 minutes, finds a machine whose heartbeat has gone stale (at most once an hour per machine), and when an agent reports a connection failure through its alert channel.
+a machine stopped reporting. it is sent when the health check, which runs every 5 minutes, finds a machine whose heartbeat has gone stale (at most once an hour per machine), and when an agent reports a connection failure through its alert channel. a machine reporting that Windows has a restart pending is not offline and sends none.
 
 this event comes from owlette's older alerting sender, not the roost dispatcher, so it does not follow the rest of this page:
 
