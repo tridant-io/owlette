@@ -208,11 +208,11 @@ export async function updateMember(input: {
       return { ok: false, failure: { kind: 'is_owner' } };
     }
 
-    const scope = parseMachineIds(data);
+    const machineScope = parseMachineIds(data);
     const before: MemberAccess = {
       role: row.role,
       swoop: parseSwoopMode(row.swoop),
-      machineIds: scope === null ? null : [...scope],
+      machineIds: machineScope === null ? null : [...machineScope],
     };
     const update: {
       role?: AssignableRole;

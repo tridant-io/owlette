@@ -48,8 +48,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     const data = snap.exists ? (snap.data() ?? {}) : null;
     const machineId = typeof data?.machineId === 'string' ? data.machineId : null;
-    const scope = auth.machineIds;
-    if (data === null || (scope !== null && (machineId === null || !scope.includes(machineId)))) {
+    const machineScope = auth.machineIds;
+    if (data === null || (machineScope !== null && (machineId === null || !machineScope.includes(machineId)))) {
       return problem({
         type: ProblemType.NotFound,
         title: 'log entry not found',

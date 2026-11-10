@@ -208,7 +208,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
     const { siteId } = await params;
     const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
-    const scope = auth.machineIds;
+    const machineScope = auth.machineIds;
 
     const searchParams = request.nextUrl.searchParams;
     const action = normalizeOptionalQueryString(searchParams, 'action');
@@ -239,7 +239,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
     const { pageSize, pageToken } = parsedPagination.pagination;
 
     // nothing this caller may see: answer before any read
-    if (scope !== null && (scope.length === 0 || (machineId !== undefined && !scope.includes(machineId)))) {
+    if (machineScope !== null && (machineScope.length === 0 || (machineId !== undefined && !machineScope.includes(machineId)))) {
       return applyAuthDeprecations(
         NextResponse.json(withPaginationFields({ siteId, logs: [] }, '')),
         auth.scopeCheck,
@@ -258,7 +258,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
         let query = logsCol.orderBy('timestamp', 'desc');
         // in the query, not only in `include`: a filter there alone would page
         // through the whole site's logs for a member who reaches one machine
-        if (scope !== null) query = query.where('machineId', 'in', scope);
+        if (machineScope !== null) query = query.where('machineId', 'in', machineScope);
         if (sinceMs !== undefined) {
           query = query.where('timestamp', '>=', Timestamp.fromDate(new Date(sinceMs)));
         }
@@ -276,7 +276,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<Ro
       include: (doc) => {
         const data = doc.data();
         const log = serializeLogEntry(doc.id, siteId, data);
-        if (scope !== null && (log.machineId === null || !scope.includes(log.machineId))) return false;
+        if (machineScope !== null && (log.machineId === null || !machineScope.includes(log.machineId))) return false;
         return logMatches(log, filters, data.timestamp);
       },
     });

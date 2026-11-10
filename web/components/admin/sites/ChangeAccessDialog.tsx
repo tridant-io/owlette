@@ -26,6 +26,7 @@ import type {
   UseSiteMembersResult,
 } from '@/hooks/useSiteMembers';
 import { useTalonReassign } from '@/hooks/useTalonReassign';
+import { narrowsMachineScope } from '@/lib/machineAccess';
 import { SWOOP_MODE_LABELS, effectiveSwoopMode, grantedSwoopMode } from '@/lib/swoopMode';
 import { toast } from '@/lib/toast';
 
@@ -84,8 +85,7 @@ export function ChangeAccessDialog({
 
   // from the whole site to some machines: their talons stop at the next run (a scoped author holds no talon)
   const limiting = seededMachineIds === null && machineIds !== null;
-  const narrowed =
-    machineIds !== null && (seededMachineIds === null || seededMachineIds.some((id) => !machineIds.includes(id)));
+  const narrowed = machineIds !== null && narrowsMachineScope(seededMachineIds, machineIds);
 
   // the granted mode before and after, as the server's revocation reads it
   const before = grantedSwoopMode(seededRole, fromSwoopChoice(seededSwoop));

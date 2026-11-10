@@ -48,7 +48,7 @@ import {
 import { removeMember, updateMember } from '@/lib/membership.server';
 import { revokeSwoopSessionsForUser } from '@/lib/swoop/revokeViewerSessions.server';
 import { grantedSwoopMode, SWOOP_MODES } from '@/lib/swoopMode';
-import { MAX_MACHINE_SCOPE, normalizeMachineIdsInput } from '@/lib/machineAccess';
+import { MAX_MACHINE_SCOPE, narrowsMachineScope, normalizeMachineIdsInput } from '@/lib/machineAccess';
 import { refuseUnknownMachines } from '../route';
 
 // The talon store pulls in `node:crypto` for webhook secret minting.
@@ -487,10 +487,7 @@ export const PATCH = authorizedSiteHandler<RouteParams>({
         const watchLost = had !== 'none' && has === 'none';
         const controlLost = had === 'control' && has !== 'control';
         const keepMachineIds = after.machineIds;
-        const narrowed =
-          keepMachineIds !== null &&
-          (before.machineIds === null ||
-            before.machineIds.some((id) => !keepMachineIds.includes(id)));
+        const narrowed = keepMachineIds !== null && narrowsMachineScope(before.machineIds, keepMachineIds);
         const lossReason = before.role !== after.role ? 'role_changed' : 'swoop_changed';
         if (watchLost || controlLost || narrowed) {
           void revokeSwoopSessionsForUser({

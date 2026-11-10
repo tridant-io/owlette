@@ -348,9 +348,9 @@ export function machineScopeOf(actor: UserActor, siteId: string): readonly strin
   if (!actor.machineScopes) return actor.role === 'superadmin' ? null : [];
   // own properties only, for the reason `hasCapability` gives for siteRoles
   if (!Object.prototype.hasOwnProperty.call(actor.machineScopes, siteId)) return [];
-  const scope = actor.machineScopes[siteId];
-  if (scope === null) return null;
-  return Array.isArray(scope) ? scope : [];
+  const machineScope = actor.machineScopes[siteId];
+  if (machineScope === null) return null;
+  return Array.isArray(machineScope) ? machineScope : [];
 }
 
 /**
@@ -417,10 +417,10 @@ export function hasCapability(
     }
     if (!held) return false;
     // 3. machine scope: a scoped actor holds machine-class capabilities on its machines only
-    const scope = machineScopeOf(actor, siteId);
-    if (scope === null) return true;
+    const machineScope = machineScopeOf(actor, siteId);
+    if (machineScope === null) return true;
     if (!MACHINE_CAPABILITIES.has(capability)) return false;
-    return machineId !== undefined && scope.includes(machineId);
+    return machineId !== undefined && machineScope.includes(machineId);
   }
 
   // Not site-scoped: the global role grants self-service and nothing else.

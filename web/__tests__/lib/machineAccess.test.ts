@@ -8,6 +8,7 @@
 
 import {
   MAX_MACHINE_SCOPE,
+  narrowsMachineScope,
   normalizeMachineIdsInput,
   parseMachineIds,
   scopeCovers,
@@ -53,6 +54,24 @@ describe('scopeCovers', () => {
     [['a'], '__proto__'],
   ])('does not let scope %p cover %p', (scope, machineId) => {
     expect(scopeCovers(scope, machineId)).toBe(false);
+  });
+});
+
+describe('narrowsMachineScope', () => {
+  it('narrows from the whole site to any list, an empty one included', () => {
+    expect(narrowsMachineScope(null, ['m1'])).toBe(true);
+    expect(narrowsMachineScope(null, [])).toBe(true);
+  });
+
+  it('narrows when the new list drops a machine, whatever it adds', () => {
+    expect(narrowsMachineScope(['m1', 'm2'], ['m1'])).toBe(true);
+    expect(narrowsMachineScope(['m1'], ['m2'])).toBe(true);
+  });
+
+  it('does not narrow when the new list keeps every machine, in any order', () => {
+    expect(narrowsMachineScope(['m1'], ['m1', 'm2'])).toBe(false);
+    expect(narrowsMachineScope(['m2', 'm1'], ['m1', 'm2'])).toBe(false);
+    expect(narrowsMachineScope([], ['m1'])).toBe(false);
   });
 });
 

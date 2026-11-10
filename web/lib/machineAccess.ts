@@ -47,6 +47,15 @@ export function scopeCovers(scope: readonly string[] | null, machineId: string):
   return scope === null || scope.includes(machineId);
 }
 
+/**
+ * whether limiting a row to `after` takes a machine away: from the whole site it
+ * always does, else when `after` drops one `before` held. the members api ends
+ * swoop sessions on it, and the change-access dialog warns on the same answer.
+ */
+export function narrowsMachineScope(before: readonly string[] | null, after: readonly string[]): boolean {
+  return before === null || before.some((id) => !after.includes(id));
+}
+
 export type MachineIdsInput = { ok: true; value: string[] | null } | { ok: false; error: string };
 
 /**
