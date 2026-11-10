@@ -4,12 +4,21 @@ command-line client for the [owlette.app](https://owlette.app) public api. authe
 
 ## install
 
+`@owlette/cli` is not on npm yet. Until the `rc` tag is published, install from a checkout of this repository:
+
 ```bash
-npm install -g @owlette/cli@rc
+cd cli
+npm install
+npm run build
+npm link
 owlette --version
 ```
 
-`@owlette/cli@rc` is the public launch target. Until the npm `rc` tag is visible, install from the monorepo source checkout.
+Once it is published:
+
+```bash
+npm install -g @owlette/cli@rc
+```
 
 ## 30-second auth + push
 

@@ -6934,7 +6934,8 @@ paths:
                   type: object
                   description: |
                     Per-type parameters. `reboot_machine` /
-                    `shutdown_machine` accept `delay_seconds` (>=0) and
+                    `shutdown_machine` accept `delay_seconds` (>=0), which the
+                    agent ignores (the countdown is 60 seconds), and
                     `active_hours_override`; `reboot_machine` also accepts
                     `when`. A malformed override (missing, blank or over-long
                     `reason`, or any other key), an override on another type,

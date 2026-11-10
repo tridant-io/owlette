@@ -10,16 +10,9 @@ this page is the 15-minute onboarding: install → log in → push your first ro
 
 ## installation
 
-### npm release target
+### from source
 
-```bash
-npm install -g @owlette/cli@rc
-owlette --version
-```
-
-the CLI is prepared for the `@owlette/cli@1.0.0-rc.0` release channel, but it is not externally complete until the [SDK and CLI distribution gate](/docs/api/distribution) is verified. install from source until the npm `rc` tag is published.
-
-### local dev (from the monorepo)
+`@owlette/cli` is not on npm yet, so this is the install that works today:
 
 ```bash
 git clone https://github.com/tridant-io/owlette.git
@@ -31,6 +24,15 @@ owlette --version
 ```
 
 the CLI needs Node.js 20 or later. the `bin/owlette` launcher runs the compiled `dist/` output, so from a source checkout run `npm run build` first.
+
+### npm, once it is published
+
+```bash
+npm install -g @owlette/cli@rc
+owlette --version
+```
+
+this fails until the `rc` tag is published; the [SDK and CLI distribution gate](/docs/api/distribution) tracks that.
 
 ---
 

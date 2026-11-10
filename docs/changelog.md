@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — the CLI and SDK pages say how to install them today
+
+The CLI and SDK pages opened with npm and pip commands for packages that are
+not published yet. They now open with the install from source, which works, and
+show the registry command as what it becomes once the packages are out. The SDK
+reboot examples no longer pass `delay_seconds`, which the agent ignores. Nothing
+to update on the machine.
+
 ### fixed — the landing page's developer samples
 
 The developer section showed install commands for npm packages that are not
