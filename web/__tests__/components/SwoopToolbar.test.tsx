@@ -222,6 +222,26 @@ describe('SwoopToolbar', () => {
     expect(screen.getByTestId('session-badge')).toHaveTextContent('disconnected');
   });
 
+  it('counts down a failed start too, as the stage does, while its retry is scheduled', () => {
+    // a start that failed on a path that may come back ends as `error` with a retry
+    render(
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId="TEC-B4A"
+          state="error"
+          error="the connection to this machine failed."
+          retryIn={7}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId('session-badge')).toHaveTextContent('reconnecting in 7 s');
+  });
+
   it('says so when the browser held back a copy from the machine, and only then', () => {
     renderBar('connected');
     expect(screen.queryByTestId('clipboard-held-notice')).toBeNull();
