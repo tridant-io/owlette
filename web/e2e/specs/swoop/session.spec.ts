@@ -362,17 +362,18 @@ test.describe('the viewer page', () => {
 
     // the quality menu is one row per axis with what is chosen; the options
     // sit a level down.
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     const quality = page.getByRole('menu');
     await expect(quality.getByRole('menuitem')).toHaveText([
       /^bandwidth\s*auto$/,
       /^resolution\s*native$/,
       /^frame rate\s*60 fps$/,
       /^codec\s*auto$/,
+      /^size\s*fit$/,
     ]);
     await quality.getByRole('menuitem', { name: /^bandwidth/ }).click();
     await page.getByRole('menuitemradio', { name: '20 mbps' }).click();
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await expect(page.getByRole('menuitem', { name: /^bandwidth/ })).toHaveText(/^bandwidth\s*20 mbps$/);
     await page.keyboard.press('Escape');
 
@@ -508,7 +509,7 @@ test.describe('the viewer page', () => {
     await expect.poll(async () => (await offers()).length).toBe(1);
     expect(videoCodecs((await offers())[0])).toContain('vp8');
 
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await page.getByRole('menuitem', { name: /^codec/ }).click();
     await expect(page.getByText('reconnects to apply.')).toBeVisible();
     const second = page.waitForResponse(minted, { timeout: 45_000 });
@@ -523,7 +524,7 @@ test.describe('the viewer page', () => {
 
     const stored = await page.evaluate((key) => sessionStorage.getItem(key), `owlette.swoop.codec/${SITE_ID}/${CODEC_ID}`);
     expect(stored).toBe('h264');
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await expect(page.getByRole('menuitem', { name: /^codec/ })).toHaveText(/^codec\s*h264$/);
     await page.keyboard.press('Escape');
     // replaced, not ended: a DELETE would void the tab's continuity.
