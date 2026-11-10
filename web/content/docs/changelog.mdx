@@ -7,6 +7,23 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — on Windows, kill and restart in the desktop app cannot close the wrong process
+
+A pid that Windows had handed to another instance of the same program (two
+TouchDesigner entries, or any cmd.exe for a script entry) passed the app's name
+check and could be closed. The app now also checks the start time and executable
+the service recorded for that pid, the same check the service's own kills make.
+macOS and Linux keep the name check. Arrives with the next agent version.
+
+### fixed — the desktop app no longer nudges the start times the service records
+
+Whenever the desktop app wrote the process table (a kill, a restart, a launch
+mode change), about one recorded start time in twenty came back a hair off. The
+service then took that running process for a recycled pid: it dropped its row,
+refused a kill from the dashboard, or launched it again after a service restart.
+The app now reads and writes those times exactly, on Windows, macOS and Linux.
+Arrives with the next agent version.
+
 ### fixed — the CLI publishes the same files as the same version from any machine
 
 Pushing a roost from a second CI runner, another computer or a newer CLI made a

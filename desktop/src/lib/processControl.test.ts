@@ -60,7 +60,7 @@ describe('kill', () => {
 
     const result = await stopProcess(entry, 'kill', io)
 
-    expect(terminatePid).toHaveBeenCalledWith(4242, 'C:/apps/player.exe')
+    expect(terminatePid).toHaveBeenCalledWith(4242, 'C:/apps/player.exe', null)
     expect(result).toMatchObject({ pid: 4242, marker: 'KILLED' })
     expect(io.states['4242']).toEqual({ id: 'a', status: 'KILLED', timestamp: 10 })
   })
@@ -184,7 +184,33 @@ describe('identity check', () => {
   it('sends a script entry as the cmd.exe it really runs as', async () => {
     await stopProcess({ ...entry, exe_path: 'C:/apps/start.bat' }, 'kill', deps(running()))
 
-    expect(terminatePid).toHaveBeenCalledWith(4242, 'cmd.exe')
+    expect(terminatePid).toHaveBeenCalledWith(4242, 'cmd.exe', null)
+  })
+
+  it('hands the host what the service recorded about the pid', async () => {
+    // the name alone passes for any cmd.exe, or for another entry running the same exe
+    const io = deps({
+      '4242': {
+        id: 'a',
+        status: 'RUNNING',
+        timestamp: 10,
+        create_time: 1788367385.5616167,
+        exe: 'c:\\apps\\player.exe',
+      },
+    })
+
+    await stopProcess(entry, 'kill', io)
+
+    expect(terminatePid).toHaveBeenCalledWith(4242, 'C:/apps/player.exe', {
+      createTime: 1788367385.5616167,
+      exe: 'c:\\apps\\player.exe',
+    })
+  })
+
+  it('keeps the name check alone for a row with no recorded creation time', async () => {
+    await stopProcess(entry, 'kill', deps(running()))
+
+    expect(terminatePid).toHaveBeenCalledWith(4242, 'C:/apps/player.exe', null)
   })
 })
 

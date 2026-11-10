@@ -472,7 +472,10 @@ Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
   *and* the desktop app, or reboot).
 - Writes go to a scratch file in the destination directory and are renamed over
   the target, with `indent=4` formatting and **key order preserved**: the
-  `firebase` block must survive a desktop write byte-identical.
+  `firebase` block must survive a desktop write byte-identical. Numbers must
+  too: serde_json's `float_roundtrip` reads every float exactly. Without it
+  about one `create_time` in twenty came back one double off, and the service,
+  which compares it exactly, took that process for a recycled pid.
 - Reads retry three times (100/200 ms) on a locked or half-written file and then
   fail. Python returns `{}` there; we do not, because a UI that writes back an
   empty document would erase the operator's config.
@@ -544,6 +547,22 @@ was real.
 
 Neither marker decides whether the process comes back: that is the launch mode,
 read fresh from `config.json` by the service after the exit.
+
+### Which pid a kill or restart touches
+
+The pid comes from `app_states.json`, where an entry can own several rows and
+Windows recycles pids, so the host (`terminate_pid`) proves it first. The live
+image must match the entry's exe (full path, then file name; `cmd.exe` for a
+script). Where the row records the service's `create_time` and `exe`, the live
+process must also have that exact creation time and image, the check
+`shared_utils.identity_matches` makes before the service's own kills: only that
+tells two instances of one exe apart, or one `cmd.exe` from another. A row with
+no record gets the name check alone. Current agents still write such rows: a
+failed launch (the service strips the record from a `LAUNCH_FAILED` row), a
+launch whose identity the service could not read, and a row the service writes
+again after its sweep dropped it. So does a pre-3.3.0 agent. On macOS and Linux
+the record is not checked yet: psutil's creation time there is not one this app
+reads the same way.
 
 ## Drag and drop
 

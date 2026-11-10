@@ -10,6 +10,8 @@
  * behind, and Windows recycles pids), so every lookup must pick one deliberately.
  */
 
+import type { RecordedIdentity } from '@/lib/ipc'
+
 export const PROCESS_STATUSES = [
   'RUNNING',
   'LAUNCHING',
@@ -152,6 +154,18 @@ export function candidatePidsForProcess(states: AppStates, processId: string): n
     .filter(([, state]) => !isLive(asStatus(state.status) ?? 'INACTIVE'))
     .sort(byRecency)
   return [...live, ...rest].map(([pid]) => pid)
+}
+
+/**
+ * What a row says the service recorded about its pid's process, for
+ * `terminate_pid` to prove the pid still runs it. Null when the row has no
+ * usable `create_time` (written before 3.3.0, or a LAUNCH_FAILED row, which the
+ * service strips): the host's name check is then all there is.
+ */
+export function recordedIdentity(state: AppState | undefined): RecordedIdentity | null {
+  const createTime = state?.create_time
+  if (typeof createTime !== 'number' || !Number.isFinite(createTime)) return null
+  return { createTime, exe: typeof state?.exe === 'string' ? state.exe : null }
 }
 
 /** The single most likely pid, or null — see {@link candidatePidsForProcess}. */

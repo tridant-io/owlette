@@ -18,13 +18,14 @@
  * Both flows are purely local, no cloud command, as in the python GUI that 3.0.0 removed.
  */
 
-import { terminatePid, type TerminateMethod } from '@/lib/ipc'
+import { terminatePid, type RecordedIdentity, type TerminateMethod } from '@/lib/ipc'
 import { launchCopy } from '@/lib/launchCopy'
 import { expectedImagesFor, type ProcessEntry } from '@/lib/owletteConfig'
 import {
   candidatePidsForProcess,
   markKilled,
   markRestarting,
+  recordedIdentity,
   restoreState,
   type AppStates,
   type ProcessMarker,
@@ -69,18 +70,18 @@ function isIdentityMismatch(error: unknown): boolean {
 
 /**
  * Terminate `pid`, trying each acceptable image in turn: full path first, bare file name second.
- * The host's identity check is the point — this try-order is the desktop's own (the service's
- * destructive ops instead prove identity against a recorded pid/create_time/exe snapshot,
- * `shared_utils.identity_matches`) — but configured vs actually-running legitimately differ for
- * adopted processes. Anything other than an identity mismatch (access denied, an unkillable pid)
- * aborts immediately.
+ * The host's identity check is the point. The name is the desktop's own check, and configured vs
+ * actually-running legitimately differ for adopted processes; `recorded` is the service's, the
+ * same creation time and image `shared_utils.identity_matches` proves before its own kills, and
+ * the only thing that tells two instances of one exe apart. Anything other than an identity
+ * mismatch (access denied, an unkillable pid) aborts immediately.
  */
-async function terminateAs(pid: number, images: string[]) {
+async function terminateAs(pid: number, images: string[], recorded: RecordedIdentity | null) {
   let lastError: unknown = new Error('no executable to identify the process by')
 
   for (const image of images) {
     try {
-      return await terminatePid(pid, image)
+      return await terminatePid(pid, image, recorded)
     } catch (cause) {
       if (!isIdentityMismatch(cause)) throw cause
       lastError = cause
@@ -113,7 +114,7 @@ export async function stopProcess(
     const result =
       mode === 'restart'
         ? await restartPid(pid, states, entry, images, deps)
-        : await killPid(pid, entry, images, deps)
+        : await killPid(pid, states, entry, images, deps)
     if (result) return result
   }
   throw new NoLiveInstanceError(name)
@@ -121,11 +122,12 @@ export async function stopProcess(
 
 async function killPid(
   pid: number,
+  states: AppStates,
   entry: ProcessEntry,
   images: string[],
   deps: StopDeps,
 ): Promise<StopResult | null> {
-  const result = await terminate(pid, images, 'kill')
+  const result = await terminate(pid, images, recordedIdentity(states[String(pid)]), 'kill')
   if (result) await deps.mutateStates((current) => markKilled(current, pid, entry.id))
   return result
 }
@@ -142,7 +144,7 @@ async function restartPid(
 
   let result: StopResult | null
   try {
-    result = await terminate(pid, images, 'restart')
+    result = await terminate(pid, images, recordedIdentity(previous), 'restart')
   } catch (cause) {
     // No kill happened, so the marker claims an exit that isn't ours. Best-effort rollback: if
     // this write also fails, the original failure is still what the operator sees.
@@ -170,9 +172,10 @@ async function restartPid(
 async function terminate(
   pid: number,
   images: string[],
+  recorded: RecordedIdentity | null,
   mode: StopMode,
 ): Promise<StopResult | null> {
-  const outcome = await terminateAs(pid, images)
+  const outcome = await terminateAs(pid, images, recorded)
   if (outcome.method === 'not_found') return null
   return { pid, method: outcome.method, marker: MARKERS[mode] }
 }
