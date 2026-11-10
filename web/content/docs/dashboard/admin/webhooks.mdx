@@ -57,7 +57,7 @@ a subscription can list any event in the catalog, but only three are ever sent:
 
 the admin dialog marks **machine online**, **deployment completed** and **deployment failed** "(future)"; the others that never fire carry no such mark.
 
-**`machine.offline` follows the offline email.** the health check sends it only for a site whose offline email has at least one recipient, so a site where everyone turned **machine offline alerts** off gets no `machine.offline` either.
+**`machine.offline` and the offline email.** the health check sends it whatever the site's email settings are. an agent's own connection-failure report still sends it only for a site whose offline email has at least one recipient.
 
 **older event names still arrive.** the alert sender also delivers `process.crashed`, `process.restarted` (sent when a process fails to start), `threshold.breached` (from an [alert rule](/docs/dashboard/admin/email-alerts#threshold-alert-rules)'s webhook channel) and the `display.*` events to any subscription whose events already list them. none of them is in the catalog, so a new subscription cannot select them, and an edit from the admin panel fails on a subscription that has them, because the edit sends the old names back.
 
@@ -85,7 +85,7 @@ the admin dialog marks **machine online**, **deployment completed** and **deploy
 
 **admin panel** cards show the switch, the name with a Slack or Discord badge, the URL, the event pills, a status badge (`never triggered`, the last HTTP status, `network error`, or `auto-disabled`), a failure count, and when it last fired. these come from the alert sender and the **test** button only: roost deliveries do not update them.
 
-**settings** cards show `paused` or `active`, the events, and when the subscription was created. their **last delivery** time and failure count are not updated by either sender yet. expand one for **recent deliveries**: the roost dispatcher's deliveries from the last 30 days, each with its status and attempt count, and a retry button on a failed or pending one. a retry is a fresh delivery with the same `Roost-Delivery` ID, signed with the current secret.
+**settings** cards show `paused` or `active`, the events, and when the subscription was created. their **last delivery** time is not updated by either sender yet, and their failure count is the alert sender's. expand one for **recent deliveries**: the roost dispatcher's deliveries from the last 30 days, each with its status and attempt count, and a retry button on a failed or pending one. a retry is a fresh delivery with the same `Roost-Delivery` ID, signed with the current secret.
 
 **test** on the admin panel sends one sample to the URL: a `process.crashed` payload from a machine named `MEDIA-SERVER-01` with `X-owlette-Event: test`, signed only for a generic URL, with a 10-second timeout. the result shows as a toast and on the card. it proves the URL answers; it is not the roost envelope, so use the probe to test a roost receiver. **test** is off while the webhook is switched off.
 
@@ -108,9 +108,9 @@ deleting soft-deletes the subscription and stops new deliveries; roost deliverie
 
 ## auto-disabled subscriptions
 
-after 10 alert-sender failures in a row, the subscription is switched off with `enabled: false` and its admin card reads `auto-disabled`. it then gets nothing from either sender.
+after 10 alert-sender failures in a row, the subscription is switched off and its admin card reads `auto-disabled`. it then gets nothing from either sender, and settings → webhooks shows it as `paused`.
 
-the dashboard cannot turn it back on. the admin switch writes `paused`, which leaves `enabled: false` in place, and settings → webhooks shows the subscription as `active`. delete it and create it again.
+turning it back on from either page clears the auto-disable and starts the failure count over.
 
 ---
 

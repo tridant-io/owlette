@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — a webhook switched off after ten failures can be turned back on
+
+A webhook that failed ten times in a row was switched off for good: neither the
+dashboard switch nor the API could turn it back on, and the API reported it as
+active. Turning it on from the dashboard, or a `PATCH` with `paused: false`, now
+clears it and starts the failure count over, and the API reports it as paused
+with its failure count. Nothing to update on the machine.
+
 ### fixed — two people in one swoop session
 
 With two people in one swoop session, a reconnect could cost everyone but the

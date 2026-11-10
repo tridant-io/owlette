@@ -408,6 +408,26 @@ describe('GET /api/webhooks/{webhookId}', () => {
     expect(body.id).toBe(WEBHOOK);
     expect(JSON.stringify(body)).not.toMatch(/whsec_/);
   });
+
+  it('reports a webhook the sender switched off as paused, with its real failure count', async () => {
+    // after ten failed deliveries the sender writes `enabled: false` and counts in
+    // `failCount`; neither is the public field name.
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(WEBHOOK, {
+        url: 'https://ex.com/a',
+        events: ['version.published'],
+        paused: false,
+        enabled: false,
+        failureCount: 0,
+        failCount: 10,
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`,
+    );
+    const res = await detailGET(req, { params: Promise.resolve({ webhookId: WEBHOOK }) });
+    expect(await res.json()).toMatchObject({ paused: true, failureCount: 10 });
+  });
 });
 
 // PATCH /api/webhooks/{id}
@@ -473,6 +493,53 @@ describe('PATCH /api/webhooks/{webhookId}', () => {
         }),
       }),
     );
+  });
+
+  it('resuming a webhook the sender switched off turns it back on with a fresh failure count', async () => {
+    mocks.get.mockResolvedValue(
+      docSnapshot(WEBHOOK, {
+        url: 'https://ex.com/orig',
+        events: ['version.published'],
+        paused: true,
+        enabled: false,
+        failCount: 10,
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`,
+      { method: 'PATCH', body: { paused: false } },
+    );
+    const res = await detailPATCH(req, {
+      params: Promise.resolve({ webhookId: WEBHOOK }),
+    });
+    expect(res.status).toBe(200);
+    const updatePayload = mocks.update.mock.calls[0]![0] as Record<string, unknown>;
+    expect(updatePayload.paused).toBe(false);
+    expect(updatePayload.enabled).toEqual(FieldValue.delete());
+    expect(updatePayload.failCount).toBe(0);
+  });
+
+  it('pausing drops the legacy enabled flag so paused is the one switch', async () => {
+    mocks.get.mockResolvedValue(
+      docSnapshot(WEBHOOK, {
+        url: 'https://ex.com/orig',
+        events: ['version.published'],
+        enabled: true,
+        failCount: 3,
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`,
+      { method: 'PATCH', body: { paused: true } },
+    );
+    const res = await detailPATCH(req, {
+      params: Promise.resolve({ webhookId: WEBHOOK }),
+    });
+    expect(res.status).toBe(200);
+    const updatePayload = mocks.update.mock.calls[0]![0] as Record<string, unknown>;
+    expect(updatePayload.paused).toBe(true);
+    expect(updatePayload.enabled).toEqual(FieldValue.delete());
+    expect(updatePayload.failCount).toBeUndefined();
   });
 
   it('404 on patched doc that is soft-deleted', async () => {

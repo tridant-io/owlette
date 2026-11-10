@@ -14347,8 +14347,12 @@ components:
       description: |
         Webhook subscription wrapper with activity fields. Returned on
         `GET /api/webhooks`, `GET /api/webhooks/{webhookId}` and PATCH.
-        `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` are not
-        updated by the dispatcher yet; read delivery history instead.
+        `lastDeliveryAt` and `lastDeliveryStatus` are not updated yet.
+        `failureCount` counts the `machine.offline` sender's consecutive
+        failures: after 10 it switches the subscription off, which reads here
+        as `paused`, and a PATCH with `paused: false` turns it back on and
+        starts the count over. For the dispatcher's deliveries, read delivery
+        history.
       allOf:
         - $ref: '#/components/schemas/WebhookSubscription'
         - type: object

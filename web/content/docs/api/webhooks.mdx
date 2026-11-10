@@ -115,7 +115,7 @@ this event comes from owlette's older alerting sender, not the roost dispatcher,
 - headers are `Content-Type: application/json`, `User-Agent: owlette-Webhooks/1.0`, `X-owlette-Event: machine.offline`, and `X-owlette-Signature: sha256=<hex>` — the lowercase hex HMAC-SHA256 of the raw body, keyed with the subscription's signing secret. there is no timestamp in the signature, so no replay window, and no `Roost-*` headers.
 - a URL on `hooks.slack.com` or `discord.com/api/webhooks` receives a chat-formatted message instead, unsigned.
 - each event is one attempt with a 5-second timeout: no retries, no entry in [delivery history](#delivery-history).
-- after 10 consecutive failed attempts the sender disables the subscription, which also stops its version events. the API does not show that state and `PATCH` cannot clear it; create the subscription again to resume.
+- after 10 consecutive failed attempts the sender switches the subscription off, which also stops its version events. the API reports it as `paused`, with the failures in `failureCount`; `PATCH` with `paused: false` turns it back on and starts the count over.
 
 ### not dispatched yet
 
@@ -319,7 +319,7 @@ probe deliveries send the same four headers plus `User-Agent: roost-probe/1.0`; 
 - **pause and delete.** pausing or deleting a subscription stops new deliveries from being queued for it. deliveries already queued are still sent.
 - **states.** a delivery is `pending` until it succeeds (`succeeded`) or gives up (`failed`).
 - **ordering.** deliveries are not ordered. use `occurredAt` when order matters.
-- **subscription counters.** `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` on a subscription are not updated by the dispatcher yet; read [delivery history](#delivery-history) instead.
+- **subscription counters.** `lastDeliveryAt` and `lastDeliveryStatus` on a subscription are not updated yet, and `failureCount` counts only the [machine.offline](#machineoffline) sender's consecutive failures. for the dispatcher's deliveries, read [delivery history](#delivery-history).
 
 ---
 
