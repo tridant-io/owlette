@@ -187,9 +187,15 @@ export const verifyAuditChain = onRequest(
 export const exportAuditDaily = onSchedule(
   { schedule: '15 5 * * *', timeoutSeconds: 540, memory: '512MiB' },
   async () => {
+    const exporter = getDefaultExporter();
+    if (!exporter) {
+      // the export reads every site's whole chain, so it must not run with nowhere to send it
+      console.log('[auditLog] daily export skipped: no audit sink is wired');
+      return;
+    }
     const results = await exportAllSites({
       store: getDefaultStore(),
-      exporter: getDefaultExporter(),
+      exporter,
       directory: getDefaultDirectory(),
     });
     const totalExported = results.reduce((n, r) => n + r.exported, 0);
@@ -254,15 +260,9 @@ function getDefaultDirectory() {
   };
 }
 
-function getDefaultExporter(): AuditExporter {
+function getDefaultExporter(): AuditExporter | null {
   // TODO(wave 0.6): wire BigQuery. Until then the firestore chain is
   // authoritative and 7-year retention holds because no delete job runs
   // (firestore has no auto-TTL on this path).
-  return {
-    async exportBatch(_records) {
-      throw new Error(
-        'BigQuery audit sink not wired — deferred to wave 0.6 (gcp deploy)',
-      );
-    },
-  };
+  return null;
 }
