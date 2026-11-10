@@ -10,6 +10,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — local hoot starts on macOS and Linux
+
+On a Mac or a Linux machine, local hoot never started. It runs as the
+signed-in user, who could neither write the agent's log folder nor read its
+token store, so every launch ended at once and the agent tried again every
+30 seconds. hoot now logs to `logs/cortex/cortex.log` there, and the agent
+hands it a one-hour access token, so hoot never holds the agent token.
+Windows is unchanged. Takes an agent update.
+
 ### changed — the site filter is a search row
 
 Past ten sites, the filter in the site switcher and in owlette swoop's site

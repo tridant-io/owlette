@@ -1501,6 +1501,8 @@ class TestPosix:
         assert _mode(root / 'ipc' / 'swoop') == 0o770
         assert _mode(root / 'logs') == 0o750
         assert _mode(root / 'logs' / 'swoop') == 0o770
+        # hoot is a console-user process and logs/ itself is the daemon's
+        assert _mode(root / 'logs' / 'cortex') == 0o770
         assert _mode(root / 'cache') == 0o750
         assert _mode(root / 'config' / 'config.json') == 0o660
 
