@@ -48,7 +48,7 @@ describe('machinesNotice', () => {
 describe('NoMachinesForYou', () => {
   it('renders its title and line', () => {
     const { container } = render(<NoMachinesForYou />);
-    expect(screen.getByText('no machines here for you yet')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'no machines here for you yet' })).toBeInTheDocument();
     expect(screen.getByText('a site admin chooses which machines you can reach.')).toBeInTheDocument();
     expect(container.querySelector('svg')).not.toBeNull();
   });

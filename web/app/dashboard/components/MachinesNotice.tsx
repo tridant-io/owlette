@@ -20,10 +20,13 @@ export function machinesNotice(input: {
 
 export function NoMachinesForYou() {
   return (
-    <Card className="border-border bg-card/50 p-6 text-center">
-      <Monitor className="mx-auto h-6 w-6 text-muted-foreground" />
-      <p className="mt-2 text-sm text-foreground">no machines here for you yet</p>
-      <p className="mt-1 text-xs text-muted-foreground">
+    // gap-0: card's own gap-6 pulls the icon, title and line apart
+    <Card className="border-border bg-card items-center gap-0 px-6 py-12 text-center animate-in fade-in duration-300">
+      <div className="mb-4 flex size-14 items-center justify-center rounded-full bg-muted" aria-hidden="true">
+        <Monitor className="size-7 text-muted-foreground" />
+      </div>
+      <h2 className="text-lg font-semibold text-foreground text-balance">no machines here for you yet</h2>
+      <p className="mt-1 max-w-sm text-sm text-muted-foreground text-pretty">
         a site admin chooses which machines you can reach.
       </p>
     </Card>
