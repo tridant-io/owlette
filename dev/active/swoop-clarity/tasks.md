@@ -357,3 +357,10 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - **Probe artifacts fixed:** a same-page source, a DOM repaint every frame, and a headless 47 fps timer.
   - **Not measured:** glass to glass, WebView2 itself, 4K, Safari, and three clean Edge runs per cover.
   - **The owner decides** whether to proceed.
+- 2026-11-10, **owner ruling: proceed with the hidden video.** dev is merged in at e7605c8f; the swoopHost conflict keeps both 1.8's size/detail and dev's lossy. **Addendum to 3.1:**
+  - Its Files widen to `web/lib/swoop/video/smooth.ts` (plus its test) and the freeze watchdog: `web/lib/swoop/stall.ts` (find it), its test, and `useSwoopSession.ts`'s `shownFrames()`.
+  - Draw inside the rVFC callback as smooth.ts does. When the canvas first shows, set the video's opacity to 0 in the same task; `hide()` restores it, which covers context loss and `dispose()` too.
+  - The presenter exposes `drawnFrames`. `shownFrames()` = (totalVideoFrames − droppedVideoFrames) + drawnFrames, and it feeds the stall detector and `recoveredSince`. `StallSample` gains `shownFrames`.
+  - New stall tests: dropped climbing with total while the canvas draws is no stall; draws stopping while the host sends declares one. The stall header note on presenter counters is updated.
+  - 'The freeze watchdog is untouched' no longer holds; the plan says why (owner, 2026-11-10).
+  - **4.1** re-measures with the restated rule: callbacks and totalVideoFrames within 5% of none, and canvas draws within 5% of none's (total − dropped). Use the probe's `--receiver idle` and the remote sender (400a7702).
