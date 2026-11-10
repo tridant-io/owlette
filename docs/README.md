@@ -10,6 +10,10 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [roadmap.md](roadmap.md) — living, roughly-prioritized list of what's next. not a commitment.
 - [changelog.md](changelog.md) — release history; an installer must never ship without a matching `## [X.Y.Z]` entry here.
 
+## adr/ — settled decisions
+
+- [adr/](adr/) — one short record per decision that is hard to reverse, with why it was made and what it costs. read the ones for the area you touch before changing it; the format is in `adr/0001-*`.
+
 ## runbooks/ — operational procedures
 
 - [runbooks/index.md](runbooks/index.md) — situation-to-runbook lookup table; read this first when something is on fire.
@@ -32,8 +36,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/threat-model.md](internal/threat-model.md) — canonical security design constraint for roost, reconciled against the code that actually shipped.
 - [internal/manifest-format.md](internal/manifest-format.md) — roost manifest format spec v1 (approved).
 - [internal/v1-v2-migration.md](internal/v1-v2-migration.md) — canonical v1 → v2 (roost) migration design.
-- [internal/architecture-decisions.md](internal/architecture-decisions.md) — the owlette 2.0 architecture decision record.
-- [internal/version-management.md](internal/version-management.md) — independent component versioning and `scripts/sync-versions.js`.
+- [internal/version-management.md](internal/version-management.md) — what `scripts/sync-versions.js` writes, why `firestore.rules` keeps its own version, and the tag patterns.
 - [internal/slsa-build-l3.md](internal/slsa-build-l3.md) — hermetic CI installer build with signed in-toto provenance, verifiable with `slsa-verifier`.
 - [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned `claude.exe` that agents fetch on demand.
 - [internal/dmca-takedown-sop.md](internal/dmca-takedown-sop.md) — 17 U.S.C. § 512(c) safe-harbor operator SOP for roost user content.
