@@ -7,6 +7,15 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — two people in one swoop session
+
+With two people in one swoop session, a reconnect could cost everyone but the
+last to join their picture, and one person muting their tab silenced the machine
+for the others. Each viewer now reconnects on its own, and the machine's audio
+stays on while anyone is listening. A ctrl+alt+del whose answer was lost no
+longer stops it working for the rest of the session. Arrives with the next agent
+version.
+
 ### fixed — three things in the owlette app
 
 The start service button in the app's footer showed nothing when the start
