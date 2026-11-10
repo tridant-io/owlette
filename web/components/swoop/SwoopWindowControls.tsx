@@ -104,43 +104,41 @@ export function SwoopWindowControls({
   const close = useCallback(() => void closeViewerWindow(), []);
 
   if (!drawn) return null;
+  const button = cn(BUTTON, half && 'h-6');
+  const glyph = half ? 'size-3.5' : 'size-4';
+  const box = half ? 'size-3' : 'size-3.5';
   return (
     <div data-testid="window-controls" className={cn('flex shrink-0 items-stretch', className)}>
       <button
         type="button"
         aria-label="minimize"
         data-testid="window-minimize"
-        className={cn(BUTTON, half && 'h-6', 'hover:bg-accent focus-visible:bg-accent')}
+        className={cn(button, 'hover:bg-accent focus-visible:bg-accent')}
         onClick={minimize}
       >
-        <Minus aria-hidden className={half ? 'size-3.5' : 'size-4'} />
+        <Minus aria-hidden className={glyph} />
       </button>
       <button
         type="button"
         aria-label={maximized ? 'restore' : 'maximize'}
         data-testid="window-maximize"
         data-maximized={maximized || undefined}
-        className={cn(BUTTON, half && 'h-6', 'hover:bg-accent focus-visible:bg-accent')}
+        className={cn(button, 'hover:bg-accent focus-visible:bg-accent')}
         onClick={toggle}
       >
-        {maximized ? (
-          <Copy aria-hidden className={cn(half ? 'size-3' : 'size-3.5', '-scale-x-100')} />
-        ) : (
-          <Square aria-hidden className={half ? 'size-3' : 'size-3.5'} />
-        )}
+        {maximized ? <Copy aria-hidden className={cn(box, '-scale-x-100')} /> : <Square aria-hidden className={box} />}
       </button>
       <button
         type="button"
         aria-label="close"
         data-testid="window-close"
         className={cn(
-          BUTTON,
-          half && 'h-6',
+          button,
           'hover:bg-danger-solid hover:text-danger-solid-foreground focus-visible:bg-danger-solid focus-visible:text-danger-solid-foreground',
         )}
         onClick={leaving ? () => setConfirming(leaving) : close}
       >
-        <X aria-hidden className={half ? 'size-3.5' : 'size-4'} />
+        <X aria-hidden className={glyph} />
       </button>
       <Dialog
         open={confirming !== null}

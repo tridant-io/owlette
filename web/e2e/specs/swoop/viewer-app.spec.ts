@@ -8,9 +8,8 @@
  * side the controls move to a half-height strip across the top that lets
  * presses through everywhere else, so the picture keeps the window's full
  * height. the picker's header and the login page carry the same controls, at
- * full height. in a browser
- * none of it exists. fullscreen in the app says how to leave it from inside
- * the stage; a browser leaves that to chrome.
+ * full height. in a browser none of it exists. fullscreen in the app says how
+ * to leave it from inside the stage; a browser leaves that to chrome.
  *
  * no streamer and no swoop on site-A here: the page refuses the session and
  * stays put with its bar, which is all the title bar needs.
@@ -168,12 +167,15 @@ test.describe('inside owlette swoop — admin on site-A', () => {
 
     // the strip takes no press outside the controls and their drag handle: the
     // picture under the rest of it stays the machine's
-    const outsideStrip = await page.evaluate(() =>
+    const handle = (await strip.getByTestId('swoop-window-drag').boundingBox())!;
+    const outsideStrip = await page.evaluate(
+      (points) =>
+        points.map(([x, y]) => !document.elementFromPoint(x, y)?.closest('[data-testid="swoop-window-strip"]')),
       [
         [800, 12],
         [100, 4],
-        [1600 - 138 - 160 - 8, 12],
-      ].map(([x, y]) => !document.elementFromPoint(x, y)?.closest('[data-testid="swoop-window-strip"]')),
+        [handle.x - 8, 12],
+      ],
     );
     expect(outsideStrip).toEqual([true, true, true]);
 
