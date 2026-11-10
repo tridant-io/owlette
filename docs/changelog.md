@@ -10,6 +10,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — display changes are refused while NVIDIA Mosaic is on
+
+A display change sent from the dashboard to a machine running NVIDIA Mosaic is
+meant to be refused, because changing one display there can break up the Mosaic
+grid. The check never ran, so the change went through. It is now refused with a
+message that says why. Arrives with the next agent version.
+
 ### fixed — scrolling a page at a time through swoop
 
 A mouse wheel set to scroll a page at a time barely moved the machine: one page
