@@ -27,6 +27,7 @@ import {
   COMMAND_POLL_INTERVAL_MS,
   COMMAND_TIMEOUT_MS,
 } from '@/lib/hoot-utils.server';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 
 export interface TalonDispatchInput {
   siteId: string;
@@ -125,9 +126,10 @@ export async function dispatchTalonCommand(
  * writing the pending command; reading the reply is not.
  *
  * CROSS-SIDE CONTRACT: the agent writes `{status:'running', startedAt}` on
- * start (`agent/src/firebase_client.py` `_mark_command_running`). Running
- * entries are NON-terminal: keep polling, never delete them — the agent's
- * terminal write overwrites the marker.
+ * start (`agent/src/firebase_client.py` `_mark_command_running`), and progress
+ * statuses for installs and updates. Those entries are NON-terminal
+ * ({@link isTerminalCommandStatus}): keep polling, never delete them — the
+ * agent's terminal write overwrites the marker.
  */
 export async function pollTalonCommandResult(
   db: Firestore,
@@ -149,7 +151,7 @@ export async function pollTalonCommandResult(
     const data = completedDoc.data();
     const cmdResult = data?.[commandId] as Record<string, unknown> | undefined;
     if (cmdResult) {
-      if (cmdResult.status === 'running') continue;
+      if (!isTerminalCommandStatus(cmdResult.status)) continue;
 
       // Best-effort cleanup so the doc doesn't grow unbounded.
       await completed.update({ [commandId]: FieldValue.delete() }).catch(() => undefined);

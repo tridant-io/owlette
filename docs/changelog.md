@@ -10,6 +10,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — api answers that were wrong or missing
+
+The machine detail API, and `owlette machine get`, always returned an empty
+process list; they list the machine's processes. A chat listing ended early
+when it met deleted chats; each page now fills. The rollout list refused
+`stage=fleet`; it filters on it. A cancelled command read as failed with no
+reason; the reason is in `error`. A talon could take an install's progress
+report as the command's answer; it waits for the end. Nothing to update on the
+machine.
+
 ### fixed — deleting a site removes its process configs too
 
 Deleting a site left its process configs, display layouts, restart schedules

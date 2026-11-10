@@ -26,10 +26,26 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 import {
   COMMAND_EXPIRY_MS,
+  isTerminalCommandStatus,
   stampCommand,
   writeCommandFanOut,
   type CommandData,
 } from '@/lib/commandLifecycle';
+
+// every status the agent writes to commands/completed (firebase_client.py
+// _mark_command_*, owlette_service.py progress updates), plus the legacy `error`
+describe('isTerminalCommandStatus', () => {
+  it.each(['completed', 'failed', 'cancelled', 'error'])('%s ends a command', (status) => {
+    expect(isTerminalCommandStatus(status)).toBe(true);
+  });
+
+  it.each(['running', 'closing_processes', 'downloading', 'installing', 'uninstalling', 'pending', undefined])(
+    '%s does not',
+    (status) => {
+      expect(isTerminalCommandStatus(status)).toBe(false);
+    },
+  );
+});
 
 /**
  * The fakes implement only `collection().doc().collection().doc().set()`, so
