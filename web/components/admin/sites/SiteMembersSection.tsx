@@ -63,6 +63,17 @@ function RoleBadge({ role }: { role: DisplayedRole }) {
 
 const NO_MACHINES: SiteMachine[] = [];
 
+function LoadError({ message, action, onRetry }: { message: string; action: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-danger-surface border border-danger-border rounded-lg p-4">
+      <p className="text-danger">{message}</p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        {action}
+      </Button>
+    </div>
+  );
+}
+
 /** the machines a scope names, by name, where an id the site no longer has shows as itself */
 function AccessCell({ machineIds, machines }: { machineIds: string[] | null; machines: SiteMachine[] }) {
   const label = accessLabel(machineIds);
@@ -95,7 +106,8 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
   const { members, loading, error, refresh, addMember, removeMember, updateMember } = useSiteMembers(siteId);
   const { fetchSiteAuthored } = useTalonReassign();
   const { membersMayWatch } = useSwoopSettings(siteId).settings;
-  const machines = useSiteMachines(siteId).machines ?? NO_MACHINES;
+  const siteMachines = useSiteMachines(siteId);
+  const machines = siteMachines.machines ?? NO_MACHINES;
 
   const [addOpen, setAddOpen] = useState(false);
   const [accessTarget, setAccessTarget] = useState<SiteMember | null>(null);
@@ -179,13 +191,15 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
         description="the people who can reach this site, their role, their swoop and their access."
         actions={<CompactButton icon={Plus} label="add member" onClick={() => setAddOpen(true)} />}
       >
-        {error && (
-          <div className="flex items-center justify-between gap-3 bg-danger-surface border border-danger-border rounded-lg p-4">
-            <p className="text-danger">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => void refresh()}>
-              retry
-            </Button>
-          </div>
+        {error && <LoadError message={error} action="retry" onRetry={() => void refresh()} />}
+
+        {/* without them the access picker lists no machines, and the column shows ids */}
+        {siteMachines.error && (
+          <LoadError
+            message={`machines couldn't load: ${siteMachines.error}`}
+            action="reload machines"
+            onRetry={() => void siteMachines.refresh()}
+          />
         )}
 
         {loading && (

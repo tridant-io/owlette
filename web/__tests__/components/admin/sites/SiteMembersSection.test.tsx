@@ -326,6 +326,24 @@ describe('the access column', () => {
     expect(within(tooltip).getAllByRole('listitem').map((item) => item.textContent)).toEqual(['kiosk', 'gone']);
   });
 
+  it("says when the machines couldn't load, since the access picker would list none", async () => {
+    const refreshMachines = jest.fn();
+    jest.mocked(useSiteMachines).mockReturnValue({
+      machines: null,
+      error: 'failed to load machines (500)',
+      refresh: refreshMachines,
+    });
+    render(
+      <TooltipProvider delayDuration={0}>
+        <SiteMembersSection siteId="elm-gate" />
+      </TooltipProvider>,
+    );
+
+    expect(screen.getByText("machines couldn't load: failed to load machines (500)")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'reload machines' }));
+    expect(refreshMachines).toHaveBeenCalledTimes(1);
+  });
+
   it('names a scope by its ids until the machines load', async () => {
     jest.mocked(useSiteMachines).mockReturnValue({ machines: null, error: null, refresh: jest.fn() });
     render(
