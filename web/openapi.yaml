@@ -12943,9 +12943,10 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Free-form metadata; the server requires no keys. The CLI and SDKs
-            write `producer`, `cliVersion`, `createdAt`, `hostname` and
-            `platform`. Every key is part of the hashed version id.
+            Free-form metadata; the server requires no keys. The SDKs write
+            `producer`, `cliVersion`, `createdAt`, `hostname` and `platform`;
+            the CLI and the dashboard send it empty. Every key is part of the
+            hashed version id.
         files:
           type: array
           minItems: 1

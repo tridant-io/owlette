@@ -7,6 +7,15 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — the CLI publishes the same files as the same version from any machine
+
+Pushing a roost from a second CI runner, another computer or a newer CLI made a
+new version of unchanged files and rolled it out to every target again. The CLI
+no longer writes its host name, platform or version into the version, so the
+same files get the same version wherever they are pushed from. The first push
+of unchanged files onto a version an older CLI published still makes one new
+version. Nothing to update on the machine.
+
 ### changed — the CLI and SDK pages say how to install them today
 
 The CLI and SDK pages opened with npm and pip commands for packages that are

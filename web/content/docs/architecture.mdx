@@ -522,13 +522,13 @@ version bodies are stored at `project-manifests/{siteId}/{roostId}/{versionId}.j
 
 ### version body format
 
-the version body is an OCI-derived JSON document with media type `application/vnd.owlette.version.v1+json`. it is canonical JSON with a `config` object and a non-empty `files[]` array. `config` is free-form provenance about the push: the server checks only that it is an object and stores it verbatim, so it can later answer "how was this version produced?". the keys below are what `owlette push` emits (`cli/src/lib/versionBuilder.ts`); `hostname` and `platform` are left out when the CLI can't determine them. minimal shape:
+the version body is an OCI-derived JSON document with media type `application/vnd.owlette.version.v1+json`. it is canonical JSON with a `config` object and a non-empty `files[]` array. `config` is free-form provenance about the push: the server checks only that it is an object and stores it verbatim. it is part of what the version id is computed from, so `owlette push` and the dashboard send it empty: the same files then get the same version from any machine. minimal shape:
 
 ```json
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.owlette.version.v1+json",
-  "config": { "producer": "owlette-cli", "cliVersion": "1.0.0-rc.0", "hostname": "studio-01", "platform": "win32" },
+  "config": {},
   "files": [
     { "path": "project.toe", "size": 123456, "chunks": [
       { "hash": "a1b2...", "size": 4194304 }
