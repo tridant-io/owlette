@@ -35,7 +35,8 @@ import { sanitizeForLog } from '@/lib/logSanitize';
  * failures, process crash/start failures, display events).
  * Auth: `Authorization: Bearer <agent-firebase-id-token>`.
  * Rate limits: 5/hr per IP for every event, plus 3/hr per
- * `machineId:processName` for process alerts.
+ * `machineId:processName` for process alerts and one per `machineId:eventType`
+ * per hour (four hours for drift) for display events.
  */
 
 /** the `errorCode` the agent's reboot-pending check posts (`_check_and_alert_reboot_pending`). */
@@ -398,8 +399,8 @@ export const POST = withRateLimit(
       // before the email, which has two early exits below: a site that routes
       // this alert to a webhook must hear about it with no email recipients.
       // not for a reboot-pending notice, which rides this branch with no
-      // eventType: that machine is online and saying windows wants a restart, so
-      // it keeps its email and is no machine.offline.
+      // eventType: that machine is online and saying it has a restart pending,
+      // so it keeps its email and is no machine.offline.
       if (errorCode !== REBOOT_PENDING_NOTICE) {
         const siteDoc = await db.collection('sites').doc(siteId).get();
         const siteName = siteDoc.data()?.name || siteId;
