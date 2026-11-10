@@ -63,7 +63,6 @@ struct SecondInstance {
 /// Holds the file watchers for the life of the app; dropping this stops them.
 struct Watchers(Mutex<Option<watchers::WatchHandle>>);
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     // First: plugins init in registration order, and this one must claim the instance lock.
@@ -86,10 +85,9 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     // Degraded-state toasts from the tray monitor.
     .plugin(tauri_plugin_notification::init())
-    // For upcoming filesystem browsing under the owlette tree; unused so far.
+    // Metadata reads (exists, readDir, stat) for the drag-drop classifier.
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
-      commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
       path_status::path_status,
