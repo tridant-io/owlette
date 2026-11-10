@@ -10,6 +10,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — the agent reconnects on a network that only lets https out
+
+After a dropped connection the agent looked for the internet by reaching a
+public DNS resolver, so on a network that blocks that it stayed disconnected
+until the service was restarted. It now also tries owlette itself over https.
+Arrives with the next agent version.
+
 ### fixed — small things in the dashboard
 
 A failed clear logs now says why. The screenshot and live view dialogs could
