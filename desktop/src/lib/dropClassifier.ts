@@ -4,9 +4,9 @@
  * All disk contact goes through the injected {@link FsProbe} and there is no
  * module state, so the rule matrix is unit-testable without Tauri.
  *
- * Drafts mirror the python service's on-disk schema (`owlette_gui.py:1043-1057`).
+ * Drafts mirror the on-disk schema the python GUI wrote before 3.0.0.
  * Numeric fields are STRINGS to match every other writer of `config.json`; the
- * service coerces with int()/float() (`owlette_service.py:2097,:2271`).
+ * service coerces them (`_seconds` in `owlette_service.py`).
  */
 
 import { launchCopyFor, type DesktopOs } from '@/lib/launchCopy'

@@ -99,7 +99,7 @@ function fileNameOf(path: string): string {
  * The owlette configuration window: a view over three files in
  * `%PROGRAMDATA%\Owlette` owned by the python service, edited read-modify-write.
  * No cloud client here on purpose — the service is the only thing that talks to
- * owlette and uploads the config it reads from disk (`owlette_gui.py:2403-2408`).
+ * owlette and uploads the config it reads from disk.
  */
 function App() {
   const config = useOwletteConfig()
@@ -392,7 +392,7 @@ function App() {
       // whatever mode it is switched to, so kill/restart stay offered until it
       // is actually gone (the service prunes dead pids). Only a dead row gets
       // the intent written over it — `INACTIVE` for off, `QUEUED` while the
-      // service picks it up — as `owlette_gui.on_launch_mode_change` did.
+      // service picks it up — as the python GUI did before 3.0.0 removed it.
       const pid = livePidForProcess(appStates.states, selected.id)
       if (pid === null) return
       const status = statusForProcess(appStates.states, selected.id)

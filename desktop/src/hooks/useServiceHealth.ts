@@ -15,7 +15,7 @@ import {
 } from '@/lib/serviceHealth'
 
 /**
- * SCM re-query interval — the app's only timer. A dead service stops writing
+ * SCM re-query interval. A dead service stops writing
  * `service_status.json`, so there are no events left and the staleness rule (the
  * tray's two minutes) can only be applied by asking again. An SCM query costs
  * microseconds and never touches the seam files.
