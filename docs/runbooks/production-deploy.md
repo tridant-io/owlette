@@ -53,8 +53,8 @@ rules.
 | web dev | push to `dev` | Railway auto-deploys dev service to `https://dev.owlette.app` | push release candidate to `dev`, then verify |
 | web prod | push or merge to `main` | Railway auto-deploys prod service to `https://owlette.app` | merge `dev` to `main`, then verify |
 | Cloud Functions | none | no CI workflow | run `FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod` if functions changed (firebase-tools 15.x) |
-| Firestore rules and indexes | none | no CI workflow | run `firebase deploy --only firestore` if rules or indexes changed |
-| storage rules | none | no CI workflow | run `firebase deploy --only storage` if storage rules changed |
+| Firestore rules and indexes | none | no CI workflow | run `firebase deploy --only firestore --project prod` if rules or indexes changed |
+| storage rules | none | no CI workflow | run `firebase deploy --only storage --project prod` if storage rules changed |
 | published docs (/docs) | push or merge to `main` | ships with the web prod deploy — fumadocs MDX under `web/content/docs/` is compiled by `npm run build` | none beyond the web deploy; verify `https://owlette.app/docs` in smoke |
 | CLI npm package | tag push matching `cli-v[0-9]+.[0-9]+.[0-9]+` | `.github/workflows/cli-publish.yml` publishes to npm with provenance | out of scope here |
 | agent installer | separate release process | separate runbook | use [agent-installer-release.md](agent-installer-release.md) |
@@ -216,7 +216,7 @@ rules.
    Cloud Functions have no CI deployment workflow. Deploy them manually:
 
     ```sh
-    FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase use prod &&       FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions
+    FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod
     ```
 
     **`FUNCTIONS_DISCOVERY_TIMEOUT` is not optional.** Before deploying anything,
@@ -264,7 +264,7 @@ rules.
    Use the production Firebase project and deploy Firestore:
 
     ```sh
-    firebase deploy --only firestore
+    firebase deploy --only firestore --project prod
     ```
 
    This deploy covers both Firestore rules and indexes. If the rule change
@@ -276,7 +276,7 @@ rules.
    Storage rules have no CI deployment workflow. Deploy them manually:
 
    ```sh
-   firebase deploy --only storage
+   firebase deploy --only storage --project prod
    ```
 
 10. Run production post-deploy smoke checks.
@@ -327,10 +327,10 @@ rules.
   completed successfully (firebase-tools 15.x; the timeout override is required — see above).
 - [ ] `firebase functions:list --project prod` shows the expected runtime for every function.
 - [ ] `firebase functions:log --project prod` is clean — no load errors on the new build.
-- [ ] If Firestore rules or indexes changed, `firebase deploy --only firestore`
+- [ ] If Firestore rules or indexes changed, `firebase deploy --only firestore --project prod`
   completed successfully after any required migration — and, where the web code
   depends on them, before the production web deploy rather than after it.
-- [ ] If storage rules changed, `firebase deploy --only storage` completed
+- [ ] If storage rules changed, `firebase deploy --only storage --project prod` completed
   successfully.
 - [ ] If `web/content/docs/**` changed, the affected pages render at
   `https://owlette.app/docs`.
@@ -394,7 +394,7 @@ Redeploying previous source is the rollback.
 
 ```sh
 git checkout <prev-sha> functions/
-firebase use prod && firebase deploy --only functions
+FUNCTIONS_DISCOVERY_TIMEOUT=120 firebase deploy --only functions --project prod
 ```
 
 After rollback, restore the working tree intentionally so the previous source
@@ -412,7 +412,7 @@ Command-line rollback for rules:
 
 ```sh
 git checkout HEAD~1 firestore.rules
-firebase deploy --only firestore:rules
+firebase deploy --only firestore:rules --project prod
 ```
 
 If the rollback reverses a rule change that depended on a data migration, review
@@ -423,7 +423,7 @@ For indexes, use the same Firestore deploy surface only when the checked-out
 source reflects the intended index state:
 
 ```sh
-firebase deploy --only firestore
+firebase deploy --only firestore --project prod
 ```
 
 ### storage rules
@@ -433,7 +433,7 @@ source.
 
 ```sh
 git checkout HEAD~1 storage.rules
-firebase deploy --only storage
+firebase deploy --only storage --project prod
 ```
 
 Console history is also available for storage rules. Use it when it is the
