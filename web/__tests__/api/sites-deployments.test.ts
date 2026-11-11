@@ -93,6 +93,7 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
+import { FieldValue } from 'firebase-admin/firestore';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { ApiKeyScope } from '@/lib/apiKeyTypes';
 import type { ResolvedAuth } from '@/lib/apiAuth.server';
@@ -163,6 +164,23 @@ function idempotencyHeaders(key: string): Record<string, string> {
 
 function queueIdempotencyMiss(): void {
   mocks.get.mockResolvedValueOnce(docSnapshot('idempotency-cache', null));
+}
+
+// a merge write that queues a command: not the site's lastDeploymentActivityAt stamp.
+function isCommandWrite(c: unknown[]): boolean {
+  return (
+    (c[1] as { merge?: boolean })?.merge === true &&
+    !('lastDeploymentActivityAt' in (c[0] as object))
+  );
+}
+
+// the stamp the deployment sweeper scans sites by.
+function siteStamps(): unknown[][] {
+  return mocks.set.mock.calls.filter(
+    (c: unknown[]) =>
+      'lastDeploymentActivityAt' in (c[0] as object) &&
+      (c[1] as { merge?: boolean })?.merge === true,
+  );
 }
 
 describe('GET /api/sites/{siteId}/deployments', () => {
@@ -266,14 +284,14 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     expect(body.targets).toHaveLength(2);
 
     // Deployment doc + fan-out merges (one per machine).
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     const firstCmd = mergeCalls[0][0];
     const cmdKey = Object.keys(firstCmd)[0];
     expect(firstCmd[cmdKey].type).toBe('install_software');
     expect(mocks.update).toHaveBeenCalledWith({ status: 'in_progress' });
+    // the sweeper only scans sites with recent activity; without this it never fails a stuck target.
+    expect(siteStamps()).toHaveLength(1);
 
     expect(mockedEmit).toHaveBeenCalledTimes(1);
     expect(mockedEmit).toHaveBeenCalledWith(
@@ -294,9 +312,7 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     });
     const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
     expect(res.status).toBe(201);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     for (const call of mergeCalls) {
       const cmd = call[0][Object.keys(call[0])[0]];
@@ -318,9 +334,7 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
     expect(res.status).toBe(400);
     expect((await res.json()).errors).toHaveProperty(['body.active_hours_override']);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(0);
   });
 
@@ -630,9 +644,14 @@ describe('DELETE /api/sites/{siteId}/deployments/{deploymentId}', () => {
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
+  // the first read, then the claim transaction's re-read of the same record.
+  function stageDeployment(snapshot: ReturnType<typeof docSnapshot>) {
+    mocks.get.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot);
+  }
+
   it('200 — re-queues install for failed targets only', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -658,9 +677,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.machine_ids).toEqual(['m2', 'm3']);
 
     // Two install_software commands re-queued (one per failed target).
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     expect(mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]].retry_attempt).toBe(true);
 
@@ -695,7 +712,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('skips checksum compute when the deployment already has one', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -715,9 +732,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(res.status).toBe(200);
     expect(mockComputeChecksum).not.toHaveBeenCalled();
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     const cmd = mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]];
     expect(cmd.sha256_checksum).toBe('ab'.repeat(32));
     // No re-pin: doc already had the checksum.
@@ -726,7 +741,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('carries the processes to close and the projects to hold, as the first attempt did', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'td.exe',
         installer_url: 'https://example.com/td.exe',
@@ -747,9 +762,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     });
     expect(res.status).toBe(200);
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     const cmd = mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]];
     expect(cmd.close_processes).toEqual(['TouchDesigner.exe']);
     expect(cmd.suppress_projects).toEqual(['C:\\show\\main.toe']);
@@ -757,7 +770,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('retries only the machines in the body filter', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -787,9 +800,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.machine_ids).toEqual(['m2']);
 
     // Only one command queued; m1 stays failed with its error intact.
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(1);
     const updatePayload = mocks.update.mock.calls[0][0];
     const m1 = updatePayload.targets.find((t: { machineId: string }) => t.machineId === 'm1');
@@ -801,7 +812,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('200 — an active_hours_override flows to every re-queued install and is audited', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -826,9 +837,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(200);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     for (const call of mergeCalls) {
       const cmd = call[0][Object.keys(call[0])[0]];
@@ -850,7 +859,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('a retry without an override carries none', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -868,9 +877,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(200);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]]).not.toHaveProperty('activeHoursOverride');
     expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('activeHoursOverride');
   });
@@ -959,9 +966,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(422);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(0);
     expect(mocks.update).not.toHaveBeenCalled();
   });
@@ -1015,25 +1020,232 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.code).toBe('idempotency_key_required');
   });
 
+  describe('against a live record', () => {
+    type Target = { machineId: string; status: string; failedCommandType?: string; error?: string };
+    const installer = {
+      installer_name: 'vlc.exe',
+      installer_url: 'https://example.com/vlc.exe',
+      silent_flags: '/S',
+      status: 'partial',
+    };
+    const pinned = { ...installer, sha256_checksum: 'ab'.repeat(32) };
+
+    // reads see the latest write, as requests in flight together would.
+    function liveDeployment(initial: Record<string, unknown>) {
+      const path = `sites/${SITE}/deployments/${DEPLOYMENT}`;
+      let record = initial;
+      mocks.get.mockImplementation((p: string) =>
+        Promise.resolve(p === path ? docSnapshot(DEPLOYMENT, record) : docSnapshot('any', null)),
+      );
+      mocks.update.mockImplementation(async (payload: Record<string, unknown>) => {
+        if ('targets' in payload) record = { ...record, ...payload };
+      });
+      return {
+        statuses: () => (record.targets as Target[]).map((t) => t.status),
+        setTargets: (targets: Target[]) => {
+          record = { ...record, targets };
+        },
+      };
+    }
+
+    function retry(key: string, body: Record<string, unknown> = {}) {
+      return retryPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`, {
+          method: 'POST',
+          headers: idempotencyHeaders(key),
+          body,
+        }),
+        { params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }) },
+      );
+    }
+
+    const queuedInstalls = () => mocks.set.mock.calls.filter(isCommandWrite);
+
+    it('replaces an install still queued from before, so a machine that was offline runs one', async () => {
+      liveDeployment({ ...pinned, targets: [{ machineId: 'm1', status: 'failed' }] });
+      // the sweeper timed m1 out at `pending`: its first install is still queued.
+      const pendingPath = `sites/${SITE}/machines/m1/commands/pending`;
+      const deploymentGet = mocks.get.getMockImplementation()!;
+      mocks.get.mockImplementation((p: string) =>
+        p === pendingPath
+          ? Promise.resolve(
+              docSnapshot('pending', {
+                install_first: { type: 'install_software', deployment_id: DEPLOYMENT },
+                reboot_1: { type: 'reboot_machine' },
+              }),
+            )
+          : deploymentGet(p),
+      );
+
+      const res = await retry('idem-retry-live-stale-install');
+
+      expect(res.status).toBe(200);
+      const [[payload]] = queuedInstalls() as Array<[Record<string, unknown>]>;
+      expect(FieldValue.delete().isEqual(payload.install_first as FieldValue)).toBe(true);
+      expect(payload).not.toHaveProperty('reboot_1');
+      expect(Object.keys(payload).filter((k) => k.startsWith('install_deploy'))).toHaveLength(1);
+    });
+
+    it('stamps the site so the sweeper watches the targets it claimed', async () => {
+      liveDeployment({ ...pinned, targets: [{ machineId: 'm1', status: 'failed' }] });
+
+      const res = await retry('idem-retry-live-stamp');
+
+      expect(res.status).toBe(200);
+      expect(siteStamps()).toHaveLength(1);
+    });
+
+    it('audits what was queued, then answers 500, when one of three installs cannot be queued', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'failed' },
+          { machineId: 'm3', status: 'failed' },
+        ],
+      });
+      let installWrites = 0;
+      mocks.set.mockImplementation(async (...args: unknown[]) => {
+        if (isCommandWrite(args) && ++installWrites === 2) throw new Error('write failed');
+      });
+
+      const res = await retry('idem-retry-live-partial-queue');
+
+      expect(res.status).toBe(500);
+      expect(mockedEmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            verb: 'retry',
+            retried_count: 2,
+            machine_ids: ['m1', 'm3'],
+            unqueued_machine_ids: ['m2'],
+          }),
+        }),
+      );
+      // claimed before queuing: m2 waits for the sweeper, with no second install anywhere.
+      expect(live.statuses()).toEqual(['pending', 'pending', 'pending']);
+    });
+
+    it('keeps a result that lands while the checksum downloads', async () => {
+      const live = liveDeployment({
+        ...installer,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'installing' },
+        ],
+      });
+      mockComputeChecksum.mockImplementation(async () => {
+        live.setTargets([
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'completed' },
+        ]);
+        return { sha256_checksum: 'f0'.repeat(32), size_bytes: 1024 };
+      });
+
+      const res = await retry('idem-retry-live-checksum');
+
+      expect(res.status).toBe(200);
+      expect(live.statuses()).toEqual(['pending', 'completed']);
+    });
+
+    it('two per-machine retries in flight together both land', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'failed' },
+        ],
+      });
+
+      const [first, second] = await Promise.all([
+        retry('idem-retry-live-m1', { machines: ['m1'] }),
+        retry('idem-retry-live-m2', { machines: ['m2'] }),
+      ]);
+
+      expect([first.status, second.status]).toEqual([200, 200]);
+      expect(live.statuses()).toEqual(['pending', 'pending']);
+      expect(queuedInstalls()).toHaveLength(2);
+    });
+
+    it('queues no install for a target that left `failed` before the retry claimed it', async () => {
+      const live = liveDeployment({
+        ...installer,
+        targets: [{ machineId: 'm1', status: 'failed' }],
+      });
+      // another retry claims m1 while this one downloads the installer.
+      mockComputeChecksum.mockImplementation(async () => {
+        live.setTargets([{ machineId: 'm1', status: 'pending' }]);
+        return { sha256_checksum: 'f0'.repeat(32), size_bytes: 1024 };
+      });
+
+      const res = await retry('idem-retry-live-claimed');
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe('no_failed_targets');
+      expect(body.detail).toMatch(/nothing was queued/);
+      expect(queuedInstalls()).toHaveLength(0);
+      expect(live.statuses()).toEqual(['pending']);
+    });
+
+    it('does not reinstall a program whose uninstall failed', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed', failedCommandType: 'uninstall_software' },
+          { machineId: 'm2', status: 'failed', failedCommandType: 'install_software' },
+          // what agents answered the deployment uninstall before it sent a program name:
+          // windows and macOS, then linux.
+          { machineId: 'm3', status: 'failed', error: 'Error: Software name and uninstall command required' },
+          {
+            machineId: 'm4',
+            status: 'failed',
+            error: "Error: executing command uninstall_software: No module named 'winreg'",
+          },
+        ],
+      });
+
+      const res = await retry('idem-retry-live-uninstall-failed');
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).machine_ids).toEqual(['m2']);
+      expect(live.statuses()).toEqual(['failed', 'pending', 'failed', 'failed']);
+      expect(queuedInstalls()).toHaveLength(1);
+    });
+
+    it('409 when the only machine named is one whose uninstall failed', async () => {
+      liveDeployment({
+        ...pinned,
+        targets: [{ machineId: 'm1', status: 'failed', failedCommandType: 'uninstall_software' }],
+      });
+
+      const res = await retry('idem-retry-live-named-uninstall', { machines: ['m1'] });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe('no_failed_targets');
+      expect(body.detail).toMatch(/uninstall/);
+      expect(queuedInstalls()).toHaveLength(0);
+    });
+  });
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
   it('200 — cancels pending targets, leaves installing/completed alone', async () => {
     // 1st get: deployment doc; then one pending command doc per cancellable
-    // target (there is one).
+    // target (there is one); then the transaction's re-read of the deployment.
     queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [
+        { machineId: 'm1', status: 'installing' },
+        { machineId: 'm2', status: 'pending' },
+        { machineId: 'm3', status: 'completed' },
+      ],
+      status: 'in_progress',
+    });
     mocks.get
-      .mockResolvedValueOnce(
-        docSnapshot(DEPLOYMENT, {
-          installer_name: 'vlc.exe',
-          targets: [
-            { machineId: 'm1', status: 'installing' },
-            { machineId: 'm2', status: 'pending' },
-            { machineId: 'm3', status: 'completed' },
-          ],
-          status: 'in_progress',
-        }),
-      )
+      .mockResolvedValueOnce(deployment)
       .mockResolvedValueOnce({
         exists: true,
         data: () => ({
@@ -1043,7 +1255,8 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
           },
           some_other_command: { type: 'reboot_machine' },
         }),
-      });
+      })
+      .mockResolvedValueOnce(deployment);
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
       { method: 'POST', headers: idempotencyHeaders('idem-cancel-happy'), body: {} },
@@ -1078,15 +1291,15 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
 
   it('200 — flips deployment status to cancelled when every target terminal-cancelled', async () => {
     queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [{ machineId: 'm1', status: 'pending' }],
+      status: 'in_progress',
+    });
     mocks.get
-      .mockResolvedValueOnce(
-        docSnapshot(DEPLOYMENT, {
-          installer_name: 'vlc.exe',
-          targets: [{ machineId: 'm1', status: 'pending' }],
-          status: 'in_progress',
-        }),
-      )
-      .mockResolvedValueOnce({ exists: false });
+      .mockResolvedValueOnce(deployment)
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce(deployment);
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
       { method: 'POST', headers: idempotencyHeaders('idem-cancel-terminal'), body: {} },
@@ -1133,6 +1346,131 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
     expect(body.code).toBe('no_cancellable_targets');
   });
 
+  it('cancels only the machines in the body filter', async () => {
+    queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [
+        { machineId: 'm1', status: 'pending' },
+        { machineId: 'm2', status: 'pending' },
+      ],
+      status: 'in_progress',
+    });
+    mocks.get
+      .mockResolvedValueOnce(deployment)
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce(deployment);
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-filter'),
+        body: { machines: ['m2'] },
+      },
+    );
+    const res = await cancelPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cancelled).toBe(1);
+    expect(body.machine_ids).toEqual(['m2']);
+    expect(body.status).toBe('in_progress');
+
+    const deploymentUpdate = mocks.update.mock.calls.find(
+      (c: unknown[]) => (c[0] as { targets?: unknown }).targets !== undefined,
+    );
+    const updateArg = deploymentUpdate![0] as {
+      targets: Array<{ machineId: string; status: string }>;
+    };
+    expect(updateArg.targets.find((t) => t.machineId === 'm1')!.status).toBe('pending');
+    expect(updateArg.targets.find((t) => t.machineId === 'm2')!.status).toBe('cancelled');
+  });
+
+  it('409 no_cancellable_targets when the filter names no cancellable target', async () => {
+    queueIdempotencyMiss();
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(DEPLOYMENT, {
+        installer_name: 'vlc.exe',
+        targets: [
+          { machineId: 'm1', status: 'installing' },
+          { machineId: 'm2', status: 'pending' },
+        ],
+        status: 'in_progress',
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-filter-miss'),
+        body: { machines: ['m1', 'm9'] },
+      },
+    );
+    const res = await cancelPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('no_cancellable_targets');
+    expect(body.detail).toMatch(/machines filter/);
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('a filter naming one cancellable target and one installing cancels only the first', async () => {
+    queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [
+        { machineId: 'm1', status: 'installing' },
+        { machineId: 'm2', status: 'pending' },
+      ],
+      status: 'in_progress',
+    });
+    mocks.get
+      .mockResolvedValueOnce(deployment)
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce(deployment);
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-filter-mixed'),
+        body: { machines: ['m1', 'm2'] },
+      },
+    );
+    const res = await cancelPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cancelled).toBe(1);
+    expect(body.machine_ids).toEqual(['m2']);
+  });
+
+  it.each([
+    ['an empty array', []],
+    ['a string, not an array', 'm1'],
+    ['an empty machine id', ['m1', '']],
+  ])('400 when machines is %s, before anything is read', async (_label, machines) => {
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-badfilter'),
+        body: { machines },
+      },
+    );
+    const res = await cancelPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.errors).toHaveProperty(['body.machines']);
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
   it('400 when Idempotency-Key is missing', async () => {
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`,
@@ -1146,54 +1484,259 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
     expect(body.code).toBe('idempotency_key_required');
   });
 
+  it('500 after the record is settled when the cancel cannot be written to one machine', async () => {
+    // reads: the deployment, each machine's pending map (nothing queued), the re-read.
+    queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [
+        { machineId: 'm1', status: 'pending' },
+        { machineId: 'm2', status: 'pending' },
+      ],
+      status: 'in_progress',
+    });
+    mocks.get
+      .mockResolvedValueOnce(deployment)
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce(deployment);
+    let commandWrites = 0;
+    mocks.set.mockImplementation(async (...args: unknown[]) => {
+      if (isCommandWrite(args) && ++commandWrites === 2) throw new Error('write failed');
+    });
+
+    const res = await cancelPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`, {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-unreached'),
+        body: {},
+      }),
+      { params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }) },
+    );
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    const deploymentUpdate = mocks.update.mock.calls.find(
+      (c: unknown[]) => (c[0] as { targets?: unknown }).targets !== undefined,
+    );
+    const updateArg = deploymentUpdate![0] as { targets: Array<{ status: string }> };
+    expect(updateArg.targets.map((t) => t.status)).toEqual(['cancelled', 'cancelled']);
+  });
+
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => {
-  it('200 — queues uninstall_software per target + flips status', async () => {
+  const TD = 'TouchDesigner 2023.11880';
+  const tdRecord = {
+    name: TD,
+    uninstall_command: '"C:/Program Files/Derivative/TouchDesigner/unins000.exe"',
+    installer_type: 'inno',
+    install_location: 'C:/Program Files/Derivative/TouchDesigner',
+  };
+  // answers for the installed_software query, one per looked-up target, in target order.
+  const listed = (record: Record<string, unknown>) => ({
+    empty: false,
+    docs: [{ data: () => record }],
+  });
+  const notListed = { empty: true, docs: [] };
+  // the machine doc each finished target's lookup reads first.
+  const machine = (id: string) => docSnapshot(id, { online: true });
+
+  // the list suite above stages a query answer its 400 case never reads; drop it.
+  beforeEach(() => mocks.collectionGet.mockReset());
+
+  function uninstallRequest(key: string, body: unknown) {
+    return createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
+      { method: 'POST', headers: idempotencyHeaders(key), body },
+    );
+  }
+
+  it('200 — queues the agent command on each finished target that lists the program, and reports the rest', async () => {
     mockResolveAuth.mockResolvedValue(
       authedKey([{ resource: 'site', id: SITE, permissions: ['admin'] }]),
     );
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
-      docSnapshot(DEPLOYMENT, {
-        installer_name: 'vlc.exe',
-        targets: [
-          { machineId: 'm1', status: 'completed' },
-          { machineId: 'm2', status: 'completed' },
-        ],
-        status: 'completed',
-      }),
-    );
-    const req = createMockRequest(
-      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
-      { method: 'POST', headers: idempotencyHeaders('idem-uninstall-happy'), body: {} },
-    );
-    const res = await uninstallPOST(req, {
+    mocks.get
+      .mockResolvedValueOnce(
+        docSnapshot(DEPLOYMENT, {
+          installer_name: 'TouchDesigner.2023.11880.exe',
+          targets: [
+            { machineId: 'm1', status: 'completed' },
+            { machineId: 'm2', status: 'failed' },
+            { machineId: 'm3', status: 'installing' },
+          ],
+          status: 'in_progress',
+        }),
+      )
+      .mockResolvedValueOnce(machine('m1'))
+      .mockResolvedValueOnce(machine('m2'));
+    mocks.collectionGet.mockResolvedValueOnce(listed(tdRecord)).mockResolvedValueOnce(notListed);
+
+    const res = await uninstallPOST(uninstallRequest('idem-uninstall-happy', { software_name: TD }), {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
+
     expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.queued).toBe(2);
-    expect(body.status).toBe('uninstalling');
+    expect(await res.json()).toEqual({
+      deploymentId: DEPLOYMENT,
+      siteId: SITE,
+      status: 'in_progress',
+      queued: 1,
+      machine_ids: ['m1'],
+      skipped: [
+        { machineId: 'm2', reason: 'software_not_found' },
+        { machineId: 'm3', reason: 'install_in_flight' },
+      ],
+    });
+    // exact name only, and two records under it are told apart: a silent uninstall as SYSTEM.
+    expect(mocks.where).toHaveBeenCalledWith('name', '==', TD);
+    expect(mocks.where).toHaveBeenCalledTimes(2);
+    expect(mocks.limit).toHaveBeenCalledWith(2);
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
+    expect(mergeCalls).toHaveLength(1);
+    const [commandId, command] = Object.entries(mergeCalls[0][0] as Record<string, unknown>)[0];
+    expect(commandId).toMatch(/^uninstall-\d+$/);
+    // the machine route's command, plus the deployment_id the reconciler keys on.
+    expect(command).toMatchObject({
+      type: 'uninstall_software',
+      software_name: TD,
+      uninstall_command: tdRecord.uninstall_command,
+      installer_type: 'inno',
+      verify_paths: [tdRecord.install_location],
+      deployment_id: DEPLOYMENT,
+      auditCorrelationId: 'corr-test',
+    });
+    expect(Object.keys(command as object).sort()).toEqual(
+      [
+        'auditCorrelationId',
+        'createdAt',
+        'deployment_id',
+        'expiresAt',
+        'installer_type',
+        'software_name',
+        'timestamp',
+        'type',
+        'uninstall_command',
+        'verify_paths',
+      ].sort(),
     );
-    expect(mergeCalls).toHaveLength(2);
-    const firstCmd = mergeCalls[0][0];
-    const cmdKey = Object.keys(firstCmd)[0];
-    expect(firstCmd[cmdKey].type).toBe('uninstall_software');
-    expect(firstCmd[cmdKey].installer_name).toBe('vlc.exe');
 
-    const updateCall = mocks.update.mock.calls[0][0];
-    expect(updateCall.status).toBe('uninstalling');
-
+    // the reconciler moves the targets from the agent's result; the route writes no status.
+    expect(mocks.update).not.toHaveBeenCalled();
     expect(mockedEmit).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: 'deployment_mutated',
-        attributes: expect.objectContaining({ verb: 'uninstall', target_count: 2 }),
+        attributes: expect.objectContaining({
+          verb: 'uninstall',
+          target_count: 1,
+          software_name: TD,
+          skipped_count: 2,
+        }),
       }),
     );
+  });
+
+  it('409 no_uninstallable_targets when no target lists the program — queues nothing', async () => {
+    mockResolveAuth.mockResolvedValue(
+      authedKey([{ resource: 'site', id: SITE, permissions: ['admin'] }]),
+    );
+    queueIdempotencyMiss();
+    mocks.get
+      .mockResolvedValueOnce(
+        docSnapshot(DEPLOYMENT, {
+          installer_name: 'vlc.exe',
+          targets: [
+            { machineId: 'm1', status: 'completed' },
+            { machineId: 'm2', status: 'completed' },
+          ],
+          status: 'completed',
+        }),
+      )
+      .mockResolvedValueOnce(machine('m1'))
+      .mockResolvedValueOnce(machine('m2'));
+    mocks.collectionGet.mockResolvedValueOnce(notListed).mockResolvedValueOnce(notListed);
+
+    const res = await uninstallPOST(
+      uninstallRequest('idem-uninstall-none', { software_name: 'VLC media player' }),
+      { params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }) },
+    );
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.code).toBe('no_uninstallable_targets');
+    expect(body.skipped).toEqual([
+      { machineId: 'm1', reason: 'software_not_found' },
+      { machineId: 'm2', reason: 'software_not_found' },
+    ]);
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mockedEmit).not.toHaveBeenCalled();
+  });
+
+  async function uninstallFromOneTarget(
+    key: string,
+    machineDoc: ReturnType<typeof docSnapshot>,
+    softwareList: unknown,
+  ) {
+    mockResolveAuth.mockResolvedValue(
+      authedKey([{ resource: 'site', id: SITE, permissions: ['admin'] }]),
+    );
+    queueIdempotencyMiss();
+    mocks.get
+      .mockResolvedValueOnce(
+        docSnapshot(DEPLOYMENT, {
+          installer_name: 'TouchDesigner.exe',
+          targets: [{ machineId: 'm1', status: 'completed' }],
+          status: 'completed',
+        }),
+      )
+      .mockResolvedValueOnce(machineDoc);
+    mocks.collectionGet.mockResolvedValueOnce(softwareList);
+    return uninstallPOST(uninstallRequest(key, { software_name: TD }), {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+  }
+
+  it('skips a removed machine, whose software list outlives it, and queues nothing for it', async () => {
+    const res = await uninstallFromOneTarget(
+      'idem-uninstall-removed',
+      docSnapshot('m1', null),
+      listed(tdRecord),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).skipped).toEqual([{ machineId: 'm1', reason: 'machine_not_found' }]);
+    expect(mocks.collectionGet).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('skips a machine that lists two versions under the name, rather than pick one', async () => {
+    const res = await uninstallFromOneTarget('idem-uninstall-two-builds', machine('m1'), {
+      empty: false,
+      docs: [{ data: () => tdRecord }, { data: () => ({ ...tdRecord, version: 'older' }) }],
+    });
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).skipped).toEqual([{ machineId: 'm1', reason: 'software_ambiguous' }]);
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['missing', {}],
+    ['blank', { software_name: '   ' }],
+    ['not a string', { software_name: 42 }],
+  ])('400 when software_name is %s, before anything is read', async (_label, body) => {
+    mockResolveAuth.mockResolvedValue(
+      authedKey([{ resource: 'site', id: SITE, permissions: ['admin'] }]),
+    );
+    const res = await uninstallPOST(uninstallRequest('idem-uninstall-noname', body), {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).errors).toHaveProperty(['body.software_name']);
+    expect(mocks.get).not.toHaveBeenCalled();
   });
 
   it('404 when deployment not found', async () => {
@@ -1204,7 +1747,11 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => 
     mocks.get.mockResolvedValueOnce(docSnapshot(DEPLOYMENT, null));
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
-      { method: 'POST', headers: idempotencyHeaders('idem-uninstall-not-found'), body: {} },
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-uninstall-not-found'),
+        body: { software_name: 'VLC media player' },
+      },
     );
     const res = await uninstallPOST(req, {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
@@ -1226,7 +1773,11 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => 
     );
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
-      { method: 'POST', headers: idempotencyHeaders('idem-uninstall-conflict'), body: {} },
+      {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-uninstall-conflict'),
+        body: { software_name: 'VLC media player' },
+      },
     );
     const res = await uninstallPOST(req, {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
@@ -1242,7 +1793,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => 
     );
     const req = createMockRequest(
       `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
-      { method: 'POST', body: {} },
+      { method: 'POST', body: { software_name: 'VLC media player' } },
     );
     const res = await uninstallPOST(req, {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
@@ -1256,26 +1807,4 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => 
   // This suite mocks authorizedSiteHandler, and authorization now lives
   // entirely in that wrapper, so an assertion here could no longer observe
   // it — it would pass whatever the gate did.
-
-  it('200 — scope-pass with site=<id>:admin', async () => {
-    mockResolveAuth.mockResolvedValue(
-      authedKey([{ resource: 'site', id: SITE, permissions: ['admin'] }]),
-    );
-    queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
-      docSnapshot(DEPLOYMENT, {
-        installer_name: 'vlc.exe',
-        targets: [{ machineId: 'm1', status: 'completed' }],
-        status: 'completed',
-      }),
-    );
-    const req = createMockRequest(
-      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/uninstall`,
-      { method: 'POST', headers: idempotencyHeaders('idem-uninstall-scope-pass'), body: {} },
-    );
-    const res = await uninstallPOST(req, {
-      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
-    });
-    expect(res.status).toBe(200);
-  });
 });

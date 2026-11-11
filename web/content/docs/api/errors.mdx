@@ -299,9 +299,10 @@ see [swoop](/docs/dashboard/swoop).
 |---|---:|---|
 | <span id="over_quota" />`over_quota` | 413 | more target machines than the site's `deployQuota` (default 100); `quota` holds `max_targets` and `requested` |
 | <span id="deployment_in_flight" />`deployment_in_flight` | 409 | deleting a deployment that is not terminal, or has a target still running |
-| <span id="no_failed_targets" />`no_failed_targets` | 409 | a retry found no failed target to retry |
-| <span id="no_cancellable_targets" />`no_cancellable_targets` | 409 | a cancel found no target that can still be cancelled |
+| <span id="no_failed_targets" />`no_failed_targets` | 409 | a retry found no failed target to retry: a failed uninstall is not retried, and a target that left `failed` while the retry ran is not counted |
+| <span id="no_cancellable_targets" />`no_cancellable_targets` | 409 | a cancel found no target (of the `machines` named, when given) that can still be cancelled, or every one moved on while it ran |
 | <span id="no_targets" />`no_targets` | 409 | an uninstall of a deployment with no targets |
+| <span id="no_uninstallable_targets" />`no_uninstallable_targets` | 409 | a deployment uninstall found no target to queue it on (finished, still on the site, listing the program once); nothing was queued, and `skipped` says why for each |
 | <span id="too_large" />`too_large` | 413 | the installer to checksum is larger than 10 GiB |
 | <span id="fetch_failed" />`fetch_failed` | 422 | the installer download for a checksum failed |
 | <span id="too_many_redirects" />`too_many_redirects` | 422 | the installer URL redirected more than 5 times |

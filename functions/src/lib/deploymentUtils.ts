@@ -34,6 +34,8 @@ export interface DeploymentTarget {
   uninstalledAt?: number | FirebaseFirestore.Timestamp;
   /** Stamped by the retry route when it resets a failed target to pending. */
   retriedAt?: number | FirebaseFirestore.Timestamp;
+  /** Set by the reconciler on a `failed` target: the command type that failed. */
+  failedCommandType?: string;
 }
 
 // Stale-target timeouts (the sweeper)

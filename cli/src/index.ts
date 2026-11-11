@@ -20,7 +20,7 @@ import { registerMachineCommands } from './commands/machine';
 import { registerSwoopCommand } from './commands/swoop';
 import { registerAuditLogCommands } from './commands/audit-log';
 import { registerWhoamiCommand } from './commands/whoami';
-import { registerVersionCommand } from './commands/version';
+import { readCliVersion, registerVersionCommand } from './commands/version';
 import { registerChatCommands } from './commands/chat';
 import { registerUserCommands } from './commands/user';
 import { registerProcessCommands } from './commands/process';
@@ -28,14 +28,13 @@ import { registerInstallerCommands } from './commands/installer';
 import { _resetConfigCache } from './config';
 
 const PROGRAM_NAME = 'owlette';
-const VERSION = '1.0.0-rc.0';
 
 export function buildProgram(): Command {
   const program = new Command();
   program
     .name(PROGRAM_NAME)
     .description('owlette — cli for the owlette api')
-    .version(VERSION)
+    .version(readCliVersion())
     .option('--api-url <url>', 'target api host')
     .option('--profile <name>', 'named profile from ~/.config/owlette/config.toml')
     .option('--json', 'emit structured JSON instead of ascii tables on stdout');

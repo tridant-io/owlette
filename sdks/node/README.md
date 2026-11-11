@@ -102,6 +102,11 @@ removed.
 | `owlette.members(siteId)` | `list`, `add`, `remove`                                    |
 | `owlette.quotas`  | `current`, `history`                                               |
 
+`installerDeployments.uninstall(siteId, deploymentId, { softwareName })` takes
+the program's exact name in the machines' software list, since a deployment
+records only its installer file. Finished targets whose machine lists it get
+the uninstall; the rest come back in `skipped`.
+
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.
 

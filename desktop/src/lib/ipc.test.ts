@@ -156,23 +156,38 @@ describe('terminate_pid', () => {
       imagePath: 'C:\\apps\\player.exe',
     })
 
-    await terminatePid(4242, 'C:\\apps\\player.exe', 2000)
+    await terminatePid(4242, 'C:\\apps\\player.exe', null, 2000)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'C:\\apps\\player.exe',
+      recorded: null,
       gracefulTimeoutMs: 2000,
+    })
+  })
+
+  it('forwards what the service recorded about the pid', async () => {
+    invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
+
+    await terminatePid(4242, 'player.exe', { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' })
+
+    expect(invoke).toHaveBeenCalledWith('terminate_pid', {
+      pid: 4242,
+      expectedExe: 'player.exe',
+      recorded: { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' },
+      gracefulTimeoutMs: null,
     })
   })
 
   it('lets the host apply its own grace period when none is given', async () => {
     invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
 
-    await terminatePid(4242, 'player.exe')
+    await terminatePid(4242, 'player.exe', null)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'player.exe',
+      recorded: null,
       gracefulTimeoutMs: null,
     })
   })

@@ -15,44 +15,24 @@ const FILES = [
 
 describe('buildVersion', () => {
   it('returns an OCI-shape object with the fixed mediaType + schemaVersion', () => {
-    const m = buildVersion({ files: FILES, cliVersion: '0.0.1' });
+    const m = buildVersion(FILES);
     expect(m.schemaVersion).toBe(VERSION_SCHEMA_VERSION);
     expect(m.mediaType).toBe(VERSION_MEDIA_TYPE);
   });
 
   it('sorts files by path for deterministic output', () => {
-    const m = buildVersion({ files: FILES, cliVersion: '0.0.1' });
+    const m = buildVersion(FILES);
     expect(m.files.map((f) => f.path)).toEqual(['a/first.bin', 'middle.bin', 'z/last.bin']);
   });
 
-  it('config carries deterministic producer metadata', () => {
-    const m = buildVersion({
-      files: FILES,
-      cliVersion: '1.2.3',
-      hostname: 'my-laptop',
-      platform: 'darwin',
-    });
-    expect(m.config.producer).toBe('owlette-cli');
-    expect(m.config.cliVersion).toBe('1.2.3');
-    expect(m.config.hostname).toBe('my-laptop');
-    expect(m.config.platform).toBe('darwin');
-    expect(m.config.createdAt).toBeUndefined();
+  it('leaves config empty, as the dashboard uploader does', () => {
+    expect(buildVersion(FILES).config).toEqual({});
   });
 
   it('builds identical versionIds for identical input', () => {
-    const a = buildVersion({ files: FILES, cliVersion: '0.0.1' });
-    const b = buildVersion({ files: FILES, cliVersion: '0.0.1' });
+    const a = buildVersion(FILES);
+    const b = buildVersion(FILES);
     expect(versionIdForVersion(a)).toBe(versionIdForVersion(b));
-  });
-
-  it('merges extra config fields into config', () => {
-    const m = buildVersion({
-      files: FILES,
-      cliVersion: '0.0.1',
-      extra: { gitSha: 'abc123', ciJob: '42' },
-    });
-    expect(m.config.gitSha).toBe('abc123');
-    expect(m.config.ciJob).toBe('42');
   });
 });
 

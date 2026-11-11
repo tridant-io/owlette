@@ -463,6 +463,19 @@ export function startTurn(
   // stopped) — kills streamText and the in-flight tool poll loops.
   const abortController = new AbortController();
 
+  // The one reading of ownership, for the heartbeat and for a tool that asks between
+  // beats: a guarded `touch`, so it also bumps `updatedAt`. Abort only on genuine loss.
+  // A Firestore `error` is indeterminate — aborting on a single blip would drop a
+  // healthy in-flight response; the next heartbeat re-checks.
+  const checkOwnership = async () => {
+    const ownership = await touch(db, chatId, turnId);
+    if (ownership === 'lost') {
+      abortController.abort();
+      clearHeartbeat();
+    }
+    return ownership;
+  };
+
   // Set by onFinish. If the stream tears down without it (e.g. a chunk the
   // state machine rejects), the pump's finally closes the turn as errored so
   // the stream doc can't leak a fresh-looking 'running' state.
@@ -483,15 +496,7 @@ export function startTurn(
         } catch {
           // Stream already torn down — nothing to heartbeat.
         }
-        void touch(db, chatId, turnId).then((ownership) => {
-          // Abort only on genuine loss. A Firestore `error` is indeterminate —
-          // aborting on a single blip would drop a healthy in-flight response;
-          // the next heartbeat re-checks.
-          if (ownership === 'lost') {
-            abortController.abort();
-            clearHeartbeat();
-          }
-        });
+        void checkOwnership();
       }, timing.heartbeatMs);
 
       // Must precede the turn-start persist, which creates the doc.
@@ -646,6 +651,7 @@ export function startTurn(
             onCommandQueued: (toolCallId: string, commandId: string, machineId: string) =>
               recordToolCommand(db, chatId, turnId, toolCallId, commandId, machineId),
             abortSignal: abortController.signal,
+            stillOwnsChat: checkOwnership,
           },
         },
       );

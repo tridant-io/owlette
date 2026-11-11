@@ -12,7 +12,8 @@
  *
  * Pure action; route shims are POST /api/sites/{siteId}/deployments/checksum
  * (DEPLOYMENT_MANAGE) and POST /api/platform/installer-checksum
- * (SYSTEM_PRESET_MANAGE).
+ * (SYSTEM_PRESET_MANAGE). The retry route self-heals with it, and hoot's
+ * `deploy_software` pins with it inside a tool call, which has no `maxDuration`.
  */
 
 import { createHash } from 'node:crypto';
@@ -23,7 +24,7 @@ export const MAX_INSTALLER_BYTES = 10 * 1024 * 1024 * 1024; // 10 GiB
 
 const MAX_REDIRECTS = 5;
 
-/** overall deadline; kept under the route shims' `maxDuration = 300`. */
+/** overall deadline; kept under the routes' `maxDuration = 300`, and the most a hoot deploy waits. */
 const COMPUTE_DEADLINE_MS = 270_000;
 
 export type InstallerChecksumErrorCode =

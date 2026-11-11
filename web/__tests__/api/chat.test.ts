@@ -84,6 +84,28 @@ jest.mock('@/lib/hootStream.server', () => {
   };
 });
 
+// The send chain test runs the real runHootStream over these: a site admin, one
+// online machine, a scripted model. Nothing else here reaches them.
+jest.mock('@/lib/hoot-utils.server', () => ({
+  __esModule: true,
+  verifyUserSiteAccess: async () => ({ role: 'admin', isSiteAdmin: true, standing: { machineIds: null } }),
+  resolveHootMaxTier: () => 1,
+  listSiteMachines: async () => [{ id: 'm1', online: true, hootEnabled: true, activeHoursGuard: false }],
+  getHootRequireTier3Approval: async () => true,
+  buildExecutableTools: () => ({}),
+  resolveLlmConfig: async () => ({ provider: 'anthropic', apiKey: 'k', model: 'm' }),
+}));
+const mockCreateModel = jest.fn();
+jest.mock('@/lib/llm', () => ({
+  __esModule: true,
+  createModel: (...a: unknown[]) => mockCreateModel(...a),
+  buildSystemPrompt: () => 'system prompt',
+}));
+jest.mock('@/lib/hoot/advisor', () => ({
+  __esModule: true,
+  withAdvisor: (_config: unknown, tools: unknown) => ({ tools }),
+}));
+
 // Site scoping resolves from MEMBER ROWS, not the legacy `users/{uid}.sites[]`.
 // This mock used to target `getUserSiteIds` in apiHelpers; when the routes moved
 // to `listUserSiteIds` the old mock silently stopped intercepting, and these
@@ -121,11 +143,23 @@ const mockUserDocGet = jest.fn().mockResolvedValue({
   exists: false,
   data: () => null,
 });
+// The real idempotency wrapper's cache, for the send chain test.
+const mockIdempotencyCache = new Map<string, unknown>();
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     collection: (name: string) => {
       if (name === 'users') {
         return { doc: () => ({ get: mockUserDocGet }) };
+      }
+      if (name === 'idempotency_cache') {
+        return {
+          doc: (id: string) => ({
+            get: async () => ({ exists: mockIdempotencyCache.has(id), data: () => mockIdempotencyCache.get(id) }),
+            set: async (data: unknown) => {
+              mockIdempotencyCache.set(id, data);
+            },
+          }),
+        };
       }
       return { where: () => ({ get: mockOwnedSitesGet }) };
     },
@@ -136,6 +170,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import { Timestamp } from 'firebase-admin/firestore';
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 
 import {
   GET as listGET,
@@ -821,6 +856,75 @@ describe('POST /api/hoot/conversations/{conversationId}', () => {
     expect(mockRunHootStream).toHaveBeenCalledWith(
       expect.objectContaining({ maxToolTier: 1 }),
     );
+  });
+});
+
+/**
+ * The whole send chain, as `owlette chat send` runs it: the real idempotency
+ * wrapper and the real runHootStream over a scripted model. The tests above stub
+ * runHootStream, which is how hoot's replies went unsaved with nothing red.
+ */
+describe('POST /api/hoot/conversations/{conversationId} saves hoot reply', () => {
+  const PROMPT = 'how is the lobby?';
+
+  function send() {
+    return sendPOST(
+      jsonReq(
+        `http://localhost/api/hoot/conversations/${CONV}`,
+        'POST',
+        { role: 'user', content: PROMPT },
+        { 'idempotency-key': 'reply-1' },
+      ),
+      ctx(),
+    );
+  }
+
+  it('saves the reply once, and a replay with the same key saves nothing more', async () => {
+    mockIdempotencyCache.clear();
+    mockWithIdempotency.mockImplementation(jest.requireActual('@/lib/idempotency').withIdempotency);
+    mockRunHootStream.mockImplementation(jest.requireActual('@/lib/hootStream.server').runHootStream);
+    mockRequireChatAuth.mockResolvedValue({
+      ok: true,
+      userId: 'user-1',
+      auth: { userId: 'user-1', keyContext: { keyId: 'k1', environment: 'live' } },
+      scopeCheck: { isLegacy: false },
+    });
+    mockGetConversation.mockResolvedValue(
+      mockConversation({ messages: [{ role: 'user', content: PROMPT, timestamp: Timestamp.now() }] }),
+    );
+    mockCreateModel.mockReturnValue(
+      new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'text-start' as const, id: 't1' },
+              { type: 'text-delta' as const, id: 't1', delta: 'lobby-01 is online' },
+              { type: 'text-end' as const, id: 't1' },
+              {
+                type: 'finish' as const,
+                finishReason: { unified: 'stop' as const, raw: undefined },
+                usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+              },
+            ],
+          }),
+        }),
+      }),
+    );
+
+    const first = await send();
+
+    expect(first.status).toBe(200);
+    expect(await first.text()).toContain('"delta":"lobby-01 is online"');
+    expect(mockAppendMessage.mock.calls.map(([message]) => [message.role, message.content])).toEqual([
+      ['user', PROMPT],
+      ['assistant', 'lobby-01 is online'],
+    ]);
+
+    const replay = await send();
+
+    expect(replay.headers.get('Idempotent-Replayed')).toBe('true');
+    expect(await replay.text()).toContain('"delta":"lobby-01 is online"');
+    expect(mockAppendMessage).toHaveBeenCalledTimes(2);
   });
 });
 

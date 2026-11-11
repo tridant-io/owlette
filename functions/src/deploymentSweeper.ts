@@ -10,7 +10,11 @@
  */
 
 import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { getFirestore } from 'firebase-admin/firestore';
+import {
+  getFirestore,
+  type DocumentReference,
+  type Firestore,
+} from 'firebase-admin/firestore';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import {
   calculateDeploymentStatus,
@@ -20,18 +24,18 @@ import {
   type DeploymentTarget,
 } from './lib/deploymentUtils';
 
-const db = getFirestore();
-
 /** Sites without deployment activity in this window are skipped. */
 const RECENT_DEPLOYMENT_ACTIVITY_MS = 30 * 60 * 1000; // 30 minutes
 
 export const sweepStaleDeployments = onSchedule(
   { schedule: 'every 5 minutes', timeoutSeconds: 60 },
   async () => {
+    // resolved here, not at import, so tests can import sweepDeployment without an app.
+    const db = getFirestore();
     const now = Date.now();
     let totalUpdated = 0;
 
-    const sitesToSweep = await getSitesToSweep(now);
+    const sitesToSweep = await getSitesToSweep(db, now);
 
     for (const siteDoc of sitesToSweep) {
       const siteId = siteDoc.id;
@@ -51,31 +55,8 @@ export const sweepStaleDeployments = onSchedule(
       }
 
       for (const deploymentDoc of deploymentsSnap.docs) {
-        const data = deploymentDoc.data();
-        const targets: DeploymentTarget[] = data.targets || [];
-
-        const updatedTargets = timeOutStaleTargets(
-          targets,
-          instantMs(data.createdAt),
-          now,
-          Timestamp.now(),
-        );
-        if (!updatedTargets) continue;
-
-        const newStatus = calculateDeploymentStatus(updatedTargets);
-        const wasTerminal = DEPLOYMENT_TERMINAL_STATUSES.has(data.status);
-
-        const updatePayload: Record<string, unknown> = {
-          targets: updatedTargets,
-          status: newStatus,
-          updatedAt: FieldValue.serverTimestamp(),
-        };
-
-        if (!wasTerminal && DEPLOYMENT_TERMINAL_STATUSES.has(newStatus)) {
-          updatePayload.completedAt = FieldValue.serverTimestamp();
-        }
-
-        await deploymentDoc.ref.update(updatePayload);
+        const newStatus = await sweepDeployment(db, deploymentDoc.ref, now);
+        if (newStatus === null) continue;
         totalUpdated++;
 
         console.log(
@@ -90,7 +71,46 @@ export const sweepStaleDeployments = onSchedule(
   }
 );
 
+/** Fails one deployment's stale targets. Returns its new status, or null when nothing changed. */
+export async function sweepDeployment(
+  db: Firestore,
+  deploymentRef: DocumentReference,
+  nowMs: number,
+): Promise<string | null> {
+  // re-read in a transaction: the query snapshot can be older than a result the
+  // reconciler just wrote, and failing that target from it would undo the result.
+  return db.runTransaction(async (tx) => {
+    const data = (await tx.get(deploymentRef)).data() ?? {};
+    const targets: DeploymentTarget[] = data.targets || [];
+
+    const updatedTargets = timeOutStaleTargets(
+      targets,
+      instantMs(data.createdAt),
+      nowMs,
+      Timestamp.now(),
+    );
+    if (!updatedTargets) return null;
+
+    const newStatus = calculateDeploymentStatus(updatedTargets);
+    const wasTerminal = DEPLOYMENT_TERMINAL_STATUSES.has(data.status);
+
+    const updatePayload: Record<string, unknown> = {
+      targets: updatedTargets,
+      status: newStatus,
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (!wasTerminal && DEPLOYMENT_TERMINAL_STATUSES.has(newStatus)) {
+      updatePayload.completedAt = FieldValue.serverTimestamp();
+    }
+
+    tx.update(deploymentRef, updatePayload);
+    return newStatus;
+  });
+}
+
 async function getSitesToSweep(
+  db: Firestore,
   nowMs: number,
 ): Promise<FirebaseFirestore.QueryDocumentSnapshot<FirebaseFirestore.DocumentData>[]> {
   const cutoff = Timestamp.fromMillis(nowMs - RECENT_DEPLOYMENT_ACTIVITY_MS);

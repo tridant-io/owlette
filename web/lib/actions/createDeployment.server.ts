@@ -1,6 +1,7 @@
 /**
- * Shared core behind `POST /api/sites/{siteId}/deployments` and hoot's
- * `invokeAsSystem`, so both fan out installs identically.
+ * Shared core behind `POST /api/sites/{siteId}/deployments`, which the dashboard
+ * and the API go through. hoot's `deploy_software` builds its own writes
+ * (`executeDeploySoftware` in lib/hoot-utils.server.ts).
  *
  * validate → quota-check `sites/{siteId}.deployQuota` → write the deployment
  * doc pending → fan out `install_software` → flip to in_progress → audit.
@@ -332,6 +333,13 @@ export async function createDeployment(
   if (validated.suppressProjects) deploymentData.suppress_projects = validated.suppressProjects;
   if (validated.parallelInstall) deploymentData.parallel_install = true;
 
+  // the stale-deployment sweeper scans only sites stamped in the last 30 minutes. stamped
+  // first: a stamp with no deployment behind it is harmless, a deployment the sweeper
+  // never scans is not.
+  await db
+    .collection('sites')
+    .doc(ctx.siteId)
+    .set({ lastDeploymentActivityAt: FieldValue.serverTimestamp() }, { merge: true });
   await deploymentRef.set(deploymentData);
 
   // Underscore-prefixed command ids match the legacy hook shape, so the agent's

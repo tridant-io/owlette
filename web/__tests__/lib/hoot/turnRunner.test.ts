@@ -972,6 +972,75 @@ describe('startTurn — heartbeat abort decision', () => {
   });
 });
 
+describe('startTurn — the ownership check a tool asks before it writes', () => {
+  /**
+   * A tool that asks, as deploy_software does before its first write, whether the turn
+   * still owns the chat. The heartbeat stays at its 20s default, so any abort it sees
+   * came from that question, not from a beat.
+   */
+  function ownershipProbeSetup(observe: { ownership?: unknown; abortedAfter?: boolean }) {
+    (hootUtils.buildExecutableTools as jest.Mock).mockImplementation((...args: unknown[]) => {
+      const { toolCallbacks } = args[7] as {
+        toolCallbacks?: { stillOwnsChat?: () => Promise<unknown>; abortSignal?: AbortSignal };
+      };
+      return {
+        deploy_software: tool({
+          description: 'deploy',
+          inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+          execute: async () => {
+            observe.ownership = await toolCallbacks?.stillOwnsChat?.();
+            observe.abortedAfter = toolCallbacks?.abortSignal?.aborted;
+            return { ok: true };
+          },
+        }),
+      };
+    });
+
+    let call = 0;
+    mockModel = new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks:
+              call === 1
+                ? [
+                    { type: 'tool-call' as const, toolCallId: 'call_deploy', toolName: 'deploy_software', input: '{}' },
+                    { ...finishChunk, finishReason: { unified: 'tool-calls' as const, raw: undefined } },
+                  ]
+                : textChunks('done'),
+          }),
+        };
+      },
+    });
+  }
+
+  it("reads the turn's ownership the way the heartbeat does, and a loss stops the turn at once", async () => {
+    (turnStore.touch as jest.Mock).mockResolvedValue('lost');
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe('lost');
+    expect(observe.abortedAfter).toBe(true);
+    expect(turnStore.touch).toHaveBeenLastCalledWith(fakeDb, CHAT_ID, TURN_ID);
+  });
+
+  it.each(['owned', 'error'] as const)("leaves the turn running on '%s', as the heartbeat does", async (ownership) => {
+    (turnStore.touch as jest.Mock).mockResolvedValue(ownership);
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe(ownership);
+    expect(observe.abortedAfter).toBe(false);
+  });
+});
+
 describe('startTurn — error paths', () => {
   it('model failure: error chunk on the stream, finishTurn(error), no persist', async () => {
     mockModel = new MockLanguageModelV3({

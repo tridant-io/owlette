@@ -130,7 +130,7 @@ function parseSwoopSeats(value: unknown): Machine['swoopSeats'] {
 }
 
 /**
- * Non-2xx from {@link apiJson}. Carries status + RFC-7807 `code` so callers can
+ * Non-2xx from {@link apiJson} or the deployments hook. Carries status + RFC-7807 `code` so callers can
  * tell an expected 401/403 from a real fault and keep it out of Sentry.
  */
 export class ApiRequestError extends Error {

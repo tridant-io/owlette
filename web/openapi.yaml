@@ -1446,10 +1446,8 @@ paths:
         Two shapes, chosen by the body:
 
         - `{ "enabled": <bool> }` and nothing else flips the talon on or off.
-          Enabling re-arms `nextRunAt` from now, so a talon that sat disabled
-          for a month does not fire the instant it is switched back on, and
-          re-checks that the author still has an LLM key when the talon uses AI
-          (`400 llm_key_required`).
+          Switching on re-checks that the author still has an LLM key when the
+          talon uses AI (`400 llm_key_required`).
         - anything else replaces the caller-owned fields wholesale and is
           revalidated exactly like a create — including the `command`-output
           privilege gate, the webhook-url SSRF check, and the author-LLM-key
@@ -1457,10 +1455,24 @@ paths:
           including `enabled` (default `true`), so a replacement that omits it
           switches a paused talon back on.
 
-        Run bookkeeping (`lastRunAt`, `lastRunStatus`, `consecutiveFailures`)
-        is never touched by either shape. `disabledReason` is cleared by the
-        enable/disable shape — a person moving the switch settles the question
-        of why it moved.
+        Moving the switch does the same through either shape. The toggle
+        shape always counts as moving it; a replacement counts only when its
+        `enabled` differs from the talon's, so an edit that carries the
+        current value moves nothing.
+
+        - Either edge clears `disabledReason` — a person moving the switch
+          settles the question of why it moved. Editing a talon the system
+          switched off, without switching it on, keeps the reason.
+        - Switching on re-arms `nextRunAt` from now, so a talon that sat
+          disabled for a month does not fire the instant it is switched back
+          on.
+        - Switching from off to on starts `consecutiveFailures` over at 0, so
+          a talon the system switched off after 10 failed runs gets 10 more
+          tries. Switching it off, or sending `enabled: true` for a talon that
+          is already on, keeps the count.
+
+        The rest of the run bookkeeping (`lastRunAt`, `lastRunStatus`) is
+        never touched by either shape.
 
         Requires `TALON_MANAGE`; API keys need `site=<siteId>:write`.
       security:
@@ -5371,7 +5383,18 @@ paths:
         `sha256_checksum`, the server first downloads the installer to compute
         and store one; a failed download answers `400`, `413` or `422` as
         `POST .../deployments/checksum` does. `409 no_failed_targets` when
-        nothing matches. Requires `DEPLOYMENT_MANAGE`; API keys need
+        nothing matches. A target whose failure was an uninstall
+        (`failedCommandType: uninstall_software` on the target) is not
+        retried, since the install would put the program back; run the
+        uninstall again instead. The targets are claimed on a fresh read of
+        the record before any install is queued, so one that left `failed`
+        meanwhile (another retry, or a late result) gets no second install;
+        when none is left the answer is `409 no_failed_targets` and nothing is
+        queued. An install of this deployment still queued for a retried
+        machine (one timed out while it was offline) is replaced, so the
+        machine runs one. If an install cannot be queued after its target was
+        claimed, the answer is `500`; that target stays `pending` until the
+        server times it out. Requires `DEPLOYMENT_MANAGE`; API keys need
         `site=<siteId>:write`.
 
         A target refused inside its active hours is `failed` with an `error`
@@ -5439,12 +5462,23 @@ paths:
         Marks every target in `pending` / `closing_processes` /
         `downloading` state as `cancelled`, removes this deployment's
         `install_software` command from those machines' pending queue, and
-        queues `cancel_installation` on them. Targets that have started
-        `installing` (or are already terminal) are left alone. Once no target
-        is in flight the deployment settles to `cancelled`, `completed`,
-        `failed` or `partial`; otherwise it stays `in_progress`.
-        `409 no_cancellable_targets` when nothing is cancellable. Requires
-        `DEPLOYMENT_MANAGE`; API keys need `site=<siteId>:write`.
+        queues `cancel_installation` on them. With `machines`, only those
+        machines' targets are cancelled and the rest carry on. Targets that
+        have started `installing` (or are already terminal) are left alone.
+        Once no target is in flight the deployment settles to `cancelled`,
+        `completed`, `failed` or `partial`; otherwise it stays `in_progress`.
+        `409 no_cancellable_targets` when nothing is cancellable, or nothing
+        named in `machines` is; a malformed `machines` is `400`. The same 409
+        comes back when every target moved past `downloading` while the call
+        ran, though `cancel_installation` may already have been sent to those
+        machines. If a write or read for some machine fails, the answer is
+        `500`; the record is settled first unless writing it is what failed.
+        Every target still `pending`, `closing_processes` or `downloading`
+        whose queued install was removed is then `cancelled`, even if its
+        `cancel_installation` could not be sent, and a target whose queued
+        install could not be removed stays as it was, since that install may
+        still run. Requires `DEPLOYMENT_MANAGE`; API keys need
+        `site=<siteId>:write`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -5455,7 +5489,14 @@ paths:
         required: false
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              properties:
+                machines:
+                  type: array
+                  minItems: 1
+                  items: { type: string, minLength: 1 }
+                  description: Cancel only these machines' targets. Omit to cancel every cancellable target.
       responses:
         '200':
           description: Cancellation processed.
@@ -5490,12 +5531,23 @@ paths:
     post:
       operationId: uninstallSiteDeployment
       tags: [Deployments]
-      summary: queue uninstall_software per target
+      summary: uninstall a program from the deployment's targets
       description: |
-        Queues `uninstall_software` on every target machine, whatever its status,
-        and flips the deployment-level status to `uninstalling`. Per-target
-        reconciliation is asynchronous — poll `GET ../{deploymentId}` for
-        progress. `409 no_targets` when the deployment has no targets.
+        Looks `software_name` up, by exact name, in each target machine's
+        software list and queues its uninstall there, the same command
+        `POST /api/sites/{siteId}/machines/{machineId}/uninstall` queues, tied
+        to this deployment. Targets not queued come back in `skipped`, each with
+        a `reason`: `install_in_flight` (the target is not finished yet),
+        `machine_not_found` (the machine was removed from the site),
+        `software_not_found` (the machine does not list the program),
+        `software_ambiguous` (it lists more than one version under that name;
+        uninstall the one you mean per machine) or `software_record_invalid`
+        (its entry has no uninstall command). Each
+        queued target turns `uninstalled`, or `failed` with an `error`, when its
+        agent reports; poll `GET ../{deploymentId}`. `409 no_uninstallable_targets`
+        when no target can take it, and then nothing is queued (the problem
+        carries `skipped`). `404` when the deployment does not exist; `409
+        no_targets` when it has no targets.
 
         ### Authentication and scopes
 
@@ -5509,26 +5561,49 @@ paths:
       parameters:
         - $ref: '#/components/parameters/RequiredIdempotencyKeyHeader'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              required: [software_name]
+              properties:
+                software_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: The program's exact name in the machines' software list.
       responses:
         '200':
-          description: Uninstall queued.
+          description: Uninstall queued on the targets that list the program.
           content:
             application/json:
               schema:
                 type: object
-                required: [deploymentId, siteId, status, queued, machine_ids]
+                required: [deploymentId, siteId, status, queued, machine_ids, skipped]
                 properties:
                   deploymentId: { type: string }
                   siteId: { type: string }
-                  status: { type: string }
+                  status: { type: string, description: The deployment's status as read; this call does not change it. }
                   queued: { type: integer }
                   machine_ids:
                     type: array
                     items: { type: string }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [machineId, reason]
+                      properties:
+                        machineId: { type: string }
+                        reason:
+                          type: string
+                          enum:
+                            - install_in_flight
+                            - machine_not_found
+                            - software_not_found
+                            - software_ambiguous
+                            - software_record_invalid
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '402': { $ref: '#/components/responses/PlanRequired' }
@@ -7920,7 +7995,14 @@ paths:
         Queues an uninstall of an installed program, looked up by name in the
         machine's software inventory. `404` carries `machine_not_found` or
         `software_not_found`; `409 software_record_invalid` means the inventory
-        entry has no usable uninstall command.
+        entry has no usable uninstall command. When the machine lists more than
+        one version under the name, the first record found is used. With
+        `deployment_id`, the uninstall moves that deployment's target for this
+        machine to `uninstalled` (or `failed`) when the agent reports. A
+        `deployment_id` that is not a deployment on this site is `400`, and so is
+        one whose target for this machine has not finished installing; one that
+        does not target this machine is ignored and the uninstall is queued
+        untied.
 
         ### Authentication and scopes
 
@@ -7949,6 +8031,10 @@ paths:
                   maxItems: 32
                   items: { type: string, minLength: 1 }
                 timeout_seconds: { type: number, description: Clamped to 1-86400. }
+                deployment_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: A deployment on this site whose finished target on this machine the uninstall moves.
       responses:
         '202':
           description: Uninstall command queued.
@@ -12195,7 +12281,11 @@ components:
               nullable: true
             consecutiveFailures:
               type: integer
-              description: Reset to 0 on any successful run; drives auto-disable backoff.
+              description: >-
+                Failed runs in a row; at 10 the system switches the talon off
+                with `disabledReason: repeated_failures`. Reset to 0 by any
+                successful run and when a person switches the talon from off
+                to on.
             disabledReason:
               type: string
               nullable: true
@@ -13172,9 +13262,10 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Free-form metadata; the server requires no keys. The CLI and SDKs
-            write `producer`, `cliVersion`, `createdAt`, `hostname` and
-            `platform`. Every key is part of the hashed version id.
+            Free-form metadata; the server requires no keys. The SDKs write
+            `producer`, `cliVersion`, `createdAt`, `hostname` and `platform`;
+            the CLI and the dashboard send it empty. Every key is part of the
+            hashed version id.
         files:
           type: array
           minItems: 1
@@ -13919,6 +14010,9 @@ components:
         error:
           type: string
           nullable: true
+        failedCommandType:
+          type: string
+          description: On a `failed` target, the agent command that failed (`install_software` or `uninstall_software`). A retry skips a failed uninstall.
         completedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         cancelledAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         retriedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }

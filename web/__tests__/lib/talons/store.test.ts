@@ -960,6 +960,104 @@ describe('updateTalon', () => {
 
     expect(mockAssertLlmKeyAvailable).toHaveBeenCalledWith(db, 'original-author');
   });
+
+  it.each([
+    ['says enabled: true', { enabled: true }],
+    ['omits enabled', {}],
+  ])(
+    'gives a switched-off talon its ten tries back when a replace that %s switches it on',
+    async (_label, overrides) => {
+      seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+
+      const updated = await updateTalon(db, ctxFor(), 't1', talonInput(overrides));
+
+      expect(updated.enabled).toBe(true);
+      expect(updated.consecutiveFailures).toBe(0);
+    },
+  );
+
+  it('starts the count over when a replace switches on a talon a person paused', async () => {
+    seedTalon('t1', { enabled: false, consecutiveFailures: 4 });
+
+    const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: true }));
+
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it.each([true, false])(
+    'keeps the failure count when a replace sends enabled: %p for a talon that is on',
+    async (enabled) => {
+      // an editor save carries enabled: true; it must not forgive nine failures
+      seedTalon('t1', { consecutiveFailures: 9 });
+
+      const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled, name: 'renamed' }));
+
+      expect(updated.consecutiveFailures).toBe(9);
+    },
+  );
+
+  it.each([
+    ['on', { enabled: false }, true],
+    ['off', { enabled: true }, false],
+  ])(
+    'clears a system disabledReason when a replace switches the talon %s, as the toggle does',
+    async (_label, seeded, enabled) => {
+      seedTalon('t1', { ...seeded, disabledReason: 'repeated_failures' });
+
+      await updateTalon(db, ctxFor(), 't1', talonInput({ enabled }));
+
+      expect('disabledReason' in storedTalon('t1')).toBe(false);
+    },
+  );
+
+  it('keeps the disabledReason when an edit leaves a switched-off talon off', async () => {
+    // the card explains why it is off; renaming it does not answer that
+    seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures' });
+
+    await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: false, name: 'renamed' }));
+
+    expect(storedTalon('t1').disabledReason).toBe('repeated_failures');
+  });
+
+  it('re-arms a stale nextRunAt when a replace switches the talon on with the same trigger', async () => {
+    seedTalon('t1', { enabled: false, nextRunAt: new Date('2020-01-01T00:00:00Z') });
+
+    const before = Date.now();
+    const updated = await updateTalon(db, ctxFor(), 't1', talonInput({ enabled: true }));
+
+    expect((updated.nextRunAt as Date).getTime()).toBeGreaterThanOrEqual(before + 60 * 60_000);
+  });
+
+  it('re-arms nextRunAt from the new trigger when a replace switches the talon on and changes it', async () => {
+    seedTalon('t1', { enabled: false, nextRunAt: new Date('2020-01-01T00:00:00Z') });
+
+    const before = Date.now();
+    const updated = await updateTalon(
+      db,
+      ctxFor(),
+      't1',
+      talonInput({ enabled: true, trigger: { type: 'schedule', intervalMinutes: 120 } }),
+    );
+
+    expect((updated.nextRunAt as Date).getTime()).toBeGreaterThanOrEqual(before + 120 * 60_000);
+  });
+
+  it('removes nextRunAt when a replace switches on a talon with no next run', async () => {
+    seedTalon('t1', {
+      enabled: false,
+      trigger: { type: 'event', eventTypes: ['machine_offline'] },
+      nextRunAt: new Date('2020-01-01T00:00:00Z'),
+    });
+
+    await updateTalon(
+      db,
+      ctxFor(),
+      't1',
+      talonInput({ enabled: true, trigger: { type: 'event', eventTypes: ['machine_offline'] } }),
+    );
+
+    expect('nextRunAt' in storedTalon('t1')).toBe(false);
+  });
 });
 
 // setTalonEnabled
@@ -1020,6 +1118,53 @@ describe('setTalonEnabled', () => {
     );
     expect(storedTalon('t1').enabled).toBe(false);
     expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('gives a talon switched off for repeated failures its ten tries back when a person re-enables it', async () => {
+    seedTalon('t1', { enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+
+    const updated = await setTalonEnabled(db, ctxFor(), 't1', true);
+
+    // left at 10, the first failed run after re-enabling switched it off again
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it('starts the count over when a person re-enables a talon they paused', async () => {
+    seedTalon('t1', { enabled: false, consecutiveFailures: 4 });
+
+    const updated = await setTalonEnabled(db, ctxFor(), 't1', true);
+
+    expect(updated.consecutiveFailures).toBe(0);
+  });
+
+  it.each([true, false])(
+    'keeps the failure count when the switch sends enabled: %p for a talon that is on',
+    async (enabled) => {
+      seedTalon('t1', { consecutiveFailures: 4 });
+
+      const updated = await setTalonEnabled(db, ctxFor(), 't1', enabled);
+
+      expect(updated.consecutiveFailures).toBe(4);
+    },
+  );
+
+  it('switching off a talon that is already off clears its reason and nothing else', async () => {
+    // the toggle counts every request as a move of the switch
+    const stale = new Date('2020-01-01T00:00:00Z');
+    seedTalon('t1', {
+      enabled: false,
+      disabledReason: 'repeated_failures',
+      consecutiveFailures: 10,
+      nextRunAt: stale,
+    });
+
+    await setTalonEnabled(db, ctxFor(), 't1', false);
+
+    const stored = storedTalon('t1');
+    expect(stored.enabled).toBe(false);
+    expect('disabledReason' in stored).toBe(false);
+    expect(stored.consecutiveFailures).toBe(10);
+    expect(stored.nextRunAt).toEqual(stale);
   });
 
   it.each([true, false])(

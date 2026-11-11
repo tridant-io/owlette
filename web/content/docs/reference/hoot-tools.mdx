@@ -759,7 +759,7 @@ arm or disarm an existing talon. disabling leaves the talon in place; it does no
 | `talon_id` | string | **yes** | as returned by `list_talons` or `create_talon`. never guessed |
 | `enabled` | boolean | **yes** | `true` to arm, `false` to disarm |
 
-enabling recomputes `nextRunAt` from now in the site's timezone, so a talon that sat disabled for a while does not fire the moment it comes back, and re-checks the author's LLM key when the talon has a `visual_check` condition or a hoot output (`llm_key_required` if it is gone). either edge clears a system-set disable reason, so a re-armed talon does not still claim it was switched off. like `create_talon`, this tool is left out of unattended hoot.
+enabling recomputes `nextRunAt` from now in the site's timezone, so a talon that sat disabled for a while does not fire the moment it comes back, starts its failure count over when it was off, and re-checks the author's LLM key when the talon has a `visual_check` condition or a hoot output (`llm_key_required` if it is gone). either edge clears a system-set disable reason, so a re-armed talon does not still claim it was switched off. like `create_talon`, this tool is left out of unattended hoot.
 
 **returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
 
@@ -880,6 +880,8 @@ deploy and install software on the machine through the full deployment pipeline:
 **Windows only in practice.** the deployment is created for any machine, but a macOS or Linux agent cannot run an installer: it first closes any processes the deployment names, then downloads and checks the file, and fails the install with *no interactive user session available for installation*. see [platform support](/docs/reference/platform-support#software).
 
 **requires confirmation before it runs.** hoot summarizes the deployment plan (software, version, install path, parallel install, processes to close) and waits for explicit approval.
+
+**pins the installer's checksum first.** agents refuse an install without a SHA-256 checksum. a deployment of a preset's own installer uses the preset's checksum; any other installer URL, a TouchDesigner build chosen by `version` included, is downloaded and hashed by the server before anything is queued, under the same limits as the [deployments](/docs/dashboard/deployments) dialog: 10 GiB and 270 seconds. a large installer can take a few minutes. stopping the turn from the chat during the download queues nothing: hoot checks the turn is still running right before it queues, so only a stop that lands in the instant between that check and the queueing lets the deployment through, and it then shows on the deployments page. if that check cannot reach the database, nothing is queued and hoot says so. if the checksum cannot be computed, hoot gets an error and nothing is deployed and no process is closed; deploy that installer from the deployments page, where the checksum can be entered by hand.
 
 **active hours.** on Windows the agent refuses the install while the machine is inside its active hours, before it closes anything, and the [deployments](/docs/dashboard/deployments) page shows the refusal on that target. hoot says so before it deploys. `override_active_hours` installs anyway, on one machine, after approval (see [overriding active hours](#overriding-active-hours)).
 
