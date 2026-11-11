@@ -21,8 +21,18 @@ far it may go (read, bounded changes or privileged) and on which machines. A
 machine can also hand hoot a task in words and read the answer back; that runs
 on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
 is in the audit log under the machine. Update the machine the AI agent runs on
-to use it; the machines it acts on need no update. See the
+to use it; the machines it acts on need no update. The desktop app's menu has
+a new item, connect an ai agent, that shows the command to run. See the
 [hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+
+### changed — hoot's site settings have their own page in the admin panel
+
+The admin panel's sidebar has a hoot section. Its settings page holds the
+switch that makes hoot wait for approval before a privileged (tier 3) tool,
+which used to be the shield button in the hoot chat header, and the new
+settings for machines that act on other machines. The setting itself and its
+default are unchanged: approval is on unless a site owner or admin turns it
+off. Nothing to update on the machine.
 
 ### fixed — saving a talon edit keeps the switch where it is now
 
