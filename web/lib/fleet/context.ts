@@ -6,6 +6,7 @@
 import type { NextResponse } from 'next/server';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { Capability, MachineActor } from '@/lib/capabilities';
+import type { McpToolDefinition } from '@/lib/mcp-tools';
 import type { FleetGrant } from '@/lib/fleet/policy.server';
 
 export interface FleetContext {
@@ -41,3 +42,32 @@ export interface FleetCallDenial {
   tool: string | null;
   machineId: string | null;
 }
+
+/** every item carries `text`, so a script that does not know a kind still shows words. */
+export type FleetContentItem =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; url: string; text: string };
+
+/** how a call the server answered itself ended. */
+export type FleetAnswer =
+  | { status: 'completed'; content: FleetContentItem[] }
+  | { status: 'failed'; error: string };
+
+/**
+ * a tool the server answers itself, with no command to an agent. dispatch does
+ * every check before `run`: a 'machine' tool acts on the one machine `machine`
+ * names, which is in the site, inside the grant and has hoot on; a 'site' tool
+ * names none, so it is a read and narrows what it returns to the grant itself.
+ * `run` is handed only the parameters `definition` declares.
+ */
+export type FleetServerTool =
+  | {
+      target: 'site';
+      definition: McpToolDefinition;
+      run(ctx: FleetContext, params: Record<string, unknown>): Promise<FleetAnswer>;
+    }
+  | {
+      target: 'machine';
+      definition: McpToolDefinition;
+      run(ctx: FleetContext, machine: string, params: Record<string, unknown>): Promise<FleetAnswer>;
+    };

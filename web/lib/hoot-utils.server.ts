@@ -18,6 +18,7 @@ import {
 import { canonicalJson } from '@/lib/auditLogVerify';
 import { sanitizeForLog } from '@/lib/logSanitize';
 import type { LlmConfig } from '@/lib/llm';
+import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
 import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
@@ -33,6 +34,7 @@ import {
   hasCapability,
   siteStanding,
   type Actor,
+  type MachineActor,
   type MemberStanding,
   type Role,
   type SystemActorName,
@@ -85,6 +87,18 @@ export const SITE_WIDE_SERVER_TOOLS: ReadonlySet<string> = new Set([
   'create_talon',
   'list_talons',
   'set_talon_enabled',
+]);
+
+/**
+ * tools that leave something standing in a person's name: a talon has an
+ * author, and a follow-up fires later as its chat's owner. a turn a granted
+ * machine started (ADR 0017) is never offered them.
+ */
+export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'create_talon',
+  'set_talon_enabled',
+  'schedule_followup',
+  'cancel_followup',
 ]);
 
 export const COMMAND_POLL_INTERVAL_MS = 1500;
@@ -164,10 +178,11 @@ export interface BuildExecutableToolsOptions {
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
-  /** Who a turn's audit rows name when `userId` did not start it: a granted
-   *  machine's `machine:<id>` (ADR 0017). Attribution only — the tools still act
-   *  on `userId`'s standing. `systemActor` wins over it. */
-  auditActor?: string;
+  /** A granted machine is who asks (ADR 0017): its own call for a server-side
+   *  tool, or a hoot turn it started on `userId`'s key. Wins over userId/userRole
+   *  so the action runs, and its audit row reads, as `machine:<id>`; `systemActor`
+   *  wins over it. */
+  machineActor?: MachineActor;
   /** Chat this tool loop belongs to; defaulted from the positional `chatId` so
    *  server-side tools can stamp provenance (talon `createdVia` + `chatId`). */
   chatId?: string;
@@ -250,6 +265,14 @@ function actionContextForHoot(
     };
   }
 
+  if (options.machineActor) {
+    return {
+      siteId,
+      actor: options.machineActor,
+      auditActor: machineAuditActor(options.machineActor.machineId),
+    };
+  }
+
   const userId = options.userId || 'unknown';
   const actor: Actor = {
     type: 'user',
@@ -264,7 +287,7 @@ function actionContextForHoot(
   return {
     siteId,
     actor,
-    auditActor: options.auditActor ?? `cortex:user_${userId}`,
+    auditActor: `cortex:user_${userId}`,
   };
 }
 
@@ -2020,7 +2043,12 @@ function toolRefusal(error: string, detail: string, status: number): ProcessTool
 
 /** A person drives this turn from a dashboard chat, so an override can go to their approval card. */
 function personCanApproveOverride(options: BuildExecutableToolsOptions): boolean {
-  return options.allowActiveHoursOverride === true && !options.systemActor && !!options.userId;
+  return (
+    options.allowActiveHoursOverride === true &&
+    !options.systemActor &&
+    !options.machineActor &&
+    !!options.userId
+  );
 }
 
 /**
@@ -2171,6 +2199,7 @@ export function buildExecutableTools(
   for (const def of toolDefs) {
     const toolName = def.name;
     if (scoped && SITE_WIDE_SERVER_TOOLS.has(toolName)) continue;
+    if (options.machineActor && PERSON_ONLY_TOOLS.has(toolName)) continue;
     const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
     const takesOverride = takesActiveHoursOverride(def);
     const offered = offerOverride ? def : withoutActiveHoursOverride(def);

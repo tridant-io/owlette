@@ -8,13 +8,14 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import {
-  LIST_MACHINES_TOOL,
   MACHINE_PARAM,
   fleetCatalog,
+  findFleetServerTool,
   findFleetTool,
   splitFleetParams,
   toMcpTool,
 } from '@/lib/fleet/catalog.server';
+import { LIST_MACHINES_TOOL } from '@/lib/fleet/tools/machines.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
   allTools,
@@ -27,17 +28,34 @@ import { ACTIVE_HOURS_OVERRIDE_KEYS } from '@/lib/actions/executeMachineCommand.
 
 const TIERS: ToolTier[] = [1, 2, 3];
 
+/** the tools the server answers itself, in catalog order, with the tier each needs. */
+const SERVER_TOOLS: Array<[name: string, tier: ToolTier, target: 'site' | 'machine']> = [
+  [LIST_MACHINES_TOOL, 1, 'site'],
+  ['get_site_logs', 1, 'site'],
+  ['update_process', 2, 'machine'],
+  ['add_process', 2, 'machine'],
+  ['delete_process', 2, 'machine'],
+];
+
+/** every catalog tool that acts on one machine, whoever answers it. */
 function machineTools(maxTier: ToolTier) {
-  return fleetCatalog(maxTier).filter((def) => def.name !== LIST_MACHINES_TOOL);
+  return fleetCatalog(maxTier).filter((def) => findFleetServerTool(def.name)?.target !== 'site');
 }
 
 describe('fleetCatalog', () => {
-  it.each(TIERS)('at tier %i holds the machine tools up to that tier plus list_machines', (tier) => {
-    const expected = allTools.filter((def) => def.tier <= tier && !SERVER_SIDE_TOOLS.has(def.name));
+  it.each(TIERS)('at tier %i holds the server tools and the machine tools up to that tier', (tier) => {
+    const serverNames = SERVER_TOOLS.filter(([, needs]) => needs <= tier).map(([name]) => name);
+    const agentNames = allTools
+      .filter((def) => def.tier <= tier && !SERVER_SIDE_TOOLS.has(def.name))
+      .map((def) => def.name);
     const catalog = fleetCatalog(tier);
-    expect(catalog).toHaveLength(expected.length + 1);
-    expect(catalog.map((def) => def.name)).toEqual([LIST_MACHINES_TOOL, ...expected.map((def) => def.name)]);
+    expect(catalog.map((def) => def.name)).toEqual([...serverNames, ...agentNames]);
     for (const def of catalog) expect(def.tier).toBeLessThanOrEqual(tier);
+  });
+
+  it('names no tool twice', () => {
+    const names = fleetCatalog(3).map((def) => def.name);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('starts with list_machines at tier 1, taking no parameters', () => {
@@ -48,9 +66,22 @@ describe('fleetCatalog', () => {
     expect(first.parameters.required).toBeUndefined();
   });
 
-  it('leaves out every server-side tool', () => {
-    const names = fleetCatalog(3).map((def) => def.name);
-    for (const name of SERVER_SIDE_TOOLS) expect(names).not.toContain(name);
+  it("offers four of hoot's server-side tools and no other", () => {
+    // talons and follow-ups need a person or a chat, and deploy_software with
+    // its presets queues outside executeMachineCommand
+    const offered = fleetCatalog(3).map((def) => def.name).filter((name) => SERVER_SIDE_TOOLS.has(name));
+    expect(offered).toEqual(['get_site_logs', 'update_process', 'add_process', 'delete_process']);
+  });
+
+  it('answers a server tool that names no machine only as a tier 1 read', () => {
+    // a site tool is admitted with no machine, and a machine actor holds
+    // nothing but the view there
+    const siteTools = fleetCatalog(3).filter((def) => findFleetServerTool(def.name)?.target === 'site');
+    expect(siteTools.map((def) => def.name)).toEqual([LIST_MACHINES_TOOL, 'get_site_logs']);
+    for (const def of siteTools) {
+      expect(def.tier).toBe(1);
+      expect(def.parameters.properties).not.toHaveProperty(MACHINE_PARAM);
+    }
   });
 
   it('exposes no active-hours override on any tool', () => {
@@ -116,12 +147,39 @@ describe('findFleetTool', () => {
     expect(findFleetTool(tier3MachineTool.name, 3)?.name).toBe(tier3MachineTool.name);
   });
 
-  it('returns null for a server-side tool', () => {
-    for (const name of SERVER_SIDE_TOOLS) expect(findFleetTool(name, 3)).toBeNull();
+  it('returns null for a server-side tool the fleet does not offer', () => {
+    const offered = new Set(SERVER_TOOLS.map(([name]) => name));
+    const withheld = [...SERVER_SIDE_TOOLS].filter((name) => !offered.has(name));
+    expect(withheld.sort()).toEqual([
+      'cancel_followup',
+      'create_talon',
+      'deploy_software',
+      'get_system_presets',
+      'list_talons',
+      'schedule_followup',
+      'set_talon_enabled',
+    ]);
+    for (const name of withheld) expect(findFleetTool(name, 3)).toBeNull();
   });
 
   it('returns null for an unknown name', () => {
     expect(findFleetTool('no_such_tool', 3)).toBeNull();
+  });
+});
+
+describe('findFleetServerTool', () => {
+  it.each(SERVER_TOOLS)('answers %s itself, at tier %i, on a %s', (name, tier, target) => {
+    const tool = findFleetServerTool(name);
+    expect(tool?.target).toBe(target);
+    expect(tool?.definition.tier).toBe(tier);
+    // the catalog adds `machine`; the tool's own definition never declares it
+    expect(tool?.definition.parameters.properties).not.toHaveProperty(MACHINE_PARAM);
+  });
+
+  it('returns null for a tool an agent answers, and for an unknown name', () => {
+    const agentTool = allTools.find((def) => !SERVER_SIDE_TOOLS.has(def.name))!;
+    expect(findFleetServerTool(agentTool.name)).toBeNull();
+    expect(findFleetServerTool('no_such_tool')).toBeNull();
   });
 });
 

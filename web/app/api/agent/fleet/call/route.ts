@@ -3,9 +3,9 @@
  * (ADR 0017). body `{ tool, params }`; `params.machine` names the machine a
  * machine tool acts on.
  *
- * 200 `{ status: 'completed', content }` for a tool the server answers itself,
- * else 202 `{ callId, timeoutSeconds }`, read back at
- * `/api/agent/fleet/calls/{callId}`.
+ * 200 for a tool the server answers itself, `{ status: 'completed', content }`
+ * or `{ status: 'failed', error }`; else 202 `{ callId, timeoutSeconds }`, read
+ * back at `/api/agent/fleet/calls/{callId}`.
  *
  * `Idempotency-Key` is required: the local script retries a call whose answer
  * it lost, and the retry must get the first call back, never a second command.

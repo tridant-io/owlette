@@ -300,6 +300,30 @@ describe('POST /api/agent/fleet/call', () => {
     expect(callRecords()).toEqual([]);
   });
 
+  it('answers a process tool itself: 200 with what the tool said, a failure included, on one allow row and no command', async () => {
+    // kiosk-1 has no process config here, so the tool fails before it writes
+    const res = await startCall(callRequest(token, { tool: 'delete_process', params: { machine: M1, process_name: 'td.exe' } }));
+
+    expect(res.status).toBe(200);
+    await expect(json(res)).resolves.toEqual({
+      status: 'failed',
+      error: `config_not_found: Configuration not found for machine ${M1}.`,
+    });
+    expect(writeAuditEntryBlockingSpy).toHaveBeenCalledTimes(1);
+    expect(writeAuditEntryBlockingSpy).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({
+        actor: MACHINE_ACTOR_ROW,
+        capability: Capability.MACHINE_EXEC_COMMAND,
+        target: { kind: 'machine', id: M1 },
+        outcome: 'allow',
+        metadata: { route: '/api/agent/fleet/call', method: 'POST', tool: 'delete_process', machineId: M1 },
+      }),
+    );
+    expect(pendingEntries(M1)).toEqual([]);
+    expect(callRecords()).toEqual([]);
+  });
+
   it('starts a tier-2 tool on a covered machine: 202, one command, one allow row, the command limit charged once', async () => {
     const res = await startCall(callRequest(token, { tool: 'restart_process', params: { machine: M1, process_name: 'td.exe' } }));
 

@@ -1,8 +1,9 @@
 /**
- * the tools a granted machine sees: hoot's machine tools up to the grant's
- * tier, each naming the machine it acts on, behind the fleet's own
- * `list_machines`. server-side hoot tools are left out, and a machine never
- * carries an active-hours override.
+ * the tools a granted machine sees, up to the grant's tier: the ones the
+ * server answers itself (`serverTools`, the fleet's own `list_machines` first)
+ * and hoot's machine tools, which are queued to an agent. every tool that acts
+ * on a machine names it with `machine`, and a machine never carries an
+ * active-hours override.
  */
 
 import {
@@ -13,19 +14,14 @@ import {
 } from '@/lib/mcp-tools';
 import { SERVER_SIDE_TOOLS } from '@/lib/hoot-utils.server';
 import { stripActiveHoursOverride } from '@/lib/actions/executeMachineCommand.server';
+import type { FleetServerTool } from '@/lib/fleet/context';
+import { hootServerTools } from '@/lib/fleet/tools/hoot.server';
+import { listMachinesTool } from '@/lib/fleet/tools/machines.server';
 
-export const LIST_MACHINES_TOOL = 'list_machines';
 export const MACHINE_PARAM = 'machine';
 
-const listMachinesTool: McpToolDefinition = {
-  name: LIST_MACHINES_TOOL,
-  description: 'List the machines you may act on, each with its id, whether it is online, seconds since its last heartbeat, OS, agent version and whether hoot is on. Pass an id as `machine` to any other tool.',
-  tier: 1,
-  parameters: {
-    type: 'object',
-    properties: {},
-  },
-};
+/** a new area's tools join here. */
+const serverTools: readonly FleetServerTool[] = [listMachinesTool, ...hootServerTools];
 
 function withMachineParam(def: McpToolDefinition): McpToolDefinition {
   return {
@@ -45,7 +41,7 @@ function withMachineParam(def: McpToolDefinition): McpToolDefinition {
 }
 
 const catalog: readonly McpToolDefinition[] = [
-  listMachinesTool,
+  ...serverTools.map((tool) => (tool.target === 'machine' ? withMachineParam(tool.definition) : tool.definition)),
   ...allTools
     .filter((def) => !SERVER_SIDE_TOOLS.has(def.name))
     .map((def) => withMachineParam(withoutActiveHoursOverride(def))),
@@ -57,6 +53,11 @@ export function fleetCatalog(maxTier: ToolTier): McpToolDefinition[] {
 
 export function findFleetTool(name: string, maxTier: ToolTier): McpToolDefinition | null {
   return fleetCatalog(maxTier).find((def) => def.name === name) ?? null;
+}
+
+/** the tool behind a catalog name when the server answers it, null when an agent does. */
+export function findFleetServerTool(name: string): FleetServerTool | null {
+  return serverTools.find((tool) => tool.definition.name === name) ?? null;
 }
 
 export function splitFleetParams(params: unknown): {

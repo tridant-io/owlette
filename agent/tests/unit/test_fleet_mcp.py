@@ -411,6 +411,19 @@ def test_an_inline_call_maps_its_content(session, api, fleet):
     uuid.UUID(request['headers']['Idempotency-Key'])
 
 
+def test_an_inline_call_that_failed_is_an_error_led_by_its_reason(session, api, fleet):
+    # a tool the server answers itself fails in the same response, with no poll
+    api.answer('POST', '/agent/fleet/call', FakeResponse(200, {
+        'status': 'failed', 'error': 'process_not_found: no process named nope',
+    }))
+
+    result = call(fleet, 'delete_process', {'machine': 'machine-2', 'process_name': 'nope'})
+
+    assert result.is_error
+    assert texts(result) == ['process_not_found: no process named nope']
+    assert len(api.calls) == 1
+
+
 def test_every_call_carries_a_fresh_idempotency_key(session, api, fleet):
     api.answer('POST', '/agent/fleet/call', FakeResponse(200, {'status': 'completed', 'content': []}))
 

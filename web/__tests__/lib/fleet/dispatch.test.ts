@@ -32,6 +32,21 @@ jest.mock('@/lib/screenshotStorage.server', () => ({
     expiresAt: '2026-11-10T13:00:00.000Z',
   })),
 }));
+// the process actions write through the admin sdk's own db, so the tools that
+// reach them are followed to the action's door and no further.
+const mockCreateProcess = jest.fn();
+const mockUpdateProcess = jest.fn();
+const mockDeleteProcess = jest.fn();
+jest.mock('@/lib/actions/createProcess.server', () => ({
+  ...jest.requireActual('@/lib/actions/createProcess.server'),
+  createProcess: (...args: unknown[]) => mockCreateProcess(...args),
+}));
+jest.mock('@/lib/actions/updateProcess.server', () => ({
+  updateProcess: (...args: unknown[]) => mockUpdateProcess(...args),
+}));
+jest.mock('@/lib/actions/deleteProcess.server', () => ({
+  deleteProcess: (...args: unknown[]) => mockDeleteProcess(...args),
+}));
 
 import { emitMutation } from '@/lib/auditLogClient';
 import logger from '@/lib/logger';
@@ -111,16 +126,22 @@ type Filter = [field: string, op: string, value: unknown];
 function query(path: string, filters: Filter[], max: number | null = null) {
   return {
     where: (field: string, op: string, value: unknown) => {
-      if (op !== '==' && op !== '<=') throw new Error(`fake firestore answers == and <= only, got ${op}`);
+      if (op !== '==' && op !== '<=' && op !== '>=') throw new Error(`fake firestore answers ==, <= and >= only, got ${op}`);
       return query(path, [...filters, [field, op, value]], max);
     },
+    // rows come back in the order a test stored them
+    orderBy: () => query(path, filters, max),
     limit: (count: number) => query(path, filters, count),
     get: async () => {
       if (queryError) throw queryError;
       reads.push(path);
       queries.push({ path, filters, max });
       const found = children(path).filter((doc) =>
-        filters.every(([f, op, v]) => (op === '==' ? doc.data()[f] === v : (doc.data()[f] as number) <= (v as number))),
+        filters.every(([f, op, v]) => {
+          const stored = doc.data()[f];
+          if (op === '==') return stored === v;
+          return op === '<=' ? (stored as number) <= (v as number) : (stored as number) >= (v as number);
+        }),
       );
       const page = max === null ? found : found.slice(0, max);
       return { empty: page.length === 0, docs: page };
@@ -194,6 +215,20 @@ function started(result: FleetCallStart): { callId: string; timeoutSeconds: numb
   return result.body;
 }
 
+function answered(result: FleetCallStart) {
+  if (!result.ok || result.kind !== 'answered') throw new Error(`expected an inline answer, got ${JSON.stringify(result)}`);
+  return result.body;
+}
+
+/** the one text item of a call the server answered and completed. */
+function completedText(result: FleetCallStart): string {
+  const body = answered(result);
+  if (body.status !== 'completed') throw new Error(`expected a completed answer, got ${JSON.stringify(body)}`);
+  expect(body.content).toHaveLength(1);
+  expect(body.content[0].type).toBe('text');
+  return body.content[0].text;
+}
+
 function readBody(result: FleetCallRead) {
   if (!result.ok) throw new Error('expected a read');
   return result.body;
@@ -227,7 +262,8 @@ describe('startFleetCall: refusals, in order', () => {
   it.each([
     ['an unknown tool', 'format_disk', 'format_disk'],
     ['a tool above the grant', 'execute_script', 'execute_script'],
-    ['a server-side hoot tool', 'get_site_logs', 'get_site_logs'],
+    ['a hoot tool that needs a person', 'create_talon', 'create_talon'],
+    ['hoot\'s deploy', 'deploy_software', 'deploy_software'],
     ['a tool that is not a string', 42, null],
     ['an over-long name, bounded in the deny', 'x'.repeat(500), 'x'.repeat(128)],
   ])('403 tool_not_allowed for %s', async (_label, tool, deniedTool) => {
@@ -336,11 +372,7 @@ describe('startFleetCall: list_machines', () => {
 
   async function listed(grant: FleetGrant) {
     const res = await startFleetCall(ctxFor(grant), { tool: 'list_machines', params: {} }, admit);
-    if (!res.ok || res.kind !== 'answered') throw new Error('expected an inline answer');
-    expect(res.body.status).toBe('completed');
-    expect(res.body.content).toHaveLength(1);
-    expect(res.body.content[0].type).toBe('text');
-    return JSON.parse(res.body.content[0].text);
+    return JSON.parse(completedText(res));
   }
 
   it('answers inline with the machines the grant covers, each in the contract shape', async () => {
@@ -375,6 +407,227 @@ describe('startFleetCall: list_machines', () => {
     expect(docs.has(pendingPath(M1))).toBe(false);
     expect(hasRecords()).toBe(false);
     expect(emitMutation).not.toHaveBeenCalled();
+  });
+});
+
+describe('startFleetCall: the site log', () => {
+  const logsPath = `sites/${SITE}/logs`;
+
+  /** one entry per machine named, newest first, as the log's own order has them. */
+  function storeLogs(machines: Array<string | undefined>) {
+    machines.forEach((machineId, index) => {
+      docs.set(`${logsPath}/log-${String(index).padStart(3, '0')}`, {
+        timestamp: new Date(Date.now() - index * 60_000),
+        ...(machineId === undefined ? {} : { machineId }),
+        action: 'process_crash',
+        level: 'error',
+        processName: 'td.exe',
+        details: `entry ${index}`,
+      });
+    });
+  }
+
+  async function siteLogs(grant: FleetGrant, params: Record<string, unknown> = {}) {
+    const res = await startFleetCall(ctxFor(grant), { tool: 'get_site_logs', params }, admit);
+    return JSON.parse(completedText(res)) as { logs: Array<{ machine: string; details: string }>; count: number };
+  }
+
+  function askedFor(): number | null {
+    return queries.find((query) => query.path === logsPath)?.max ?? null;
+  }
+
+  it('is a tier 1 read, admitted as a view of no machine before anything is read', async () => {
+    admit.mockResolvedValue(problemRateLimited(5));
+    const res = await startFleetCall(ctxFor({ maxTier: 1, machineIds: [M1] }), { tool: 'get_site_logs', params: {} }, admit);
+    expect(res.ok).toBe(false);
+    expect(admit).toHaveBeenCalledWith({ capability: Capability.MACHINE_VIEW, tool: 'get_site_logs', machineId: null });
+    expect(reads).toEqual([]);
+  });
+
+  it('gives a grant that names its machines only their entries', async () => {
+    storeLogs([M1, M2, undefined, SENDER, M1]);
+    const body = await siteLogs({ maxTier: 1, machineIds: [M1] });
+    expect(body.logs.map((row) => [row.machine, row.details])).toEqual([[M1, 'entry 0'], [M1, 'entry 4']]);
+    expect(body.count).toBe(2);
+  });
+
+  it('asks the log for the most it gives, then keeps as many as the caller asked for', async () => {
+    storeLogs([M1, M2, M1, M1, M2, M1]);
+    const body = await siteLogs({ maxTier: 1, machineIds: [M1] }, { limit: 2 });
+    expect(askedFor()).toBe(200);
+    expect(body.logs.map((row) => row.details)).toEqual(['entry 0', 'entry 2']);
+    expect(body.count).toBe(2);
+  });
+
+  it('gives a grant that names no machine nothing, and reads nothing to find that out', async () => {
+    storeLogs([M1, M2]);
+    expect(await siteLogs({ maxTier: 3, machineIds: [] })).toEqual({ logs: [], count: 0 });
+    expect(reads).toEqual([]);
+  });
+
+  it('says so when the read came back full, since older entries of its machines may lie beyond it', async () => {
+    storeLogs([...Array<string>(199).fill(M2), M1]);
+    expect(await siteLogs({ maxTier: 1, machineIds: [M1] })).toMatchObject({
+      count: 1,
+      incomplete: expect.stringContaining('narrow hours, level or action'),
+    });
+  });
+
+  it('says nothing of the kind when the read held the whole window', async () => {
+    storeLogs([M1, M2]);
+    expect(await siteLogs({ maxTier: 1, machineIds: [M1] })).not.toHaveProperty('incomplete');
+  });
+
+  it('gives a whole-site grant the log as it is, asked for at the caller\'s limit', async () => {
+    storeLogs([M1, M2, undefined]);
+    const body = await siteLogs({ maxTier: 1, machineIds: null }, { limit: 10 });
+    expect(askedFor()).toBe(10);
+    expect(body.logs.map((row) => row.machine)).toEqual([M1, M2, 'unknown']);
+    expect(body).not.toHaveProperty('incomplete');
+  });
+
+  it.each([
+    ['a limit of zero', { limit: 0 }, 50],
+    ['a negative limit', { limit: -5 }, 50],
+    ['a limit that is not a number', { limit: '10' }, 50],
+    ['a limit past the cap', { limit: 5000 }, 200],
+    ['a fractional limit', { limit: 0.4 }, 1],
+  ])('never hands the query %s', async (_label, params, asked) => {
+    storeLogs([M1]);
+    await siteLogs({ maxTier: 1, machineIds: null }, params);
+    expect(askedFor()).toBe(asked);
+  });
+
+  it('drops a window that is no positive number, so the log falls back to its day', async () => {
+    storeLogs([M1]);
+    const body = (await siteLogs({ maxTier: 1, machineIds: null }, { hours: -3 })) as unknown as { hours: number };
+    expect(body.hours).toBe(24);
+  });
+
+  it('queues nothing and records no call', async () => {
+    storeLogs([M1]);
+    await siteLogs({ maxTier: 1, machineIds: [M1] });
+    expect(docs.has(pendingPath(M1))).toBe(false);
+    expect(hasRecords()).toBe(false);
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+});
+
+describe('startFleetCall: the process tools', () => {
+  const configPath = (machine: string) => `config/${SITE}/machines/${machine}`;
+
+  beforeEach(() => {
+    docs.set(configPath(M1), { processes: [{ processId: 'proc-1', name: 'TouchDesigner' }] });
+    docs.set(configPath(M2), { processes: [{ processId: 'proc-9', name: 'TouchDesigner' }] });
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    mockDeleteProcess.mockResolvedValue({ processId: 'proc-1', alreadyDeleted: false });
+  });
+
+  const AS_SENDER = { siteId: SITE, actor: TIER2_TO_M1.actor, auditActor: `machine:${SENDER}` };
+
+  it('update_process runs on the server as the calling machine and is answered in the response', async () => {
+    const res = await startFleetCall(
+      TIER2_TO_M1,
+      { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner', launch_mode: 'always' } },
+      admit,
+    );
+    expect(JSON.parse(completedText(res))).toEqual({ ok: true, processId: 'proc-1', process_name: 'TouchDesigner' });
+    expect(admit).toHaveBeenCalledWith({ capability: Capability.MACHINE_EXEC_COMMAND, tool: 'update_process', machineId: M1 });
+    expect(mockUpdateProcess).toHaveBeenCalledWith(AS_SENDER, {
+      machineId: M1,
+      processId: 'proc-1',
+      patch: { launch_mode: 'always' },
+    });
+    // no command to an agent: the config write is the whole call
+    expect(pendingEntries(M1)).toEqual([]);
+    expect(hasRecords()).toBe(false);
+  });
+
+  it('delete_process acts on the machine it names, as the calling machine', async () => {
+    const res = await startFleetCall(TIER2_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit);
+    expect(JSON.parse(completedText(res))).toMatchObject({ ok: true, processId: 'proc-1' });
+    expect(mockDeleteProcess).toHaveBeenCalledWith(AS_SENDER, { machineId: M1, processId: 'proc-1' });
+  });
+
+  it('add_process is handed only the parameters its definition declares', async () => {
+    const res = await startFleetCall(
+      TIER2_TO_M1,
+      {
+        tool: 'add_process',
+        params: {
+          machine: M1,
+          name: 'Notepad',
+          exe_path: 'C:/Windows/notepad.exe',
+          not_a_field: 'x',
+          override_active_hours: true,
+        },
+      },
+      admit,
+    );
+    expect(JSON.parse(completedText(res))).toEqual({ ok: true, processId: 'proc-2', name: 'Notepad' });
+    expect(mockCreateProcess).toHaveBeenCalledWith(AS_SENDER, {
+      machineId: M1,
+      name: 'Notepad',
+      exe_path: 'C:/Windows/notepad.exe',
+    });
+  });
+
+  it('a failure the tool reports is a failed answer, not a refusal', async () => {
+    const res = await startFleetCall(TIER2_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'Resolume' } }, admit);
+    expect(answered(res)).toEqual({
+      status: 'failed',
+      error: `process_not_found: Process "Resolume" was not found on machine ${M1}.`,
+    });
+    expect(mockDeleteProcess).not.toHaveBeenCalled();
+  });
+
+  it.each(['update_process', 'add_process', 'delete_process'])(
+    '%s is refused on a machine outside the grant, before any read or admission',
+    async (tool) => {
+      const res = await refusedWith(
+        startFleetCall(TIER2_TO_M1, { tool, params: { machine: M2, process_name: 'TouchDesigner', name: 'n', exe_path: 'x' } }, admit),
+        403,
+        'machine_not_granted',
+      );
+      expect(res.deny).toEqual({ reason: 'machine_not_granted', tool, machineId: M2 });
+      expect(reads).toEqual([]);
+      expect(admit).not.toHaveBeenCalled();
+      for (const action of [mockUpdateProcess, mockCreateProcess, mockDeleteProcess]) expect(action).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['update_process', 'add_process', 'delete_process'])('%s is not offered to a tier 1 grant', async (tool) => {
+    await refusedWith(
+      startFleetCall(ctxFor({ maxTier: 1, machineIds: [M1] }), { tool, params: { machine: M1 } }, admit),
+      403,
+      'tool_not_allowed',
+    );
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it('is refused when hoot is off on the machine, with nothing written', async () => {
+    docs.set(machinePath(M1), { online: true, cortexEnabled: false });
+    await refusedWith(
+      startFleetCall(TIER2_TO_M1, { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit),
+      409,
+      'hoot_disabled',
+    );
+    expect(mockUpdateProcess).not.toHaveBeenCalled();
+  });
+
+  it('runs on a machine that is offline: a config write needs no agent to answer', async () => {
+    docs.set(machinePath(M1), { online: false });
+    const res = await startFleetCall(TIER2_TO_M1, { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit);
+    expect(answered(res).status).toBe('completed');
+  });
+
+  it("admit's refusal comes back as it is, and the action never runs", async () => {
+    const limited = problemRateLimited(30);
+    admit.mockResolvedValue(limited);
+    const res = await startFleetCall(TIER2_TO_M1, { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit);
+    expect(res).toEqual({ ok: false, response: limited });
+    expect(mockUpdateProcess).not.toHaveBeenCalled();
   });
 });
 

@@ -3,7 +3,8 @@
  *
  * a machine tool queues one command on one machine, only through
  * `executeMachineCommand`, which owns the allowlist, the plan gate, the offline
- * check and the dispatch audit row. `list_machines` the server answers itself.
+ * check and the dispatch audit row. a tool the server answers itself
+ * (`FleetServerTool`) passes the same checks and is answered in the response.
  * a started call is read by its `callId`, `cmd:<machine>:<commandId>`, and the
  * read that hands over a terminal status deletes the result, so it is the last.
  *
@@ -13,7 +14,7 @@
  * command on a machine it reaches, a screenshot or a shell's output included.
  *
  * whether a machine is outside the grant has one owner: `hasCapability` with
- * the capability the tool's tier needs. `grantCovers` only filters a list.
+ * the capability the tool's tier needs.
  */
 
 import type { NextResponse } from 'next/server';
@@ -27,7 +28,6 @@ import {
 } from '@/lib/actions/executeMachineCommand.server';
 import { commandErrorToProblem } from '@/lib/machineCommandProblem';
 import { COMMAND_ID_RE, lookupCommandStatus, type CommandStatus } from '@/lib/commandStatus.server';
-import { timestampToMs } from '@/lib/firestoreTime.server';
 import {
   COMMAND_TIMEOUT_MS,
   MAX_TOOL_TIMEOUT_SECONDS,
@@ -37,14 +37,15 @@ import { isValidMachineId } from '@/lib/hoot/target';
 import logger from '@/lib/logger';
 import { EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
 import { FLEET_CALLS_COLLECTION, type FleetCallRecord } from '@/lib/fleet/calls.server';
-import { LIST_MACHINES_TOOL, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
-import { grantCovers } from '@/lib/fleet/policy.server';
-import type { AdmitFleetCall, FleetCallDenial, FleetContext } from '@/lib/fleet/context';
-
-/** every item carries `text`, so a script that does not know a kind still shows words. */
-export type FleetContentItem =
-  | { type: 'text'; text: string }
-  | { type: 'image_url'; url: string; text: string };
+import { findFleetServerTool, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
+import type {
+  AdmitFleetCall,
+  FleetAnswer,
+  FleetCallDenial,
+  FleetContentItem,
+  FleetContext,
+  FleetServerTool,
+} from '@/lib/fleet/context';
 
 /** `deny` is absent when `admit` refused: the request handler recorded that one. */
 export interface FleetRefusal {
@@ -54,7 +55,7 @@ export interface FleetRefusal {
 }
 
 export type FleetCallStart =
-  | { ok: true; kind: 'answered'; body: { status: 'completed'; content: FleetContentItem[] } }
+  | { ok: true; kind: 'answered'; body: FleetAnswer }
   | { ok: true; kind: 'started'; body: { callId: string; timeoutSeconds: number } }
   | FleetRefusal;
 
@@ -136,31 +137,15 @@ function callTimeoutSeconds(def: McpToolDefinition, toolParams: Record<string, u
   return Math.min(Math.max(Math.ceil(asked), DEFAULT_CALL_TIMEOUT_SECONDS), MAX_TOOL_TIMEOUT_SECONDS);
 }
 
-async function listMachines(ctx: FleetContext): Promise<FleetCallStart> {
-  const snap = await ctx.db.collection('sites').doc(ctx.siteId).collection('machines').get();
-  const now = Date.now();
-  const machines = snap.docs
-    .filter((doc) => grantCovers(ctx.grant, doc.id))
-    .map((doc) => {
-      const data = doc.data();
-      // read as the public machines list route reads them
-      const heartbeatMs = timestampToMs(data.lastHeartbeat ?? data.presence?.lastHeartbeat ?? null);
-      return {
-        id: doc.id,
-        online: data.online === true,
-        lastHeartbeatAgeSeconds: heartbeatMs === null ? null : Math.max(0, Math.floor((now - heartbeatMs) / 1000)),
-        os: data.os ?? data.presence?.os ?? null,
-        agentVersion: data.agent_version ?? data.presence?.agent_version ?? null,
-        // as isHootEnabled reads it: absent means on
-        hootEnabled: data.cortexEnabled !== false,
-      };
-    })
-    .sort((a, b) => a.id.localeCompare(b.id));
-  return {
-    ok: true,
-    kind: 'answered',
-    body: { status: 'completed', content: [{ type: 'text', text: JSON.stringify(machines, null, 2) }] },
-  };
+/**
+ * what a server tool is handed: the parameters its definition declares and no
+ * others, so nothing the caller adds reaches the action behind the tool.
+ */
+function declaredParams(tool: FleetServerTool, params: Record<string, unknown>): Record<string, unknown> {
+  const declared = tool.definition.parameters.properties;
+  return Object.fromEntries(
+    Object.entries(params).filter(([key]) => Object.prototype.hasOwnProperty.call(declared, key)),
+  );
 }
 
 /**
@@ -229,13 +214,15 @@ export async function startFleetCall(
       null,
     );
   }
-  if (def.name === LIST_MACHINES_TOOL) {
-    const refused = await admit({ capability: Capability.MACHINE_VIEW, tool: def.name, machineId: null });
+  const serverTool = findFleetServerTool(def.name);
+  const capability = fleetToolCapability(def);
+  const { machine, toolParams } = splitFleetParams(input.params);
+  if (serverTool?.target === 'site') {
+    const refused = await admit({ capability, tool: def.name, machineId: null });
     if (refused) return { ok: false, response: refused };
-    return listMachines(ctx);
+    return { ok: true, kind: 'answered', body: await serverTool.run(ctx, declaredParams(serverTool, toolParams)) };
   }
 
-  const { machine, toolParams } = splitFleetParams(input.params);
   if (machine === null || !isValidMachineId(machine)) {
     return denied(
       problemValidation('params.machine must be the id of a machine, from list_machines', {
@@ -246,7 +233,6 @@ export async function startFleetCall(
       null,
     );
   }
-  const capability = fleetToolCapability(def);
   if (!hasCapability(ctx.actor, capability, ctx.siteId, machine)) {
     return denied(machineNotGranted(machine), 'machine_not_granted', def.name, machine);
   }
@@ -282,6 +268,14 @@ export async function startFleetCall(
 
   const refused = await admit({ capability, tool: def.name, machineId: machine });
   if (refused) return { ok: false, response: refused };
+
+  if (serverTool) {
+    return {
+      ok: true,
+      kind: 'answered',
+      body: await serverTool.run(ctx, machine, declaredParams(serverTool, toolParams)),
+    };
+  }
 
   const commandType = EXISTING_COMMAND_MAPPINGS[def.name];
   const timeoutSeconds = commandType ? DEFAULT_CALL_TIMEOUT_SECONDS : callTimeoutSeconds(def, toolParams);
