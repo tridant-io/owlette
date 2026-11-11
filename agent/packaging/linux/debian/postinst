@@ -34,6 +34,7 @@ case "$1" in
     mode_dir ipc 770
     mode_dir logs 750
     mode_dir logs/swoop 770
+    mode_dir logs/cortex 770
     mode_dir cache 750
     [ -f "${DATA_ROOT}/tmp/json.lock" ] || : > "${DATA_ROOT}/tmp/json.lock"
     chown "root:${GROUP}" "${DATA_ROOT}/tmp/json.lock" && chmod 660 "${DATA_ROOT}/tmp/json.lock"

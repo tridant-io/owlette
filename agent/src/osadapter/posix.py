@@ -131,6 +131,7 @@ _DIRECTORY_MODES = {
     'ipc': 0o770,
     'logs': 0o750,
     'logs/swoop': 0o770,
+    'logs/cortex': 0o770,
     'cache': 0o750,
 }
 # The files in the tree the desktop app reads or writes as well, and whether

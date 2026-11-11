@@ -28,7 +28,7 @@ import shared_utils
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
-LOG_DIR = shared_utils.get_data_path('logs')
+LOG_DIR = shared_utils.CORTEX_LOG_DIR
 os.makedirs(LOG_DIR, exist_ok=True)
 
 logging.basicConfig(
@@ -158,6 +158,19 @@ def _re_encrypt_cortex_api_key(storage, api_key: str) -> None:
         logger.info("Cortex API key re-encrypted under the machine-bound key")
     except Exception as e:
         logger.error(f"Failed to re-encrypt the Cortex API key: {e}")
+
+
+def _hoot_credential(config: dict):
+    """What hoot authenticates its Firestore calls with.
+
+    On Windows an AuthManager over the token store, as in firebase_client.py.
+    Off Windows the token store is the daemon's alone, so hoot reads the access
+    token the daemon publishes for it and never holds the agent token.
+    """
+    from auth_manager import AuthManager, PublishedToken
+    if sys.platform == 'win32':
+        return AuthManager(api_base=shared_utils.get_configured_api_base(config))
+    return PublishedToken()
 
 
 # ─── Guardrails ───────────────────────────────────────────────────────────────
@@ -535,9 +548,7 @@ async def main():
         return
 
     # Auth manager + Firestore client, as in firebase_client.py.
-    from auth_manager import AuthManager
-    api_base = shared_utils.get_configured_api_base(config)
-    auth_manager = AuthManager(api_base=api_base)
+    auth_manager = _hoot_credential(config)
 
     if not auth_manager.is_authenticated():
         logger.error("Agent not authenticated — exiting")
