@@ -50,11 +50,10 @@ A deployment hoot started carried no installer checksum, so every machine closed
 the processes it named, downloaded the installer and then refused to run it.
 Hoot now pins the checksum first: a preset's own, or one the server computes by
 downloading the installer, which can take a few minutes for a large one.
-Stopping the reply meanwhile deploys nothing, unless the stop lands in the
-download's last seconds. If the checksum cannot be had, nothing is deployed and
-nothing is closed, and hoot says why. Its deployments now also time out like any
-other when a machine never answers, and list in date order with the rest in the
-API and CLI. Nothing to update on the machine.
+Stopping the reply meanwhile deploys nothing. If the checksum cannot be had,
+nothing is deployed and nothing is closed, and hoot says why. Its deployments now
+also time out like any other when a machine never answers, and list in date
+order with the rest in the API and CLI. Nothing to update on the machine.
 
 ### fixed — the deployments page offers cancel and retry only where they work
 

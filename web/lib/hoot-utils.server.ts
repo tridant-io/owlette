@@ -52,6 +52,7 @@ import {
   type HootTarget,
   type ResolvedTargets,
 } from '@/lib/hoot/target';
+import type { TurnOwnership } from '@/lib/hoot/turnStore.server';
 import type { TalonStoreContext } from '@/lib/talons/store.server';
 
 /**
@@ -211,13 +212,18 @@ export interface BuildExecutableToolsOptions {
    */
   resumedToolCallIds?: readonly string[];
   /** Per-tool-call dispatch hooks; site-wide fan-out fires onCommandQueued once
-   *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire these. */
+   *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire those two. */
   toolCallbacks?: {
     onCommandQueued?: (toolCallId: string, commandId: string, machineId: string) => void;
     onPollTick?: () => void;
     /** Per-turn abort signal — fans out to every dispatch's poll loop so a
-     * superseded/stopped turn stops waiting on in-flight tool commands. */
+     * superseded/stopped turn stops waiting on in-flight tool commands, and
+     * cancels deploy_software's checksum download. */
     abortSignal?: AbortSignal;
+    /** Whether this turn still owns its chat, asked now rather than at the next
+     *  heartbeat; deploy_software asks it right before its first write. It is the
+     *  heartbeat's guarded write, not a pure read, and a `lost` answer stops the turn. */
+    stillOwnsChat?: () => Promise<TurnOwnership>;
   };
 }
 
@@ -1146,8 +1152,14 @@ async function executeGetSystemPresets(
 
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
 
+/** What a deploy may use of its turn: never the dispatch hooks, which it must not fire. */
+type DeployTurn = Pick<NonNullable<BuildExecutableToolsOptions['toolCallbacks']>, 'abortSignal' | 'stillOwnsChat'>;
+
 const DEPLOY_STOPPED_ERROR =
   'This turn was stopped or taken over before the deployment was queued. Nothing was deployed and no process was closed.';
+
+const DEPLOY_OWNERSHIP_UNCONFIRMED_ERROR =
+  'This turn could not confirm it still owns the chat, so the deployment was not queued. Nothing was deployed and no process was closed. Ask for it again.';
 
 function checksumFailedResult(installerUrl: string, reason: string): { error: string } {
   return {
@@ -1160,8 +1172,9 @@ function checksumFailedResult(installerUrl: string, reason: string): { error: st
  * sha256, create a deployment doc, write install_software commands. Returns once
  * they are queued; installs run async. Pinning an installer that is not the
  * preset's downloads it here first, up to computeInstallerChecksum's deadline.
- * `signal` is the turn's: the runner aborts it at its next heartbeat after a stop
- * or a takeover, so a stop in a download's last seconds can come too late.
+ * `turn` is the dashboard turn's: its signal cancels the download, and since the
+ * runner only fires that at its next heartbeat, the turn's ownership is read once
+ * more right before the first write. Other callers pass none.
  */
 async function executeDeploySoftware(
   db: FirebaseFirestore.Firestore,
@@ -1169,8 +1182,9 @@ async function executeDeploySoftware(
   machineIds: string[],
   params: Record<string, unknown>,
   envelope: CommandEnvelopeOptions,
-  signal?: AbortSignal,
+  turn: DeployTurn = {},
 ): Promise<unknown> {
+  const signal = turn.abortSignal;
   const softwareName = params.software_name as string;
   const version = params.version as string | undefined;
   const presetId = params.preset_id as string | undefined;
@@ -1341,7 +1355,13 @@ async function executeDeploySoftware(
   }
 
   // stopped or taken over as the download finished: nothing written yet, so nothing to undo.
-  if (signal?.aborted) return { error: DEPLOY_STOPPED_ERROR };
+  // the signal only fires at the runner's next heartbeat, so ask the turn itself first, and
+  // read the signal after that await so a beat landing meanwhile still counts. unlike the
+  // heartbeat, an answer that cannot be confirmed deploys nothing: a refused deploy can be
+  // asked for again, processes closed for a stopped turn cannot be reopened.
+  const ownership = turn.stillOwnsChat ? await turn.stillOwnsChat() : 'owned';
+  if (signal?.aborted || ownership === 'lost') return { error: DEPLOY_STOPPED_ERROR };
+  if (ownership === 'error') return { error: DEPLOY_OWNERSHIP_UNCONFIRMED_ERROR };
 
   // the stale-deployment sweeper scans only sites stamped in the last 30 minutes. stamped
   // first: a stamp with no deployment behind it is harmless, a deployment the sweeper
@@ -2038,7 +2058,7 @@ export async function executeServerSideTool(
     case 'get_system_presets':
       return executeGetSystemPresets(db, params);
     case 'deploy_software':
-      return executeDeploySoftware(db, siteId, machineIds, params, envelope, options.toolCallbacks?.abortSignal);
+      return executeDeploySoftware(db, siteId, machineIds, params, envelope, options.toolCallbacks);
     case 'update_process':
       return executeUpdateProcessTool(db, siteId, machineIds, params, options);
     case 'add_process':

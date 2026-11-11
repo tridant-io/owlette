@@ -775,6 +775,73 @@ describe('deploy_software', () => {
       expect(result).toEqual(STOPPED);
       expect(writes).toEqual([]);
     });
+
+    it('queues nothing when the stop is recorded before the heartbeat has fired the signal', async () => {
+      const { db, writes } = createDeployDb();
+      const stillOwnsChat = jest.fn(async () => 'lost' as const);
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { abortSignal: new AbortController().signal, stillOwnsChat },
+      });
+
+      expect(stillOwnsChat).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('asks after the download and before the first write, and deploys as before while the turn owns the chat', async () => {
+      const { db, writes } = createDeployDb();
+      let writesWhenAsked = -1;
+      const stillOwnsChat = jest.fn(async () => {
+        writesWhenAsked = writes.length;
+        return 'owned' as const;
+      });
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { stillOwnsChat },
+      });
+
+      expect(result).toMatchObject({ status: 'deployment_started' });
+      expect(stillOwnsChat).toHaveBeenCalledTimes(1);
+      expect(mockComputeInstallerChecksum.mock.invocationCallOrder[0]).toBeLessThan(
+        stillOwnsChat.mock.invocationCallOrder[0],
+      );
+      expect(writesWhenAsked).toBe(0);
+      expect(queuedCommand(writes).sha256_checksum).toBe(COMPUTED_CHECKSUM);
+    });
+
+    it('deploys nothing when the turn cannot confirm it still owns the chat', async () => {
+      const { db, writes } = createDeployDb();
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { stillOwnsChat: async () => 'error' as const },
+      });
+
+      expect(result).toEqual({
+        error:
+          'This turn could not confirm it still owns the chat, so the deployment was not queued. Nothing was deployed and no process was closed. Ask for it again.',
+      });
+      expect(writes).toEqual([]);
+    });
+
+    it('queues nothing when a heartbeat stops the turn while the ownership check is pending', async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: {
+          abortSignal: stop.signal,
+          // the check committed while the turn was still running; a beat lands before it returns.
+          stillOwnsChat: async () => {
+            stop.abort();
+            return 'owned' as const;
+          },
+        },
+      });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
   });
 
   it('builds install_software from explicit fields, so no override name reaches the command', async () => {
