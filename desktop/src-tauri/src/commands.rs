@@ -36,6 +36,14 @@ pub fn launch_args() -> Vec<String> {
   std::env::args().collect()
 }
 
+/// The interpreter and script an MCP client starts to reach hoot from this
+/// machine, in that order. None where this machine cannot be the acting side
+/// of hoot mcp yet.
+#[tauri::command(async)]
+pub fn hoot_mcp_command() -> Option<Vec<String>> {
+  crate::agent_cli::hoot_mcp_command()
+}
+
 /// This machine's name, as the fleet knows it (`COMPUTERNAME`).
 #[tauri::command(async)]
 pub fn hostname() -> String {

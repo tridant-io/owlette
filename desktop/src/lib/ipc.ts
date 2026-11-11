@@ -223,6 +223,15 @@ export function openSwoopViewer(): Promise<void> {
   return invoke<void>('open_swoop_viewer')
 }
 
+/**
+ * the interpreter and the script an mcp client starts to reach hoot from this
+ * machine, in that order; null where this machine cannot be the acting side of
+ * hoot mcp yet.
+ */
+export function hootMcpCommand(): Promise<string[] | null> {
+  return invoke<string[] | null>('hoot_mcp_command')
+}
+
 /** macOS's answer on Screen Recording for this app; null off macOS. */
 export function screenRecordingGranted(): Promise<boolean | null> {
   return invoke<boolean | null>('screen_recording_granted')

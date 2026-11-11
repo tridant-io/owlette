@@ -116,6 +116,7 @@ pub fn run() {
       commands::discard_issue_screenshots,
       commands::swoop_viewer_installed,
       commands::open_swoop_viewer,
+      commands::hoot_mcp_command,
       commands::log_event,
       commands::sidebar_width,
       commands::set_sidebar_width,
