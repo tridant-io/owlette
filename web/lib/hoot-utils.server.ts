@@ -21,6 +21,7 @@ import type { LlmConfig } from '@/lib/llm';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
 import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
+import { computeInstallerChecksum, InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
 import {
   ACTIVE_HOURS_OVERRIDE_KEYS,
   stripActiveHoursOverride,
@@ -1143,9 +1144,24 @@ async function executeGetSystemPresets(
   return { presets, count: presets.length };
 }
 
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
+
+const DEPLOY_STOPPED_ERROR =
+  'This turn was stopped or taken over before the deployment was queued. Nothing was deployed and no process was closed.';
+
+function checksumFailedResult(installerUrl: string, reason: string): { error: string } {
+  return {
+    error: `Could not pin a SHA-256 checksum for ${installerUrl}: ${reason}. owlette agents refuse an install without one. Nothing was deployed and no process was closed. Check that the URL is a direct HTTPS download of the installer, or deploy it from the [Deployments page](/deployments), where the checksum can be entered by hand.`,
+  };
+}
+
 /**
- * deploy_software, server-side: resolve preset + params, create a deployment doc,
- * write install_software commands. Returns immediately; installs run async.
+ * deploy_software, server-side: resolve preset + params, pin the installer's
+ * sha256, create a deployment doc, write install_software commands. Returns once
+ * they are queued; installs run async. Pinning an installer that is not the
+ * preset's downloads it here first, up to computeInstallerChecksum's deadline.
+ * `signal` is the turn's: the runner aborts it at its next heartbeat after a stop
+ * or a takeover, so a stop in a download's last seconds can come too late.
  */
 async function executeDeploySoftware(
   db: FirebaseFirestore.Firestore,
@@ -1153,6 +1169,7 @@ async function executeDeploySoftware(
   machineIds: string[],
   params: Record<string, unknown>,
   envelope: CommandEnvelopeOptions,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const softwareName = params.software_name as string;
   const version = params.version as string | undefined;
@@ -1253,7 +1270,41 @@ async function executeDeploySoftware(
     };
   }
 
-  // Mirrors useDeployments.createDeployment.
+  // agents refuse install_software without a pinned checksum, and only after closing
+  // close_processes and downloading the file, so it is settled before anything is
+  // written. a preset's checksum holds only for the preset's own installer url.
+  let sha256Checksum: string;
+  const presetChecksum: unknown = preset?.sha256_checksum;
+  if (
+    installerUrl === preset?.installer_url &&
+    typeof presetChecksum === 'string' &&
+    SHA256_HEX_RE.test(presetChecksum)
+  ) {
+    sha256Checksum = presetChecksum;
+  } else {
+    // computeInstallerChecksum never hears an abort that came before the call.
+    if (signal?.aborted) return { error: DEPLOY_STOPPED_ERROR };
+    try {
+      sha256Checksum = (await computeInstallerChecksum(installerUrl, { signal })).sha256_checksum;
+    } catch (err) {
+      if (err instanceof InstallerChecksumError) {
+        if (err.code === 'cancelled') return { error: DEPLOY_STOPPED_ERROR };
+        return checksumFailedResult(installerUrl, err.message);
+      }
+      // the installer url can be a signed link, so the line names the software, not the url.
+      console.error(
+        `[hoot] deploy_software could not pin a checksum for ${sanitizeForLog(softwareName)} on site ${sanitizeForLog(siteId)}:`,
+        err,
+      );
+      return checksumFailedResult(installerUrl, 'an unexpected error stopped the download');
+    }
+  }
+
+  // built by hand beside createDeployment (lib/actions/createDeployment.server.ts), which
+  // the dashboard and the API go through, because createDeployment refuses an active-hours
+  // override from hoot's audit actor (`cortex:user_<uid>`), writes no timeout_seconds and
+  // takes no stop signal. keep the fields they share in step.
+  const { FieldValue } = await import('firebase-admin/firestore');
   const deploymentId = `deploy-${Date.now()}`;
   const deploymentRef = db
     .collection('sites')
@@ -1272,8 +1323,9 @@ async function executeDeploySoftware(
     installer_name: installerName,
     installer_url: installerUrl,
     silent_flags: silentFlags,
+    sha256_checksum: sha256Checksum,
     targets,
-    createdAt: Date.now(),
+    createdAt: FieldValue.serverTimestamp(),
     status: 'pending',
     source: 'cortex',
   };
@@ -1288,6 +1340,16 @@ async function executeDeploySoftware(
     deploymentData.parallel_install = true;
   }
 
+  // stopped or taken over as the download finished: nothing written yet, so nothing to undo.
+  if (signal?.aborted) return { error: DEPLOY_STOPPED_ERROR };
+
+  // the stale-deployment sweeper scans only sites stamped in the last 30 minutes. stamped
+  // first: a stamp with no deployment behind it is harmless, a deployment the sweeper
+  // never scans is not.
+  await db
+    .collection('sites')
+    .doc(siteId)
+    .set({ lastDeploymentActivityAt: FieldValue.serverTimestamp() }, { merge: true });
   await deploymentRef.set(deploymentData);
 
   const commandPromises = machineIds.map(async (mid) => {
@@ -1309,6 +1371,7 @@ async function executeDeploySoftware(
       installer_url: installerUrl,
       installer_name: installerName,
       silent_flags: silentFlags,
+      sha256_checksum: sha256Checksum,
       deployment_id: deploymentId,
       timestamp: Date.now(),
       status: 'pending',
@@ -1975,7 +2038,7 @@ export async function executeServerSideTool(
     case 'get_system_presets':
       return executeGetSystemPresets(db, params);
     case 'deploy_software':
-      return executeDeploySoftware(db, siteId, machineIds, params, envelope);
+      return executeDeploySoftware(db, siteId, machineIds, params, envelope, options.toolCallbacks?.abortSignal);
     case 'update_process':
       return executeUpdateProcessTool(db, siteId, machineIds, params, options);
     case 'add_process':

@@ -15,7 +15,22 @@ jest.mock('@/lib/llm-encryption.server', () => ({
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
-  FieldValue: { delete: jest.fn(() => '__FIELD_DELETE__') },
+  FieldValue: {
+    delete: jest.fn(() => '__FIELD_DELETE__'),
+    serverTimestamp: jest.fn(() => '__SERVER_TIMESTAMP__'),
+  },
+}));
+
+// the real download is never run here: deploy_software's checksum comes from this.
+const COMPUTED_CHECKSUM = 'c'.repeat(64);
+const mockComputeInstallerChecksum = jest.fn(async (..._args: unknown[]) => ({
+  sha256_checksum: COMPUTED_CHECKSUM,
+  size_bytes: 1024,
+}));
+
+jest.mock('@/lib/actions/computeInstallerChecksum.server', () => ({
+  ...jest.requireActual('@/lib/actions/computeInstallerChecksum.server'),
+  computeInstallerChecksum: (...args: unknown[]) => mockComputeInstallerChecksum(...args),
 }));
 
 const mockCreateProcess = jest.fn();
@@ -204,6 +219,7 @@ import {
 import { allTools } from '@/lib/mcp-tools';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { MAX_TARGET_MACHINES } from '@/lib/hoot/target';
+import { InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
 import { Capability, hasCapability, type UserActor } from '@/lib/capabilities';
 
 beforeEach(() => {
@@ -533,21 +549,233 @@ describe('executeExistingCommand', () => {
 });
 
 describe('deploy_software', () => {
-  /** Records every doc write by path; the preset collection is empty. */
-  function createDeployDb() {
-    const writes: { path: string; data: Record<string, unknown> }[] = [];
+  /** Records every doc write by path, in order; `presets` is the system_presets collection. */
+  function createDeployDb(presets: Record<string, Record<string, unknown>> = {}) {
+    const writes: { path: string; data: Record<string, unknown>; options?: unknown }[] = [];
     const doc = (path: string): unknown => ({
-      set: jest.fn(async (data: Record<string, unknown>) => {
-        writes.push({ path, data });
+      get: jest.fn(async () => {
+        const preset = presets[path.replace(/^system_presets\//, '')];
+        return { exists: path.startsWith('system_presets/') && !!preset, data: () => preset };
+      }),
+      set: jest.fn(async (data: Record<string, unknown>, options?: unknown) => {
+        writes.push({ path, data, options });
       }),
       collection: (name: string) => col(`${path}/${name}`),
     });
     const col = (path: string): unknown => ({
       doc: (id: string) => doc(`${path}/${id}`),
-      get: jest.fn(async () => ({ docs: [] })),
+      get: jest.fn(async () => ({
+        docs: path === 'system_presets'
+          ? Object.entries(presets).map(([id, data]) => ({ id, data: () => data }))
+          : [],
+      })),
     });
     return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, writes };
   }
+
+  const PLAYER = {
+    software_name: 'Player',
+    installer_url: 'https://example.com/player.exe',
+    silent_flags: '/S',
+  };
+  const PRESET_CHECKSUM = 'a'.repeat(64);
+  const TD_PRESET = {
+    name: 'TouchDesigner',
+    software_name: 'TouchDesigner',
+    installer_name: 'TouchDesigner.2023.11880.exe',
+    installer_url: 'https://download.derivative.ca/TouchDesigner.2023.11880.exe',
+    silent_flags: '/VERYSILENT /DIR="C:\\Program Files\\Derivative\\TouchDesigner.2023.11880"',
+    close_processes: ['TouchDesigner.exe'],
+    sha256_checksum: PRESET_CHECKSUM,
+  };
+
+  function deploymentWrite(writes: { path: string; data: Record<string, unknown> }[]) {
+    return writes.find((w) => /^sites\/s1\/deployments\/[^/]+$/.test(w.path) && 'targets' in w.data)!;
+  }
+
+  function queuedCommand(writes: { path: string; data: Record<string, unknown> }[]) {
+    const pending = writes.find((w) => w.path === 'sites/s1/machines/m1/commands/pending')!;
+    return Object.values(pending.data)[0] as Record<string, unknown>;
+  }
+
+  it('pins the checksum it computes from the installer URL on the command and the deployment', async () => {
+    const { db, writes } = createDeployDb();
+
+    const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    expect(mockComputeInstallerChecksum).toHaveBeenCalledTimes(1);
+    expect(mockComputeInstallerChecksum.mock.calls[0][0]).toBe('https://example.com/player.exe');
+    expect(queuedCommand(writes).sha256_checksum).toBe(COMPUTED_CHECKSUM);
+    expect(deploymentWrite(writes).data.sha256_checksum).toBe(COMPUTED_CHECKSUM);
+  });
+
+  it("uses a preset's own checksum for the preset's installer, without downloading it", async () => {
+    const { db, writes } = createDeployDb({ td: TD_PRESET });
+
+    const result = await executeServerSideTool(
+      db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', preset_id: 'td' }, {},
+    );
+
+    expect(result).toMatchObject({ status: 'deployment_started' });
+    expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+    expect(queuedCommand(writes).sha256_checksum).toBe(PRESET_CHECKSUM);
+    expect(deploymentWrite(writes).data.sha256_checksum).toBe(PRESET_CHECKSUM);
+  });
+
+  it("computes the checksum when the installer is not the preset's, so another TouchDesigner build gets its own", async () => {
+    const { db, writes } = createDeployDb({ td: TD_PRESET });
+
+    await executeServerSideTool(
+      db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', version: '2025.32280' }, {},
+    );
+
+    expect(mockComputeInstallerChecksum.mock.calls[0][0]).toBe(
+      'https://download.derivative.ca/TouchDesigner.2025.32280.exe',
+    );
+    expect(queuedCommand(writes)).toMatchObject({
+      installer_url: 'https://download.derivative.ca/TouchDesigner.2025.32280.exe',
+      sha256_checksum: COMPUTED_CHECKSUM,
+    });
+  });
+
+  it.each([
+    ['the download fails', new InstallerChecksumError('fetch_failed', 'download failed with http 404')],
+    ['the installer is too large', new InstallerChecksumError('too_large', 'installer exceeds the limit')],
+    ['the download runs out of time', new InstallerChecksumError('timeout', 'checksum computation exceeded 270s')],
+    ['the address is refused', new InstallerChecksumError('invalid_url', 'private address')],
+  ])('writes and queues nothing when %s', async (_label, error) => {
+    const { db, writes } = createDeployDb();
+    mockComputeInstallerChecksum.mockRejectedValueOnce(error);
+
+    const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(result).toEqual({ error: expect.stringContaining(error.message) });
+    expect((result as { error: string }).error).toContain('Nothing was deployed and no process was closed');
+    expect(writes).toEqual([]);
+  });
+
+  it('answers an unexpected checksum failure as a tool error, logs it without the url, and writes nothing', async () => {
+    const { db, writes } = createDeployDb();
+    mockComputeInstallerChecksum.mockRejectedValueOnce(new TypeError('Invalid URL'));
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+      expect(result).toEqual({
+        error: expect.stringContaining(
+          'Could not pin a SHA-256 checksum for https://example.com/player.exe: an unexpected error stopped the download.',
+        ),
+      });
+      expect((result as { error: string }).error).toContain('Nothing was deployed and no process was closed');
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(String(errorSpy.mock.calls[0][0])).not.toContain('example.com');
+    } finally {
+      errorSpy.mockRestore();
+    }
+    expect(writes).toEqual([]);
+  });
+
+  it('stamps the site for the stale-deployment sweeper before it writes the deployment', async () => {
+    const { db, writes } = createDeployDb();
+
+    await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    const stampAt = writes.findIndex((w) => w.path === 'sites/s1');
+    expect(stampAt).toBeGreaterThanOrEqual(0);
+    expect(writes[stampAt]).toEqual({
+      path: 'sites/s1',
+      data: { lastDeploymentActivityAt: '__SERVER_TIMESTAMP__' },
+      options: { merge: true },
+    });
+    expect(stampAt).toBeLessThan(writes.indexOf(deploymentWrite(writes)));
+  });
+
+  it("dates the deployment by the server's clock, as every other deployment is, so the API list sorts it with them", async () => {
+    const { db, writes } = createDeployDb();
+
+    await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {});
+
+    expect(deploymentWrite(writes).data.createdAt).toBe('__SERVER_TIMESTAMP__');
+  });
+
+  describe('when the turn is stopped', () => {
+    const STOPPED = {
+      error:
+        'This turn was stopped or taken over before the deployment was queued. Nothing was deployed and no process was closed.',
+    };
+
+    /** The person presses stop while the server is still downloading the installer. */
+    function stopDuringDownload(stop: AbortController, finishes: boolean) {
+      mockComputeInstallerChecksum.mockImplementationOnce(async (...args: unknown[]) => {
+        stop.abort();
+        if (!finishes && (args[1] as { signal?: AbortSignal } | undefined)?.signal?.aborted) {
+          throw new InstallerChecksumError('cancelled', 'checksum computation cancelled by client');
+        }
+        return { sha256_checksum: COMPUTED_CHECKSUM, size_bytes: 1024 };
+      });
+    }
+
+    it("cancels the download through the turn's signal and queues nothing", async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+      stopDuringDownload(stop, false);
+      const def = allTools.find((t) => t.name === 'deploy_software')!;
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [def], false, [], {
+        machineScope: null,
+        toolCallbacks: { abortSignal: stop.signal },
+      });
+
+      const result = await tools.deploy_software.execute(PLAYER, { toolCallId: 'call_1' });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('queues nothing when the stop lands as the download finishes', async () => {
+      const { db, writes } = createDeployDb();
+      const stop = new AbortController();
+      stopDuringDownload(stop, true);
+
+      const result = await executeServerSideTool(db, 's1', ['m1'], 'deploy_software', PLAYER, {
+        toolCallbacks: { abortSignal: stop.signal },
+      });
+
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it("queues nothing for a turn already stopped, even on a preset's checksum with no download", async () => {
+      const { db, writes } = createDeployDb({ td: TD_PRESET });
+      const stop = new AbortController();
+      stop.abort();
+
+      const result = await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', preset_id: 'td' },
+        { toolCallbacks: { abortSignal: stop.signal } },
+      );
+
+      expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+
+    it('does not start a download for a turn already stopped', async () => {
+      const { db, writes } = createDeployDb({ td: TD_PRESET });
+      const stop = new AbortController();
+      stop.abort();
+
+      const result = await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { software_name: 'TouchDesigner', version: '2025.32280' },
+        { toolCallbacks: { abortSignal: stop.signal } },
+      );
+
+      expect(mockComputeInstallerChecksum).not.toHaveBeenCalled();
+      expect(result).toEqual(STOPPED);
+      expect(writes).toEqual([]);
+    });
+  });
 
   it('builds install_software from explicit fields, so no override name reaches the command', async () => {
     const { db, writes } = createDeployDb();

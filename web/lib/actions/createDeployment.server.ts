@@ -1,6 +1,7 @@
 /**
- * Shared core behind `POST /api/sites/{siteId}/deployments` and hoot's
- * `invokeAsSystem`, so both fan out installs identically.
+ * Shared core behind `POST /api/sites/{siteId}/deployments`, which the dashboard
+ * and the API go through. hoot's `deploy_software` builds its own writes
+ * (`executeDeploySoftware` in lib/hoot-utils.server.ts).
  *
  * validate → quota-check `sites/{siteId}.deployQuota` → write the deployment
  * doc pending → fan out `install_software` → flip to in_progress → audit.
