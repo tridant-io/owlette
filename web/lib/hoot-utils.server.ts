@@ -1306,8 +1306,11 @@ async function executeDeploySoftware(
         return checksumFailedResult(installerUrl, err.message);
       }
       // the installer url can be a signed link, so the line names the software, not the url.
+      // the name is the model's text: as an argument, a % in it is never read as a directive.
       console.error(
-        `[hoot] deploy_software could not pin a checksum for ${sanitizeForLog(softwareName)} on site ${sanitizeForLog(siteId)}:`,
+        '[hoot] deploy_software could not pin a checksum for %s on site %s:',
+        sanitizeForLog(softwareName),
+        sanitizeForLog(siteId),
         err,
       );
       return checksumFailedResult(installerUrl, 'an unexpected error stopped the download');

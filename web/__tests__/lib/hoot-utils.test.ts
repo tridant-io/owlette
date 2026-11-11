@@ -677,6 +677,26 @@ describe('deploy_software', () => {
     expect(writes).toEqual([]);
   });
 
+  it('logs a software name that holds a format directive as text, with the error after it', async () => {
+    const { db } = createDeployDb();
+    const failure = new TypeError('Invalid URL');
+    mockComputeInstallerChecksum.mockRejectedValueOnce(failure);
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await executeServerSideTool(
+        db, 's1', ['m1'], 'deploy_software', { ...PLAYER, software_name: 'Player 100%s' }, {},
+      );
+
+      const args = errorSpy.mock.calls[0];
+      expect(String(args[0])).not.toContain('Player');
+      expect(args).toContain('Player 100%s');
+      expect(args[args.length - 1]).toBe(failure);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('stamps the site for the stale-deployment sweeper before it writes the deployment', async () => {
     const { db, writes } = createDeployDb();
 
