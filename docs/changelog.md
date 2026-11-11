@@ -10,6 +10,173 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — saving a talon edit keeps the switch where it is now
+
+The talon editor sent the on or off state from the moment it was opened. If the
+talon was switched off in the meantime, by the system after repeated failures or
+by someone else, saving the edit switched it back on. The editor now saves the
+state the talon has when you save. Nothing to update on the machine.
+
+### fixed — a talon switched back on gets its ten tries back
+
+A talon that failed ten runs in a row switched off, and when someone switched it
+back on it kept that count of ten, so its first failed run switched it off
+again. Switching a talon from off to on, from its card, through hoot or over the
+API, now starts the count over; switching it off keeps the count. An API update
+that switches a talon on now also clears why it was off and schedules its next
+run from now, as the switch on its card always did. Nothing to update on the
+machine.
+
+### fixed — hoot's replies are saved in API conversations
+
+A send through the hoot conversations API (`owlette chat send`, the SDKs) saved
+your message but never hoot's reply, so the conversation held only your side and
+every follow-up reached hoot without its own earlier answers. The reply's text
+is now saved when it finishes. A reply that ends in an error is not saved, and
+tool calls are not stored. Nothing to update on the machine.
+
+### fixed — a failed local hoot turn reads as an error
+
+When hoot ran on the machine (local hoot) and its turn failed, the conversations
+API sent the agent's error message as if it were hoot's answer and saved it as
+hoot's reply, so later turns treated it as something hoot had said. The error
+now arrives as the stream's error line, which `owlette chat send` and the SDKs
+already report as an error, and nothing is saved for that turn. Nothing to
+update on the machine.
+
+### fixed — hoot's deployments install instead of closing the show and failing
+
+A deployment hoot started carried no installer checksum, so every machine closed
+the processes it named, downloaded the installer and then refused to run it.
+Hoot now pins the checksum first: a preset's own, or one the server computes by
+downloading the installer, which can take a few minutes for a large one.
+Stopping the reply meanwhile deploys nothing. If the checksum cannot be had,
+nothing is deployed and nothing is closed, and hoot says why. Its deployments now
+also time out like any other when a machine never answers, and list in date
+order with the rest in the API and CLI. Nothing to update on the machine.
+
+### fixed — the deployments page offers cancel and retry only where they work
+
+The x on a machine that was already installing did nothing: the server refused
+the cancel and the page said nothing. The x now shows only on a machine that has
+not started installing, and a cancel or retry the server refuses, because the
+machine moved on while the click was on its way, says so in plain words. A
+machine whose uninstall failed no longer offers retry this machine, and retry
+failed shows only when an install failed: a retry installs, and would put the
+program back. Nothing to update on the machine.
+
+### fixed — a cancel that cannot reach a machine still cancels what it stopped
+
+When the cancel command could not be written to one machine, a cancel had
+already removed the queued installs but marked nothing, so those machines stayed
+pending with nothing left to run until they timed out. Every machine whose
+queued install was removed is now marked cancelled before the error is reported,
+and one whose install could not be removed is left as it was. Nothing to update
+on the machine.
+
+### fixed — a cancelled deployment target that was already installing shows how the install ended
+
+A cancel cannot stop an install the agent has already started, and the agent's
+answer to that cancel arrives after the install, so a machine that finished
+installing was switched back to cancelled with the program in place. That answer
+no longer changes the deployment: the machine shows the install's own result,
+completed or failed. A cancel still stops every machine whose install had not
+started. Nothing to update on the machine.
+
+### fixed — stuck deployment targets time out again
+
+The server fails a target still `pending` after 15 minutes, or `downloading` or
+`installing` after 30, counted from the deployment's creation or its last retry.
+Since late May it did that only for sites it was already watching, so most stuck
+targets stayed in flight for good and could not be retried. A machine that was
+only offline still runs its install when it reconnects. Nothing to update on the
+machine.
+
+### fixed — a retry no longer undoes results or installs twice
+
+A retry that first had to download and hash the installer wrote back the record
+it had read before the download, erasing results that arrived meanwhile, and two
+retries at once could each send an install to the same machine. A retry now
+claims its targets on the latest record before it queues anything, and replaces
+an install still queued for a machine that was offline, so each machine runs
+one. Nothing to update on the machine.
+
+### fixed — retry failed no longer reinstalls a program whose uninstall failed
+
+A deployment target whose uninstall failed could be picked up by retry failed,
+which installs, and so put the program back. A failed target now records which
+command failed, and a retry skips a failed uninstall: the page offers no retry
+on that machine, and over the API a retry that reaches only failed uninstalls is
+refused. Over the API the target carries `failedCommandType`. Nothing to update
+on the machine.
+
+### fixed — an uninstall started from a deployment updates that deployment
+
+Uninstall software from a deployment's menu removed the program but left the
+deployment showing completed. Each machine the deployment finished on now turns
+uninstalled, or failed with the reason, when its agent reports. Over the API,
+the machine uninstall route takes the same optional `deployment_id`. Nothing to
+update on the machine.
+
+### fixed — uninstalling a deployment over the API works, and needs the program's name
+
+`POST …/deployments/{id}/uninstall` and `owlette deploy uninstall` queued a
+command every agent rejected, which marked every machine failed. The call now
+requires `software_name` (`--software` in the CLI): a script that sends none
+gets `400 validation_failed` until it names the program. The program is
+uninstalled from each machine that finished the install, is still on the site
+and lists that exact name once; the rest come back in `skipped` with the
+reason. Nothing to update on the machine.
+
+### fixed — cancelling one machine in a deployment cancels only that machine
+
+The x on a machine in a deployment cancelled every machine still queued in it.
+It now cancels that machine only, and two cancels in quick succession no longer
+undo each other. Over the API, the cancel route takes an optional `machines`
+list, as retry does; without it every machine that can still be cancelled is,
+as before. Nothing to update on the machine.
+
+### fixed — a deployment keeps every machine's result
+
+When several machines reported on one deployment at the same moment, only one
+result was kept. The others stayed installing until they were marked failed,
+or, after an uninstall, stayed completed. Each result is now applied to the
+latest record, and a machine whose result arrives while stale installs are
+being checked is no longer marked failed. Nothing to update on the machine.
+
+### fixed — on Windows, kill and restart in the desktop app reach the running instance
+
+When the newest row for a process held a pid that Windows had since given to
+something else, kill and restart stopped there with "refusing to terminate".
+They now move on to the instance the service actually recorded. Arrives with
+the next agent version.
+
+### fixed — on Windows, kill and restart in the desktop app cannot close the wrong process
+
+A pid that Windows had handed to another instance of the same program (two
+TouchDesigner entries, or any cmd.exe for a script entry) passed the app's name
+check and could be closed. The app now also checks the start time and executable
+the service recorded for that pid, the same check the service's own kills make.
+macOS and Linux keep the name check. Arrives with the next agent version.
+
+### fixed — the desktop app no longer nudges the start times the service records
+
+Whenever the desktop app wrote the process table (a kill, a restart, a launch
+mode change), about one recorded start time in twenty came back a hair off. The
+service then took that running process for a recycled pid: it dropped its row,
+refused a kill from the dashboard, or launched it again after a service restart.
+The app now reads and writes those times exactly, on Windows, macOS and Linux.
+Arrives with the next agent version.
+
+### fixed — the CLI publishes the same files as the same version from any machine
+
+Pushing a roost from a second CI runner, another computer or a newer CLI made a
+new version of unchanged files and rolled it out to every target again. The CLI
+no longer writes its host name, platform or version into the version, so the
+same files get the same version wherever they are pushed from. The first push
+of unchanged files onto a version an older CLI published still makes one new
+version. Nothing to update on the machine.
+
 ### changed — the CLI and SDK pages say how to install them today
 
 The CLI and SDK pages opened with npm and pip commands for packages that are

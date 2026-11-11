@@ -12,7 +12,6 @@
 
 import { createReadStream, promises as fs } from 'fs';
 import { createHash, randomUUID } from 'crypto';
-import { hostname, platform } from 'os';
 import { join } from 'path';
 import { Command } from 'commander';
 import { loadConfig } from '../config';
@@ -33,7 +32,6 @@ import { unconfirmedMutationFatal } from '../lib/output';
 const UPLOAD_CONCURRENCY = 8;
 const CHECK_BATCH_SIZE = 900; // server cap is 1000 — stay under.
 const PUSH_MAX_RETRIES = 5;
-const CLI_VERSION = '0.1.0';
 const MAX_DESCRIPTION_LENGTH = 500;
 const SIGNED_URL_REFRESH_SKEW_MS = 60_000;
 
@@ -194,12 +192,7 @@ async function runPush(input: PushInputs): Promise<void> {
   }
 
   log(json, 'owlette: publishing version (with optimistic retry on 412)…');
-  const version = buildVersion({
-    files,
-    cliVersion: CLI_VERSION,
-    hostname: hostname(),
-    platform: platform(),
-  });
+  const version = buildVersion(files);
 
   const publishInput: PublishInput = {
     apiUrl,

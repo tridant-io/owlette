@@ -317,18 +317,32 @@ export function serviceRestart(): Promise<ServiceCommandOutcome> {
 }
 
 /**
+ * What the service recorded about the process it bound to a pid, at launch or
+ * adoption (`read_process_identity` in `agent/src/shared_utils.py`).
+ */
+export interface RecordedIdentity {
+  /** psutil's `create_time`, unix seconds, exactly as the service wrote it. */
+  createTime: number
+  /** The image it started from; null checks the creation time alone. */
+  exe: string | null
+}
+
+/**
  * Close a process gracefully (WM_CLOSE, then terminate), but only if the pid is
- * still running `expectedExe` — a recycled pid rejects rather than killing an
- * unrelated process.
+ * still running `expectedExe` and, when there is a record, is still the process
+ * the service recorded — a recycled pid rejects rather than killing an
+ * unrelated process, even one running the same exe.
  */
 export function terminatePid(
   pid: number,
   expectedExe: string,
+  recorded: RecordedIdentity | null,
   gracefulTimeoutMs?: number,
 ): Promise<TerminateOutcome> {
   return invoke<TerminateOutcome>('terminate_pid', {
     pid,
     expectedExe,
+    recorded,
     gracefulTimeoutMs: gracefulTimeoutMs ?? null,
   })
 }

@@ -1,8 +1,9 @@
 /**
  * POST /api/sites/{siteId}/deployments/{deploymentId}/cancel
  *
- * Cancels every target still in a pre-flight state, purges queued
- * install_software commands, and fans out cancel_installation commands.
+ * Cancels every target still in a pre-flight state (or only those named in
+ * the optional `machines` body filter), purges queued install_software
+ * commands, and fans out cancel_installation commands.
  *
  * security-boundary-migration wave 3.3: mutation logic lives in
  * `web/lib/actions/cancelDeployment.server.ts`.
@@ -10,6 +11,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { problem, problemFromError, ProblemType } from '@/lib/apiErrors';
+import { parseMachinesFilter } from '@/lib/machinesFilter';
 import {
   applyAuthDeprecations,
   auditActorIdentifier,
@@ -40,7 +42,9 @@ export const POST = authorizedSiteHandler<RouteParams>({
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
-
+    // optional filter for the dashboard's per-target cancel; omitted → all cancellable.
+    const filter = parseMachinesFilter(parsed.body);
+    if (!filter.ok) return filter.response;
 
     return withIdempotency(
       request,
@@ -55,6 +59,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           deploymentId,
           actorIdentifier: auditActorIdentifier(ctx.auth),
           correlationId: ctx.correlationId,
+          machines: filter.machines,
         });
 
         if (!result.ok) {
@@ -85,6 +90,11 @@ function cancelDeploymentErrorToResponse(
   siteId: string,
   deploymentId: string,
 ): NextResponse {
+  // a write or read failed. the core settled the record first, unless writing it is
+  // what failed, and audited the outcome either way.
+  if (result.code === 'write_failed') {
+    return problemFromError(result.cause, 'sites/[siteId]/deployments/[deploymentId]/cancel:POST');
+  }
   if (result.code === 'not_found') {
     return problem({
       type: ProblemType.NotFound,

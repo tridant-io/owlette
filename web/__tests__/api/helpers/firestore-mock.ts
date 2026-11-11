@@ -123,6 +123,8 @@ function buildLegacyCollection(): Record<string, unknown> {
   };
 }
 
+let transactionChain: Promise<unknown> = Promise.resolve();
+
 /** Returns a mock Firestore db object. Use inside jest.mock factory. */
 export function mockDbFactory(): Record<string, unknown> {
   return {
@@ -144,6 +146,32 @@ export function mockDbFactory(): Record<string, unknown> {
      */
     getAll: (...refs: Array<{ get: () => Promise<unknown> }>) =>
       Promise.all(refs.map((ref) => ref.get())),
+    /**
+     * Runs the callback once. `tx.get` reads through the ref, so it shares the
+     * `mocks.get` queue; `tx.update` and `tx.set` land on `mocks.update` and
+     * `mocks.set`. Transactions run one after another across every db this factory
+     * returns, which is what firestore's retry-on-conflict amounts to for two
+     * writers of one document.
+     */
+    runTransaction: (fn: (tx: unknown) => Promise<unknown>) => {
+      const run = transactionChain.then(() =>
+        fn({
+          get: (ref: { get: () => Promise<unknown> }) => ref.get(),
+          update: (ref: { update: (data: unknown) => unknown }, data: unknown) => {
+            ref.update(data);
+          },
+          set: (
+            ref: { set: (data: unknown, options?: unknown) => unknown },
+            data: unknown,
+            options?: unknown,
+          ) => {
+            ref.set(data, options);
+          },
+        }),
+      );
+      transactionChain = run.catch(() => undefined);
+      return run;
+    },
   };
 }
 

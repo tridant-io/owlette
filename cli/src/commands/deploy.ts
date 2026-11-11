@@ -423,8 +423,14 @@ export function registerDeployCommands(program: Command): void {
 
   deploy
     .command('uninstall <deploymentId>')
-    .description('queue uninstall on every target machine (requires site=<id>:admin scope)')
+    .description(
+      'uninstall a program from every finished target that lists it (requires site=<id>:admin scope)',
+    )
     .requiredOption('--site <siteId>', 'site id that owns the deployment')
+    .requiredOption(
+      '--software <name>',
+      "the program's exact name in the machines' software list",
+    )
     .option('--yes', 'skip the confirmation prompt')
     .option(
       '--idempotency-key <key>',
@@ -436,7 +442,7 @@ export function registerDeployCommands(program: Command): void {
 
       if (!opts.yes && process.stdin.isTTY) {
         const ok = await promptYesNo(
-          `uninstall ${deploymentId} from every target machine? this is permanent. [y/N] `,
+          `uninstall "${opts.software}" from every target of ${deploymentId} that lists it? this is permanent. [y/N] `,
         );
         if (!ok) {
           process.stdout.write('uninstall aborted\n');
@@ -462,7 +468,7 @@ export function registerDeployCommands(program: Command): void {
         res = await fetchWithTimeout(url, {
           method: 'POST',
           headers,
-          body: JSON.stringify({}),
+          body: JSON.stringify({ software_name: opts.software }),
         });
       } catch (err) {
         unconfirmedMutationFatal({
@@ -478,9 +484,15 @@ export function registerDeployCommands(program: Command): void {
         status?: string;
         queued?: number;
         machine_ids?: string[];
+        skipped?: Array<{ machineId: string; reason: string }>;
         detail?: string;
         code?: string;
       };
+
+      // the 200 and the 409 no_uninstallable_targets both carry skipped.
+      const skipped = data.skipped?.length
+        ? `; skipped ${data.skipped.map((s) => `${s.machineId} (${s.reason})`).join(', ')}`
+        : '';
 
       if (!res.ok) {
         if (res.status === 403 && data.code === 'scope_insufficient') {
@@ -491,7 +503,7 @@ export function registerDeployCommands(program: Command): void {
           return;
         }
         fatal(
-          `POST /api/sites/${opts.site}/deployments/${deploymentId}/uninstall failed (${res.status}, ${data.code ?? 'unknown'}): ${data.detail ?? JSON.stringify(data)}`,
+          `POST /api/sites/${opts.site}/deployments/${deploymentId}/uninstall failed (${res.status}, ${data.code ?? 'unknown'}): ${data.detail ?? JSON.stringify(data)}${skipped}`,
         );
         return;
       }
@@ -502,7 +514,7 @@ export function registerDeployCommands(program: Command): void {
       }
 
       process.stdout.write(
-        `owlette: queued uninstall on ${data.queued ?? 0} target(s) for ${deploymentId} — status ${data.status}\n`,
+        `owlette: queued uninstall of "${opts.software}" on ${data.queued ?? 0} target(s) for ${deploymentId}${skipped}\n`,
       );
     });
 

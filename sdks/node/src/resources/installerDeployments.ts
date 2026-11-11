@@ -98,6 +98,15 @@ export interface RetryInstallerDeploymentOptions {
   idempotencyKey?: string;
 }
 
+export interface UninstallInstallerDeploymentOptions {
+  /**
+   * The program's exact name in the machines' software list. Each finished
+   * target that lists it runs its uninstaller; the rest come back in `skipped`.
+   */
+  softwareName: string;
+  idempotencyKey?: string;
+}
+
 export interface CreateInstallerDeploymentResult {
   deploymentId: string;
   siteId: string;
@@ -114,6 +123,8 @@ export interface InstallerDeploymentMutationResult {
   cancelled?: number;
   queued?: number;
   machine_ids?: string[];
+  /** uninstall only: targets not queued, with why. */
+  skipped?: Array<{ machineId: string; reason: string }>;
 }
 
 export interface InstallerDeploymentDeleteResult {
@@ -224,15 +235,16 @@ export class InstallerDeployments {
   async uninstall(
     siteId: string,
     deploymentId: string,
-    opts: { idempotencyKey?: string } = {},
+    opts: UninstallInstallerDeploymentOptions,
   ): Promise<InstallerDeploymentMutationResult> {
     const res = await this.client.request<InstallerDeploymentMutationResult>(
       `/api/sites/${encodeURIComponent(siteId)}/deployments/${encodeURIComponent(deploymentId)}/uninstall`,
       {
         method: 'POST',
-        body: {},
+        // `?.`: a plain-JS caller that passes no options gets the server's 400, not a TypeError.
+        body: { software_name: opts?.softwareName },
         idempotencyKey:
-          opts.idempotencyKey ?? `sdk-installer-deployments-uninstall-${randomUUID()}`,
+          opts?.idempotencyKey ?? `sdk-installer-deployments-uninstall-${randomUUID()}`,
       },
     );
     return res.data;

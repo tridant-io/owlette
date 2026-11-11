@@ -22,7 +22,10 @@ tauri-build = { version = "2.7.4", features = [] }
 # `preserve_order` is load-bearing: without it serde_json sorts object keys and
 # every desktop write would reshuffle the operator's config.json — including the
 # firebase block the service owns.
-serde_json = { version = "1.0", features = ["preserve_order"] }
+# `float_roundtrip` is too: without it about one create_time in twenty is read a
+# double off, so a desktop write of app_states.json breaks the service's identity
+# records, and terminate_pid refuses the process the service recorded.
+serde_json = { version = "1.0", features = ["preserve_order", "float_roundtrip"] }
 serde = { version = "1.0", features = ["derive"] }
 log = "0.4"
 # `tray-icon` builds the notification-area icon that replaces pystray;

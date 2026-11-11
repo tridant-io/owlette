@@ -57,7 +57,7 @@ six built-in templates ship with every site: **morning wall check**, **crash tri
 
 every firing writes a run record — trigger summary, per-machine target, condition verdict, each output's result, and timing — visible in the talon's recent runs and in the site's [activity log](/docs/dashboard/activity-logs) as `talon_triggered`, `talon_succeeded`, `talon_failed` or `talon_skipped` (a site-wide run is logged against the machine ID `site`). a firing held back by the cooldown writes no run.
 
-cooldowns (default 60 minutes, up to 1440) stop a flapping machine from firing the same talon in a loop. a talon that fails 10 runs in a row is switched off automatically with the reason recorded on it. re-enabling it does **not** reset that count — only a successful run does — so a talon re-enabled before its cause is fixed switches off again on its next failure.
+cooldowns (default 60 minutes, up to 1440) stop a flapping machine from firing the same talon in a loop. a talon that fails 10 runs in a row is switched off automatically with the reason recorded on it. a successful run starts that count over, and so does switching the talon back on, so a re-enabled talon gets 10 more tries. switching it off keeps the count. saving an edit leaves the talon on or off as it is, with its count and its reason: a talon the system switched off stays off until you switch it on.
 
 structural changes — create, edit, enable, disable, delete — are written to the site audit log as `talon_mutated` entries, attributed to the person who made them (including talons created through hoot). an automatic switch-off is attributed to `system:talon_runner`.
 

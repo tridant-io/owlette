@@ -384,10 +384,10 @@ export function scheduleSummary(process: ProcessEntry): string {
  * Image names for `terminate_pid`'s identity check, most specific first.
  * `.bat`/`.cmd` run as `cmd.exe` so the configured path can never match.
  * Otherwise full path then bare file name — configured vs actually-running
- * paths legitimately differ for adopted processes. This name-based check is
- * the desktop's own; the service's destructive ops instead prove identity
- * against a recorded pid/create_time/exe snapshot
- * (`shared_utils.identity_matches`).
+ * paths legitimately differ for adopted processes. A name cannot tell two
+ * instances of one exe apart, so where the pid's row records the service's
+ * create_time/exe snapshot `terminate_pid` proves that as well
+ * (`recordedIdentity`, as `shared_utils.identity_matches` does).
  */
 export function expectedImagesFor(process: ProcessEntry): string[] {
   const exe = text(process.exe_path).trim()
