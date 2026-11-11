@@ -131,7 +131,10 @@ export async function updateDeployment(
 
     if (
       newTargetStatus === currentStatus &&
-      latestCmd.progress === target.progress
+      latestCmd.progress === target.progress &&
+      // a failure by another command is news: an uninstall that fails on a target whose
+      // install had failed must replace the marker, or a retry reinstalls the program.
+      (newTargetStatus !== 'failed' || latestCmd.type === target.failedCommandType)
     ) {
       return 'unchanged' as const;
     }
@@ -144,6 +147,14 @@ export async function updateDeployment(
 
     if (latestCmd.error) {
       target.error = latestCmd.error;
+    }
+
+    // which command failed: the retry route must not reinstall a program whose
+    // uninstall failed. every agent from 3.3.x up writes `type` on its result.
+    if (newTargetStatus === 'failed' && typeof latestCmd.type === 'string' && latestCmd.type) {
+      target.failedCommandType = latestCmd.type;
+    } else {
+      delete target.failedCommandType;
     }
 
     if (TARGET_TERMINAL_STATUSES.has(newTargetStatus)) {

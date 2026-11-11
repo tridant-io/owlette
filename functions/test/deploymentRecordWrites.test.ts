@@ -64,12 +64,17 @@ function fakeDb(initial: Record<string, Doc>, onRead?: (path: string, write: Wri
   return {
     db: { collection, runTransaction } as unknown as Firestore,
     ref: (path: string) => ref(path) as unknown as DocumentReference,
-    doc: (path: string) => docs.get(path) as { status: string; targets: Array<{ machineId: string; status: string }> },
+    doc: (path: string) =>
+      docs.get(path) as {
+        status: string;
+        targets: Array<{ machineId: string; status: string; failedCommandType?: string; error?: string }>;
+      },
+    writesTo: (path: string) => versions.get(path) ?? 0,
   };
 }
 
-function result(cmdId: string, status: string, type: string) {
-  return [{ cmdId, cmdData: { status, type, deployment_id: 'd1' } }];
+function result(cmdId: string, status: string, type: string, error?: string) {
+  return [{ cmdId, cmdData: { status, type, deployment_id: 'd1', ...(error ? { error } : {}) } }];
 }
 
 describe('updateDeployment', () => {
@@ -111,6 +116,65 @@ describe('updateDeployment', () => {
 
     assert.deepEqual(doc(DEPLOYMENT).targets.map((t) => t.status), ['uninstalled', 'uninstalled']);
     assert.equal(doc(DEPLOYMENT).status, 'uninstalled');
+  });
+
+  // the retry route reads it: a failed uninstall retried as an install would put the program back.
+  it('records which command a failed target failed on, and drops it once the target moves on', async () => {
+    const { db, doc } = fakeDb({
+      [DEPLOYMENT]: {
+        status: 'completed',
+        targets: [
+          { machineId: 'm1', status: 'completed' },
+          { machineId: 'm2', status: 'installing' },
+        ],
+      },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('u1', 'failed', 'uninstall_software', 'Error: timeout'));
+    await updateDeployment(db, 's1', 'm2', 'd1', result('i2', 'failed', 'install_software', 'Error: exit 1603'));
+    assert.deepEqual(
+      doc(DEPLOYMENT).targets.map((t) => [t.status, t.failedCommandType, t.error]),
+      [
+        ['failed', 'uninstall_software', 'Error: timeout'],
+        ['failed', 'install_software', 'Error: exit 1603'],
+      ],
+    );
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('u3', 'completed', 'uninstall_software'));
+    assert.equal(doc(DEPLOYMENT).targets[0].status, 'uninstalled');
+    assert.equal('failedCommandType' in doc(DEPLOYMENT).targets[0], false);
+  });
+
+  // the deployment uninstall queues on failed targets too, so a failed install can be
+  // followed by a failed uninstall: the record must name the uninstall, or a retry reinstalls.
+  it('moves the failure to an uninstall that fails on a target whose install had failed', async () => {
+    const { db, doc } = fakeDb({
+      [DEPLOYMENT]: { status: 'failed', targets: [{ machineId: 'm1', status: 'installing' }] },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'failed', 'install_software', 'Error: exit 1603'));
+    await updateDeployment(db, 's1', 'm1', 'd1', result('u1', 'failed', 'uninstall_software', 'Error: timeout'));
+
+    const [target] = doc(DEPLOYMENT).targets;
+    assert.deepEqual([target.status, target.failedCommandType, target.error], [
+      'failed',
+      'uninstall_software',
+      'Error: timeout',
+    ]);
+  });
+
+  it('names the latest failing command either way round, and a repeat of it writes nothing', async () => {
+    const { db, doc, writesTo } = fakeDb({
+      [DEPLOYMENT]: { status: 'completed', targets: [{ machineId: 'm1', status: 'completed' }] },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('u1', 'failed', 'uninstall_software', 'Error: timeout'));
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'failed', 'install_software', 'Error: exit 1603'));
+    assert.equal(doc(DEPLOYMENT).targets[0].failedCommandType, 'install_software');
+
+    const writes = writesTo(DEPLOYMENT);
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'failed', 'install_software', 'Error: exit 1603'));
+    assert.equal(writesTo(DEPLOYMENT), writes);
   });
 });
 
