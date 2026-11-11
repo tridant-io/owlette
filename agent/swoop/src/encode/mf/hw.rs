@@ -59,7 +59,8 @@
 //! 50              p50 15.64 / 4.14 / 4.68 ms  p95 61.83 / 32.81 / 40.46 ms
 //! ```
 //!
-//! and two runs once the exports had finished:
+//! and two runs once the exports had finished (CPU 30-58%), all provisional
+//! until a run on a quiet box:
 //!
 //! ```text
 //! the mft's own   p50 9.30 / 9.57 ms          p95 11.80 / 13.18 ms

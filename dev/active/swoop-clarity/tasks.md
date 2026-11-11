@@ -393,12 +393,15 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     - The restated cover rule held in all four clean 1080p runs (2 Edge, 2 Chromium). Under load it held in 4 of 6.
   - **DOWNSCALE_USAGE stays OPTIMAL_SPEED,** against the letter of C12 and on 1.3's note. QUALITY came within 1.0 ms (0.41 ms against SPEED's 0.53-0.55 ms at 4K to 1080p), but it is the same filter on this driver. At exactly 3:1, both usages hand back alternate 1-px stripes whole (0..255, mean 127.5): a two-tap bilinear, not an average. The move would buy nothing measurable here, at an unmeasured cost on Intel and AMD. A GPU downscale that averages needs its own shader, which is a backlog candidate.
   - **The CPU area average stays: 9.06-9.83 ms p50 over five quiet runs**, under the 10 ms limit. Its margin is thin: 15 runs under load read 9.8-24.3 ms. 1.3's change stands, and 6.1 may describe it.
+  - **Clean and decisive:** the CPU average, the 1080p matrix and the 1080p latency.
+  - **Provisional, so these need a clean re-run** (the docs say so where they stand):
+    - step 1's GPU scaler times (the stripe result is pixels and stands);
+    - step 2's NVENC table;
+    - step 3's mf-hw times;
+    - step 4's 4K matrix and 4K latency. They ran once per engine under load, and the loopback sender never held 60 fps at 4K anyway, so only the 4K draw p95 counts.
   - **Not run:**
     - the investigation covers (`canvas-vf` and `canvas-poll` throw; the rest are not what ships);
-    - `under` (it is `canvas` now);
-    - the 4K matrix on a quiet box (it ran once per engine under load, and the loopback sender never held 60 fps at 4K anyway);
-    - the 4K latency on a quiet box;
-    - a quiet NVENC and mf-hw run.
+    - `under` (it is `canvas` now).
   - **For the owner:**
     - Each latency pair is two fresh WebRTC sessions, and none's own median moved 13-46 ms between them. One pair can't resolve a 16.7 ms gate, and one quiet pair read +20 ms against the lowest none of all. 8.1's glass-to-glass photos are the check on it.
     - The probe's own `holds` verdict still applies the old 1% drop clause, so it prints "fails" for every `canvas` run. The restated rule was applied by hand.

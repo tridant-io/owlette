@@ -97,7 +97,7 @@
  *   gpu (timer query): quiet, edge 0.20/0.21-0.22/1.8-2.7 and chromium
  *   0.22-0.23/0.40-1.79/2.9-3.3; loaded, 0.08-0.10/0.10-0.20/0.21-1.54.
  *
- *   3840x2160 into 1300x731, one 20 s run per engine, loaded (three tries
+ *   3840x2160 into 1300x731, provisional: one 20 s run per engine, loaded (three tries
  *   each, as the loopback sender never held 60 fps: 600-1110 frames of
  *   1200), so only the draw counts. edge, over its three canvas tries and the
  *   latency run: cpu p50 0.3, p95 0.5-0.7, max 1.3-3.3 ms; gpu p50 0.20, p95

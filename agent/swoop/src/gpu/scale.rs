@@ -51,7 +51,8 @@
 //! submit until the GPU signals done), three runs once another app's 4K
 //! ffmpeg exports had finished, with TouchDesigner still holding about a
 //! fifth of the GPU. Four earlier runs during the exports read up to 1.20 ms
-//! for SPEED and 0.62 ms for QUALITY.
+//! for SPEED and 0.62 ms for QUALITY. The times are provisional until a run
+//! on a quiet box; the stripes are pixels, not times, and stand.
 //!
 //! ```text
 //!                                 OPTIMAL_SPEED        OPTIMAL_QUALITY

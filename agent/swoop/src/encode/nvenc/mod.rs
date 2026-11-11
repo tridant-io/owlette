@@ -120,7 +120,8 @@
 //!
 //! Task 4.1's `nvenc_encode_times`, 2026-11-11, RTX 2080 Ti, driver 610.88,
 //! release build, run after another app's 4K ffmpeg exports had finished
-//! (CPU 30-58%, TouchDesigner still on about a fifth of the GPU):
+//! (CPU 30-58%, TouchDesigner still on about a fifth of the GPU), so
+//! provisional until a run on a quiet box:
 //!
 //! ```text
 //! 1920x1080 H264 20 mbps, 300 at 60 fps, p1: p50 6.28 ms, p95 10.84 ms
