@@ -36,6 +36,7 @@ mode_dir tmp 770
 mode_dir ipc 770
 mode_dir logs 750
 mode_dir logs/swoop 770
+mode_dir logs/cortex 770
 mode_dir cache 750
 # the cross-process json lock: whoever creates it first sets its mode, and a
 # 0640 lock is one the app cannot take at all.

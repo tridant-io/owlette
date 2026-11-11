@@ -1429,6 +1429,8 @@ def ensure_data_directories():
             get_data_path('ipc/cortex_commands'),
             get_data_path('ipc/cortex_results'),
             get_data_path('ipc/cortex_events'),
+            # hoot is the console user, who cannot write logs/ itself
+            get_data_path('logs/cortex'),
         ]
 
     try:
@@ -1829,6 +1831,12 @@ CORTEX_PID_PATH = get_data_path('tmp/cortex.pid')
 CORTEX_IPC_CMD_DIR = get_data_path('ipc/cortex_commands')
 CORTEX_IPC_RESULT_DIR = get_data_path('ipc/cortex_results')
 CORTEX_IPC_EVENTS_DIR = get_data_path('ipc/cortex_events')
+# off windows logs/ is the daemon's alone, so hoot logs into a directory the
+# data-root mode table opens to the group
+CORTEX_LOG_DIR = get_data_path('logs' if _IS_WINDOWS else 'logs/cortex')
+# off windows the token store is the daemon's alone too: it publishes its
+# access token here for hoot (auth_manager.PublishedToken)
+CORTEX_TOKEN_PATH = get_data_path('ipc/cortex_token.json')
 
 
 def is_cortex_enabled(config=None):

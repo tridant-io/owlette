@@ -27,7 +27,7 @@ the app menu's **logs** item opens this folder on every platform, and on Windows
 | **service stdout / stderr** | `service_stdout.log`, `service_stderr.log` | Windows | the service runner's raw output, captured verbatim by owlette-host — interpreter-level tracebacks that never reach the logger land in stderr |
 | **daemon output** | `launchd-agent.log` | macOS | the same raw output on a Mac: the daemon's stdout and stderr, as launchd writes them |
 | **daemon output** | `journalctl -u owlette-agent` | Linux | not a file: systemd keeps the service's raw output in the journal |
-| **hoot** | `cortex.log` | all | hoot runtime and CLI fetch. only written when hoot is enabled |
+| **hoot** | `cortex.log`, in its own `cortex` folder on macOS and Linux | all | hoot runtime and CLI fetch. only written when hoot is enabled |
 | **pairing** | `pairing_debug.log` | all | device-code pairing and token setup |
 | **preseed pairing** | `pairing.log` | macOS, Linux | the background pairing a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) starts at install |
 | **token exchange (legacy)** | `oauth_debug.log` | all | left by an older agent's registration-code exchange, which phrase pairing replaced. no current agent writes it, so it is absent or stale, and safe to delete. response bodies were never written — they carry tokens |

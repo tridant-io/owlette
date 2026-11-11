@@ -11,6 +11,7 @@ C:\\ProgramData\\Owlette\\.tokens.enc.
 """
 
 import base64
+import os
 import requests
 import time
 import logging
@@ -18,6 +19,7 @@ import json
 import threading
 from typing import Optional, Dict, Any, Callable
 
+from cryptography.fernet import InvalidToken
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -560,8 +562,65 @@ class AuthManager:
         """True when a refresh token exists in storage."""
         return self.storage.has_refresh_token()
 
+    def current_token(self) -> tuple[Optional[str], Optional[float]]:
+        """The access token in hand and its expiry, without refreshing."""
+        return self._access_token, self._token_expiry
+
     def get_site_id(self) -> Optional[str]:
         """Site ID this agent is authorized for, or None."""
         if not self._site_id:
             self._site_id = self.storage.get_site_id()
         return self._site_id
+
+
+def publish_token(token: str, expiry: float) -> None:
+    """Write the daemon's access token where hoot reads it, off Windows.
+
+    hoot is a console-user process and the token store is the daemon's alone
+    there, so this one-hour token is the only credential hoot ever holds.
+    Raises OSError when the file cannot be written.
+    """
+    path = shared_utils.CORTEX_TOKEN_PATH
+    temp_path = f"{path}.tmp"
+    payload = json.dumps({'token': get_storage().encrypt_value(token), 'expiry': expiry})
+    with os.fdopen(shared_utils.open_new_file(temp_path, 0o640), 'w', encoding='utf-8') as f:
+        if hasattr(os, 'fchmod'):
+            # os.open subtracts the umask from the mode it is handed
+            os.fchmod(f.fileno(), 0o640)
+        shared_utils.grant_data_group(f.fileno())
+        f.write(payload)
+    os.replace(temp_path, path)
+
+
+def withdraw_token() -> None:
+    """Remove the published token: hoot is off, or the machine is unpaired."""
+    try:
+        os.remove(shared_utils.CORTEX_TOKEN_PATH)
+    except FileNotFoundError:
+        pass
+
+
+class PublishedToken:
+    """hoot's credential off Windows: the access token the daemon publishes.
+
+    Stands in for AuthManager where FirestoreRestClient is concerned. It never
+    refreshes: the daemon does, and republishes on its next tick.
+    """
+
+    def get_valid_token(self) -> str:
+        try:
+            with open(shared_utils.CORTEX_TOKEN_PATH, encoding='utf-8') as f:
+                published = json.load(f)
+            if float(published['expiry']) > time.time():
+                return get_storage().decrypt_value(str(published['token']))[0]
+        except (OSError, ValueError, KeyError, TypeError, InvalidToken):
+            pass
+        raise AuthenticationError("The agent has not published a valid access token")
+
+    def is_authenticated(self) -> bool:
+        """True when the daemon has published a token that is still valid."""
+        try:
+            self.get_valid_token()
+        except AuthenticationError:
+            return False
+        return True
