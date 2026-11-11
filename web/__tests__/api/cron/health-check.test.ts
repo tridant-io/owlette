@@ -52,6 +52,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 jest.mock('@/lib/adminUtils.server', () => ({
   getSiteAlertRecipients: (...args: unknown[]) => getSiteAlertRecipientsMock(...args),
   getSiteLabel: async (siteId: string) => siteId,
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 
 jest.mock('@/lib/resendClient.server', () => ({
@@ -307,7 +308,7 @@ describe('GET /api/cron/health-check', () => {
     knownSites.add('node-pa');
     setSite({ name: 'node-pa' });
     getSiteAlertRecipientsMock.mockResolvedValue([
-      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [] },
+      { userId: 'u1', email: 'admin@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
     ]);
   });
 
@@ -363,6 +364,31 @@ describe('GET /api/cron/health-check', () => {
       },
       { merge: true }
     );
+  });
+
+  it("lists only a scoped recipient's machines in their email, and skips one with none down", async () => {
+    setSite({
+      name: 'node-pa',
+      health: { offlineAlert: { pendingIds: ['LOBBY-1', 'STAGE-2'], pendingUpdatedAt: ts(now - 8 * MIN) } },
+    });
+    mockMachinesGet.mockResolvedValue({ size: 2, docs: [alertDoc('LOBBY-1'), alertDoc('STAGE-2')] });
+    getSiteAlertRecipientsMock.mockResolvedValue([
+      { userId: 'whole', email: 'whole@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: null },
+      { userId: 'scoped', email: 'scoped@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['LOBBY-1'] },
+      { userId: 'elsewhere', email: 'elsewhere@node-pa.test', ccEmails: [], mutedMachines: [], machineIds: ['OTHER-9'] },
+    ]);
+
+    await GET(request('cron-secret'));
+
+    expect(emailSend).toHaveBeenCalledTimes(2);
+    const sent = Object.fromEntries(
+      emailSend.mock.calls.map(([mail]: [{ to: string[]; subject: string; html: string }]) => [mail.to[0], mail]),
+    );
+    expect(sent['whole@node-pa.test'].subject).toBe('2 machine(s) offline in node-pa');
+    expect(sent['scoped@node-pa.test'].subject).toBe('1 machine(s) offline in node-pa');
+    expect(sent['scoped@node-pa.test'].html).toContain('LOBBY-1');
+    expect(sent['scoped@node-pa.test'].html).not.toContain('STAGE-2');
+    expect(sent['elsewhere@node-pa.test']).toBeUndefined();
   });
 
   it('taps the talon matcher once per not-responding machine (talons 2.3)', async () => {

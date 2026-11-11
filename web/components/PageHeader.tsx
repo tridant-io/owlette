@@ -41,11 +41,20 @@ const FEEDBACK_LABELS = [
   'we can take it',
 ];
 
+interface NavItem {
+  name: string;
+  href: string;
+  icon: React.ElementType;
+  description: string;
+  /** spans the site, so hidden where the caller is limited to some machines. */
+  wholeSiteOnly?: boolean;
+}
+
 /**
  * Primary page navigation. Rendered twice — by the desktop page-switcher
  * dropdown and by the mobile drawer — so the two can never drift apart.
  */
-const NAV_ITEMS = [
+const NAV_ITEMS: readonly NavItem[] = [
   {
     name: 'dashboard',
     href: '/dashboard',
@@ -63,18 +72,21 @@ const NAV_ITEMS = [
     href: '/talons',
     icon: Zap,
     description: 'watch schedules, events, and screens — then act',
+    wholeSiteOnly: true,
   },
   {
     name: 'roost',
     href: '/roosts',
     icon: FolderSync,
     description: 'sync project files to your machines',
+    wholeSiteOnly: true,
   },
   {
     name: 'deploy',
     href: '/deployments',
     icon: Rocket,
     description: 'install software across machines',
+    wholeSiteOnly: true,
   },
   {
     name: 'logs',
@@ -82,7 +94,7 @@ const NAV_ITEMS = [
     icon: ScrollText,
     description: 'monitor events and system activities',
   },
-] as const;
+];
 
 /** Icon shown beside the current page name, keyed by the lowercased page label. */
 const PAGE_ICONS: Record<string, React.ElementType> = Object.fromEntries(
@@ -114,7 +126,7 @@ export function PageHeader({
   disableNav,
 }: PageHeaderProps) {
   const router = useRouter();
-  const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin } = useAuth();
+  const { user, signOut, isSuperadmin, administersAnySite, isSiteAdmin, machineScope } = useAuth();
   const { plan } = usePlan();
   const [reportBugOpen, setReportBugOpen] = useState(false);
   const [createSiteOpen, setCreateSiteOpen] = useState(false);
@@ -213,6 +225,8 @@ export function PageHeader({
     canManageSites ? { label: 'manage sites', icon: Settings, onSelect: () => router.push('/admin/sites') } : null,
     canCreateSite ? { label: 'new site', icon: Plus, onSelect: () => setCreateSiteOpen(true) } : null,
   ].filter((entry) => entry !== null);
+  const scopedHere = !!currentSiteId && machineScope(currentSiteId) !== null;
+  const navItems = NAV_ITEMS.filter((item) => !(scopedHere && item.wholeSiteOnly));
   const PageIcon = PAGE_ICONS[currentPage.toLowerCase()];
 
   // the scrim mounts with the first open menu and goes once its fade-out ends:
@@ -308,7 +322,7 @@ export function PageHeader({
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className={`${MENU_SURFACE} w-72`}>
-                {NAV_ITEMS.map((item) => {
+                {navItems.map((item) => {
                   const ItemIcon = item.icon;
                   return (
                     <DropdownMenuItem
@@ -543,7 +557,7 @@ export function PageHeader({
 
           <div className="py-2">
             <p className="px-4 py-1.5 text-xs text-muted-foreground">go to</p>
-            {NAV_ITEMS.map((item) => {
+            {navItems.map((item) => {
               const ItemIcon = item.icon;
               const isCurrent = item.name === currentPage.toLowerCase();
               return (

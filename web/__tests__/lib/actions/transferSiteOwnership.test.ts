@@ -173,6 +173,28 @@ describe('transferSiteOwnership — the happy path', () => {
     expect(docs.get(member(OWNER))).toMatchObject({ uid: OWNER, role: 'admin', status: 'active' });
   });
 
+  it('writes a scoped successor an owner row with no machine scope and no swoop mode', async () => {
+    // an owner reaches the whole site and always controls, so neither field may outlive the handover
+    docs.set(member(ALICE), {
+      uid: ALICE,
+      role: 'admin',
+      status: 'active',
+      swoop: 'view',
+      machineIds: ['m1'],
+    });
+
+    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+
+    expect(res.ok).toBe(true);
+    expect(docs.get(member(ALICE))).toEqual({
+      uid: ALICE,
+      role: 'owner',
+      status: 'active',
+      addedAt: NOW,
+      addedBy: OWNER,
+    });
+  });
+
   it('lets a superadmin transfer a site they do not own', async () => {
     const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: 'uid_sa', actorIsSuperadmin: true });
     expect(res.ok).toBe(true);

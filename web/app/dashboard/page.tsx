@@ -44,6 +44,7 @@ import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
 import { MissingPathDialog } from './components/MissingPathDialog';
+import { machinesNotice, NoMachinesForYou, MachinesLoadError } from './components/MachinesNotice';
 import { usePathCheck, type PathWarning } from '@/hooks/usePathCheck';
 import { PATH_FIELDS, withArgs, type PathField } from '@/lib/pathCheck';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
@@ -115,11 +116,13 @@ export default function DashboardPage() {
   const processFormRef = useScrollFade<HTMLDivElement>();
 
   const router = useRouter();
-  const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
+  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, swoopMode, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
   const { sites, loading: sitesLoading, createSite, updateSite } = useSites(user?.uid, userSites, isSuperadmin);
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
+  // null is the whole site; a list is a scoped member's machines there
+  const scope = currentSiteId ? machineScope(currentSiteId) : null;
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [viewType, setViewType] = useState<ViewType>('card');
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
@@ -199,7 +202,7 @@ export default function DashboardPage() {
     ? editProcessForm.schedules
     : DEFAULT_SCHEDULE;
 
-  const { machines, loading: machinesLoading, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId);
+  const { machines, loading: machinesLoading, error: machinesError, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId, scope);
   const { prefs: devicePrefs, setListPref } = useDevicePrefs();
   const listPref = devicePrefs.listView;
   const deviceUnion = useMemo<DeviceUnion>(() => ({
@@ -215,7 +218,8 @@ export default function DashboardPage() {
     nic:  machines.some(m => (m.devices?.nics?.length  ?? 0) > 1),
   }), [machines]);
   const { presets: schedulePresets, createPreset, deletePreset: deleteSchedulePreset, updatePreset: updateSchedulePreset } = useSchedulePresets(currentSiteId);
-  const { checkMachineHasActiveDeployment } = useDeployments(currentSiteId);
+  // deployments span the site, so a scoped member opens no listener ('' reads nothing)
+  const { checkMachineHasActiveDeployment } = useDeployments(scope === null ? currentSiteId : '');
   const { removeMachineFromSite, removing: isRemovingMachine } = useMachineOperations(currentSiteId);
 
   const [expandedMachineIds, setExpandedMachineIds] = useState<Set<string>>(() => new Set());
@@ -631,7 +635,7 @@ export default function DashboardPage() {
     });
   };
 
-  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf);
+  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf, scope);
 
   const handleSaveProcess = async () => {
     if (!editProcessForm.name || !editProcessForm.name.trim()) {
@@ -785,12 +789,16 @@ export default function DashboardPage() {
   // `!sitesLoading` gate is what suppresses the one-paint flash.
   // Show the card only for: (a) no sites at all, or (b) a selected site whose machines have
   // finished loading and is empty. Everything else renders null.
+  const scoped = scope !== null;
   const showGettingStarted = useMemo(() => {
     if (sitesLoading) return false;
     if (sites.length === 0) return true;
+    // a scoped member cannot pair a machine, so they get machinesNotice instead
+    if (scoped) return false;
     // Have sites; need a selected one whose machines have finished loading.
     return !!currentSiteId && !machinesLoading && machines.length === 0;
-  }, [sitesLoading, sites.length, currentSiteId, machinesLoading, machines.length]);
+  }, [sitesLoading, sites.length, scoped, currentSiteId, machinesLoading, machines.length]);
+  const notice = machinesNotice({ scoped, loading: machinesLoading, count: machines.length, error: machinesError });
 
   // id + online only, memoized so the heavy panel doesn't re-render on every dashboard paint.
   const switcherMachines = useMemo(
@@ -909,6 +917,9 @@ export default function DashboardPage() {
   const swoopSettings = useSwoopSettings(currentSiteId);
   // not while loading: the hook reads off until the snapshot lands.
   const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
+  // membersMayWatch reads true until the snapshot lands, so while it loads only
+  // an explicit none hides swoop, as swoopOff waits for it too
+  const noSwoop = swoopMode(currentSiteId, swoopSettings.settings.membersMayWatch) === 'none';
   // The online flag is read when the dialog opens, not when the row was bound.
   const onRemoveMachineById = useStableCallback((machineId: string) => {
     const machine = machines.find((m) => m.machineId === machineId);
@@ -1235,6 +1246,7 @@ export default function DashboardPage() {
                   onSwoop={onSwoop}
                   onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
+                  noSwoop={noSwoop}
                   onSiteSettings={onSiteSettings}
                   sitePlan={sitePlan}
                 />
@@ -1269,6 +1281,7 @@ export default function DashboardPage() {
                         userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
                         swoopOff={swoopOff}
+                        noSwoop={noSwoop}
                         onSiteSettings={onSiteSettings}
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
@@ -1280,6 +1293,10 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+        ) : notice === 'load_error' && machinesError ? (
+          <MachinesLoadError error={machinesError} />
+        ) : notice === 'none_for_you' ? (
+          <NoMachinesForYou />
         ) : showGettingStarted ? (
           <Card className="border-border bg-card animate-in fade-in duration-300">
             <CardHeader>
@@ -1811,9 +1828,10 @@ export default function DashboardPage() {
           targetMachineAgentVersion={machines.find(m => m.machineId === scheduleEditorTarget.machineId)?.agent_version}
           currentLaunchMode={effectiveLaunchMode(scheduleEditorTarget.process)}
           presets={schedulePresets}
-          onCreatePreset={handleCreatePreset}
-          onDeletePreset={async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); }}
-          onUpdatePreset={async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); }}
+          // presets are site-wide: without the handlers a scoped admin applies them but writes none
+          onCreatePreset={isSiteAdmin(currentSiteId) ? handleCreatePreset : undefined}
+          onDeletePreset={isSiteAdmin(currentSiteId) ? async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); } : undefined}
+          onUpdatePreset={isSiteAdmin(currentSiteId) ? async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); } : undefined}
         />
       )}
 

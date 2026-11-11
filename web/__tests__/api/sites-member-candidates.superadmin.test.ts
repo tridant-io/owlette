@@ -91,7 +91,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 import { GET } from '@/app/api/sites/[siteId]/member-candidates/route';
 import { siteStanding, type MemberStanding, type SiteRole } from '@/lib/capabilities';
-import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { memberStanding } from '@/lib/sitePolicy.server';
 
 const TARGET = 'site-a';
 const SELF = 'uid-self';
@@ -112,9 +112,8 @@ function seedUser(uid: string, role: 'member' | 'superadmin' = 'member'): void {
 function standingOf(uid: string): Record<string, MemberStanding & { role: SiteRole }> {
   const bySite: Record<string, MemberStanding & { role: SiteRole }> = Object.create(null);
   for (const [siteId, roster] of Object.entries(mockRosters)) {
-    const row = roster[uid] ?? null;
-    const role = deriveMembership(row);
-    if (role !== null) bySite[siteId] = { role, swoopMode: deriveSwoopMode(row, role) };
+    const standing = memberStanding(roster[uid] ?? null);
+    if (standing.role !== null) bySite[siteId] = { ...standing, role: standing.role };
   }
   return bySite;
 }

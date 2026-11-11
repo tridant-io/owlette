@@ -58,6 +58,7 @@ function renderMenu(
         siteId="site-A"
         isOnline
         isSiteAdmin
+        isMachineAdmin
         onRemoveMachine={jest.fn()}
         onRestart={jest.fn()}
         onShutdown={jest.fn()}

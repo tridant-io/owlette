@@ -17,6 +17,7 @@
 import type { NextRequest } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import type { MemberStanding, Role, SiteRole } from '@/lib/capabilities';
+import { parseMachineIds } from '@/lib/machineAccess';
 import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 
 /**
@@ -67,6 +68,12 @@ export interface SiteAccessFacts {
    * owner row, and with no `swoop` field.
    */
   swoopMode: SwoopMode | null;
+  /**
+   * the member row's machine scope; null means the whole site. always null for
+   * a superadmin (the rules' `isSuperadmin()` short-circuit) and with no active
+   * membership.
+   */
+  machineIds: readonly string[] | null;
   /**
    * `users/{uid}.sites[]`, filtered to strings. LEGACY — no longer part of any
    * access decision. Retained for audit context until wave 6.1 strips the field;
@@ -142,6 +149,34 @@ export function deriveSwoopMode(
 }
 
 /**
+ * the machine scope a member row carries, null for the whole site. a row that
+ * grants nothing carries nothing. unlike the mode, it reads an owner row too,
+ * because the rules do.
+ */
+export function deriveMachineIds(
+  memberData: Record<string, unknown> | null,
+  role: MembershipRole,
+): readonly string[] | null {
+  if (role === null) return null;
+  return parseMachineIds(memberData);
+}
+
+/** one member row's standing, read the way access reads it. */
+export function memberStanding(memberData: Record<string, unknown> | null): MemberStanding {
+  const role = deriveMembership(memberData);
+  return {
+    role,
+    swoopMode: deriveSwoopMode(memberData, role),
+    machineIds: deriveMachineIds(memberData, role),
+  };
+}
+
+/** the standing `resolveSiteAccess` found on the one site it resolved. */
+export function standingOf(facts: SiteAccessFacts): MemberStanding {
+  return { role: facts.membershipRole, swoopMode: facts.swoopMode, machineIds: facts.machineIds };
+}
+
+/**
  * Resolve a user principal against a site in ONE batched read.
  *
  * Decision order is load-bearing and pinned by the parity matrix: a missing
@@ -184,6 +219,7 @@ export async function resolveSiteAccess(
     rawRole,
     membershipRole,
     swoopMode: deriveSwoopMode(memberData, membershipRole),
+    machineIds: globalRole === 'superadmin' ? null : deriveMachineIds(memberData, membershipRole),
     sites,
     deletedAt,
     userExists: Boolean(userData),
@@ -199,7 +235,7 @@ export async function resolveSiteAccess(
 
 /**
  * the read counterpart of `resolveSiteAccess` across every site the user is on:
- * each active member row's site role and swoop mode, keyed by site id.
+ * each active member row's `memberStanding`, keyed by site id.
  *
  * `status` is filtered in memory, by `deriveMembership`, rather than added as a
  * second `where`: a composite (uid, status) collection-group index does not
@@ -216,10 +252,9 @@ export async function listUserStanding(
   const bySite: Record<string, MemberStanding & { role: SiteRole }> = Object.create(null);
   for (const doc of snap.docs) {
     const siteId = doc.ref.parent.parent?.id;
-    const data = doc.data() ?? null;
-    const role = deriveMembership(data);
-    if (!siteId || role === null) continue;
-    bySite[siteId] = { role, swoopMode: deriveSwoopMode(data, role) };
+    const standing = memberStanding(doc.data() ?? null);
+    if (!siteId || standing.role === null) continue;
+    bySite[siteId] = { ...standing, role: standing.role };
   }
   return bySite;
 }

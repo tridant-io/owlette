@@ -18,7 +18,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
-  requireSiteAuthAndScope,
+  requireSiteMachineAuthAndScope,
 } from '../../../../_shared';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
@@ -35,7 +35,7 @@ type PathParams = { siteId: string; machineId: string } & Record<string, string 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId, machineId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteMachineAuthAndScope(request, siteId, machineId, 'read');
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();

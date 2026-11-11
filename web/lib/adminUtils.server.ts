@@ -2,13 +2,24 @@
 
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import { parseMachineIds, scopeCovers } from '@/lib/machineAccess';
 import { pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
+import { deriveMembership } from '@/lib/sitePolicy.server';
 
 export interface SiteRecipient {
   userId: string;
   email: string;
   ccEmails: string[];
   mutedMachines: string[];
+  /** the member row's machine scope; null is the whole site */
+  machineIds: readonly string[] | null;
+}
+
+/** false when the recipient muted the machine or their machine scope does not reach it */
+export function recipientWantsMachine(recipient: SiteRecipient, machineId: string): boolean {
+  // a recipient built without the field reaches no machine; scopeCovers would throw on it
+  if (recipient.machineIds === undefined) return false;
+  return !recipient.mutedMachines.includes(machineId) && scopeCovers(recipient.machineIds, machineId);
 }
 
 /** One user, resolved as the recipient of an alert that has no site to scope it to. */
@@ -40,11 +51,19 @@ export async function getSiteLabel(siteId: string): Promise<string> {
   }
 }
 
+/** users per `getAll`, so a large site is never one unbounded read */
+const USER_READ_CHUNK = 100;
+
 /**
  * Site recipients carrying userId + email, for per-user email personalization
  * (unsubscribe links). Optionally filtered by one alert preference. None when
  * the site's payer has no `owlette.control`; pass a batch's `planMemo` to
  * resolve each payer once.
+ *
+ * Recipients are the site's active member rows, plus the legacy `users.sites[]`
+ * array during the transition, plus the owner. Each carries its member row's
+ * machine scope (null for the whole site, the owner and the ADMIN_EMAIL
+ * fallback), so a sender filters per machine with {@link recipientWantsMachine}.
  */
 export async function getSiteAlertRecipients(
   siteId: string,
@@ -62,6 +81,19 @@ export async function getSiteAlertRecipients(
   // opted out" — respect it; only a genuinely orphan site gets the fallback.
   let siteHasUsers = false;
 
+  const addUser = (
+    userId: string,
+    data: FirebaseFirestore.DocumentData | undefined,
+    machineIds: readonly string[] | null,
+  ) => {
+    if (typeof data?.deletedAt === 'number') return;
+    const email = data?.email as string | undefined;
+    if (!email) return;
+    siteHasUsers = true;
+    if (filterPreference && data?.preferences?.[filterPreference] === false) return;
+    recipients.push({ userId, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [], machineIds });
+  };
+
   try {
     const siteDoc = await db.collection('sites').doc(siteId).get();
     const siteData = siteDoc.data();
@@ -78,6 +110,15 @@ export async function getSiteAlertRecipients(
 
     const ownerId = siteData?.owner as string | undefined;
 
+    // read before anyone is added: if it throws, the catch below leaves only the
+    // fallback. going on without it would mail a scoped member about every machine.
+    const memberRows = await db.collection('sites').doc(siteId).collection('members').get();
+    const rowByUid = new Map<string, { active: boolean; machineIds: readonly string[] | null }>();
+    for (const doc of memberRows.docs) {
+      const data = doc.data();
+      rowByUid.set(doc.id, { active: deriveMembership(data) !== null, machineIds: parseMachineIds(data) });
+    }
+
     const usersQuery = await db
       .collection('users')
       .where('sites', 'array-contains', siteId)
@@ -85,32 +126,30 @@ export async function getSiteAlertRecipients(
 
     for (const doc of usersQuery.docs) {
       seenIds.add(doc.id);
-      const data = doc.data();
-      if (typeof data?.deletedAt === 'number') continue;
-      const email = data?.email as string | undefined;
-      if (!email) continue;
-      siteHasUsers = true;
-      if (filterPreference && data?.preferences?.[filterPreference] === false) continue;
-      recipients.push({ userId: doc.id, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [] });
+      addUser(doc.id, doc.data(), rowByUid.get(doc.id)?.machineIds ?? null);
     }
 
     if (ownerId && !seenIds.has(ownerId)) {
       try {
         const ownerDoc = await db.collection('users').doc(ownerId).get();
-        const data = ownerDoc.data();
-        if (typeof data?.deletedAt !== 'number') {
-          const email = data?.email as string | undefined;
-          if (email) {
-            siteHasUsers = true;
-            if (!(filterPreference && data?.preferences?.[filterPreference] === false)) {
-              recipients.push({ userId: ownerId, email, ccEmails: data?.preferences?.alertCcEmails || [], mutedMachines: data?.preferences?.mutedMachines || [] });
-            }
-          }
-        }
+        addUser(ownerId, ownerDoc.data(), null);
       } catch {
         // Untrustworthy empty set — fall open below rather than apply mutes.
         enumerationFailed = true;
       }
+    }
+
+    // a member row the legacy array does not list: a scoped member, or anyone
+    // once scripts/migrations/strip-legacy-membership.mjs has run.
+    const rowOnly = [...rowByUid]
+      .filter(([uid, row]) => row.active && !seenIds.has(uid) && uid !== ownerId)
+      .map(([uid]) => uid);
+    const reads: Array<Promise<FirebaseFirestore.DocumentSnapshot[]>> = [];
+    for (let i = 0; i < rowOnly.length; i += USER_READ_CHUNK) {
+      reads.push(db.getAll(...rowOnly.slice(i, i + USER_READ_CHUNK).map((uid) => db.collection('users').doc(uid))));
+    }
+    for (const doc of (await Promise.all(reads)).flat()) {
+      addUser(doc.id, doc.data(), rowByUid.get(doc.id)?.machineIds ?? null);
     }
   } catch (error) {
     enumerationFailed = true;
@@ -138,7 +177,7 @@ export async function getSiteAlertRecipients(
         // No Auth user (distribution list) or Auth down — deliver with no mutes.
       }
     }
-    recipients.push({ userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines });
+    recipients.push({ userId: 'fallback', email: ADMIN_EMAIL, ccEmails: [], mutedMachines, machineIds: null });
   }
 
   return recipients;

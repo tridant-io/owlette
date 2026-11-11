@@ -547,7 +547,10 @@ export function startTurn(
       // Re-check the caller's resolved set against the site as it is NOW. This
       // only ever removes machines (see `narrowToLiveMachines`), so an approved
       // tool call cannot reach a machine the approver never saw.
-      const siteMachines = await listSiteMachines(db, params.siteId);
+      // the listing is cut to the person's scope as well, though callers resolve
+      // within it: a machine dropped from the scope since then drops out here.
+      const machineScope = params.access.standing.machineIds;
+      const siteMachines = await listSiteMachines(db, params.siteId, machineScope);
       const resolved = narrowToLiveMachines(params.resolved, siteMachines);
       if (resolved.ids.length === 0) throw noLiveMachinesError(params.turnTarget, resolved);
       // The record has to name what this turn actually dispatches to before it
@@ -621,8 +624,8 @@ export function startTurn(
         {
           userId: params.userId,
           userRole: params.access.role,
-          userSiteRole: params.access.siteRole,
-          userSwoopMode: params.access.swoopMode,
+          userStanding: params.access.standing,
+          machineScope,
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),

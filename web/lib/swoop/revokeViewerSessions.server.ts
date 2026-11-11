@@ -1,16 +1,20 @@
 /**
- * End one person's live swoop sessions. A revocation ends every one they are
- * in, in a site, because their authorisation to be in them just went away —
- * removed from the site, or demoted out of `MACHINE_REMOTE_CONTROL`. A kick
- * (`swoop/sessions/{sid}/kick`) ends one, because a site owner or admin took
- * them out of it.
+ * End one person's live swoop sessions. A revocation ends the ones in a site
+ * that their authorisation to be in just went away from, for three reasons:
+ * removed from the site, which ends every one; demoted out of
+ * `MACHINE_REMOTE_CONTROL` by role or swoop mode, which ends the ones they
+ * control in; and a machine scope narrowed, which ends the ones on machines
+ * that left it. A kick (`swoop/sessions/{sid}/kick`) ends one, because a site
+ * owner or admin took them out of it.
  *
  * The lease already covers a revocation: the renewal route re-checks
  * membership, site enablement and capability, so a removed member is out within
  * one lease (<= 5 min) with nothing here at all (PROTOCOL.md §10). This is the
  * fast half of the same decision — the kill path (plan.md D11) closes the window
- * to <= 2 s — and it is best-effort by construction: the membership write is
- * authoritative and has already landed when this runs.
+ * to about 2 s, shared session or not, because the whole session ends and
+ * everyone else in it rejoins and is decided again — and it is best-effort by
+ * construction: the membership write is authoritative and has already landed
+ * when this runs.
  *
  * So the sweep is never inside the caller's Firestore transaction, never
  * awaited in a way that can fail the response, and never throws. A relay that
@@ -37,13 +41,19 @@ export interface RevokeSwoopSessionsArgs {
   /** `user:<uid>` / `apiKey:<keyId>`, for the command envelope. */
   auditActor: string;
   /** Why, for the audit row. A reason code, never prose. */
-  reason: 'member_removed' | 'role_changed' | 'swoop_changed';
+  reason: 'member_removed' | 'role_changed' | 'swoop_changed' | 'scope_changed';
   /**
    * Only sessions in which this user holds CONTROL. A demotion costs them
    * `MACHINE_REMOTE_CONTROL` and nothing else, so a watch they are still
    * entitled to must survive it.
    */
   controlOnly?: boolean;
+  /**
+   * A scope was narrowed: the machines still in it. A session on any other
+   * machine ends whatever their seat holds, audited `scope_changed`; one on a
+   * listed machine ends only under `controlOnly`, for their control seat.
+   */
+  keepMachineIds?: readonly string[];
   /** Stamped on the command envelope so the agent's write-back correlates. */
   correlationId?: string;
 }
@@ -131,7 +141,22 @@ export async function endSwoopSessionForUser(args: EndSwoopSessionForUserArgs): 
   }
 }
 
-/** Ends every unended session this user holds a seat in (`endSwoopSessionForUser`). */
+/** why this session ends for the person, or null when they keep it. */
+function revocationReason(
+  args: RevokeSwoopSessionsArgs,
+  session: SwoopSession,
+): RevokeSwoopSessionsArgs['reason'] | null {
+  // a session they started and left goes on without them
+  const seats = session.viewers.filter((viewer) => viewer.uid === args.uid);
+  if (seats.length === 0) return null;
+  if (args.keepMachineIds && !args.keepMachineIds.includes(session.machineId)) return 'scope_changed';
+  // a demotion costs control and nothing else: a watch they are still entitled to survives it
+  if (args.controlOnly) return seats.some((seat) => seat.ctl) ? args.reason : null;
+  // a narrowing alone leaves the machines still in scope
+  return args.keepMachineIds ? null : args.reason;
+}
+
+/** Ends every unended session this user holds a seat in that the revocation reaches (`endSwoopSessionForUser`). */
 export async function revokeSwoopSessionsForUser(
   args: RevokeSwoopSessionsArgs,
 ): Promise<RevokeSwoopSessionsResult> {
@@ -143,10 +168,8 @@ export async function revokeSwoopSessionsForUser(
     });
 
     for (const session of sessions) {
-      // a session they started and left goes on without them, and a demotion
-      // costs control and nothing else: a watch they are still entitled to survives it.
-      const seated = session.viewers.some((viewer) => viewer.uid === args.uid && (!args.controlOnly || viewer.ctl));
-      if (!seated) continue;
+      const reason = revocationReason(args, session);
+      if (reason === null) continue;
 
       await endSwoopSessionForUser({
         session,
@@ -164,7 +187,7 @@ export async function revokeSwoopSessionsForUser(
         sid: session.sid,
         actor: args.actor,
         ...(args.correlationId ? { correlationId: args.correlationId } : {}),
-        endReason: args.reason,
+        endReason: reason,
         endedFor: args.uid,
         durationMs: Date.now() - session.startedAt,
       });

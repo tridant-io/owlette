@@ -5,8 +5,9 @@ import { useCallback } from 'react';
 /**
  * Departure-time talon lookups + reassignment.
  *
- * Any talon with a hoot output re-resolves its AUTHOR's site access on every
- * run, so removing them from the site kills it at whatever hour it next fires.
+ * Every talon re-checks its AUTHOR's site access before any output fires, so
+ * removing the author from the site switches each of their talons off at its
+ * next run, with nothing fired.
  * These calls let the removal flows say "this person wrote N talons" before the
  * removal, and hand them to somebody still here.
  *

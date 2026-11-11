@@ -2,11 +2,12 @@
 /**
  * @jest-environment jsdom
  *
- * MemberAccessFields, the role and swoop fields the add and change access
- * dialogs share. each select is described by a help line that says what the
- * choice gives on this site, and "by role" stands for a row with no swoop field.
+ * MemberAccessFields, the role, swoop and machines fields the add and change
+ * access dialogs share. each select is described by a help line that says what
+ * the choice gives on this site, and "by role" stands for a row with no swoop
+ * field. the machines field sits under swoop, where null is the whole site.
  */
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   MemberAccessFields,
@@ -21,6 +22,11 @@ import type { AddableSiteMemberRole } from '@/hooks/useSiteMembers';
 window.HTMLElement.prototype.hasPointerCapture = jest.fn();
 window.HTMLElement.prototype.releasePointerCapture = jest.fn();
 window.HTMLElement.prototype.scrollIntoView = jest.fn();
+
+const MACHINES = [
+  { id: 'IN', name: 'lobby wall' },
+  { id: 'IN2', name: 'kiosk' },
+];
 
 const MEMBER_LINE = 'views machines, takes screenshots and opens live view. no commands and no configuration.';
 const ADMIN_LINE =
@@ -38,6 +44,7 @@ interface FieldsProps {
   role?: AddableSiteMemberRole;
   swoop?: SwoopChoice;
   membersMayWatch?: boolean;
+  machineIds?: string[] | null;
   disabled?: boolean;
 }
 
@@ -46,10 +53,12 @@ function renderFields({
   role = 'member',
   swoop = 'default',
   membersMayWatch = true,
+  machineIds = null,
   disabled,
 }: FieldsProps = {}) {
   const onRoleChange = jest.fn();
   const onSwoopChange = jest.fn();
+  const onMachineIdsChange = jest.fn();
   const user = userEvent.setup();
   render(
     <MemberAccessFields
@@ -59,14 +68,18 @@ function renderFields({
       onRoleChange={onRoleChange}
       onSwoopChange={onSwoopChange}
       membersMayWatch={membersMayWatch}
+      machines={MACHINES}
+      machineIds={machineIds}
+      onMachineIdsChange={onMachineIdsChange}
       disabled={disabled}
     />,
   );
-  return { user, onRoleChange, onSwoopChange };
+  return { user, onRoleChange, onSwoopChange, onMachineIdsChange };
 }
 
 const roleSelect = () => screen.getByRole('combobox', { name: 'role' });
 const swoopSelect = () => screen.getByRole('combobox', { name: 'swoop' });
+const accessGroup = () => screen.getByRole('group', { name: 'access' });
 const optionNames = () => screen.getAllByRole('option').map((option) => option.textContent);
 
 describe('swoop choices and the stored field', () => {
@@ -154,10 +167,46 @@ describe('MemberAccessFields selects', () => {
     expect(onSwoopChange).toHaveBeenLastCalledWith('default');
   });
 
-  it('disables both selects when disabled', () => {
-    renderFields({ disabled: true });
+  it('disables both selects and the machines field when disabled', () => {
+    renderFields({ disabled: true, machineIds: ['IN'] });
 
     expect(roleSelect()).toBeDisabled();
     expect(swoopSelect()).toBeDisabled();
+    expect(within(accessGroup()).getByRole('button', { name: 'whole site' })).toBeDisabled();
+    expect(screen.getByTestId('add-member-machines-machines')).toBeDisabled();
+  });
+});
+
+describe('MemberAccessFields machines', () => {
+  it('renders the machines field under swoop, at the whole site for null', () => {
+    renderFields();
+
+    expect(swoopSelect().compareDocumentPosition(accessGroup()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(accessGroup()).getByRole('button', { name: 'whole site' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.queryByTestId('add-member-machines-machines')).not.toBeInTheDocument();
+  });
+
+  it('shows the picked machines under the given prefix', () => {
+    renderFields({ idPrefix: 'change-access', machineIds: ['IN'] });
+
+    expect(within(accessGroup()).getByRole('button', { name: 'some machines' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByTestId('change-access-machines-machines')).toHaveTextContent('lobby wall');
+  });
+
+  it('hands up some machines as []', async () => {
+    const { user, onMachineIdsChange } = renderFields();
+
+    await user.click(within(accessGroup()).getByRole('button', { name: 'some machines' }));
+    expect(onMachineIdsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('hands up the whole site as null from a list', async () => {
+    const { user, onMachineIdsChange } = renderFields({ machineIds: ['IN'] });
+
+    await user.click(within(accessGroup()).getByRole('button', { name: 'whole site' }));
+    expect(onMachineIdsChange).toHaveBeenCalledWith(null);
   });
 });

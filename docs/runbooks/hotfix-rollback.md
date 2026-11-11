@@ -122,6 +122,18 @@ Known gap:
 - Roost has `sites/{siteId}.roostEnabled`; agent equivalent UNKNOWN.
 ## per-surface rollback recipes
 Before commands, confirm current branch, target environment, bad SHA, known-good SHA, and who is watching verification.
+### machine scope trap (4.1.28 on)
+Code from before 4.1.28 ignores `machineIds` on member rows, so any rollback past it widens every scoped member to the whole site at once.
+Check first (`--env=dev` for dev):
+```bash
+node scripts/check-membership-read-path.mjs --env=prod --list-scoped
+```
+While it lists any row:
+- Never roll the web back by redeploying an older Railway deployment.
+- Never let the Vercel standby serve older code: a failover to it is a rollback too.
+- Never restore rules older than 2.12.0.
+Remove the scoped members first, with the `DELETE /api/sites/{siteId}/members/{uid}` the script prints for each row (the owner's call, and mutating).
+Only once the list is empty: revert the web, then the rules, then the usage function (`getUsageSummaryHttp`).
 ### web (Railway)
 Rollback model: revert the offending commit on `dev` or `main`, push, and Railway auto-redeploys.
 Use revert when the bad commit is isolated:
@@ -206,6 +218,7 @@ firebase deploy --only firestore:rules
 ```
 Migration ordering trap:
 - Rule changes paired with data migrations cannot be rolled back out-of-order.
+- Rules older than 2.12.0 widen every scoped member: see "machine scope trap" above.
 - Live admins can lose access if rules are restored before compatible data state.
 - See `scripts/README.md:111-114`.
 After deploy:

@@ -333,11 +333,11 @@ send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also 
 
 | route | API-key scope | role |
 |---|---|---|
-| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | member |
+| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | whole-site member |
 | `POST /api/webhooks`, `PATCH` or `DELETE /api/webhooks/{webhookId}`, `POST .../rotate-secret` | `site=<siteId>:write` | site admin or owner |
-| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | member |
+| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | whole-site member |
 
-a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
+a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). webhooks span the site's machines, so a member whose access is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403 forbidden` on every route here, whatever their role. the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
 
 `Idempotency-Key` is optional on create, update, rotate-secret and retry: the same key with the same body within 24 hours replays the first success with `Idempotent-Replayed: true`. delete and probe ignore it. see [idempotency](/docs/api/idempotency).
 

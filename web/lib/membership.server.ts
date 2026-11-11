@@ -16,6 +16,10 @@
  * ownership moves only through the transactional `transferOwnership` (task 2.2);
  * `removeMember` refuses the owner.
  *
+ * machine scope: a role or swoop change keeps the machine scope, because scoped
+ * admins exist (machine-scope decision 3), so promoting a scoped member never
+ * widens them. widening is only ever an explicit `machineIds: null`.
+ *
  * SUPERADMINS ARE DELIBERATELY NOT MEMBERS. They reach every site by global role
  * (`resolveSiteAccess` short-circuits before the membership term); writing member rows
  * would leave a demoted superadmin holding a membership nobody granted. The cost is
@@ -25,6 +29,7 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { listUserStanding } from '@/lib/sitePolicy.server';
+import { normalizeMachineIdsInput, parseMachineIds } from '@/lib/machineAccess';
 import { parseSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 
 /** Stored per-site role. `owner` is written only by ownership transfer. */
@@ -49,12 +54,22 @@ export interface MemberDoc {
    * the role decides. never stored as null, and never on the owner's row.
    */
   swoop?: SwoopMode;
+  /**
+   * the machine scope: absent means the whole site. written sorted and unique,
+   * never as [] or null, and never on the owner's row. pruning a machine can
+   * leave [], which means no machines.
+   */
+  machineIds?: string[];
 }
 
-/** a member's access on a site: the site role, and their own swoop mode or null. */
+/**
+ * a member's access on a site: the site role, their own swoop mode or null, and
+ * their machine scope or null for the whole site.
+ */
 export interface MemberAccess {
   role: MemberRole;
   swoop: SwoopMode | null;
+  machineIds: string[] | null;
 }
 
 /** Typed failures. Callers map these to status codes; this module picks none. */
@@ -65,7 +80,8 @@ export type MembershipFailure =
   | { kind: 'site_not_found' }
   | { kind: 'user_not_found' }
   | { kind: 'user_inactive' }
-  | { kind: 'invalid_role' };
+  | { kind: 'invalid_role' }
+  | { kind: 'invalid_machine_ids' };
 
 export type MembershipResult<T = void> =
   | ({ ok: true } & (T extends void ? Record<string, never> : { value: T }))
@@ -73,6 +89,16 @@ export type MembershipResult<T = void> =
 
 function memberRef(db: FirebaseFirestore.Firestore, siteId: string, uid: string) {
   return db.collection('sites').doc(siteId).collection('members').doc(uid);
+}
+
+/**
+ * a machine scope as it is stored, or null when the list is invalid. the routes
+ * validate first; this re-check keeps any other caller from storing [] (no
+ * machines) or more than an `in` query can list.
+ */
+function storedScope(ids: readonly string[]): string[] | null {
+  const normalized = normalizeMachineIdsInput(ids, { allowNull: false });
+  return normalized.ok ? normalized.value : null;
 }
 
 /**
@@ -100,6 +126,7 @@ export async function addMember(input: {
   uid: string;
   role: AssignableRole;
   swoop?: SwoopMode;
+  machineIds?: readonly string[];
   addedBy: string;
   now?: () => Date;
   db?: FirebaseFirestore.Firestore;
@@ -107,6 +134,8 @@ export async function addMember(input: {
   if (!ASSIGNABLE_ROLES.includes(input.role)) {
     return { ok: false, failure: { kind: 'invalid_role' } };
   }
+  const machineIds = input.machineIds === undefined ? undefined : storedScope(input.machineIds);
+  if (machineIds === null) return { ok: false, failure: { kind: 'invalid_machine_ids' } };
 
   const db = input.db ?? getAdminDb();
   const now = (input.now ?? (() => new Date()))();
@@ -121,6 +150,7 @@ export async function addMember(input: {
     addedAt: now,
     addedBy: input.addedBy,
     ...(input.swoop !== undefined ? { swoop: input.swoop } : {}),
+    ...(machineIds !== undefined ? { machineIds } : {}),
   } satisfies MemberDoc);
   batch.update(userRef, { sites: FieldValue.arrayUnion(input.siteId) });
 
@@ -135,26 +165,33 @@ export async function addMember(input: {
 }
 
 /**
- * Change a member's per-site role, their swoop mode, or both, and return their
- * access before and after the write.
+ * Change a member's per-site role, their swoop mode, their machine scope, or any
+ * of them together, and return their access before and after the write.
  *
  * `AssignableRole` makes `'owner'` untypeable as a destination and the owner check
  * below makes it unreachable as a source — together they close the
- * admin-promotes-self-to-owner path. the same check keeps a mode off the owner's
- * row, because the owner always controls.
+ * admin-promotes-self-to-owner path. the same check keeps a mode and a machine
+ * scope off the owner's row, because the owner always controls the whole site.
  *
- * `swoop: null` deletes the field, so the role decides again. a role change
- * leaves the mode as it is.
+ * `swoop: null` deletes the field, so the role decides again. `machineIds: null`
+ * deletes the field, so the person reaches the whole site again. a change to one
+ * field leaves the others as they are.
  */
 export async function updateMember(input: {
   siteId: string;
   uid: string;
   role?: AssignableRole;
   swoop?: SwoopMode | null;
+  machineIds?: readonly string[] | null;
   db?: FirebaseFirestore.Firestore;
 }): Promise<MembershipResult<{ before: MemberAccess; after: MemberAccess }>> {
   if (input.role !== undefined && !ASSIGNABLE_ROLES.includes(input.role)) {
     return { ok: false, failure: { kind: 'invalid_role' } };
+  }
+  // undefined leaves the field and null widens; only a list given is checked
+  const machineIds = input.machineIds ? storedScope(input.machineIds) : input.machineIds;
+  if (input.machineIds && machineIds === null) {
+    return { ok: false, failure: { kind: 'invalid_machine_ids' } };
   }
 
   const db = input.db ?? getAdminDb();
@@ -163,27 +200,72 @@ export async function updateMember(input: {
   return db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists) return { ok: false, failure: { kind: 'not_member' } };
-    const row = snap.data() as MemberDoc;
+    const data = snap.data();
+    const row = data as MemberDoc;
     // Read INSIDE the transaction: a concurrent transferOwnership that makes this
     // uid the owner must abort this write rather than demote the new owner.
     if (row.role === 'owner') {
       return { ok: false, failure: { kind: 'is_owner' } };
     }
 
-    const before: MemberAccess = { role: row.role, swoop: parseSwoopMode(row.swoop) };
-    const update: { role?: AssignableRole; swoop?: SwoopMode | FieldValue } = {};
+    const machineScope = parseMachineIds(data);
+    const before: MemberAccess = {
+      role: row.role,
+      swoop: parseSwoopMode(row.swoop),
+      machineIds: machineScope === null ? null : [...machineScope],
+    };
+    const update: {
+      role?: AssignableRole;
+      swoop?: SwoopMode | FieldValue;
+      machineIds?: string[] | FieldValue;
+    } = {};
     if (input.role !== undefined) update.role = input.role;
     if (input.swoop !== undefined) {
       update.swoop = input.swoop === null ? FieldValue.delete() : input.swoop;
+    }
+    if (machineIds !== undefined) {
+      update.machineIds = machineIds === null ? FieldValue.delete() : machineIds;
     }
     if (Object.keys(update).length > 0) tx.update(ref, update);
 
     const after: MemberAccess = {
       role: input.role ?? before.role,
       swoop: input.swoop === undefined ? before.swoop : input.swoop,
+      machineIds: machineIds === undefined ? before.machineIds : machineIds,
     };
     return { ok: true, value: { before, after } };
   });
+}
+
+/**
+ * take a machine out of every machine scope on its site, and return how many
+ * rows held it. machine ids start as hostnames and get reused, so a re-paired or
+ * reused id must never inherit an old grant. removal and pairing call this.
+ *
+ * a row whose only machine this was keeps `machineIds: []`, no machines. never
+ * delete the field here: an absent field is the whole site.
+ */
+export async function pruneMachineFromMembers(input: {
+  siteId: string;
+  machineId: string;
+  db?: FirebaseFirestore.Firestore;
+}): Promise<number> {
+  const db = input.db ?? getAdminDb();
+  // collection scope, which automatic single-field indexing covers
+  const holders = await db
+    .collection('sites')
+    .doc(input.siteId)
+    .collection('members')
+    .where('machineIds', 'array-contains', input.machineId)
+    .get();
+  if (holders.empty) return 0;
+
+  const batch = db.batch();
+  for (const holder of holders.docs) {
+    batch.update(holder.ref, { machineIds: FieldValue.arrayRemove(input.machineId) });
+  }
+  await batch.commit();
+  return holders.size;
 }
 
 /**

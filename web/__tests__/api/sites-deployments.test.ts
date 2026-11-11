@@ -134,7 +134,7 @@ beforeEach(() => {
   mocks.memberDocs.clear();
   mocks.userDocs.clear();
   mockResolveAuth.mockResolvedValue(authedSession());
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   mockSiteAuditActor.mockImplementation(
     jest.requireActual('@/lib/actions/auditActor.server').siteAuditActor,
   );

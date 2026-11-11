@@ -91,7 +91,15 @@ const MIN = 60_000;
 function resolvedOn(ids: string[], fanOut = ids.length !== 1) {
   return { ok: true, resolved: { ids, fanOut, skipped: { offline: [], disabled: [] } } };
 }
-const ADMIN_ACCESS = { role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true };
+const ADMIN_ACCESS = {
+  role: 'admin',
+  siteRole: 'owner',
+  swoopMode: null,
+  standing: { role: 'owner', swoopMode: null, machineIds: null },
+  isSuperadmin: false,
+  isSiteAdmin: true,
+  isSiteOwner: true,
+};
 
 /** Follow-up docs by id. The claim transaction reads and writes through this map. */
 const followups = new Map<string, Record<string, unknown>>();
@@ -350,6 +358,7 @@ describe('fireDueFollowups', () => {
 
     expect(resolveHootTargetsMock).toHaveBeenCalledWith(db, 'node-pa', {
       requested: ['lobby-01', 'lobby-02'],
+      machineScope: null,
     });
     expect(startTurnMock.mock.calls[0][1]).toMatchObject({
       resolved: { ids: ['lobby-01', 'lobby-02'], fanOut: true },
@@ -363,7 +372,7 @@ describe('fireDueFollowups', () => {
 
     await sweep();
 
-    expect(resolveHootTargetsMock).toHaveBeenCalledWith(db, 'node-pa', { requested: null });
+    expect(resolveHootTargetsMock).toHaveBeenCalledWith(db, 'node-pa', { requested: null, machineScope: null });
     expect(startTurnMock.mock.calls[0][1]).toMatchObject({
       turnTarget: { machineIds: null, source: 'followup' },
     });
@@ -378,6 +387,7 @@ describe('fireDueFollowups', () => {
 
     expect(resolveHootTargetsMock).toHaveBeenCalledWith(db, 'node-pa', {
       requested: ['lobby-01'],
+      machineScope: null,
     });
     expect(startTurnMock.mock.calls[0][1]).toMatchObject({
       turnTarget: { machineIds: ['lobby-01'], fanOut: false, source: 'followup' },
@@ -405,6 +415,7 @@ describe('fireDueFollowups', () => {
     expect(counts).toMatchObject({ due: 1, fired: 1, failed: 0 });
     expect(resolveHootTargetsMock).toHaveBeenNthCalledWith(2, db, 'node-pa', {
       requested: ['lobby-01'],
+      machineScope: null,
     });
     expect(startTurnMock.mock.calls[0][1]).toMatchObject({
       resolved: { ids: ['lobby-01'], fanOut: false },
@@ -441,6 +452,67 @@ describe('fireDueFollowups', () => {
       // Readable on the record the owner can see: which machines went missing.
       turnError: 'target_machines_gone: gone-01, gone-02',
     });
+  });
+
+  it('narrows to the owner scope as it stands now, as for a machine that left the site', async () => {
+    // scheduled over two machines; the owner has since been limited to one
+    verifyUserSiteAccessMock.mockResolvedValue({
+      ...ADMIN_ACCESS,
+      siteRole: 'admin',
+      standing: { role: 'admin', swoopMode: null, machineIds: ['lobby-01'] },
+      isSiteOwner: false,
+    });
+    seedFollowup(
+      'fu-1',
+      followup({ targetMachineIds: ['lobby-01', 'lobby-02'], machineId: 'lobby-01' }),
+    );
+    // the resolver reads a machine outside the scope as one the site does not have
+    resolveHootTargetsMock
+      .mockResolvedValueOnce({ ok: false, status: 400, reason: 'unknown_machine', machineIds: ['lobby-02'] })
+      .mockResolvedValueOnce(resolvedOn(['lobby-01']));
+
+    const counts = await sweep();
+
+    expect(counts).toMatchObject({ due: 1, fired: 1, failed: 0 });
+    expect(resolveHootTargetsMock).toHaveBeenNthCalledWith(1, db, 'node-pa', {
+      requested: ['lobby-01', 'lobby-02'],
+      machineScope: ['lobby-01'],
+    });
+    expect(resolveHootTargetsMock).toHaveBeenNthCalledWith(2, db, 'node-pa', {
+      requested: ['lobby-01'],
+      machineScope: ['lobby-01'],
+    });
+    expect(startTurnMock.mock.calls[0][1]).toMatchObject({
+      resolved: { ids: ['lobby-01'], fanOut: false },
+      turnTarget: { machineIds: ['lobby-01'], fanOut: false, source: 'followup' },
+    });
+  });
+
+  it('fails a follow-up when every machine it names has left the owner scope', async () => {
+    verifyUserSiteAccessMock.mockResolvedValue({
+      ...ADMIN_ACCESS,
+      siteRole: 'admin',
+      standing: { role: 'admin', swoopMode: null, machineIds: ['lobby-09'] },
+      isSiteOwner: false,
+    });
+    seedFollowup('fu-1', followup({ targetMachineIds: ['lobby-01'], machineId: 'lobby-01' }));
+    resolveHootTargetsMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      reason: 'unknown_machine',
+      machineIds: ['lobby-01'],
+    });
+
+    const counts = await sweep();
+
+    expect(counts).toMatchObject({ due: 1, fired: 0, failed: 1 });
+    expect(resolveHootTargetsMock).toHaveBeenCalledWith(db, 'node-pa', {
+      requested: ['lobby-01'],
+      machineScope: ['lobby-09'],
+    });
+    expect(startTurnMock).not.toHaveBeenCalled();
+    // the record a machine that left the site leaves, which says nothing more about it
+    expect(followups.get('fu-1')).toMatchObject({ status: 'failed', turnError: 'target_machines_gone: lobby-01' });
   });
 
   it('dispatches to nothing on a target machine with hoot switched off', async () => {

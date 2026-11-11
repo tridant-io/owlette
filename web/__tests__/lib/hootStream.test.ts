@@ -73,6 +73,17 @@ import { getToolsByTier } from '@/lib/mcp-tools';
 
 const FOLLOWUP_TOOLS = ['schedule_followup', 'cancel_followup'];
 
+/** `verifyUserSiteAccess` for an admin of the whole site. */
+const WHOLE_SITE_ADMIN = {
+  role: 'admin',
+  siteRole: 'admin',
+  swoopMode: null,
+  standing: { role: 'admin', swoopMode: null, machineIds: null },
+  isSuperadmin: false,
+  isSiteAdmin: true,
+  isSiteOwner: false,
+};
+
 describe('conversationsToolDefs', () => {
   it.each([1, 2, 3] as const)('withholds the follow-up tools at tier %d', (tier) => {
     const names = conversationsToolDefs(tier).map((def) => def.name);
@@ -155,13 +166,7 @@ describe('runHootStream site mode', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockVerifyUserSiteAccess.mockResolvedValue({
-      role: 'admin',
-      siteRole: 'admin',
-      isSuperadmin: false,
-      isSiteAdmin: true,
-      isSiteOwner: false,
-    });
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
     mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
     mockGetHootRequireTier3Approval.mockResolvedValue(true);
     mockBuildExecutableTools.mockReturnValue({});
@@ -282,13 +287,7 @@ describe('runHootStream site mode', () => {
 describe('runHootStream single-machine mode', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    mockVerifyUserSiteAccess.mockResolvedValue({
-      role: 'admin',
-      siteRole: 'admin',
-      isSuperadmin: false,
-      isSiteAdmin: true,
-      isSiteOwner: false,
-    });
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
     mockIsMachineOnline.mockResolvedValue(true);
     mockIsHootEnabled.mockResolvedValue(true);
     // the gate on keeps this turn on the server-side llm path.
@@ -384,13 +383,7 @@ describe('runHootStream never offers an active-hours override', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockVerifyUserSiteAccess.mockResolvedValue({
-      role: 'admin',
-      siteRole: 'admin',
-      isSuperadmin: false,
-      isSiteAdmin: true,
-      isSiteOwner: false,
-    });
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
     mockListSiteMachines.mockResolvedValue([{ id: 'm1', online: true, hootEnabled: true, activeHoursGuard: true }]);
     mockGetMachineSummary.mockResolvedValue({ id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: true });
     mockIsMachineOnline.mockResolvedValue(true);
@@ -427,5 +420,130 @@ describe('runHootStream never offers an active-hours override', () => {
       expect(tools[toolName].inputSchema.properties).not.toHaveProperty('override_active_hours');
       expect(tools[toolName].inputSchema.properties).not.toHaveProperty('reason');
     }
+  });
+});
+
+/**
+ * a scoped caller reaches only their machines through both conversation routes:
+ * site mode is the machines in their scope, a machine outside it is a 404 before
+ * anything about it is read, and the model never sees a tool that spans the site.
+ */
+describe('runHootStream for someone limited to some machines', () => {
+  const FANOUT_ARG = 6;
+  const OPTIONS_ARG = 7;
+  const SITE_WIDE_TOOLS = ['get_site_logs', 'deploy_software', 'create_talon', 'list_talons', 'set_talon_enabled'];
+
+  const machineDocs = [
+    { id: 'm1', data: () => ({ online: true }) },
+    { id: 'm2', data: () => ({ online: true }) },
+    { id: 'm3', data: () => ({ online: false }) },
+  ];
+  /** `sites/site-a` and its machines, for the real listing. */
+  const db = {
+    collection: () => ({
+      doc: () => ({
+        get: async () => ({ data: () => ({}) }),
+        collection: () => ({ get: async () => ({ docs: machineDocs }) }),
+      }),
+    }),
+  } as unknown as Firestore;
+
+  function send(machineId: string) {
+    return runHootStream({ db, userId: 'u1', siteId: 'site-a', machineId, machineName: 'Lobby', messages: [], chatId: 'conv-1' });
+  }
+
+  const actual = jest.requireActual('@/lib/hoot-utils.server');
+
+  /** the real tools builder, whose tools reach the model as built. */
+  function realTools() {
+    mockBuildExecutableTools.mockImplementationOnce(actual.buildExecutableTools);
+    (withAdvisor as jest.Mock).mockImplementationOnce((_config: unknown, tools: unknown) => ({ tools }));
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      ...WHOLE_SITE_ADMIN,
+      standing: { role: 'admin', swoopMode: null, machineIds: ['m1', 'm3'] },
+    });
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    mockGetMachineSummary.mockResolvedValue(null);
+    mockGetHootRequireTier3Approval.mockResolvedValue(true);
+    mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    // the real listing, so the scope is applied as in production
+    mockListSiteMachines.mockImplementation(actual.listSiteMachines);
+  });
+
+  it('dispatches a site-wide turn only to the online machines in scope, with no site-wide tool', async () => {
+    realTools();
+
+    const result = await send(SITE_TARGET_ID);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.ok).toBe(true);
+    expect(mockListSiteMachines).toHaveBeenCalledWith(db, 'site-a', ['m1', 'm3']);
+    // m2 is online but outside the scope; m3 is in it but offline
+    expect(mockBuildExecutableTools.mock.calls[0][FANOUT_ARG]).toEqual(['m1']);
+    // the conversations API builds no site standing, as before, but still passes the scope
+    const options = mockBuildExecutableTools.mock.calls[0][OPTIONS_ARG];
+    expect(options).toMatchObject({ machineScope: ['m1', 'm3'] });
+    expect(options).not.toHaveProperty('userStanding');
+    const { tools } = (streamText as jest.Mock).mock.calls[0][0];
+    for (const toolName of SITE_WIDE_TOOLS) expect(tools).not.toHaveProperty(toolName);
+    expect(tools).toHaveProperty('get_system_info');
+    expect((buildSystemPrompt as jest.Mock).mock.calls[0][4]).toEqual({ machineIds: ['m1'], guardedIds: [] });
+  });
+
+  it('answers a site with nothing online in scope as a sleeping site', async () => {
+    mockVerifyUserSiteAccess.mockResolvedValue({
+      ...WHOLE_SITE_ADMIN,
+      standing: { role: 'admin', swoopMode: null, machineIds: ['m3'] },
+    });
+
+    await expect(send(SITE_TARGET_ID)).resolves.toEqual({
+      ok: false,
+      status: 503,
+      error: 'no machines are currently online in this site.',
+    });
+    expect(mockBuildExecutableTools).not.toHaveBeenCalled();
+  });
+
+  it('refuses a machine outside the scope with 404, before any machine read', async () => {
+    await expect(send('m2')).resolves.toEqual({
+      ok: false,
+      status: 404,
+      error: 'machine not found or no access',
+    });
+    expect(mockIsMachineOnline).not.toHaveBeenCalled();
+    expect(mockIsHootEnabled).not.toHaveBeenCalled();
+    expect(mockGetMachineSummary).not.toHaveBeenCalled();
+    expect(mockBuildExecutableTools).not.toHaveBeenCalled();
+  });
+
+  it('serves a machine in scope as before, still with no site-wide tool', async () => {
+    realTools();
+
+    const result = await send('m1');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(result.ok).toBe(true);
+    expect(mockIsMachineOnline).toHaveBeenCalledWith(db, 'site-a', 'm1');
+    expect(mockBuildExecutableTools.mock.calls[0][OPTIONS_ARG]).toMatchObject({ machineScope: ['m1', 'm3'] });
+    const { tools } = (streamText as jest.Mock).mock.calls[0][0];
+    for (const toolName of SITE_WIDE_TOOLS) expect(tools).not.toHaveProperty(toolName);
+  });
+
+  it('leaves the whole site unchanged', async () => {
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
+    realTools();
+
+    await send(SITE_TARGET_ID);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(mockListSiteMachines).toHaveBeenCalledWith(db, 'site-a', null);
+    expect(mockBuildExecutableTools.mock.calls[0][FANOUT_ARG]).toEqual(['m1', 'm2']);
+    const { tools } = (streamText as jest.Mock).mock.calls[0][0];
+    for (const toolName of SITE_WIDE_TOOLS) expect(tools).toHaveProperty(toolName);
   });
 });

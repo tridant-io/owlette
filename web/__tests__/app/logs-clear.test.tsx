@@ -15,7 +15,13 @@ import LogsPage from '@/app/logs/page';
 jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn() }) }));
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { uid: 'u1' }, loading: false, userPreferences: {}, isSiteAdmin: () => true }),
+  useAuth: () => ({
+    user: { uid: 'u1' },
+    loading: false,
+    userPreferences: {},
+    isSiteAdmin: () => true,
+    machineScope: () => null,
+  }),
 }));
 
 jest.mock('@/hooks/useCurrentSite', () => ({

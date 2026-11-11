@@ -621,13 +621,15 @@ the `mac` field of `signaling/signal-answer.json`.
 
 a live session holds a **5-minute lease** the browser renews silently, and no absolute cap: it lasts as long as
 its viewers keep renewing. the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
-site, a site that turns swoop off, a capability revoked or a machine excluded all take effect within one
-lease rather than at the next reconnect.
+site, a site that turns swoop off, a capability revoked, a machine excluded or a machine dropped from the
+viewer's machine scope all take effect within one lease rather than at the next reconnect.
 
 1. every `leaseSeconds` (default 300, from the bundle's `enablement`) the browser calls
-   `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, site enablement and capability and, if
-   all still hold, mints a **fresh viewer jwt** — same claims, new `iat`/`exp`/`jti` — and returns it with the
-   new `expiresAt`.
+   `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, machine scope, site enablement and
+   capability and, if all still hold, mints a **fresh viewer jwt** — same claims, new `iat`/`exp`/`jti` — and
+   returns it with the new `expiresAt`. a machine outside the viewer's scope answers 404, which is not a
+   withdrawal: the browser retries it, as it does for a removed member, until the host drops the viewer at
+   expiry + 30 s.
 2. the browser forwards that token to the host on `swoop-control` as `{"t":"lease","token":"…"}`.
 3. the host verifies it exactly as it verified the connect token (section 11's order), with one addition: the
    token's `fp` MUST equal the fingerprint of the **already established** dtls session. it answers
@@ -664,6 +666,12 @@ nor zero.
 
 the kill switch is faster and independent of all of this: the worker broadcasts `kill`, the streamer exits,
 and that path completes in ≤ 2 s. the polled command is only the last resort for a machine with no socket.
+
+a membership change takes the same fast path. narrowing a viewer's machine scope ends every session they sit
+in on a machine it drops, shared or not: the api ends the **whole** session through the sid-scoped kill
+(`endReason: "revoked"`, `endedFor` the viewer, audited `scope_changed`) within about 2 s, and everyone else in
+it reconnects on their own and is decided again. the narrowed viewer's lease is only the backstop, for a sweep
+that failed: their next renewal answers 404, and they are out within one lease plus the 30 s grace.
 
 ---
 

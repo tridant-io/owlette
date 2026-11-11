@@ -6,6 +6,8 @@ import {
   mockDbFactory,
   docSnapshot,
   querySnapshot,
+  seedMember,
+  seedSiteOwner,
 } from './helpers/firestore-mock';
 
 jest.mock('@sentry/nextjs', () => ({
@@ -52,7 +54,7 @@ const SITE = 'site-alpha';
 beforeEach(() => {
   jest.clearAllMocks();
   mockResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   mocks.get.mockResolvedValue(docSnapshot('any', {}));
   mocks.collectionGet.mockResolvedValue(querySnapshot([]));
 });
@@ -205,5 +207,63 @@ describe('GET /api/events/stream', () => {
     expect(chunk).toContain(`"siteId":"${SITE}"`);
     expect(chunk).toContain('"events":["version.published"]');
     expect(chunk).toContain('"transportOnly":true');
+  });
+});
+
+// quota and the events stream span every machine on the site, so the _shared
+// gate refuses a scoped member of any role (ADR 0016). the real site-access
+// adapter runs here, so the scope is read off the member row itself.
+describe('a machine scope', () => {
+  const SCOPED_MEMBER = 'user-scoped-member';
+  const SCOPED_ADMIN = 'user-scoped-admin';
+  const MEMBER = 'user-member';
+  const realAssertSite = jest.requireActual('@/lib/apiAuth.server').assertUserHasSiteAccess;
+  const siteContext = () => ({ params: Promise.resolve({ siteId: SITE }) });
+
+  beforeEach(() => {
+    mockAssertSite.mockImplementation(realAssertSite);
+    seedSiteOwner(SITE);
+    for (const [uid, role] of [[SCOPED_MEMBER, 'member'], [SCOPED_ADMIN, 'admin']] as const) {
+      seedMember(SITE, uid, role);
+      const key = `${SITE}/${uid}`;
+      mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: ['machine-1'] });
+    }
+    seedMember(SITE, MEMBER, 'member');
+  });
+
+  describe.each([
+    ['the quota', () => quotaGET(createMockRequest(`http://localhost/api/sites/${SITE}/quota`), siteContext())],
+    [
+      'the quota history',
+      () => quotaHistoryGET(createMockRequest(`http://localhost/api/sites/${SITE}/quota/history?period=7d`), siteContext()),
+    ],
+    [
+      'the events stream',
+      () => eventsGET(createMockRequest(`http://localhost/api/events/stream?siteId=${SITE}&events=version.published`)),
+    ],
+  ] as const)('%s', (_route, call) => {
+    it.each([
+      ['a scoped member', SCOPED_MEMBER],
+      ['a scoped admin', SCOPED_ADMIN],
+    ])('refuses %s with 403 before reading anything of the site', async (_who, uid) => {
+      mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
+
+      const res = await call();
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({ detail: 'capability not granted' });
+      expect(mocks.get).not.toHaveBeenCalled();
+      expect(mocks.collectionGet).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: still answers a whole-site member 200', async () => {
+      mockResolveAuth.mockResolvedValue({ userId: MEMBER, keyContext: null });
+
+      const res = await call();
+
+      expect(res.status).toBe(200);
+      // the stream keeps a keepalive timer until it is cancelled
+      await res.body?.cancel();
+    });
   });
 });

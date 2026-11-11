@@ -40,7 +40,7 @@ The contract is `web/openapi.yaml`, served at `GET /api/openapi` and rendered at
 ## Web Components
 
 - `web/components/ui/` — shadcn/ui primitives, ours to edit; `button.tsx` variants are the single source of truth for button styling (frontend-dev-guidelines skill).
-- `web/components/` — shared app components: dialogs (`ConfirmDialog`, `DeploymentDialog`, `ScreenshotDialog`, `WebhookSettingsDialog`, ...), `RequireAdminAccess` (admin guard), `PageHeader`, `ThemeProvider`, `LazyAuthProvider`. Subfolders: `admin` (the shared `admin/Panel`, `SegmentedControl` and `BackLink`, and `admin/sites`: the site list and the site settings sections), `auth`, `charts`, `hoot`, `icons`, `landing`, `mdx`, `roost`, `swoop`.
+- `web/components/` — shared app components: dialogs (`ConfirmDialog`, `DeploymentDialog`, `ScreenshotDialog`, `WebhookSettingsDialog`, ...), `RequireAdminAccess` (admin guard), `PageHeader`, `ThemeProvider`, `LazyAuthProvider`. Subfolders: `admin` (the shared `admin/Panel`, `SegmentedControl` and `BackLink`, and `admin/sites`: the site list and the site settings sections, plus `MachineAccessField`, the "whole site" | "some machines" picker the add-member and change-access dialogs share), `auth`, `charts`, `hoot`, `icons`, `landing`, `mdx`, `roost`, `swoop`.
 - `web/app/dashboard/components/` — `MachineCardView`, `MachineListView`, `AddMachineButton`, `SiteTimeConfirmBanner`. The process add/edit dialog state lives in `web/app/dashboard/page.tsx`.
 
 ---
@@ -60,6 +60,7 @@ Every Firestore read from a component goes through one. Landmarks:
 | `usePasskeys.ts` | `usePasskeys(userId)` — `registerPasskey`, `deletePasskey`, `renamePasskey`, `supported` |
 | `useUserManagement.ts` | `useUserManagement(enabled)` |
 | `useSiteMembers.ts` | `useSiteMembers(siteId)` (list, add, remove, `updateMember`), `useMemberCandidates(siteId)` |
+| `useSiteMachines.ts` | `useSiteMachines(siteId)` — a site's machines through `GET /api/sites/{siteId}/machines` (scope-checked server side), for site settings' machines and members sections |
 
 ---
 
@@ -74,6 +75,7 @@ Every Firestore read from a component goes through one. Landmarks:
 | `apiAuth.server.ts` | Route auth: `resolveAuth`, `requireSession`, `requireAdminOrIdToken`, `requireScope`, `assertUserHasSiteAccess`, `assertUserHasSiteCapability`, `ApiAuthError` |
 | `sitePolicy.server.ts`, `capabilities.ts`, `membership.server.ts` | Site access and per-site roles (firebase-integration skill) |
 | `swoopMode.ts` | The swoop mode's labels and rules, shared by server and dashboard |
+| `machineAccess.ts` | The one reading of a member's machine scope (`machineIds`), shared by server, dashboard and the read-path script: `parseMachineIds`, `scopeCovers`, `normalizeMachineIdsInput`, `MAX_MACHINE_SCOPE` (30) |
 | `sessionManager.server.ts` | HTTPOnly session via iron-session, including session MFA state |
 | `rateLimit.ts` / `rateLimit.server.ts` / `withRateLimit.ts` | Upstash limiters (`authRateLimit`, `apiRateLimit`, ...) / Firestore-sharded per-capability limiter / route wrapper |
 | `webhookSender.server.ts` | `fireWebhooks(siteId, siteName, eventType, data)`, `testWebhook(url, secret)` |

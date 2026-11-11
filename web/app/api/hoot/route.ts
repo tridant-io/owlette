@@ -284,6 +284,7 @@ export async function POST(request: NextRequest) {
       // down; anything the new lock wrote carries its explicit list.
       const outcome = await resolveHootTargets(db, siteId, {
         requested: prior.resolvedMachineIds,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 
@@ -315,6 +316,7 @@ export async function POST(request: NextRequest) {
       const outcome = await resolveHootTargets(db, siteId, {
         requested: requested.machineIds,
         mentions,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 

@@ -372,4 +372,69 @@ describe('revokeSwoopSessionsForUser', () => {
       expect(killSession).not.toHaveBeenCalled();
     });
   });
+
+  /**
+   * a narrowed machine scope ends the sessions on the machines that left it,
+   * whole, as every revocation does, and leaves the ones on machines still in it.
+   */
+  describe('a narrowed machine scope', () => {
+    const onM1Control = { ...controlSession, sid: 'sid-m1-control', machineId: 'm1' };
+    const onM1Watch = { ...watchSession, sid: 'sid-m1-watch', machineId: 'm1' };
+    const onM2 = { ...watchSession, sid: 'sid-m2', machineId: 'm2' };
+    const otherSeat = { viewerId: 'v-other', uid: 'user-other', ctl: true, joinedAt: NOW, leaseExpiresAt: NOW };
+
+    it('ends their session on a machine that left it, audited scope_changed, and leaves the ones on m1', async () => {
+      const leftOnM2 = { ...onM2, sid: 'sid-m2-left', viewers: [otherSeat] };
+      listUnendedSwoopSessionsForUser.mockResolvedValue([onM1Control, onM1Watch, onM2, leftOnM2]);
+
+      const result = await revoke({ reason: 'scope_changed', keepMachineIds: ['m1'] });
+
+      expect(result.revokedSids).toEqual(['sid-m2']);
+      expect(endSwoopSession).toHaveBeenCalledTimes(1);
+      endedFor('sid-m2', UID);
+      expect(recordSwoopSessionEnded).toHaveBeenCalledTimes(1);
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-m2', machineId: 'm2', endReason: 'scope_changed', endedFor: UID }),
+      );
+    });
+
+    it('with controlOnly, also ends the one they control on m1, audited with the call’s reason', async () => {
+      listUnendedSwoopSessionsForUser.mockResolvedValue([onM1Control, onM1Watch, onM2]);
+
+      const result = await revoke({ reason: 'role_changed', controlOnly: true, keepMachineIds: ['m1'] });
+
+      expect(result.revokedSids).toEqual(['sid-m1-control', 'sid-m2']);
+      expect(recordSwoopSessionEnded).toHaveBeenCalledTimes(2);
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-m1-control', endReason: 'role_changed' }),
+      );
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-m2', endReason: 'scope_changed' }),
+      );
+    });
+
+    // release 1 ends the whole sid, so the others rejoin and the api decides each again
+    it('ends a shared session on m2 for everyone in it, naming whom it was ended for', async () => {
+      listUnendedSwoopSessionsForUser.mockResolvedValue([{ ...onM2, viewers: [...onM2.viewers, otherSeat] }]);
+
+      const result = await revoke({ reason: 'scope_changed', keepMachineIds: ['m1'] });
+
+      expect(result.revokedSids).toEqual(['sid-m2']);
+      endedFor('sid-m2', UID);
+      expect(killSession).toHaveBeenCalledWith({ siteId: SITE, machineId: 'm2', sid: 'sid-m2' });
+      expect(recordSwoopSessionEnded).toHaveBeenCalledWith(
+        expect.objectContaining({ sid: 'sid-m2', endReason: 'scope_changed', endedFor: UID }),
+      );
+    });
+
+    it('ends one on m2 they are alone in', async () => {
+      listUnendedSwoopSessionsForUser.mockResolvedValue([onM2]);
+
+      const result = await revoke({ reason: 'scope_changed', keepMachineIds: ['m1'] });
+
+      expect(result.revokedSids).toEqual(['sid-m2']);
+      endedFor('sid-m2', UID);
+      expect(killSession).toHaveBeenCalledWith({ siteId: SITE, machineId: 'm2', sid: 'sid-m2' });
+    });
+  });
 });

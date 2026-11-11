@@ -176,7 +176,7 @@ interface HootChatViewProps {
 
 export function HootChatView({ initialChatId }: HootChatViewProps) {
   const router = useRouter();
-  const { user, userSites, isSuperadmin, isSiteAdmin, loading: authLoading, lastSiteId, lastMachineIds, updateLastSite, updateLastMachine } = useAuth();
+  const { user, userSites, isSuperadmin, isSiteAdmin, machineScope, loading: authLoading, lastSiteId, lastMachineIds, updateLastSite, updateLastMachine } = useAuth();
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
@@ -261,7 +261,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  const { machines, loading: machinesLoading } = useMachines(currentSiteId);
+  const scope = machineScope(currentSiteId);
+  const { machines, loading: machinesLoading } = useMachines(currentSiteId, scope);
 
   const siteMachineIds = useMemo(() => machines.map((m) => m.machineId), [machines]);
   // An EMPTY listing counts as "not known yet", not as "this site has none":
@@ -421,6 +422,8 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     // into the next conversation.
     selection: siteSelection,
     siteMachineIds,
+    // autonomous chats are whole-site; a scoped member's read of them is refused
+    includeAutonomous: scope === null,
     onChatPersisted: handleChatPersisted,
     onChatLoaded: handleChatLoaded,
   });

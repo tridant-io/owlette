@@ -186,6 +186,28 @@ describe('GET swoop/sessions', () => {
     expect(mockListLive).toHaveBeenCalledWith({ siteId: SITE });
   });
 
+  // the list spans every machine on the site, so no machine scope reaches it,
+  // whatever the role or swoop mode (ADR 0016).
+  it.each([
+    ['a scoped admin', ADMIN, 'admin', {}],
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+  ] as const)('%s cannot list the site sessions', async (_who, uid, role, extra) => {
+    seedMember(SITE, uid, role, extra);
+    const key = `${SITE}/${uid}`;
+    mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: ['machine-1'] });
+    signIn(uid);
+
+    const res = await GET(createMockRequest(sessionsUrl()), siteContext());
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('capability_missing');
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'machine_scope_site_wide' }),
+    );
+    expect(mockListLive).not.toHaveBeenCalled();
+  });
+
   it('refuses an api key, even an admin key, before reading anything', async () => {
     signInWithApiKey(ADMIN);
 
