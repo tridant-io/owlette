@@ -10,6 +10,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — hoot's replies are saved in API conversations
+
+A send through the hoot conversations API (`owlette chat send`, the SDKs) saved
+your message but never hoot's reply, so the conversation held only your side and
+every follow-up reached hoot without its own earlier answers. The reply's text
+is now saved when it finishes. A reply that ends in an error is not saved, and
+tool calls are not stored. Nothing to update on the machine.
+
 ### fixed — a failed local hoot turn reads as an error
 
 When hoot ran on the machine (local hoot) and its turn failed, the conversations

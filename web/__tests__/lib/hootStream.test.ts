@@ -45,8 +45,8 @@ jest.mock('@/lib/hoot/advisor', () => ({
 
 jest.mock('ai', () => ({
   __esModule: true,
+  ...jest.requireActual('ai'),
   streamText: jest.fn(() => ({ toUIMessageStreamResponse: () => new Response('') })),
-  stepCountIs: jest.fn((count: number) => count),
   // what the real tools builder wraps each tool in; identity keeps them readable.
   tool: jest.fn((definition: unknown) => definition),
   jsonSchema: jest.fn((schema: unknown) => schema),
@@ -61,6 +61,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 import type { Firestore } from 'firebase-admin/firestore';
 import { streamText } from 'ai';
+import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 import {
   conversationsToolDefs,
   runHootStream,
@@ -68,7 +69,7 @@ import {
 } from '@/lib/hootStream.server';
 import { withAdvisor } from '@/lib/hoot/advisor';
 import { SITE_TARGET_ID } from '@/lib/hoot/target';
-import { buildSystemPrompt } from '@/lib/llm';
+import { buildSystemPrompt, createModel } from '@/lib/llm';
 import { getToolsByTier } from '@/lib/mcp-tools';
 
 const FOLLOWUP_TOOLS = ['schedule_followup', 'cancel_followup'];
@@ -645,5 +646,287 @@ describe('runHootStream for someone limited to some machines', () => {
     expect(mockBuildExecutableTools.mock.calls[0][FANOUT_ARG]).toEqual(['m1', 'm2']);
     const { tools } = (streamText as jest.Mock).mock.calls[0][0];
     for (const toolName of SITE_WIDE_TOOLS) expect(tools).toHaveProperty(toolName);
+  });
+});
+
+/**
+ * The conversations API saves hoot's reply through `onAssistantText`. These turns run
+ * the installed AI SDK end to end over a scripted model, so the tap reads the frames
+ * the SDK really sends: the day its framing changes, this fails instead of replies
+ * quietly going unsaved. The suites above stub the reply as an empty body, which is
+ * how a tap that never saved a server-side reply stayed green.
+ */
+describe('runHootStream saves the reply it streamed', () => {
+  const actualAi = jest.requireActual('ai');
+  const db = {} as unknown as Firestore;
+
+  const finish = (unified: 'stop' | 'tool-calls' = 'stop') => ({
+    type: 'finish' as const,
+    finishReason: { unified, raw: undefined },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+  });
+
+  function text(id: string, ...deltas: string[]) {
+    return [
+      { type: 'text-start' as const, id },
+      ...deltas.map((delta) => ({ type: 'text-delta' as const, id, delta })),
+      { type: 'text-end' as const, id },
+    ];
+  }
+
+  /** the next turn runs the real streamText over `model`; `reshape` stands in for the network. */
+  function nextTurnModel(model: MockLanguageModelV3, reshape?: (response: Response) => Promise<Response>) {
+    (createModel as jest.Mock).mockReturnValueOnce(model);
+    (streamText as jest.Mock).mockImplementationOnce((options: unknown) => {
+      const result = actualAi.streamText(options);
+      if (!reshape) return result;
+      return { toUIMessageStreamResponse: () => reshape(result.toUIMessageStreamResponse()) };
+    });
+  }
+
+  /** the SDK's bytes one at a time: every frame and every multi-byte character arrives cut. */
+  async function oneBytePerChunk(response: Response): Promise<Response> {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+          controller.close();
+        },
+      }),
+    );
+  }
+
+  /** a model that answers once, in one text part. */
+  function replying(...deltas: string[]) {
+    return new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({ chunks: [...text('t1', ...deltas), finish()] }),
+      }),
+    });
+  }
+
+  async function send(machineId = 'kiosk-01', onAssistantText: jest.Mock = jest.fn()) {
+    const result = await runHootStream({
+      db,
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId,
+      machineName: 'Lobby',
+      messages: [{ role: 'user', content: 'how is the lobby?' }],
+      chatId: 'conv-1',
+      onAssistantText,
+    });
+    if (!result.ok) throw new Error(result.error);
+    return { response: result.response, onAssistantText };
+  }
+
+  /** let detached work run, so a save or a close that should not happen gets its chance to. */
+  async function settle(): Promise<void> {
+    for (let i = 0; i < 5; i++) await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  /** what the client read, and every text the tap handed over to be saved. */
+  async function sendAndRead(machineId?: string) {
+    const { response, onAssistantText } = await send(machineId);
+    const body = await response.text();
+    await settle();
+    return { body, saved: onAssistantText.mock.calls.map(([saved]) => saved) };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
+    mockListSiteMachines.mockResolvedValue([{ id: 'm1', online: true, hootEnabled: true, activeHoursGuard: false }]);
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    mockGetMachineSummary.mockResolvedValue(null);
+    // the gate on keeps a single-machine turn on the server-side llm path.
+    mockGetHootRequireTier3Approval.mockResolvedValue(true);
+    mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    mockBuildExecutableTools.mockReturnValue({});
+  });
+
+  it.each([
+    ['a single-machine turn', 'kiosk-01'],
+    ['a site-wide turn', SITE_TARGET_ID],
+  ])('saves the reply of %s once, whole', async (_label, machineId) => {
+    nextTurnModel(replying('lobby-01 is ', 'online'));
+
+    const { body, saved } = await sendAndRead(machineId);
+
+    // the client gets the SDK's stream untouched
+    expect(body).toContain('data: {"type":"text-delta","id":"t1","delta":"lobby-01 is "}');
+    expect(saved).toEqual(['lobby-01 is online']);
+  });
+
+  it('reads frames and characters that arrive cut across chunks', async () => {
+    nextTurnModel(replying('cpu is at 12% — ', 'all good 🦉'), oneBytePerChunk);
+
+    const { saved } = await sendAndRead();
+
+    expect(saved).toEqual(['cpu is at 12% — all good 🦉']);
+  });
+
+  it('closes the stream only once the reply is saved', async () => {
+    let saveStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      saveStarted = resolve;
+    });
+    let finishSave!: () => void;
+    const onAssistantText = jest.fn(() => {
+      saveStarted();
+      return new Promise<void>((resolve) => {
+        finishSave = resolve;
+      });
+    });
+    nextTurnModel(replying('lobby-01 is online'));
+    const { response } = await send('kiosk-01', onAssistantText);
+
+    let closed = false;
+    const body = response.text().then((text) => {
+      closed = true;
+      return text;
+    });
+    await started;
+    await settle();
+
+    expect(onAssistantText).toHaveBeenCalledWith('lobby-01 is online');
+    expect(closed).toBe(false);
+    finishSave();
+    expect(await body).toContain('data: [DONE]');
+  });
+
+  it('still closes the stream cleanly when the save fails', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const onAssistantText = jest.fn().mockRejectedValue(new Error('firestore unavailable'));
+    nextTurnModel(replying('lobby-01 is online'));
+    const { response } = await send('kiosk-01', onAssistantText);
+
+    const body = await response.text();
+
+    expect(body.endsWith('data: [DONE]\n\n')).toBe(true);
+    expect(onAssistantText).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('[hootStream] onAssistantText tap failed:', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('saves every text part of a turn that ran a tool between them, as the dashboard copies that reply', async () => {
+    let call = 0;
+    nextTurnModel(new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks:
+              call === 1
+                ? [
+                    ...text('0', 'let me check.'),
+                    { type: 'tool-call' as const, toolCallId: 'call_1', toolName: 'get_metrics', input: '{}' },
+                    finish('tool-calls'),
+                  ]
+                : [...text('0', 'cpu is at 12%.'), finish()],
+          }),
+        };
+      },
+    }));
+    (withAdvisor as jest.Mock).mockReturnValueOnce({
+      tools: {
+        get_metrics: actualAi.tool({
+          inputSchema: actualAi.jsonSchema({ type: 'object', properties: {} }),
+          execute: async () => ({ cpu: 12 }),
+        }),
+      },
+    });
+
+    const { body, saved } = await sendAndRead();
+
+    expect(body).toContain('"type":"tool-output-available"');
+    // the tool's call and output are not text; the stored conversation has no place for them
+    expect(saved).toEqual(['let me check.\n\ncpu is at 12%.']);
+  });
+
+  it('saves nothing of a reply that ended in an error, though the SDK still sends finish', async () => {
+    nextTurnModel(new MockLanguageModelV3({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: [...text('t1', 'cpu is'), { type: 'error' as const, error: new Error('overloaded') }, finish()],
+        }),
+      }),
+    }));
+
+    const { body, saved } = await sendAndRead();
+
+    expect(body).toContain('"type":"error"');
+    expect(body).toContain('"type":"finish"');
+    expect(saved).toEqual([]);
+  });
+
+  it('saves nothing when the model fails before it says anything', async () => {
+    nextTurnModel(new MockLanguageModelV3({
+      doStream: async () => {
+        throw new Error('invalid x-api-key');
+      },
+    }));
+
+    const { body, saved } = await sendAndRead();
+
+    expect(body).toContain('"type":"error"');
+    expect(saved).toEqual([]);
+  });
+
+  it('saves nothing when the turn cannot start, and says why on the legacy error line', async () => {
+    mockResolveLlmConfig.mockRejectedValueOnce(new Error('no LLM key saved'));
+
+    const { body, saved } = await sendAndRead();
+
+    expect(body).toBe('3:"no LLM key saved"\n');
+    expect(saved).toEqual([]);
+  });
+
+  describe('a client that hangs up', () => {
+    /** a reply whose second half waits until `release` is called. */
+    function heldReply() {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      nextTurnModel(new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: new ReadableStream({
+            async start(controller) {
+              for (const chunk of text('t1', 'the first half')) controller.enqueue(chunk);
+              await held;
+              for (const chunk of [...text('t2', 'the second half'), finish()]) controller.enqueue(chunk);
+              controller.close();
+            },
+          }),
+        }),
+      }));
+      return release;
+    }
+
+    it('leaves nothing saved of the reply it walked away from', async () => {
+      const release = heldReply();
+      const { response, onAssistantText } = await send();
+      const reader = response.body!.getReader();
+      await reader.read();
+
+      await reader.cancel();
+      release();
+      await settle();
+
+      expect(onAssistantText).not.toHaveBeenCalled();
+    });
+
+    it('negative control: the same reply, never read but never cancelled, is saved in the same time', async () => {
+      const release = heldReply();
+      const { onAssistantText } = await send();
+
+      release();
+      await settle();
+
+      expect(onAssistantText).toHaveBeenCalledWith('the first half\n\nthe second half');
+    });
   });
 });
