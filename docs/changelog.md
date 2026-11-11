@@ -10,6 +10,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — a talon switched back on gets its ten tries back
+
+A talon that failed ten runs in a row switched off, and when someone switched it
+back on it kept that count of ten, so its first failed run switched it off
+again. Switching a talon from off to on, from its card, through hoot or over the
+API, now starts the count over; switching it off keeps the count. An API update
+that switches a talon on now also clears why it was off and schedules its next
+run from now, as the switch on its card always did. Nothing to update on the
+machine.
+
 ### fixed — hoot's replies are saved in API conversations
 
 A send through the hoot conversations API (`owlette chat send`, the SDKs) saved

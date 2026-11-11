@@ -1446,10 +1446,8 @@ paths:
         Two shapes, chosen by the body:
 
         - `{ "enabled": <bool> }` and nothing else flips the talon on or off.
-          Enabling re-arms `nextRunAt` from now, so a talon that sat disabled
-          for a month does not fire the instant it is switched back on, and
-          re-checks that the author still has an LLM key when the talon uses AI
-          (`400 llm_key_required`).
+          Switching on re-checks that the author still has an LLM key when the
+          talon uses AI (`400 llm_key_required`).
         - anything else replaces the caller-owned fields wholesale and is
           revalidated exactly like a create — including the `command`-output
           privilege gate, the webhook-url SSRF check, and the author-LLM-key
@@ -1457,10 +1455,24 @@ paths:
           including `enabled` (default `true`), so a replacement that omits it
           switches a paused talon back on.
 
-        Run bookkeeping (`lastRunAt`, `lastRunStatus`, `consecutiveFailures`)
-        is never touched by either shape. `disabledReason` is cleared by the
-        enable/disable shape — a person moving the switch settles the question
-        of why it moved.
+        Moving the switch does the same through either shape. The toggle
+        shape always counts as moving it; a replacement counts only when its
+        `enabled` differs from the talon's, so an edit that carries the
+        current value moves nothing.
+
+        - Either edge clears `disabledReason` — a person moving the switch
+          settles the question of why it moved. Editing a talon the system
+          switched off, without switching it on, keeps the reason.
+        - Switching on re-arms `nextRunAt` from now, so a talon that sat
+          disabled for a month does not fire the instant it is switched back
+          on.
+        - Switching from off to on starts `consecutiveFailures` over at 0, so
+          a talon the system switched off after 10 failed runs gets 10 more
+          tries. Switching it off, or sending `enabled: true` for a talon that
+          is already on, keeps the count.
+
+        The rest of the run bookkeeping (`lastRunAt`, `lastRunStatus`) is
+        never touched by either shape.
 
         Requires `TALON_MANAGE`; API keys need `site=<siteId>:write`.
       security:
@@ -12168,7 +12180,11 @@ components:
               nullable: true
             consecutiveFailures:
               type: integer
-              description: Reset to 0 on any successful run; drives auto-disable backoff.
+              description: >-
+                Failed runs in a row; at 10 the system switches the talon off
+                with `disabledReason: repeated_failures`. Reset to 0 by any
+                successful run and when a person switches the talon from off
+                to on.
             disabledReason:
               type: string
               nullable: true

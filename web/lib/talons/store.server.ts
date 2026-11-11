@@ -30,6 +30,7 @@ import type {
   TalonCreatedVia,
   TalonDoc,
   TalonOutput,
+  TalonTrigger,
 } from './types';
 import {
   MAX_TALONS_PER_SITE,
@@ -291,6 +292,36 @@ function talonAuthorUid(talon: Pick<TalonDoc, 'createdBy'>): string | undefined 
   return createdBy;
 }
 
+/**
+ * what a person moving a talon's switch writes besides `enabled`: every toggle
+ * request, and a replace that changes `enabled`. either way it clears the
+ * system's `disabledReason`, else a re-armed talon still claims it was switched
+ * off. switching on re-arms `nextRunAt` from now (a month-old next run would
+ * fire the instant the sweep sees it) and, from off, starts the failure count
+ * over: left at the limit, its first failed run would switch it off again. only
+ * the off-to-on edge resets the count, so `enabled: true` for a talon already
+ * on forgives nothing.
+ */
+async function switchMoveUpdates(
+  db: Firestore,
+  siteId: string,
+  existing: Pick<TalonDoc, 'enabled' | 'disabledReason'>,
+  enabled: boolean,
+  trigger: TalonTrigger,
+  now: Date,
+): Promise<Record<string, unknown>> {
+  const updates: Record<string, unknown> =
+    existing.disabledReason !== undefined ? { disabledReason: FieldValue.delete() } : {};
+  if (!enabled) return updates;
+
+  const timezone = await getSiteTimezone(db, siteId);
+  const nextRunAt = computeNextRunAt(trigger, timezone, now);
+  // see the null-sorting note in `createTalon`
+  updates.nextRunAt = nextRunAt ?? FieldValue.delete();
+  if (!existing.enabled) updates.consecutiveFailures = 0;
+  return updates;
+}
+
 function hasWebhookOutput(outputs: TalonOutput[]): boolean {
   return outputs.some((output) => output.type === 'webhook');
 }
@@ -418,7 +449,9 @@ export async function createTalon(
 
 /**
  * Replace a talon's caller-owned fields. Full-document semantics; run
- * bookkeeping (`lastRunAt`, `consecutiveFailures`, …) is untouched.
+ * bookkeeping (`lastRunAt`, `consecutiveFailures`, …) is untouched, except
+ * that a replace which moves the switch does what the toggle does
+ * ({@link switchMoveUpdates}).
  */
 export async function updateTalon(
   db: Firestore,
@@ -451,7 +484,19 @@ export async function updateTalon(
     updates.description = FieldValue.delete();
   }
 
-  if (changedFields.includes('trigger')) {
+  // every replace carries `enabled`, so only a changed value moves the switch:
+  // an edit to a talon the system switched off keeps the reason it shows
+  const switchMoved = value.enabled !== existing.enabled;
+  const switchedOn = switchMoved && value.enabled;
+  if (switchMoved) {
+    Object.assign(
+      updates,
+      await switchMoveUpdates(db, ctx.siteId, existing, value.enabled, value.trigger, now),
+    );
+  }
+
+  // switching on has already re-armed it from the new trigger
+  if (changedFields.includes('trigger') && !switchedOn) {
     const timezone = await getSiteTimezone(db, ctx.siteId);
     const nextRunAt = computeNextRunAt(value.trigger, timezone, now);
     // Switching a schedule talon to a threshold/event one must drop the field
@@ -483,9 +528,9 @@ export async function updateTalon(
 }
 
 /**
- * Flip a talon on or off. Enabling re-arms `nextRunAt` from now — a month-old
- * next-run would otherwise fire the instant the sweep sees it. Disabling leaves
- * it stale, harmless because the sweep filters `enabled == true`.
+ * Flip a talon on or off; {@link switchMoveUpdates} says what moving the switch
+ * writes. Disabling leaves `nextRunAt` stale, harmless because the sweep
+ * filters `enabled == true`.
  */
 export async function setTalonEnabled(
   db: Firestore,
@@ -495,15 +540,6 @@ export async function setTalonEnabled(
 ): Promise<StoredTalon> {
   const existing = await requireTalon(db, ctx.siteId, talonId);
 
-  const now = new Date();
-  // A human moved the switch: clear the system's disabledReason on either edge,
-  // else a re-armed talon still claims it was switched off.
-  const updates: Record<string, unknown> = {
-    enabled,
-    updatedAt: now,
-    ...(existing.disabledReason !== undefined ? { disabledReason: FieldValue.delete() } : {}),
-  };
-
   if (enabled) {
     await assertAuthorLlmKeyAvailable(
       talonAuthorUid(existing),
@@ -511,10 +547,14 @@ export async function setTalonEnabled(
       existing.condition,
       existing.outputs,
     );
-    const timezone = await getSiteTimezone(db, ctx.siteId);
-    const nextRunAt = computeNextRunAt(existing.trigger, timezone, now);
-    updates.nextRunAt = nextRunAt ?? FieldValue.delete();
   }
+
+  const now = new Date();
+  const updates: Record<string, unknown> = {
+    enabled,
+    updatedAt: now,
+    ...(await switchMoveUpdates(db, ctx.siteId, existing, enabled, existing.trigger, now)),
+  };
 
   await talonsCollection(db, ctx.siteId).doc(talonId).update(updates);
 
