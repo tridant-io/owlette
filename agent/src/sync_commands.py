@@ -313,8 +313,9 @@ def _handle_sync_pull(cmd_data: dict, cmd_id: str, service: Any) -> str:
         if cancelled:
             return cancelled
 
-        # diff against the most-recent committed version for this roost, if any
-        prior = _load_prior_version(service, site_id, roost_id, exclude_version_id=version_id)
+        # diff against the version last committed into this root, if any: its
+        # unchanged files are the only ones the assembler may skip.
+        prior = _load_prior_version(service, site_id, roost_id, extract_root)
         diff = diff_versions(version, prior)
 
         cancelled = _cancelled_before_distribution('version diff')
@@ -470,6 +471,7 @@ def _handle_sync_pull(cmd_data: dict, cmd_id: str, service: Any) -> str:
                 state=state,
                 allowlist=allowlist,
                 cancel_event=cancel_event,
+                unchanged_paths=frozenset(f.path for f in diff.files_unchanged),
             )
         except (AssembleError, DestinationNotAllowedError) as e:
             logger.error(
@@ -608,16 +610,22 @@ def _require_str(d: dict, key: str) -> str:
     return v
 
 
+_state_lock = threading.Lock()
+
+
 def _state_for(service: Any) -> SyncState:
     """
     lazily attach a SyncState to the service so all handlers share one
-    connection. the service owns its lifecycle.
+    connection. the service owns its lifecycle. locked: the scrub thread
+    and a command thread can both get here first, and the reaper retires
+    every sync its own instance did not start.
     """
-    state = getattr(service, '_sync_state', None)
-    if state is None:
-        state = SyncState()
-        service._sync_state = state
-    return state
+    with _state_lock:
+        state = getattr(service, '_sync_state', None)
+        if state is None:
+            state = SyncState()
+            service._sync_state = state
+        return state
 
 
 class _NullReader:
@@ -693,12 +701,12 @@ def _allowlist_for(service: Any) -> DestinationAllowlist:
 
 
 def _load_prior_version(
-    service: Any, site_id: str, roost_id: str, exclude_version_id: str
+    service: Any, site_id: str, roost_id: str, extract_root: str
 ) -> Optional[Version]:
     """
-    find the most recent COMMITTED version for this roost (excluding
-    the version we're about to install) and load it from cache. used
-    for diffing.
+    find the version most recently COMMITTED into extract_root for this
+    roost and load it from cache: what the tree holds now. the version about
+    to be installed counts, so a re-sync of what is on disk skips it all.
     """
     state = _state_for(service)
     # Only the immediately prior committed distribution is considered; a real
@@ -707,10 +715,10 @@ def _load_prior_version(
         assert state._conn is not None
         cur = state._conn.execute(
             '''SELECT version_id, version_url FROM distributions
-               WHERE site_id = ? AND roost_id = ? AND version_id != ?
+               WHERE site_id = ? AND roost_id = ? AND extract_root = ?
                  AND state = 'committed'
-               ORDER BY updated_at DESC LIMIT 1''',
-            (site_id, roost_id, exclude_version_id),
+               ORDER BY updated_at DESC, id DESC LIMIT 1''',
+            (site_id, roost_id, extract_root),
         )
         row = cur.fetchone()
     if row is None:

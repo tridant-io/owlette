@@ -6,7 +6,8 @@ This guide explains how to build the Owlette installer executable for distributi
 
 - **Windows** (required for building the Windows installer)
 - **Node.js 22 + npm** — the full build compiles the desktop app in `desktop/`
-- **Rust toolchain** (rustup) and **MSVC C++ build tools** — for the desktop app and the `owlette-host` service host. The build prepends `%USERPROFILE%\.cargo\bin` to PATH itself
+- **Rust toolchain** (rustup) and **MSVC C++ build tools** — for the desktop app, owlette swoop (the viewer app), the `owlette-host` service host and the swoop streamer. The build prepends `%USERPROFILE%\.cargo\bin` to PATH itself
+- **CMake** — the swoop streamer builds libopus from source (`--features audio-opus`). The build also finds the copy inside Visual Studio
 - **Inno Setup 6** — found through `%ISCC%`, then `iscc` on PATH, then `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`
 
 No system Python is needed: the build downloads and checksum-verifies its own embedded Python 3.11.8. `scripts/bootstrap-windows.ps1` checks all of the above.
@@ -37,13 +38,13 @@ Set `OWLETTE_SIGN=1` first for a signed build, which every release needs: see "c
 
 **What it does:**
 0. Reads the version from `VERSION`
-1. Cleans `build/` (the `downloads/` cache is kept)
+1. Cleans `build/installer_package`, `installer_output`, `python` and `tools` (`build/macos` and `build/linux` hold the tracked posix build scripts and stay; the `downloads/` cache is kept)
 2. Downloads Python 3.11.8 embedded and verifies its SHA-256
 3. Configures the embedded Python's import paths
 4. Installs pip
-5. Installs `requirements.txt` into the embedded Python
-6. Builds the desktop app (`npx tauri build --no-bundle` in `desktop/`)
-7. Builds the service host (`cargo build --release` in `agent/host`)
+5. Installs `requirements.txt` into the embedded Python, then deletes the Claude CLI the SDK bundles
+6. Builds the desktop app (`npx tauri build --no-bundle` in `desktop/`) and owlette swoop, the viewer app (`desktop/viewer`)
+7. Builds the service host (`cargo build --release` in `agent/host`) and the swoop streamer (`cargo build --release --features audio-opus` in `agent/swoop`)
 8. Stages the installer package in `build/installer_package/`
 9. Compiles the Inno Setup installer from `owlette_installer.iss`
 
@@ -69,7 +70,7 @@ build_installer_quick.bat
 **What it does:**
 1. Reads the version from `VERSION`
 2. Checks that a previous full build exists
-3. Copies the agent source, scripts, and icons into `build/installer_package/`; re-copies the desktop app if it has been rebuilt, and rebuilds the service host
+3. Copies the agent source, scripts, and icons into `build/installer_package/`; re-copies the desktop app, owlette swoop and the swoop streamer if they have been rebuilt, and rebuilds the service host
 4. Recompiles the Inno Setup installer
 
 **Output:**
@@ -80,7 +81,7 @@ build_installer_quick.bat
 **Important:**
 - Requires a previous full build (Method 1) to exist in `build/`
 - Does not update Python dependencies or the Python runtime
-- Does not compile the desktop app — run `npx tauri build --no-bundle` in `desktop/` first if it changed
+- Does not compile the desktop app, owlette swoop or the swoop streamer — build the one that changed first (the script prints the command), and it refuses to package when any of the three is missing
 - If you get errors, do a full rebuild with Method 1
 
 ## Build Output Structure
@@ -96,7 +97,10 @@ agent/
 │   │   │   ├── src/                  # Agent Python source code
 │   │   │   └── icons/                # Application icons
 │   │   ├── app/
-│   │   │   └── owlette-desktop.exe   # Desktop app (tray + window)
+│   │   │   ├── owlette-desktop.exe   # Desktop app (tray + window)
+│   │   │   └── owlette-swoop-viewer.exe  # owlette swoop, the viewer app
+│   │   ├── swoop/
+│   │   │   └── owlette-swoop.exe     # swoop streamer
 │   │   ├── tools/
 │   │   │   └── owlette-host.exe      # Windows service host
 │   │   └── scripts/                  # install.bat / uninstall.bat
@@ -202,7 +206,7 @@ The version is read from `VERSION` at build time and passed to Inno Setup, which
 2. Run `node scripts/sync-versions.js X.Y.Z` from the repo root — it updates every version file, including the desktop and host crates
 3. Commit, then do a full rebuild (Method 1)
 
-The ordering rules are in [docs/internal/version-management.md](../docs/internal/version-management.md) and the release runbook.
+The ordering rules are in the release runbook, [docs/runbooks/agent-installer-release.md](../docs/runbooks/agent-installer-release.md).
 
 ## CI/CD Integration
 
@@ -210,7 +214,7 @@ The ordering rules are in [docs/internal/version-management.md](../docs/internal
 
 ## Cleaning Build Artifacts
 
-The full build deletes and recreates `build/` on every run, so there is no separate clean step. `downloads/` is a cache of the Python embed and `get-pip.py`; it only needs clearing if the pinned Python version changes.
+The full build deletes and recreates `build/installer_package`, `installer_output`, `python` and `tools` on every run, so there is no separate clean step; `build/macos` and `build/linux` hold the tracked posix build scripts. `downloads/` is a cache of the Python embed and `get-pip.py`; it only needs clearing if the pinned Python version changes.
 
 ## Additional Resources
 

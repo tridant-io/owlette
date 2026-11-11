@@ -32,6 +32,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { formatScheduleSummary } from '@/components/ScheduleEditor';
 import { cn } from '@/lib/utils';
 import { BLOCK_COLORS } from '@/lib/scheduleDefaults';
+import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { formatTemperature, getTemperatureColorClass } from '@/lib/temperatureUtils';
 import { resolveMemoryTotalGb } from '@/lib/machineMemory';
 import { activeHoursGuardOf, type PowerCommandOptions, type PowerCommandSent } from '@/lib/activeHours';
@@ -839,11 +840,11 @@ export const MachineRow = memo(function MachineRow({
                                 </>
                               )}
                             </div>
-                            {((process._optimisticLaunchMode ?? process.launch_mode) === 'scheduled') && (process._optimisticSchedules ?? process.schedules) && (process._optimisticSchedules ?? process.schedules)!.length > 0 && (
+                            {effectiveLaunchMode(process) === 'scheduled' && effectiveSchedules(process) && effectiveSchedules(process)!.length > 0 && (
                               <div className="flex items-center gap-1.5 text-[11px] mt-0.5">
                                 <Clock className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
                                 <span className="truncate">
-                                  {(process._optimisticSchedules ?? process.schedules)!.map((block, i) => {
+                                  {effectiveSchedules(process)!.map((block, i) => {
                                     const colorIdx = block.colorIndex ?? i;
                                     const color = BLOCK_COLORS[colorIdx % BLOCK_COLORS.length];
                                     const summary = block.name || formatScheduleSummary([block], siteTimeFormat);
@@ -859,7 +860,7 @@ export const MachineRow = memo(function MachineRow({
                             )}
                           </div>
                           {(() => {
-                            const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as LaunchMode;
+                            const currentMode = effectiveLaunchMode(process);
                             return (
                               <>
                                 {/* Desktop controls (lg+) */}

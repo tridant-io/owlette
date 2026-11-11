@@ -57,59 +57,19 @@ def auth_manager(storage):
     return am
 
 
-# TestTokenExchange — registration code -> tokens
-class TestTokenExchange:
-    def test_successful_exchange(self, auth_manager):
-        """exchange_registration_code should return True on 200."""
+# TestDeviceCodeCredentials — what a pairing poll must carry before it is stored
+class TestDeviceCodeCredentials:
+    def test_reply_missing_tokens_is_refused_and_nothing_saved(self, auth_manager, storage):
+        """The legacy plaintext poll reply without a refresh token or site."""
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "accessToken": "access-123",
-            "refreshToken": "refresh-456",
-            "expiresIn": 3600,
-            "siteId": "site-abc",
-        }
+        mock_response.json.return_value = {"accessToken": "access-123"}
 
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            result = auth_manager.exchange_registration_code("REG-CODE-XYZ")
+        with patch("requests.post", return_value=mock_response):
+            with pytest.raises(AuthenticationError, match="missing tokens"):
+                auth_manager.poll_device_code("DEVICE-CODE", interval=0, timeout=5)
 
-        assert result is True
-        assert auth_manager._access_token == "access-123"
-        assert auth_manager._site_id == "site-abc"
-
-    def test_error_on_non_200_response(self, auth_manager):
-        """Non-200 response should raise AuthenticationError."""
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.text = "Unauthorized"
-        mock_response.json.return_value = {"error": "invalid_code"}
-
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("BAD-CODE")
-
-    def test_error_on_network_failure(self, auth_manager):
-        """Network errors should raise AuthenticationError wrapping the original."""
-        with patch("requests.post", side_effect=ConnectionError("DNS resolution failed")), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("REG-CODE")
-
-    def test_error_on_missing_tokens(self, auth_manager):
-        """If response is missing required fields, should raise."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "accessToken": "access-123",
-            # Missing refreshToken and siteId
-        }
-
-        with patch("requests.post", return_value=mock_response), \
-             patch("builtins.open", MagicMock()):
-            with pytest.raises(AuthenticationError):
-                auth_manager.exchange_registration_code("REG-CODE")
+        storage.save_refresh_token.assert_not_called()
 
 
 # TestTokenRefresh — caching and refresh logic

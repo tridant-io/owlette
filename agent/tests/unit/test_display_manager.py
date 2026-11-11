@@ -845,7 +845,7 @@ class TestApplyTopologyAutoRestore:
         # Mosaic refuse-guard inactive on the test host.
         import nvapi_display
         monkeypatch.setattr(
-            nvapi_display, 'detect_mosaic', lambda: {'mosaicActive': False},
+            nvapi_display, 'detect_mosaic', lambda: {'active': False, 'grids': []},
         )
 
         # `_apply_core` is the only CCD-touching call on S1; stub it so we never hit Win32.
@@ -978,7 +978,7 @@ class TestApplyTopologyAutoRestore:
         import nvapi_display
         monkeypatch.setattr(dm, '_is_session_0', lambda: False)
         monkeypatch.setattr(
-            nvapi_display, 'detect_mosaic', lambda: {'mosaicActive': False},
+            nvapi_display, 'detect_mosaic', lambda: {'active': False, 'grids': []},
         )
 
         def _fake_read_config(keys=None, **kw):

@@ -69,10 +69,10 @@ the room only enforces who may send what, and to whom.
 | `viewer-join` | **server only** | the host, once per viewer id per session (see below) |
 | `error` | **server only** | the offending socket |
 | `kill` | **server only** (from `POST /v1/kill`) | every socket of the named `sid` (every socket when `sid` is null), then `close(1000)` |
-| `offer` | viewer only | host and doorbell |
+| `offer` | viewer only | the host |
 | `answer` | host only | the named viewer (`to`) |
 | `host-ready` | host only | the named viewer, or all viewers when `to` is absent |
-| `candidate` | viewer or host | viewer → host and doorbell; host → the named viewer, or all viewers |
+| `candidate` | viewer or host | viewer → the host; host → the named viewer, or all viewers |
 | `bye` | viewer or host | same direction rule as `candidate` |
 
 refusals, each an `error` frame carrying a code and nothing else:

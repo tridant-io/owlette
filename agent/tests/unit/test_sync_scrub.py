@@ -346,6 +346,23 @@ def test_reaper_keeps_chunks_referenced_by_an_active_distribution(tmp_path):
         state.close()
 
 
+def test_reaper_collects_what_a_sync_cut_off_by_a_restart_fetched(tmp_path):
+    """no process finishes a sync a restart interrupted once its command is
+    gone, and while its row stays active it pins every chunk it fetched."""
+    store = tmp_path / 'content'
+    h = _put_store_chunk(store, b'fetched before the restart', age_seconds=48 * 3600)
+    _state_with_distribution(tmp_path, 'state.db', 'downloading', [h]).close()
+
+    state = SyncState(str(tmp_path / 'state.db'))  # the next agent process
+    try:
+        report = reap_orphan_chunks(state, content_store=str(store))
+
+        assert report.deleted_hashes == [h]
+        assert state.find_distribution('s', 'r', 'v')['state'] == 'failed'
+    finally:
+        state.close()
+
+
 @pytest.mark.parametrize('terminal_state', ['committed', 'failed', 'cancelled'])
 def test_reaper_collects_chunks_of_terminal_distributions(tmp_path, terminal_state):
     """An ended distribution is never resumed, so its leftovers are the leak

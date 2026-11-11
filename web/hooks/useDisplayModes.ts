@@ -2,16 +2,15 @@
 
 /**
  * Per-monitor catalogue of supported display modes. Subscribes to
- * `sites/{siteId}/machines/{machineId}/hardware/displayModes` and exposes it
- * plus a `requestEnumerate` dispatcher that asks the agent to rebuild it. Feeds
- * the resolution + refresh dropdowns in the display editor.
+ * `sites/{siteId}/machines/{machineId}/hardware/displayModes` and exposes it.
+ * Feeds the resolution + refresh dropdowns in the display editor.
  *
  * With `triggerForHash` (the live profile's `signatureHash`) and `enabled`, it
  * fires `enumerateDisplayModes` once per (site, machine, hash) per tab
  * lifetime: a stale or missing cache re-enumerates, a fresh one is a pure read.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { useDisplayActions } from '@/hooks/useDisplayActions';
@@ -51,9 +50,6 @@ export interface UseDisplayModesResult {
   loading: boolean;
   /** Any error from the Firestore subscription; null while healthy. */
   error: string | null;
-  /** Manual `enumerate_display_modes` dispatch, for a "refresh catalogue"
-   * affordance; the auto-trigger covers the common case. */
-  requestEnumerate: () => Promise<string>;
 }
 
 export interface UseDisplayModesOptions {
@@ -220,18 +216,12 @@ export function useDisplayModes(
     enumerateDisplayModes,
   ]);
 
-  // Stable identity so consumers can list it in dependency arrays.
-  const requestEnumerate = useCallback(async () => {
-    return enumerateDisplayModes();
-  }, [enumerateDisplayModes]);
-
   // Render-time derivation, matching useDisplayState.
   if (!enabled) {
     return {
       catalogue: null,
       loading: false,
       error: null,
-      requestEnumerate,
     };
   }
   if (!db) {
@@ -239,7 +229,6 @@ export function useDisplayModes(
       catalogue: null,
       loading: false,
       error: 'Firebase not configured',
-      requestEnumerate,
     };
   }
   if (!siteId || !machineId) {
@@ -247,7 +236,6 @@ export function useDisplayModes(
       catalogue: null,
       loading: false,
       error: null,
-      requestEnumerate,
     };
   }
   // Target in flight — report loading rather than leaking prior-target data.
@@ -256,13 +244,11 @@ export function useDisplayModes(
       catalogue: null,
       loading: true,
       error: null,
-      requestEnumerate,
     };
   }
   return {
     catalogue: state.catalogue,
     loading: !state.loaded,
     error: state.error,
-    requestEnumerate,
   };
 }

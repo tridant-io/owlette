@@ -170,6 +170,27 @@ describe('what gets written', () => {
   })
 })
 
+describe('the 15-minute steppers', () => {
+  it('step on click, which is what enter and space fire on a focused button', () => {
+    const { save } = setup(null)
+
+    fireEvent.click(screen.getByRole('button', { name: 'start time, 15 minutes later' }))
+    fireEvent.click(screen.getByRole('button', { name: 'stop time, 15 minutes earlier' }))
+
+    expect(save()).toStrictEqual([
+      { days: ['mon', 'tue', 'wed', 'thu', 'fri'], ranges: [{ start: '09:15', stop: '16:45' }] },
+    ])
+  })
+
+  it('name the fields they step, and the block name field', () => {
+    setup(null)
+
+    expect(screen.getByRole('textbox', { name: 'start time' })).toBe(time('9:00 am'))
+    expect(screen.getByRole('textbox', { name: 'stop time' })).toBe(time('5:00 pm'))
+    expect(screen.getByRole('textbox', { name: 'block name' })).toBeTruthy()
+  })
+})
+
 describe('which clock the windows follow', () => {
   /**
    * FROZEN. This is the sentence every recorded walkthrough frames, and it is

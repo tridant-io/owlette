@@ -128,6 +128,24 @@ describe('setProcessLaunchMode', () => {
     expect(result.mode).toBe('scheduled');
   });
 
+  it.each([
+    ['a time no clock has', [{ days: ['mon'], ranges: [{ start: '24:00', stop: '17:00' }] }]],
+    ['a block that is not an object', ['mon-fri 09:00-17:00']],
+    ['schedules that are not an array', 'mon-fri 09:00-17:00'],
+  ])('rejects %s before anything is written, in any mode', async (_label, schedules) => {
+    for (const mode of ['scheduled', 'always'] as const) {
+      await expect(
+        setProcessLaunchMode(CTX, {
+          machineId: MACHINE,
+          processId: PID,
+          mode,
+          schedules: schedules as never,
+        }),
+      ).rejects.toThrow(ActionInputError);
+    }
+    expect(mockWithProcessLock).not.toHaveBeenCalled();
+  });
+
   it('rejects an invalid mode', async () => {
     await expect(
       // @ts-expect-error — testing runtime validation

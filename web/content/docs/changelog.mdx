@@ -7,6 +7,197 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### changed — the CLI and SDK pages say how to install them today
+
+The CLI and SDK pages opened with npm and pip commands for packages that are
+not published yet. They now open with the install from source, which works, and
+show the registry command as what it becomes once the packages are out. The SDK
+reboot examples no longer pass `delay_seconds`, which the agent ignores. Nothing
+to update on the machine.
+
+### fixed — the landing page's developer samples
+
+The developer section showed install commands for npm packages that are not
+published yet, and a sign-in command that does not exist. It now shows the API
+and the CLI installed from source, and signs in with `owlette auth login`.
+Nothing to update on the machine.
+
+### fixed — machine.offline for a connection failure, and none for a pending restart
+
+When an agent reported a connection failure, its `machine.offline` webhook was
+sent only on a site where someone takes the offline email; it is now sent
+whatever the email settings are. A machine reporting a pending restart was
+announced as `machine.offline` as well. It is online, so it sends its email and
+no webhook. Nothing to update on the machine.
+
+### fixed — roost writes a changed file of the same size
+
+A roost rollout or rollback skipped every file whose size had not changed, so a
+file edited without changing its length kept its old contents. A file is now
+skipped only when the version already on the machine had the same bytes. The
+integrity check reads only the version on disk instead of every older one, and
+a sync cut off by a restart no longer holds on to the chunks it downloaded.
+Arrives with the next agent version.
+
+### fixed — swoop refused sessions after a few failed starts
+
+A swoop session that failed before its streamer started still counted toward
+the limit on streamer starts, twice, so a short outage could leave the machine
+refusing swoop for a while. Only real starts count now. Arrives with the next
+agent version.
+
+### changed — download links stay out of the agent's logs
+
+A failed installer or roost download wrote its signed link into the agent's log
+and into the error the dashboard shows. The link is now cut off after its path.
+Arrives with the next agent version.
+
+### fixed — the agent reconnects on a network that only lets https out
+
+After a dropped connection the agent looked for the internet by reaching a
+public DNS resolver, so on a network that blocks that it stayed disconnected
+until the service was restarted. It now also tries owlette itself over https.
+Arrives with the next agent version.
+
+### fixed — small things in the dashboard
+
+A failed clear logs now says why. The screenshot and live view dialogs could
+show the previous machine's picture; they show the machine they were opened on,
+and a picked history screenshot stays picked. swoop's bar said disconnected
+while a failed start was being retried; it counts down, as the picture area
+does. An owlette update sent again to a machine that had timed out kept reading
+"may have failed"; it reads updating. A metrics chart could draw the range you
+had just switched away from. A failed sign-in, sign-up or Google sign-in showed
+two messages, and a new account was told "you can now sign in" while already
+signed in. Switching site while an alert rules save was on its way showed one
+site's rules under the other. The deploy dialog asked for the installer URL when
+only its file name was missing; it asks for the file name. /demo, /swoop and the
+swoop sign-in pages name their browser tab, and the sitemap lists the docs and
+legal pages. Nothing to update on the machine.
+
+### fixed — api answers that were wrong or missing
+
+The machine detail API, and `owlette machine get`, always returned an empty
+process list; they list the machine's processes. A chat listing ended early
+when it met deleted chats; each page now fills. The rollout list refused
+`stage=fleet`; it filters on it. A cancelled command read as failed with no
+reason; the reason is in `error`. A talon could take an install's progress
+report as the command's answer; it waits for the end. Nothing to update on the
+machine.
+
+### fixed — deleting a site removes its process configs too
+
+Deleting a site left its process configs, display layouts, restart schedules
+and presets behind. They are deleted with it, and a machine on 4.1.8 or later
+leaves the site when that happens. A preset with a very long name could be
+created but then neither edited nor deleted; its id is now short enough for
+both. Nothing to update on the machine.
+
+### fixed — schedule days and restart times the agent cannot match are refused
+
+A process schedule day sent through the API as `Monday` or `TUE` was stored as
+sent and never ran; it is now stored as `mon` or `tue`, and anything that is not
+a weekday is refused. A restart schedule accepted `99:99`, `24:00` or `Monday`,
+and the agent skipped it; those are refused too, naming the field. A schedule
+saved earlier with such a day gets the same refusal the next time it is saved,
+until the day is corrected. Nothing to update on the machine.
+
+### fixed — a webhook switched off after ten failures can be turned back on
+
+A webhook that failed ten times in a row was switched off for good: neither the
+dashboard switch nor the API could turn it back on, and the API reported it as
+active. Turning it on from the dashboard, or a `PATCH` with `paused: false`, now
+clears it and starts the failure count over, and the API reports it as paused
+with its failure count. Nothing to update on the machine.
+
+### fixed — two people in one swoop session
+
+With two people in one swoop session, a reconnect could cost everyone but the
+last to join their picture, and one person muting their tab silenced the machine
+for the others. Each viewer now reconnects on its own, and the machine's audio
+stays on while anyone is listening. A ctrl+alt+del whose answer was lost no
+longer stops it working for the rest of the session. Arrives with the next agent
+version.
+
+### fixed — three things in the owlette app
+
+The start service button in the app's footer showed nothing when the start
+failed; it now says why. The start on login checkbox in the app's menu kept its
+old value after a change from the tray until the app restarted; it now follows
+the tray. The 15-minute steppers beside a schedule time ignored Enter and Space
+and did not say which time they moved; they work from the keyboard and name the
+time. Arrives with the next agent version.
+
+### fixed — two answers from the owlette CLI
+
+`owlette key list` stopped with "Invalid time value" for anyone who had a key;
+it lists the keys again. `owlette site add-member` said "added" when the person
+was already a member and nothing had changed; it now says they keep their role
+and names the command that changes it, `owlette site set-role`. Nothing to
+update on the machine.
+
+### fixed — three sentences that were out of date
+
+The page for AI assistants called owlette Windows-only in three places; it
+covers Windows, macOS and Linux. The webhooks page said publishes and rollbacks
+are not sent; they are, and only `deployment.*` is still to come. The CLI sign-in
+page named a command that does not exist; it is `owlette auth login`. Nothing to
+update on the machine.
+
+### fixed — retrying a deployment closes the apps first, like the first attempt
+
+A deployment set to close processes and hold their projects during the install
+did neither when it was retried, so the retry installed over the running app.
+A retry now does both. Nothing to update on the machine.
+
+### fixed — offline webhooks and talons fire when nobody takes the email
+
+On a site where every user had turned the offline email off, a machine going
+offline sent no `machine.offline` webhook and started no talon either. Both now
+fire whatever the email settings are. Nothing to update on the machine.
+
+### fixed — the missing-executable alert keeps appearing
+
+Once a site had more than twenty missing-executable alerts in its logs, a new
+one usually no longer popped up on the dashboard. It does again, with its "use
+path" action. Nothing to update on the machine.
+
+### fixed — hoot reads the agent's log
+
+Asked for a machine's agent log, hoot could read a different log from the same
+folder, such as the one submit issue writes, and report on that. It now reads
+the agent's log. Arrives with the next agent version.
+
+### fixed — display changes are refused while NVIDIA Mosaic is on
+
+A display change sent from the dashboard to a machine running NVIDIA Mosaic is
+meant to be refused, because changing one display there can break up the Mosaic
+grid. The check never ran, so the change went through. It is now refused with a
+message that says why. Arrives with the next agent version.
+
+### fixed — scrolling a page at a time through swoop
+
+A mouse wheel set to scroll a page at a time barely moved the machine: one page
+arrived as a sixty-fourth of a page. It now scrolls the page. Arrives with the
+next agent version.
+
+### fixed — a schedule time or launch delay the agent could not read no longer stops it
+
+A process schedule with a time no clock has (`24:00`), or a launch delay or
+init timeout left empty in the dashboard's edit form, made the agent stop and
+start again over and over, so nothing on that machine was kept running. The
+dashboard and the API now refuse a time like that and store the default for an
+empty field, so no machine is sent one. Nothing to update on the machine; the
+agent's own guard, which skips a value it cannot read, arrives with the next
+version.
+
+### fixed — a config file that could not be read is no longer written over
+
+Saving hoot's key at a moment when the machine's config file could not be read
+(another program holding it, for one) wrote the file back with only hoot's
+section, and the machine came up unpaired. The agent now leaves the file as it
+is and reports that the key was not saved. Arrives with the next agent version.
+
 ### fixed — local hoot starts on macOS and Linux
 
 On a Mac or a Linux machine, local hoot never started. It runs as the

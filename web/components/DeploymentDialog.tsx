@@ -305,11 +305,6 @@ export default function DeploymentDialog({
   };
 
   const handleDeploy = async () => {
-    if (!installerName.trim()) {
-      toast.error('Please provide an installer URL');
-      return;
-    }
-
     if (!installerUrl.trim()) {
       toast.error('Please provide an installer URL');
       return;
@@ -319,6 +314,12 @@ export default function DeploymentDialog({
       new URL(installerUrl);
     } catch {
       toast.error('Invalid installer URL format');
+      return;
+    }
+
+    // the name is read off the URL's last segment, and only one with an extension
+    if (!installerName.trim()) {
+      toast.error('the installer URL has to end in the file name, like setup.exe');
       return;
     }
 

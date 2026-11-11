@@ -572,15 +572,13 @@ def _get_agent_logs(params, config):
     if not os.path.isdir(log_dir):
         return {'error': 'Log directory not found', 'log_dir': log_dir}
 
-    log_files = sorted(
-        [f for f in os.listdir(log_dir) if f.endswith('.log')],
-        reverse=True
-    )
-
-    if not log_files:
+    # the agent's own log, by the name initialize_logging("service") gives it.
+    # the folder also holds the issue tool's, owlette-host's and the installer's
+    # logs, and "whichever .log sorts last" picked one of those.
+    log_name = 'service.log'
+    log_path = os.path.join(log_dir, log_name)
+    if not os.path.isfile(log_path):
         return {'error': 'No log files found', 'log_dir': log_dir}
-
-    log_path = os.path.join(log_dir, log_files[0])
 
     try:
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -593,7 +591,7 @@ def _get_agent_logs(params, config):
         recent = lines[-max_lines:]
 
         return {
-            'log_file': log_files[0],
+            'log_file': log_name,
             'lines': [l.rstrip() for l in recent],
             'count': len(recent),
             'total_lines': len(lines),

@@ -99,11 +99,6 @@ export default async function RootLayout({
   // owlette swoop is told apart here, from its ua token, so its pages are the
   // app's in the server's html instead of turning into them after hydration
   const userAgent = requestHeaders.get('user-agent') ?? '';
-  // Validate Firebase environment variables
-  // In development: logs warnings
-  // In production: throws error if misconfigured
-  // TEMPORARILY DISABLED for initial Railway deployment
-  // validateEnvironmentOrThrow();
 
   // the theme script swaps the server's fallback class before first paint, so
   // <html> never matches what was rendered

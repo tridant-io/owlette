@@ -3,14 +3,13 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { ArrowRight, KeyRound, RefreshCw, Webhook } from 'lucide-react';
-import { CLI_DIR_URL } from '@/lib/repoLinks';
+import { CLI_DIR_URL, GITHUB_REPO, GITHUB_REPO_URL } from '@/lib/repoLinks';
 
-type TabId = 'curl' | 'cli' | 'typescript';
+type TabId = 'curl' | 'cli';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'curl', label: 'curl' },
   { id: 'cli', label: 'cli' },
-  { id: 'typescript', label: 'typescript' },
 ];
 
 const SAMPLES: Record<TabId, string> = {
@@ -20,22 +19,15 @@ URL="https://owlette.app/api/sites/$SITE/machines/$MACHINE"
 curl -X POST "$URL/processes/$PROC/restart" \\
   -H "Authorization: Bearer $OWLETTE_TOKEN" \\
   -H "Idempotency-Key: $(uuidgen)"`,
-  cli: `# install once
-npm i -g @owlette/cli
-owlette login
+  // from source: the cli is not on npm, and a sample that fails at its first line sells nothing
+  cli: `# install once, from source
+git clone ${GITHUB_REPO_URL}.git
+cd ${GITHUB_REPO}/cli && npm install && npm run build && npm link
+owlette auth login
 
 # restart a process anywhere
 owlette process restart $PROC \\
   --site $SITE --machine $MACHINE`,
-  typescript: `import { Owlette } from '@owlette/sdk';
-
-const owlette = new Owlette({
-  token: process.env.OWLETTE_TOKEN!,
-});
-
-await owlette
-  .processes(siteId, machineId)
-  .restart(processId);`,
 };
 
 const PROOF_CHIPS: { icon: typeof KeyRound; label: string; body: string }[] = [
@@ -69,7 +61,7 @@ export function DeveloperSection() {
           <p className="section-subheadline text-balance max-w-3xl mx-auto">
             restart a process, push a deploy, or check machine health from
             wherever your automation already runs — install the CLI on a
-            runner, import the SDK into your backend, or just curl it.
+            runner, or just curl it.
           </p>
         </div>
 

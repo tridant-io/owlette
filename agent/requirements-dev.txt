@@ -3,14 +3,8 @@
 
 # Testing Framework
 pytest==9.2.0
-pytest-cov==7.1.0
-pytest-mock==3.17.0
-pytest-asyncio==1.4.1
 
-# Code Quality
+# nothing runs black. the pin stays because dependabot alert 311 (black, filed
+# against main) is still open, and the release gate reads this line as the proof
+# that the alert is fixed here. remove it once main no longer pins black.
 black==26.10.1
-flake8==7.5.0
-
-# Testing Utilities
-responses==0.26.3  # Mock HTTP requests
-freezegun==1.5.5   # Mock datetime

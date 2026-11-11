@@ -2,7 +2,8 @@
 sync_state — crash-safe local state for roost (project distribution v2).
 
 per-roost sync progress in SQLite with WAL journaling, so a crash, power loss
-or service restart never loses state; on startup the agent resumes pending ops.
+or service restart never loses state. a sync a restart cut off resumes only if
+its command comes again; the reaper retires the rest (retire_interrupted).
 
 - one DB per install: <data root>/sync-state.db, deliberately outside the
   user's Documents tree so the cache cannot mix with assembled files.
@@ -127,6 +128,10 @@ class SyncState:
         self._db_path = Path(db_path)
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
+        # distributions this instance started or moved. the service holds one
+        # instance (sync_commands._state_for), so any other active row was left
+        # by an earlier process.
+        self._live_ids: Set[int] = set()
         self._open()
 
     # ─── lifecycle ────────────────────────────────────────────────────
@@ -316,6 +321,7 @@ class SyncState:
                            VALUES (?, ?, ?, 'planned')''',
                         [(dist_id, c['hash'], c['size']) for c in chunks],
                     )
+                self._live_ids.add(dist_id)
                 return dist_id
         except sqlite3.IntegrityError as e:
             raise SyncStateError(
@@ -334,6 +340,7 @@ class SyncState:
                    WHERE id = ?''',
                 (state, _now(), error, dist_id),
             )
+            self._live_ids.add(dist_id)
 
     def get_distribution(self, dist_id: int) -> Optional[sqlite3.Row]:
         """fetch a distribution row by id, or None if not found."""
@@ -357,26 +364,34 @@ class SyncState:
             )
             return cur.fetchone()
 
-    def list_pending_distributions(self) -> List[sqlite3.Row]:
+    def retire_interrupted(self) -> int:
         """
-        list distributions in non-terminal states. called at agent startup
-        to resume in-flight syncs after a crash/restart.
+        mark failed every active distribution this instance never started or
+        moved, and return how many. an earlier process left it: nothing
+        finishes it unless its command comes again (which resumes the row
+        whatever its state), and while active it pins its chunks against the
+        reaper for good.
         """
-        with self._lock:
-            assert self._conn is not None
-            placeholders = ', '.join('?' * len(ACTIVE_DISTRIBUTION_STATES))
-            cur = self._conn.execute(
-                f'''SELECT * FROM distributions
-                    WHERE state IN ({placeholders})
-                    ORDER BY created_at ASC''',
-                ACTIVE_DISTRIBUTION_STATES,
+        with self._txn() as conn:
+            live = tuple(self._live_ids)
+            states = ', '.join('?' * len(ACTIVE_DISTRIBUTION_STATES))
+            cur = conn.execute(
+                f'''UPDATE distributions
+                    SET state = 'failed', updated_at = ?, error = ?
+                    WHERE state IN ({states})
+                      AND id NOT IN ({', '.join('?' * len(live))})''',
+                (_now(), 'interrupted by an agent restart',
+                 *ACTIVE_DISTRIBUTION_STATES, *live),
             )
-            return list(cur.fetchall())
+            return cur.rowcount
 
     def list_scrub_due(self, max_age_seconds: int) -> List[sqlite3.Row]:
         """
-        list committed distributions due for scrub: extract_root is set AND
-        (last_scrub_at is NULL OR last_scrub_at < now - max_age_seconds).
+        list, per roost, the committed distribution the tree holds now (the
+        newest committed row) when it is due for scrub: extract_root is set AND
+        (last_scrub_at is NULL OR last_scrub_at < now - max_age_seconds). a
+        superseded version is not on disk: scrubbing it re-reads the unchanged
+        files once more and reports every file a later version changed as drift.
 
         ordered oldest-scrub-first so a backlog drains in priority order.
         """
@@ -384,11 +399,17 @@ class SyncState:
             assert self._conn is not None
             cutoff = _now() - max_age_seconds
             cur = self._conn.execute(
-                '''SELECT * FROM distributions
-                   WHERE state = 'committed'
-                     AND extract_root IS NOT NULL
-                     AND (last_scrub_at IS NULL OR last_scrub_at < ?)
-                   ORDER BY COALESCE(last_scrub_at, 0) ASC''',
+                '''SELECT d.* FROM distributions d
+                   WHERE d.state = 'committed'
+                     AND d.extract_root IS NOT NULL
+                     AND (d.last_scrub_at IS NULL OR d.last_scrub_at < ?)
+                     AND d.id = (
+                         SELECT c.id FROM distributions c
+                         WHERE c.site_id = d.site_id AND c.roost_id = d.roost_id
+                           AND c.state = 'committed'
+                         ORDER BY c.updated_at DESC, c.id DESC LIMIT 1
+                     )
+                   ORDER BY COALESCE(d.last_scrub_at, 0) ASC''',
                 (cutoff,),
             )
             return list(cur.fetchall())

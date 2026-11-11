@@ -1008,6 +1008,9 @@ describe('site CRUD actions', () => {
     db.seed('fleet_sessions/hash-other', { siteId: 'site-other', machineId: 'machine-1' });
     db.seed('fleet_calls/cmd_a', { siteId: 'site-a', callerMachineId: 'machine-1', machineId: 'machine-2' });
     db.seed('fleet_calls/cmd_other', { siteId: 'site-other', callerMachineId: 'machine-1', machineId: 'machine-2' });
+    db.seed('config/site-a/machines/machine-1', { processes: [{ exe_path: 'C:\\show.exe' }] });
+    db.seed('config/site-a/schedule_presets/sched-1', { name: 'weekdays' });
+    db.seed('config/site-other/machines/machine-9', { processes: [] });
 
     const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
 
@@ -1023,6 +1026,11 @@ describe('site CRUD actions', () => {
       machineId: 'machine-2',
     });
     expect(db.docs.get('sites/site-a')).toBeNull();
+    // process configs and presets live under config/{siteId}, outside the site doc,
+    // and are customer data too; another site's are untouched.
+    expect(db.docs.get('config/site-a/machines/machine-1')).toBeNull();
+    expect(db.docs.get('config/site-a/schedule_presets/sched-1')).toBeNull();
+    expect(db.docs.get('config/site-other/machines/machine-9')).toEqual({ processes: [] });
     // Subcollections go with it — Firestore would otherwise leave these orphaned
     // under an id nobody can reach.
     expect(db.docs.get('sites/site-a/machines/machine-1')).toBeNull();
@@ -1109,5 +1117,26 @@ describe('site CRUD actions', () => {
 
     expect(order[0]).toBe('batch-committed');
     expect(order[order.length - 1]).toBe('site-deleted');
+  });
+
+  it('deleteSite removes config/{siteId} before the site, so a failure leaves a site to retry on', async () => {
+    const db = new FakeDb();
+    db.seed('sites/site-a', { name: 'a' });
+    db.seed('config/site-a/machines/machine-1', { processes: [] });
+
+    const real = db.recursiveDelete.bind(db);
+    let calls = 0;
+    db.recursiveDelete = async (ref: FakeDoc) => {
+      calls += 1;
+      if (calls === 2) throw new Error('unavailable');
+      return real(ref);
+    };
+
+    await expect(deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() })).rejects.toThrow(
+      'unavailable',
+    );
+    // site-first would leave config behind with no site left to delete it through
+    expect(db.docs.get('config/site-a/machines/machine-1')).toBeNull();
+    expect(db.docs.get('sites/site-a')).toEqual({ name: 'a' });
   });
 });

@@ -45,7 +45,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * Enter and blur both fire for one "done typing"; drop the second within 100ms
- * rather than writing the file twice (`owlette_gui.py:867-871`).
+ * rather than writing the file twice.
  */
 const SAVE_DEBOUNCE_MS = 100
 
@@ -148,7 +148,7 @@ interface ProcessDetailProps {
  *
  * Deferred external refresh: the web app and the service write the same file.
  * External changes apply immediately except to the field under the cursor, which
- * keeps its text until focus leaves (`owlette_gui.py:1434-1448`).
+ * keeps its text until focus leaves.
  */
 export function ProcessDetail({
   process,
@@ -707,7 +707,7 @@ export function ProcessDetail({
               how to run
             </SectionToggle>
             <CollapsibleContent className="col-span-2">
-              {/* Dimmed, not disabled — see the isOff note above. */}
+              {/* Dimmed, not disabled — see the unmanaged note above. */}
               <div
                 className={cn(
                   'grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-x-3 gap-y-3 pt-3 @2xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] @4xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] [&>*]:transition-opacity',

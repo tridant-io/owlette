@@ -58,24 +58,9 @@ const PLATFORM_BY_EXTENSION: Record<string, string> = {
 const INSTALLER_PLATFORMS = Object.values(PLATFORM_BY_EXTENSION);
 
 export function registerInstallerCommands(program: Command): void {
-  const installer =
-    (program.commands.find((c) => c.name() === 'installer') as Command | undefined) ??
-    program
-      .command('installer')
-      .description('agent installer binary management (superadmin)');
-
-  // Overwrite any earlier description so help text stays canonical.
-  installer.description('agent installer binary management (superadmin)');
-
-  // Drop any stub verbs left from earlier file-load ordering.
-  for (const verb of ['list', 'latest', 'upload', 'set-latest', 'delete'] as const) {
-    const existing = installer.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = installer.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const installer = program
+    .command('installer')
+    .description('agent installer binary management (superadmin)');
 
   installer
     .command('list')

@@ -45,7 +45,8 @@ path = "src/main.rs"
 # failing to start. Media Foundation is the fallback below it on Windows, a
 # hardware rung and a software floor, and ships because the owner chose it
 # (2026-10-11): it loads mfplat.dll the same way, so an N edition without the
-# Media Feature Pack still starts. Task 10.1 adds the rest and never adds
+# Media Feature Pack still starts. Every release build adds `audio-opus`, and
+# the macOS one swaps these two for `encode-videotoolbox`; none adds
 # `testhooks`.
 default = ["encode-nvenc", "encode-mf"]
 
@@ -84,10 +85,8 @@ serde_json = "=1.0.154"
 thiserror = "=2.0.21"
 anyhow = "=1.0.104"
 
-# JWT segments are base64url without padding; hex is for the golden-vector
-# fixtures and for ids in log lines.
+# JWT segments are base64url without padding.
 base64 = "=0.23.1"
-hex = "=0.4.3"
 
 # plan.md D8: k = HKDF(K_session, viewerId), and the host MACs its DTLS
 # fingerprint + sid with it. One RustCrypto generation across all three or the
@@ -238,9 +237,8 @@ str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-
 # GPU convert/scale path, Gdi + HiDpi for display geometry, KeyboardAndMouse for
 # injection, StationsAndDesktops for the secure desktop, DataExchange + Memory
 # for the clipboard and Graphics_Imaging (WIC) for its png compression both
-# ways, Media_Audio for the WASAPI loopback capture, Devices_Display for the
-# display topology, LibraryLoader for the DLL search path, Performance for QPC
-# timestamps.
+# ways, Media_Audio for the WASAPI loopback capture, LibraryLoader for the DLL
+# search path, Performance for QPC timestamps.
 #
 # Com_StructuredStorage and Variant are not subsystems this crate calls: both
 # `IMMDevice::Activate` and `ActivateAudioInterfaceAsync` are generated behind
@@ -250,11 +248,9 @@ str0m = { version = "=0.23.1", default-features = false, features = ["wincrypto-
 #
 # 0.62 is the version all three spikes measured against.
 windows = { version = "=0.62.2", features = [
-    "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Direct3D_Fxc",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
@@ -341,6 +337,10 @@ dispatch2 = "=0.3.1"
 # and the Tauri desktop build already use, so it is not new to this repo.
 # Exit condition: the standing dependency-currency review.
 winresource = "=0.1.34"
+
+[dev-dependencies]
+# The golden-vector fixtures carry their bitstreams as hex.
+hex = "=0.4.3"
 
 [profile.release]
 # Copied from agent/host/Cargo.toml with its comment, because the reason is the

@@ -4,30 +4,18 @@
  * reader share this reading, so a command reads the same through both.
  *
  * progress markers (`running`, `downloading`, `installing`) live on the
- * `completed` doc as non-terminal and surface as `in_progress`; only
- * `completed`/`failed`/`error`/`cancelled` resolve the command. a finished
+ * `completed` doc as non-terminal and surface as `in_progress`; only a status
+ * `isTerminalCommandStatus` accepts resolves the command. a finished
  * screenshot gets a fresh 1-hour signed read url in `result.screenshot_url` on
  * every read; the url itself is never persisted.
  */
 import type { DocumentSnapshot, Firestore } from 'firebase-admin/firestore';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 import { issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
 
 export const COMMAND_ID_RE = /^cmd_[A-Za-z0-9_-]{1,80}$/;
 
 export type CommandStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
-
-/**
- * Only these statuses resolve a command. The agent also writes non-terminal
- * markers to the completed doc — `running` (restart-safety, written at command
- * start), `downloading`, `installing` — which must surface as `in_progress`.
- * `cancelled` has no CommandStatus variant and maps to `failed` at resolve time.
- */
-const TERMINAL_COMMAND_STATUSES = new Set([
-  'completed',
-  'failed',
-  'error',
-  'cancelled',
-]);
 
 export interface CommandStatusLookup {
   status: CommandStatus;
@@ -97,7 +85,10 @@ export async function lookupCommandStatus(
     }
   }
 
-  const errorVal = cmd.error;
+  // a cancelled hoot tool carries its reason in `error`; everything else the
+  // agent cancels carries it in `result`
+  const errorVal =
+    typeof cmd.error === 'string' ? cmd.error : cmd.status === 'cancelled' ? cmd.result : undefined;
   const error =
     lookup.status === 'failed' && typeof errorVal === 'string' && errorVal.length > 0
       ? errorVal
@@ -127,10 +118,10 @@ function resolveCommand(
   const completedEntry = completedAll?.[commandId];
   if (completedEntry && typeof completedEntry === 'object') {
     const data = completedEntry as Record<string, unknown>;
-    const rawStatus = typeof data.status === 'string' ? data.status : null;
+    const rawStatus = data.status;
     // Non-terminal or unrecognized status means still executing — never report
     // completed with an empty result.
-    if (!rawStatus || !TERMINAL_COMMAND_STATUSES.has(rawStatus)) {
+    if (!isTerminalCommandStatus(rawStatus)) {
       return { status: 'in_progress', data };
     }
     // Terminal. `cancelled` has no dedicated CommandStatus variant, so it maps

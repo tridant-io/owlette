@@ -2371,7 +2371,7 @@ def is_within_schedule(schedules, timezone_str=None):
     """True if now falls in ANY schedule block's window, or if schedules is
     empty (safety fallback). timezone_str is IANA; local time when None.
     """
-    if not schedules:
+    if not schedules or not isinstance(schedules, (list, tuple)):
         return True  # No schedules = always active (safety fallback)
 
     from datetime import datetime, time as dt_time
@@ -2392,16 +2392,24 @@ def is_within_schedule(schedules, timezone_str=None):
 
     prev_day = day_names[(day_names.index(current_day) - 1) % 7]
 
+    # a malformed block or range is skipped, never raised: a raise here leaves
+    # the main loop, and owlette-host (launchd, systemd) relaunches the agent
+    # into the same config
     for block in schedules:
+        if not isinstance(block, dict):
+            continue
         days = block.get('days', day_names)
-        for time_range in block.get('ranges', []):
+        ranges = block.get('ranges', [])
+        if not isinstance(days, (list, tuple)) or not isinstance(ranges, (list, tuple)):
+            continue
+        for time_range in ranges:
             try:
                 start_h, start_m = map(int, time_range['start'].split(':'))
                 stop_h, stop_m = map(int, time_range['stop'].split(':'))
-            except (ValueError, KeyError):
+                start = dt_time(start_h, start_m)
+                stop = dt_time(stop_h, stop_m)
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
-            start = dt_time(start_h, start_m)
-            stop = dt_time(stop_h, stop_m)
             if start <= stop:
                 if current_day in days and start <= current_time <= stop:
                     return True
@@ -2878,8 +2886,18 @@ def write_config(keys, value):
 
     Raises ValueError when an intermediate exists but is not a dict: overwriting
     a scalar with a dict to make room would destroy whatever it held.
+
+    Raises OSError when config.json exists but could not be read: a lock or a
+    torn write reads as {}, and writing that back would drop every other
+    section, `firebase` with it, and unpair the machine (upgrade_config guards
+    the same way).
     """
     config = read_json_from_file(CONFIG_PATH)
+    if not config and os.path.exists(CONFIG_PATH):
+        raise OSError(
+            f"Cannot write config path {'.'.join(map(str, keys))}: "
+            f"{CONFIG_PATH} exists but could not be read"
+        )
 
     item = config
     for depth, key in enumerate(keys[:-1]):

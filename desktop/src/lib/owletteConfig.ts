@@ -91,7 +91,7 @@ export const TEXT_FIELDS = [
 export type TextField = (typeof TEXT_FIELDS)[number]
 export type ProcessForm = Record<TextField, string>
 
-/** Defaults the legacy GUI writes for a brand new entry (`owlette_gui.new_process`). */
+/** Defaults the python GUI wrote for a brand new entry, before 3.0.0 removed it. */
 export const NEW_PROCESS_DEFAULTS = {
   name: 'untitled process',
   time_delay: '0',
@@ -152,7 +152,7 @@ export function formsEqual(a: ProcessForm, b: ProcessForm): boolean {
 }
 
 /**
- * "Soft save" (`owlette_gui.py:886-945`): blur fires on every focus change, so a
+ * "Soft save", as the python GUI did it: blur fires on every focus change, so a
  * nonsense number is replaced by the default rather than thrown back mid-edit.
  * delay >= 0, time-to-init >= 10, relaunch attempts an integer >= 0 (0 =
  * unlimited). Trimming is ours — a trailing space in an exe path is an
@@ -358,7 +358,7 @@ export function reorderProcess(config: OwletteConfig, id: string, toIndex: numbe
 }
 
 /**
- * One-line window summary, wording from `owlette_gui.py:784-800`. Empty is not
+ * One-line window summary, wording from the python GUI. Empty is not
  * "nothing runs" — `shared_utils.is_within_schedule` returns True for an empty
  * schedule, so the copy says so.
  */

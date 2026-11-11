@@ -23,6 +23,9 @@ export interface SkippedMachine {
   reason: string;
 }
 
+/** an update with no report back after this reads as "may have failed". */
+const UPDATE_TIMEOUT_MS = 15 * 60 * 1000;
+
 function isInstallerPlatform(key: string): key is InstallerPlatform {
   return (INSTALLER_PLATFORMS as readonly string[]).includes(key);
 }
@@ -68,7 +71,8 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
   const [updateError, setUpdateError] = useState<string | null>(null);
   // Start times drive the stale-update timeout below.
   const [updateStartTimes, setUpdateStartTimes] = useState<Map<string, number>>(new Map());
-  const [staleMachines, setStaleMachines] = useState<Set<string>>(new Set());
+  // the clock the stale check reads; it ticks only while something is updating
+  const [now, setNow] = useState(0);
 
   const cancelUpdate = useCallback((machineId: string) => {
     setUpdatingMachines(prev => {
@@ -81,37 +85,26 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
       newMap.delete(machineId);
       return newMap;
     });
-    setStaleMachines(prev => {
-      const newSet = new Set(prev);
-      newSet.delete(machineId);
-      return newSet;
-    });
   }, []);
 
   // Without this the UI shows "Updating..." forever if the agent crashes mid-update.
+  const anyUpdating = updatingMachines.size > 0;
   useEffect(() => {
-    if (updatingMachines.size === 0) return;
-
-    const UPDATE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
-
-    const checkInterval = setInterval(() => {
-      const now = Date.now();
-      const newStaleMachines = new Set<string>();
-
-      updatingMachines.forEach(machineId => {
-        const startTime = updateStartTimes.get(machineId);
-        if (startTime && (now - startTime) > UPDATE_TIMEOUT_MS) {
-          newStaleMachines.add(machineId);
-        }
-      });
-
-      if (newStaleMachines.size > 0) {
-        setStaleMachines(newStaleMachines);
-      }
-    }, 30_000);
-
+    if (!anyUpdating) return;
+    const checkInterval = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(checkInterval);
-  }, [updatingMachines, updateStartTimes]);
+  }, [anyUpdating]);
+
+  // derived, never stored: a resend restarts a machine's clock, and a cleared,
+  // failed or finished update stops being stale with it
+  const staleMachines = useMemo(() => {
+    const stale = new Set<string>();
+    updatingMachines.forEach(machineId => {
+      const startTime = updateStartTimes.get(machineId);
+      if (startTime !== undefined && now - startTime > UPDATE_TIMEOUT_MS) stale.add(machineId);
+    });
+    return stale;
+  }, [updatingMachines, updateStartTimes, now]);
 
   useEffect(() => {
     if (updatingMachines.size === 0) return;
@@ -143,11 +136,6 @@ export function useOwletteUpdates(machines: Machine[]): UseOwletteUpdatesReturn 
         const newMap = new Map(prev);
         clearedIds.forEach(id => newMap.delete(id));
         return newMap;
-      });
-      setStaleMachines(prev => {
-        const newSet = new Set(prev);
-        clearedIds.forEach(id => newSet.delete(id));
-        return newSet;
       });
     }
   }, [machines, latestVersion, updatingMachines]);

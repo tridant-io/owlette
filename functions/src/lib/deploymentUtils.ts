@@ -32,6 +32,70 @@ export interface DeploymentTarget {
   completedAt?: number | FirebaseFirestore.Timestamp;
   cancelledAt?: number | FirebaseFirestore.Timestamp;
   uninstalledAt?: number | FirebaseFirestore.Timestamp;
+  /** Stamped by the retry route when it resets a failed target to pending. */
+  retriedAt?: number | FirebaseFirestore.Timestamp;
+}
+
+// Stale-target timeouts (the sweeper)
+
+/** How long a target can sit at "pending" before we fail it (ms). */
+const PENDING_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+/** How long a target can sit at "downloading"/"installing" before we fail it (ms). */
+const ACTIVE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+
+/** Epoch ms of a stored instant: numeric on legacy docs, a Timestamp on new ones, 0 when absent. */
+export function instantMs(value: unknown): number {
+  if (typeof value === 'number') return value;
+  return (value as FirebaseFirestore.Timestamp | undefined)?.toMillis?.() || 0;
+}
+
+/**
+ * Fail every non-terminal target that has outlived its timeout. Returns the new
+ * targets array, or null when no target changed.
+ */
+export function timeOutStaleTargets(
+  targets: DeploymentTarget[],
+  deploymentCreatedAtMs: number,
+  nowMs: number,
+  failedAt: number | FirebaseFirestore.Timestamp,
+): DeploymentTarget[] | null {
+  let changed = false;
+  const updatedTargets = targets.map((target) => {
+    if (TARGET_TERMINAL_STATUSES.has(target.status)) {
+      return target;
+    }
+
+    // A retried target's attempt starts at its retry: timed from the deployment,
+    // every retry of a deployment older than the timeout failed at the next sweep.
+    const targetAge = nowMs - Math.max(deploymentCreatedAtMs, instantMs(target.retriedAt));
+
+    if (target.status === 'pending' && targetAge > PENDING_TIMEOUT_MS) {
+      changed = true;
+      return {
+        ...target,
+        status: 'failed',
+        error: `Timed out: agent did not start after ${Math.round(PENDING_TIMEOUT_MS / 60000)} minutes`,
+        completedAt: failedAt,
+      };
+    }
+
+    if (
+      ['downloading', 'installing', 'uninstalling'].includes(target.status) &&
+      targetAge > ACTIVE_TIMEOUT_MS
+    ) {
+      changed = true;
+      return {
+        ...target,
+        status: 'failed',
+        error: `Timed out: agent stalled during ${target.status} after ${Math.round(ACTIVE_TIMEOUT_MS / 60000)} minutes`,
+        completedAt: failedAt,
+      };
+    }
+
+    return target;
+  });
+  return changed ? updatedTargets : null;
 }
 
 // Command → Target status mapping

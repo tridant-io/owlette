@@ -201,6 +201,38 @@ class TestSpawnRefusals:
         assert wait_for(lambda: backend.spawned == 1)
         assert manager.status()['lastRefusal'] is None
 
+    def test_bundle_failures_do_not_count_toward_the_ceiling(self, firebase):
+        # no streamer was started; the polled command also re-sends a refused
+        # sid, so each failed start used to count twice.
+        backend = FakeSpawn(bundle_error=swoop_spawn.SwoopSpawnError(
+            swoop_spawn.REFUSAL_BUNDLE_UNAVAILABLE, 'bundle fetch failed: 503',
+        ))
+        manager = make_manager(backend, firebase)
+        for attempt in range(1, swoop_manager.SPAWN_CEILING + 1):
+            manager.ensure_streamer(f'sid_{attempt}')
+            assert wait_for(lambda: backend.fetched == attempt
+                            and manager.status()['state'] == swoop_manager.STATE_IDLE)
+
+        backend.bundle_error = None
+        manager.ensure_streamer('sid_ok')
+        assert wait_for(lambda: backend.spawned == 1)
+        assert manager.status()['lastRefusal'] is None
+        assert len(manager._spawn_times) == 1
+        manager.kill('test')
+
+    def test_a_streamer_that_dies_before_its_bundle_counts_toward_the_ceiling(self, firebase):
+        # a process was started, so it is a spawn: the ceiling is what stops a
+        # streamer that keeps dying at start from being relaunched without end.
+        proc = FakeProc()
+        proc.write_bundle = MagicMock(side_effect=OSError('the pipe is closed'))
+        backend = FakeSpawn(proc=proc)
+        manager = make_manager(backend, firebase)
+
+        manager.ensure_streamer('sid_1')
+        assert wait_for(lambda: backend.spawned == 1
+                        and manager.status()['state'] == swoop_manager.STATE_IDLE)
+        assert len(manager._spawn_times) == 1
+
     def test_crash_exit_keeps_its_spawn_in_the_window(self, firebase):
         backend = FakeSpawn()
         manager = make_manager(backend, firebase)

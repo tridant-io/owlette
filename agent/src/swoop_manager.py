@@ -306,7 +306,6 @@ class SwoopManager:
         with self._lock:
             self._state = STATE_STARTING
             self._sid = sid
-            self._spawn_times.append(time.monotonic())
 
         if bundle is None:
             bundle = self._fetch_bundle(sid)
@@ -323,6 +322,12 @@ class SwoopManager:
             _wipe(bundle)
             self._refuse(swoop_spawn.REFUSAL_SPAWN_FAILED, str(e), sid=sid)
             return
+
+        # counted once a streamer process exists, whether or not it lives to read
+        # its bundle. a refused bundle is no spawn, and the polled command
+        # re-sends a refused sid, so that used to count twice.
+        with self._lock:
+            self._spawn_times.append(time.monotonic())
 
         try:
             proc.write_bundle(bundle)

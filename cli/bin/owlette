@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Launcher for the owlette CLI. Prefers the compiled `dist/index.js` when
 // present (production / published install); falls back to the TS source
-// via ts-node during local development so `./cli/bin/owlette --help` works
-// without a prior `npm run build`.
+// via ts-node only where someone has installed it, since it is not a
+// dependency, and otherwise says to run `npm run build`.
 //
 // Keep this file thin — any real logic lives in src/index.ts.
 

@@ -39,19 +39,6 @@ const SIGNED_URL_REFRESH_SKEW_MS = 60_000;
 
 export function registerPushCommand(program: Command): void {
   const roost = (program.commands.find((c) => c.name() === 'roost') as Command) ?? program.command('roost');
-  if (!program.commands.includes(roost)) {
-    // Registration order between registerPushCommand and registerRoostInspect isn't fixed.
-    roost.description('manage roosts + versions');
-  }
-
-  // Replace a stub `push` so the real implementation wins regardless of file load order.
-  // commander types commands[] readonly, hence the cast for the in-place splice.
-  const existing = roost.commands.find((c) => c.name() === 'push');
-  if (existing) {
-    const list = roost.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
 
   roost
     .command('push <dir>')

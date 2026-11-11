@@ -14,7 +14,7 @@
 //   cargo test --release --lib -- --ignored encode::mf --test-threads=1
 //   node spikes/mf-decode-check/run.mjs C:\mf-annexb [--headed]
 //
-// No dependencies and no package.json, like the browser-matrix spike.
+// No dependencies and no package.json.
 import { createServer } from 'node:http';
 import { readFile, readdir, mkdtemp } from 'node:fs/promises';
 import { spawn } from 'node:child_process';

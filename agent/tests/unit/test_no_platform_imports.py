@@ -59,7 +59,7 @@ _WINDOWS_MODULES = frozenset({
     'servicemanager', 'pywintypes', 'pythoncom', 'ntsecuritycon', 'winerror',
     'commctrl', 'sspicon', 'winioctlcon', 'regutil',
     # agent/requirements.txt, marked `sys_platform == "win32"`
-    'wmi', 'clr', 'HardwareMonitor',
+    'wmi', 'clr', 'HardwareMonitor', 'mss',
 })
 
 # Everything `ctypes` defines only under `_os.name == "nt"`.

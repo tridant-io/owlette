@@ -93,12 +93,11 @@ updates:
       prefix: deps
 
   # Python dependencies: the agent, the published Python SDK, and the
-  # integration / agent-runner test harnesses.
+  # agent-runner test harness.
   - package-ecosystem: pip
     directories:
       - /agent
       - /sdks/python
-      - /test/integration
       - /test/infra/agent-runner
     target-branch: dev
     schedule:
