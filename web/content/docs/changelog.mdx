@@ -7,6 +7,62 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### changed — swoop's text stays clear at any window size
+
+Small text on a machine shown smaller than its own screen could look
+stair-stepped in swoop, because browsers shrink video with a filter that drops
+parts of thin strokes. The picture now lands on whole pixels of your screen, and
+a window a little bigger than the machine's screen, or than half of it, shows it
+at exactly full size or half size, where text is crisp. The quality menu gains
+two settings for how the picture is drawn on your screen. Its **size** row
+offers **sharp**: the largest of full size, a half, a third and so on that fits
+the window, for the clearest text (a third and smaller need smooth scaling). Its
+**smooth scaling** setting averages the picture down at any other size, so thin
+text keeps its strokes. It is on by default in Chrome, Edge and other Chromium
+browsers on a computer, and in owlette swoop on Windows; elsewhere it is off and
+you can turn it on, and wherever the picture lags or looks wrong you can turn it
+off. Both are kept in this browser and never sent to the machine. The latency
+stats add **shown at**, the picture's size against the machine's own pixels,
+**scaling**, how it is drawn, and, while smooth scaling draws, an estimate of
+the time it adds. Nothing to update on the machine: reload the swoop page.
+
+### changed — swoop keeps the machine's resolution on a slow connection
+
+On a connection that could not keep up, the machine lowered swoop's frame rate
+and then its resolution, down to 720p, where a big screen's small text could
+not be read. From agent 4.2.0 a slow connection costs frame rate and bitrate,
+never resolution: the picture keeps the resolution you chose in the quality
+menu, at down to 15 frames a second. When you would rather have smooth motion
+than readable text on a slow connection, pick 1080p or 720p there yourself.
+
+Text is sharper from a machine with an NVIDIA GPU: its encoder runs a slower,
+higher-quality setting, and goes back to its fastest one for the rest of the
+session when the GPU cannot keep up, which the machine's swoop log records. On
+an Intel or AMD GPU the streamer asks the GPU's encoder for balanced quality,
+under the same check. With an NVIDIA GPU a picture that stops moving also
+sharpens in about half a second instead of several: after a scroll or a drag
+ends, the machine sends the still picture again at the session's frame rate for
+half a second, then at the usual two frames a second.
+
+A Windows machine with no GPU, such as a virtual machine, now averages its
+screen when it scales it down, instead of skipping pixels, so thin text keeps
+its strokes. These need the machine's agent updated to 4.2.0; the viewer needs
+nothing.
+
+### fixed — a portrait display streams upright in swoop
+
+A display turned to portrait on a Windows machine reached swoop on its side.
+From agent 4.2.0 the machine turns the picture of a rotated display upright
+before it sends it, and the pointer and taps land where you point on the
+upright picture. A Mac already sent rotated displays upright.
+
+### fixed — swoop lets go of a viewer whose connection never comes back
+
+After a network change, a viewer's browser could ask the machine to restart
+the connection and then never finish. The machine kept that viewer in the
+session for good, so everyone else saw an extra, nameless watch-only viewer.
+From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
+already did for a viewer whose connection dropped.
 
 ## [4.1.28] - 2026-11-10
 ### added — a member can be limited to some machines

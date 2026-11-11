@@ -652,7 +652,9 @@ when the last viewer is gone the streamer lingers about 60 s and exits 0 with `r
 **host behaviour on a lost path.** ice going `disconnected` does not end a viewer. the host asks the viewer for
 an ice restart after 2 s, pauses that viewer's media while the path is down, and asks for a keyframe once it
 is back. a viewer still disconnected 60 s after ice reports the path down (str0m does that 15–25 s after the
-last packet) is let go with `reason: "timeout"`, and a dtls or sctp close ends it at once. the page matches
+last packet) is let go with `reason: "timeout"`, and so is one whose ice is still checking with no working pair
+60 s after checking began (a restart offer that carries no candidates leaves it there for good). a dtls or sctp
+close ends a viewer at once. the page matches
 it: its silence watchdog only judges a live path, and a restart offer's answer is timed only while the page's
 own signalling socket is open. a viewer that is itself offline waits, and a host that stays silent while the
 offer can reach it is given up on 10 s later. the picture comes back with the path; after a long drop the

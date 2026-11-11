@@ -220,7 +220,7 @@ The idle WebSocket each agent holds to the swoop signalling worker, through whic
 _Avoid_: signalling socket, push channel
 
 **Quality ladder**:
-The streamer's ordered frame-rate and resolution caps below the viewer's chosen preset. A rung is one step on it, and a healthy session sits on the preset's own rung.
+The streamer's ordered frame-rate caps below the viewer's chosen preset. From 4.2.0 resolution is the viewer's alone; older streamers also step resolution down after the frame rate. A rung is one step on it, and a healthy session sits on the preset's own rung.
 _Avoid_: bitrate tiers
 
 **Encoder tier**:

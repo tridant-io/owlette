@@ -212,6 +212,9 @@ app-level RTT, so the stats overlay shows a per-stage breakdown.
 **D17 — Presentation contract (browser).** Present from the decoder output callback, never from
 `requestAnimationFrame`; `desynchronized` canvas with an ImageBitmap fallback; `requestVideoFrameCallback` only
 to measure; decode off the main thread where the platform allows.
+_2026-11-11: 4.2.0 puts a WebGL2 canvas in the shipping path for minification only: it mirrors the `<video>` and
+draws each presented frame from the one rVFC chain when the picture is shown below full size at a size the video
+cannot draw exactly. Nothing presents from rAF. See dev/active/swoop-clarity/plan.md, C2._
 
 ## Names registry (every task uses these spellings)
 
