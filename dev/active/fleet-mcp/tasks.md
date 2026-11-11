@@ -1,5 +1,5 @@
 # fleet mcp — Tasks
-**Progress**: 19/36 complete (0.1 to 0.3, waves 1 to 3, 4.1, 4.2, wave 9); 0.4 half done (Linux measured, macOS owed)
+**Progress**: 20/36 complete (0.1 to 0.3, waves 1 to 3, 4.1, 4.2, waves 9 and 11); 0.4 half done (Linux measured, macOS owed)
 
 Rules every task obeys:
 - Read `context.md` first: it holds the decisions, the session file contract and the fleet API contract.
@@ -190,14 +190,13 @@ Depends on: Wave 9.
 ## Wave 11: Tool registry and hoot's server-side tools
 Depends on: Wave 3, Task 9.1.
 
-- [ ] **Task 11.1: Registry and server-side tools**
-  - Files: `web/lib/fleet/tools/index.ts` (new), `web/lib/fleet/tools/roost.ts`, `deployments.ts`, `schedules.ts`, `displays.ts`, `reads.ts`, `screenshots.ts` (new, each exporting an empty tool list for wave 12 to fill), `web/lib/fleet/catalog.server.ts`, `web/lib/fleet/dispatch.server.ts`, tests
-  - Do: Define `FleetTool { definition: McpToolDefinition; capability; run(ctx, params): Promise<content> }` and a registry that the catalog and dispatch both read, so a later task adds a tool by editing one area file. The registry also takes an optional result mapper per machine tool name, so an area file can shape that tool's result envelope without touching dispatch. Then expose hoot's server-side tools that need no person: `get_site_logs`, `get_system_presets`, `list_talons`, `deploy_software`, `update_process`, `add_process`, `delete_process`, through `executeServerSideTool` (`web/lib/hoot-utils.server.ts` ~1906) with the machine's audit actor (task 9.1's option) and a machine list resolved inside the grant and limited to machines with hoot on. Leave out `schedule_followup` and `cancel_followup` (they need a chat) and `create_talon` and `set_talon_enabled` (they need a person as author). A tool that acts on several machines asks `hasCapability` once per machine, and a site-level read returns only rows for machines the grant covers.
-  - Done when: tests cover each exposed tool's tier, its refusal outside the grant and its audit actor; the catalog count test is updated; the six area files exist and register nothing yet.
-  - Found 2026-11-11: `createProcess`, `updateProcess` and `deleteProcess` check no capability themselves (the route or the turn does), so this task's own `hasCapability` per machine is the whole gate for a direct call. `actionContextForHoot` builds a user actor from `userId`, and a direct call has none: pass the machine actor in beside the audit name, or call the three cores with a context built here, rather than let a row carry a user called `unknown`.
+- [x] **Task 11.1: Registry and server-side tools** (2026-11-11, on `feat/fleet-mcp-stack`; built smaller than first written, see the log)
+  - Files: `web/lib/fleet/context.ts`, `web/lib/fleet/catalog.server.ts`, `web/lib/fleet/dispatch.server.ts`, `web/lib/fleet/tools/machines.server.ts` (new), `web/lib/fleet/tools/hoot.server.ts` (new), `web/lib/hoot-utils.server.ts`, `web/lib/hoot/turnRunner.server.ts`, tests
+  - Do: `FleetServerTool { target: 'site' | 'machine'; definition; run }` in `context.ts`; the list `serverTools` in `catalog.server.ts`, which the catalog and dispatch both read, so a later task adds a tool with its own file and one line there. Dispatch runs a server tool after the same checks as a queued one and answers in the response. Exposed: `get_site_logs` (a site read, narrowed to the grant's machines) and `update_process`, `add_process`, `delete_process` (one machine each), through `executeServerSideTool` with the machine as the action's actor. Not exposed: talons and follow-ups (they need a person or a chat), and `deploy_software` with `get_system_presets` (task 12.2).
+  - Done when: tests cover each exposed tool's tier, its refusal outside the grant and the audit row naming the calling machine; the catalog test lists the server tools.
 
 ## Wave 12: Areas
-Depends on: Wave 11. Each task edits only its own area file and its own tests. Each tool calls the existing action core its dashboard or API route uses, takes the machine's audit actor, checks the grant and the hoot switch for every machine it names, and declares its tier. Operations only: nothing that manages members, API keys, agent tokens, webhooks, pairing, machine removal or billing. A tool that names several machines asks `hasCapability` once per machine.
+Depends on: Wave 11. Each task adds its own area file under `web/lib/fleet/tools/`, its own tests, and one line in `serverTools` (`web/lib/fleet/catalog.server.ts`); run them one after another, or merge that line by hand. Each tool calls the existing action core its dashboard or API route uses, takes the machine's audit actor, checks the grant and the hoot switch for every machine it names, and declares its tier. Operations only: nothing that manages members, API keys, agent tokens, webhooks, pairing, machine removal or billing. A tool that names several machines asks `hasCapability` once per machine.
 
 - [ ] **Task 12.1: roost**
   - Files: `web/lib/fleet/tools/roost.ts`, `web/__tests__/lib/fleet/tools/roost.test.ts` (new)
@@ -206,7 +205,7 @@ Depends on: Wave 11. Each task edits only its own area file and its own tests. E
 
 - [ ] **Task 12.2: deployments and owlette updates**
   - Files: `web/lib/fleet/tools/deployments.ts`, its test (new)
-  - Do: Tools to list deployments and read one (tier 1), cancel one (tier 2), and send `update_owlette` to a machine (tier 3), on `web/lib/actions/createDeployment.server.ts` and the command path. The agent's active-hours guard still applies and a machine can never override it; say so in the tool descriptions.
+  - Do: Tools to list deployments and read one (tier 1), cancel one (tier 2), and send `update_owlette` to a machine (tier 3), on `web/lib/actions/createDeployment.server.ts` and the command path. A deploy tool (tier 3) and the preset list belong here too, on `createDeployment`: hoot's own `deploy_software` writes install commands outside `executeMachineCommand`, so task 11.1 left it and `get_system_presets` out. The agent's active-hours guard still applies and a machine can never override it; say so in the tool descriptions.
   - Done when: tests cover each tool, the grant check and the audit actor.
 
 - [ ] **Task 12.3: reboot schedules**
@@ -226,7 +225,7 @@ Depends on: Wave 11. Each task edits only its own area file and its own tests. E
 
 - [ ] **Task 12.6: screenshots as images**
   - Files: `web/lib/fleet/tools/screenshots.ts`, its test (new)
-  - Do: Make `capture_screenshot` return an `image_url` content item (the signed read URL the public poll route already mints) so the script hands the agent an image. Add a tier-1 tool listing a machine's recent screenshots with signed URLs. Today a fleet `capture_screenshot` is queued as `mcp_tool_call`, so its result comes back as text and the image branch in dispatch is never reached. Route it as the `capture_screenshot` command type, whose result the shared lookup signs a URL for.
+  - Do: (No result-mapper hook exists: task 11.1 did not build one, since this task may not need it.) Make `capture_screenshot` return an `image_url` content item (the signed read URL the public poll route already mints) so the script hands the agent an image. Add a tier-1 tool listing a machine's recent screenshots with signed URLs. Today a fleet `capture_screenshot` is queued as `mcp_tool_call`, so its result comes back as text and the image branch in dispatch is never reached. Route it as the `capture_screenshot` command type, whose result the shared lookup signs a URL for.
   - Done when: tests cover the envelope and the grant check; on dev, a Claude Code session sees the picture.
 
 ## Wave 13: Catalog docs, proof, release
@@ -271,3 +270,17 @@ Depends on: Wave 12, Wave 10.
   - Checked: the whole web unit suite, `tsc`, eslint on the changed files.
 - owlette-3e's unpushed `fix/audit-followups` edits `hoot-utils.server.ts` and `turnRunner.server.ts` too, in other hunks (`toolCallbacks`, `stillOwnsChat`, `checkOwnership`). Told which lines; git should merge both.
 - Next: wave 10, `ask_hoot`, once the owner has said yes to assumption 3 (it spends the site owner's LLM key at a machine's asking); wave 11 does not need that answer. Still blocked on the owner: 4.3 and 5.2 (the name), wave 5 (the branch on dev), wave 6 (the release).
+- The owner said "push": `origin/feat/fleet-mcp` is `c28a33ea` (wave 9 and the plan). On wave 10 he said "I'm not sure. I assume yes?": it is built on yes, with the payer and the budget each one constant to change before it ships.
+- Wave 11 done on the stack, smaller than the task first said, each cut for a reason:
+  - No six empty area files and no result-mapper hook: nothing would use them before wave 12, and an empty file is dead code. A wave 12 task adds its file and one line in `serverTools`.
+  - `deploy_software` and `get_system_presets` are not offered: hoot's deploy writes install commands straight into a machine's queue, outside `executeMachineCommand`, so it has no offline check and no per-command audit row. Task 12.2 builds deploys on the dashboard's own `createDeployment`.
+  - `list_talons` is not offered: it exists to serve the talon write tools, which a machine never gets.
+  - No `capability` field: the tool's tier decides it through `fleetToolCapability`, the one rule dispatch already had.
+  - `list_machines` moved into the same list (`web/lib/fleet/tools/machines.server.ts`), so dispatch has one path for every tool the server answers.
+- What a machine can now do without an agent answering: read the site's activity log (`get_site_logs`, tier 1) and add, change or remove a process owlette manages on a machine its grant covers (tier 2). A process tool runs on a machine that is offline, since it is a config write; it is refused when hoot is off there.
+  - `get_site_logs` for a grant that names its machines reads the site's newest 200 entries in the window and keeps theirs, and says `incomplete` when that read came back full. A grant that names no machine reads nothing. One call reads up to 500 log documents (with a level or action filter); the view limit of 300 calls a minute per machine is what bounds that.
+  - A server tool is handed only the parameters its definition declares.
+  - A failure the tool reports is `200 { status: 'failed', error }`, which the script already shows as an error (a test in `test_fleet_mcp.py` pins it).
+- Task 9.1's option changed shape before anything used it: `machineActor?: MachineActor` in place of `auditActor?: string`. The action's actor is the machine, and its audit name is derived from it, so no row can carry a name the caller made up and no context carries a user called `unknown`. A turn or a call with a machine actor is never offered an active-hours override, a talon write or a follow-up (`PERSON_ONLY_TOOLS`).
+- Reviewed on two axes (Sonnet), nothing above medium. Taken: the override and the person-only tools above; a test that runs the real process actions and reads the audit row (`web/__tests__/lib/fleet/tools.test.ts`); the `incomplete` note; a limit or a window that is no positive number never reaches the query. Checked: the whole web unit suite before the review fixes (495 suites, 11,753 tests), the fleet and hoot suites after them, `tsc`, eslint, the script's tests.
+- Dev moved under the stack: pull request #488 (the whole-project audit, 448 files) merged at `5107da81`. The stack takes it in a merge of its own.
