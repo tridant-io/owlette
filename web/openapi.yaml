@@ -5351,7 +5351,18 @@ paths:
         `sha256_checksum`, the server first downloads the installer to compute
         and store one; a failed download answers `400`, `413` or `422` as
         `POST .../deployments/checksum` does. `409 no_failed_targets` when
-        nothing matches. Requires `DEPLOYMENT_MANAGE`; API keys need
+        nothing matches. A target whose failure was an uninstall
+        (`failedCommandType: uninstall_software` on the target) is not
+        retried, since the install would put the program back; run the
+        uninstall again instead. The targets are claimed on a fresh read of
+        the record before any install is queued, so one that left `failed`
+        meanwhile (another retry, or a late result) gets no second install;
+        when none is left the answer is `409 no_failed_targets` and nothing is
+        queued. An install of this deployment still queued for a retried
+        machine (one timed out while it was offline) is replaced, so the
+        machine runs one. If an install cannot be queued after its target was
+        claimed, the answer is `500`; that target stays `pending` until the
+        server times it out. Requires `DEPLOYMENT_MANAGE`; API keys need
         `site=<siteId>:write`.
 
         A target refused inside its active hours is `failed` with an `error`
@@ -13748,6 +13759,9 @@ components:
         error:
           type: string
           nullable: true
+        failedCommandType:
+          type: string
+          description: On a `failed` target, the agent command that failed (`install_software` or `uninstall_software`). A retry skips a failed uninstall.
         completedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         cancelledAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         retriedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }

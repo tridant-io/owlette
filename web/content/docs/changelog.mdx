@@ -7,6 +7,32 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — stuck deployment targets time out again
+
+The server fails a target still `pending` after 15 minutes, or `downloading` or
+`installing` after 30, counted from the deployment's creation or its last retry.
+Since late May it did that only for sites it was already watching, so most stuck
+targets stayed in flight for good and could not be retried. A machine that was
+only offline still runs its install when it reconnects. Nothing to update on the
+machine.
+
+### fixed — a retry no longer undoes results or installs twice
+
+A retry that first had to download and hash the installer wrote back the record
+it had read before the download, erasing results that arrived meanwhile, and two
+retries at once could each send an install to the same machine. A retry now
+claims its targets on the latest record before it queues anything, and replaces
+an install still queued for a machine that was offline, so each machine runs
+one. Nothing to update on the machine.
+
+### fixed — retry failed no longer reinstalls a program whose uninstall failed
+
+A deployment target whose uninstall failed could be picked up by retry failed,
+which installs, and so put the program back. A failed target now records which
+command failed, and a retry skips a failed uninstall; when it is the only failed
+target, the retry says to run the uninstall again. Over the API the target
+carries `failedCommandType`. Nothing to update on the machine.
+
 ### fixed — an uninstall started from a deployment updates that deployment
 
 Uninstall software from a deployment's menu removed the program but left the

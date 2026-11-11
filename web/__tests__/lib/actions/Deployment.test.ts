@@ -171,6 +171,14 @@ describe('createDeployment', () => {
         attributes: expect.objectContaining({ verb: 'create', correlationId: 'corr_1' }),
       }),
     );
+
+    // the sweeper scans only sites stamped in the last 30 minutes.
+    const siteStamp = sets.find((set) => set.path.join('/') === 'sites/site_a');
+    expect(siteStamp?.payload).toHaveProperty('lastDeploymentActivityAt');
+    expect(siteStamp?.options).toEqual({ merge: true });
+    expect(Object.keys(siteStamp?.payload ?? {})).toEqual(['lastDeploymentActivityAt']);
+    // before the deployment: if the stamp fails, no deployment is left unswept.
+    expect(sets.indexOf(siteStamp!)).toBeLessThan(sets.indexOf(deploymentSet));
   });
 
   describe('active-hours override (active-hours-guard task 2.3)', () => {

@@ -26,6 +26,8 @@ export interface DeploymentTarget {
   completedAt?: FirestoreTs;
   cancelledAt?: FirestoreTs;
   uninstalledAt?: FirestoreTs;
+  /** on a `failed` target, the command that failed (`install_software` or `uninstall_software`). */
+  failedCommandType?: string;
 }
 
 export interface Deployment {

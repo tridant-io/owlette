@@ -129,6 +129,8 @@ each finished target also writes `deployment_completed` or `deployment_failed` t
 
 - **retry failed**, in the row's menu (**more options**), requeues every failed target on the same record. the targets go back to `pending` with their errors cleared, and the deployment returns to `in_progress`. no new record is made
 - **retry this machine**, on a failed target's line, does the same for that one machine
+- a target whose **uninstall** failed is not retried: a retry installs, and would put the program back. run **uninstall software** again for it. when it is the only failed target, the retry is refused with `409 no_failed_targets`, and the page shows why
+- two retries at once, or one while a machine reports, do not undo each other, and a machine that already left `failed` is not sent a second install. a machine that timed out while offline still has its first install queued; the retry replaces it, so the machine runs one
 
 a deployment created before checksums were pinned has none. a retry then downloads and hashes the installer first, which takes a while for a large file (the button spins), and saves the checksum on the record.
 
@@ -202,7 +204,7 @@ the file the machine downloaded is not the one that was hashed. a URL that alway
 
 ### a target is stuck
 
-a target whose agent stops reporting, because it went offline or restarted mid-install, can stay in `downloading` or `installing`. an installing target cannot be cancelled or retried, and it keeps the record from being deleted; the dashboard has no way to clear it today. a machine that never picked the install up stays `pending` and takes it when it reconnects.
+a target whose agent stops reporting, because it went offline or restarted mid-install, is failed by the server: after 15 minutes still `pending`, or 30 minutes `downloading` or `installing`, counted from the deployment's creation or its last retry. its line then starts `Timed out:`, and it can be retried. a machine that was only offline keeps the install queued and runs it when it reconnects; its line turns `completed` if that succeeds. a target held in `closing_processes` is not timed out.
 
 ### the deployment cannot be cancelled
 

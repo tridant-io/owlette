@@ -93,6 +93,7 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
+import { FieldValue } from 'firebase-admin/firestore';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { ApiKeyScope } from '@/lib/apiKeyTypes';
 import type { ResolvedAuth } from '@/lib/apiAuth.server';
@@ -163,6 +164,23 @@ function idempotencyHeaders(key: string): Record<string, string> {
 
 function queueIdempotencyMiss(): void {
   mocks.get.mockResolvedValueOnce(docSnapshot('idempotency-cache', null));
+}
+
+// a merge write that queues a command: not the site's lastDeploymentActivityAt stamp.
+function isCommandWrite(c: unknown[]): boolean {
+  return (
+    (c[1] as { merge?: boolean })?.merge === true &&
+    !('lastDeploymentActivityAt' in (c[0] as object))
+  );
+}
+
+// the stamp the deployment sweeper scans sites by.
+function siteStamps(): unknown[][] {
+  return mocks.set.mock.calls.filter(
+    (c: unknown[]) =>
+      'lastDeploymentActivityAt' in (c[0] as object) &&
+      (c[1] as { merge?: boolean })?.merge === true,
+  );
 }
 
 describe('GET /api/sites/{siteId}/deployments', () => {
@@ -266,14 +284,14 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     expect(body.targets).toHaveLength(2);
 
     // Deployment doc + fan-out merges (one per machine).
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     const firstCmd = mergeCalls[0][0];
     const cmdKey = Object.keys(firstCmd)[0];
     expect(firstCmd[cmdKey].type).toBe('install_software');
     expect(mocks.update).toHaveBeenCalledWith({ status: 'in_progress' });
+    // the sweeper only scans sites with recent activity; without this it never fails a stuck target.
+    expect(siteStamps()).toHaveLength(1);
 
     expect(mockedEmit).toHaveBeenCalledTimes(1);
     expect(mockedEmit).toHaveBeenCalledWith(
@@ -294,9 +312,7 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     });
     const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
     expect(res.status).toBe(201);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     for (const call of mergeCalls) {
       const cmd = call[0][Object.keys(call[0])[0]];
@@ -318,9 +334,7 @@ describe('POST /api/sites/{siteId}/deployments', () => {
     const res = await createPOST(req, { params: Promise.resolve({ siteId: SITE }) });
     expect(res.status).toBe(400);
     expect((await res.json()).errors).toHaveProperty(['body.active_hours_override']);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(0);
   });
 
@@ -630,9 +644,14 @@ describe('DELETE /api/sites/{siteId}/deployments/{deploymentId}', () => {
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
+  // the first read, then the claim transaction's re-read of the same record.
+  function stageDeployment(snapshot: ReturnType<typeof docSnapshot>) {
+    mocks.get.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(snapshot);
+  }
+
   it('200 — re-queues install for failed targets only', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -658,9 +677,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.machine_ids).toEqual(['m2', 'm3']);
 
     // Two install_software commands re-queued (one per failed target).
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     expect(mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]].retry_attempt).toBe(true);
 
@@ -695,7 +712,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('skips checksum compute when the deployment already has one', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -715,9 +732,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(res.status).toBe(200);
     expect(mockComputeChecksum).not.toHaveBeenCalled();
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     const cmd = mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]];
     expect(cmd.sha256_checksum).toBe('ab'.repeat(32));
     // No re-pin: doc already had the checksum.
@@ -726,7 +741,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('carries the processes to close and the projects to hold, as the first attempt did', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'td.exe',
         installer_url: 'https://example.com/td.exe',
@@ -747,9 +762,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     });
     expect(res.status).toBe(200);
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     const cmd = mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]];
     expect(cmd.close_processes).toEqual(['TouchDesigner.exe']);
     expect(cmd.suppress_projects).toEqual(['C:\\show\\main.toe']);
@@ -757,7 +770,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('retries only the machines in the body filter', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -787,9 +800,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.machine_ids).toEqual(['m2']);
 
     // Only one command queued; m1 stays failed with its error intact.
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(1);
     const updatePayload = mocks.update.mock.calls[0][0];
     const m1 = updatePayload.targets.find((t: { machineId: string }) => t.machineId === 'm1');
@@ -801,7 +812,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('200 — an active_hours_override flows to every re-queued install and is audited', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -826,9 +837,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(200);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(2);
     for (const call of mergeCalls) {
       const cmd = call[0][Object.keys(call[0])[0]];
@@ -850,7 +859,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
 
   it('a retry without an override carries none', async () => {
     queueIdempotencyMiss();
-    mocks.get.mockResolvedValueOnce(
+    stageDeployment(
       docSnapshot(DEPLOYMENT, {
         installer_name: 'vlc.exe',
         installer_url: 'https://example.com/vlc.exe',
@@ -868,9 +877,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(200);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]]).not.toHaveProperty('activeHoursOverride');
     expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('activeHoursOverride');
   });
@@ -959,9 +966,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
       params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
     });
     expect(res.status).toBe(422);
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(0);
     expect(mocks.update).not.toHaveBeenCalled();
   });
@@ -1015,6 +1020,214 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(body.code).toBe('idempotency_key_required');
   });
 
+  describe('against a live record', () => {
+    type Target = { machineId: string; status: string; failedCommandType?: string; error?: string };
+    const installer = {
+      installer_name: 'vlc.exe',
+      installer_url: 'https://example.com/vlc.exe',
+      silent_flags: '/S',
+      status: 'partial',
+    };
+    const pinned = { ...installer, sha256_checksum: 'ab'.repeat(32) };
+
+    // reads see the latest write, as requests in flight together would.
+    function liveDeployment(initial: Record<string, unknown>) {
+      const path = `sites/${SITE}/deployments/${DEPLOYMENT}`;
+      let record = initial;
+      mocks.get.mockImplementation((p: string) =>
+        Promise.resolve(p === path ? docSnapshot(DEPLOYMENT, record) : docSnapshot('any', null)),
+      );
+      mocks.update.mockImplementation(async (payload: Record<string, unknown>) => {
+        if ('targets' in payload) record = { ...record, ...payload };
+      });
+      return {
+        statuses: () => (record.targets as Target[]).map((t) => t.status),
+        setTargets: (targets: Target[]) => {
+          record = { ...record, targets };
+        },
+      };
+    }
+
+    function retry(key: string, body: Record<string, unknown> = {}) {
+      return retryPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`, {
+          method: 'POST',
+          headers: idempotencyHeaders(key),
+          body,
+        }),
+        { params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }) },
+      );
+    }
+
+    const queuedInstalls = () => mocks.set.mock.calls.filter(isCommandWrite);
+
+    it('replaces an install still queued from before, so a machine that was offline runs one', async () => {
+      liveDeployment({ ...pinned, targets: [{ machineId: 'm1', status: 'failed' }] });
+      // the sweeper timed m1 out at `pending`: its first install is still queued.
+      const pendingPath = `sites/${SITE}/machines/m1/commands/pending`;
+      const deploymentGet = mocks.get.getMockImplementation()!;
+      mocks.get.mockImplementation((p: string) =>
+        p === pendingPath
+          ? Promise.resolve(
+              docSnapshot('pending', {
+                install_first: { type: 'install_software', deployment_id: DEPLOYMENT },
+                reboot_1: { type: 'reboot_machine' },
+              }),
+            )
+          : deploymentGet(p),
+      );
+
+      const res = await retry('idem-retry-live-stale-install');
+
+      expect(res.status).toBe(200);
+      const [[payload]] = queuedInstalls() as Array<[Record<string, unknown>]>;
+      expect(FieldValue.delete().isEqual(payload.install_first as FieldValue)).toBe(true);
+      expect(payload).not.toHaveProperty('reboot_1');
+      expect(Object.keys(payload).filter((k) => k.startsWith('install_deploy'))).toHaveLength(1);
+    });
+
+    it('stamps the site so the sweeper watches the targets it claimed', async () => {
+      liveDeployment({ ...pinned, targets: [{ machineId: 'm1', status: 'failed' }] });
+
+      const res = await retry('idem-retry-live-stamp');
+
+      expect(res.status).toBe(200);
+      expect(siteStamps()).toHaveLength(1);
+    });
+
+    it('audits what was queued, then answers 500, when one of three installs cannot be queued', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'failed' },
+          { machineId: 'm3', status: 'failed' },
+        ],
+      });
+      let installWrites = 0;
+      mocks.set.mockImplementation(async (...args: unknown[]) => {
+        if (isCommandWrite(args) && ++installWrites === 2) throw new Error('write failed');
+      });
+
+      const res = await retry('idem-retry-live-partial-queue');
+
+      expect(res.status).toBe(500);
+      expect(mockedEmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            verb: 'retry',
+            retried_count: 2,
+            machine_ids: ['m1', 'm3'],
+            unqueued_machine_ids: ['m2'],
+          }),
+        }),
+      );
+      // claimed before queuing: m2 waits for the sweeper, with no second install anywhere.
+      expect(live.statuses()).toEqual(['pending', 'pending', 'pending']);
+    });
+
+    it('keeps a result that lands while the checksum downloads', async () => {
+      const live = liveDeployment({
+        ...installer,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'installing' },
+        ],
+      });
+      mockComputeChecksum.mockImplementation(async () => {
+        live.setTargets([
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'completed' },
+        ]);
+        return { sha256_checksum: 'f0'.repeat(32), size_bytes: 1024 };
+      });
+
+      const res = await retry('idem-retry-live-checksum');
+
+      expect(res.status).toBe(200);
+      expect(live.statuses()).toEqual(['pending', 'completed']);
+    });
+
+    it('two per-machine retries in flight together both land', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed' },
+          { machineId: 'm2', status: 'failed' },
+        ],
+      });
+
+      const [first, second] = await Promise.all([
+        retry('idem-retry-live-m1', { machines: ['m1'] }),
+        retry('idem-retry-live-m2', { machines: ['m2'] }),
+      ]);
+
+      expect([first.status, second.status]).toEqual([200, 200]);
+      expect(live.statuses()).toEqual(['pending', 'pending']);
+      expect(queuedInstalls()).toHaveLength(2);
+    });
+
+    it('queues no install for a target that left `failed` before the retry claimed it', async () => {
+      const live = liveDeployment({
+        ...installer,
+        targets: [{ machineId: 'm1', status: 'failed' }],
+      });
+      // another retry claims m1 while this one downloads the installer.
+      mockComputeChecksum.mockImplementation(async () => {
+        live.setTargets([{ machineId: 'm1', status: 'pending' }]);
+        return { sha256_checksum: 'f0'.repeat(32), size_bytes: 1024 };
+      });
+
+      const res = await retry('idem-retry-live-claimed');
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe('no_failed_targets');
+      expect(body.detail).toMatch(/nothing was queued/);
+      expect(queuedInstalls()).toHaveLength(0);
+      expect(live.statuses()).toEqual(['pending']);
+    });
+
+    it('does not reinstall a program whose uninstall failed', async () => {
+      const live = liveDeployment({
+        ...pinned,
+        targets: [
+          { machineId: 'm1', status: 'failed', failedCommandType: 'uninstall_software' },
+          { machineId: 'm2', status: 'failed', failedCommandType: 'install_software' },
+          // what agents answered the deployment uninstall before it sent a program name:
+          // windows and macOS, then linux.
+          { machineId: 'm3', status: 'failed', error: 'Error: Software name and uninstall command required' },
+          {
+            machineId: 'm4',
+            status: 'failed',
+            error: "Error: executing command uninstall_software: No module named 'winreg'",
+          },
+        ],
+      });
+
+      const res = await retry('idem-retry-live-uninstall-failed');
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).machine_ids).toEqual(['m2']);
+      expect(live.statuses()).toEqual(['failed', 'pending', 'failed', 'failed']);
+      expect(queuedInstalls()).toHaveLength(1);
+    });
+
+    it('409 when the only machine named is one whose uninstall failed', async () => {
+      liveDeployment({
+        ...pinned,
+        targets: [{ machineId: 'm1', status: 'failed', failedCommandType: 'uninstall_software' }],
+      });
+
+      const res = await retry('idem-retry-live-named-uninstall', { machines: ['m1'] });
+
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.code).toBe('no_failed_targets');
+      expect(body.detail).toMatch(/uninstall/);
+      expect(queuedInstalls()).toHaveLength(0);
+    });
+  });
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
@@ -1342,9 +1555,7 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => 
     expect(mocks.where).toHaveBeenCalledTimes(2);
     expect(mocks.limit).toHaveBeenCalledWith(2);
 
-    const mergeCalls = mocks.set.mock.calls.filter(
-      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
-    );
+    const mergeCalls = mocks.set.mock.calls.filter(isCommandWrite);
     expect(mergeCalls).toHaveLength(1);
     const [commandId, command] = Object.entries(mergeCalls[0][0] as Record<string, unknown>)[0];
     expect(commandId).toMatch(/^uninstall-\d+$/);
