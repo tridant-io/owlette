@@ -961,13 +961,13 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 
 [[package]]
 name = "moq-nvenc"
-version = "0.0.5"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06346f3894fca032963024048d05d8d13842c5946ce9fbf0ac93b9198edd5ac9"
+checksum = "f44f0825b2deb9cff474a4b7164f8749599ac6ae61db81c82e57b7c0b8dc1af7"
 dependencies = [
  "cudarc",
- "lazy_static",
  "libloading",
+ "thiserror",
 ]
 
 [[package]]
