@@ -9,7 +9,7 @@
 // decoder callback" describes a `VideoDecoder` that no longer exists in the
 // shipping path. what survives of that first case — no rAF for a frame, and no
 // upload from the frame join — is asserted below. smooth scaling's canvas
-// (4.1.29) draws from `present`, against a fake renderer.
+// (4.2.0) draws from `present`, against a fake renderer.
 
 import { createPresenter } from '@/lib/swoop/video/presenter';
 import type { FrameObservation } from '@/lib/swoop/video/receiver';

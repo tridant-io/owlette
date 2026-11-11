@@ -86,7 +86,7 @@ Mixed fleet: no wire change, so every pairing of a 4.1.27 or 4.1.28 viewer and s
 - **Encoders and tiers**: Windows chain `nvenc` → `mf-hw` → `mf-sw` (select.rs:43); macOS `videotoolbox` only; Linux ships no streamer (a stub builds). Tiers are per codec class (`apply_tiers` matches on `want.codec`, session/mod.rs:4070-4083), so a pass has two tiers when an H.264 and an HEVC viewer watch at once. The capture thread encodes tiers one after another, and NVENC's encode waits for its completion event on that thread (~4395). `ctx.backend` is an `Option<&'static str>`: `"nvenc"`, `"mf-hw"`, `"mf-sw"`, `"videotoolbox"`.
 - **Two budgets, two words**: the glossary's "encoder budget" is the count of encode sessions a machine can open (`select::budget`, session/tiers.rs D14); the gate's 12 ms is the "encode-time budget" (`gate::ENCODE_TIME_P50`).
 - **Every rung move is a new encoder and an IRAP**: `TierPass::retarget` drops the encoder on any change of width, height or fps (session/mod.rs:4031-4054); `LadderChange::needs_new_encoder` only says whether the size must be re-planned (governor.rs:337-342).
-- **The download host** refuses a re-upload of a published version (409 `installer_published`): a fix after 7.1's upload is 4.1.29.
+- **The download host** refuses a re-upload of a published version (409 `installer_published`): a fix after the release upload is 4.2.1.
 
 ## Commands
 

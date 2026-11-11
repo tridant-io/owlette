@@ -9,7 +9,7 @@
 //!
 //! Sessions open at a text preset: P4 up to 2560x1440 pixels, P3 above it
 //! (3440x1440 and 4K among them), because a slower preset's cost grows with the
-//! picture. P1, which every session opened at before 4.1.29, costs scrolling
+//! picture. P1, which every session opened at before 4.2.0, costs scrolling
 //! text about 5 QP against P4, and P4 costs about 2.3x P1's encode time
 //! (`dev/active/swoop/research/01-parsec-and-peers.md`, measured on an RTX 5060
 //! Ti at 1440p). ULTRA_LOW_LATENCY tuning and every setting in the next section
