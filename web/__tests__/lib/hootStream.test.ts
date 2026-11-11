@@ -372,6 +372,106 @@ describe('runHootStream single-machine mode', () => {
 });
 
 /**
+ * Local hoot streams its own line frames from the agent's Firestore doc and saves
+ * the reply itself once the agent marks it complete. An agent error is answered as
+ * an error and never saved as hoot's reply.
+ */
+describe('runHootStream on local hoot', () => {
+  let pushSnapshot: (data: Record<string, unknown>) => void;
+  const unsubscribe = jest.fn();
+  let setTimeoutSpy: jest.SpyInstance;
+  let clearTimeoutSpy: jest.SpyInstance;
+
+  /** the 60 s wait for the agent was cleared, not left to fire on a closed stream. */
+  function expectAgentWaitCleared() {
+    const index = setTimeoutSpy.mock.calls.findIndex(([, ms]) => ms === 60_000);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[index].value);
+  }
+
+  /** the machine doc, with local hoot alive, and the agent's active-chat doc under it. */
+  const doc: Record<string, unknown> = {
+    collection: () => doc,
+    doc: () => doc,
+    get: async () => ({ exists: true, data: () => ({ cortexStatus: { online: true, lastHeartbeat: new Date() } }) }),
+    set: async () => undefined,
+    onSnapshot: (next: (snapshot: { data: () => unknown }) => void) => {
+      pushSnapshot = (data) => next({ data: () => data });
+      return unsubscribe;
+    },
+  };
+
+  /** what the agent writes when its turn fails: `write_error_response` in `agent/src/cortex_firestore.py`. */
+  const agentError = { status: 'error', response: { content: 'Error: invalid x-api-key', complete: true } };
+
+  async function send() {
+    const onAssistantText = jest.fn();
+    const result = await runHootStream({
+      db: doc as unknown as Firestore,
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId: 'kiosk-01',
+      machineName: 'Lobby',
+      messages: [{ role: 'user', content: 'how is the lobby?' }],
+      chatId: 'conv-1',
+      onAssistantText,
+    });
+    if (!result.ok) throw new Error(result.error);
+    return { response: result.response, onAssistantText };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    // the gate off lets a site admin's turn run on the agent.
+    mockGetHootRequireTier3Approval.mockResolvedValue(false);
+    setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+    clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+  });
+
+  afterEach(() => {
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
+  });
+
+  it("saves the agent's finished reply once", async () => {
+    const { response, onAssistantText } = await send();
+
+    pushSnapshot({ status: 'streaming', response: { content: 'cpu is ', complete: false } });
+    pushSnapshot({ status: 'complete', response: { content: 'cpu is at 12%', complete: true } });
+    const body = await response.text();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(body).toBe('0:"cpu is "\n0:"at 12%"\nd:{"finishReason":"stop"}\n');
+    expect(mockResolveLlmConfig).not.toHaveBeenCalled();
+    expect(onAssistantText.mock.calls).toEqual([['cpu is at 12%']]);
+  });
+
+  it.each([
+    ['before any text', [], '3:"Error: invalid x-api-key"\n'],
+    [
+      'part-way through a reply',
+      [{ status: 'streaming', response: { content: 'cpu is ', complete: false } }],
+      '0:"cpu is "\n3:"Error: invalid x-api-key"\n',
+    ],
+  ])("answers the agent's error %s as an error, and saves nothing", async (_label, before, expected) => {
+    const { response, onAssistantText } = await send();
+
+    for (const snapshot of before) pushSnapshot(snapshot);
+    // firestore calls the listener with no try around it, so it must not throw
+    expect(() => pushSnapshot(agentError)).not.toThrow();
+    const body = await response.text();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(body).toBe(expected);
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expectAgentWaitCleared();
+  });
+});
+
+/**
  * Nobody approves a conversations API call in a dashboard chat, so it can never
  * carry an active-hours override: its tools are built without
  * `allowActiveHoursOverride`, and the schemas the model gets lack the flag.

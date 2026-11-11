@@ -354,6 +354,18 @@ function handleLocalHoot(
           const complete: boolean = response.complete || false;
           const status: string = data.status;
 
+          // the agent writes an error as complete, with its message as the content:
+          // answer it as an error before either branch below takes it for hoot's reply
+          if (status === 'error') {
+            controller.enqueue(
+              encoder.encode(`3:${JSON.stringify(content || 'hoot error')}\n`),
+            );
+            if (timeoutId) clearTimeout(timeoutId);
+            unsubscribe?.();
+            controller.close();
+            return;
+          }
+
           if (content.length > lastContent.length) {
             const delta = content.slice(lastContent.length);
             controller.enqueue(encoder.encode(`0:${JSON.stringify(delta)}\n`));
@@ -368,15 +380,6 @@ function handleLocalHoot(
             unsubscribe?.();
             controller.close();
             void fireAssistantTap(onAssistantText, lastContent);
-          }
-
-          if (status === 'error') {
-            controller.enqueue(
-              encoder.encode(`3:${JSON.stringify(content || 'hoot error')}\n`),
-            );
-            if (timeoutId) clearTimeout(timeoutId);
-            unsubscribe?.();
-            controller.close();
           }
         },
         (error) => {

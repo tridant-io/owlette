@@ -10,6 +10,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — a failed local hoot turn reads as an error
+
+When hoot ran on the machine (local hoot) and its turn failed, the conversations
+API sent the agent's error message as if it were hoot's answer and saved it as
+hoot's reply, so later turns treated it as something hoot had said. The error
+now arrives as the stream's error line, which `owlette chat send` and the SDKs
+already report as an error, and nothing is saved for that turn. Nothing to
+update on the machine.
+
 ### fixed — hoot's deployments install instead of closing the show and failing
 
 A deployment hoot started carried no installer checksum, so every machine closed
