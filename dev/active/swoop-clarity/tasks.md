@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 20/25 complete
+**Progress**: 21/25 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -215,7 +215,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     COVERAGE.md: a row beside the `/swoop/[siteId]/[machineId]` rows (~34-35): `/swoop/[siteId]/[machineId]` (picture size and scaling) | admin (control) | desktop | `swoop/clarity.spec.ts` | what (a) to (i) cover | Covered (how the canvas looks and its latency on a real GPU: the probe, task 4.1, and the owner's sitting).
   - Done when: clarity.spec.ts passes three runs in a row; the whole swoop set (`e2e/specs/swoop`) passes in the same run (this wave's one Playwright run); with the config changed the mobile project passes too (`--project=mobile-chromium`); eslint clean on the spec and the config; one `--headed` run of cases (e) and (f) on this box with the fake host's `detail: true` (Chromium on the RTX 2080 Ti, not SwiftShader) reads `scaling smooth` with a `smooth scaling` estimate, and the task report carries its two screenshots of the detail band, smooth scaling on and off.
 
-- [ ] **Task 5.2: the streamer passes every CI invocation, on the system it runs on**
+- [x] **Task 5.2: the streamer passes every CI invocation, on the system it runs on**
   - Files: none (results go in the task report and this file's Log)
   - Depends on: Tasks 1.1, 1.2, 1.3, 2.1, 2.2, 2.4, 3.3, 3.4, 4.1
   - Do: Every swoop cargo invocation CI runs (rust-build.yml:117-143 on Windows and :244-287 on macOS and Linux), plus the builds and hardware sets that ship. A red here found after 7.1's upload would cost a version (the download host refuses a re-upload of a published version, 409 `installer_published`). Run the remote legs first; they do not load this box.
@@ -440,3 +440,4 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - 0 frames dropped in decode in every run.
   - **The canvas costs Safari 13-19% of its callbacks**, outside the rule, so WebKit stays off by default (C6) and the toggle stays offered.
   - **Low Power Mode was on** (battery), so Safari ran at 30 Hz: provisional until a rerun with it off. The script is `~/src/safari-probe.sh` on the Mac, and the runs are in the session scratchpad's safari-runs/.
+- 2026-11-11, 5.2 done. 3.3's still-screen test passed on TEC-A4D at a4fa0e1c's tree, run with every window minimized (Shell.Application MinimizeAll, TouchDesigner included, on the owner's go) and restored after: `swoop refine: in 350 ms of a still screen nvenc sent 1 frames and mf-sw 1; 100 to 450 ms after the last paint, 15 and 0` (want ≤2, ≤2, ≥10, ≤2). Every leg of 5.2 is green; the WebKitGTK line is above.
