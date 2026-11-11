@@ -3,12 +3,13 @@
  * @jest-environment jsdom
  *
  * AddMemberDialog, the members section's add dialog, with the real search: a
- * pick adds by uid and a typed full email adds by email, with the role and an
- * optional swoop mode. an untouched dialog writes no swoop field, the toast
- * says when the person was already on the site, a 404 keeps the dialog open,
- * and the copy never calls either role account-level.
+ * pick adds by uid and a typed full email adds by email, with the role, an
+ * optional swoop mode and an optional machine scope. an untouched dialog writes
+ * no swoop field and no machineIds, the toast says when the person was already
+ * on the site, a 404 keeps the dialog open, and the copy never calls either
+ * role account-level.
  */
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AddMemberDialog } from '@/components/admin/sites/AddMemberDialog';
 import {
@@ -43,6 +44,11 @@ window.HTMLElement.prototype.scrollIntoView = jest.fn();
 type User = ReturnType<typeof userEvent.setup>;
 type AddMember = jest.Mock<Promise<AddSiteMemberResult>, [AddSiteMemberInput]>;
 
+const MACHINES = [
+  { id: 'IN', name: 'lobby wall' },
+  { id: 'IN2', name: 'kiosk' },
+];
+
 const CANDIDATES: MemberCandidate[] = [
   { uid: 'u-rae', email: 'rae@example.com', displayName: 'rae calloway' },
   { uid: 'u-kim', email: 'kim@example.com', displayName: 'kim ortiz' },
@@ -73,6 +79,7 @@ function renderDialog({
     <AddMemberDialog
       siteId="elm-gate"
       membersMayWatch={membersMayWatch}
+      machines={MACHINES}
       onOpenChange={onOpenChange}
       addMember={addMember}
     />,
@@ -94,6 +101,14 @@ async function choose(user: User, field: 'role' | 'swoop', option: string) {
   await user.click(screen.getByRole('option', { name: option }));
 }
 
+const access = () => screen.getByRole('group', { name: 'access' });
+
+async function limitTo(user: User, machine: string) {
+  await user.click(within(access()).getByRole('button', { name: 'some machines' }));
+  await user.click(screen.getByTestId('add-member-machines-machines'));
+  await user.click(await screen.findByRole('checkbox', { name: machine }));
+}
+
 describe('AddMemberDialog', () => {
   it('names itself, fetches the people it may offer for this site, and starts as a member by role', () => {
     renderDialog({ membersMayWatch: false });
@@ -111,6 +126,45 @@ describe('AddMemberDialog', () => {
     expect(screen.getByRole('combobox', { name: 'swoop' })).toHaveAccessibleDescription(
       "by role: members don't watch on this site.",
     );
+    expect(within(access()).getByRole('button', { name: 'whole site' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('limits them to the machines picked: some machines then one sends just that one', async () => {
+    const { user, addMember } = renderDialog();
+
+    await pickRae(user);
+    await limitTo(user, 'lobby wall');
+    await user.click(addButton());
+
+    expect(sent(addMember)).toStrictEqual([{ uid: 'u-rae', role: 'member', machineIds: ['IN'] }]);
+  });
+
+  it('sends no machineIds once the choice is back on the whole site', async () => {
+    const { user, addMember } = renderDialog();
+
+    await pickRae(user);
+    await limitTo(user, 'lobby wall');
+    await user.click(within(access()).getByRole('button', { name: 'whole site' }));
+    await user.click(addButton());
+
+    expect(sent(addMember)).toStrictEqual([{ uid: 'u-rae', role: 'member' }]);
+  });
+
+  it('keeps add disabled while some machines has none picked, and enter adds no one then', async () => {
+    const { user, addMember } = renderDialog();
+
+    await user.type(search(), 'new.person@example.org');
+    expect(addButton()).toBeEnabled();
+
+    await user.click(within(access()).getByRole('button', { name: 'some machines' }));
+    expect(addButton()).toBeDisabled();
+    await user.click(search());
+    await user.keyboard('{Enter}');
+    expect(addMember).not.toHaveBeenCalled();
+
+    await user.click(screen.getByTestId('add-member-machines-machines'));
+    await user.click(await screen.findByRole('checkbox', { name: 'kiosk' }));
+    expect(addButton()).toBeEnabled();
   });
 
   it('adds a picked person by uid as a member with no swoop field, toasts member added and closes', async () => {

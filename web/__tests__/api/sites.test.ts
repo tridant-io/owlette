@@ -466,6 +466,32 @@ describe('/api/sites/{siteId}', () => {
     });
   });
 
+  it('returns site detail to a scoped member, whose writes to the site stay refused', async () => {
+    seedSite('site-a', { name: 'Alpha', owner: 'owner-uid' });
+    authedSession('scoped-uid', 'admin', ['site-a']);
+    const row = docStore['sites/site-a/members/scoped-uid'];
+    docStore['sites/site-a/members/scoped-uid'] = { data: { ...row.data, machineIds: ['m1'] } };
+
+    const res = await siteGET(
+      createMockRequest('http://localhost/api/sites/site-a'),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ id: 'site-a', name: 'Alpha', owner: 'owner-uid' });
+
+    const patch = await sitePATCH(
+      createMockRequest('http://localhost/api/sites/site-a', {
+        method: 'PATCH',
+        body: { name: 'Renamed' },
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+    expect(patch.status).toBe(403);
+    expect(docStore['sites/site-a']?.data?.name).toBe('Alpha');
+  });
+
   it('creates a site and replays matching idempotency keys', async () => {
     authedKey('admin-uid', 'superadmin', [siteScope('*', 'admin')]);
     const request = () =>

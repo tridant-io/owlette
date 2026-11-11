@@ -58,16 +58,23 @@ expected output:
 | `agentCanAccessMachine(siteId, machineId)` | the agent token matches both `site_id` and `machine_id` |
 | `isActiveMember(siteId)` | a `sites/{siteId}/members/{uid}` document exists with `status: "active"` |
 | `siteMemberRole(siteId)` | the per-site role (`owner`, `admin` or `member`) from that membership document. only valid behind `isActiveMember()` |
-| `canAccessSite(siteId)` | not soft-deleted, and either a superadmin or an active member of the site |
-| `isSiteAdmin(siteId)` | a superadmin, or an active member whose per-site role is `owner` or `admin`. a global `users/{uid}.role == "admin"` grants **nothing** on a site it holds no member row for |
+| `memberIsWholeSite(siteId)` | the caller's member row has no `machineIds` field. only valid behind `isActiveMember()` |
+| `memberHoldsMachine(siteId, machineId)` | the caller's member row has a `machineIds` list that contains `machineId`. a value that is not a list never matches. only valid behind `isActiveMember()` |
+| `canAccessSite(siteId)` | not soft-deleted, and either a superadmin or an active member of the site, a scoped member included. kept for the documents that say nothing about other machines: the site document, `settings/{swoop,display,cortex}`, and the schedule and reboot presets |
+| `canAccessWholeSite(siteId)` | not soft-deleted, and either a superadmin or an active member whose row is whole site. every block that spans machines uses it |
+| `canAccessMachine(siteId, machineId)` | not soft-deleted, and either a superadmin or an active member whose row is whole site or lists `machineId`. every block under one machine uses it |
+| `isSiteAdmin(siteId)` | a superadmin, or an active member whose per-site role is `owner` or `admin` and whose row is whole site. a scoped admin is not a site admin here. a global `users/{uid}.role == "admin"` grants **nothing** on a site it holds no member row for |
 | `hasRequiredFields(required)` | the write payload contains every named field |
 
 site access is a document. `sites/{siteId}/members/{uid}` holds
-`{ uid, role, status, addedAt, addedBy, swoop? }` and is the only thing that
-grants a user access to a site. `swoop` is the person's swoop mode (`none`,
-`view` or `control`); without it, the site role decides. the older
-`sites/{siteId}.owner` field and `users/{uid}.sites[]` array are still written,
-but no rule reads them.
+`{ uid, role, status, addedAt, addedBy, swoop?, machineIds? }` and is the only
+thing that grants a user access to a site. `swoop` is the person's swoop mode
+(`none`, `view` or `control`); without it, the site role decides. `machineIds`
+is the person's [machine scope](/docs/reference/authentication#machine-scope),
+1 to 30 of the site's machines: with it they reach only those machines and
+nothing that spans machines, without it the whole site. `[]`, or a value that
+is not a list, reaches no machine. the older `sites/{siteId}.owner` field and
+`users/{uid}.sites[]` array are still written, but no rule reads them.
 superadmins hold no member rows; they reach every site by global role. every
 member write is server-only.
 
@@ -75,42 +82,45 @@ member write is server-only.
 
 these are client-rule permissions. trusted server routes that use the Firebase Admin SDK bypass the rules, so "server only" means denied to every client SDK write and managed by owlette's server code.
 
+in the member/admin column, a **whole-site** row is a member row with no `machineIds`, and a machine **your access covers** is any machine of the site for a whole-site row, or one the row's `machineIds` lists for a scoped one. a scoped admin is a scoped member: the site-admin rows below need a whole-site row too.
+
 | path | member/admin client | superadmin client | agent client | trusted server / Admin SDK |
 |------|---------------------|-------------------|--------------|----------------------------|
 | `sites/{siteId}/members/{memberUid}` | read only your own membership rows (by document ID, or `where('uid','==',me)`); no write. matched at `match /{path=**}/members/{memberUid}`, a recursive wildcard, which is what makes the dashboard's `collectionGroup('members')` listener legal | same | no access | full write; `membership.server.ts` is the single writer |
 | `site_ids/{siteId}` | single-document get only, never list; no write | same | same | write. tombstones for deleted sites, so an ID is never reused |
-| `sites/{siteId}` | read sites where you hold an active member row; no write | read all sites; no write | no access | create/update/delete |
-| `sites/{siteId}/machines/{machineId}` | read machines in accessible sites; no write | read all machines; no write | read/write/delete own machine only | full write |
-| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | read commands in accessible sites; no write | read all commands; no write | read/write/delete own machine's commands | full write |
-| `sites/{siteId}/machines/{machineId}/screenshots/{screenshotId}` | read in accessible sites | read all | no access | write history entries |
-| `sites/{siteId}/machines/{machineId}/installed_software/{softwareId}` | read and delete inventory in accessible sites | read and delete in all sites | read/write/delete own machine's inventory | full write |
-| `sites/{siteId}/machines/{machineId}/hardware/{docId}` | read in accessible sites; no write | read all; no write | read/write own machine's hardware | full write |
-| `sites/{siteId}/machines/{machineId}/metrics_history/{bucketId}` | read in accessible sites; no write | read all; no write | read/write own machine's metrics | full write |
-| `sites/{siteId}/machines/{machineId}/cortex/{docId}` | read in accessible sites; no write | read all; no write | read/write own machine's hoot chat state | full write |
-| `sites/{siteId}/machines/{machineId}/logs/{logId}` | read in accessible sites; no write | read all; no write | read and create own machine's log entries | full write |
-| `sites/{siteId}/deployments/{deploymentId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
-| `sites/{siteId}/installer_templates/{templateId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
-| `sites/{siteId}/project_templates/{templateId}` | read in accessible sites; no write | read all; no write | no access | create/update/delete |
-| `sites/{siteId}/roosts/{roostId}` | read in accessible sites; no write. creating, publishing, rolling back and deleting go through the API, which checks the site-admin capability | read all; no write | no access | create/update/delete |
-| `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` | read/delete in accessible sites; no create/update | read/delete all; no create/update | create/update own machine's target state | full write |
-| `sites/{siteId}/roosts/{roostId}/versions/{versionId}` | read version history in accessible sites; no write | read all; no write | no access | server only; versions are immutable |
-| `sites/{siteId}/webhooks/{webhookId}` | site admins (`owner`/`admin`) read; plain members denied. no write | read all; no write | no access | write |
+| `sites/{siteId}` | read sites where you hold an active member row, a scoped one included; no write | read all sites; no write | no access | create/update/delete |
+| `sites/{siteId}/machines/{machineId}` | read machines your access covers; no write. a scoped member's list query must pin the IDs (`documentId() in` their machines), because rules are not filters | read all machines; no write | read/write/delete own machine only | full write |
+| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | read commands of machines your access covers; no write | read all commands; no write | read/write/delete own machine's commands | full write |
+| `sites/{siteId}/machines/{machineId}/screenshots/{screenshotId}` | read on machines your access covers | read all | no access | write history entries |
+| `sites/{siteId}/machines/{machineId}/installed_software/{softwareId}` | read and delete inventory on machines your access covers | read and delete in all sites | read/write/delete own machine's inventory | full write |
+| `sites/{siteId}/machines/{machineId}/hardware/{docId}` | read on machines your access covers; no write | read all; no write | read/write own machine's hardware | full write |
+| `sites/{siteId}/machines/{machineId}/metrics_history/{bucketId}` | read on machines your access covers; no write | read all; no write | read/write own machine's metrics | full write |
+| `sites/{siteId}/machines/{machineId}/cortex/{docId}` | read on machines your access covers; no write | read all; no write | read/write own machine's hoot chat state | full write |
+| `sites/{siteId}/machines/{machineId}/logs/{logId}` | read on machines your access covers; no write | read all; no write | read and create own machine's log entries | full write |
+| `sites/{siteId}/deployments/{deploymentId}` | read with a whole-site row; a scoped member cannot. no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/installer_templates/{templateId}` | read with a whole-site row; no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/project_templates/{templateId}` | read with a whole-site row; no write | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/roosts/{roostId}` | read with a whole-site row; a scoped member cannot. no write. creating, publishing, rolling back and deleting go through the API, which checks the site-admin capability | read all; no write | no access | create/update/delete |
+| `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` | read/delete with a whole-site row; no create/update | read/delete all; no create/update | create/update own machine's target state | full write |
+| `sites/{siteId}/roosts/{roostId}/versions/{versionId}` | read version history with a whole-site row; no write | read all; no write | no access | server only; versions are immutable |
+| `sites/{siteId}/webhooks/{webhookId}` | site admins (`owner`/`admin`, whole site) read; plain members and scoped admins denied. no write | read all; no write | no access | write |
 | `sites/{siteId}/webhook_secrets/{webhookId}` | no access | no access | no access | server only |
-| `sites/{siteId}/talons/{talonId}` and `talon_runs/{runId}` | read in accessible sites; no write | read all; no write | no access | server only; run records are an audit surface |
+| `sites/{siteId}/talons/{talonId}` and `talon_runs/{runId}` | read with a whole-site row; a scoped member cannot. no write | read all; no write | no access | server only; run records are an audit surface |
 | `sites/{siteId}/talon_secrets/{secretId}` | no access | no access | no access | server only |
-| `sites/{siteId}/cortex-events/{eventId}` | read in accessible sites; no write | read all; no write | create, and update its own, for its own machine | full write |
-| `sites/{siteId}/logs/{logId}` | read in accessible sites; no write | read all; no write | read site logs and create own-machine entries | create/delete |
-| `sites/{siteId}/audit_log/{entryId}` | site admins read; members cannot | read all | no access | server only; nobody can edit or delete an entry from a client |
-| `sites/{siteId}/settings/{settingId}` | read in accessible sites; no write | read all; no write | no access | write |
-| `config/{siteId}/machines/{machineId}` | read in accessible sites; no write | read all; no write | read/write/delete own machine's config | full write |
-| `config/{siteId}/schedule_presets`, `reboot_presets`, `project_distribution_presets`, `talon_presets` | read in accessible sites; no write | read all; no write | no access | write/delete |
+| `sites/{siteId}/cortex-events/{eventId}` | read with a whole-site row; no write | read all; no write | create, and update its own, for its own machine | full write |
+| `sites/{siteId}/logs/{logId}` | read entries whose `machineId` your access covers; no write. a scoped member's list query must pin `machineId` (`==` or `in`) to their machines, and an entry with no `machineId` is whole-site only | read all; no write | read site logs and create own-machine entries | create/delete |
+| `sites/{siteId}/audit_log/{entryId}` | site admins (whole site) read; members and scoped admins cannot | read all | no access | server only; nobody can edit or delete an entry from a client |
+| `sites/{siteId}/settings/{settingId}` | read `swoop`, `display` and `cortex` with any row, a scoped one included; `alerts` only with a whole-site row. no write | read all; no write | no access | write |
+| `config/{siteId}/machines/{machineId}` | read for machines your access covers; no write | read all; no write | read/write/delete own machine's config | full write |
+| `config/{siteId}/schedule_presets`, `reboot_presets` | read with any row, a scoped one included; no write | read all; no write | no access | write/delete |
+| `config/{siteId}/project_distribution_presets`, `talon_presets` | read with a whole-site row; no write | read all; no write | no access | write/delete |
 | `users/{userId}` | read your own profile; self-create as `member` with no sites; update only `preferences`, `displayName`, `photoURL`, `timezone`, `lastSiteId` and `lastMachineIds`. this document does not grant site access; member rows do | read all profiles; role writes still go through the server | no access | manage roles and deletion |
 | `users/{userId}/settings/{settingId}` | read/write your own | read/write your own | no access | Admin SDK bypass only |
 | `users/{userId}/devicePrefs/{docId}` | read/write your own | read/write your own | no access | Admin SDK bypass only |
 | `users/{userId}/api_keys/{keyId}` | read your own key inventory; no write | read your own only; no write | no access | server only |
 | `installer_metadata/{document=**}` | public read | public read | public read | write |
 | `system_presets/{presetId}` | read if authenticated; no write | read if authenticated; no write | read if authenticated; no write | create/update/delete |
-| `chats/{chatId}`, its `messages` and `stream` | create your own chats; read/write your own chats and messages; read autonomous chats and their streams for accessible sites | same, for all sites | no site-scoped reads; the owner-only rules apply as to any signed-in caller | Admin SDK bypass only |
+| `chats/{chatId}`, its `messages` and `stream` | create your own chats; read/write your own chats and messages; read autonomous chats and their streams for sites where your row is whole site. a scoped member sees no autonomous chat | same, for all sites | no site-scoped reads; the owner-only rules apply as to any signed-in caller | Admin SDK bypass only |
 | `cortex-followups/{followupId}` | read your own | read your own | no access | server only |
 | `agent_tokens`, `agent_refresh_tokens`, `device_codes`, `api_keys` | no access | no access | no access | server only |
 | any unmatched path, including `sites/{siteId}/machines/{machineId}/swoop_sessions` | no access | no access | no access | Admin SDK bypass only |
@@ -143,7 +153,7 @@ the repository's rules tests run against the Firestore emulator. with JDK 21 and
 npm run test:rules
 ```
 
-the specs live in `web/__tests__/rules/`: the baseline matrix, explicit denials, membership, swoop sessions and the hardening cases. run them after any change to `firestore.rules`.
+the specs live in `web/__tests__/rules/`: the baseline matrix, explicit denials, membership, swoop sessions, the hardening cases, `siteReadControls.test.ts` (what a whole-site member reads on every site path) and `machineScope.test.ts` (what a scoped member reads, and what stays out of reach). run them after any change to `firestore.rules`.
 
 ### rules playground
 
@@ -195,7 +205,9 @@ then commit the restored file, so the repository matches what is live.
 
 ## versioning
 
-the rules version is independent of the product version. it is tracked in the header comment at the top of `firestore.rules`, with a line on what each version changed.
+the rules version is independent of the product version. it is tracked in the header comment at the top of `firestore.rules`, with a line on what each version changed. the current version is **2.12.0**, which added machine scope.
+
+2.12.0 rests on one invariant, written beside `canAccessSite` in the file: `canAccessSite` admits a scoped member, so it gates only the documents that say nothing about other machines (the site document, `settings/{swoop,display,cortex}`, and the schedule and reboot presets). a block that spans machines takes `canAccessWholeSite`, and a block under one machine takes `canAccessMachine`. a new block written with `canAccessSite` would hand every scoped member the whole collection.
 
 ---
 

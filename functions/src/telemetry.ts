@@ -311,9 +311,13 @@ export const recordUsageEvent = onRequest(
 /**
  * Per-tenant cost data — verify the caller can access `siteId` first, or any HTTPS
  * caller could enumerate cost figures for sites they don't belong to. Allowed: a
- * superadmin, or a user holding an ACTIVE `sites/{siteId}/members/{uid}` row. A
- * single 401 covers both "no token" and "no access" so the endpoint can't be
+ * superadmin, or a user holding an ACTIVE, whole-site `sites/{siteId}/members/{uid}`
+ * row. A single 401 covers both "no token" and "no access" so the endpoint can't be
  * used to probe which siteIds an attacker has access to.
+ *
+ * cost data is site-wide, so a scoped member gets that same 401: any `machineIds`
+ * on the row, even `[]` or a malformed value, means not whole site, as the rules'
+ * memberIsWholeSite() reads it.
  *
  * Reads the member row, not `users/{uid}.sites[]`. That array is legacy and wave
  * 6.1 deletes it; this endpoint is deployed and public, and it was the only
@@ -371,7 +375,11 @@ export async function isAuthorizedForSiteUsage(
     if (user.role === 'superadmin') return true;
 
     const member = await deps.getMember(siteId, uid);
-    return member !== null && member.status === 'active';
+    return (
+      member !== null &&
+      member.status === 'active' &&
+      !Object.prototype.hasOwnProperty.call(member, 'machineIds')
+    );
   } catch {
     return false;
   }

@@ -106,9 +106,10 @@ export function ManageUserSitesDialog({
   };
 
   /**
-   * Ask about the talons first: a talon run re-resolves its AUTHOR's site access,
-   * so removing access silently breaks any automation they wrote. Look the damage
-   * up before acting, and go straight through only when there is none.
+   * Ask about the talons first: every talon re-resolves its AUTHOR's site access
+   * before any output fires, so removing access switches off every automation they
+   * wrote at its next run. Look them up before acting, and go straight through only
+   * when there are none.
    */
   const handleRemoveSiteClick = async (siteId: string, siteName: string) => {
     setRemovingFrom(siteId);

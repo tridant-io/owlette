@@ -152,6 +152,52 @@ const UPRIGHT = 'md:bar-left:rotate-180';
 /** behind a viewer while they click: a pill's fill, or a row's in the phone's list. */
 const CLICK_FILL = 'bg-accent-cyan/20';
 
+/** how long the badge takes to go; matches its `animation-duration-140`. */
+export const BADGE_EXIT_MS = 140;
+
+/**
+ * the badge comes and goes quick but never pops (owner, 2026-11-10): up 4 px
+ * and in over 180 ms, easing out; down and out a little quicker, easing in,
+ * held at nothing until it unmounts. the settle is motion-safe, and reduced
+ * motion stops the fade too (globals.css), so there it comes and goes at once.
+ * keyed on `data-state`, which outranks the app bar's fade-in of all on it.
+ */
+const BADGE_MOTION = [
+  'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:motion-safe:slide-in-from-bottom-1',
+  'data-[state=open]:ease-out data-[state=open]:animation-duration-180',
+  'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:motion-safe:slide-out-to-bottom-1',
+  'data-[state=closed]:ease-in data-[state=closed]:animation-duration-140 data-[state=closed]:fill-mode-forwards',
+].join(' ');
+
+/**
+ * the badge on the bar: it holds what it last said through its fade out, then
+ * unmounts, and a new word while it shows is only new text on the same pill.
+ * it keeps its place in the row while it fades. once it has gone only what
+ * follows it closes up (a notice, the view-only pill): the name and the pills
+ * come before it, and the controls keep to the far end.
+ */
+function SessionBadge({ badge }: { badge: ReturnType<typeof badgeFor> }) {
+  const [held, setHeld] = useState(badge);
+  if (badge && (badge.label !== held?.label || badge.tone !== held?.tone)) setHeld(badge);
+  const leaving = badge === null && held !== null;
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => setHeld(null), BADGE_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+  if (!held) return null;
+  return (
+    <Badge
+      variant={held.tone}
+      data-testid="session-badge"
+      data-state={leaving ? 'closed' : 'open'}
+      className={cn('shrink-0', VERTICAL, BADGE_MOTION)}
+    >
+      {held.label}
+    </Badge>
+  );
+}
+
 /**
  * a warning the bar has for you: one icon on every layout, its sentence on
  * hover, and in a popover on a click or a tap, since a touch screen has no
@@ -674,11 +720,7 @@ export function SwoopToolbar({
         {/* keyed to this tab's seat: a kick asked about one session's viewer is not carried into the next */}
         <ViewerPills key={session?.viewerId} session={session} compact={compact} />
 
-        {badge && (
-          <Badge variant={badge.tone} data-testid="session-badge" className={cn('shrink-0', VERTICAL)}>
-            {badge.label}
-          </Badge>
-        )}
+        <SessionBadge badge={badge} />
 
         {session && !session.ctl && (
           <Badge variant="outline" className={cn('shrink-0', VERTICAL)}>

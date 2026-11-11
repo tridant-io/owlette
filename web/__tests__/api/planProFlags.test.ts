@@ -126,10 +126,10 @@ beforeEach(() => {
   mockUsers = {};
   mockGetEntitlements.mockResolvedValue(FREE);
   mockResolveAuth.mockResolvedValue(SESSION);
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA, machineIds: null });
   mockResolveSiteAccess.mockResolvedValue({
     ok: true,
-    facts: { siteData: SITE_DATA, globalRole: 'member', membershipRole: 'owner' },
+    facts: { siteData: SITE_DATA, globalRole: 'member', membershipRole: 'owner', swoopMode: null, machineIds: null },
   });
   mockVerifyIdToken.mockRejectedValue(new Error('not an id token'));
 });
@@ -236,7 +236,7 @@ describe('roost writes need owlette.roost', () => {
   it('answers the capability before the plan', async () => {
     mockResolveSiteAccess.mockResolvedValue({
       ok: true,
-      facts: { siteData: SITE_DATA, globalRole: 'member', membershipRole: 'member' },
+      facts: { siteData: SITE_DATA, globalRole: 'member', membershipRole: 'member', swoopMode: null, machineIds: null },
     });
 
     const result = await requireRoostAuthAndScope(request(), SITE, ROOST, 'deploy');

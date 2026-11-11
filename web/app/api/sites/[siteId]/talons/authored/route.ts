@@ -2,10 +2,10 @@
  * GET /api/sites/{siteId}/talons/authored?uid={uid} — what this person wrote.
  *
  * The departure preview. Removing a member touches nothing under `sites/{siteId}`, so
- * their talons survive and keep looking healthy in the list — but any talon with a hoot
- * output re-resolves its AUTHOR's site access on every run, so it starts failing the
- * moment they lose access. This lets the member-removal UI say "they wrote 4 talons —
- * these stop running" *before* the removal instead of after.
+ * their talons survive and keep looking healthy in the list — but every talon re-checks
+ * its AUTHOR's site access before any output fires, so at its next run after they lose
+ * access it switches off with nothing fired. This lets the member-removal UI say "they
+ * wrote 4 talons — these stop running" *before* the removal instead of after.
  *
  * Names, not just a count: an operator deciding whether to reassign needs to know it's
  * the nightly restart, not a one-off test. Bounded by MAX_TALONS_PER_SITE (20), so the

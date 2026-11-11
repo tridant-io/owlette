@@ -73,7 +73,7 @@ function streamDoc(data: Record<string, unknown>) {
 const running = () => streamDoc({ status: 'running', turnId: 'turn-1', updatedAt: { toMillis: () => Date.now() } });
 
 function mountHook() {
-  return renderHook(() => useOwletteChat({ siteId: 'site-A', selection: ALL_MACHINES }));
+  return renderHook(() => useOwletteChat({ siteId: 'site-A', selection: ALL_MACHINES, includeAutonomous: true }));
 }
 
 beforeEach(() => {

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
+import { isAccessValid, liveMachineIds } from '@/components/admin/sites/MachineAccessField';
 import { MemberAccessFields, type SwoopChoice } from '@/components/admin/sites/MemberAccessFields';
 import { MemberSearchInput, type AddMemberTarget } from '@/components/admin/sites/MemberSearchInput';
 import { Button } from '@/components/ui/button';
@@ -25,11 +26,13 @@ import { toast } from '@/lib/toast';
 export function AddMemberDialog({
   siteId,
   membersMayWatch,
+  machines,
   onOpenChange,
   addMember,
 }: {
   siteId: string;
   membersMayWatch: boolean;
+  machines: { id: string; name: string }[];
   onOpenChange: (open: boolean) => void;
   addMember: UseSiteMembersResult['addMember'];
 }) {
@@ -37,19 +40,23 @@ export function AddMemberDialog({
   const [target, setTarget] = useState<AddMemberTarget | null>(null);
   const [role, setRole] = useState<AddableSiteMemberRole>('member');
   const [swoop, setSwoop] = useState<SwoopChoice>('default');
+  const [machineIds, setMachineIds] = useState<string[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const canAdd = !!target && isAccessValid(machineIds);
 
   const submit = async () => {
-    if (!target || adding) return;
+    if (!target || !canAdd || adding) return;
     setAdding(true);
     // by role sends no field, so the new row carries no swoop mode
     const swoopPart = swoop === 'default' ? {} : { swoop };
+    // the whole site sends no field either
+    const scopePart = machineIds === null ? {} : { machineIds: liveMachineIds(machineIds, machines) };
     const label = target.kind === 'uid' ? target.label : target.email;
     try {
       const added = await addMember(
         target.kind === 'uid'
-          ? { uid: target.uid, role, ...swoopPart }
-          : { email: target.email, role, ...swoopPart },
+          ? { uid: target.uid, role, ...swoopPart, ...scopePart }
+          : { email: target.email, role, ...swoopPart, ...scopePart },
       );
       if (added.roleHonored) {
         toast.success('member added', { description: `${label} now has ${role} access to this site.` });
@@ -78,7 +85,7 @@ export function AddMemberDialog({
     // the members section mounts this only while open, so every open starts
     // empty and fetches the people it may offer afresh
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5 text-accent-cyan" />
@@ -110,6 +117,9 @@ export function AddMemberDialog({
             onRoleChange={setRole}
             onSwoopChange={setSwoop}
             membersMayWatch={membersMayWatch}
+            machines={machines}
+            machineIds={machineIds}
+            onMachineIdsChange={setMachineIds}
             disabled={adding}
           />
         </div>
@@ -117,7 +127,7 @@ export function AddMemberDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={adding}>
             cancel
           </Button>
-          <Button onClick={submit} disabled={!target || adding}>
+          <Button onClick={submit} disabled={!canAdd || adding}>
             {adding ? (
               'adding…'
             ) : (

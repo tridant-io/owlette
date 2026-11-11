@@ -13,6 +13,9 @@
  * in demo mode, and the user menu's admin panel lands site admins on their
  * sites.
  *
+ * on a site where the person is limited to some machines, both the page menu
+ * and the drawer leave out talons, roost and deploy, which span the site.
+ *
  * past ten sites the switcher opens on a filter that keeps every typed key
  * from the menu's typeahead, and the drawer's site list has the same filter.
  * in both, escape clears the filter before it closes anything.
@@ -45,12 +48,15 @@ interface MockAuth {
   isSuperadmin: boolean;
   administersAnySite: boolean;
   adminOf: string[];
+  /** sites where the person is limited to some machines */
+  scopes?: Record<string, string[]>;
 }
 // as AuthContext: a superadmin administers every site
 const SITE_ADMIN: MockAuth = { isSuperadmin: false, administersAnySite: true, adminOf: ['site-a'] };
 const ADMIN_ELSEWHERE: MockAuth = { isSuperadmin: false, administersAnySite: true, adminOf: ['site-b'] };
 const MEMBER: MockAuth = { isSuperadmin: false, administersAnySite: false, adminOf: [] };
 const SUPERADMIN: MockAuth = { isSuperadmin: true, administersAnySite: true, adminOf: [] };
+const SCOPED_ON_A: MockAuth = { isSuperadmin: false, administersAnySite: false, adminOf: [], scopes: { 'site-a': ['m1'] } };
 
 let mockAuth = SITE_ADMIN;
 jest.mock('@/contexts/AuthContext', () => ({
@@ -60,6 +66,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     isSuperadmin: mockAuth.isSuperadmin,
     administersAnySite: mockAuth.administersAnySite,
     isSiteAdmin: (siteId: string) => mockAuth.isSuperadmin || mockAuth.adminOf.includes(siteId),
+    machineScope: (siteId: string) => mockAuth.scopes?.[siteId] ?? null,
   }),
 }));
 
@@ -368,6 +375,43 @@ describe('PageHeader site filter', () => {
     await user.keyboard('{Escape}');
 
     expect(screen.queryByRole('dialog', { name: 'menu' })).toBeNull();
+  });
+});
+
+const PAGES = ['dashboard', 'hoot', 'talons', 'roost', 'deploy', 'logs'];
+
+// the pages a surface offers, in nav order. each entry's name is its page
+// followed by the page's description.
+function pagesOffered(surface: HTMLElement, role: 'menuitem' | 'button'): string[] {
+  return PAGES.filter((page) => within(surface).queryByRole(role, { name: new RegExp(`^${page}`) }) !== null);
+}
+
+// talons, roost and deploy span the site
+const PAGES_BY_SITE: [string, string[], string][] = [
+  ['limited to some machines', ['dashboard', 'hoot', 'logs'], 'site-a'],
+  ['whole', PAGES, 'site-b'],
+];
+
+describe('PageHeader pages', () => {
+  beforeEach(() => {
+    mockAuth = SCOPED_ON_A;
+  });
+
+  it.each(PAGES_BY_SITE)('the page menu, on a site reached %s, lists %j', async (_reach, pages, siteId) => {
+    const { user } = renderHeader({ currentSiteId: siteId });
+
+    await user.click(screen.getByRole('button', { name: 'dashboard' }));
+    const menu = await screen.findByRole('menu');
+
+    expect(pagesOffered(menu, 'menuitem')).toEqual(pages);
+  });
+
+  it.each(PAGES_BY_SITE)('the drawer, on a site reached %s, lists %j', async (_reach, pages, siteId) => {
+    const { user } = renderHeader({ currentSiteId: siteId });
+
+    await user.click(screen.getByRole('button', { name: 'menu', exact: true }));
+
+    expect(pagesOffered(screen.getByRole('dialog', { name: 'menu' }), 'button')).toEqual(pages);
   });
 });
 

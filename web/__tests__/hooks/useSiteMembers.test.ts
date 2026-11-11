@@ -25,6 +25,7 @@ const OWNER: SiteMember = {
   globalRole: 'admin',
   displayName: 'Owner',
   swoop: null,
+  machineIds: null,
 };
 
 const MEMBER: SiteMember = {
@@ -34,6 +35,7 @@ const MEMBER: SiteMember = {
   globalRole: 'member',
   displayName: null,
   swoop: null,
+  machineIds: null,
 };
 
 function jsonResponse(
@@ -116,6 +118,22 @@ describe('useSiteMembers', () => {
       ['owner-uid', null],
       ['controller-uid', 'control'],
       ['held-back-uid', 'none'],
+    ]);
+  });
+
+  it("carries each member's machine scope as the route returns it", async () => {
+    const scoped: SiteMember = {
+      ...MEMBER,
+      uid: 'scoped-uid',
+      machineIds: ['m1', 'm2'],
+    };
+    fetchMock.mockResolvedValue(jsonResponse({ members: [OWNER, scoped] }));
+
+    const { result } = renderHook(() => useSiteMembers('site-a'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.members.map((m) => [m.uid, m.machineIds])).toEqual([
+      ['owner-uid', null],
+      ['scoped-uid', ['m1', 'm2']],
     ]);
   });
 
@@ -280,6 +298,32 @@ describe('useSiteMembers', () => {
         email: 'member@example.com',
         role: 'member',
         swoop: 'control',
+      });
+    });
+
+    it('posts the machine scope only when one is given', async () => {
+      mockAddOk();
+      const { result } = renderHook(() => useSiteMembers('site-a'));
+      await waitFor(() => expect(result.current.loading).toBe(false));
+      fetchMock.mockClear();
+
+      await act(async () => {
+        await result.current.addMember({ uid: 'member-uid', role: 'member' });
+        await result.current.addMember({
+          uid: 'member-uid',
+          role: 'admin',
+          machineIds: ['m1'],
+        });
+      });
+
+      const bodies = fetchMock.mock.calls
+        .filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST')
+        .map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+      expect(bodies[0]).not.toHaveProperty('machineIds');
+      expect(bodies[1]).toEqual({
+        uid: 'member-uid',
+        role: 'admin',
+        machineIds: ['m1'],
       });
     });
 
@@ -459,6 +503,7 @@ describe('useSiteMembers', () => {
       uid: 'member-uid',
       role: 'member',
       swoop: 'control',
+      machineIds: null,
     };
 
     function mockUpdateOk() {
@@ -501,12 +546,17 @@ describe('useSiteMembers', () => {
       ).toBeUndefined();
     });
 
-    // a null swoop is a value, not an absence: it puts them back on their role's default
+    // a null swoop or machineIds is a value, not an absence: it puts them back on
+    // their role's default, or gives them the whole site back
     it.each<[UpdateSiteMemberInput, Record<string, unknown>]>([
       [{ role: 'admin' }, { role: 'admin' }],
       [{ swoop: null }, { swoop: null }],
       [{ role: 'member', swoop: 'view' }, { role: 'member', swoop: 'view' }],
       [{ role: undefined, swoop: 'none' }, { swoop: 'none' }],
+      [{ machineIds: null }, { machineIds: null }],
+      [{ machineIds: ['m1'] }, { machineIds: ['m1'] }],
+      [{ role: 'admin', machineIds: ['m1'] }, { role: 'admin', machineIds: ['m1'] }],
+      [{ swoop: undefined, machineIds: null }, { machineIds: null }],
     ])('sends exactly the fields given in %p', async (patch, sent) => {
       mockUpdateOk();
       const { result } = renderHook(() => useSiteMembers('site-a'));
@@ -518,7 +568,7 @@ describe('useSiteMembers', () => {
       });
 
       const init = fetchMock.mock.calls[0][1] as RequestInit;
-      expect(JSON.parse(String(init.body))).toEqual(sent);
+      expect(JSON.parse(String(init.body))).toStrictEqual(sent);
     });
 
     it('rejects a refused change with its status and code, and does not refetch', async () => {

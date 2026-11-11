@@ -10,7 +10,7 @@ the agent takes its work from two Firestore documents per machine. this page lis
 
 ## the queue
 
-each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member of the site can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
+each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member whose access covers the machine can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
 
 ```
 1. a writer merges one entry into commands/pending under a new command id

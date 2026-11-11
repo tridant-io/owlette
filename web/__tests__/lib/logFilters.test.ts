@@ -61,6 +61,23 @@ describe('planActionFilter', () => {
   });
 });
 
+describe('planActionFilter beside a machine `in`', () => {
+  // a scoped member's query carries `machineId in scope`, and firestore counts
+  // the product of the two clauses against its 30-disjunction cap.
+  it('narrows in memory once the selection passes its share', () => {
+    expect(planActionFilter(['a', 'b'], TOTAL, 1)).toEqual({ inValues: null, clientSide: true });
+  });
+
+  it('pushes a selection within its share to the server', () => {
+    expect(planActionFilter(['a'], TOTAL, 1)).toEqual({ inValues: ['a'], clientSide: false });
+  });
+
+  it('still reads nothing and everything as no filter', () => {
+    expect(planActionFilter([], TOTAL, 1)).toEqual({ inValues: null, clientSide: false });
+    expect(planActionFilter(values(TOTAL), TOTAL, 1)).toEqual({ inValues: null, clientSide: false });
+  });
+});
+
 describe('actionDeleteScope', () => {
   it('is empty when nothing is selected', () => {
     expect(actionDeleteScope([], TOTAL)).toEqual([]);

@@ -208,7 +208,7 @@ function buildVersionEnvelope(hash = CHUNK_HASH): Record<string, unknown> {
 
 function authed() {
   mockResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 beforeEach(() => {

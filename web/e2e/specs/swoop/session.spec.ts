@@ -23,7 +23,7 @@
 import crypto from 'crypto';
 import { test, expect, devices, type Locator, type Page } from '@playwright/test';
 import { authenticator } from 'otplib';
-import { getAdminDb } from '../../helpers/emulator';
+import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
 import { ageSignInCeremony } from '../../helpers/signInCeremony';
@@ -1527,5 +1527,358 @@ test.describe('two viewers on one machine, over the api', () => {
     } finally {
       await revokeApiKey(key);
     }
+  });
+});
+
+test.describe('machine scope', () => {
+  const SCOPE_IN = `mach-scope-in-${SUFFIX}`;
+  const SCOPE_OUT = `mach-scope-out-${SUFFIX}`;
+  const SCOPE_NARROWED = `mach-scope-narrowed-${SUFFIX}`;
+  const NO_ACCESS = 'machine not found or no access';
+
+  let scopedController: TestUser;
+  let scopedControllerSecret = '';
+  let scopedAdmin: TestUser;
+  let scopedAdminSecret = '';
+  let narrowingOperator: TestUser;
+  let narrowingOperatorSecret = '';
+  let scopedWatcher: TestUser;
+  let wholeAdmin: TestUser;
+
+  const memberRow = (uid: string) => getAdminDb().doc(`sites/${SITE_ID}/members/${uid}`);
+
+  /** `users/{uid}/swoop_step_up/{binding}`'s id, as `stepUpMachineBinding` in lib/swoop/policy.server.ts makes it. */
+  const stepUpBinding = (uid: string, machineId: string): string =>
+    crypto.createHash('sha256').update(`${uid}/${SITE_ID}/${machineId}`).digest('hex').slice(0, 32);
+
+  /** the machine's menu on the dashboard: it portals out of the card, and opens by keyboard so a settling card picks nothing. */
+  async function machineMenu(page: Page, machineId: string): Promise<Locator> {
+    await page.goto('/dashboard');
+    const card = page.getByTestId('machine-card').filter({ hasText: machineId });
+    await expect(card).toBeVisible({ timeout: 20_000 });
+    await card.getByTestId('machine-context-menu-trigger').focus();
+    await page.keyboard.press('Enter');
+    const menu = page.getByRole('menu');
+    await expect(menu).toBeVisible();
+    return menu;
+  }
+
+  test.beforeAll(async () => {
+    // no monitors, so no hardware subdoc outlives the cleanup
+    for (const machineId of [SCOPE_IN, SCOPE_OUT, SCOPE_NARROWED]) {
+      await seedMachine(SITE_ID, machineId, { monitorCount: 0 });
+    }
+    // seedMachine writes without merge, so the swoop field lands after it: the dashboard offers swoop only where it streams
+    await getAdminDb().doc(`sites/${SITE_ID}/machines/${SCOPE_IN}`).set({ capabilities: { swoop: 1 } }, { merge: true });
+
+    const controller = await seedTotpUser(`scope-ctl-${SUFFIX}`);
+    scopedController = controller.user;
+    scopedControllerSecret = controller.secret;
+    await grantMembership(SITE_ID, scopedController.uid, 'member', { swoop: 'control', machineIds: [SCOPE_IN] });
+
+    const admin = await seedTotpUser(`scope-admin-${SUFFIX}`);
+    scopedAdmin = admin.user;
+    scopedAdminSecret = admin.secret;
+    await grantMembership(SITE_ID, scopedAdmin.uid, 'admin', { machineIds: [SCOPE_IN] });
+
+    const narrowing = await seedTotpUser(`scope-narrowing-${SUFFIX}`);
+    narrowingOperator = narrowing.user;
+    narrowingOperatorSecret = narrowing.secret;
+    await grantMembership(SITE_ID, narrowingOperator.uid, 'admin');
+
+    // no second factor. `sites: []`, so this site is their only one and the picker and the dashboard open on it
+    scopedWatcher = await seedDedicatedUser({ ...dedicatedUser('member', `scope-watcher-${SUFFIX}`), sites: [] });
+    await grantMembership(SITE_ID, scopedWatcher.uid, 'member', { machineIds: [SCOPE_IN] });
+    wholeAdmin = await seedDedicatedUser({ ...dedicatedUser('member', `scope-whole-${SUFFIX}`), sites: [] });
+    await grantMembership(SITE_ID, wholeAdmin.uid, 'admin');
+  });
+
+  test.afterAll(async () => {
+    const db = getAdminDb();
+    for (const machineId of [SCOPE_IN, SCOPE_OUT, SCOPE_NARROWED]) {
+      const machine = db.doc(`sites/${SITE_ID}/machines/${machineId}`);
+      // the sessions, the queued commands, and the revocation a kill writes beside them
+      for (const sub of ['swoop_sessions', 'commands', 'swoop_step_up_revocations']) {
+        for (const doc of await machine.collection(sub).listDocuments()) await doc.delete();
+      }
+      await machine.delete();
+    }
+    for (const user of [scopedController, scopedAdmin, narrowingOperator, scopedWatcher, wholeAdmin]) {
+      await memberRow(user.uid).delete();
+      // seedTotpUser's people are members of site-A too
+      await db.doc(`sites/site-A/members/${user.uid}`).delete();
+      await db.doc(`users/${user.uid}`).delete();
+      await getAdminAuth().deleteUser(user.uid);
+    }
+  });
+
+  test('a scoped watcher sees only their machine, and is refused another before any ceremony', async ({ page }) => {
+    await signIn(page, scopedWatcher);
+    await page.goto('/swoop');
+    await expect(page.getByTestId('swoop-picker-site')).toContainText(`Swoop ${SUFFIX}`);
+    await expect(page.getByTestId(`swoop-picker-machine-${SCOPE_IN}`)).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('swoop-picker-grid').getByRole('listitem')).toHaveCount(1);
+    await expect(page.getByTestId(`swoop-picker-machine-${SCOPE_OUT}`)).toHaveCount(0);
+
+    const granted = nextGrant(page, SCOPE_IN);
+    await page.goto(`/swoop/${SITE_ID}/${SCOPE_IN}`);
+    const grant = await granted;
+    expect(grant.ctl).toBe(false);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByText(/view only/i)).toBeVisible();
+    const ended = page.waitForResponse(
+      (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',
+    );
+    await page.getByRole('button', { name: /end session/i }).click();
+    expect((await ended).status()).toBe(200);
+
+    // the wrapper's 404, the same as for a machine that does not exist: final, with the way back
+    const seen = recordSwoopResponses(page);
+    const asked = `POST /sites/${SITE_ID}/machines/${SCOPE_OUT}/swoop/sessions`;
+    const refused = page.waitForResponse(
+      (r) => r.url().endsWith(`/machines/${SCOPE_OUT}/swoop/sessions`) && r.request().method() === 'POST',
+      { timeout: 45_000 },
+    );
+    await page.goto(`/swoop/${SITE_ID}/${SCOPE_OUT}`);
+    const refusal = await refused;
+    const problem = (await refusal.json()) as { code?: string; detail?: string };
+    expect([refusal.status(), problem.code, problem.detail]).toEqual([404, 'not_found', NO_ACCESS]);
+    await expect(alertLine(page)).toContainText(NO_ACCESS, { timeout: 20_000 });
+    await expect(alertLine(page).getByRole('link', { name: 'back to dashboard' })).toBeVisible();
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    await expect(page.getByText('this machine has left the site.')).toHaveCount(0);
+
+    // the retry ladder's first rungs fall inside this wait, so a refusal that was not final would have asked again
+    await page.waitForTimeout(5_000);
+    expect(seen.filter((line) => line.startsWith(`${asked} `))).toEqual([`${asked} 404`]);
+    await expect(page.getByText(/reconnecting in/)).toHaveCount(0);
+  });
+
+  test('a scoped member set to control takes control of their machine, through a host, and nothing else', async ({
+    page,
+    browser,
+  }) => {
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: SCOPE_IN });
+    try {
+      // a fresh sign-in is the step-up, so control comes without a dialog.
+      await signIn(page, scopedController, scopedControllerSecret, { fresh: true });
+      const granted = nextGrant(page, SCOPE_IN);
+      await page.goto(`/swoop/${SITE_ID}/${SCOPE_IN}`);
+      const grant = await granted;
+      expect(grant.ctl).toBe(true);
+      await expectHostPicture(page);
+      await expect
+        .poll(() => host.leases)
+        .toEqual([{ viewer: grant.viewerId, sid: grant.sid, uid: scopedController.uid, ctl: true }]);
+      await expect(page.getByText(/view only/i)).toHaveCount(0);
+
+      // control is the machine's to give; the site's session list and the kill stay with the whole site
+      const list = await apiCall(page, 'GET', `/api/sites/${SITE_ID}/swoop/sessions`);
+      expect([list.status, list.body.code], JSON.stringify(list.body)).toEqual([403, 'capability_missing']);
+      const killOut = await apiCall(page, 'POST', `/api/sites/${SITE_ID}/machines/${SCOPE_OUT}/swoop/kill`, {});
+      expect([killOut.status, killOut.body.code, killOut.body.detail], JSON.stringify(killOut.body)).toEqual([
+        404,
+        'not_found',
+        NO_ACCESS,
+      ]);
+      const killIn = await apiCall(page, 'POST', `/api/sites/${SITE_ID}/machines/${SCOPE_IN}/swoop/kill`, {});
+      expect([killIn.status, killIn.body.code], JSON.stringify(killIn.body)).toEqual([403, 'capability_missing']);
+
+      const ended = page.waitForResponse(
+        (r) => r.url().includes(`/swoop/sessions/${grant.sid}`) && r.request().method() === 'DELETE',
+      );
+      await page.getByRole('button', { name: /end session/i }).click();
+      expect((await ended).status()).toBe(200);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+
+    // still inside the sign-in's five minutes, which would open a window on any machine that
+    // reached the step-up: the one for their machine is there, and none for the other, so the
+    // scope refused before the ceremony was looked at
+    await page.goto(`/swoop/${SITE_ID}/${SCOPE_OUT}`);
+    await expect(alertLine(page)).toContainText(NO_ACCESS, { timeout: 20_000 });
+    const windows = getAdminDb().collection(`users/${scopedController.uid}/swoop_step_up`);
+    expect((await windows.doc(stepUpBinding(scopedController.uid, SCOPE_IN)).get()).exists).toBe(true);
+    expect((await windows.doc(stepUpBinding(scopedController.uid, SCOPE_OUT)).get()).exists).toBe(false);
+  });
+
+  test('a scoped admin takes control after the step-up dialog, sees names but no email, and holds nothing site-wide', async ({
+    page,
+    browser,
+  }) => {
+    // the sign-in is dated back, so the step-up asks
+    const spent = await signIn(page, scopedAdmin, scopedAdminSecret);
+    const seen = recordSwoopResponses(page);
+    const minted = page.waitForResponse(
+      (r) =>
+        r.url().endsWith(`/machines/${SCOPE_IN}/swoop/sessions`) &&
+        r.request().method() === 'POST' &&
+        r.status() === 201,
+      { timeout: 45_000 },
+    ).catch(() => null);
+    await page.goto(`/swoop/${SITE_ID}/${SCOPE_IN}`);
+
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
+    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, scopedAdminSecret, spent));
+    await dialog.getByRole('button', { name: /^confirm$/i }).click();
+    const mintResponse = await minted;
+    expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
+    const grant = ((await mintResponse!.json()) as { data: { sid: string; ctl: boolean } }).data;
+    expect(grant.ctl).toBe(true);
+    await expect(dialog).toBeHidden();
+    const record = await readSession(page, grant.sid, SCOPE_IN);
+    expect((record.viewers as Array<{ uid: string; ctl: boolean }>).map((v) => [v.uid, v.ctl])).toEqual([
+      [scopedAdmin.uid, true],
+    ]);
+
+    // an admin of the whole site joins to watch, over the api, so the session has someone else in it
+    const sessionsPath = `/api/sites/${SITE_ID}/machines/${SCOPE_IN}/swoop/sessions`;
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await signIn(other, wholeAdmin);
+      const joinRes = await apiCall(other, 'POST', sessionsPath, {
+        control: false,
+        fp: fingerprint(5),
+        clientCaps: CLIENT_CAPS,
+      });
+      expect(joinRes.status, JSON.stringify(joinRes.body)).toBe(201);
+      const joined = joinRes.body.data as { sid: string; viewerId: string };
+      expect(joined.sid).toBe(grant.sid);
+
+      // names go to everyone seated; an email only to a whole-site owner or admin, and kick with it
+      type NamedViewer = { uid: string; displayName?: string; email?: string; kickable?: boolean };
+      const asScoped = (await readSession(page, grant.sid, SCOPE_IN)).viewers as NamedViewer[];
+      expect(asScoped.map((v) => [v.uid, v.displayName, v.email, v.kickable])).toEqual([
+        [scopedAdmin.uid, scopedAdmin.displayName, undefined, false],
+        [wholeAdmin.uid, wholeAdmin.displayName, undefined, false],
+      ]);
+      const asWhole = (await readSession(other, grant.sid, SCOPE_IN)).viewers as NamedViewer[];
+      expect(asWhole.map((v) => [v.uid, v.email, v.kickable])).toEqual([
+        [scopedAdmin.uid, scopedAdmin.email, true],
+        [wholeAdmin.uid, wholeAdmin.email, false],
+      ]);
+
+      // the session list, kill and kick are the whole site's, which an admin limited to some machines is not
+      for (const [method, path, body] of [
+        ['GET', `/api/sites/${SITE_ID}/swoop/sessions`, undefined],
+        ['POST', `/api/sites/${SITE_ID}/machines/${SCOPE_IN}/swoop/kill`, {}],
+        ['POST', `${sessionsPath}/${grant.sid}/kick`, { viewerId: joined.viewerId }],
+      ] as const) {
+        const res = await apiCall(page, method, path, body);
+        expect([res.status, res.body.code], `${method} ${path}: ${JSON.stringify(res.body)}`).toEqual([
+          403,
+          'capability_missing',
+        ]);
+      }
+      const wholeList = await apiCall(other, 'GET', `/api/sites/${SITE_ID}/swoop/sessions`);
+      expect(wholeList.status, JSON.stringify(wholeList.body)).toBe(200);
+      const wholeKill = await apiCall(other, 'POST', `/api/sites/${SITE_ID}/machines/${SCOPE_IN}/swoop/kill`, {});
+      expect(wholeKill.status, JSON.stringify(wholeKill.body)).toBe(200);
+      expect((await readSession(page, grant.sid, SCOPE_IN)).state).toBe('ended');
+    } finally {
+      await otherContext.close();
+    }
+  });
+
+  // a narrowing takes a machine out of someone's scope. the machine has one streamer and no way
+  // to drop one viewer, so it ends the session for everyone in it, as a removal does, and
+  // everyone comes back: the api decides what each may do now.
+  test('narrowing a member ends the whole session on the machine that left their scope, and the other comes back in control', async ({
+    page,
+    browser,
+  }) => {
+    // the watcher reaches this machine until the narrowing below takes it away
+    await memberRow(scopedWatcher.uid).set({ machineIds: [SCOPE_IN, SCOPE_NARROWED] }, { merge: true });
+    const host = await FakeSwoopHost.start({ browser, viewer: page, siteId: SITE_ID, machineId: SCOPE_NARROWED });
+    const otherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+    try {
+      const other = await otherContext.newPage();
+      await host.addViewer(other);
+      await signIn(page, narrowingOperator, narrowingOperatorSecret, { fresh: true });
+      await signIn(other, scopedWatcher);
+
+      const firstGrant = nextGrant(page, SCOPE_NARROWED);
+      await page.goto(`/swoop/${SITE_ID}/${SCOPE_NARROWED}`);
+      const first = await firstGrant;
+      expect(first.ctl).toBe(true);
+      await expectHostPicture(page);
+      const joinGrant = nextGrant(other, SCOPE_NARROWED);
+      await other.goto(`/swoop/${SITE_ID}/${SCOPE_NARROWED}`);
+      const joined = await joinGrant;
+      expect([joined.sid, joined.ctl]).toEqual([first.sid, false]);
+      await expectHostPicture(other);
+
+      const rejoined = nextGrant(page, SCOPE_NARROWED);
+      // the narrowed member comes back on the ladder like everyone else, and the scope turns them away
+      const refused = other.waitForResponse(
+        (r) => r.url().endsWith(`/machines/${SCOPE_NARROWED}/swoop/sessions`) && r.request().method() === 'POST',
+        { timeout: 45_000 },
+      );
+      const narrowed = await apiCall(
+        page,
+        'PATCH',
+        `/api/sites/${SITE_ID}/members/${scopedWatcher.uid}`,
+        { machineIds: [SCOPE_IN] },
+        { 'Idempotency-Key': `swoop-narrow-${SUFFIX}` },
+      );
+      expect(narrowed.status, JSON.stringify(narrowed.body)).toBe(200);
+
+      // the record ends at once, not one seat a lease later. the ~2 s to the viewers is the
+      // signal worker's broadcast, which this rig lacks: here the queued kill reaches the host.
+      await expect
+        .poll(
+          async () => {
+            const record = await readSession(page, first.sid, SCOPE_NARROWED);
+            return [record.state, record.endReason, record.endedFor];
+          },
+          { timeout: 5_000 },
+        )
+        .toEqual(['ended', 'revoked', scopedWatcher.uid]);
+
+      const refusal = await refused;
+      const problem = (await refusal.json()) as { code?: string; detail?: string };
+      expect([refusal.status(), problem.code, problem.detail]).toEqual([404, 'not_found', NO_ACCESS]);
+      await expect(other.getByText('your access to this machine was removed.')).toBeVisible({ timeout: 20_000 });
+      await expect(other.getByText('this machine has left the site.')).toHaveCount(0);
+
+      // the operator was not narrowed: a new session, control and all, with no dialog and no final notice
+      const next = await rejoined;
+      expect(next.sid).not.toBe(first.sid);
+      expect(next.ctl).toBe(true);
+      await expectHostPicture(page);
+      await expect(page.getByText('this session was ended from elsewhere.')).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      expect(host.problems).toEqual([]);
+    } finally {
+      await otherContext.close();
+      await host.stop();
+    }
+  });
+
+  test('a scoped member set to no swoop gets live view on their machine, and swoop once they may watch', async ({
+    page,
+  }) => {
+    // a heartbeat over five minutes old reads as offline, and an offline machine offers no screen
+    await getAdminDb()
+      .doc(`sites/${SITE_ID}/machines/${SCOPE_IN}`)
+      .set({ lastHeartbeat: Math.floor(Date.now() / 1000) }, { merge: true });
+    await memberRow(scopedWatcher.uid).set({ swoop: 'none' }, { merge: true });
+    await signIn(page, scopedWatcher);
+
+    const none = await machineMenu(page, SCOPE_IN);
+    await expect(none.getByTestId('machine-context-menu-live-view')).toBeVisible();
+    await expect(none.getByTestId('machine-context-menu-swoop')).toHaveCount(0);
+    await expect(none.getByTestId('machine-context-menu-swoop-off')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    // the same person on the same machine, set to watch
+    await memberRow(scopedWatcher.uid).set({ swoop: 'view' }, { merge: true });
+    const watch = await machineMenu(page, SCOPE_IN);
+    await expect(watch.getByTestId('machine-context-menu-swoop')).toBeVisible();
+    await expect(watch.getByTestId('machine-context-menu-live-view')).toHaveCount(0);
   });
 });

@@ -50,7 +50,7 @@ function authed() {
     userId: 'user-1',
     keyContext: null,
   });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 beforeEach(() => {

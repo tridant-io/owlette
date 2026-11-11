@@ -1209,6 +1209,92 @@ describe('POST swoop/sessions — a second factor passed at sign-in', () => {
   });
 });
 
+// a scoped member reaches only the machines in their machine scope (ADR 0016),
+// and the wrapper refuses any other before the handler runs: no ceremony is
+// asked for, no window is written and no session is made for it.
+describe('POST swoop/sessions — a machine scope', () => {
+  const OTHER = 'machine-2';
+
+  /** narrows `uid`'s row to `machineIds`, as the members api writes a machine scope. */
+  const limitTo = (uid: string, machineIds: string[]): void => {
+    const key = `${SITE}/${uid}`;
+    mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds });
+  };
+
+  const create = (machineId: string, body: Record<string, unknown>) =>
+    POST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/swoop/sessions`, {
+        method: 'POST',
+        body: { fp: FP, ...body },
+      }),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  const denyReasons = () =>
+    (writeAuditEntry.mock.calls as [string, { outcome?: string; denyReason?: string }][])
+      .filter(([, entry]) => entry.outcome === 'deny')
+      .map(([, entry]) => entry.denyReason);
+
+  // the other machine is on the site and online, so only the scope can refuse it
+  beforeEach(() => staged.set(`sites/${SITE}/machines/${OTHER}`, { online: true }));
+
+  it.each([
+    ['a scoped admin', ADMIN, 'admin', {}],
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+  ] as const)('answers %s 404 on another machine, before any window or session is written', async (_who, uid, role, extra) => {
+    seedMember(SITE, uid, role, extra);
+    limitTo(uid, [MACHINE]);
+    // a ceremony two minutes old and a proof: either opens a window once the handler runs
+    signIn(uid, 'challenge', 2 * 60_000);
+
+    const { status, body } = await parseResponse(
+      await create(OTHER, { control: true, mfaProof: { code: '123456' } }),
+    );
+
+    expect(status).toBe(404);
+    // the wrapper's own 404, never release 1's machine_not_found: the machine has not left
+    expect(body).toMatchObject({ detail: 'machine not found or no access', code: 'not_found' });
+    expect(denyReasons()).toEqual(['machine_out_of_scope']);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(writeAuditEntryBlocking).not.toHaveBeenCalled();
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  it('lets a scoped member watch the machine in their scope', async () => {
+    limitTo(MEMBER, [MACHINE]);
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await create(MACHINE, { control: false }));
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(false);
+  });
+
+  it.each([
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+    ['a scoped admin', ADMIN, 'admin', {}],
+  ] as const)('takes %s through the step-up on the machine in their scope, as a whole-site admin', async (_who, uid, role, extra) => {
+    seedMember(SITE, uid, role, extra);
+    limitTo(uid, [MACHINE]);
+    signIn(uid);
+
+    const asked = await parseResponse(await create(MACHINE, { control: true }));
+    expect(asked.status).toBe(401);
+    expect(asked.body.code).toBe('step_up_required');
+
+    const { status, body } = await parseResponse(
+      await create(MACHINE, { control: true, mfaProof: { code: '123456' } }),
+    );
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
+    expect(
+      (mocks.set.mock.calls as [Record<string, unknown>][]).filter(([payload]) => payload.openedBy === 'ceremony'),
+    ).toHaveLength(1);
+  });
+});
+
 describe('GET / DELETE swoop/sessions/{sid}', () => {
   beforeEach(() => {
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
@@ -1333,6 +1419,23 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
         ['Olive Owner', `${SITE_OWNER}@example.test`],
         [null, null],
       ]);
+    });
+
+    // an admin limited to some machines holds the site role but not the whole site
+    it('names everyone in it to a scoped admin, with no email', async () => {
+      const key = `${SITE}/${ADMIN}`;
+      mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: [MACHINE] });
+
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
     });
 
     // a superadmin holds no site role and sees every email, as the admin list does

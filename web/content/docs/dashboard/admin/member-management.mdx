@@ -1,14 +1,14 @@
 ---
 title: "member management"
-description: "add and remove the people who can reach a site, and set each one's site role and swoop mode. a site's owners and admins do it in the members section of its settings: admin panel → sites → the site's gear → members."
-keywords: ["invite", "invite user", "add user", "team", "share site", "remove user", "revoke access", "make admin", "promote", "demote", "site access", "colleague", "transfer ownership", "give control", "view only", "remote control access"]
+description: "add and remove the people who can reach a site, and set each one's site role, swoop mode and machine scope. a site's owners and admins do it in the members section of its settings: admin panel → sites → the site's gear → members."
+keywords: ["invite", "invite user", "add user", "team", "share site", "remove user", "revoke access", "make admin", "promote", "demote", "site access", "colleague", "transfer ownership", "give control", "view only", "remote control access", "machine scope", "some machines", "one machine", "limit access", "restrict to machines", "whole site", "machine access"]
 ---
 
 **location**: admin panel → sites → a site's gear → members (`/admin/sites/{siteId}?section=members`)
 
 <Callout type="info" title={"permissions"}>
 
-the section is part of a site's [settings](/docs/dashboard/admin/sites#site-settings), which open for the site's owners and admins, and for owlette's superadmins on every site. every change needs `SITE_MEMBER_MANAGE` on that site, which owners and admins hold.
+the section is part of a site's [settings](/docs/dashboard/admin/sites#site-settings), which open for the site's owners and admins whose access is the whole site, and for owlette's superadmins on every site. every change needs `SITE_MEMBER_MANAGE` on that site, which those owners and admins hold; an admin [limited to some machines](#machine-scope) does not.
 
 </Callout>
 
@@ -21,6 +21,7 @@ the section is part of a site's [settings](/docs/dashboard/admin/sites#site-sett
 | **member** | the display name if there is one, the email address, and a `you` badge on your own row |
 | **role** | `owner`, `admin` or `member`, on this site |
 | **swoop** | what they get from [swoop](/docs/dashboard/swoop) while the site has it on. the owner reads `control`; anyone else reads `no swoop`, `watch` or `control`, marked `· by role` when they have no [swoop mode](#swoop-mode) of their own |
+| **access** | `whole site`, or the [machines they are limited to](#machine-scope): `1 machine`, `3 machines`, or `no machines`. hover a count for the machines' names. on a phone it follows the swoop, after a `·` |
 | **actions** | the row menu, or `—` when there is nothing you can do to that row |
 
 the list is the site's active member rows whose accounts still exist and are not deleted. the owner appears through their own row with the `owner` badge. the list shows only this site's members, and the **add member** search suggests only people already on other sites you run. it never shows which other sites a member belongs to.
@@ -35,7 +36,7 @@ the list is the site's active member rows whose accounts still exist and are not
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, schedule presets, enrolling machines, revoking agent tokens, and managing members |
 | **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one |
 
-roles are **per site**. the same person can own one site, administer a second and be a plain member of a third, and the role on their owlette account grants nothing on any of them. the [capability matrix](/docs/dashboard/admin#capability-matrix) lists every capability each role holds. a [swoop mode](#swoop-mode) changes what one person gets from swoop, and nothing else.
+roles are **per site**. the same person can own one site, administer a second and be a plain member of a third, and the role on their owlette account grants nothing on any of them. the [capability matrix](/docs/dashboard/admin#capability-matrix) lists every capability each role holds. a [swoop mode](#swoop-mode) changes what one person gets from swoop, and nothing else. a [machine scope](#machine-scope) limits an admin or a member to some of the site's machines, and takes away everything that spans the site; the owner always has the whole site.
 
 ---
 
@@ -46,7 +47,7 @@ each person can have their own swoop mode on the site: **no swoop**, **watch** o
 | swoop | on this site's machines |
 |---|---|
 | **by role** | no swoop mode of their own: the role decides, as above |
-| **no swoop** | nothing. the viewer says **you can't use swoop on this site** |
+| **no swoop** | nothing. a machine's menu offers live view instead of swoop, and the viewer says **you can't use swoop on this site** |
 | **watch** | they watch, and never take control |
 | **control** | they watch, and take control after confirming a [second factor](/docs/dashboard/swoop#the-second-factor) |
 
@@ -54,12 +55,51 @@ it changes swoop and nothing else. a member set to control takes control, after 
 
 - the owner always controls, and their swoop mode cannot be set (`409 cannot_change_owner_role`)
 - nobody changes their own (`403 cannot_modify_own_membership`)
-- a member set to control cannot kill sessions or see the site's session list on [admin → swoop](/docs/dashboard/swoop#admin--swoop); an admin held to watch still can
-- it applies only while the site has swoop on
+- a member set to control cannot kill sessions or see the site's session list on [admin → swoop](/docs/dashboard/swoop#admin--swoop); an admin held to watch still can, when their access is the whole site
+- it applies only while the site has swoop on, and only on the machines their [access](#machine-scope) covers
+- a machine's menu offers swoop only to someone who gets it there: with no swoop, or as a member with no swoop mode of their own on a site that does not let members watch, it offers live view instead
 
 lowering it ends their sessions: losing control ends the sessions they control, and no swoop ends every session they are in. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once.
 
 set it when you [add someone](#adding-a-member), and change it later with `change access...` (see [changing a role](#changing-a-role)). the API equivalent is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "swoop": "control" }`. the values are `none`, `view` and `control`, and `null` goes back to by role.
+
+---
+
+## machine scope
+
+a person's access is either the **whole site** or **some machines** of it. limited to some machines, they keep their role and their swoop mode on those machines, and reach nothing else on the site: nothing that spans its machines, whatever their role. you choose it under **access**, beside role and swoop, when you [add someone](#adding-a-member) and in `change access...` (see [changing a role](#changing-a-role)): pick **some machines**, then the machines. **whole site** gives everything back.
+
+- between 1 and 30 machines. the dashboard lists someone's machines in one query, which takes at most 30; for more, give them the whole site or split the site
+- the owner's row and your own row cannot be limited: `change access...` is not offered on either, and the server refuses both (`409 cannot_change_owner_role`, `403 cannot_modify_own_membership`)
+- removing a machine from the site, or a machine leaving it from its own tray, takes it out of everyone's access. someone whose last machine went reads **no machines** and reaches none until you pick some; they are never given the whole site. a machine that leaves and pairs again is in nobody's access until you add it back
+- a machine you picked that leaves the site before you save is dropped from the save
+
+### what they see
+
+- **the dashboard** lists only their machines. with none of them to show, it says **no machines here for you yet** and that a site admin chooses which machines they can reach
+- **a member** views, screenshots and opens live view on their machines. **an admin** also runs commands and changes processes, displays and restart schedules there. removing a machine, revoking its agent token and **turn on swoop…** stay with owners and admins of the whole site
+- **[swoop](/docs/dashboard/swoop)** follows their swoop mode on their machines. any other machine answers **machine not found or no access**, whether it exists or not
+- **[hoot](/docs/dashboard/hoot#choosing-machines)** talks to their machines only, without the tools that span the site, and the conversation list leaves out the site's autonomous investigations
+- **[logs](/docs/dashboard/activity-logs)** shows the rows for their machines, and **[alert emails](/docs/dashboard/admin/email-alerts#who-gets-them)** come for their machines only
+
+### what they cannot reach
+
+everything that spans the site needs the whole site:
+
+- the site's settings and members, managing its presets, agent tokens, alert rules and webhooks, its swoop sessions on [admin → swoop](/docs/dashboard/swoop#admin--swoop), and the audit log. an admin who runs another site sees this one in their site list as **admin · 2 machines** (or **member · 1 machine**), with no gear, and its settings page says, for a site named lobby, **your access to lobby is limited to some machines, and its settings need the whole site. ask its owner or an admin.**
+- deployments, roost and talons. while the site is selected, the navigation hides **talons**, **roost** and **deploy**, and those pages offer only the sites where their access is the whole site; with none, they say **this page needs whole-site access**
+- killing a swoop session, kicking someone out of one, and other viewers' email addresses
+- pairing machines, removing them, and uninstalling software
+- writing talons, or being handed someone else's
+
+### narrowing someone's access
+
+narrowing, from the whole site to some machines or to fewer machines, takes effect at once:
+
+- **swoop.** every swoop session they are in on a machine you take away ends within a couple of seconds, for everyone in it, because one streamer serves the whole session; everyone else reconnects on their own, and their viewer says **your access to this machine was removed.** their sessions on the machines they keep carry on. the dialog says **a swoop session they are in on a machine you take away ends.**
+- **talons.** talons span the site, so the ones they wrote stop: every talon they wrote switches itself off at its next run, before any of its outputs fires, as it does when its author is removed. when you move someone from **whole site** to **some machines**, the dialog says how many talons they wrote on the site, for example **they wrote 2 talons, which stop at their next run once their access is limited. reassign them to keep them.**
+
+the API equivalent is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "machineIds": ["kiosk-01", "kiosk-02"] }`, and `null` gives back the whole site. `POST /api/sites/{siteId}/members` takes `machineIds` when you add someone; leave it out for the whole site. an ID that is not a machine of the site is refused (`400`, `unknown machine: …`). the CLI and the SDKs do not set it yet.
 
 ---
 
@@ -71,14 +111,15 @@ the person must already have an owlette account: this adds an existing account t
 2. under **name or email**, search by name or email. the list offers people on the other sites where you are owner or admin, minus the people already here; owlette's superadmins are offered every account not on the site. pick someone, or type the full email they signed up with.
 3. choose a **role**: **member** or **admin**.
 4. choose their **swoop**: **by role**, **no swoop**, **watch** or **control**. **by role** leaves their swoop mode unset, so the role decides.
-5. click **add member**.
+5. choose their **access**: **whole site**, or **some machines** and then the machines (see [machine scope](#machine-scope)). with **some machines**, **add member** waits until you pick at least one.
+6. click **add member**.
 
 if this is the only site you run, there is no one to suggest: type the full email they signed up with. deleted accounts and superadmin accounts are never suggested.
 
-the role and swoop mode you pick are written for this site only, and change nothing about their account or any other site.
+the role, swoop mode and access you pick are written for this site only, and change nothing about their account or any other site.
 
 - **no account found for that email**: nobody has signed up with that address. ask them to sign up first, then add them
-- **already on this site**: they were a member already, so nothing changed, their swoop mode included. to change their access, see [changing a role](#changing-a-role)
+- **already on this site**: they were a member already, so nothing changed, their swoop mode and access included. to change their access, see [changing a role](#changing-a-role)
 - the site owner cannot be added again (`target_is_owner`), and a deleted account cannot be added
 
 ---
@@ -98,9 +139,9 @@ two rows cannot be removed:
 
 ### talon reassignment
 
-talons belong to the site, but a talon with a hoot output or a visual check re-checks its **author's** access on every run. once its author has been removed, it switches itself off on its next run.
+talons belong to the site, but every talon re-checks its **author's** access on every run, before any of its outputs fires. once its author has been removed, it switches itself off on its next run.
 
-when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker, which lists this site's owners and admins. choosing a successor moves authorship before the membership change; the section then says how many talons moved. if the server refuses the successor, nothing is removed.
+when the person you are removing wrote talons on this site, the dialog says how many, names the first five, and offers a successor picker, which lists this site's owners and admins whose access is the whole site. choosing a successor moves authorship before the membership change; the section then says how many talons moved. if the server refuses the successor, nothing is removed.
 
 reassignment is never automatic. leave the picker empty and the removal still goes through, leaving the talons with an author who can no longer run them: reassign or delete them afterwards.
 
@@ -108,23 +149,23 @@ reassignment is never automatic. leave the picker empty and the removal still go
 
 ## changing a role
 
-open the row menu, select `change access...`, choose the **role** and the **swoop**, and click **save**. owners and admins get it on every row except their own and the owner's, and the change applies to **this site only**.
+open the row menu, select `change access...`, choose the **role**, the **swoop** and the **access**, and click **save**. owners and admins get it on every row except their own and the owner's, and the change applies to **this site only**.
 
-the server call is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "role": "admin" }` or `{ "role": "member" }`, a `swoop` (see [swoop mode](#swoop-mode)), or both, from a signed-in session or an API key holding both `write` and `admin` on the site. the CLI equivalent is [`owlette site set-role`](/docs/cli/reference/site#set-role), which changes only the role.
+the server call is `PATCH /api/sites/{siteId}/members/{uid}` with `{ "role": "admin" }` or `{ "role": "member" }`, a `swoop` (see [swoop mode](#swoop-mode)), `machineIds` (see [machine scope](#machine-scope)), or any of them together, from a signed-in session or an API key holding both `write` and `admin` on the site. the CLI equivalent is [`owlette site set-role`](/docs/cli/reference/site#set-role), which changes only the role.
 
 the server enforces:
 
-- the **owner's** role cannot change (`409 cannot_change_owner_role`). ownership moves only by transfer, so a site is never left without one
+- the **owner's** role, swoop mode and access cannot change (`409 cannot_change_owner_role`). ownership moves only by transfer, so a site is never left without one
 - only `admin` and `member` can be assigned
-- you cannot change your **own** role (`403 cannot_modify_own_membership`)
+- you cannot change your **own** row (`403 cannot_modify_own_membership`)
 - the person must already be on the site (`404`)
 
-demoting someone to member ends any swoop session in which they hold control, unless their swoop mode keeps control. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once. a session they are still allowed to watch carries on. a role change leaves their swoop mode as it was.
+demoting someone to member ends any swoop session in which they hold control, unless their swoop mode keeps control. each of those sessions ends at once, within a couple of seconds, and anyone else in it reconnects on their own; a person alone in a session is out the same way. a kill from [admin → swoop](/docs/dashboard/swoop#admin--swoop) also ends a session at once. a session they are still allowed to watch carries on. a role change leaves their swoop mode and their access as they were: an admin limited to some machines who is made a member stays limited to them.
 
-to narrow someone's access instead, remove them from the sites they should not reach.
+to narrow someone's access to some of this site's machines, set their [machine scope](#machine-scope).
 
 ---
 
 ## transferring ownership
 
-`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it, or one of owlette's superadmins. the new owner does not have to be on the site already; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.
+`POST /api/sites/{siteId}/transfer-ownership` hands the site to another account in one step, or [`owlette site transfer-ownership`](/docs/cli/reference/site#transfer-ownership) from a terminal. only the current owner can do it, or one of owlette's superadmins. the new owner does not have to be on the site already, and gets the whole site whatever their access was; the outgoing owner stays on as an admin, and can then be removed like anyone else. there is no dashboard control for it.
