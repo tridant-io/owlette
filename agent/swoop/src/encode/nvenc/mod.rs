@@ -118,6 +118,35 @@
 //!   which shows how slow idle clocks read. Only swoop-clarity task 4.1, alone
 //!   on its box, records it here.
 //!
+//! Task 4.1's `nvenc_encode_times`, 2026-11-11, RTX 2080 Ti, driver 610.88,
+//! release build, run after another app's 4K ffmpeg exports had finished
+//! (CPU 30-58%, TouchDesigner still on about a fifth of the GPU):
+//!
+//! ```text
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p1: p50 6.28 ms, p95 10.84 ms
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p3: p50 7.57 ms, p95 14.91 ms
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p4: p50 3.91 ms, p95 8.52 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p1: p50 9.54 ms, p95 12.62 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p3: p50 5.35 ms, p95 9.11 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p4: p50 6.54 ms, p95 7.40 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p1: p50 7.73 ms, p95 8.12 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p3: p50 10.50 ms, p95 11.21 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p4: p50 11.16 ms, p95 12.35 ms
+//! 1920x1080 H264 20 mbps, 20 at 2 Hz, p1: p50 2.90 ms, p95 8.42 ms
+//! 1920x1080 H264 20 mbps, 20 at 2 Hz, p4: p50 11.46 ms, p95 13.50 ms
+//! ```
+//!
+//! A run during the exports read lower p50s at 1080p (P1 3.16, P4 3.66 ms)
+//! and every p95 at 30-35 ms: the other work holds the clocks up and takes
+//! the GPU for whole frame intervals. So read the p50s to within a few ms,
+//! and the order of P1, P3 and P4 at one size as noise.
+//!
+//! What to expect on this GPU: with the whole 12 ms, the text preset keeps
+//! its p50 inside it at every size (P4 3.9 ms at 1080p and 6.5 ms at 1440p,
+//! P3 10.5 ms at 4K HEVC), so the gate keeps it. A 4K pass that shares the
+//! 12 ms with a second tier hands its P3 session 6 ms, so that session drops
+//! to P1 (7.7 ms).
+//!
 //! At P1, before the text preset, the first two printed this on the spike 0.9
 //! dev box (RTX 2080 Ti, driver 591.86); at the text preset the keyframe and
 //! delta sizes differ and the assertions do not:

@@ -63,8 +63,61 @@
  * chromium and, rerun on a quiet box, in edge too; under kept its callbacks
  * and frames and failed only on the drops, which are the artifact above. the
  * rule is now: callbacks and totalVideoFrames within 5% of none's, and the
- * canvas's draws within 5% of none's frames less its drops. task 4.1's matrix,
- * alone on the box, measures it.
+ * canvas's draws within 5% of none's frames less its drops. task 4.1's matrix
+ * measures it.
+ *
+ * task 4.1 (2026-11-11): the probe's remote sender (a separate headless
+ * chromium 156.0.8078.4 page streams the source, so the measured browser only
+ * receives, decodes and draws) with `--receiver idle`, on the same rtx 2080
+ * ti (driver 610.88) through d3d11 in both engines. `canvas` is the shipped
+ * renderer, which hides the video, so it is `under`, and `under` was not run
+ * again. each cell is rvfc callbacks / totalVideoFrames / droppedVideoFrames,
+ * then the canvas's draws against none's frames less its drops.
+ *
+ *   1920x1080 into 1000x562, two 20 s runs per engine on a quiet box (cpu
+ *   max 6-24% across each run, so the probe counts all four clean)
+ *   engine                    none            canvas          draws / shown   rule
+ *   edge 157.0.4341.42,       1189/1200/11    1173/1200/1199  1173 / 1189     holds: -1.3%, 0.0%, -1.3%
+ *   headed                    1189/1200/9     1193/1201/1200  1193 / 1191     holds: +0.3%, +0.1%, +0.2%
+ *   chromium 156.0.8078.4,    1176/1200/21    1179/1200/1200  1179 / 1179     holds: +0.3%, 0.0%, 0.0%
+ *   headless                  1192/1200/4     1178/1200/1200  1178 / 1196     holds: -1.2%, 0.0%, -1.5%
+ *
+ *   the same, three runs each earlier, while another app's 4k ffmpeg exports
+ *   held the cpu at 89-100% (none of them clean):
+ *   engine                    none            canvas          draws / shown   rule
+ *   edge 157.0.4341.42,       1025/1199/51    1084/1200/1200  1084 / 1148     fails: callbacks +5.8%, draws -5.6%
+ *   headed                    1064/1199/118   1073/1197/1197  1073 / 1081     holds
+ *                             1110/1201/67    1084/1201/1199  1084 / 1134     holds
+ *   chromium 156.0.8078.4,    1083/1201/103   1092/1200/1200  1092 / 1098     holds
+ *   headless                  1130/1200/34    1057/1202/1201  1057 / 1166     fails: callbacks -6.5%, draws -9.3%
+ *                             1074/1196/84    1119/1193/1194  1119 / 1112     holds
+ *
+ *   the canvas's draw, cpu ms p50/p95/max: quiet, 0.2/0.3/0.4-1.1 in both
+ *   engines; loaded, edge 0.3/0.4-0.6/1.5-3.9 and chromium 0.2-0.3/0.4-0.7/3.5-6.8.
+ *   gpu (timer query): quiet, edge 0.20/0.21-0.22/1.8-2.7 and chromium
+ *   0.22-0.23/0.40-1.79/2.9-3.3; loaded, 0.08-0.10/0.10-0.20/0.21-1.54.
+ *
+ *   3840x2160 into 1300x731, one 20 s run per engine, loaded (three tries
+ *   each, as the loopback sender never held 60 fps: 600-1110 frames of
+ *   1200), so only the draw counts. edge, over its three canvas tries and the
+ *   latency run: cpu p50 0.3, p95 0.5-0.7, max 1.3-3.3 ms; gpu p50 0.20, p95
+ *   0.20-0.25 ms. chromium: cpu 0.3/0.4-0.6/1.5-5.8 ms, gpu 0.19/0.19-0.20 ms.
+ *
+ *   latency in edge, 30 shots per cover, live - shown, median / p95. each
+ *   pair is two fresh sessions, and none's own median moved 13-46 ms between
+ *   them, so one pair cannot resolve a refresh; the pairs' median can:
+ *   1920x1080 into 1000x562, quiet   none 13 / 15    canvas 33 / 34    +20 ms
+ *                                    none 38 / 58    canvas 42 / 43    +4 ms
+ *                                    none 46 / 49    canvas 35 / 36    -11 ms
+ *   1920x1080 into 1000x562, loaded  none 39 / 58    canvas 44 / 60    +5 ms
+ *   3840x2160 into 1300x731, loaded  none 403 / 436  canvas 391 / 424  -12 ms (the loopback's
+ *                                    encoder holds about 400 ms, so 4k keeps only the draw gate)
+ *
+ * plan c15's gates: the 4k draw p95 in edge is 0.5-0.7 ms (gate 4 ms), and
+ * the canvas adds 4 ms to the 1080p median, the median of the quiet pairs
+ * (gate 16.7 ms), so both pass and smooth scaling stays on by default in
+ * chromium desktop engines. one quiet pair read +20 ms against the lowest
+ * none of all; glass to glass (task 8.1) is the check on it.
  */
 
 /** the most source texels averaged per axis: exact down to 1/7, evenly sampled below that. */

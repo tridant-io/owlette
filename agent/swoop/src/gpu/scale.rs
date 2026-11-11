@@ -37,20 +37,46 @@
 //! and the two callers do different jobs. [`Downscaler::open`] is the BGRA
 //! downscale a session opens when a tier's size differs from the capture (a
 //! menu resolution, an encoder's size limit, mf-sw's 720p cap), where the
-//! filter decides whether thin text survives: it takes `DOWNSCALE_USAGE`,
-//! which stays `D3D11_VIDEO_USAGE_OPTIMAL_SPEED` unless task 4.1 of the swoop
-//! text clarity plan (`dev/active/swoop-clarity`, decision C12) measures
-//! `OPTIMAL_QUALITY`'s 3840x2160 -> 1920x1080 p50 within 1.0 ms of
-//! `OPTIMAL_SPEED`'s. [`Downscaler::open_nv12`] is the same-size BGRA -> NV12
+//! filter decides whether thin text survives: it takes `DOWNSCALE_USAGE`.
+//! The swoop text clarity plan (`dev/active/swoop-clarity`, decision C12)
+//! moved it to `D3D11_VIDEO_USAGE_OPTIMAL_QUALITY` if that usage's 3840x2160
+//! -> 1920x1080 p50 came within 1.0 ms of `OPTIMAL_SPEED`'s, to get a filter
+//! that averages; it stays `OPTIMAL_SPEED` for the reason below.
+//! [`Downscaler::open_nv12`] is the same-size BGRA -> NV12
 //! convert mf-hw and mf-sw run on every frame, on the Intel and AMD machines
 //! mf-hw exists for: not a downscale, so it always takes `OPTIMAL_SPEED`.
-//! Task 4.1 records both usages' numbers here, with the GPU, the driver and
-//! the date.
+//!
+//! Task 4.1 measured both usages on 2026-11-11 (RTX 2080 Ti, driver 610.88,
+//! release, `each_usage_prints_its_blit_time_and_its_filter`; p50 from
+//! submit until the GPU signals done), three runs once another app's 4K
+//! ffmpeg exports had finished, with TouchDesigner still holding about a
+//! fifth of the GPU. Four earlier runs during the exports read up to 1.20 ms
+//! for SPEED and 0.62 ms for QUALITY.
+//!
+//! ```text
+//!                                 OPTIMAL_SPEED        OPTIMAL_QUALITY
+//! bgra 3840x2160 -> 1920x1080     0.53-0.55 ms         0.41 ms
+//! bgra 3840x2160 -> 2560x1440     0.53-0.56 ms         0.42-0.43 ms
+//! nv12 3840x2160, same size       0.51-0.62 ms         0.50-0.51 ms
+//! nv12 2560x1440, same size       0.42-0.43 ms         0.42-0.44 ms
+//! 1-px stripes 3:1, green         mean 127.5, 0..255   mean 127.5, 0..255
+//! ```
+//!
+//! `OPTIMAL_QUALITY` is within the 1.0 ms, but on this driver it is the same
+//! filter: at exactly 3:1 both usages hand back alternate stripes whole (0
+//! and 255), a two-tap bilinear that samples each output pixel's middle
+//! texel, where an average gives 85 and 170. So `DOWNSCALE_USAGE` stays
+//! `OPTIMAL_SPEED`: the move buys nothing measurable here, and on Intel and
+//! AMD, where it might change the filter, its cost is not measured. A GPU
+//! downscale that averages is a shader of its own, not a usage.
 //!
 //! The CPU path is an area average: each target pixel is the mean of the
-//! source pixels it covers, so a shrink skips none of them. Task 4.1 records
-//! its 3840x2160 -> 1280x720 time here too, held to a 10 ms p50 (mf-sw's
-//! frame is 33 ms).
+//! source pixels it covers, so a shrink skips none of them, held to a 10 ms
+//! p50 at 3840x2160 -> 1280x720 (mf-sw's frame is 33 ms). Task 4.1 timed it
+//! on 2026-11-11 (i9-9900X, release, `cpu_scale_times_a_four_k_shrink_to_720p`
+//! alone): 9.06-9.83 ms p50 over five runs at 16% CPU load, so it stays. It
+//! has little room: fifteen earlier runs under other apps' load read
+//! 9.8-24.3 ms.
 //!
 //! # Hardware tests
 //!
@@ -359,8 +385,8 @@ mod imp {
     };
 
     /// The usage [`Downscaler::open`]'s video processor opens at, which picks
-    /// the driver's filter. The module doc says when it moves to
-    /// `OPTIMAL_QUALITY`.
+    /// the driver's filter. The module doc says why it stays
+    /// `OPTIMAL_SPEED`.
     const DOWNSCALE_USAGE: D3D11_VIDEO_USAGE = D3D11_VIDEO_USAGE_OPTIMAL_SPEED;
 
     /// Everything that stops a frame being downscaled.

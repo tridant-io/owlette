@@ -47,6 +47,28 @@
 //! Mbps (-5.4 %) with never more than one input in flight and no rise in
 //! latency. Intel and AMD are not measured. The rest, and the method, are in
 //! `dev/active/swoop/spikes/6.7-encoder-breadth.md`.
+//!
+//! Quality vs speed 50 against the MFT's own value, swoop-clarity task 4.1,
+//! 2026-11-11, the same RTX 2080 Ti on driver 610.88, release, three runs of
+//! `mf_hw_encode_times_with_and_without_quality_vs_speed` at 1080p60 and 20
+//! Mbps, 300 steady frames each, submit to sink, during another app's two 4K
+//! ffmpeg exports (TouchDesigner on about a fifth of the GPU throughout):
+//!
+//! ```text
+//! the mft's own   p50 4.45 / 4.98 / 4.60 ms   p95 27.33 / 32.51 / 34.40 ms
+//! 50              p50 15.64 / 4.14 / 4.68 ms  p95 61.83 / 32.81 / 40.46 ms
+//! ```
+//!
+//! and two runs once the exports had finished:
+//!
+//! ```text
+//! the mft's own   p50 9.30 / 9.57 ms          p95 11.80 / 13.18 ms
+//! 50              p50 9.65 / 10.20 ms         p95 12.09 / 12.08 ms
+//! ```
+//!
+//! The gate kept 50 in every run, and 50 costs at most about 0.6 ms of p50
+//! against the MFT's own, but for the first run. The p50s move with the GPU's
+//! clocks, which the exports held up; the spike measured 4.98-5.71 ms.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;

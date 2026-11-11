@@ -1,5 +1,5 @@
 # swoop text clarity (4.1.28) — Tasks
-**Progress**: 18/25 complete
+**Progress**: 19/25 complete
 
 Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, environment, and the review fixes applied differently, with why). All paths are relative to the repo root of the `release/4.1.28` worktree. Anchors such as `file.tsx:120` are `release/4.1.27` @ f5a97522; 4.1.27 merges before this work starts, so find code by the quoted text when a line has moved.
 
@@ -187,7 +187,7 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
 
 ## Wave 4: the numbers that decide
 
-- [ ] **Task 4.1: measure the scalers, the encoders and the canvas, alone on this box**
+- [x] **Task 4.1: measure the scalers, the encoders and the canvas, alone on this box**
   - Files: `agent/swoop/src/gpu/scale.rs`, `agent/swoop/src/encode/nvenc/mod.rs`, `agent/swoop/src/encode/mf/hw.rs`, `web/lib/swoop/video/smooth.ts` (module doc only), `web/lib/swoop/viewStore.ts` and `web/__tests__/lib/swoop/viewStore.test.ts` (only if a canvas gate fails)
   - Depends on: Tasks 1.3, 2.1, 2.2, 2.5, 3.4
   - Do: The numbers that pick a default or go into a module doc, measured with nothing else running on this box. This wave has no other task. Before starting, stop what this session started (the Next server, the emulators, cargo builds, probe browsers; `Get-Process node, cargo, rustc, msedge, chrome -ErrorAction SilentlyContinue` lists candidates) and ask before stopping anything else; run on mains power. In order:
@@ -383,3 +383,22 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
     - 7.1's changelog gets a line.
     - Backlog: a viewer whose `bind_peer` fails has no peer and no limit (another possible nameless pill); a streamer-side verify deadline; queueing to a stuck peer during the 60 s; web `presence.ts` labelling unverified seats (owner's call).
 - 2026-11-10, **owner ruling: swoop-clarity ships as 4.1.29**, after machine-scope (now 4.1.28). 0f9250d4 renumbers PROTOCOL.md, nvenc/mod.rs and the presenter/receiver docs. The branch stays named release/4.1.28 until 7.1, which renumbers the plan headings, changelog and sync-versions to 4.1.29.
+### 2026-11-11
+- **Task 4.1 (03:17-04:11 PST):** numbers are in the module docs of scale.rs, nvenc/mod.rs, mf/hw.rs and smooth.ts. Setup: RTX 2080 Ti, driver 610.88 (spike 0.9 had 591.86), i9-9900X, release builds, Edge 157.0.4341.42 headed, Playwright Chromium 156.0.8078.4 headless, probe sender in headless Chromium 156.
+  - **The box was not alone.** A Claude session that the Starlight app runs itself (session 75287d0a) ran 4K ffmpeg exports from 03:22 to about 03:54: two, then six, with the CPU at 89-100%. Other sessions ran ffmpeg conversions and Embody and livenation pytest/unittest runs, and TouchDesigner (open since 11/2) held about 22% of the GPU throughout. Nothing was stopped.
+  - The scalers, the NVENC table and mf-hw were re-run once the exports ended (CPU 30-58%). The CPU average, the 1080p matrix and the 1080p latency were re-run on a quiet box (CPU 1-24%, all runs clean).
+  - **Canvas verdict: smooth scaling stays on by default in Chromium desktop engines.**
+    - The 4K Edge draw p95 is 0.5-0.7 ms (gate 4 ms).
+    - The latency added at 1080p is 4 ms, the median of three quiet pairs (+20, +4 and -11 ms; gate 16.7 ms).
+    - The restated cover rule held in all four clean 1080p runs (2 Edge, 2 Chromium). Under load it held in 4 of 6.
+  - **DOWNSCALE_USAGE stays OPTIMAL_SPEED,** against the letter of C12 and on 1.3's note. QUALITY came within 1.0 ms (0.41 ms against SPEED's 0.53-0.55 ms at 4K to 1080p), but it is the same filter on this driver. At exactly 3:1, both usages hand back alternate 1-px stripes whole (0..255, mean 127.5): a two-tap bilinear, not an average. The move would buy nothing measurable here, at an unmeasured cost on Intel and AMD. A GPU downscale that averages needs its own shader, which is a backlog candidate.
+  - **The CPU area average stays: 9.06-9.83 ms p50 over five quiet runs**, under the 10 ms limit. Its margin is thin: 15 runs under load read 9.8-24.3 ms. 1.3's change stands, and 6.1 may describe it.
+  - **Not run:**
+    - the investigation covers (`canvas-vf` and `canvas-poll` throw; the rest are not what ships);
+    - `under` (it is `canvas` now);
+    - the 4K matrix on a quiet box (it ran once per engine under load, and the loopback sender never held 60 fps at 4K anyway);
+    - the 4K latency on a quiet box;
+    - a quiet NVENC and mf-hw run.
+  - **For the owner:**
+    - Each latency pair is two fresh WebRTC sessions, and none's own median moved 13-46 ms between them. One pair can't resolve a 16.7 ms gate, and one quiet pair read +20 ms against the lowest none of all. 8.1's glass-to-glass photos are the check on it.
+    - The probe's own `holds` verdict still applies the old 1% drop clause, so it prints "fails" for every `canvas` run. The restated rule was applied by hand.
