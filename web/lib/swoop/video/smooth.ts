@@ -118,6 +118,24 @@
  * (gate 16.7 ms), so both pass and smooth scaling stays on by default in
  * chromium desktop engines. one quiet pair read +20 ms against the lowest
  * none of all; glass to glass (task 8.1) is the check on it.
+ *
+ * task 3.4 (2026-11-11): safari 26.6 on TEC-MBA (apple m2, macos 26.6, dpr 2),
+ * the probe's same-page pair, one 5 s run per cover. renderer "Apple GPU",
+ * smoothAvailable() true, no gpu timer, and draw times in whole ms (safari
+ * clamps performance.now). low power mode was on, so safari ran its animation
+ * frames at 30 Hz and the source was painted at 30 fps: provisional until a
+ * run with it off. safari reports no totalVideoFrames for a webrtc video, so
+ * each cell is rvfc callbacks / frames presented / callbacks that coalesced,
+ * then the draw, cpu ms p50/p95/max:
+ *
+ *   source into box           none          canvas                under
+ *   1920x1080 into 1000x562   141/150/9     114/150/36, 0/2/3     110/149/39, 0/1/3
+ *   3840x2160 into 1300x731   149/150/1     129/147/18, 1/5/13    141/148/7, 1/4/16
+ *
+ * no frame was dropped in decode (the receiver's framesDropped is 0 in every
+ * run), but the canvas costs safari 13-19% of its callbacks, so it shows 13-19%
+ * fewer distinct frames than the bare video, outside the rule above. smooth
+ * scaling stays off by default in webkit (plan c6), offered there to turn on.
  */
 
 /** the most source texels averaged per axis: exact down to 1/7, evenly sampled below that. */
