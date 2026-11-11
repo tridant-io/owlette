@@ -10,6 +10,15 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — a cancelled deployment target that was already installing shows how the install ended
+
+A cancel cannot stop an install the agent has already started, and the agent's
+answer to that cancel arrives after the install, so a machine that finished
+installing was switched back to cancelled with the program in place. That answer
+no longer changes the deployment: the machine shows the install's own result,
+completed or failed. A cancel still stops every machine whose install had not
+started. Nothing to update on the machine.
+
 ### fixed — stuck deployment targets time out again
 
 The server fails a target still `pending` after 15 minutes, or `downloading` or

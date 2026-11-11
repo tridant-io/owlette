@@ -67,7 +67,14 @@ function fakeDb(initial: Record<string, Doc>, onRead?: (path: string, write: Wri
     doc: (path: string) =>
       docs.get(path) as {
         status: string;
-        targets: Array<{ machineId: string; status: string; failedCommandType?: string; error?: string }>;
+        targets: Array<{
+          machineId: string;
+          status: string;
+          failedCommandType?: string;
+          error?: string;
+          cancelledAt?: unknown;
+          completedAt?: unknown;
+        }>;
       },
     writesTo: (path: string) => versions.get(path) ?? 0,
   };
@@ -175,6 +182,120 @@ describe('updateDeployment', () => {
     const writes = writesTo(DEPLOYMENT);
     await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'failed', 'install_software', 'Error: exit 1603'));
     assert.equal(writesTo(DEPLOYMENT), writes);
+  });
+});
+
+// the agent runs cancel_installation on its slow lane, after the install it was meant to
+// stop, and marks it `cancelled` whatever it found; the server's cancel settles the target.
+describe('updateDeployment and the answer to a cancel', () => {
+  const cancelAnswer = (cmdId: string) => result(cmdId, 'cancelled', 'cancel_installation');
+
+  it('leaves a completed target completed when the cancel that queued behind its install reports', async () => {
+    const { db, doc, writesTo } = fakeDb({
+      [DEPLOYMENT]: { status: 'completed', targets: [{ machineId: 'm1', status: 'completed' }] },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('c1', 'running', 'cancel_installation'));
+    await updateDeployment(db, 's1', 'm1', 'd1', cancelAnswer('c1'));
+
+    assert.equal(doc(DEPLOYMENT).targets[0].status, 'completed');
+    assert.equal(doc(DEPLOYMENT).status, 'completed');
+    assert.equal(writesTo(DEPLOYMENT), 0);
+  });
+
+  it('ends a target the server cancelled mid-download as its install reports, without the cancel time', async () => {
+    const { db, doc } = fakeDb({
+      [DEPLOYMENT]: {
+        status: 'cancelled',
+        targets: [{ machineId: 'm1', status: 'cancelled', cancelledAt: 1 }],
+      },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'installing', 'install_software'));
+    assert.equal(doc(DEPLOYMENT).targets[0].status, 'cancelled');
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'completed', 'install_software'));
+    await updateDeployment(db, 's1', 'm1', 'd1', cancelAnswer('c1'));
+
+    const [target] = doc(DEPLOYMENT).targets;
+    assert.equal(target.status, 'completed');
+    assert.notEqual(target.completedAt, undefined);
+    assert.equal('cancelledAt' in target, false);
+    assert.equal(doc(DEPLOYMENT).status, 'completed');
+  });
+
+  it('ends a target the server cancelled as failed, marked install_software, when its install fails', async () => {
+    const { db, doc } = fakeDb({
+      [DEPLOYMENT]: {
+        status: 'cancelled',
+        targets: [{ machineId: 'm1', status: 'cancelled', cancelledAt: 1 }],
+      },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'failed', 'install_software', 'Error: exit 1603'));
+
+    const [target] = doc(DEPLOYMENT).targets;
+    assert.deepEqual([target.status, target.failedCommandType, target.error], [
+      'failed',
+      'install_software',
+      'Error: exit 1603',
+    ]);
+    assert.equal('cancelledAt' in target, false);
+    assert.equal(doc(DEPLOYMENT).status, 'failed');
+  });
+
+  // agent/src/firebase_client.py _seed_seen_commands: after a restart the agent fails every
+  // entry still `running`, with its type, which includes a cancel's leftover marker.
+  it('moves nothing on a cancel_installation that a restart marked failed', async () => {
+    const { db, doc, writesTo } = fakeDb({
+      [DEPLOYMENT]: { status: 'completed', targets: [{ machineId: 'm1', status: 'completed' }] },
+    });
+
+    await updateDeployment(
+      db,
+      's1',
+      'm1',
+      'd1',
+      result('c1', 'failed', 'cancel_installation', 'interrupted by service restart'),
+    );
+
+    assert.equal(doc(DEPLOYMENT).targets[0].status, 'completed');
+    assert.equal(writesTo(DEPLOYMENT), 0);
+  });
+
+  // the cancel-first order is a guard: the install was already last, so it passed before the fix.
+  const orders: Array<[string, Array<'install' | 'cancel'>]> = [
+    ['install first', ['install', 'cancel']],
+    ['cancel first, guard', ['cancel', 'install']],
+  ];
+  for (const [label, order] of orders) {
+    it(`takes the install's result when one write carries both (${label})`, async () => {
+      const { db, doc } = fakeDb({
+        [DEPLOYMENT]: { status: 'cancelled', targets: [{ machineId: 'm1', status: 'cancelled' }] },
+      });
+      const parts = {
+        install: result('i1', 'completed', 'install_software'),
+        cancel: cancelAnswer('c1'),
+      };
+
+      await updateDeployment(db, 's1', 'm1', 'd1', order.flatMap((part) => parts[part]));
+
+      assert.equal(doc(DEPLOYMENT).targets[0].status, 'completed');
+    });
+  }
+
+  // a guard: it passed before the fix too. only the cancel_installation type is skipped.
+  it('guard: still cancels a target on a cancelled result of any other command', async () => {
+    const { db, doc } = fakeDb({
+      [DEPLOYMENT]: { status: 'in_progress', targets: [{ machineId: 'm1', status: 'installing' }] },
+    });
+
+    await updateDeployment(db, 's1', 'm1', 'd1', result('i1', 'cancelled', 'install_software'));
+
+    const [target] = doc(DEPLOYMENT).targets;
+    assert.equal(target.status, 'cancelled');
+    assert.notEqual(target.cancelledAt, undefined);
+    assert.equal(doc(DEPLOYMENT).status, 'cancelled');
   });
 });
 

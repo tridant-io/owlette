@@ -2,7 +2,9 @@
  * Firestore trigger on sites/{siteId}/machines/{machineId}/commands/completed.
  * For each command carrying a deployment_id it updates that target's status on
  * the deployment doc and recalculates the overall status — server-side so any
- * consumer (API, tests, scripts) sees it without the dashboard running.
+ * consumer (API, tests, scripts) sees it without the dashboard running. The
+ * agent's answer to `cancel_installation` is skipped: the server's cancel
+ * settles the target, and that answer says nothing about the install.
  *
  * CANONICAL reconciler. `reconcileDeploymentStatus` /
  * `reconcileDistributionStatus` were removed 2026-05-30 because they triggered
@@ -85,6 +87,14 @@ export async function updateDeployment(
   deploymentId: string,
   commands: Array<{ cmdId: string; cmdData: Record<string, any> }>,
 ): Promise<void> {
+  // the server's cancel settles the target itself. the agent's answer to cancel_installation
+  // says nothing about whether an install stopped: it runs after the install it was meant to
+  // stop, and is marked `cancelled` even when it found nothing to cancel.
+  const targetMovingCommands = commands.filter(
+    (cmd) => cmd.cmdData.type !== 'cancel_installation',
+  );
+  if (targetMovingCommands.length === 0) return;
+
   const deploymentRef = db
     .collection('sites')
     .doc(siteId)
@@ -111,7 +121,7 @@ export async function updateDeployment(
     // A terminal target must not regress to an intermediate state.
     if (TARGET_TERMINAL_STATUSES.has(currentStatus)) {
       // Terminal → terminal is allowed (e.g. uninstall after install).
-      const hasTerminalUpdate = commands.some((cmd) => {
+      const hasTerminalUpdate = targetMovingCommands.some((cmd) => {
         const newStatus = mapCommandToTargetStatus(
           cmd.cmdData.status,
           cmd.cmdData.type || ''
@@ -123,7 +133,7 @@ export async function updateDeployment(
     }
 
     // Commands arrive in write order, so the last one is the latest state.
-    const latestCmd = commands[commands.length - 1].cmdData;
+    const latestCmd = targetMovingCommands[targetMovingCommands.length - 1].cmdData;
     const newTargetStatus = mapCommandToTargetStatus(
       latestCmd.status,
       latestCmd.type || ''
@@ -155,6 +165,12 @@ export async function updateDeployment(
       target.failedCommandType = latestCmd.type;
     } else {
       delete target.failedCommandType;
+    }
+
+    // a target the server cancelled while the agent already had its install ends as that
+    // install reports; a cancel time beside `completed` would say the opposite.
+    if (newTargetStatus !== 'cancelled') {
+      delete target.cancelledAt;
     }
 
     if (TARGET_TERMINAL_STATUSES.has(newTargetStatus)) {
