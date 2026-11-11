@@ -335,8 +335,9 @@ export default function DeploymentsPage() {
     currentSite,
     siteTimezone,
     hasNoSites,
+    limitedOnly,
     selectSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const deploymentsGated = usePlanGated('deployments', siteOwner);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
@@ -657,7 +658,7 @@ export default function DeploymentsPage() {
               on a permanent "loading deployments..." spinner. */}
           {hasNoSites ? (
             <div className="p-8">
-              <NoSitesEmptyState action="manage deployments" />
+              <NoSitesEmptyState action="manage deployments" limited={limitedOnly} />
             </div>
           ) : deploymentsLoading || sitesLoading || !currentSiteId ? (
             <div className="p-8 text-center">

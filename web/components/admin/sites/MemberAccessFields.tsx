@@ -1,5 +1,6 @@
 'use client';
 
+import { MachineAccessField } from '@/components/admin/sites/MachineAccessField';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import type { AddableSiteMemberRole } from '@/hooks/useSiteMembers';
@@ -49,6 +50,9 @@ export function MemberAccessFields({
   onRoleChange,
   onSwoopChange,
   membersMayWatch,
+  machines,
+  machineIds,
+  onMachineIdsChange,
   disabled,
 }: {
   idPrefix: string;
@@ -57,6 +61,10 @@ export function MemberAccessFields({
   onRoleChange: (r: AddableSiteMemberRole) => void;
   onSwoopChange: (c: SwoopChoice) => void;
   membersMayWatch: boolean;
+  machines: { id: string; name: string }[];
+  /** null is the whole site */
+  machineIds: string[] | null;
+  onMachineIdsChange: (next: string[] | null) => void;
   disabled?: boolean;
 }) {
   const roleId = `${idPrefix}-role`;
@@ -109,6 +117,13 @@ export function MemberAccessFields({
           {swoopHint(swoop, role, membersMayWatch)}
         </p>
       </div>
+      <MachineAccessField
+        idPrefix={`${idPrefix}-machines`}
+        machines={machines}
+        value={machineIds}
+        onChange={onMachineIdsChange}
+        disabled={disabled}
+      />
     </div>
   );
 }

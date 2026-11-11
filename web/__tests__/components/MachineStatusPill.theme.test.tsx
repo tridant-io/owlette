@@ -44,7 +44,7 @@ describe('MachineStatusPill theme tokens', () => {
       online: true,
       rebooting: true,
       rebootScheduledAt: inTwoMinutes,
-      isSiteAdmin: true,
+      isMachineAdmin: true,
       onCancel: jest.fn().mockResolvedValue(undefined),
     });
     const pill = screen.getByTestId('machine-status-cancel-pill');
@@ -55,7 +55,7 @@ describe('MachineStatusPill theme tokens', () => {
   it('opens a later countdown cancellable, not on the spinner of one already cancelled', async () => {
     const onCancel = jest.fn().mockResolvedValue(undefined);
     const nowSec = Math.floor(Date.now() / 1000);
-    const admin = { online: true, isSiteAdmin: true, onCancel };
+    const admin = { online: true, isMachineAdmin: true, onCancel };
     const { rerender } = renderPill({ ...admin, rebooting: true, rebootScheduledAt: nowSec + 120 });
 
     fireEvent.click(screen.getByTestId('machine-status-cancel-pill'));
@@ -75,7 +75,7 @@ describe('MachineStatusPill held restart', () => {
   const held = { online: true, rebootDeferredUntil: AT, machineTimezone: 'America/New_York' };
 
   it('names the time on the machine clock, in the warning token, without the pulse', () => {
-    renderPill({ ...held, isSiteAdmin: true, onCancel: jest.fn().mockResolvedValue(undefined) });
+    renderPill({ ...held, isMachineAdmin: true, onCancel: jest.fn().mockResolvedValue(undefined) });
     const pill = screen.getByTestId('machine-status-deferred-pill');
     expect(pill).toHaveTextContent('restart at 17:30');
     expect(pill).toHaveAccessibleName('restart at 17:30 (machine time) — click to cancel');
@@ -100,7 +100,7 @@ describe('MachineStatusPill held restart', () => {
   });
 
   it('is no button for someone who cannot cancel', () => {
-    renderPill({ ...held, isSiteAdmin: false, onCancel: jest.fn() });
+    renderPill({ ...held, isMachineAdmin: false, onCancel: jest.fn() });
     const pill = screen.getByRole('img', { name: 'restart at 17:30 (machine time)' });
     expect(pill).toHaveAttribute('data-testid', 'machine-status-deferred-pill');
   });
@@ -112,7 +112,7 @@ describe('MachineStatusPill held restart', () => {
 
   it('cancels through onCancel, and a later hold opens cancellable again', async () => {
     const onCancel = jest.fn().mockResolvedValue(undefined);
-    const admin = { online: true, isSiteAdmin: true, onCancel, machineTimezone: 'America/New_York' };
+    const admin = { online: true, isMachineAdmin: true, onCancel, machineTimezone: 'America/New_York' };
     const { rerender } = renderPill({ ...admin, rebootDeferredUntil: AT });
 
     fireEvent.click(screen.getByTestId('machine-status-deferred-pill'));
@@ -132,7 +132,7 @@ describe('MachineStatusPill held restart', () => {
       ...held,
       rebooting: true,
       rebootScheduledAt: inTwoMinutes,
-      isSiteAdmin: true,
+      isMachineAdmin: true,
       onCancel: jest.fn().mockResolvedValue(undefined),
     });
     expect(screen.getByTestId('machine-status-cancel-pill')).toBeInTheDocument();

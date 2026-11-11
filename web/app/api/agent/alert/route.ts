@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
 import {
   wrapEmailLayout,
@@ -431,8 +431,8 @@ export const POST = withRateLimit(
       let emailsSent = 0;
 
       for (const recipient of recipients) {
-        // Honor per-machine mutes (mirrors the critical-display loop).
-        if (recipient.mutedMachines.includes(machineId)) continue;
+        // Honor per-machine mutes and machine scope (mirrors the critical-display loop).
+        if (!recipientWantsMachine(recipient, machineId)) continue;
         try {
           const unsubscribeUrl = recipient.userId !== 'fallback'
             ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
@@ -538,7 +538,7 @@ async function triggerAutonomousHoot(
  * Send one critical-path display alert inline, bypassing the digest cron —
  * `display_monitor_removed` / `display_auto_revert_fired` can't wait minutes.
  * Shares `buildDisplayDigestEmail` with the cron path so the layout is
- * identical, and honors `mutedMachines` + unsubscribe links the same way.
+ * identical, and honors mutes, machine scope and unsubscribe links the same way.
  * Returns the number of emails that actually sent.
  */
 async function sendCriticalDisplayEmailNow(params: {
@@ -581,8 +581,8 @@ async function sendCriticalDisplayEmailNow(params: {
   let emailsSent = 0;
   for (const recipient of recipients) {
     try {
-      // Critical-path bypass must not override the operator's mute.
-      if (recipient.mutedMachines.includes(machineId)) continue;
+      // Critical-path bypass must not override the operator's mute or machine scope.
+      if (!recipientWantsMachine(recipient, machineId)) continue;
 
       const unsubscribeUrl = recipient.userId !== 'fallback'
         ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`

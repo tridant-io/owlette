@@ -31,6 +31,9 @@ jest.mock('@/contexts/AuthContext', () => {
   const auth = {
     userPreferences: { temperatureUnit: 'C', timeDisplayMode: 'machine', timezone: 'UTC', mutedMachines: [] },
     isSiteAdmin: () => true,
+    isMachineAdmin: () => true,
+    machineScope: () => null,
+    siteRole: () => 'admin',
   };
   return { useAuth: () => auth };
 });

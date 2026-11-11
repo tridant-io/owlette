@@ -62,6 +62,10 @@ let sites = [{ id: SITE, name: 'Site One' }];
 let machines: Partial<Machine>[] = [];
 let swoopOn = true;
 let machinesSiteId = '';
+let role: 'owner' | 'admin' | 'member' = 'admin';
+// the caller's machine scope by site; a site not listed is the whole site
+let scopes: Record<string, readonly string[]> = {};
+let machinesScope: readonly string[] | null | undefined;
 const updateLastSite = jest.fn();
 
 jest.mock('@/contexts/AuthContext', () => ({
@@ -70,6 +74,10 @@ jest.mock('@/contexts/AuthContext', () => ({
     loading: false,
     isSuperadmin: false,
     isSiteAdmin: () => siteAdmin,
+    machineScope: (siteId: string) => scopes[siteId] ?? null,
+    isMachineAdmin: (siteId: string, machineId: string) =>
+      siteAdmin || (role !== 'member' && (scopes[siteId]?.includes(machineId) ?? false)),
+    siteRole: () => role,
     userSites: [SITE],
     lastSiteId: null,
     updateLastSite,
@@ -78,8 +86,9 @@ jest.mock('@/contexts/AuthContext', () => ({
 
 jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites, loading: false }),
-  useMachines: (siteId: string) => {
+  useMachines: (siteId: string, machineIds?: readonly string[] | null) => {
     machinesSiteId = siteId;
+    machinesScope = machineIds;
     return { machines: siteId ? machines : [], loading: false };
   },
 }));
@@ -104,6 +113,9 @@ beforeEach(() => {
   sites = [{ id: SITE, name: 'Site One' }];
   machines = [];
   swoopOn = true;
+  role = 'admin';
+  scopes = {};
+  machinesScope = undefined;
   localStorage.clear();
   mockPush.mockClear();
 });
@@ -230,6 +242,39 @@ describe('SwoopPicker', () => {
     expect(reason('m1')).toHaveTextContent(
       'swoop is off for this site · ask a site owner or admin to turn it on',
     );
+    expect(within(reason('m1')).queryByRole('link')).toBeNull();
+  });
+
+  it("reads only the machines in the person's scope on a scoped site, and the whole site on another", async () => {
+    const user = userEvent.setup();
+    sites = [
+      { id: SITE, name: 'Site One' },
+      { id: 'site-2', name: 'Site Two' },
+    ];
+    scopes = { [SITE]: ['m1'] };
+    machines = [machine('m1')];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    expect(machinesSiteId).toBe(SITE);
+    expect(machinesScope).toEqual(['m1']);
+
+    await user.click(screen.getByTestId('swoop-picker-site'));
+    await user.click(within(await screen.findByRole('dialog', { name: 'sites' })).getByRole('button', { name: 'Site Two' }));
+    await waitFor(() => expect(machinesSiteId).toBe('site-2'));
+    expect(machinesScope).toBeNull();
+  });
+
+  it('a scoped admin cannot turn swoop on for the site, so is told who can', async () => {
+    // an admin on their own machine, but not of the whole site
+    siteAdmin = false;
+    scopes = { [SITE]: ['m1'] };
+    swoopOn = false;
+    machines = [machine('m1')];
+    renderPicker();
+
+    await screen.findByTestId('swoop-picker-machine-m1');
+    expect(reason('m1')).toHaveTextContent('swoop is off for this site · ask a site owner or admin to turn it on');
     expect(within(reason('m1')).queryByRole('link')).toBeNull();
   });
 

@@ -16,9 +16,9 @@ hoot offers the model the same 52 tools on every machine. the tier decides wheth
 | **2** | process and machine management | auto-approved | 24 |
 | **3** | privileged | in-chat approval while the site's approval gate is on (the default) | 11 |
 
-members and chat-scoped API keys are capped at tier 1. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
+members and chat-scoped API keys are capped at tier 1. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tier on those machines, without the site-level tools below. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
 
-> **server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) run in the Next.js server process and never go through the agent's command queue. talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine.
+> **server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) run in the Next.js server process and never go through the agent's command queue. talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine. five of them span the site, `get_site_logs`, `deploy_software`, `create_talon`, `list_talons` and `set_talon_enabled`, so hoot never offers them to someone limited to some machines, whatever their role.
 
 ### overriding active hours
 
@@ -141,7 +141,7 @@ local hoot offers fewer tools than the web registry: 21 at its highest tier, and
 
 ### get_site_logs
 
-activity logs across every machine in the site, for finding errors, crashes and events across the fleet. **server-side**: queries Firestore directly.
+activity logs across every machine in the site, for finding errors, crashes and events across the fleet. **server-side**: queries Firestore directly. it spans the site, so it is not offered to someone limited to some machines.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|

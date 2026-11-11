@@ -2,6 +2,8 @@
  * GET /api/sites/{siteId}/logs/{logId}
  *
  * Fetch one operational log entry from `sites/{siteId}/logs`.
+ * a scoped member gets the missing log's 404 for a row with no machine, or a
+ * machine outside their machine scope.
  */
 
 import type { NextRequest } from 'next/server';
@@ -34,7 +36,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       });
     }
 
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
 
     const snap = await getAdminDb()
@@ -44,7 +46,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       .doc(logId)
       .get();
 
-    if (!snap.exists) {
+    const data = snap.exists ? (snap.data() ?? {}) : null;
+    const machineId = typeof data?.machineId === 'string' ? data.machineId : null;
+    const machineScope = auth.machineIds;
+    if (data === null || (machineScope !== null && (machineId === null || !machineScope.includes(machineId)))) {
       return problem({
         type: ProblemType.NotFound,
         title: 'log entry not found',
@@ -54,7 +59,6 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       });
     }
 
-    const data = snap.data() ?? {};
     return applyAuthDeprecations(
       NextResponse.json({
         id: logId,
@@ -62,7 +66,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         timestamp: timestampToIso(data.timestamp),
         action: typeof data.action === 'string' ? data.action : 'unknown',
         level: typeof data.level === 'string' ? data.level : 'info',
-        machineId: typeof data.machineId === 'string' ? data.machineId : null,
+        machineId,
         machineName: typeof data.machineName === 'string' ? data.machineName : null,
         processName: typeof data.processName === 'string' ? data.processName : null,
         details:

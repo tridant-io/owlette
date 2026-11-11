@@ -91,6 +91,8 @@ interface MachineCardViewProps {
   onSwoopApp?: (machineId: string) => void;
   /** The site has swoop off: the menu offers its switch instead (MachineContextMenu). */
   swoopOff?: boolean;
+  /** the viewer's swoop mode here is none: the menu offers no swoop (MachineContextMenu). */
+  noSwoop?: boolean;
   onSiteSettings?: () => void;
   /** the viewer's plan on this site (`useSitePlan`); unset is unrestricted. */
   sitePlan?: SitePlan;
@@ -119,7 +121,9 @@ interface MachineCardProps extends MachineCardHandlers {
   schedulesFollowSiteTime?: boolean;
   userPreferences: { temperatureUnit: 'C' | 'F' };
   isSiteAdmin: boolean;
+  isMachineAdmin: boolean;
   swoopOff?: boolean;
+  noSwoop?: boolean;
   cardPref: DeviceSelection;
   onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
@@ -175,7 +179,9 @@ const MachineCard = memo(function MachineCard({
   schedulesFollowSiteTime,
   userPreferences,
   isSiteAdmin,
+  isMachineAdmin,
   swoopOff,
+  noSwoop,
   cardPref,
   onSetCardPref,
   onToggleStats,
@@ -419,7 +425,7 @@ const MachineCard = memo(function MachineCard({
               shutdownScheduledAt={machine.shutdownScheduledAt}
               rebootDeferredUntil={machine.rebootDeferredUntil}
               machineTimezone={machine.machineTimezone}
-              isSiteAdmin={isSiteAdmin}
+              isMachineAdmin={isMachineAdmin}
               onCancel={onCancelRestart ? () => onCancelRestart(machineId) : undefined}
             />
             <Tooltip>
@@ -451,6 +457,7 @@ const MachineCard = memo(function MachineCard({
                 shuttingDown={machine.shuttingDown}
                 rebootDeferredUntil={machine.rebootDeferredUntil}
                 isSiteAdmin={isSiteAdmin}
+                isMachineAdmin={isMachineAdmin}
                 onRemoveMachine={() => onRemoveMachine(machineId, machineId, machine.online)}
                 onRestart={onRestart ? (options) => onRestart(machineId, options) : undefined}
                 onShutdown={onShutdown ? (options) => onShutdown(machineId, options) : undefined}
@@ -463,6 +470,7 @@ const MachineCard = memo(function MachineCard({
                 onSwoop={onSwoop ? () => onSwoop(machineId) : undefined}
                 onSwoopApp={onSwoopApp ? () => onSwoopApp(machineId) : undefined}
                 swoopOff={swoopOff}
+                noSwoop={noSwoop}
                 onSiteSettings={onSiteSettings}
                 onViewDisplays={openMetric ? () => openMetric('display') : undefined}
                 rebootSchedule={machine.rebootSchedule}
@@ -504,7 +512,7 @@ const MachineCard = memo(function MachineCard({
                 {!machine.online && ' — machine offline, cannot restart'}
               </span>
             </div>
-            {isSiteAdmin && (
+            {isMachineAdmin && (
               <div className="flex items-center gap-1.5 flex-shrink-0">
                 {/* No approve while offline: the command would 409 machine_offline.
                     nor without control: approving is a restart command. */}
@@ -1041,7 +1049,7 @@ const MachineCard = memo(function MachineCard({
                               ? 'text-info border-info-border'
                               : 'text-muted-foreground border-border/50';
                             // Non-admins: static pill, since the toggle would 403.
-                            if (!isSiteAdmin) {
+                            if (!isMachineAdmin) {
                               return (
                                 <div className="flex items-center h-8">
                                   <span className={`flex items-center px-2.5 md:px-3 text-xs md:text-sm font-medium rounded-md border bg-card ${modeColor}`}>
@@ -1160,7 +1168,7 @@ const MachineCard = memo(function MachineCard({
                               </>
                             );
                           })()}
-                          {isSiteAdmin && (
+                          {isMachineAdmin && (
                             <>
                               <IconButton
                                 label={`edit ${process.name}`}
@@ -1241,7 +1249,7 @@ const MachineCard = memo(function MachineCard({
                   ))}
                 </div>
                 {/* add process Button — admin-only write action */}
-                {isSiteAdmin && (
+                {isMachineAdmin && (
                   <div className="flex justify-center pt-3">
                     <Button
                       variant="ghost"
@@ -1260,7 +1268,7 @@ const MachineCard = memo(function MachineCard({
       )}
 
       {/* add process button for machines with no processes — admin-only */}
-      {!planLocked && isSiteAdmin && (!machine.processes || machine.processes.length === 0) && (
+      {!planLocked && isMachineAdmin && (!machine.processes || machine.processes.length === 0) && (
         <div className="border-t border-border/50 flex justify-center p-3">
           <Button
             variant="ghost"
@@ -1287,10 +1295,11 @@ export function MachineCardView({
   siteTimeFormat = '12h',
   schedulesFollowSiteTime,
   swoopOff,
+  noSwoop,
   sitePlan,
   ...handlers
 }: MachineCardViewProps) {
-  const { userPreferences, isSiteAdmin } = useAuth();
+  const { userPreferences, isSiteAdmin, isMachineAdmin } = useAuth();
   const canSiteAdmin = isSiteAdmin(currentSiteId);
   const { prefs, setCardPref } = useDevicePrefs();
   const temperaturePrefs = useMemo(
@@ -1322,7 +1331,9 @@ export function MachineCardView({
           siteTimeFormat={siteTimeFormat}
           userPreferences={temperaturePrefs}
           isSiteAdmin={canSiteAdmin}
+          isMachineAdmin={isMachineAdmin(currentSiteId, machine.machineId)}
           swoopOff={swoopOff}
+          noSwoop={noSwoop}
           cardPref={prefs.cardView[machine.machineId] ?? NO_CARD_PREF}
           onSetCardPref={setCardPref}
           schedulesFollowSiteTime={schedulesFollowSiteTime}

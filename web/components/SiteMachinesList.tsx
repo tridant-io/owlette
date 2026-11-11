@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Loader2, Monitor, RotateCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -8,23 +8,9 @@ import { toast } from '@/lib/toast';
 import { formatRelativeTime } from '@/lib/timeUtils';
 import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
+import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
-
-interface SiteMachine {
-  id: string;
-  name: string;
-  online: boolean;
-  lastHeartbeat: string | null;
-  agentVersion: string | null;
-  /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */
-  displayAwake?: { held?: boolean } | null;
-  /** what tells whether the agent would refuse a restart inside active hours; null where it reports none. */
-  osFamily?: string | null;
-  capabilities?: { activeHoursGuard?: number } | null;
-  activeHours?: unknown;
-  machineTimezone?: string | null;
-}
 
 interface SiteMachinesListProps {
   siteId: string;
@@ -32,36 +18,15 @@ interface SiteMachinesListProps {
 
 /**
  * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
- *
- * uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
- * rather than a client Firestore listener, so superadmins can inspect sites
- * they aren't members of without loosening rules.
  */
 export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
-  const [machines, setMachines] = useState<SiteMachine[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { machines, error, refresh: fetchMachines } = useSiteMachines(siteId);
   // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
   const power = usePowerCommand(siteId);
-
-  const fetchMachines = useCallback(async () => {
-    setError(null);
-    try {
-      const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/machines`);
-      if (!response.ok) throw new Error(`failed to load machines (${response.status})`);
-      const body = (await response.json()) as { machines: SiteMachine[] };
-      setMachines(body.machines);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'failed to load machines');
-    }
-  }, [siteId]);
-
-  useEffect(() => {
-    void fetchMachines();
-  }, [fetchMachines]);
 
   const handleConfirmRestart = async (options: PowerCommandOptions) => {
     if (!restartTarget) return;

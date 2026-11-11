@@ -80,9 +80,9 @@ export async function resolveTalonAuthor(
     );
   }
 
+  let access: SiteAccessLevel;
   try {
-    const access = await verifyUserSiteAccess(db, userId, siteId);
-    return { userId, access };
+    access = await verifyUserSiteAccess(db, userId, siteId);
   } catch (error) {
     if (error instanceof SiteAccessError) {
       const reason = REASON_BY_ACCESS_CODE[error.code];
@@ -95,6 +95,17 @@ export async function resolveTalonAuthor(
     }
     throw error;
   }
+
+  // a scoped author stops the talon, as a removed one does: a talon spans the
+  // site, its hoot output lists every machine (hootOutput.server.ts passes a
+  // whole-site scope), and TALON_MANAGE is site-wide. reassigning re-arms it.
+  if (access.standing.machineIds !== null) {
+    throw new TalonAuthorError(
+      'creator_access_revoked',
+      `Talon ${talon.id} author ${userId} is limited to some machines; a talon needs whole-site standing.`,
+    );
+  }
+  return { userId, access };
 }
 
 /**

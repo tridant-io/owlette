@@ -74,6 +74,8 @@ jest.mock('@/lib/adminUtils.server', () => ({
   getSiteAlertRecipients: jest.fn(async () => mockRecipients),
   getMachineTimezone: jest.fn(async () => 'UTC'),
   getSiteLabel: jest.fn(async (siteId: string) => siteId),
+  // the real mute and machine-scope filter.
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 
 jest.mock('@/lib/resendClient.server', () => ({
@@ -225,7 +227,7 @@ describe('POST /api/agent/alert — connection failure webhook', () => {
     beforeEach(() => {
       mockResendClient = { emails: { send } };
       mockRecipients = [
-        { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [] },
+        { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
       ];
     });
 

@@ -699,6 +699,20 @@ describe('useSwoopSession — how a session ends', () => {
     expect(mints()).toHaveLength(1);
   });
 
+  // the wrapper's 404 for a machine outside the person's scope carries no code:
+  // final on its own sentence, and never read as the machine leaving the site.
+  it('a machine out of scope on the mint is final, and does not say it left the site', async () => {
+    mint = { status: 404, body: { detail: 'machine not found or no access' } };
+    await open();
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('machine not found or no access');
+    expect(swoop.refusal).toBeNull();
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
   it('a plan refusal on the mint is final, and names the plan', async () => {
     mint = {
       status: 402,

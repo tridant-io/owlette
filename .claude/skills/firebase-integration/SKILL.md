@@ -16,10 +16,14 @@ The main paths (`firestore.rules` has every collection):
 ```
 firestore/
 ├── sites/{siteId}/                # name, timezone, owner (legacy), createdAt
-│   ├── members/{uid}/             # THE site-access grant. { uid, role, status, addedAt, addedBy, swoop? }
+│   ├── members/{uid}/             # THE site-access grant. { uid, role, status, addedAt, addedBy, swoop?, machineIds? }
 │   │   # role: 'owner' | 'admin' | 'member'. Written by lib/membership.server.ts and the
 │   │   # ownership transfer (lib/actions/transferSiteOwnership.server.ts).
 │   │   # `swoop` is the person's swoop mode, absent = by role, written only by lib/membership.server.ts.
+│   │   # `machineIds` is the machine scope: absent = whole site; present = only those machines
+│   │   # (1-30, sorted) and nothing site-wide; [] or a non-list = no machines. read it with
+│   │   # parseMachineIds (lib/machineAccess.ts), widen with a field delete, never null or [].
+│   │   # never on an owner row or set by the person on their own row.
 │   │   # `uid` is duplicated as a field so the client can run
 │   │   # collectionGroup('members').where('uid','==',me) — rules cannot prove a doc id.
 │   ├── machines/{machineId}       # ONE doc the agent heartbeats into — these are fields, not subdocs:
@@ -46,7 +50,7 @@ firestore/
 │   # `role` is GLOBAL and grants nothing on a site: only 'superadmin' carries authority.
 │   # `sites[]` is LEGACY: no rule reads it and it grants nothing, but it is still written
 │   # (site create, ownership transfer) and read server-side — alert recipients in
-│   # lib/adminUtils.server.ts still come from it. Never gate access on it.
+│   # lib/adminUtils.server.ts still add it beside the member rows. Never gate access on it.
 │   └── api_keys/{keyId}/          # API key metadata (name, keyHash, keyPrefix, environment, scopes, createdAt, expiresAt, lastUsedAt)
 ├── api_keys/{keyHash}/            # Top-level API key lookup (userId, keyId, environment, scopes, expiresAt) — O(1) resolution
 └── installer_metadata/, system_presets/, chats/, agent_tokens/, agent_refresh_tokens/, device_codes/, ...
@@ -107,6 +111,14 @@ Agent detects crash → firebase_client.send_process_alert()
     to recipients with processAlerts !== false
 ```
 
+Recipients come from `getSiteAlertRecipients` (`lib/adminUtils.server.ts`): the site's active
+member rows, plus the legacy `users.sites[]` array during the transition, plus the owner.
+Each recipient carries its row's `machineIds`, and every sender filters per machine with
+`recipientWantsMachine` (mutes and machine scope together), so a scoped member gets only
+their machines' alerts and no email that names no machine. If the member rows can't be
+read, only the `ADMIN_EMAIL` fallback is mailed: going on without them would mail a scoped
+member about every machine.
+
 `/api/agent/alert` also takes:
 - **Connection failure** (`eventType: 'connection_failure'`): emailed immediately, filtered by `healthAlerts` preference
 - **Display events** (`display_*`) and `exe_missing`, with their own routing and rate limits
@@ -150,13 +162,26 @@ Site access is MEMBERSHIP, resolved from `sites/{siteId}/members/{uid}` — not 
 field; server code still reads them for alert recipients and a few listings, never as a
 grant.
 
-- `canAccessSite(siteId)` — superadmin, or an ACTIVE membership row.
-- `isSiteAdmin(siteId)` — superadmin, or a membership role of `owner` / `admin`.
+- `canAccessSite(siteId)` — superadmin, or an ACTIVE membership row, scoped or not.
+  Because it admits scoped members, it gates only what says nothing about other machines:
+  the site document, `settings/{swoop,display,cortex}`, and the schedule and reboot presets.
+  A new block written with it hands every scoped member the whole collection.
+- `canAccessWholeSite(siteId)` — superadmin, or an active row with no `machineIds`. Every
+  block that spans machines (deployments, roosts, talons, cortex-events, autonomous hoot chats, ...).
+- `canAccessMachine(siteId, machineId)` — superadmin, or an active row that is whole site
+  or lists the machine. Every block under one machine, and site logs by
+  `resource.data.machineId`. Rules are not filters: a list is provable only when the query
+  pins the id (`documentId()` or a `machineId` field, `==` or `in`) to machines in the scope.
+- `isSiteAdmin(siteId)` — superadmin, or a membership role of `owner` / `admin` on a
+  whole-site row. A scoped admin reads neither the audit log nor webhooks.
+- `memberIsWholeSite` / `memberHoldsMachine` (rules 2.12.0) read the member document
+  `isActiveMember` already reads; `memberHoldsMachine` checks `machineIds is list` first,
+  because `in` on a map tests its keys. Call them only behind `isActiveMember`.
 - A GLOBAL `users/{uid}.role == 'admin'` grants **nothing** on a site it holds no row for.
   This is the escalation the per-site-roles migration closed; do not reintroduce it.
 - `isActiveMember` + `siteMemberRole` share one document read, and `isNotDeletedUser` +
-  `isSuperadmin` share another, so the auth path costs 2 document reads.
-  `get(sites/{siteId})` is deliberately absent from it.
+  `isSuperadmin` share another, so the auth path costs 2 document reads, per-machine reads
+  included. `get(sites/{siteId})` is deliberately absent from it.
 - The recursive `match /{path=**}/members/{memberUid}` block is what makes the client's
   `collectionGroup('members')` query legal — a rule nested under `match /sites/{siteId}`
   does not authorize a collection-group query, however permissive.
@@ -167,8 +192,29 @@ collection-group scope, and neither the emulator nor the Admin SDK will tell you
 `scripts/check-membership-read-path.mjs` is the only check that catches it.
 
 Server-side the same decision lives in `lib/sitePolicy.server.ts` (`resolveSiteAccess`), with
-the capability matrix in `lib/capabilities.ts` keyed on the PER-SITE role.
+the capability matrix in `lib/capabilities.ts` keyed on the PER-SITE role. Machine scope
+(ADR 0016) rides along:
 
-Deployments: any site member can read; only the server (`isServiceAccount()`) creates, updates or deletes. Webhook docs are site-admin read only.
+- `resolveSiteAccess`'s facts carry `machineIds` (`deriveMachineIds`, through
+  `parseMachineIds` in `lib/machineAccess.ts`, the one reading of the field). `standingOf(facts)`
+  and `memberStanding(row)` turn facts or a raw row into a `MemberStanding`.
+- `siteStanding(pairs)` is the one builder of an actor's per-site maps: `siteRoles`,
+  `swoopModes` and `machineScopes`, with an entry for every site in `siteRoles` (null = whole
+  site). `machineScopeOf` reads a missing entry as no machines, so a builder that skips
+  `siteStanding` fails closed.
+- `hasCapability(actor, capability, siteId, machineId?)` checks the role matrix, then the
+  swoop mode, then the scope: a scoped actor holds only `MACHINE_CAPABILITIES` (MACHINE_VIEW,
+  MACHINE_REMOTE_VIEW, MACHINE_EXEC_COMMAND, MACHINE_REMOTE_CONTROL, MACHINE_CONFIG_WRITE), and
+  only on a machine in scope. No machineId denies a scoped actor.
+- The wrapper (`authorizedSiteHandler`) has a scope step after the actor is built and before
+  `securityConfig.read()`, so `capability_enforcement=false` never widens a scope. It reads
+  `params.machineId`: off the scope, 404 'machine not found or no access' (audited
+  `machine_out_of_scope`); a route with no machineId, or a site-wide capability, gets the
+  capability refusal, 403 (audited `machine_scope_site_wide`).
+- The `_shared` gates: `requireSiteAuthAndScope` refuses a scoped caller unless the route
+  passes `{ machineScope: 'admit' }` and filters itself; `requireSiteMachineAuthAndScope` and
+  `requireMachineAuthAndScope` answer 404 off the scope.
+
+Deployments: any whole-site member can read; only the server (`isServiceAccount()`) creates, updates or deletes. Webhook docs are site-admin read only.
 
 Rules file: `firestore.rules` (version managed independently from product version). Its tests: `cd web && npm run test:rules`.

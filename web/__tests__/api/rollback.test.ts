@@ -150,7 +150,7 @@ function authedAsOperator() {
       ],
     },
   });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 function authedAsReadOnly() {
@@ -166,7 +166,7 @@ function authedAsReadOnly() {
       scopes: [{ resource: 'roost', id: '*', permissions: ['read'] }],
     },
   });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
 }
 
 async function rollback(body: Record<string, unknown>): Promise<{

@@ -12,15 +12,23 @@ import { Card } from '@/components/ui/card';
 interface NoSitesEmptyStateProps {
   /** Completes "you need site access to …", e.g. "manage roosts". */
   action: string;
+  /**
+   * the caller has sites, but is limited to some machines on each
+   * (`limitedOnly` from `useCurrentSite`), and this page spans the site.
+   */
+  limited?: boolean;
 }
 
-export function NoSitesEmptyState({ action }: NoSitesEmptyStateProps) {
+export function NoSitesEmptyState({ action, limited = false }: NoSitesEmptyStateProps) {
   return (
     <Card className="border-border bg-card/50 p-8 text-center">
-      <p className="text-sm text-foreground">no sites available</p>
+      <p className="text-sm text-foreground">
+        {limited ? 'this page needs whole-site access' : 'no sites available'}
+      </p>
       <p className="mt-1 text-xs text-muted-foreground">
-        you need site access to {action}. create a site from the dashboard, or ask a
-        site admin to add you.
+        {limited
+          ? `you reach only some machines on your sites. ask a site admin if you need to ${action}.`
+          : `you need site access to ${action}. create a site from the dashboard, or ask a site admin to add you.`}
       </p>
     </Card>
   );

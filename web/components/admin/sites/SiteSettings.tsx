@@ -31,7 +31,7 @@ export function SiteSettings({
   onSectionChange: (next: SiteSection) => void;
   onDeleted: (administersAnotherSite: boolean) => void;
 }) {
-  const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner } = useAuth();
+  const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope } = useAuth();
   const { sites, loading, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
   // a delete's cascade drops the site from `sites`, and the caller's row on it,
   // before the request answers: the site is held till then, so its confirm dialog stays up
@@ -71,7 +71,10 @@ export function SiteSettings({
       <div>
         {title}
         <p className="mt-2 text-sm text-muted-foreground wrap-anywhere">
-          {`you're a member of ${site.name}. ask its owner or an admin to change its settings.`}
+          {/* "you're a member" would be wrong for a scoped admin: the scope keeps them out, not the role */}
+          {machineScope(site.id) !== null
+            ? `your access to ${site.name} is limited to some machines, and its settings need the whole site. ask its owner or an admin.`
+            : `you're a member of ${site.name}. ask its owner or an admin to change its settings.`}
         </p>
       </div>
     );

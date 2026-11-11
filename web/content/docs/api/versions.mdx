@@ -14,18 +14,18 @@ the examples use `$OWLETTE_API_URL` (`https://owlette.app`), `$OWLETTE_API_KEY`,
 
 ## authentication and scopes
 
-send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also works). routes under `/api/roosts/{roostId}` are authorized against the roost, so the key needs a `roost=<roostId>` scope (or `roost=*`) with the permission below; listing and creating roosts are authorized against the site instead. every route also needs membership of the site, and every route that changes something needs the site admin or owner role.
+send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also works). routes under `/api/roosts/{roostId}` are authorized against the roost, so the key needs a `roost=<roostId>` scope (or `roost=*`) with the permission below; listing and creating roosts are authorized against the site instead. every route also needs whole-site membership of the site, and every route that changes something needs the site admin or owner role.
 
 | route | API-key scope | role |
 |---|---|---|
-| `GET /api/roosts` | `site=<siteId>:read` | member |
+| `GET /api/roosts` | `site=<siteId>:read` | whole-site member |
 | `POST /api/roosts` | `site=<siteId>:write` | admin or owner |
-| `GET` on `/api/roosts/{roostId}`, `/versions`, `/versions/{versionRef}`, `/files`, `/diff`, `/deployments`, `/deployments/{rolloutId}` | `roost=<roostId>:read` | member |
+| `GET` on `/api/roosts/{roostId}`, `/versions`, `/versions/{versionRef}`, `/files`, `/diff`, `/deployments`, `/deployments/{rolloutId}` | `roost=<roostId>:read` | whole-site member |
 | `PATCH` or `DELETE /api/roosts/{roostId}`, `POST /versions`, `PATCH /versions/{versionRef}` | `roost=<roostId>:write` | admin or owner |
 | `POST /api/roosts/{roostId}/rollback` | `roost=<roostId>:rollback` | admin or owner |
 | `POST /api/roosts/{roostId}/deploy`, `POST /api/roosts/{roostId}/resync` | `roost=<roostId>:deploy` | admin or owner |
 
-a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). permissions are exact: `rollback` and `deploy` do not include `write`, and none of them include `read`. see [authentication](/docs/api/authentication).
+a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). a roost spans the site's machines, so a member whose access is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403 forbidden` on every route here, reads included, whatever their role. permissions are exact: `rollback` and `deploy` do not include `write`, and none of them include `read`. see [authentication](/docs/api/authentication).
 
 every route also accepts the optional `Roost-Version: 2026-04-22` header. leave it out and the response carries `X-Roost-Version-Missing: true`; send an unsupported date and you get `400 unsupported_version`.
 

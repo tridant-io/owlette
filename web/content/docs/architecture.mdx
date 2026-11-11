@@ -106,7 +106,7 @@ the dashboard is a Next.js 16 application on Railway, with a failover origin beh
 - **manages processes**: add, edit, remove, start, stop, kill
 - **deploys software**: pushes installers to machines with progress tracking
 - **publishes roost versions**: content-addressed project sync through R2 chunks, immutable version history, resync and rollback
-- **manages access**: per-site roles and capabilities; see the [admin panel](/docs/dashboard/admin)
+- **manages access**: per-site roles and capabilities, each membership the whole site or limited to some of its machines; see the [admin panel](/docs/dashboard/admin)
 - **runs swoop sessions**: the viewer, and the routes that authorise and lease each session
 - **provides hoot**: an AI chat for machine interaction, plus autonomous crash investigation
 
@@ -347,13 +347,14 @@ see the [authentication reference](/docs/reference/authentication) for the compl
 
 ### site-based access control
 
-all data is scoped to **sites**, and what a person may do on a site is decided by their role on that site, held in `sites/{siteId}/members/{uid}`. their account-level role grants nothing on a site.
+all data is scoped to **sites**, and what a person may do on a site is decided by their role on that site and the machines it covers, held in `sites/{siteId}/members/{uid}`. their account-level role grants nothing on a site.
 
 | who | access |
 |------|--------|
 | **member** | read access to the site: machines, screenshots, live view, watching swoop |
 | **admin** | a member's access plus writes: commands, configuration, deployments, roosts, swoop control and settings, membership |
 | **owner** | an admin's access plus deleting the site and transferring ownership. one per site |
+| **scoped member** | a member or admin whose row lists `machineIds`, 1 to 30 machines: their role on those machines only, and nothing that spans the site. see [machine scope](/docs/dashboard/admin/member-management#machine-scope) |
 | **superadmin** | every site and the platform-level operations, without member rows |
 | **agent** | a single site and a single machine, from its token's claims |
 
@@ -364,8 +365,9 @@ the full capability list is in the [admin panel](/docs/dashboard/admin#capabilit
 rules enforce access at the database level, so no client can bypass them:
 
 - users must be authenticated, and a deleted user is refused immediately
-- site access is checked through `canAccessSite(siteId)`: a superadmin, or an active member row for that site
-- site-level elevated operations are checked through `isSiteAdmin(siteId)`: an owner or admin member row, or a superadmin
+- site access is checked through `canAccessSite(siteId)`: a superadmin, or an active member row for that site, scoped or not
+- a machine's data is checked through `canAccessMachine(siteId, machineId)`, and data that spans the site through `canAccessWholeSite(siteId)`, so a scoped member reads only their machines
+- site-level elevated operations are checked through `isSiteAdmin(siteId)`: an owner or admin member row with the whole site, or a superadmin
 - platform-wide operations are checked through `isSuperadmin()`
 - agents are scoped by the `site_id` and `machine_id` claims in their custom token, through `agentCanAccessMachine(siteId, machineId)`
 - the token collections (`agent_tokens`, `agent_refresh_tokens`) are server-side only
