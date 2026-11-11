@@ -849,6 +849,76 @@ impl Denials {
     }
 }
 
+/// §5's `mute` is one viewer's, and the machine has one audio capture for all
+/// of them. The page starts muted and says nothing until its first toggle, so
+/// a viewer is known to listen only once it has sent `mute` off. Until the
+/// session's first `mute` the machine is audible, as it always was; after it,
+/// only while a viewer in the session is listening.
+#[derive(Debug, Default)]
+pub struct MuteVotes {
+    listening: std::collections::BTreeSet<String>,
+    voted: bool,
+    quiet: bool,
+}
+
+impl MuteVotes {
+    /// This viewer's own `mute`. `Some` with the session's state when it moved.
+    pub fn vote(&mut self, viewer: &str, on: bool, present: &[String]) -> Option<bool> {
+        self.voted = true;
+        if on {
+            self.listening.remove(viewer);
+        } else {
+            self.listening.insert(viewer.to_owned());
+        }
+        self.settle(present)
+    }
+
+    /// After a join or a departure, with the viewers now in the session. One
+    /// that left takes its vote with it.
+    pub fn settle(&mut self, present: &[String]) -> Option<bool> {
+        self.listening.retain(|viewer| present.contains(viewer));
+        let quiet = self.voted && self.listening.is_empty();
+        (quiet != self.quiet).then(|| {
+            self.quiet = quiet;
+            quiet
+        })
+    }
+}
+
+/// The one ctrl+alt+del with the service. One at a time, because the service
+/// answers in order and a second would take the first one's answer.
+///
+/// The service can skip an answer (a sid it does not recognise, a pipe write
+/// that failed), so the slot has a deadline: without one, a lost answer left
+/// every later ctrl+alt+del refused for the rest of the session.
+#[derive(Debug, Default)]
+pub struct SasSlot {
+    pending: Option<(&'static str, String, Instant)>,
+}
+
+impl SasSlot {
+    /// How long one request holds the slot: `securedesk`'s own wait before it
+    /// asks again, so its next ask finds the slot free.
+    pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// `true` when this request is the one in flight now, and the service is
+    /// owed a `sas_request` for it.
+    pub fn ask(&mut self, feature: &'static str, viewer: &str, now: Instant) -> bool {
+        if let Some((_, _, asked)) = self.pending {
+            if now.duration_since(asked) < Self::ANSWER_TIMEOUT {
+                return false;
+            }
+        }
+        self.pending = Some((feature, viewer.to_owned(), now));
+        true
+    }
+
+    /// The feature and viewer the service's answer belongs to.
+    pub fn answer(&mut self) -> Option<(&'static str, String)> {
+        self.pending.take().map(|(feature, viewer, _)| (feature, viewer))
+    }
+}
+
 /// Capture runs only while somebody is watching.
 ///
 /// §6 keeps the process alive for the linger after the last viewer leaves, but
@@ -1043,7 +1113,8 @@ mod host {
     use super::{
         codec_wire_name, feature_room, feeds, limits_for, moved, pick_codec, settles, tier_encodes,
         tiers, CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
-        Joining, Outbox, RateGate, SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
+        Joining, MuteVotes, Outbox, RateGate, SasSlot, SessionHandle, TierEncode, ViewerRate,
+        HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
@@ -1753,9 +1824,10 @@ mod host {
             window: Window::new(w.started),
             encoder: None,
             display: 0,
-            sas_pending: None,
+            sas: SasSlot::default(),
             sas_viewer: None,
             control_viewer: None,
+            mutes: MuteVotes::default(),
             test_override: describe_override(bundle),
             features: Vec::new(),
             outbox: Outbox::new(w.started),
@@ -1904,7 +1976,7 @@ mod host {
         /// The feature whose [`FeatureRequest::Sas`] is outstanding, by name,
         /// and the viewer it was asked for. `sas_result` goes to that feature
         /// and to nothing else, and §5's `sas-result` to that viewer alone.
-        sas_pending: Option<(&'static str, String)>,
+        sas: SasSlot,
         /// The controller whose `sas` passed the gate last. Recorded at the
         /// gate, not taken from `control_viewer`: the feature raises its
         /// request a turn later, after anyone's swoop-control traffic.
@@ -1914,10 +1986,11 @@ mod host {
         /// this is how a [`FeatureRequest`] raised from inside one — a
         /// `sas_request`, a clipboard audit row — names the viewer behind it.
         control_viewer: Option<String>,
+        /// Every viewer's own `mute`. The features are told the session's,
+        /// never one viewer's.
+        mutes: MuteVotes,
         /// The bundle's test-only `overrides`, named on every `status`. Always
-        /// `None` on a release build, and on a `testhooks` build until the
-        /// override backends exist (Tasks 7.2 and 8.7) — `drive` refuses a
-        /// bundle that names one until then, so the session never starts.
+        /// `None` on a release build, which refuses a bundle carrying one.
         test_override: Option<String>,
         features: Vec<Box<dyn Feature>>,
         /// What the features produced this turn, bounded and paced so a
@@ -2268,7 +2341,7 @@ mod host {
         }
 
         fn on_admitted(&mut self, viewer: String, ctl: bool) {
-            let present: Vec<String> = self.viewers.iter().map(|v| v.id.clone()).collect();
+            let present = self.viewer_ids();
             match super::on_join(&viewer, &present, self.encoder_budget) {
                 // A re-offer after an ice restart is admitted again by the room
                 // and is not a second viewer.
@@ -2295,6 +2368,7 @@ mod host {
             // no setter for one — only `Roster::verify` over a verified token.
             self.roster.join(&viewer);
             self.viewers.push(Viewer::new(viewer.clone(), auto_bitrate_bps(self.source)));
+            self.settle_mute();
             let ready = self.client.host_ready(Some(&viewer));
             self.send(&ready);
             self.publish_roster();
@@ -2470,7 +2544,7 @@ mod host {
                 .as_mut()
                 .expect("just bound")
                 .dtls_fingerprint();
-            if let Err(e) = self.client.set_host_fingerprint(&fingerprint) {
+            if let Err(e) = self.client.set_host_fingerprint(&viewer, &fingerprint) {
                 ::log::error!("swoop: local dtls fingerprint unusable: {e}");
                 return false;
             }
@@ -2503,6 +2577,7 @@ mod host {
             }
             self.roster.leave(viewer);
             self.denials.forget(viewer);
+            self.settle_mute();
             // A feature's next request must not be attributed to the viewer that
             // just left.
             if self.control_viewer.as_deref() == Some(viewer) {
@@ -2817,8 +2892,9 @@ mod host {
                 if changed {
                     header.flags |= flags::RESOLUTION_CHANGED;
                 }
-                // Sets IRAP on any frame-id gap: a gap without it *is* the
-                // dangling reference §4 forbids.
+                // Never IRAP on a frame-id gap: §4 has the receiver drop to the
+                // next recovery point, and a delta stamped IRAP is a chunk whose
+                // references the decoder never had.
                 v.sequencer.prepare(&mut header);
                 let record = header.encode();
                 if let Some(peer) = v.peer.as_mut() {
@@ -3080,30 +3156,29 @@ mod host {
                 }
             }
             for (name, request) in asked {
-                self.on_request(name, request);
+                self.on_request(name, request, now);
             }
         }
 
         /// One [`FeatureRequest`], acted on by the only thread that holds the
         /// worker channels. Every hand-off is a `try_send`: a capture thread
         /// inside a ten-second re-duplication must never hold the loop up.
-        fn on_request(&mut self, feature: &'static str, request: FeatureRequest) {
+        fn on_request(&mut self, feature: &'static str, request: FeatureRequest, now: Instant) {
             match request {
                 FeatureRequest::Sas => {
                     // §6's `sas_request` names a viewer, and there is no
                     // ctrl+alt+del without a controller still here to have
-                    // asked for it. One in flight: the service answers in
-                    // order, so a second would take the first one's answer.
+                    // asked for it.
                     let asker = self.sas_viewer.take().filter(|viewer| {
                         self.is_viewer(viewer) && self.roster.control_granted(viewer)
                     });
-                    let (Some(viewer), None) = (asker, &self.sas_pending) else {
+                    let Some(viewer) = asker.filter(|viewer| self.sas.ask(feature, viewer, now))
+                    else {
                         // answered, so the feature is not left waiting on a
                         // request that was never sent
                         self.route_sas_result(feature, false);
                         return;
                     };
-                    self.sas_pending = Some((feature, viewer.clone()));
                     let event = Event::SasRequest {
                         sid: self.sid.clone(),
                         viewer,
@@ -3142,7 +3217,7 @@ mod host {
         /// The service's answer to a `sas_request`, routed to the feature that
         /// asked and to nothing else.
         fn on_sas_result(&mut self, ok: bool) {
-            let Some((name, viewer)) = self.sas_pending.take() else {
+            let Some((name, viewer)) = self.sas.answer() else {
                 ::log::warn!("swoop: unexpected sas_result ok={ok}");
                 return;
             };
@@ -3172,6 +3247,10 @@ mod host {
             if channel == Channel::SwoopControl {
                 self.control_viewer = Some(viewer.to_owned());
             }
+            self.offer(channel, ctl, data);
+        }
+
+        fn offer(&mut self, channel: Channel, ctl: bool, data: &[u8]) {
             for feature in self.features.iter_mut() {
                 if let Err(e) = feature.on_message(channel, ctl, data) {
                     ::log::warn!(
@@ -3179,6 +3258,28 @@ mod host {
                         feature.name()
                     );
                 }
+            }
+        }
+
+        /// The session's `mute`, as the one `audio` reads. Nobody's message,
+        /// so no viewer is named and nothing gated rides on it.
+        fn tell_features_mute(&mut self, on: bool) {
+            match serde_json::to_vec(&ControlMessage::Mute { on }) {
+                Ok(payload) => self.offer(Channel::SwoopControl, false, &payload),
+                Err(e) => ::log::error!("swoop: could not encode mute: {e}"),
+            }
+        }
+
+        fn viewer_ids(&self) -> Vec<String> {
+            self.viewers.iter().map(|v| v.id.clone()).collect()
+        }
+
+        /// After a join or a departure: a viewer that left takes its `mute`
+        /// with it, and a newcomer's page starts muted.
+        fn settle_mute(&mut self) {
+            let present = self.viewer_ids();
+            if let Some(quiet) = self.mutes.settle(&present) {
+                self.tell_features_mute(quiet);
             }
         }
 
@@ -3313,35 +3414,46 @@ mod host {
         }
 
         fn on_channel_data(&mut self, viewer: &str, ch: Channel, binary: bool, data: &[u8]) {
-            match ch {
+            let to_features = match ch {
                 Channel::SwoopControl if !binary => self.on_control(viewer, data),
-                Channel::SwoopInput if !binary => self.on_input(viewer, data),
-                Channel::SwoopFeedback if !binary => self.on_feedback(viewer, data),
+                Channel::SwoopInput if !binary => {
+                    self.on_input(viewer, data);
+                    true
+                }
+                Channel::SwoopFeedback if !binary => {
+                    self.on_feedback(viewer, data);
+                    true
+                }
                 // Host → viewer channels, and §3's channels are text.
                 _ => {
                     ::log::warn!("swoop: unexpected data on {ch:?} (binary {binary})");
                     return;
                 }
+            };
+            if to_features {
+                self.offer_to_features(viewer, ch, data);
             }
-            self.offer_to_features(viewer, ch, data);
         }
 
-        fn on_control(&mut self, viewer: &str, data: &[u8]) {
+        /// `false` when the features must not be offered this payload as it
+        /// came: a `mute`, which reaches them as the session's own, and any
+        /// control message from a viewer the session no longer holds.
+        fn on_control(&mut self, viewer: &str, data: &[u8]) -> bool {
             let Ok(message) = serde_json::from_slice::<ControlMessage>(data) else {
                 // Not a malformation: §5 shares this channel with the
                 // clipboard, so a payload the control codec refuses is the
                 // expected shape of a clip frame. `offer_to_features` still
                 // gets it.
                 ::log::debug!("swoop: a swoop-control payload is not a control message");
-                return;
+                return true;
             };
             if !self.is_viewer(viewer) {
-                return;
+                return false;
             }
             // The roster's verdict, from the token this host verified itself.
             if message.requires_control() && !self.roster.control_granted(viewer) {
                 self.deny(viewer, "gated_control");
-                return;
+                return true;
             }
             match message {
                 // §8's viewer token has no field on `offer`, so both ends put
@@ -3418,7 +3530,7 @@ mod host {
                         auto_bitrate_bps(self.source),
                     );
                     let Some(v) = self.viewer_mut(viewer) else {
-                        return;
+                        return true;
                     };
                     v.governor.set_ceiling(ceiling);
                     let target = v.governor.target_bps();
@@ -3437,7 +3549,15 @@ mod host {
                 ControlMessage::Display { index } => {
                     ::log::info!("swoop: display {index} requested (task 6.4)")
                 }
-                ControlMessage::Mute { .. } => {}
+                // This viewer's own: the machine stays audible while another
+                // viewer in the session is listening.
+                ControlMessage::Mute { on } => {
+                    let present = self.viewer_ids();
+                    if let Some(quiet) = self.mutes.vote(viewer, on, &present) {
+                        self.tell_features_mute(quiet);
+                    }
+                    return false;
+                }
                 // Host → viewer types, which a viewer may not send.
                 ControlMessage::HelloHost { .. }
                 | ControlMessage::SasResult { .. }
@@ -3446,6 +3566,7 @@ mod host {
                     ::log::warn!("swoop: viewer sent a host-only control message")
                 }
             }
+            true
         }
 
         /// One §5 input message from one viewer.
@@ -6419,6 +6540,52 @@ mod tests {
         denials.forget("viewer_a");
         assert!(denials.note("viewer_a"));
         assert!(!denials.note("viewer_b"));
+    }
+
+    /// One viewer muting its own tab must not silence the machine for another
+    /// that is listening. The page starts muted and says so only on its first
+    /// toggle, so a viewer that never sent `mute` is not a listener to wait for.
+    #[test]
+    fn one_viewers_mute_does_not_silence_another_that_is_listening() {
+        let mut mutes = MuteVotes::default();
+        let two = ["viewer_a".to_owned(), "viewer_b".to_owned()];
+        // audible until the session's first `mute`, as before.
+        assert_eq!(mutes.settle(&two), None);
+        assert_eq!(mutes.vote("viewer_a", false, &two), None, "already audible");
+        assert_eq!(mutes.vote("viewer_b", false, &two), None);
+        assert_eq!(mutes.vote("viewer_b", true, &two), None, "a is still listening");
+        assert_eq!(mutes.vote("viewer_a", true, &two), Some(true));
+        assert_eq!(mutes.vote("viewer_b", false, &two), Some(false));
+        assert_eq!(mutes.vote("viewer_b", true, &two), Some(true));
+
+        // a newcomer's page starts muted, so it does not turn the audio back on
+        let three = [two[0].clone(), two[1].clone(), "viewer_c".to_owned()];
+        assert_eq!(mutes.settle(&three), None);
+        // until it un-mutes, and its departure takes that with it.
+        assert_eq!(mutes.vote("viewer_c", false, &three), Some(false));
+        assert_eq!(mutes.settle(&two), Some(true));
+
+        // a viewer that only watches never holds the machine audible.
+        assert_eq!(mutes.vote("viewer_a", false, &two), Some(false));
+        assert_eq!(mutes.vote("viewer_a", true, &two), Some(true));
+        assert_eq!(mutes.settle(&[]), None);
+    }
+
+    /// One ctrl+alt+del at a time, and an answer that never comes costs the
+    /// click that lost it, not every click after it for the rest of the session.
+    #[test]
+    fn a_lost_sas_answer_costs_one_click() {
+        let t0 = Instant::now();
+        let mut sas = SasSlot::default();
+        assert!(sas.ask("securedesk", "viewer_a", t0));
+        assert!(
+            !sas.ask("securedesk", "viewer_a", t0 + Duration::from_secs(1)),
+            "the first is still with the service"
+        );
+        // `securedesk` asks again once its own wait is over.
+        assert!(sas.ask("securedesk", "viewer_a", t0 + SasSlot::ANSWER_TIMEOUT));
+        assert_eq!(sas.answer(), Some(("securedesk", "viewer_a".to_owned())));
+        assert_eq!(sas.answer(), None, "one answer per request");
     }
 
     /// §6 keeps the process alive for the linger after the last viewer leaves,

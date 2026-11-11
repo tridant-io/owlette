@@ -324,6 +324,26 @@ describe('POST /api/agent/auth/refresh — rotation', () => {
     expect(tokenStore.has(hashOf('t0'))).toBe(true); // in-grace grandparent kept
   });
 
+  it('two holders that both rotate one token inside its grace both keep a working token', async () => {
+    seedToken('t0');
+
+    // The service and local hoot share one credential: each presents t0
+    // before the other has saved its rotated token.
+    const a = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    const b = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    expect(a).not.toBe(b);
+
+    // t0's grace ends.
+    const t0 = tokenStore.get(hashOf('t0'))!;
+    t0.retiresAt = Date.now() - 1;
+    tokenStore.set(hashOf('t0'), t0);
+
+    // Whichever token the shared store kept still refreshes, so neither
+    // holder is 401'd into wiping the machine's credentials.
+    expect((await refreshPOST(refreshReq(a))).status).toBe(200);
+    expect((await refreshPOST(refreshReq(b))).status).toBe(200);
+  });
+
   it('machine_id_mismatch when refresh token machineId differs from claim', async () => {
     seedToken('bound-to-m1', 'm-1');
     const res = await refreshPOST(refreshReq('bound-to-m1', 'm-attacker'));

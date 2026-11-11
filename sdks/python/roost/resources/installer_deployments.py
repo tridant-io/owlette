@@ -276,12 +276,18 @@ class InstallerDeployments:
         site_id: str,
         deployment_id: str,
         *,
+        software_name: str,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        """Uninstall a program from every finished target that lists it.
+
+        ``software_name`` is the program's exact name in the machines' software
+        list. Targets not queued come back in ``skipped``, each with a ``reason``.
+        """
         resp = await self._client.request(
             f"/api/sites/{site_id}/deployments/{deployment_id}/uninstall",
             method="POST",
-            body={},
+            body={"software_name": software_name},
             idempotency_key=idempotency_key,
         )
         return resp.data if isinstance(resp.data, dict) else {}

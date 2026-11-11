@@ -416,8 +416,14 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
     seedMachine(MACHINE, {
       name: 'Lobby Player',
       hostname: 'lobby-host',
-      metrics: { cpu: 0.4 },
-      processes: [{ id: 'proc-1', name: 'Player' }],
+      // the heartbeat writes processes as a map under metrics, keyed by process id
+      metrics: {
+        cpu: 0.4,
+        processes: {
+          'proc-2': { name: 'Watchdog', status: 'STOPPED', pid: null, index: 1 },
+          'proc-1': { name: 'Player', status: 'RUNNING', pid: 4242, index: 0 },
+        },
+      },
       osFamily: 'macos',
       arch: 'arm64',
       osVersion: 'macOS 26.6',
@@ -440,7 +446,11 @@ describe('GET /api/sites/{siteId}/machines/{machineId}', () => {
       arch: 'arm64',
       osVersion: 'macOS 26.6',
     });
-    expect(body.processes).toHaveLength(1);
+    // in config order, the shape `owlette machine get` prints
+    expect(body.processes).toEqual([
+      { processId: 'proc-1', name: 'Player', status: 'RUNNING', pid: 4242, index: 0 },
+      { processId: 'proc-2', name: 'Watchdog', status: 'STOPPED', pid: null, index: 1 },
+    ]);
   });
 });
 

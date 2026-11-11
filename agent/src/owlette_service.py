@@ -206,6 +206,16 @@ REBOOT_SUCCESS_DETECTION_WINDOW_SECONDS = 60 * 60
 _CRASH_LOOP_QUEUED_BY = 'system:crash_loop'
 
 
+def _seconds(value, default):
+    """A typed config value as seconds, or `default` unless it is a finite,
+    non-negative number. Read at every launch, where a raise ends the main loop."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    return seconds if 0 <= seconds < float('inf') else default
+
+
 def _inside_active_hours():
     """`(window, now)` while this Windows machine is inside its active hours,
     else None.
@@ -2656,8 +2666,16 @@ class OwletteService:
 
     def _try_launch_cortex(self):
         """Launch the Cortex process with cooldown. Mirrors _try_launch_tray() pattern.
-        Returns True if launched (or already running), False if skipped/failed."""
-        if not shared_utils.is_cortex_enabled():
+        Returns True if launched (or already running), False if skipped/failed.
+
+        Off Windows it first brings the access token hoot reads into step, so a
+        launch always finds one and a switched-off or unpaired machine loses it.
+        """
+        config = shared_utils.read_config() or {}
+        enabled = shared_utils.is_cortex_enabled(config)
+        paired = bool(config.get('firebase', {}).get('enabled'))
+        self._publish_cortex_token(enabled and paired)
+        if not enabled:
             return False
 
         if self._is_cortex_alive():
@@ -2683,6 +2701,34 @@ class OwletteService:
                 self._cortex_last_launch_time = now
             logging.debug("Could not launch Cortex (no user session?)")
             return False
+
+    def _publish_cortex_token(self, wanted):
+        """Off Windows, keep the access token hoot reads in step with the daemon's.
+
+        hoot runs as the console user and the token store is the daemon's alone
+        there, so the daemon hands it the one-hour access token: written when it
+        changes, withdrawn when hoot is off or the machine is unpaired.
+        """
+        if sys.platform == 'win32':
+            return
+        import auth_manager
+
+        manager = getattr(self.firebase_client, 'auth_manager', None) if wanted else None
+        current = manager.current_token() if manager else (None, None)
+        if current == self._cortex_token_published:
+            return
+        try:
+            if current[0]:
+                auth_manager.publish_token(*current)
+            else:
+                auth_manager.withdraw_token()
+            self._cortex_token_published = current
+            self._cortex_token_error = None
+        except OSError as e:
+            # retried on every tick, said once per cause
+            if str(e) != self._cortex_token_error:
+                self._cortex_token_error = str(e)
+                logging.warning(f"Could not update hoot's access token: {e}")
 
     def _process_cortex_ipc_commands(self):
         """Hand any pending Cortex IPC commands to the drain worker.
@@ -4562,9 +4608,9 @@ class OwletteService:
 
         if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
-            delay = float(process.get('time_delay', 0))
+            delay = _seconds(process.get('time_delay'), 0)
 
-            time_to_init = float(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id))
+            time_to_init = _seconds(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id), 0)
 
             last_info = self.last_started.get(process_list_id, {})
             last_time = last_info.get('time')
@@ -4750,7 +4796,7 @@ class OwletteService:
                 # (TouchDesigner) being double-launched before psutil sees them.
                 last_time = last_info.get('time')
                 if last_time:
-                    time_to_init = max(float(process.get('time_to_init', 0) or TIME_TO_INIT), 60.0)
+                    time_to_init = max(_seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT), 60.0)
                     elapsed = (self.current_time - last_time).total_seconds()
                     if elapsed < time_to_init:
                         return  # Still cooling down, skip this cycle
@@ -4759,7 +4805,7 @@ class OwletteService:
                 # an adopted pid never passed through _record_launch.
                 osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
-                time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
+                time_to_init = _seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
                     shared_utils.update_process_status_in_json(last_pid, 'LAUNCHING', self.firebase_client, process_id=process_list_id)
                     new_pid = None
@@ -5981,7 +6027,7 @@ class OwletteService:
                         logging.debug(f"Auto-derived verify_path from /DIR: {verify_path}")
 
                 logging.info(f"Starting software installation: {installer_name}")
-                logging.debug(f"URL: {installer_url}")
+                logging.debug(f"URL: {installer_utils.redact_query_strings(installer_url)}")
                 logging.debug(f"Flags: {silent_flags}")
                 logging.debug(f"Timeout: {timeout_seconds} seconds")
                 if expected_sha256:
@@ -8784,7 +8830,7 @@ class OwletteService:
         logging.info(f"Current version: {shared_utils.APP_VERSION}")
         logging.info(f"Target version: {target_version}")
         logging.info("="*60)
-        logging.debug(f"Installer URL: {installer_url}")
+        logging.debug(f"Installer URL: {installer_utils.redact_query_strings(installer_url)}")
         logging.debug(f"Checksum: {expected_sha256[:16]}...")
 
         os_family = shared_utils.get_os_family_arch()[0]
@@ -9591,6 +9637,10 @@ class OwletteService:
         # Cortex (local AI agent) launch tracking
         self._cortex_last_launch_time = 0
         self._cortex_launch_cooldown = 30
+        # off windows: the (token, expiry) last published for hoot, empty so the
+        # first tick acts and withdraws a stale one, and the last write failure
+        self._cortex_token_published = ()
+        self._cortex_token_error = None
 
         # Before Firebase init, which can take seconds — the user needs immediate
         # feedback that the service is starting.

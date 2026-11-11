@@ -408,6 +408,27 @@ test('the row toggle disables and re-enables the talon', async ({ page }) => {
   expect((await readTalon(CRASH_PAGE_ID))?.enabled).toBe(true);
 });
 
+test('switching a talon back on after repeated failures gives it its tries back', async ({ page }) => {
+  await seedTalons();
+  await getAdminDb()
+    .collection('sites').doc(SITE_ID)
+    .collection('talons').doc(CRASH_PAGE_ID)
+    .update({ enabled: false, disabledReason: 'repeated_failures', consecutiveFailures: 10 });
+  await gotoTalons(page);
+
+  const crash = rowByName(page, CRASH_PAGE_NAME);
+  await expect(crash.getByTitle('10 consecutive failures')).toBeVisible();
+  await expect(crash.getByTestId('talon-disabled-reason')).toBeVisible();
+
+  await crash.getByTestId('talon-toggle').click();
+  // the dot flips off the live snapshot, so seeing it proves the write landed
+  await expect(crash.getByRole('img', { name: 'enabled' })).toBeVisible();
+  await expect(crash.getByTitle('10 consecutive failures')).toHaveCount(0);
+  const talon = await readTalon(CRASH_PAGE_ID);
+  expect(talon?.consecutiveFailures).toBe(0);
+  expect(talon?.disabledReason).toBeUndefined();
+});
+
 test('the empty state sits where the list did, without pushing the page down', async ({ page }) => {
   await seedTalons();
   await gotoTalons(page);

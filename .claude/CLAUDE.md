@@ -31,6 +31,8 @@ Owlette is a cloud-connected process management and remote deployment system for
 
 **Workflow:**
 - **Don't push to `main` directly** — all work through `dev`, then PR
+- **A fix for a live security hole stays off GitHub until its ship day.** The repo is public and dev.owlette.app serves its changelog, so a branch name, PR, commit message, changelog line or installer that describes the hole publishes it. Work in a local worktree, push nothing, and tell the owner.
+- **Keep the main checkout on `dev`, fast-forward only; branch work goes in a worktree.** Every session on this machine starts in the main checkout and takes its CLAUDE.md, skills and hooks from whatever branch is checked out there, so a branch switch changes the rules for all of them.
 - **Don't create new `docs/*.md` files** without being asked, except an ADR in `docs/adr/` for a decision that is hard to reverse, surprising without context, and the result of a real trade-off (one paragraph; format in `docs/adr/0001-*`)
 - **Don't install new npm/pip packages** without confirming first
 - **Don't modify `.claude/hooks/` or `.claude/settings.json`** without explicit request
@@ -83,7 +85,7 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 
 **Two-Branch Model**: `dev` (deploys to dev.owlette.app) → `main` (deploys to owlette.app)
 
-**Commit Messages**: Conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`)
+**Commit Messages**: Conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, and `release: X.Y.Z` for the version bump)
 
 **Pre-Commit Code Review**: Before every commit, perform a thorough code review of all staged changes. Every line must meet production quality standards — no duct-tape fixes, no "good enough for now" shortcuts, no patchy logic. Specifically:
 - Verify correctness: no off-by-one errors, race conditions, resource leaks, or missed edge cases
@@ -96,9 +98,9 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 
 **Security alerts are a release gate, not a notification.** Run `node scripts/check-security-alerts.mjs` before any release build and as part of `/preflight`. It resolves every open GitHub alert against *this branch's* lockfiles, because Dependabot files security alerts and PRs against `main` (`target-branch` does not apply to them) and `main` trails `dev` — so the raw alert list mixes live vulnerabilities with ones fixed on `dev` weeks ago. Exit 1 means a vulnerable version is still pinned here: fix it, dismiss it on GitHub with a written reason, or get explicit user acceptance and re-run with `--ack "<key>=<why>"` — every ack needs a written reason, `verify:*` keys are refused outright (a check that could not run must be fixed, not waived), and acked items go in the release commit body so the decision is on record. Never ack on your own judgment. The `security preflight` workflow runs the same check daily and on every push to `dev`/`main`. Security PRs land on `dev` by hand; a Dependabot PR open past 30 days blocks only when its title names a package with an alert this branch cannot show is safe (live, unresolved or unproven); otherwise it warns.
 
-**E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `firestore.rules`, or `firebase.json`.
-- **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI, ~45s steady-state). Fix reds locally; don't ship them to a branch that auto-deploys.
-- **Reactive (safety net):** after a `git push` or `gh pr merge` lands on `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status` (run it in the background). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
+**E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `functions/**`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, or `firebase.json`.
+- **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI; about 5 minutes cold, 2–3 warm, against about 27 minutes on the hosted runner). Fix reds locally; don't ship them to a branch that auto-deploys.
+- **Reactive (safety net):** after a `git push` or `gh pr merge` lands on `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status --interval 60` (run it in the background; the default 3-second poll drains the API limit every session on this machine shares, and a watcher's 403 then reads like a red run). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
 
 ---
 
@@ -137,7 +139,7 @@ Agents authenticate via a device code flow — no browser login on the target ma
 - **Read-only by default.** GETs and other non-mutating calls need no approval — prefer one over asking the user to check for you.
 - **Mutating calls need an explicit ask.** Installer finalize / `setAsLatest`, remote commands to agents, config pushes, key revocation, deletes — never fire these off to confirm something. Get the user's go-ahead first, prod especially.
 
-**IMPORTANT — installer release order (do not reorder):** bump the version (`node scripts/sync-versions.js X.Y.Z`) **and** add the `## [X.Y.Z] - YYYY-MM-DD` entry to `docs/changelog.md`, then commit — *before* building. `build_installer_full.bat` bakes the version into the exe filename and binary, and an installer must never ship without a matching changelog entry.
+**IMPORTANT — installer release order (do not reorder):** bump the version (`node scripts/sync-versions.js X.Y.Z`) **and** add the `## [X.Y.Z] - YYYY-MM-DD` entry to `docs/changelog.md`, then commit — *before* building. `build_installer_full.bat` bakes the version into the exe filename and binary, and an installer must never ship without a matching changelog entry. Then build before anything is pushed: nothing goes to GitHub (no push, PR merge or tag) until all three installers are built, uploaded to dev and their downloads verified, because a pushed bump with no installer behind it is a release that does not exist yet.
 
 **Full release recipe** — the non-interactive build invocation (the `pause`-hang gotcha) plus the 3-step signed-URL upload → finalize API flow — lives in the build-system skill (`.claude/skills/build-system/SKILL.md`) → "Agent Installer Release". Its description triggers it on installer, release and version work.
 
@@ -202,7 +204,7 @@ passes every test and fails on a real machine the first time someone opens a hoo
 ### Review Discipline (code review, security review, audits)
 Reviews are judged on calibration, not volume. Three accurate findings are more valuable than twenty marginal ones, and inflated severities devalue every subsequent review on this codebase. Apply the following standard on every pass.
 
-- **Establish current state before reviewing.** Read the last ~10 commits — particularly anything tagged `feat(security)`, `fix(security)`, or part of a hardening pass — and the diff for the branch under review. An issue already resolved upstream is not a finding; surfacing it as one signals that the review wasn't grounded in the current code.
+- **Establish current state before reviewing.** Read the last ~10 commits — particularly anything that is part of a hardening pass, which this public repo does not label as security — and the diff for the branch under review. An issue already resolved upstream is not a finding; surfacing it as one signals that the review wasn't grounded in the current code.
 - **Severity is a claim that must be substantiated.** A "critical" finding requires a written exploit path in three parts: the actor (unauthenticated attacker, authenticated user, insider with role X), the mechanism (specific request, payload, or sequence), and the outcome (RCE, data exfiltration, auth bypass, privilege escalation, integrity violation). If the path cannot be stated plainly, the finding is not critical — reclassify it.
 - **Use the full severity ladder.** *Critical*: exploitable now with material impact. *High*: exploitable under realistic conditions or with a credible chain. *Medium*: defense-in-depth gap with no direct exploit. *Low*: hardening, style, or best-practice deviation. When uncertain between two rungs, choose the lower one and explain the uncertainty.
 - **A clean review is a valid result.** When the change is sound, state that and stop. Padding a report with speculative or low-value findings to demonstrate effort is a quality failure, not thoroughness.
@@ -214,7 +216,9 @@ Reviews are judged on calibration, not volume. Three accurate findings are more 
 
 ## Agent Dev Testing Workflow
 
-The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. Service files (`owlette_service.py`, `shared_utils.py`, `firebase_client.py`, `connection_manager.py`, `auth_manager.py`) require a restart. **Do this automatically** — don't wait for the user to ask.
+The `deploy-agent.mjs` hook auto-copies edited `agent/src/*.py` files to `C:\ProgramData\Owlette\agent\src\`. It then restarts the service itself, which every mirrored file needs since 3.0.0.
+
+The hook fires for an Edit or Write under `agent/src/` in **any** worktree, not only the main checkout, and copies by file name. In a worktree that must not reach the installed agent (a release branch, an audit, anything not at the installed version), change `agent/src/*.py` with a script run from the shell instead, and say that you did.
 
 The hook copies unelevated, so after each agent install it needs `powershell -File scripts/bootstrap-windows.ps1 -DevGrant` from an elevated prompt (the installer resets `agent\src`), which grants only the developer's own account Modify on `agent\src` and `app` (`-RemoveDevGrant` reverts it). While the grant is in place, the service logs a DevMode warning at every start.
 

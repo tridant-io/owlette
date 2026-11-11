@@ -54,6 +54,7 @@
 import { FieldValue, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
 import type { UIMessage } from 'ai';
 import { timestampToMs } from '@/lib/firestoreTime.server';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 import {
   SiteAccessError,
   resolveHootTargets,
@@ -89,13 +90,6 @@ const MAX_FOLLOWUP_FIRES_PER_SWEEP = 10;
  * watched command that finished ahead of time.
  */
 const FOLLOWUP_SCAN_LIMIT = 25;
-
-/**
- * The agent writes a non-terminal `running` marker to `commands/completed` at
- * the START of a command (restart safety), plus progress states. Only these
- * resolve it — mirrors `/api/hoot/provision-key`.
- */
-const TERMINAL_COMMAND_STATUSES = new Set(['completed', 'failed', 'error', 'cancelled']);
 
 /** What one sweep did with the follow-ups it decided to fire. */
 export interface FollowupSweepCounts {
@@ -173,8 +167,7 @@ async function watchedCommandFinished(db: Firestore, followup: FollowupDoc): Pro
     const entry = (snapshot.data() ?? {})[commandId] as
       | Record<string, unknown>
       | undefined;
-    const status = entry?.status;
-    return typeof status === 'string' && TERMINAL_COMMAND_STATUSES.has(status);
+    return isTerminalCommandStatus(entry?.status);
   } catch {
     return false;
   }

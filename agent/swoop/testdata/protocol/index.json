@@ -108,7 +108,7 @@
       "format": "json",
       "expect": "accept",
       "reason": "ok",
-      "description": "server to host and doorbell when a viewer joins"
+      "description": "server to host when a viewer joins"
     },
     {
       "file": "signaling/signal-host-ready.json",

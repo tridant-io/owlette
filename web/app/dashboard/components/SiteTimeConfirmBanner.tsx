@@ -35,6 +35,7 @@ import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { tzAbbreviation } from '@/components/TimezoneChip';
 import { toast } from '@/lib/toast';
 import { compareVersions, SITE_TIME_MIN_AGENT_VERSION } from '@/lib/versionUtils';
+import { effectiveLaunchMode } from '@/lib/processLaunch';
 import type { Machine, Process } from '@/hooks/useFirestore';
 
 export interface SiteTimeConfirmBannerProps {
@@ -56,13 +57,8 @@ export interface SiteTimeConfirmBannerProps {
   ) => Promise<void>;
 }
 
-/** Same precedence the dashboard uses when it opens the schedule editor. */
 function isScheduled(process: Process): boolean {
-  const mode =
-    process._optimisticLaunchMode ??
-    process.launch_mode ??
-    (process.autolaunch ? 'always' : 'off');
-  return mode === 'scheduled';
+  return effectiveLaunchMode(process) === 'scheduled';
 }
 
 export function SiteTimeConfirmBanner({

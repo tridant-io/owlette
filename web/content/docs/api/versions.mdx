@@ -59,8 +59,8 @@ roost fields, as returned by get (list returns the same fields except `schemaVer
   "schemaVersion": 2,
   "mediaType": "application/vnd.owlette.version.v1+json",
   "config": {
-    "producer": "owlette-cli",
-    "cliVersion": "1.0.0-rc.0",
+    "producer": "@owlette/sdk node-sdk",
+    "cliVersion": "1.0.0-rc.1",
     "createdAt": "2026-04-22T15:30:00.000Z",
     "hostname": "build-runner-01",
     "platform": "linux"
@@ -93,7 +93,7 @@ top-level fields:
 | `config` | yes | must be a JSON object. no keys are required. |
 | `files` | yes | must be a non-empty array; an empty publish is rejected. |
 
-the CLI and SDKs write `producer`, `cliVersion`, `createdAt`, `hostname` and `platform` into `config`. they are metadata the server does not read. any extra keys you add are stored and are part of the version ID.
+the SDKs write `producer`, `cliVersion`, `createdAt`, `hostname` and `platform` into `config`; the CLI and the dashboard send it empty. they are metadata the server does not read. any extra keys you add are stored and are part of the version ID.
 
 each `files[]` entry:
 
@@ -113,7 +113,7 @@ the server checks only the rules above. agents check more when they sync, and re
 
 ## version IDs and refs
 
-the server computes `versionId` as the SHA-256 hex digest of the canonical JSON of the version body: object keys sorted at every level, no whitespace. publish responses return the bare 64-character ID. because `config` is part of the body, two pushes of the same files from the CLI or SDK produce different IDs, since each writes a fresh `config.createdAt`.
+the server computes `versionId` as the SHA-256 hex digest of the canonical JSON of the version body: object keys sorted at every level, no whitespace. publish responses return the bare 64-character ID. because `config` is part of the body, two pushes of the same files from an SDK produce different IDs, since each writes a fresh `config.createdAt`. the CLI sends an empty `config`, so the same files get the same ID from any machine and any CLI release.
 
 routes that take a `{versionRef}` path segment, `targetVersion` on rollback, and `against` on diff accept:
 
@@ -333,8 +333,8 @@ curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/versions/current?siteId=site_ki
     "schemaVersion": 2,
     "mediaType": "application/vnd.owlette.version.v1+json",
     "config": {
-      "producer": "owlette-cli",
-      "cliVersion": "1.0.0-rc.0",
+      "producer": "@owlette/sdk node-sdk",
+      "cliVersion": "1.0.0-rc.1",
       "createdAt": "2026-04-22T15:30:00.000Z",
       "hostname": "build-runner-01",
       "platform": "linux"
@@ -595,7 +595,7 @@ curl -fsS "$OWLETTE_API_URL/api/roosts/rst_lobby/deployments/8d969eef6ecad3c29a3
   -H "Authorization: Bearer $OWLETTE_API_KEY"
 ```
 
-`GET /api/roosts/{roostId}/deployments` lists rollout records, newest first, in `rollouts` (repeated as `items`). `page_size` defaults to 20 with a maximum of 100. filter with `stage=scheduled`, `canary`, `complete` or `aborted` (`fleet` is not accepted as a filter and returns `400 validation_failed`). each item has `rolloutId`, `versionId`, `stage`, `canaryCount`, `fleetCount`, `extractRoot`, `versionUrl`, `triggeredBy`, `startedAt`, `completedAt`, `abortedAt`, `abortReason` and `scheduledAt`.
+`GET /api/roosts/{roostId}/deployments` lists rollout records, newest first, in `rollouts` (repeated as `items`). `page_size` defaults to 20 with a maximum of 100. filter with `stage=scheduled`, `canary`, `fleet`, `complete` or `aborted`. each item has `rolloutId`, `versionId`, `stage`, `canaryCount`, `fleetCount`, `extractRoot`, `versionUrl`, `triggeredBy`, `startedAt`, `completedAt`, `abortedAt`, `abortReason` and `scheduledAt`.
 
 the list holds one record per version: publishes, deploys and rollbacks all write the record for their version, a later deploy of the same version replaces a finished one, and [resync](#resync) deletes it. `triggeredBy` is set only for deploys.
 

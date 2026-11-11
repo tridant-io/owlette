@@ -319,7 +319,7 @@ export interface TalonDoc {
   lastRunAt?: TalonTimestamp;
   lastRunStatus?: TalonRunStatus;
   lastRunId?: string;
-  /** Reset to 0 on any successful run; drives auto-disable backoff. */
+  /** Reset to 0 on any successful run and when a person switches the talon from off to on; drives auto-disable backoff. */
   consecutiveFailures: number;
   /** SYSTEM-disable only; cleared whenever a human toggles `enabled` either way. */
   disabledReason?: TalonDisabledReason;

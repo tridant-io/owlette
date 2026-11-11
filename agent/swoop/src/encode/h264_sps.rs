@@ -10,10 +10,10 @@
 //! the first SPS it emits and, when the restriction is missing, rewrites every
 //! SPS with [`with_restriction`].
 //!
-//! The parser is the spike's (`spikes/bakeoff-host/src/nal.rs`) plus the bit
-//! positions a rewrite needs. Every reader is fallible: a truncated or
-//! malformed unit is `None`, never a panic, because the input is whatever an
-//! encoder emitted.
+//! The parser is the bake-off spike's (`spikes/bakeoff-host/src/nal.rs`, since
+//! removed; git has it) plus the bit positions a rewrite needs. Every reader is
+//! fallible: a truncated or malformed unit is `None`, never a panic, because the
+//! input is whatever an encoder emitted.
 
 /// `nal_unit_type` of a sequence parameter set.
 pub const NAL_SPS: u8 = 7;

@@ -253,7 +253,7 @@ test('episode 10 — deploy software to many machines', async ({ browser }) => {
         await expect(dialog).not.toBeVisible();
 
         // [b06] deploy and watch (~23.0s) — expand the seeded in-flight record:
-        // 3 completed, 1 installing at 64%, 6 pending, each unfinished target
+        // 3 completed, 1 installing at 64%, 6 pending, each queued target
         // carrying a cancel control.
         await centerInView(page, inFlightRow);
         await clickWithCursor(page, inFlightRow);

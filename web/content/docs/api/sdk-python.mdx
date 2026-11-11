@@ -12,18 +12,20 @@ the official async Python SDK for the [owlette public API](/docs/api/overview). 
 
 ## installation
 
+`owlette-sdk` is not on PyPI yet, so `pip install owlette-sdk` fails today. install it from a checkout of the owlette monorepo:
+
 ```bash
-pip install --pre owlette-sdk
-# or: poetry add --allow-prereleases owlette-sdk
-# or: uv pip install --pre owlette-sdk
+pip install -e <path-to-checkout>/sdks/python
 ```
 
 Python 3.10+ is required (`requires-python = ">=3.10"`; the SDK uses `dataclass(slots=True)` and runtime `X | Y` unions). the package has one runtime dependency: `httpx>=0.27`.
 
-`owlette-sdk` is not on PyPI yet — the pre-release goes out with the [distribution gate](/docs/api/distribution). until then, install it from a checkout of the owlette monorepo:
+once the pre-release is published (the [distribution gate](/docs/api/distribution) tracks it), the install becomes:
 
 ```bash
-pip install -e <path-to-checkout>/sdks/python
+pip install --pre owlette-sdk
+# or: poetry add --allow-prereleases owlette-sdk
+# or: uv pip install --pre owlette-sdk
 ```
 
 ---
@@ -375,7 +377,7 @@ status = await client.machines.get_command("site-1", "machine-a7f3", queued["com
 
 # or queue any of the three types yourself
 await client.machines.dispatch_command(
-    "site-1", "machine-a7f3", "reboot_machine", {"delay_seconds": 60},
+    "site-1", "machine-a7f3", "reboot_machine", {"when": "after_active_hours"},
 )
 
 # dispatch + poll + download in one call — returns the PNG bytes
@@ -495,7 +497,15 @@ detail = await client.installer_deployments.get("site-1", created["deploymentId"
 await client.installer_deployments.retry(
     "site-1", created["deploymentId"], active_hours_override={"reason": "venue closed today"},
 )
+
+# later: remove it again, by the program's exact name in the machines' software list
+removal = await client.installer_deployments.uninstall(
+    "site-1", created["deploymentId"], software_name="VLC media player",
+)
+print(removal["queued"], removal["skipped"])  # skipped: [{"machineId", "reason"}]
 ```
+
+`uninstall()` needs `software_name`: a deployment records only its installer file, not the program it added. finished targets whose machine lists that exact name get the uninstall; the rest come back in `skipped`, and when none can take it the call raises `409 no_uninstallable_targets`.
 
 `create()` and `retry()` take an optional `active_hours_override` keyword argument (an `ActiveHoursOverride`, `{"reason": ...}`). a Windows agent with `capabilities.activeHoursGuard` refuses an install inside the machine's [active hours](/docs/reference/agent-commands#active-hours): that target ends `failed` with an `error` that starts `Error: active_hours:`. with the override the server writes the reason onto every install the call queues, with your key as the approver. a retry needs its own; the deployment's does not carry over.
 

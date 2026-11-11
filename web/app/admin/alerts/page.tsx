@@ -71,6 +71,8 @@ const OPERATORS = [
 
 const SEVERITIES = ['info', 'warning', 'critical'] as const;
 
+const NO_RULES: AlertRule[] = [];
+
 // light takes the family surface; dark keeps the solid tint these badges always had
 const SEVERITY_COLORS: Record<string, string> = {
   info: 'border-info-border bg-info-surface text-info dark:border-transparent dark:bg-info-solid/20',
@@ -149,7 +151,10 @@ export default function AlertsPage() {
   // alert rules ride on control, the core flag (plan.md decision 4)
   const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
   const rulesGated = usePlanGated('control', siteOwner);
-  const [rules, setRules] = useState<AlertRule[]>([]);
+  // rules carry the site they were read or saved for: a save that lands after the
+  // admin moved to another site must not show, or be saved again, under that one
+  const [loaded, setLoaded] = useState<{ siteId: string; rules: AlertRule[] }>({ siteId: '', rules: [] });
+  const rules = loaded.siteId === selectedSiteId ? loaded.rules : NO_RULES;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -185,9 +190,9 @@ export default function AlertsPage() {
       const alertsRef = doc(db, 'sites', siteId, 'settings', 'alerts');
       const snap = await getDoc(alertsRef);
       if (snap.exists() && Array.isArray(snap.data()?.rules)) {
-        setRules(snap.data().rules as AlertRule[]);
+        setLoaded({ siteId, rules: snap.data().rules as AlertRule[] });
       } else {
-        setRules([]);
+        setLoaded({ siteId, rules: [] });
       }
     } catch (err: unknown) {
       console.error('Failed to fetch alert rules:', err);
@@ -207,9 +212,10 @@ export default function AlertsPage() {
   // resolves false when the save failed, so callers don't confirm a change that didn't land.
   const saveRules = async (updatedRules: AlertRule[]): Promise<boolean> => {
     if (!db || !selectedSiteId) return false;
+    const siteId = selectedSiteId;
     setSaving(true);
     try {
-      const response = await fetch(`/api/sites/${encodeURIComponent(selectedSiteId)}/alerts`, {
+      const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/alerts`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rules: updatedRules }),
@@ -218,7 +224,7 @@ export default function AlertsPage() {
         const body = await response.json().catch(() => ({}));
         throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to save alert rules');
       }
-      setRules(updatedRules);
+      setLoaded((prev) => (prev.siteId === siteId ? { siteId, rules: updatedRules } : prev));
       return true;
     } catch (err: unknown) {
       console.error('Failed to save alert rules:', err);

@@ -288,6 +288,82 @@ def test_every_sync_pull_failure_return_is_error_prefixed():
     assert bad == [], f"failure returns bypassing _failure(): {bad}"
 
 
+def test_a_same_size_change_lands_on_rollout_and_rollback(tmp_path, monkeypatch):
+    """
+    the assembler may skip only a file the version last committed into this
+    root had byte for byte. show.toe changes at the same size v1 -> v2 -> v1;
+    logo.png never changes and is the one thing skipped.
+    """
+    import hashlib
+    import itertools
+
+    import sync_commands
+    import sync_state
+    from destination_allowlist import DestinationAllowlist
+    from sync_assembler import assemble_all
+    from sync_downloader import DownloadResult, chunk_path
+    from sync_state import SyncState
+    from sync_version import Version, VersionChunk, VersionFile
+
+    store = tmp_path / 'content'
+    extract = tmp_path / 'allowed' / 'show'
+    extract.mkdir(parents=True)
+    blobs = {}
+
+    def _version(files):
+        out = []
+        for path, data in files.items():
+            digest = hashlib.sha256(data).hexdigest()
+            blobs[digest] = data
+            out.append(VersionFile(path, len(data), [VersionChunk(digest, len(data))]))
+        return Version(schema_version=1, media_type='roost', config={}, files=out, raw_bytes=b'')
+
+    logo = b'unchanged logo'
+    versions = {
+        'v1': _version({'show.toe': b'version one!', 'logo.png': logo}),
+        'v2': _version({'show.toe': b'version two!', 'logo.png': logo}),
+    }
+
+    def _download_all(*, chunks, **_):
+        for c in chunks:
+            target = chunk_path(store, c['hash'])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blobs[c['hash']])
+        return DownloadResult(fetched=len(chunks), already_present=0, failed=0, cancelled=False)
+
+    ticks = itertools.count(1_000_000)
+    monkeypatch.setattr(sync_state, '_now', lambda: next(ticks))
+    monkeypatch.setattr(sync_commands, 'fetch_version',
+                        lambda url, expected_version_id=None: versions[expected_version_id])
+    monkeypatch.setattr(sync_commands, 'download_all', _download_all)
+    monkeypatch.setattr(sync_commands, 'assemble_all',
+                        lambda **kw: assemble_all(content_store=str(store), **kw))
+
+    state = SyncState(str(tmp_path / 'state.db'))
+    service = _RecordingService(state, DestinationAllowlist([str(tmp_path / 'allowed')]))
+
+    def pull(version_id):
+        cmd = dict(_sync_pull_cmd(str(extract)), version_id=version_id)
+        result = sync_commands._handle_sync_pull(cmd, f'cmd-{version_id}', service)
+        assert result.startswith('sync_pull complete'), result
+        return result
+
+    try:
+        pull('v1')
+        assert (extract / 'show.toe').read_bytes() == b'version one!'
+
+        assert 'assembled 1 files, skipped 1' in pull('v2')
+        assert (extract / 'show.toe').read_bytes() == b'version two!'
+
+        assert 'assembled 1 files, skipped 1' in pull('v1')
+        assert (extract / 'show.toe').read_bytes() == b'version one!'
+
+        # a re-sync of what is on disk writes nothing
+        assert 'assembled 0 files, skipped 2' in pull('v1')
+    finally:
+        state.close()
+
+
 # the legacy default extract root
 
 
@@ -387,3 +463,35 @@ def test_the_handler_validates_the_substituted_root(tmp_path, monkeypatch):
     assert result.startswith('Error:'), result
     assert '/var/lib/owlette/projects' in result
     assert 'Documents' not in result
+
+
+def test_two_threads_reaching_the_sync_state_first_share_one(monkeypatch):
+    """the scrub thread and a command thread can both ask first. the reaper
+    retires every sync its own SyncState did not start, so two instances
+    would let it retire a sync that is still running."""
+    import threading
+    import time
+
+    import sync_commands
+
+    class _SlowState:
+        def __init__(self):
+            time.sleep(0.05)
+
+    monkeypatch.setattr(sync_commands, 'SyncState', _SlowState)
+
+    class _Service:
+        pass
+
+    service = _Service()
+    seen = []
+    threads = [
+        threading.Thread(target=lambda: seen.append(sync_commands._state_for(service)))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert seen[0] is seen[1]

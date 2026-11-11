@@ -2994,7 +2994,8 @@ def apply_topology(
     # Refuse cleanly until Mosaic support lands.
     try:
         import nvapi_display
-        if nvapi_display.detect_mosaic().get('mosaicActive'):
+        # None off NVIDIA or with no topology; `active` is the driver's own flag
+        if (nvapi_display.detect_mosaic() or {}).get('active'):
             error_str = 'NVIDIA Mosaic is active — remote apply not supported while Mosaic is enabled'
             _emit_audit(
                 firebase_client,

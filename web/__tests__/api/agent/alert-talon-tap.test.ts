@@ -5,6 +5,9 @@
  * event EXCEPT display events, which `functions/src/talonLogEvents.ts` already fires off the
  * agent's `sites/{siteId}/logs` write. Tapping both would double-run every display talon on a
  * 3.0.0+ agent. These tests pin the asymmetry — display in, no tap; process in, tap.
+ *
+ * The last block pins the connection-failure branch's webhook: sent whatever the email settings
+ * are, and never for a reboot-pending notice.
  */
 
 import { createMockRequest } from '../helpers/utils';
@@ -17,6 +20,9 @@ const mockVerifyIdToken = jest.fn();
 const pendingDisplayAdd = jest.fn().mockResolvedValue(undefined);
 const pendingProcessAdd = jest.fn().mockResolvedValue(undefined);
 const siteLogsAdd = jest.fn().mockResolvedValue(undefined);
+// The default is the route's two email exits: no Resend client and no recipients.
+let mockResendClient: { emails: { send: jest.Mock } } | null = null;
+let mockRecipients: Record<string, unknown>[] = [];
 
 const siteDocRef = {
   get: async () => ({ data: () => ({ name: 'test site' }) }),
@@ -65,13 +71,15 @@ jest.mock('@/lib/webhookSender.server', () => ({
 }));
 
 jest.mock('@/lib/adminUtils.server', () => ({
-  getSiteAlertRecipients: jest.fn(async () => []),
+  getSiteAlertRecipients: jest.fn(async () => mockRecipients),
   getMachineTimezone: jest.fn(async () => 'UTC'),
   getSiteLabel: jest.fn(async (siteId: string) => siteId),
+  // the real mute and machine-scope filter.
+  recipientWantsMachine: jest.requireActual('@/lib/adminUtils.server').recipientWantsMachine,
 }));
 
 jest.mock('@/lib/resendClient.server', () => ({
-  getResend: () => null,
+  getResend: () => mockResendClient,
   FROM_EMAIL: 'noreply@mail.owlette.app',
   ENV_LABEL: 'test',
 }));
@@ -107,6 +115,8 @@ function post(body: Record<string, unknown>) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockResendClient = null;
+  mockRecipients = [];
   mockVerifyIdToken.mockResolvedValue({
     role: 'agent',
     site_id: SITE,
@@ -181,6 +191,69 @@ describe('POST /api/agent/alert — talon tap', () => {
       kind: 'event',
       eventType: 'display_apply_acked',
       machineId: MACHINE,
+    });
+  });
+});
+
+describe('POST /api/agent/alert — connection failure webhook', () => {
+  it('fires machine.offline when nobody takes the email', async () => {
+    // Resend is unconfigured and the site has no recipients here: both are email
+    // exits, and a site that routes this alert to a webhook must still get it.
+    const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+    expect(await res.json()).toMatchObject({ success: true, emailSent: false });
+    expect(fireWebhooksMock).toHaveBeenCalledWith(
+      SITE,
+      'test site',
+      'machine.offline',
+      { machine: { id: MACHINE, name: MACHINE } },
+    );
+  });
+
+  it('sends no machine.offline for a reboot-pending notice', async () => {
+    // the agent posts it on this branch with no eventType. the machine is online.
+    const res = await post({
+      errorCode: 'reboot_pending',
+      errorMessage: 'Reboot pending on LOBBY-01 (reasons: os update)',
+    });
+
+    expect(res.status).toBe(200);
+    expect(fireWebhooksMock).not.toHaveBeenCalled();
+  });
+
+  describe('on a site that takes the email', () => {
+    const send = jest.fn(async () => ({ error: null }));
+
+    beforeEach(() => {
+      mockResendClient = { emails: { send } };
+      mockRecipients = [
+        { userId: 'user-1', email: 'ops@example.com', ccEmails: [], mutedMachines: [], machineIds: null },
+      ];
+    });
+
+    it('sends the email and machine.offline for a connection failure', async () => {
+      const res = await post({ errorCode: 'CONN_FAIL', errorMessage: 'no route to host' });
+
+      expect(await res.json()).toMatchObject({ success: true, emailSent: true, recipients: 1 });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(fireWebhooksMock).toHaveBeenCalledWith(
+        SITE,
+        'test site',
+        'machine.offline',
+        { machine: { id: MACHINE, name: MACHINE } },
+      );
+    });
+
+    it('sends the email and no machine.offline for a reboot-pending notice', async () => {
+      // this is where the notice used to read as the machine going offline
+      const res = await post({
+        errorCode: 'reboot_pending',
+        errorMessage: 'Reboot pending on LOBBY-01 (reasons: os update)',
+      });
+
+      expect(await res.json()).toMatchObject({ success: true, emailSent: true, recipients: 1 });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(fireWebhooksMock).not.toHaveBeenCalled();
     });
   });
 });

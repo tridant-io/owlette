@@ -4,7 +4,7 @@ description: Pre-push gate — security alerts, lint, typecheck, unit tests, fir
 
 Run the same checks CI runs, locally, *before* pushing — so a red "playwright e2e" run on dev/main becomes rare. The local e2e suite is the exact mirror of CI (same Playwright tests against the same Firebase emulators), so green here means green there for everything except cold-cache / ubuntu-vs-Windows quirks.
 
-Run this before any `git push` that touches `web/**`, `firestore.rules`, or `firebase.json`.
+Run this before any `git push` that touches `web/**`, `functions/**`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, or `firebase.json`.
 
 ## Process
 
@@ -24,12 +24,12 @@ is unreadable — this separates "still shipping here" from "already fixed on de
   state on `dev`; report them, don't act on them.
 
 ### Step 2: Scope check
-Determine whether the pending changes are in the e2e path filter (`web/**`, `firestore.rules`, `firebase.json`, `.github/workflows/e2e.yml`):
+Determine whether the pending changes are in the e2e path filter (`web/**`, `functions/**`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, `firebase.json`, `.github/workflows/e2e.yml`):
 ```bash
 git status --porcelain
 git diff --name-only @{u}..HEAD 2>/dev/null   # committed-but-unpushed, if upstream exists
 ```
-- If **nothing** in scope touches web/firestore/firebase → e2e won't run in CI. Skip to Step 3 for lint/typecheck only, then report "no e2e needed".
+- If **nothing** in scope touches those paths → e2e won't run in CI. Skip to Step 3 for lint/typecheck only, then report "no e2e needed".
 - Otherwise continue through all steps.
 
 ### Step 3: Lint + typecheck (fast — always run)
@@ -54,7 +54,7 @@ cd web && npm run test:rules
 ~2 min (boots its own firestore emulator on :8080, runs jest, tears it down). Run it BEFORE Step 6 and let it finish — it binds the same :8080 the e2e emulators want, so the two must not overlap. If nothing in scope touches the rules, skip it and say so in the report.
 
 ### Step 6: E2E suite (the authoritative gate)
-This does the production build, spins up the emulators, and runs Playwright (~45s steady-state after the first build; the first run pays for `npm run build`). Run in the BACKGROUND with a generous timeout — don't block the session synchronously:
+This does the production build, spins up the emulators, and runs Playwright (about 5–6 minutes cold including the build, 2–3 minutes warm; see `web/e2e/README.md`). Run in the BACKGROUND with a generous timeout — don't block the session synchronously:
 ```bash
 cd web && npm run e2e
 ```
@@ -74,6 +74,6 @@ Prereqs (already set up on this machine): JDK 21 on PATH, `firebase-tools@15` gl
 Verdict: [SAFE TO PUSH / DO NOT PUSH]
 ```
 - **All green** → say it's safe to push (don't push unless the user asked).
-- **Any red** → DO NOT push. Show the failing output, diagnose the root cause, and propose a fix. The whole point of preflight is to fix it here, where the loop is 45s, instead of after a 6+ min CI round-trip on a branch that auto-deploys.
+- **Any red** → DO NOT push. Show the failing output, diagnose the root cause, and propose a fix. The whole point of preflight is to fix it here, where the loop is a few minutes, instead of after a CI round-trip of about half an hour on a branch that auto-deploys.
 
 On failure, the Playwright HTML report + traces land in `web/e2e/.output/` — open `web/e2e/.output/report/` for the post-mortem.

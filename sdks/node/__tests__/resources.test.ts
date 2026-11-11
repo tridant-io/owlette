@@ -694,20 +694,22 @@ describe('owlette.installerDeployments', () => {
     ).rejects.toMatchObject({ name: 'OwletteApiError', status: 409, code: 'no_cancellable_targets' });
   });
 
-  it('uninstall → POST and honours custom idempotency-key', async () => {
+  it('uninstall → POST with the program name, and honours custom idempotency-key', async () => {
     const { owlette, calls } = makeOwlette([
       {
         status: 200,
         body: {
           deploymentId: 'deploy-1',
           siteId: 'site-1',
-          status: 'uninstalling',
-          queued: 3,
-          machine_ids: ['m-1', 'm-2', 'm-3'],
+          status: 'completed',
+          queued: 2,
+          machine_ids: ['m-1', 'm-2'],
+          skipped: [{ machineId: 'm-3', reason: 'software_not_found' }],
         },
       },
     ]);
-    await owlette.installerDeployments.uninstall('site-1', 'deploy-1', {
+    const result = await owlette.installerDeployments.uninstall('site-1', 'deploy-1', {
+      softwareName: 'VLC media player',
       idempotencyKey: 'caller-supplied',
     });
     const headers = calls[0]!.init.headers as Record<string, string>;
@@ -715,6 +717,25 @@ describe('owlette.installerDeployments', () => {
     expect(calls[0]!.url).toBe(
       'https://dev.test/api/sites/site-1/deployments/deploy-1/uninstall',
     );
+    expect(JSON.parse(String(calls[0]!.init.body))).toEqual({ software_name: 'VLC media player' });
+    expect(result.skipped).toEqual([{ machineId: 'm-3', reason: 'software_not_found' }]);
+  });
+
+  it('uninstall from plain JS with no options surfaces the server 400, not a TypeError', async () => {
+    const { owlette, calls } = makeOwlette([
+      {
+        status: 400,
+        body: { code: 'validation_failed', detail: 'field `software_name` is required' },
+      },
+    ]);
+    const uninstall = owlette.installerDeployments.uninstall as (
+      siteId: string,
+      deploymentId: string,
+    ) => Promise<unknown>;
+    await expect(
+      uninstall.call(owlette.installerDeployments, 'site-1', 'deploy-1'),
+    ).rejects.toMatchObject({ name: 'OwletteApiError', status: 400, code: 'validation_failed' });
+    expect(calls).toHaveLength(1);
   });
 
   it('delete -> DELETE with Idempotency-Key and empty body', async () => {

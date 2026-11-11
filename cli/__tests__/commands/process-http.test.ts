@@ -306,6 +306,16 @@ describe('owlette process update', () => {
   });
 });
 
+describe.each(['create', 'update'])('owlette process %s --help', (verb) => {
+  it('lists the priority and visibility values the agent matches, case and all', () => {
+    const proc = buildProgram().commands.find((c) => c.name() === 'process')!;
+    const help = proc.commands.find((c) => c.name() === verb)!.helpInformation();
+
+    expect(help).toContain('Low|Normal|High|Realtime');
+    expect(help).toContain('Normal|Hidden');
+  });
+});
+
 describe('owlette process delete', () => {
   it('DELETEs and prints the alreadyDeleted=true no-op message', async () => {
     const calls = installFetchStub({

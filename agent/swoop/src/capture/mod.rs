@@ -37,7 +37,7 @@ use crate::cursor::PointerSample;
 use crate::gpu::scale::{Downscaler, ScaleError};
 use crate::gpu::Frame;
 
-// macOS captures through ScreenCaptureKit; Task 5.1 wires it under the seam.
+// macOS captures through ScreenCaptureKit, behind `platform::macos::CaptureSource`.
 #[cfg(target_os = "macos")]
 pub mod sck;
 // a synthetic source for the `testhooks` build only; it renders into d3d11
@@ -203,69 +203,19 @@ pub struct MoveRect {
     pub dest: Rect,
 }
 
-/// Per-frame metadata, in output-local un-rotated coordinates. A rotated
-/// output's are dropped: they are the texture's and not the upright frame's,
-/// and nothing reads them.
+/// Per-frame metadata, in output-local un-rotated coordinates.
 ///
-/// Move rects are read because the API requires the order, not because they
-/// pay: 0.8 measured zero of them in 5,981 frames across seven scenes,
-/// including dragged windows, `ScrollWindowEx` blits and a browser scroll.
-/// Nothing may be optimised on their presence. Dirty rects are the opposite —
-/// 0.01% of an idle output against 92% of a scrolling browser — and the whole
-/// metadata read costs 16 bytes at p50.
+/// Nothing consumes it yet. Desktop Duplication's own rects are not read on
+/// Windows: the read is two calls inside the window that holds the frame, which
+/// serialises every duplication in the process. Spike 0.8's numbers, for the
+/// first consumer: zero move rects in 5,981 frames across seven scenes,
+/// dragged windows and scrolls included, so nothing may be optimised on their
+/// presence; dirty rects cover 0.01% of an idle output and 92% of a scrolling
+/// browser.
 #[derive(Debug, Default, Clone)]
 pub struct FrameRects {
     pub moves: Vec<MoveRect>,
     pub dirty: Vec<Rect>,
-}
-
-/// `DXGI_OUTDUPL_MOVE_RECT` is a `POINT` then a `RECT`: six i32, no padding.
-#[cfg(any(windows, test))]
-const MOVE_RECT_WORDS: usize = 6;
-/// `RECT`: four i32.
-#[cfg(any(windows, test))]
-const DIRTY_RECT_WORDS: usize = 4;
-
-/// Desktop Duplication writes both lists into the single
-/// `TotalMetadataBufferSize` buffer: the move rects at the front, the dirty
-/// rects immediately after however many bytes the move-rect read reported.
-/// Handing the dirty-rect parser the front of the buffer parses move rects as
-/// RECTs and yields plausible garbage rather than an error, which is why the
-/// API makes the order a requirement.
-#[cfg(any(windows, test))]
-fn split_metadata(words: &[i32], move_words: usize) -> (&[i32], &[i32]) {
-    words.split_at(move_words.min(words.len()))
-}
-
-#[cfg(any(windows, test))]
-fn parse_move_rects(words: &[i32]) -> Vec<MoveRect> {
-    let (rects, _) = words.as_chunks::<MOVE_RECT_WORDS>();
-    rects
-        .iter()
-        .map(|w| MoveRect {
-            source: (w[0], w[1]),
-            dest: Rect {
-                left: w[2],
-                top: w[3],
-                right: w[4],
-                bottom: w[5],
-            },
-        })
-        .collect()
-}
-
-#[cfg(any(windows, test))]
-fn parse_dirty_rects(words: &[i32]) -> Vec<Rect> {
-    let (rects, _) = words.as_chunks::<DIRTY_RECT_WORDS>();
-    rects
-        .iter()
-        .map(|w| Rect {
-            left: w[0],
-            top: w[1],
-            right: w[2],
-            bottom: w[3],
-        })
-        .collect()
 }
 
 /// HRESULTs `DuplicateOutput` returns transiently while the desktop is changing
@@ -317,7 +267,7 @@ impl RebuildSignal {
 use windows::{
     core::{Error as WinError, Interface},
     Win32::{
-        Foundation::{E_FAIL, HANDLE, HMODULE, RECT},
+        Foundation::{E_FAIL, HANDLE, HMODULE},
         Graphics::{
             Direct3D::{
                 D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_10_0,
@@ -334,8 +284,7 @@ use windows::{
                 CreateDXGIFactory1, IDXGIAdapter1, IDXGIDevice1, IDXGIFactory1, IDXGIOutput,
                 IDXGIOutput1, IDXGIOutput5, IDXGIOutputDuplication, IDXGIResource,
                 DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_NOT_FOUND,
-                DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTDUPL_MOVE_RECT,
-                DXGI_OUTPUT_DESC,
+                DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
             },
         },
         System::{
@@ -348,18 +297,6 @@ use windows::{
         },
         UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
     },
-};
-
-// The metadata buffer is i32-wide so the two API calls write through a pointer
-// with the alignment their structs need, and so the parsers above can be pure.
-// Both structs are arrays of i32 with no padding; these assertions are what
-// makes that reinterpretation sound.
-#[cfg(windows)]
-const _: () = {
-    assert!(std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() == MOVE_RECT_WORDS * 4);
-    assert!(std::mem::align_of::<DXGI_OUTDUPL_MOVE_RECT>() == 4);
-    assert!(std::mem::size_of::<RECT>() == DIRTY_RECT_WORDS * 4);
-    assert!(std::mem::align_of::<RECT>() == 4);
 };
 
 /// Per-monitor-v2, before the first DXGI call.
@@ -650,51 +587,6 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, Mode
     ))
 }
 
-/// Read both metadata lists out of the one `TotalMetadataBufferSize` buffer:
-/// all move rects, then all dirty rects, in that order.
-#[cfg(windows)]
-fn read_rects(
-    dup: &IDXGIOutputDuplication,
-    needed: u32,
-    buffer: &mut Vec<i32>,
-    out: &mut FrameRects,
-) {
-    out.moves.clear();
-    out.dirty.clear();
-    if needed == 0 {
-        return;
-    }
-    let words = needed.div_ceil(4) as usize;
-    if buffer.len() < words {
-        buffer.resize(words, 0);
-    }
-
-    let mut move_bytes = 0u32;
-    if unsafe { dup.GetFrameMoveRects(needed, buffer.as_mut_ptr().cast(), &mut move_bytes) }.is_err()
-    {
-        move_bytes = 0;
-    }
-    let move_words = (move_bytes / 4) as usize;
-
-    let mut dirty_bytes = 0u32;
-    if unsafe {
-        dup.GetFrameDirtyRects(
-            needed.saturating_sub(move_bytes),
-            buffer.as_mut_ptr().add(move_words).cast(),
-            &mut dirty_bytes,
-        )
-    }
-    .is_err()
-    {
-        dirty_bytes = 0;
-    }
-
-    let used = (move_words + (dirty_bytes / 4) as usize).min(buffer.len());
-    let (moves, dirty) = split_metadata(&buffer[..used], move_words);
-    out.moves = parse_move_rects(moves);
-    out.dirty = parse_dirty_rects(dirty);
-}
-
 /// What one `AcquireNextFrame` produced, before the caller decides what to do
 /// about it.
 #[cfg(windows)]
@@ -714,8 +606,6 @@ pub struct Duplication {
     live: Option<Live>,
     signal: RebuildSignal,
     generation: u64,
-    rects: FrameRects,
-    metadata: Vec<i32>,
     /// Set while a rebuilt duplication has yet to produce a frame with a real
     /// desktop image.
     recovering: Option<Instant>,
@@ -737,8 +627,6 @@ impl Duplication {
             live: None,
             generation: signal.generation(),
             signal,
-            rects: FrameRects::default(),
-            metadata: Vec::new(),
             recovering: None,
             idr_requested: false,
             reader: crate::cursor::PointerReader::new(),
@@ -754,12 +642,6 @@ impl Duplication {
     /// change the rotation.
     pub fn output(&self) -> &OutputInfo {
         &self.output
-    }
-
-    /// Metadata for the frame `next_frame` last returned; empty on a rotated
-    /// output (see [`FrameRects`]).
-    pub fn last_rects(&self) -> &FrameRects {
-        &self.rects
     }
 
     /// True once after every rebuild: the next encoded frame must be an IDR,
@@ -883,8 +765,6 @@ impl Duplication {
             output,
             size,
             live,
-            rects,
-            metadata,
             recovering,
             reader,
             ..
@@ -939,16 +819,7 @@ impl Duplication {
         let stale = info.LastPresentTime == 0;
         let emit = !stale || recovering.is_some_and(|since| since.elapsed() >= RECOVERY_GRACE);
 
-        let copied = if emit {
-            if rotation == Rotation::Identity {
-                read_rects(&live.dup, info.TotalMetadataBufferSize, metadata, rects);
-            } else {
-                *rects = FrameRects::default();
-            }
-            Some(live.copy_frame(&texture, &desc))
-        } else {
-            None
-        };
+        let copied = emit.then(|| live.copy_frame(&texture, &desc));
         // Back as early as possible: every duplication in the session is
         // serialised behind Desktop Duplication's lock while a frame is held.
         // A rotated output's turn reads only the copy, so it comes after.
@@ -1082,34 +953,6 @@ fn desktop_name(desktop: HDESK) -> Option<String> {
     Some(wide_to_string(&buffer))
 }
 
-/// The capture thread body: follow the input desktop, then block in
-/// `AcquireNextFrame`.
-///
-/// There is no timer and no sleep — the compositor paces this loop, and the
-/// session's floor frame rate is a separate periodic IDR, not an attempt to
-/// pull frames faster. Both callbacks run on this thread; the frame's handle is
-/// valid only for the length of `on_frame`, and `on_pointer` sees every
-/// acquired frame, including the ones that carry no picture (see
-/// [`Duplication::next_frame_with`]).
-#[cfg(windows)]
-pub fn capture_loop(
-    source: &mut Duplication,
-    watcher: &mut DesktopWatcher,
-    stop: &std::sync::atomic::AtomicBool,
-    mut on_frame: impl FnMut(&Frame),
-    on_pointer: &mut dyn FnMut(&PointerSample),
-) -> anyhow::Result<()> {
-    while !stop.load(Ordering::Relaxed) {
-        if watcher.follow() {
-            source.request_rebuild();
-        }
-        if let Some(frame) = source.next_frame_with(ACQUIRE_TIMEOUT_MS, on_pointer)? {
-            on_frame(&frame);
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,60 +1044,6 @@ mod tests {
     }
 
     #[test]
-    fn move_rects_are_read_before_dirty_rects_out_of_one_buffer() {
-        // One move rect (source point then destination rect) followed by two
-        // dirty rects, laid out as Desktop Duplication writes them.
-        let buffer: Vec<i32> = vec![10, 20, 0, 0, 100, 50, 1, 2, 3, 4, 5, 6, 7, 8];
-        let (moves, dirty) = split_metadata(&buffer, MOVE_RECT_WORDS);
-
-        assert_eq!(
-            parse_move_rects(moves),
-            vec![MoveRect {
-                source: (10, 20),
-                dest: Rect {
-                    left: 0,
-                    top: 0,
-                    right: 100,
-                    bottom: 50
-                },
-            }]
-        );
-        assert_eq!(
-            parse_dirty_rects(dirty),
-            vec![
-                Rect {
-                    left: 1,
-                    top: 2,
-                    right: 3,
-                    bottom: 4
-                },
-                Rect {
-                    left: 5,
-                    top: 6,
-                    right: 7,
-                    bottom: 8
-                },
-            ]
-        );
-
-        // Reading the dirty rects from the front of the same buffer parses the
-        // move rect as RECTs: plausible rectangles, silently wrong, never an
-        // error. That is the whole reason the order is a contract.
-        assert_ne!(parse_dirty_rects(&buffer)[0], parse_dirty_rects(dirty)[0]);
-    }
-
-    #[test]
-    fn a_truncated_trailing_rect_is_ignored() {
-        // The split is driven by byte counts the API reports, so a parser that
-        // ran off the end would read another frame's metadata.
-        assert!(parse_move_rects(&[1, 2, 3]).is_empty());
-        assert_eq!(parse_dirty_rects(&[1, 2, 3, 4, 5]).len(), 1);
-        let (moves, dirty) = split_metadata(&[1, 2, 3, 4], 99);
-        assert_eq!(moves.len(), 4);
-        assert!(dirty.is_empty());
-    }
-
-    #[test]
     fn a_wrong_adapter_is_never_retried() {
         // E_INVALIDARG is the cross-adapter answer, measured in 4 of 4 pairs:
         // retrying it burns the deadline and fails anyway.
@@ -1338,10 +1127,8 @@ mod tests {
             );
             assert!(observed >= 1, "the pointer observer never ran");
             println!(
-                "{} frame {width}x{height} rotation={:?} dirty_rects={} observed={observed} pointer_news={pointer_news}",
-                info.device_name,
-                info.rotation,
-                source.last_rects().dirty.len()
+                "{} frame {width}x{height} rotation={:?} observed={observed} pointer_news={pointer_news}",
+                info.device_name, info.rotation
             );
         }
     }

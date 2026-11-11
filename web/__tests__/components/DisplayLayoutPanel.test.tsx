@@ -240,7 +240,6 @@ function setup(options: SetupOptions = {}): SetupResult {
     catalogue: null,
     loading: false,
     error: null,
-    requestEnumerate: jest.fn(),
   });
 
   mockedUseDisplayEventFeed.mockReturnValue({

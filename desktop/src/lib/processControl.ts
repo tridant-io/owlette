@@ -5,7 +5,7 @@
  * - **kill**: terminate, THEN write `KILLED`. The service treats the exit as intentional.
  * - **restart**: write `RESTARTING` on BOTH sides of the kill. The service skips the crash alert,
  *   screenshot and Cortex event, writes a `process_restarted` audit event, and relaunches within
- *   one tick (`owlette_service.py:2598-2630`).
+ *   one tick (`PROCESS_RESTARTING_STATUS` in `owlette_service.py`).
  *
  * The sides are deliberate. `KILLED` asserts the process is gone, so writing it early would lie
  * whenever the kill fails. `RESTARTING` asserts only intent and needs both writes:
@@ -15,16 +15,17 @@
  *
  * Writing early means it can outlive a kill that never happened — {@link stopProcess} undoes that.
  *
- * Both flows are purely local, no cloud command, matching `owlette_gui.py:1182-1303`.
+ * Both flows are purely local, no cloud command, as in the python GUI that 3.0.0 removed.
  */
 
-import { terminatePid, type TerminateMethod } from '@/lib/ipc'
+import { terminatePid, type RecordedIdentity, type TerminateMethod } from '@/lib/ipc'
 import { launchCopy } from '@/lib/launchCopy'
 import { expectedImagesFor, type ProcessEntry } from '@/lib/owletteConfig'
 import {
   candidatePidsForProcess,
   markKilled,
   markRestarting,
+  recordedIdentity,
   restoreState,
   type AppStates,
   type ProcessMarker,
@@ -63,24 +64,40 @@ export interface StopDeps {
 /** The host's wording when a pid turns out to be running something else entirely. */
 const IDENTITY_MISMATCH = 'refusing to terminate'
 
+/**
+ * The host's wording when that refusal was on the service's record (`RECORD_MISMATCH` in
+ * `process_ctl.rs`, windows only). Only this one proves the row stale: a name refusal can as
+ * well mean the entry's exe path changed.
+ */
+const RECORD_MISMATCH = 'no longer the process the service recorded'
+
+function says(error: unknown, words: string): boolean {
+  return String(error instanceof Error ? error.message : error).includes(words)
+}
+
 function isIdentityMismatch(error: unknown): boolean {
-  return String(error instanceof Error ? error.message : error).includes(IDENTITY_MISMATCH)
+  return says(error, IDENTITY_MISMATCH)
+}
+
+/** matched at the start: a name refusal quotes the live image path, which could contain the words */
+function isRecordMismatch(error: unknown, pid: number): boolean {
+  return String(error instanceof Error ? error.message : error).startsWith(`pid ${pid} is ${RECORD_MISMATCH}`)
 }
 
 /**
  * Terminate `pid`, trying each acceptable image in turn: full path first, bare file name second.
- * The host's identity check is the point — this try-order is the desktop's own (the service's
- * destructive ops instead prove identity against a recorded pid/create_time/exe snapshot,
- * `shared_utils.identity_matches`) — but configured vs actually-running legitimately differ for
- * adopted processes. Anything other than an identity mismatch (access denied, an unkillable pid)
- * aborts immediately.
+ * The host's identity check is the point. The name is the desktop's own check, and configured vs
+ * actually-running legitimately differ for adopted processes; `recorded` is the service's, the
+ * same creation time and image `shared_utils.identity_matches` proves before its own kills, and
+ * the only thing that tells two instances of one exe apart. Anything other than an identity
+ * mismatch (access denied, an unkillable pid) aborts immediately.
  */
-async function terminateAs(pid: number, images: string[]) {
+async function terminateAs(pid: number, images: string[], recorded: RecordedIdentity | null) {
   let lastError: unknown = new Error('no executable to identify the process by')
 
   for (const image of images) {
     try {
-      return await terminatePid(pid, image)
+      return await terminatePid(pid, image, recorded)
     } catch (cause) {
       if (!isIdentityMismatch(cause)) throw cause
       lastError = cause
@@ -94,8 +111,12 @@ async function terminateAs(pid: number, images: string[]) {
  * Stop the live instance of `entry`, marking the exit as the operator's. See the module note.
  *
  * Candidates are tried in turn: a pid the host reports as already gone is skipped, not a
- * failure — the table keeps dead generations around, and the identity check is what tells
- * them apart. Only when none of them is alive is there nothing to stop.
+ * failure — the table keeps dead generations around. So is one the host proves is no longer the
+ * process the service recorded, but after that only rows with a record of their own are tried:
+ * a recordless row is checked by name alone, which another entry's instance of the same exe
+ * passes. Any other refusal ends the walk, as it always has, and off windows the host makes no
+ * record refusal, so there every refusal ends it. Only when none of them is alive is there
+ * nothing to stop; a record refusal is still reported then, since it says more than "not found".
  */
 export async function stopProcess(
   entry: ProcessEntry,
@@ -109,23 +130,32 @@ export async function stopProcess(
   }
 
   const states = await deps.readStates()
+  let stale: unknown = null
   for (const pid of candidatePidsForProcess(states, entry.id)) {
-    const result =
-      mode === 'restart'
-        ? await restartPid(pid, states, entry, images, deps)
-        : await killPid(pid, entry, images, deps)
-    if (result) return result
+    if (stale && !recordedIdentity(states[String(pid)])) continue
+    try {
+      const result =
+        mode === 'restart'
+          ? await restartPid(pid, states, entry, images, deps)
+          : await killPid(pid, states, entry, images, deps)
+      if (result) return result
+    } catch (cause) {
+      if (!isRecordMismatch(cause, pid)) throw cause
+      stale = cause
+    }
   }
+  if (stale) throw stale
   throw new NoLiveInstanceError(name)
 }
 
 async function killPid(
   pid: number,
+  states: AppStates,
   entry: ProcessEntry,
   images: string[],
   deps: StopDeps,
 ): Promise<StopResult | null> {
-  const result = await terminate(pid, images, 'kill')
+  const result = await terminate(pid, images, recordedIdentity(states[String(pid)]), 'kill')
   if (result) await deps.mutateStates((current) => markKilled(current, pid, entry.id))
   return result
 }
@@ -142,7 +172,7 @@ async function restartPid(
 
   let result: StopResult | null
   try {
-    result = await terminate(pid, images, 'restart')
+    result = await terminate(pid, images, recordedIdentity(previous), 'restart')
   } catch (cause) {
     // No kill happened, so the marker claims an exit that isn't ours. Best-effort rollback: if
     // this write also fails, the original failure is still what the operator sees.
@@ -170,9 +200,10 @@ async function restartPid(
 async function terminate(
   pid: number,
   images: string[],
+  recorded: RecordedIdentity | null,
   mode: StopMode,
 ): Promise<StopResult | null> {
-  const outcome = await terminateAs(pid, images)
+  const outcome = await terminateAs(pid, images, recorded)
   if (outcome.method === 'not_found') return null
   return { pid, method: outcome.method, marker: MARKERS[mode] }
 }

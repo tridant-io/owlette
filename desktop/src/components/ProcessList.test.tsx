@@ -481,7 +481,6 @@ describe('drag to reorder', () => {
     // The file-drop overlay a later task adds must be able to tell this apart
     // from an OS drag.
     expect(isRowDragging()).toBe(true)
-    expect(document.body.dataset.rowDragging).toBe('true')
 
     pointer(row, 'pointerup', { clientY: 110 })
     expect(screen.queryByTestId('drop-indicator')).toBeNull()

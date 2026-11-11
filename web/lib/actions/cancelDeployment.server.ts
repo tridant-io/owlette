@@ -12,19 +12,10 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { fanOutToMachines } from '@/lib/fanOut.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import logger from '@/lib/logger';
-
-export const PRE_FLIGHT_DEPLOYMENT_STATUSES = new Set<string>([
-  'pending',
-  'closing_processes',
-  'downloading',
-]);
-
-export const TERMINAL_DEPLOYMENT_STATUSES = new Set<string>([
-  'completed',
-  'failed',
-  'cancelled',
-  'uninstalled',
-]);
+import {
+  PRE_FLIGHT_DEPLOYMENT_STATUSES,
+  TERMINAL_DEPLOYMENT_STATUSES,
+} from '@/lib/deploymentStatuses';
 
 interface DeploymentTargetData {
   machineId: string;
@@ -39,6 +30,8 @@ export interface CancelDeploymentContext {
   actorIdentifier: string;
   /** Opaque correlation id from authorizedSiteHandler. */
   correlationId: string;
+  /** cancel only these machines' targets; omitted → every cancellable target. */
+  machines?: string[];
   db?: ReturnType<typeof getAdminDb>;
   now?: () => number;
 }
@@ -56,6 +49,13 @@ export type CancelDeploymentResult =
       ok: false;
       code: 'not_found' | 'no_cancellable_targets';
       message: string;
+    }
+  | {
+      // a write or read failed. the record was settled first unless writing it is
+      // what failed, and the outcome is audited either way.
+      ok: false;
+      code: 'write_failed';
+      cause: unknown;
     };
 
 export async function cancelDeployment(
@@ -83,19 +83,26 @@ export async function cancelDeployment(
   const targets: DeploymentTargetData[] = Array.isArray(data.targets)
     ? (data.targets as DeploymentTargetData[])
     : [];
-  const cancellable = targets.filter((target) =>
-    PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status),
+  const machineFilter = ctx.machines ? new Set(ctx.machines) : null;
+  const cancellable = targets.filter(
+    (target) =>
+      PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status) &&
+      (!machineFilter || machineFilter.has(target.machineId)),
   );
 
   if (cancellable.length === 0) {
     return {
       ok: false,
       code: 'no_cancellable_targets',
-      message: 'every target is already past the queued phase or terminal',
+      message: machineFilter
+        ? 'no targets in `pending`, `closing_processes` or `downloading` state matching the machines filter'
+        : 'every target is already past the queued phase or terminal',
     };
   }
 
-  await Promise.all(
+  // a target whose queued install could not be removed may still install, so it is
+  // neither sent a cancel nor marked; one machine's failure does not stop the others.
+  const purges = await Promise.allSettled(
     cancellable.map(async (target) => {
       const pendingRef = db
         .collection('sites')
@@ -123,12 +130,21 @@ export async function cancelDeployment(
       }
     }),
   );
+  const purged = cancellable
+    .filter((_, i) => purges[i].status === 'fulfilled')
+    .map((target) => target.machineId);
+  const unpurged = cancellable
+    .filter((_, i) => purges[i].status === 'rejected')
+    .map((target) => target.machineId);
+  const failedPurge = purges.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
 
   const installerName =
     typeof data.installer_name === 'string' ? data.installer_name : '';
   const cancelResults = await fanOutToMachines({
     siteId: ctx.siteId,
-    machineIds: cancellable.map((target) => target.machineId),
+    machineIds: purged,
     correlationId: ctx.correlationId,
     db,
     now,
@@ -142,50 +158,79 @@ export async function cancelDeployment(
       },
     }),
   });
-  const failedCancel = cancelResults.find((result) => !result.ok);
-  if (failedCancel) {
-    throw new Error(
-      `failed to fan out cancel_installation command to ${failedCancel.machineId}: ${failedCancel.error ?? 'unknown error'}`,
-    );
-  }
+  const reached = cancelResults.filter((result) => result.ok).map((result) => result.machineId);
+  const unreached = cancelResults.filter((result) => !result.ok);
 
   const cancelledAt = Timestamp.fromMillis(now());
-  const cancelledMachineIds = new Set(cancellable.map((target) => target.machineId));
-  const updatedTargets = targets.map((target) => {
-    if (!cancelledMachineIds.has(target.machineId)) return target;
-    return {
-      ...target,
-      status: 'cancelled',
-      cancelledAt,
+  // every purged target is marked, whether or not its cancel command arrived: the
+  // purge is what stops an install that has not started, and the command cannot
+  // stop one that has. failures are reported only after the record is settled,
+  // unless writing the record is what failed.
+  const cancelledMachineIds = new Set(purged);
+  // re-read in a transaction: writing back the array read above would undo a
+  // concurrent cancel of another machine, or a status the reconciler just wrote.
+  let transactionFailure: unknown;
+  const settled = await db.runTransaction(async (tx) => {
+    const fresh = await tx.get(deploymentRef);
+    if (!fresh.exists) return null;
+    const freshData = fresh.data() ?? {};
+    const freshTargets: DeploymentTargetData[] = Array.isArray(freshData.targets)
+      ? (freshData.targets as DeploymentTargetData[])
+      : [];
+
+    const marked: string[] = [];
+    const updatedTargets = freshTargets.map((target) => {
+      if (
+        !cancelledMachineIds.has(target.machineId) ||
+        !PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status)
+      ) {
+        return target;
+      }
+      marked.push(target.machineId);
+      return {
+        ...target,
+        status: 'cancelled',
+        cancelledAt,
+      };
+    });
+    if (marked.length === 0) return 'moved_on' as const;
+
+    const allTerminal = updatedTargets.every((target) =>
+      TERMINAL_DEPLOYMENT_STATUSES.has(target.status),
+    );
+
+    const updatePayload: Record<string, unknown> = {
+      targets: updatedTargets,
+      updatedAt: FieldValue.serverTimestamp(),
     };
+    let status = 'in_progress';
+    if (allTerminal) {
+      const statuses = new Set(updatedTargets.map((target) => target.status));
+      if (statuses.size === 1 && statuses.has('cancelled')) {
+        status = 'cancelled';
+      } else if (statuses.size === 1 && statuses.has('completed')) {
+        status = 'completed';
+      } else if (statuses.has('failed') && !statuses.has('completed')) {
+        status = 'failed';
+      } else {
+        status = 'partial';
+      }
+      updatePayload.status = status;
+      updatePayload.completedAt = FieldValue.serverTimestamp();
+    }
+
+    tx.update(deploymentRef, updatePayload);
+    return { status, machineIds: marked };
+  }).catch((err: unknown) => {
+    // the installs are purged and the commands sent, so this is audited and
+    // answered like any other failed write; those targets wait for the sweeper.
+    transactionFailure = err;
+    return undefined;
   });
 
-  const allTerminal = updatedTargets.every((target) =>
-    TERMINAL_DEPLOYMENT_STATUSES.has(target.status),
-  );
-
-  const updatePayload: Record<string, unknown> = {
-    targets: updatedTargets,
-    updatedAt: FieldValue.serverTimestamp(),
-  };
-  let responseStatus = 'in_progress';
-  if (allTerminal) {
-    const statuses = new Set(updatedTargets.map((target) => target.status));
-    if (statuses.size === 1 && statuses.has('cancelled')) {
-      responseStatus = 'cancelled';
-    } else if (statuses.size === 1 && statuses.has('completed')) {
-      responseStatus = 'completed';
-    } else if (statuses.has('failed') && !statuses.has('completed')) {
-      responseStatus = 'failed';
-    } else {
-      responseStatus = 'partial';
-    }
-    updatePayload.status = responseStatus;
-    updatePayload.completedAt = FieldValue.serverTimestamp();
-  }
-
-  await deploymentRef.update(updatePayload);
-
+  // the cancel commands above are already on their way, so every outcome from
+  // here is audited, including the ones that mark nothing in the record.
+  const marked = settled && settled !== 'moved_on' ? settled.machineIds : [];
   try {
     emitMutation({
       kind: 'deployment_mutated',
@@ -196,8 +241,13 @@ export async function cancelDeployment(
         endpoint: `/api/sites/${ctx.siteId}/deployments/${ctx.deploymentId}/cancel`,
         method: 'POST',
         verb: 'cancel',
-        cancelled_count: cancellable.length,
-        machine_ids: cancellable.map((target) => target.machineId),
+        cancelled_count: marked.length,
+        machine_ids: marked,
+        cancel_sent_to: reached,
+        ...(unreached.length > 0
+          ? { unreached_machine_ids: unreached.map((result) => result.machineId) }
+          : {}),
+        ...(unpurged.length > 0 ? { unpurged_machine_ids: unpurged } : {}),
         correlationId: ctx.correlationId,
       },
     });
@@ -208,12 +258,41 @@ export async function cancelDeployment(
     });
   }
 
+  if (settled === null) {
+    return {
+      ok: false,
+      code: 'not_found',
+      message: `deployment ${ctx.deploymentId} not found on site ${ctx.siteId}`,
+    };
+  }
+  const failure =
+    transactionFailure ??
+    failedPurge?.reason ??
+    (unreached.length > 0
+      ? new Error(
+          `could not send cancel_installation to ${unreached.map((result) => result.machineId).join(', ')}: ` +
+            `${unreached[0].error ?? 'unknown error'}`,
+        )
+      : undefined);
+  if (settled === undefined || failure !== undefined) {
+    return { ok: false, code: 'write_failed', cause: failure };
+  }
+  if (settled === 'moved_on') {
+    return {
+      ok: false,
+      code: 'no_cancellable_targets',
+      message:
+        'every target moved past the queued phase while the cancel ran, ' +
+        'though cancel_installation may already have been sent to those machines',
+    };
+  }
+
   return {
     ok: true,
     deploymentId: ctx.deploymentId,
     siteId: ctx.siteId,
-    status: responseStatus,
-    cancelled: cancellable.length,
-    machine_ids: cancellable.map((target) => target.machineId),
+    status: settled.status,
+    cancelled: settled.machineIds.length,
+    machine_ids: settled.machineIds,
   };
 }

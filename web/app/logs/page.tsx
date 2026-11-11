@@ -26,6 +26,7 @@ import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { DatePicker } from '@/components/ui/date-picker';
 import { formatSiteScopedTimestamp, getDisplayTimezone, zonedTimeToUtcMs } from '@/lib/timeUtils';
+import { toast } from '@/lib/toast';
 
 interface LogEvent {
   id: string;
@@ -456,6 +457,7 @@ const LogRow = React.memo(function LogRow({
             <div className="flex-shrink-0 border-t md:border-t-0 md:border-l border-border/50 pt-3 md:pt-0 md:pl-6">
               <span className="text-muted-foreground text-xs">crash screenshot</span>
               <button type="button" onClick={() => onOpenScreenshot(screenshotUrl)} className="block mt-1">
+                {/* eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset */}
                 <img
                   src={screenshotUrl}
                   alt="crash screenshot"
@@ -872,7 +874,7 @@ export default function LogsPage() {
       });
       const body = await res.json().catch(() => null);
       if (!res.ok) {
-        throw new Error(body?.detail || body?.title || 'Failed to clear logs');
+        throw new Error(body?.detail || body?.title || 'failed to clear logs');
       }
 
       console.log(`Deleted ${body?.deletedCount ?? 0} log entries`);
@@ -882,6 +884,7 @@ export default function LogsPage() {
 
     } catch (error) {
       console.error('Error clearing logs:', error);
+      toast.error(error instanceof Error ? error.message : 'failed to clear logs');
     } finally {
       setIsClearing(false);
     }
@@ -1254,6 +1257,7 @@ export default function LogsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 cursor-pointer"
           onClick={() => setScreenshotModalUrl(null)}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element -- signed storage url, not a static asset */}
           <img
             src={screenshotModalUrl}
             alt="crash screenshot"

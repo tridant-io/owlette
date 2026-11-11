@@ -118,8 +118,8 @@ function badgeFor(
   stats: SwoopStats | null | undefined,
   retryIn: number | null | undefined,
 ): { label: string; tone: 'destructive' | 'secondary' } | null {
-  if (state === 'error') return { label: 'disconnected', tone: 'destructive' };
-  if (state === 'ended') {
+  // a failed start on a path that may come back is `error` with a retry, like a lost session
+  if (state === 'ended' || state === 'error') {
     return retryIn === null || retryIn === undefined
       ? { label: 'disconnected', tone: 'destructive' }
       : { label: `reconnecting in ${retryIn} s`, tone: 'secondary' };

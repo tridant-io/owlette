@@ -1,7 +1,8 @@
 /**
  * sync_pull payload contract — pure builder + id helper for the command queued onto each
- * machine's `commands/pending` doc. Three call sites must stay aligned:
- * functions/src/distributionFanout.ts, and the roost deploy + resync routes.
+ * machine's `commands/pending` doc. Five call sites must stay aligned: functions/src/
+ * distributionFanout.ts and rolloutScheduler.ts through this builder, and the roost deploy,
+ * resync and rollback routes, which build their own.
  *
  * agent/src/sync_commands.py:_handle_sync_pull runs `_require_str` over every key emitted
  * here, so a renamed or missing field crashes the agent before any disk work.

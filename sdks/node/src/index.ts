@@ -248,6 +248,7 @@ export type {
   CreateInstallerDeploymentOptions,
   CreateInstallerDeploymentResult,
   RetryInstallerDeploymentOptions,
+  UninstallInstallerDeploymentOptions,
   InstallerDeploymentMutationResult,
 } from './resources/installerDeployments';
 export type {

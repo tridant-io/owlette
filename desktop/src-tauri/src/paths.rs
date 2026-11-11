@@ -48,7 +48,7 @@ pub const ISSUE_ATTACHMENTS_REL: &str = "ipc/issue-attachments";
 #[cfg(windows)]
 pub const SWOOP_KILL_FLAG_REL: &str = "tmp/swoop_kill.flag";
 
-/// Touched to ask a running service to exit 42 so NSSM restarts it
+/// Touched to ask a running service to exit 42 so owlette-host restarts it
 /// (`owlette_service.main`, the restart-flag branch). Windows only: off it the
 /// daemon ignores a flag it did not write itself.
 #[cfg(windows)]

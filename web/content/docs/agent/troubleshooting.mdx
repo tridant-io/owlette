@@ -27,10 +27,10 @@ the app menu's **logs** item opens this folder on every platform, and on Windows
 | **service stdout / stderr** | `service_stdout.log`, `service_stderr.log` | Windows | the service runner's raw output, captured verbatim by owlette-host — interpreter-level tracebacks that never reach the logger land in stderr |
 | **daemon output** | `launchd-agent.log` | macOS | the same raw output on a Mac: the daemon's stdout and stderr, as launchd writes them |
 | **daemon output** | `journalctl -u owlette-agent` | Linux | not a file: systemd keeps the service's raw output in the journal |
-| **hoot** | `cortex.log` | all | hoot runtime and CLI fetch. only written when hoot is enabled |
+| **hoot** | `cortex.log`, in its own `cortex` folder on macOS and Linux | all | hoot runtime and CLI fetch. only written when hoot is enabled |
 | **pairing** | `pairing_debug.log` | all | device-code pairing and token setup |
 | **preseed pairing** | `pairing.log` | macOS, Linux | the background pairing a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) starts at install |
-| **token exchange (legacy)** | `oauth_debug.log` | all | written only by the old registration-code exchange, which phrase pairing does not use, so a current agent leaves it absent or stale. response bodies were never written — they carry tokens |
+| **token exchange (legacy)** | `oauth_debug.log` | all | left by an older agent's registration-code exchange, which phrase pairing replaced. no current agent writes it, so it is absent or stale, and safe to delete. response bodies were never written — they carry tokens |
 | **app requests** | `privileged_requests.log` | macOS, Linux | an audit row for every request the desktop app made of the service — pair, leave, restart, reboot, issue — and whether it ran |
 | **submit issue** | `submit_issue.log` | all | each issue sent from the desktop app: zipping and uploading attached logs, and why they could not be attached. 1 MB, one backup. never the issue's text, a token or an upload link |
 | **self-update installer** | `installer_update.log` | Windows | the Inno Setup log written during a remote agent update |
@@ -41,7 +41,7 @@ the app menu's **logs** item opens this folder on every platform, and on Windows
 | **swoop streamer** | `swoop/swoop.log` | Windows, macOS | the [swoop](/docs/dashboard/swoop) streamer's own log, with its raw stderr beside it — see below |
 | **interactive installer** | `Setup Log <date> #NNN.txt` in the installing user's `%TEMP%` | Windows | the Inno Setup log of a manual install, written on every run and not in the data root; `/LOG="<path>"` writes it to a path you choose instead |
 
-main shared-logger files use rotating file handlers: 10 MB per file, 5 backups. owlette-host rotates the three files it writes by size, keeping exactly one `.1` sibling each: 10 MB for `service_stdout.log` and `service_stderr.log`, 2 MB for `service_host.log`. `tmp/status_writer.log` rotates at 100 KB with 2 backups, and `pairing_debug.log` uses plain writes — truncated at the start of each pairing run, while `oauth_debug.log` appends across runs rather than rotating. old main logs are deleted after 90 days by default (`logging.max_age_days`).
+main shared-logger files use rotating file handlers: 10 MB per file, 5 backups. owlette-host rotates the three files it writes by size, keeping exactly one `.1` sibling each: 10 MB for `service_stdout.log` and `service_stderr.log`, 2 MB for `service_host.log`. `tmp/status_writer.log` rotates at 100 KB with 2 backups, and `pairing_debug.log` uses plain writes, truncated at the start of each pairing run. old main logs are deleted after 90 days by default (`logging.max_age_days`).
 
 ### the swoop streamer log
 

@@ -3,8 +3,8 @@
  *
  * Poll a queued command. Merges the `pending` and `completed` Firestore docs into
  * one status: progress markers (`running`, `downloading`, `installing`) live on
- * the `completed` doc as non-terminal and surface as `in_progress`; only
- * `completed`/`failed`/`error`/`cancelled` resolve the command. For finished
+ * the `completed` doc as non-terminal and surface as `in_progress`; only a
+ * status `isTerminalCommandStatus` accepts resolves the command. For finished
  * `capture_screenshot` commands, mints a fresh 1-hour signed read URL per request
  * into `result.screenshot_url` — the URL itself is never persisted.
  *
@@ -21,6 +21,7 @@ import {
   requireMachineAuthAndScope,
 } from '../../../../../../_shared';
 import { issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 
 interface RouteParams {
   params: Promise<{ siteId: string; machineId: string; commandId: string }>;
@@ -29,19 +30,6 @@ interface RouteParams {
 const COMMAND_ID_RE = /^cmd_[A-Za-z0-9_-]{1,80}$/;
 
 type CommandStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
-
-/**
- * Only these statuses resolve a command. The agent also writes non-terminal
- * markers to the completed doc — `running` (restart-safety, written at command
- * start), `downloading`, `installing` — which must surface as `in_progress`.
- * `cancelled` has no CommandStatus variant and maps to `failed` at resolve time.
- */
-const TERMINAL_COMMAND_STATUSES = new Set([
-  'completed',
-  'failed',
-  'error',
-  'cancelled',
-]);
 
 interface CommandLookup {
   status: CommandStatus;
@@ -122,7 +110,10 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       }
     }
 
-    const errorVal = cmd.error;
+    // a cancelled hoot tool carries its reason in `error`; everything else the
+    // agent cancels carries it in `result`
+    const errorVal =
+      typeof cmd.error === 'string' ? cmd.error : cmd.status === 'cancelled' ? cmd.result : undefined;
     const errorOut =
       lookup.status === 'failed' && typeof errorVal === 'string'
         ? errorVal
@@ -165,14 +156,14 @@ function resolveCommand(
   const completedEntry = completedAll?.[commandId];
   if (completedEntry && typeof completedEntry === 'object') {
     const data = completedEntry as Record<string, unknown>;
-    const rawStatus = typeof data.status === 'string' ? data.status : null;
+    const rawStatus = data.status;
     // Non-terminal or unrecognized status means still executing — never report
     // completed with an empty result.
-    if (!rawStatus || !TERMINAL_COMMAND_STATUSES.has(rawStatus)) {
+    if (!isTerminalCommandStatus(rawStatus)) {
       return { status: 'in_progress', data, source: 'completed' };
     }
     // Terminal. `cancelled` has no dedicated CommandStatus variant, so it maps
-    // to `failed` — the agent's cancellation error then surfaces via `error`.
+    // to `failed`, and the agent's reason surfaces via `error`.
     const status: CommandStatus =
       rawStatus === 'failed' || rawStatus === 'error' || rawStatus === 'cancelled'
         ? 'failed'

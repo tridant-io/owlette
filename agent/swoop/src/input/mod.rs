@@ -676,7 +676,7 @@ fn per_notch(mode: WheelMode) -> f64 {
     match mode {
         WheelMode::Pixel => PIXELS_PER_NOTCH,
         WheelMode::Line => LINES_PER_NOTCH,
-        WheelMode::Page => LINES_PER_PAGE / LINES_PER_NOTCH,
+        WheelMode::Page => LINES_PER_NOTCH / LINES_PER_PAGE,
     }
 }
 
@@ -1756,6 +1756,14 @@ mod tests {
             vec![InputEvent::MouseWheel {
                 delta_x: 0,
                 delta_y: 120
+            }]
+        );
+        // One page up is LINES_PER_PAGE lines, which is eight notches.
+        assert_eq!(
+            viewer.accept(&wire_wheel(0.0, -1.0, WheelMode::Page), now),
+            vec![InputEvent::MouseWheel {
+                delta_x: 0,
+                delta_y: 960
             }]
         );
     }

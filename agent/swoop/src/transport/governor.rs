@@ -154,11 +154,11 @@
 //!   spends half its target.
 //!
 //! **Both actuators are wired.** `session/mod.rs`'s `apply_ladder` drains
-//! [`Governor::take_ladder`] after every report and after a `quality` message,
-//! re-plans on a resolution move and sends `ToCapture::Fps` on a frame-rate one.
-//! The frame-rate gate is deliberately skipped at `TARGET_FPS`: duplication is
-//! vsync-locked at 16.67 ms and a 16.666 ms gate drops every other frame on
-//! jitter.
+//! [`Governor::take_ladder`] after every report and after a `quality` message
+//! and re-plans the tiers, which reach capture as one `ToCapture::Tiers`: a new
+//! size or frame rate opens a new encoder there. The frame-rate gate
+//! (`RateGate`) runs at every rung, the top one included, with 2 ms of slack so
+//! a vsync-locked 60 Hz panel loses no frame to jitter.
 //!
 //! # Three caps, one of them the viewer's, and the order they compose in
 //!

@@ -32,13 +32,21 @@ interface RecordedUpdate {
   payload: Record<string, unknown>;
 }
 
-function buildFakeDb(initialDocs: Record<string, Record<string, unknown> | null> = {}) {
+function buildFakeDb(
+  initialDocs: Record<string, Record<string, unknown> | null> = {},
+  // runs on every doc read, so a test can change a doc between the read and the write.
+  onRead?: (key: string, docs: Map<string, Record<string, unknown> | null>) => void,
+  // a write this answers true for rejects, as a failed firestore write would.
+  failsWrite?: (key: string, op: 'set' | 'update') => boolean,
+) {
   const docs = new Map<string, Record<string, unknown> | null>(
     Object.entries(initialDocs),
   );
   const sets: RecordedSet[] = [];
   const updates: RecordedUpdate[] = [];
   const deletes: string[][] = [];
+  // firestore serialises transactions on one doc; running them one after another models that.
+  let transactionChain: Promise<unknown> = Promise.resolve();
 
   function makeCollection(parentPath: string[]) {
     return {
@@ -46,8 +54,10 @@ function buildFakeDb(initialDocs: Record<string, Record<string, unknown> | null>
         const docPath = [...parentPath, id];
         const key = docPath.join('/');
         return {
+          path: key,
           set: jest.fn(
             async (payload: Record<string, unknown>, options?: { merge?: boolean }) => {
+              if (failsWrite?.(key, 'set')) throw new Error(`write to ${key} failed`);
               sets.push({ path: docPath, payload, options });
               const existing = docs.get(key);
               docs.set(
@@ -59,6 +69,7 @@ function buildFakeDb(initialDocs: Record<string, Record<string, unknown> | null>
             },
           ),
           update: jest.fn(async (payload: Record<string, unknown>) => {
+            if (failsWrite?.(key, 'update')) throw new Error(`write to ${key} failed`);
             updates.push({ path: docPath, payload });
             docs.set(key, { ...(docs.get(key) ?? {}), ...payload });
           }),
@@ -68,6 +79,7 @@ function buildFakeDb(initialDocs: Record<string, Record<string, unknown> | null>
           }),
           get: jest.fn(async () => {
             const data = docs.get(key);
+            onRead?.(key, docs);
             return {
               exists: data !== undefined && data !== null,
               data: () => data ?? undefined,
@@ -79,8 +91,31 @@ function buildFakeDb(initialDocs: Record<string, Record<string, unknown> | null>
     };
   }
 
+  type DocRef = {
+    path: string;
+    get: () => Promise<unknown>;
+    update: (payload: Record<string, unknown>) => Promise<void>;
+  };
+  const runTransaction = (fn: (tx: unknown) => Promise<unknown>) => {
+    const run = transactionChain.then(() =>
+      fn({
+        get: (ref: DocRef) => ref.get(),
+        update: (ref: DocRef, payload: Record<string, unknown>) => {
+          // a failing write fails the whole transaction, as a failed commit would.
+          if (failsWrite?.(ref.path, 'update')) throw new Error(`transaction on ${ref.path} failed`);
+          void ref.update(payload);
+        },
+      }),
+    );
+    transactionChain = run.catch(() => undefined);
+    return run;
+  };
+
   return {
-    db: { collection: (name: string) => makeCollection([name]) } as unknown as FakeDb,
+    db: {
+      collection: (name: string) => makeCollection([name]),
+      runTransaction,
+    } as unknown as FakeDb,
     sets,
     updates,
     deletes,
@@ -144,6 +179,14 @@ describe('createDeployment', () => {
         attributes: expect.objectContaining({ verb: 'create', correlationId: 'corr_1' }),
       }),
     );
+
+    // the sweeper scans only sites stamped in the last 30 minutes.
+    const siteStamp = sets.find((set) => set.path.join('/') === 'sites/site_a');
+    expect(siteStamp?.payload).toHaveProperty('lastDeploymentActivityAt');
+    expect(siteStamp?.options).toEqual({ merge: true });
+    expect(Object.keys(siteStamp?.payload ?? {})).toEqual(['lastDeploymentActivityAt']);
+    // before the deployment: if the stamp fails, no deployment is left unswept.
+    expect(sets.indexOf(siteStamp!)).toBeLessThan(sets.indexOf(deploymentSet));
   });
 
   describe('active-hours override (active-hours-guard task 2.3)', () => {
@@ -277,7 +320,316 @@ describe('cancelDeployment', () => {
     expect(updatedTargets.find((target) => target.machineId === 'm2')?.status).toBe('cancelled');
     expect(updatedTargets.find((target) => target.machineId === 'm1')?.status).toBe('installing');
   });
+
+  it('with machines, cancels only those and leaves the other queued targets running', async () => {
+    const { db, sets, updates } = buildFakeDb({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'pending' },
+          { machineId: 'm2', status: 'downloading' },
+          { machineId: 'm3', status: 'pending' },
+        ],
+      },
+      'sites/site_a/machines/m1/commands/pending': {
+        install_1: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+      'sites/site_a/machines/m2/commands/pending': {
+        install_2: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+    });
+
+    const result = await cancelDeployment({
+      siteId: 'site_a',
+      deploymentId: 'deploy_1',
+      actorIdentifier: 'user:user_1',
+      correlationId: 'corr_1',
+      machines: ['m2'],
+      db,
+      now: ctx.now,
+    });
+
+    expect(result).toMatchObject({ ok: true, cancelled: 1, machine_ids: ['m2'] });
+    const touched = [...sets, ...updates]
+      .map((write) => write.path.join('/'))
+      .filter((path) => path.includes('/machines/'));
+    expect(touched.every((path) => path.includes('/machines/m2/'))).toBe(true);
+
+    const deploymentUpdate = updates.find((update) => update.path.includes('deployments'));
+    const updatedTargets = deploymentUpdate?.payload.targets as Array<{
+      machineId: string;
+      status: string;
+    }>;
+    expect(updatedTargets.map((target) => target.status)).toEqual(['pending', 'cancelled', 'pending']);
+    expect(deploymentUpdate?.payload.status).toBeUndefined();
+  });
+
+  it.each([
+    ['is not a target', ['m9']],
+    ['is installing, which a cancel never stops', ['m1']],
+  ])('refuses and writes nothing when the named machine %s', async (_label, machines) => {
+    const { db, sets, updates } = buildFakeDb({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'installing' },
+          { machineId: 'm2', status: 'pending' },
+        ],
+      },
+    });
+
+    const result = await cancelDeployment({
+      siteId: 'site_a',
+      deploymentId: 'deploy_1',
+      actorIdentifier: 'user:user_1',
+      correlationId: 'corr_1',
+      machines,
+      db,
+      now: ctx.now,
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'no_cancellable_targets' });
+    expect(sets).toHaveLength(0);
+    expect(updates).toHaveLength(0);
+  });
+
+  it('with machines naming one cancellable target and one installing, cancels only the first', async () => {
+    const { db } = buildFakeDb({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'installing' },
+          { machineId: 'm2', status: 'pending' },
+        ],
+      },
+    });
+
+    const result = await cancelDeployment({
+      siteId: 'site_a',
+      deploymentId: 'deploy_1',
+      actorIdentifier: 'user:user_1',
+      correlationId: 'corr_1',
+      machines: ['m1', 'm2'],
+      db,
+      now: ctx.now,
+    });
+
+    expect(result).toMatchObject({ ok: true, cancelled: 1, machine_ids: ['m2'] });
+    expect(await readTargetStatuses(db)).toEqual(['installing', 'cancelled']);
+  });
+
+  it('two per-machine cancels in flight together both land', async () => {
+    const { db } = buildFakeDb({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'pending' },
+          { machineId: 'm2', status: 'pending' },
+        ],
+      },
+    });
+    const base = {
+      siteId: 'site_a',
+      deploymentId: 'deploy_1',
+      actorIdentifier: 'user:user_1',
+      correlationId: 'corr_1',
+      db,
+      now: ctx.now,
+    };
+
+    const results = await Promise.all([
+      cancelDeployment({ ...base, machines: ['m1'] }),
+      cancelDeployment({ ...base, machines: ['m2'] }),
+    ]);
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    expect(await readTargetStatuses(db)).toEqual(['cancelled', 'cancelled']);
+    expect(await readDeploymentStatus(db)).toBe('cancelled');
+  });
+
+  it('refuses, and does not overwrite the target, when the agent moved it on while the cancel ran', async () => {
+    const { db } = buildFakeDb(
+      {
+        'sites/site_a/deployments/deploy_1': {
+          installer_name: 'vlc.exe',
+          status: 'in_progress',
+          targets: [
+            { machineId: 'm1', status: 'downloading' },
+            { machineId: 'm2', status: 'completed' },
+          ],
+        },
+      },
+      (key, docs) => {
+        // the reconciler moves m1 to installing after the cancel has read the deployment.
+        if (key !== 'sites/site_a/machines/m1/commands/pending') return;
+        docs.set('sites/site_a/deployments/deploy_1', {
+          ...docs.get('sites/site_a/deployments/deploy_1'),
+          targets: [
+            { machineId: 'm1', status: 'installing' },
+            { machineId: 'm2', status: 'completed' },
+          ],
+        });
+      },
+    );
+
+    const result = await cancelDeployment({
+      siteId: 'site_a',
+      deploymentId: 'deploy_1',
+      actorIdentifier: 'user:user_1',
+      correlationId: 'corr_1',
+      db,
+      now: ctx.now,
+    });
+
+    expect(result).toMatchObject({ ok: false, code: 'no_cancellable_targets' });
+    expect(await readTargetStatuses(db)).toEqual(['installing', 'completed']);
+    expect(await readDeploymentStatus(db)).toBe('in_progress');
+    // the cancel command had already gone to m1, so the refusal is still on record.
+    expect(emitMutation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: 'deployment_mutated',
+        attributes: expect.objectContaining({
+          verb: 'cancel',
+          cancelled_count: 0,
+          machine_ids: [],
+          cancel_sent_to: ['m1'],
+        }),
+      }),
+    );
+  });
+
+  describe('when a write to one machine fails', () => {
+    const twoQueued = () => ({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'pending' },
+          { machineId: 'm2', status: 'downloading' },
+        ],
+      },
+      'sites/site_a/machines/m1/commands/pending': {
+        install_1: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+      'sites/site_a/machines/m2/commands/pending': {
+        install_2: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+    });
+    const cancelAll = (db: FakeDb) =>
+      cancelDeployment({
+        siteId: 'site_a',
+        deploymentId: 'deploy_1',
+        actorIdentifier: 'user:user_1',
+        correlationId: 'corr_1',
+        db,
+        now: ctx.now,
+      });
+    const m2Pending = 'sites/site_a/machines/m2/commands/pending';
+
+    it('still marks every purged target cancelled when the cancel cannot reach one machine', async () => {
+      const { db } = buildFakeDb(twoQueued(), undefined, (key, op) => op === 'set' && key === m2Pending);
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['cancelled', 'cancelled']);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            machine_ids: ['m1', 'm2'],
+            cancel_sent_to: ['m1'],
+            unreached_machine_ids: ['m2'],
+          }),
+        }),
+      );
+    });
+
+    it('leaves a target whose queued install could not be removed, and settles the rest', async () => {
+      const { db, sets } = buildFakeDb(twoQueued(), undefined, (key, op) => op === 'update' && key === m2Pending);
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['cancelled', 'downloading']);
+      // its install may still run, and a cancel command could not stop it.
+      expect(sets.some((set) => set.path.join('/') === m2Pending)).toBe(false);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            machine_ids: ['m1'],
+            cancel_sent_to: ['m1'],
+            unpurged_machine_ids: ['m2'],
+          }),
+        }),
+      );
+    });
+
+    it('audits and reports a settling transaction that fails, with nothing marked', async () => {
+      const { db } = buildFakeDb(
+        twoQueued(),
+        undefined,
+        (key, op) => op === 'update' && key === 'sites/site_a/deployments/deploy_1',
+      );
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      // the installs are purged and the commands sent; the targets wait for the sweeper.
+      expect(await readTargetStatuses(db)).toEqual(['pending', 'downloading']);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            cancelled_count: 0,
+            machine_ids: [],
+            cancel_sent_to: ['m1', 'm2'],
+          }),
+        }),
+      );
+    });
+
+    it('reports a failed purge rather than no_cancellable_targets when the rest moved on', async () => {
+      const m1Pending = 'sites/site_a/machines/m1/commands/pending';
+      const { db } = buildFakeDb(
+        twoQueued(),
+        (key, docs) => {
+          // m2's install starts while the cancel is purging.
+          if (key !== m2Pending) return;
+          docs.set('sites/site_a/deployments/deploy_1', {
+            ...docs.get('sites/site_a/deployments/deploy_1'),
+            targets: [
+              { machineId: 'm1', status: 'pending' },
+              { machineId: 'm2', status: 'installing' },
+            ],
+          });
+        },
+        (key, op) => op === 'update' && key === m1Pending,
+      );
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['pending', 'installing']);
+    });
+  });
 });
+
+async function readDeployment(db: FakeDb): Promise<Record<string, unknown>> {
+  const snap = await db.collection('sites').doc('site_a').collection('deployments').doc('deploy_1').get();
+  return snap.data() ?? {};
+}
+
+async function readTargetStatuses(db: FakeDb): Promise<string[]> {
+  const targets = (await readDeployment(db)).targets as Array<{ status: string }>;
+  return targets.map((target) => target.status);
+}
+
+async function readDeploymentStatus(db: FakeDb): Promise<unknown> {
+  return (await readDeployment(db)).status;
+}
 
 describe('deleteDeployment', () => {
   it('deletes terminal deployments', async () => {

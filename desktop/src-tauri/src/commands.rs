@@ -19,19 +19,11 @@ use crate::agent_cli::{self, Runs};
 use crate::issue_attachments::{self, Staged, StagedVideo};
 use crate::json_io::{self, WriteOutcome};
 use crate::paths::{self, ISSUE_ATTACHMENTS_REL, SERVICE_STATUS_REL};
-use crate::process_ctl::{self, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
+use crate::process_ctl::{self, RecordedIdentity, TerminateOutcome, DEFAULT_GRACEFUL_TIMEOUT};
 use crate::service_ctl::{self, ServiceCommandOutcome, ServiceStatus};
 use crate::shell_open;
 use crate::viewer_launch;
 use crate::window_state::{self, DetailSections, LayoutState, ThemeChoice};
-
-/// Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). The frontend
-/// otherwise uses relative paths; this is for spawning the bundled interpreter or
-/// showing the operator where the tree lives.
-#[tauri::command(async)]
-pub fn owlette_data_root() -> String {
-  paths::data_root().to_string_lossy().into_owned()
-}
 
 /// argv this process was launched with, including argv[0].
 ///
@@ -92,7 +84,8 @@ pub fn request_accessibility() -> Result<(), String> {
   shell_open::open_accessibility_settings()
 }
 
-/// Whether the run-on-login startup shortcut exists.
+/// macOS's answer on sharing this app's clipboard (Paste from Other Apps); `None`
+/// off macOS and when there is no answer (`tcc::clipboard_sharing`).
 #[tauri::command(async)]
 pub fn clipboard_sharing() -> Option<bool> {
   #[cfg(target_os = "macos")]
@@ -116,6 +109,7 @@ pub fn request_clipboard_sharing() -> Result<(), String> {
   shell_open::open_clipboard_settings()
 }
 
+/// Whether the run-on-login startup shortcut exists.
 #[tauri::command(async)]
 pub fn startup_link_enabled() -> bool {
   crate::startup_link::is_enabled()
@@ -180,17 +174,18 @@ pub fn service_restart() -> Result<ServiceCommandOutcome, String> {
 }
 
 /// Close `pid` gracefully, then terminate it — but only if it is still running
-/// `expected_exe`.
+/// `expected_exe` and, when its row records one, is still the `recorded` process.
 #[tauri::command(async)]
 pub fn terminate_pid(
   pid: u32,
   expected_exe: String,
+  recorded: Option<RecordedIdentity>,
   graceful_timeout_ms: Option<u64>,
 ) -> Result<TerminateOutcome, String> {
   let timeout = graceful_timeout_ms
     .map(Duration::from_millis)
     .unwrap_or(DEFAULT_GRACEFUL_TIMEOUT);
-  process_ctl::terminate_pid(pid, &expected_exe, timeout)
+  process_ctl::terminate_pid(pid, &expected_exe, recorded.as_ref(), timeout)
 }
 
 /// Run one of the agent's headless modes, streaming its output. `mode` is a name

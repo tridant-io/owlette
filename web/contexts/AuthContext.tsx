@@ -836,34 +836,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
+  // signIn, signUp and signInWithGoogle report a failure and throw it: /login and
+  // /register say it to the user, once. a toast here as well showed every failure twice.
   const signIn = useCallback(async (email: string, password: string) => {
     try {
       if (!auth) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       await signInWithEmailAndPassword(auth, email, password);
     } catch (error: unknown) {
-      const friendlyMessage = handleError(error);
-      toast.error('Sign In Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 
   const signUp = useCallback(async (email: string, password: string, firstName?: string, lastName?: string, turnstileToken?: string) => {
     try {
       if (!auth || !db) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
@@ -898,34 +889,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } finally {
         signUpBootstrapRef.current = null;
       }
-
-      toast.success('Account Created', {
-        description: 'Your account has been created successfully. You can now sign in.',
-      });
     } catch (error: unknown) {
-      // /register renders inline remediation for this, so no toast — but still
-      // report it: OWLETTE-WEB-46 is how we learned real users hit it.
+      // reported under its own context: OWLETTE-WEB-46 is how we learned real users hit it.
       if ((error as { code?: unknown } | null)?.code === 'auth/email-already-in-use') {
         logError(error, 'signup-email-already-in-use');
         throw error;
       }
 
-      const friendlyMessage = handleError(error);
-      toast.error('Sign Up Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 
   const signInWithGoogle = useCallback(async () => {
     try {
       if (!auth) {
-        const error = new Error('Firebase authentication is not configured. Please check your environment variables.');
-        toast.error('Authentication Error', {
-          description: 'Firebase is not configured properly. Please contact support.',
-        });
-        throw error;
+        throw new Error('Firebase authentication is not configured. Please check your environment variables.');
       }
 
       const provider = new GoogleAuthProvider();
@@ -950,11 +929,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
 
-      const friendlyMessage = handleError(error);
-      toast.error('Google Sign In Failed', {
-        description: friendlyMessage,
-      });
-      throw error; // Re-throw so calling component can handle it
+      logError(error);
+      throw error;
     }
   }, []);
 

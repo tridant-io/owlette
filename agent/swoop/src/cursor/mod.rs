@@ -3,11 +3,9 @@
 //! Desktop Duplication never blends the pointer into the desktop image: the
 //! adapter draws it, and what `AcquireNextFrame` hands back is the desktop
 //! without it. So the encoded frames carry no cursor at all and the viewer has
-//! to composite one from the messages this module emits — which is what
-//! [`CursorMetadata::pointer_in_frame`] says on the wire, and why it is `false`
-//! and stays `false` for this backend. The one exception is a window move or
-//! resize, when the system paints the pointer into the picture itself: see
-//! [`with_painted`].
+//! to composite one from the messages this module emits. The one exception is
+//! a window move or resize, when the system paints the pointer into the picture
+//! itself: see [`with_painted`].
 //!
 //! Every number below is a measurement from spike 0.8 (Windows 11 23H2
 //! 22631.6199, two attached outputs), over 500 frames / 25 s:
@@ -60,7 +58,6 @@
 //! at least one shape decoded, and fewer distinct shapes than shape updates.
 
 use base64::prelude::{Engine as _, BASE64_STANDARD};
-use serde::Serialize;
 
 use crate::capture::{OutputInfo, Rect, Rotation};
 use crate::input::PointerSpace;
@@ -68,12 +65,6 @@ use crate::signal::messages::channel::Cursor;
 
 /// 96 dpi is 100% scaling — `USER_DEFAULT_SCREEN_DPI`.
 pub const DEFAULT_DPI: u32 = 96;
-
-/// §5: the viewer puts a shape up to this many css pixels on its own pointer
-/// and presents anything larger as an overlay (browsers ignore a css cursor
-/// above 128x128 outright). Advertised in [`CursorMetadata`]; nothing here
-/// shrinks to it.
-pub const MAX_CSS_SIZE: u32 = 32;
 
 /// Hard ceiling on the emitted bitmap, in image pixels: a 128x128 pointer is
 /// 65 KiB of RGBA and — with the stored deflate blocks [`encode_png`] writes —
@@ -91,29 +82,6 @@ const MAX_SHAPE_DIM: u32 = 512;
 /// eviction — a viewer's cache is its own, and a duplicate bitmap is cheaper
 /// than an id that means two things.
 const MAX_CACHED_SHAPES: usize = 64;
-
-/// What the viewer needs to know about how the pointer is delivered, for the
-/// `swoop-meta` channel. Neither `cpos` nor `cshape` has anywhere to say it and
-/// PROTOCOL.md §5 does not define either field, so it travels as metadata
-/// rather than as a new message type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CursorMetadata {
-    /// False for Desktop Duplication: the video carries no pointer and the
-    /// viewer must draw the shape itself at the last `cpos`.
-    pub pointer_in_frame: bool,
-    /// The largest shape the viewer will be sent, in css pixels.
-    pub max_css_size: u32,
-}
-
-impl Default for CursorMetadata {
-    fn default() -> Self {
-        Self {
-            pointer_in_frame: false,
-            max_css_size: MAX_CSS_SIZE,
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CursorError {

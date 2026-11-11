@@ -126,7 +126,7 @@ pub enum AudioState {
 
 /// `Headless` is a machine with no attached output, or one whose duplication
 /// yields nothing but black — the state the page answers with the dummy-plug
-/// message.
+/// message. Only the first is detected (`displays::policy::state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisplayState {

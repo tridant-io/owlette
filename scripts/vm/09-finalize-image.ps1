@@ -31,6 +31,13 @@ Start-Transcript -Path $log -Force | Out-Null
 Write-Host "transcript: $log" -ForegroundColor Cyan
 
 try {
+  # $StaleProfile is a recursive delete target, so take only C:\Users\<plain name>;
+  # windows drops a trailing dot or space when it resolves the path.
+  if ($StaleProfile -notmatch '^C:\\Users\\[A-Za-z0-9](?:[A-Za-z0-9 ._-]*[A-Za-z0-9_-])?\z' -or
+      (Split-Path $StaleProfile -Leaf) -in @('Public', 'Default', 'Default User', 'All Users')) {
+    throw "-StaleProfile '$StaleProfile' is not C:\Users\<removed account>."
+  }
+
   $vm = Get-VM -Name $Name -ErrorAction Stop
 
   # --- clean shutdown --------------------------------------------------------
@@ -69,7 +76,8 @@ try {
   # --- verify + sweep --------------------------------------------------------
   $state = Invoke-Command -Session $session -ArgumentList $StaleProfile -ScriptBlock {
     param($stale)
-    if (Test-Path $stale) {
+    # never sweep the profile of an account that still exists (08 -RemoveOld deletes the account)
+    if ((Test-Path $stale) -and -not (Get-LocalUser -Name (Split-Path $stale -Leaf) -ErrorAction SilentlyContinue)) {
       # Delete the Win32_UserProfile OBJECT, not the directory. Windows removes
       # the folder itself as part of that, including files an ordinary recursive
       # delete cannot touch (AppData\Local\Microsoft\Windows\SFAP\cache0.bin was
@@ -80,10 +88,16 @@ try {
       # It only works once the profile's registry hive is unloaded, which is why
       # this lives after the reboot above and not in 08.
       $prof = Get-CimInstance Win32_UserProfile | Where-Object { $_.LocalPath -eq $stale }
-      if ($prof) { $prof | Remove-CimInstance -ErrorAction SilentlyContinue }
+      if ($prof) {
+        Write-Host "removing the profile of $stale"
+        try { $prof | Remove-CimInstance -ErrorAction Stop }
+        catch { Write-Warning "could not remove the profile of ${stale}: $($_.Exception.Message)" }
+      }
       # Only if something still survives that removal.
       if (Test-Path $stale) {
-        Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "deleting what is left of $stale"
+        try { Remove-Item -LiteralPath $stale -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warning "could not delete all of ${stale}: $($_.Exception.Message)" }
       }
     }
     [PSCustomObject]@{

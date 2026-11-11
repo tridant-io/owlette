@@ -103,6 +103,8 @@ curl -fsS -N -X POST "$OWLETTE_API_URL/api/hoot/conversations/$CONVERSATION_ID" 
 
 the body takes exactly `role` (always `user`) and `content`. any other field is refused with `400 forbidden_field`, so a send cannot retarget a conversation: create a new one pinned to the machine you want. the user message is saved before the model runs, so a failed reply still leaves the prompt in the conversation.
 
+hoot's reply is saved to the conversation once it finishes, as its text only: tool calls are not stored, and a reply that ends in an error is not saved.
+
 ### stream format
 
 once the checks below pass, the response is `200` with `Content-Type: text/plain; charset=utf-8` and `X-Vercel-AI-Data-Stream: v1` — but the body's framing depends on where the turn runs:

@@ -18,7 +18,7 @@ import { db } from '@/lib/firebase';
 import { formatRelativeTime } from '@/lib/timeUtils';
 import { useAuth } from '@/contexts/AuthContext';
 import { useScreenshotHistory, ScreenshotRecord } from '@/hooks/useScreenshotHistory';
-import type { FirestoreTs } from '@/hooks/useFirestore';
+import { firestoreTsToMs, type FirestoreTs } from '@/hooks/useFirestore';
 import { TimezoneChip } from '@/components/TimezoneChip';
 import { toast } from '@/lib/toast';
 
@@ -67,6 +67,18 @@ export function ScreenshotDialog({
   const captureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
+  // the dashboard keeps one dialog and swaps its machine. reset during render, so the
+  // open that brings a new machine never shows the last one's picture and its
+  // auto-capture below sees the new machine's empty state.
+  const [stateFor, setStateFor] = useState(machineId);
+  if (stateFor !== machineId) {
+    setStateFor(machineId);
+    setScreenshot(initialScreenshot);
+    setIsCapturing(false);
+    setError(null);
+    setSelectedHistorical(null);
+  }
+
   const { screenshots: historyScreenshots, loading: historyLoading } = useScreenshotHistory(
     siteId, machineId, open
   );
@@ -82,7 +94,8 @@ export function ScreenshotDialog({
       const data = snapshot.data();
       if (data?.lastScreenshot?.url) {
         setScreenshot((prev) => {
-          if (!prev || data.lastScreenshot.timestamp !== prev.timestamp) {
+          // by time, not identity: every snapshot (each heartbeat) builds new Timestamp objects
+          if (!prev || firestoreTsToMs(data.lastScreenshot.timestamp) !== firestoreTsToMs(prev.timestamp)) {
             if (captureTimeoutRef.current) {
               clearTimeout(captureTimeoutRef.current);
               captureTimeoutRef.current = null;

@@ -34,9 +34,13 @@ import { sanitizeForLog } from '@/lib/logSanitize';
  * POST /api/agent/alert — agent-authenticated alert intake (connection
  * failures, process crash/start failures, display events).
  * Auth: `Authorization: Bearer <agent-firebase-id-token>`.
- * Rate limits: connection failures 5/hr per IP, process alerts 3/hr per
- * `machineId:processName`.
+ * Rate limits: 5/hr per IP for every event, plus 3/hr per
+ * `machineId:processName` for process alerts and one per `machineId:eventType`
+ * per hour (four hours for drift) for display events.
  */
+
+/** the `errorCode` the agent's reboot-pending check posts (`_check_and_alert_reboot_pending`). */
+const REBOOT_PENDING_NOTICE = 'reboot_pending';
 
 
 function buildAlertEmail(
@@ -392,6 +396,19 @@ export const POST = withRateLimit(
         return NextResponse.json({ success: true, queued: true });
       }
 
+      // before the email, which has two early exits below: a site that routes
+      // this alert to a webhook must hear about it with no email recipients.
+      // not for a reboot-pending notice, which rides this branch with no
+      // eventType: that machine is online and saying it has a restart pending,
+      // so it keeps its email and is no machine.offline.
+      if (errorCode !== REBOOT_PENDING_NOTICE) {
+        const siteDoc = await db.collection('sites').doc(siteId).get();
+        const siteName = siteDoc.data()?.name || siteId;
+        fireWebhooks(siteId, siteName, webhookEvent, {
+          machine: { id: machineId, name: machineId },
+        }).catch(console.error);
+      }
+
       // Connection failures email immediately.
       const resendClient = getResend();
       if (!resendClient) {
@@ -442,12 +459,6 @@ export const POST = withRateLimit(
       }
 
       console.log(`[agent/alert] Alert sent for ${sanitizeForLog(machineId)} (${sanitizeForLog(siteId)}): ${sanitizeForLog(resolvedEventType)}, ${recipients.length} recipient(s)`);
-
-      const siteDoc = await db.collection('sites').doc(siteId).get();
-      const siteName = siteDoc.data()?.name || siteId;
-      fireWebhooks(siteId, siteName, webhookEvent, {
-        machine: { id: machineId, name: machineId },
-      }).catch(console.error);
 
       return NextResponse.json({ success: true, emailSent: emailsSent > 0, recipients: emailsSent });
     } catch (error: unknown) {

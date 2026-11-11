@@ -19,7 +19,9 @@
  *      so it has to happen BEFORE they are deleted. Skipping it also strands a
  *      dead site id in the client's union, which reports as `membership_fallback`
  *      drift forever and blocks the wave 6.1 strip.
- *   5. recursively delete the site document and every subcollection under it.
+ *   5. recursively delete `config/{siteId}` (the site's process configs, display
+ *      layouts, restart schedules and presets live there, outside the site
+ *      document), then the site document and every subcollection under it.
  *
  * R2 IS NOT DELETED HERE, and the cascade makes that worse in a way worth stating.
  * The nightly chunk GC (functions/src/chunkGc.ts) enumerates sites with
@@ -179,7 +181,11 @@ export async function deleteSite(
     reclaimed: false,
   });
 
-  // 5. The document and everything beneath it.
+  // 5. The site's process configs, display layouts, restart schedules and presets,
+  //    which live outside it under config/{siteId}, then the document and
+  //    everything beneath it. Config goes first: a retry after a failure there
+  //    still finds the site, and a retry after the site is gone would not.
+  await db.recursiveDelete(db.collection('config').doc(input.siteId));
   await db.recursiveDelete(siteRef);
 
   emitMutation({

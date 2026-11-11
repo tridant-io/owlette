@@ -21,6 +21,7 @@ import type { LlmConfig } from '@/lib/llm';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
 import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
+import { computeInstallerChecksum, InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
 import {
   ACTIVE_HOURS_OVERRIDE_KEYS,
   stripActiveHoursOverride,
@@ -51,6 +52,7 @@ import {
   type HootTarget,
   type ResolvedTargets,
 } from '@/lib/hoot/target';
+import type { TurnOwnership } from '@/lib/hoot/turnStore.server';
 import type { TalonStoreContext } from '@/lib/talons/store.server';
 
 /**
@@ -210,13 +212,18 @@ export interface BuildExecutableToolsOptions {
    */
   resumedToolCallIds?: readonly string[];
   /** Per-tool-call dispatch hooks; site-wide fan-out fires onCommandQueued once
-   *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire these. */
+   *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire those two. */
   toolCallbacks?: {
     onCommandQueued?: (toolCallId: string, commandId: string, machineId: string) => void;
     onPollTick?: () => void;
     /** Per-turn abort signal — fans out to every dispatch's poll loop so a
-     * superseded/stopped turn stops waiting on in-flight tool commands. */
+     * superseded/stopped turn stops waiting on in-flight tool commands, and
+     * cancels deploy_software's checksum download. */
     abortSignal?: AbortSignal;
+    /** Whether this turn still owns its chat, asked now rather than at the next
+     *  heartbeat; deploy_software asks it right before its first write. It is the
+     *  heartbeat's guarded write, not a pure read, and a `lost` answer stops the turn. */
+    stillOwnsChat?: () => Promise<TurnOwnership>;
   };
 }
 
@@ -1143,9 +1150,31 @@ async function executeGetSystemPresets(
   return { presets, count: presets.length };
 }
 
+const SHA256_HEX_RE = /^[a-f0-9]{64}$/i;
+
+/** What a deploy may use of its turn: never the dispatch hooks, which it must not fire. */
+type DeployTurn = Pick<NonNullable<BuildExecutableToolsOptions['toolCallbacks']>, 'abortSignal' | 'stillOwnsChat'>;
+
+const DEPLOY_STOPPED_ERROR =
+  'This turn was stopped or taken over before the deployment was queued. Nothing was deployed and no process was closed.';
+
+const DEPLOY_OWNERSHIP_UNCONFIRMED_ERROR =
+  'This turn could not confirm it still owns the chat, so the deployment was not queued. Nothing was deployed and no process was closed. Ask for it again.';
+
+function checksumFailedResult(installerUrl: string, reason: string): { error: string } {
+  return {
+    error: `Could not pin a SHA-256 checksum for ${installerUrl}: ${reason}. owlette agents refuse an install without one. Nothing was deployed and no process was closed. Check that the URL is a direct HTTPS download of the installer, or deploy it from the [Deployments page](/deployments), where the checksum can be entered by hand.`,
+  };
+}
+
 /**
- * deploy_software, server-side: resolve preset + params, create a deployment doc,
- * write install_software commands. Returns immediately; installs run async.
+ * deploy_software, server-side: resolve preset + params, pin the installer's
+ * sha256, create a deployment doc, write install_software commands. Returns once
+ * they are queued; installs run async. Pinning an installer that is not the
+ * preset's downloads it here first, up to computeInstallerChecksum's deadline.
+ * `turn` is the dashboard turn's: its signal cancels the download, and since the
+ * runner only fires that at its next heartbeat, the turn's ownership is read once
+ * more right before the first write. Other callers pass none.
  */
 async function executeDeploySoftware(
   db: FirebaseFirestore.Firestore,
@@ -1153,7 +1182,9 @@ async function executeDeploySoftware(
   machineIds: string[],
   params: Record<string, unknown>,
   envelope: CommandEnvelopeOptions,
+  turn: DeployTurn = {},
 ): Promise<unknown> {
+  const signal = turn.abortSignal;
   const softwareName = params.software_name as string;
   const version = params.version as string | undefined;
   const presetId = params.preset_id as string | undefined;
@@ -1253,7 +1284,44 @@ async function executeDeploySoftware(
     };
   }
 
-  // Mirrors useDeployments.createDeployment.
+  // agents refuse install_software without a pinned checksum, and only after closing
+  // close_processes and downloading the file, so it is settled before anything is
+  // written. a preset's checksum holds only for the preset's own installer url.
+  let sha256Checksum: string;
+  const presetChecksum: unknown = preset?.sha256_checksum;
+  if (
+    installerUrl === preset?.installer_url &&
+    typeof presetChecksum === 'string' &&
+    SHA256_HEX_RE.test(presetChecksum)
+  ) {
+    sha256Checksum = presetChecksum;
+  } else {
+    // computeInstallerChecksum never hears an abort that came before the call.
+    if (signal?.aborted) return { error: DEPLOY_STOPPED_ERROR };
+    try {
+      sha256Checksum = (await computeInstallerChecksum(installerUrl, { signal })).sha256_checksum;
+    } catch (err) {
+      if (err instanceof InstallerChecksumError) {
+        if (err.code === 'cancelled') return { error: DEPLOY_STOPPED_ERROR };
+        return checksumFailedResult(installerUrl, err.message);
+      }
+      // the installer url can be a signed link, so the line names the software, not the url.
+      // the name is the model's text: as an argument, a % in it is never read as a directive.
+      console.error(
+        '[hoot] deploy_software could not pin a checksum for %s on site %s:',
+        sanitizeForLog(softwareName),
+        sanitizeForLog(siteId),
+        err,
+      );
+      return checksumFailedResult(installerUrl, 'an unexpected error stopped the download');
+    }
+  }
+
+  // built by hand beside createDeployment (lib/actions/createDeployment.server.ts), which
+  // the dashboard and the API go through, because createDeployment refuses an active-hours
+  // override from hoot's audit actor (`cortex:user_<uid>`), writes no timeout_seconds and
+  // takes no stop signal. keep the fields they share in step.
+  const { FieldValue } = await import('firebase-admin/firestore');
   const deploymentId = `deploy-${Date.now()}`;
   const deploymentRef = db
     .collection('sites')
@@ -1272,8 +1340,9 @@ async function executeDeploySoftware(
     installer_name: installerName,
     installer_url: installerUrl,
     silent_flags: silentFlags,
+    sha256_checksum: sha256Checksum,
     targets,
-    createdAt: Date.now(),
+    createdAt: FieldValue.serverTimestamp(),
     status: 'pending',
     source: 'cortex',
   };
@@ -1288,6 +1357,22 @@ async function executeDeploySoftware(
     deploymentData.parallel_install = true;
   }
 
+  // stopped or taken over as the download finished: nothing written yet, so nothing to undo.
+  // the signal only fires at the runner's next heartbeat, so ask the turn itself first, and
+  // read the signal after that await so a beat landing meanwhile still counts. unlike the
+  // heartbeat, an answer that cannot be confirmed deploys nothing: a refused deploy can be
+  // asked for again, processes closed for a stopped turn cannot be reopened.
+  const ownership = turn.stillOwnsChat ? await turn.stillOwnsChat() : 'owned';
+  if (signal?.aborted || ownership === 'lost') return { error: DEPLOY_STOPPED_ERROR };
+  if (ownership === 'error') return { error: DEPLOY_OWNERSHIP_UNCONFIRMED_ERROR };
+
+  // the stale-deployment sweeper scans only sites stamped in the last 30 minutes. stamped
+  // first: a stamp with no deployment behind it is harmless, a deployment the sweeper
+  // never scans is not.
+  await db
+    .collection('sites')
+    .doc(siteId)
+    .set({ lastDeploymentActivityAt: FieldValue.serverTimestamp() }, { merge: true });
   await deploymentRef.set(deploymentData);
 
   const commandPromises = machineIds.map(async (mid) => {
@@ -1309,6 +1394,7 @@ async function executeDeploySoftware(
       installer_url: installerUrl,
       installer_name: installerName,
       silent_flags: silentFlags,
+      sha256_checksum: sha256Checksum,
       deployment_id: deploymentId,
       timestamp: Date.now(),
       status: 'pending',
@@ -1975,7 +2061,7 @@ export async function executeServerSideTool(
     case 'get_system_presets':
       return executeGetSystemPresets(db, params);
     case 'deploy_software':
-      return executeDeploySoftware(db, siteId, machineIds, params, envelope);
+      return executeDeploySoftware(db, siteId, machineIds, params, envelope, options.toolCallbacks);
     case 'update_process':
       return executeUpdateProcessTool(db, siteId, machineIds, params, options);
     case 'add_process':
