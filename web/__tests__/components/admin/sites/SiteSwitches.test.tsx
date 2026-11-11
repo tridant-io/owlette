@@ -20,6 +20,13 @@ jest.mock('@/hooks/useDisplaySettings', () => ({
   useDisplaySettings: () => ({ settings: { keepAwake: true }, loading: false }),
 }));
 
+jest.mock('@/hooks/useFleetSettings', () => ({
+  useFleetSettings: () => ({ settings: { enabled: false, senders: {} }, loading: false }),
+}));
+jest.mock('@/hooks/useSiteMachines', () => ({
+  useSiteMachines: () => ({ machines: [], error: null, refresh: jest.fn() }),
+}));
+
 const toastSuccess = jest.fn();
 const toastError = jest.fn();
 jest.mock('@/lib/toast', () => ({
