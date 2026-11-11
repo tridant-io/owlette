@@ -49,6 +49,13 @@ export type CancelDeploymentResult =
       ok: false;
       code: 'not_found' | 'no_cancellable_targets';
       message: string;
+    }
+  | {
+      // a write or read failed. the record was settled first unless writing it is
+      // what failed, and the outcome is audited either way.
+      ok: false;
+      code: 'write_failed';
+      cause: unknown;
     };
 
 export async function cancelDeployment(
@@ -93,7 +100,9 @@ export async function cancelDeployment(
     };
   }
 
-  await Promise.all(
+  // a target whose queued install could not be removed may still install, so it is
+  // neither sent a cancel nor marked; one machine's failure does not stop the others.
+  const purges = await Promise.allSettled(
     cancellable.map(async (target) => {
       const pendingRef = db
         .collection('sites')
@@ -121,12 +130,21 @@ export async function cancelDeployment(
       }
     }),
   );
+  const purged = cancellable
+    .filter((_, i) => purges[i].status === 'fulfilled')
+    .map((target) => target.machineId);
+  const unpurged = cancellable
+    .filter((_, i) => purges[i].status === 'rejected')
+    .map((target) => target.machineId);
+  const failedPurge = purges.find(
+    (result): result is PromiseRejectedResult => result.status === 'rejected',
+  );
 
   const installerName =
     typeof data.installer_name === 'string' ? data.installer_name : '';
   const cancelResults = await fanOutToMachines({
     siteId: ctx.siteId,
-    machineIds: cancellable.map((target) => target.machineId),
+    machineIds: purged,
     correlationId: ctx.correlationId,
     db,
     now,
@@ -140,17 +158,18 @@ export async function cancelDeployment(
       },
     }),
   });
-  const failedCancel = cancelResults.find((result) => !result.ok);
-  if (failedCancel) {
-    throw new Error(
-      `failed to fan out cancel_installation command to ${failedCancel.machineId}: ${failedCancel.error ?? 'unknown error'}`,
-    );
-  }
+  const reached = cancelResults.filter((result) => result.ok).map((result) => result.machineId);
+  const unreached = cancelResults.filter((result) => !result.ok);
 
   const cancelledAt = Timestamp.fromMillis(now());
-  const cancelledMachineIds = new Set(cancellable.map((target) => target.machineId));
+  // every purged target is marked, whether or not its cancel command arrived: the
+  // purge is what stops an install that has not started, and the command cannot
+  // stop one that has. failures are reported only after the record is settled,
+  // unless writing the record is what failed.
+  const cancelledMachineIds = new Set(purged);
   // re-read in a transaction: writing back the array read above would undo a
   // concurrent cancel of another machine, or a status the reconciler just wrote.
+  let transactionFailure: unknown;
   const settled = await db.runTransaction(async (tx) => {
     const fresh = await tx.get(deploymentRef);
     if (!fresh.exists) return null;
@@ -202,10 +221,15 @@ export async function cancelDeployment(
 
     tx.update(deploymentRef, updatePayload);
     return { status, machineIds: marked };
+  }).catch((err: unknown) => {
+    // the installs are purged and the commands sent, so this is audited and
+    // answered like any other failed write; those targets wait for the sweeper.
+    transactionFailure = err;
+    return undefined;
   });
 
   // the cancel commands above are already on their way, so every outcome from
-  // here is audited, including the two that mark nothing in the record.
+  // here is audited, including the ones that mark nothing in the record.
   const marked = settled && settled !== 'moved_on' ? settled.machineIds : [];
   try {
     emitMutation({
@@ -219,7 +243,11 @@ export async function cancelDeployment(
         verb: 'cancel',
         cancelled_count: marked.length,
         machine_ids: marked,
-        cancel_sent_to: [...cancelledMachineIds],
+        cancel_sent_to: reached,
+        ...(unreached.length > 0
+          ? { unreached_machine_ids: unreached.map((result) => result.machineId) }
+          : {}),
+        ...(unpurged.length > 0 ? { unpurged_machine_ids: unpurged } : {}),
         correlationId: ctx.correlationId,
       },
     });
@@ -230,12 +258,24 @@ export async function cancelDeployment(
     });
   }
 
-  if (!settled) {
+  if (settled === null) {
     return {
       ok: false,
       code: 'not_found',
       message: `deployment ${ctx.deploymentId} not found on site ${ctx.siteId}`,
     };
+  }
+  const failure =
+    transactionFailure ??
+    failedPurge?.reason ??
+    (unreached.length > 0
+      ? new Error(
+          `could not send cancel_installation to ${unreached.map((result) => result.machineId).join(', ')}: ` +
+            `${unreached[0].error ?? 'unknown error'}`,
+        )
+      : undefined);
+  if (settled === undefined || failure !== undefined) {
+    return { ok: false, code: 'write_failed', cause: failure };
   }
   if (settled === 'moved_on') {
     return {

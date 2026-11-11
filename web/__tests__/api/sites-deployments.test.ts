@@ -1484,6 +1484,45 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/cancel', () => {
     expect(body.code).toBe('idempotency_key_required');
   });
 
+  it('500 after the record is settled when the cancel cannot be written to one machine', async () => {
+    // reads: the deployment, each machine's pending map (nothing queued), the re-read.
+    queueIdempotencyMiss();
+    const deployment = docSnapshot(DEPLOYMENT, {
+      installer_name: 'vlc.exe',
+      targets: [
+        { machineId: 'm1', status: 'pending' },
+        { machineId: 'm2', status: 'pending' },
+      ],
+      status: 'in_progress',
+    });
+    mocks.get
+      .mockResolvedValueOnce(deployment)
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce(deployment);
+    let commandWrites = 0;
+    mocks.set.mockImplementation(async (...args: unknown[]) => {
+      if (isCommandWrite(args) && ++commandWrites === 2) throw new Error('write failed');
+    });
+
+    const res = await cancelPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/cancel`, {
+        method: 'POST',
+        headers: idempotencyHeaders('idem-cancel-unreached'),
+        body: {},
+      }),
+      { params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }) },
+    );
+
+    expect(res.status).toBe(500);
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    const deploymentUpdate = mocks.update.mock.calls.find(
+      (c: unknown[]) => (c[0] as { targets?: unknown }).targets !== undefined,
+    );
+    const updateArg = deploymentUpdate![0] as { targets: Array<{ status: string }> };
+    expect(updateArg.targets.map((t) => t.status)).toEqual(['cancelled', 'cancelled']);
+  });
+
 });
 
 describe('POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall', () => {

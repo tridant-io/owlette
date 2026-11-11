@@ -90,6 +90,11 @@ function cancelDeploymentErrorToResponse(
   siteId: string,
   deploymentId: string,
 ): NextResponse {
+  // a write or read failed. the core settled the record first, unless writing it is
+  // what failed, and audited the outcome either way.
+  if (result.code === 'write_failed') {
+    return problemFromError(result.cause, 'sites/[siteId]/deployments/[deploymentId]/cancel:POST');
+  }
   if (result.code === 'not_found') {
     return problem({
       type: ProblemType.NotFound,

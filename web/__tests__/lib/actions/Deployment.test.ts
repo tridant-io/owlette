@@ -36,6 +36,8 @@ function buildFakeDb(
   initialDocs: Record<string, Record<string, unknown> | null> = {},
   // runs on every doc read, so a test can change a doc between the read and the write.
   onRead?: (key: string, docs: Map<string, Record<string, unknown> | null>) => void,
+  // a write this answers true for rejects, as a failed firestore write would.
+  failsWrite?: (key: string, op: 'set' | 'update') => boolean,
 ) {
   const docs = new Map<string, Record<string, unknown> | null>(
     Object.entries(initialDocs),
@@ -52,8 +54,10 @@ function buildFakeDb(
         const docPath = [...parentPath, id];
         const key = docPath.join('/');
         return {
+          path: key,
           set: jest.fn(
             async (payload: Record<string, unknown>, options?: { merge?: boolean }) => {
+              if (failsWrite?.(key, 'set')) throw new Error(`write to ${key} failed`);
               sets.push({ path: docPath, payload, options });
               const existing = docs.get(key);
               docs.set(
@@ -65,6 +69,7 @@ function buildFakeDb(
             },
           ),
           update: jest.fn(async (payload: Record<string, unknown>) => {
+            if (failsWrite?.(key, 'update')) throw new Error(`write to ${key} failed`);
             updates.push({ path: docPath, payload });
             docs.set(key, { ...(docs.get(key) ?? {}), ...payload });
           }),
@@ -87,6 +92,7 @@ function buildFakeDb(
   }
 
   type DocRef = {
+    path: string;
     get: () => Promise<unknown>;
     update: (payload: Record<string, unknown>) => Promise<void>;
   };
@@ -95,6 +101,8 @@ function buildFakeDb(
       fn({
         get: (ref: DocRef) => ref.get(),
         update: (ref: DocRef, payload: Record<string, unknown>) => {
+          // a failing write fails the whole transaction, as a failed commit would.
+          if (failsWrite?.(ref.path, 'update')) throw new Error(`transaction on ${ref.path} failed`);
           void ref.update(payload);
         },
       }),
@@ -492,6 +500,120 @@ describe('cancelDeployment', () => {
         }),
       }),
     );
+  });
+
+  describe('when a write to one machine fails', () => {
+    const twoQueued = () => ({
+      'sites/site_a/deployments/deploy_1': {
+        installer_name: 'vlc.exe',
+        status: 'in_progress',
+        targets: [
+          { machineId: 'm1', status: 'pending' },
+          { machineId: 'm2', status: 'downloading' },
+        ],
+      },
+      'sites/site_a/machines/m1/commands/pending': {
+        install_1: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+      'sites/site_a/machines/m2/commands/pending': {
+        install_2: { type: 'install_software', deployment_id: 'deploy_1' },
+      },
+    });
+    const cancelAll = (db: FakeDb) =>
+      cancelDeployment({
+        siteId: 'site_a',
+        deploymentId: 'deploy_1',
+        actorIdentifier: 'user:user_1',
+        correlationId: 'corr_1',
+        db,
+        now: ctx.now,
+      });
+    const m2Pending = 'sites/site_a/machines/m2/commands/pending';
+
+    it('still marks every purged target cancelled when the cancel cannot reach one machine', async () => {
+      const { db } = buildFakeDb(twoQueued(), undefined, (key, op) => op === 'set' && key === m2Pending);
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['cancelled', 'cancelled']);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            machine_ids: ['m1', 'm2'],
+            cancel_sent_to: ['m1'],
+            unreached_machine_ids: ['m2'],
+          }),
+        }),
+      );
+    });
+
+    it('leaves a target whose queued install could not be removed, and settles the rest', async () => {
+      const { db, sets } = buildFakeDb(twoQueued(), undefined, (key, op) => op === 'update' && key === m2Pending);
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['cancelled', 'downloading']);
+      // its install may still run, and a cancel command could not stop it.
+      expect(sets.some((set) => set.path.join('/') === m2Pending)).toBe(false);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            machine_ids: ['m1'],
+            cancel_sent_to: ['m1'],
+            unpurged_machine_ids: ['m2'],
+          }),
+        }),
+      );
+    });
+
+    it('audits and reports a settling transaction that fails, with nothing marked', async () => {
+      const { db } = buildFakeDb(
+        twoQueued(),
+        undefined,
+        (key, op) => op === 'update' && key === 'sites/site_a/deployments/deploy_1',
+      );
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      // the installs are purged and the commands sent; the targets wait for the sweeper.
+      expect(await readTargetStatuses(db)).toEqual(['pending', 'downloading']);
+      expect(emitMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attributes: expect.objectContaining({
+            cancelled_count: 0,
+            machine_ids: [],
+            cancel_sent_to: ['m1', 'm2'],
+          }),
+        }),
+      );
+    });
+
+    it('reports a failed purge rather than no_cancellable_targets when the rest moved on', async () => {
+      const m1Pending = 'sites/site_a/machines/m1/commands/pending';
+      const { db } = buildFakeDb(
+        twoQueued(),
+        (key, docs) => {
+          // m2's install starts while the cancel is purging.
+          if (key !== m2Pending) return;
+          docs.set('sites/site_a/deployments/deploy_1', {
+            ...docs.get('sites/site_a/deployments/deploy_1'),
+            targets: [
+              { machineId: 'm1', status: 'pending' },
+              { machineId: 'm2', status: 'installing' },
+            ],
+          });
+        },
+        (key, op) => op === 'update' && key === m1Pending,
+      );
+
+      const result = await cancelAll(db);
+
+      expect(result).toMatchObject({ ok: false, code: 'write_failed' });
+      expect(await readTargetStatuses(db)).toEqual(['pending', 'installing']);
+    });
   });
 });
 

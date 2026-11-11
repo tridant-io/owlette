@@ -5459,8 +5459,14 @@ paths:
         named in `machines` is; a malformed `machines` is `400`. The same 409
         comes back when every target moved past `downloading` while the call
         ran, though `cancel_installation` may already have been sent to those
-        machines. Requires
-        `DEPLOYMENT_MANAGE`; API keys need `site=<siteId>:write`.
+        machines. If a write or read for some machine fails, the answer is
+        `500`; the record is settled first unless writing it is what failed.
+        Every target still `pending`, `closing_processes` or `downloading`
+        whose queued install was removed is then `cancelled`, even if its
+        `cancel_installation` could not be sent, and a target whose queued
+        install could not be removed stays as it was, since that install may
+        still run. Requires `DEPLOYMENT_MANAGE`; API keys need
+        `site=<siteId>:write`.
       security:
         - apiKey: []
         - bearerApiKey: []

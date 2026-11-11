@@ -7,6 +7,15 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — a cancel that cannot reach a machine still cancels what it stopped
+
+When the cancel command could not be written to one machine, a cancel had
+already removed the queued installs but marked nothing, so those machines stayed
+pending with nothing left to run until they timed out. Every machine whose
+queued install was removed is now marked cancelled before the error is reported,
+and one whose install could not be removed is left as it was. Nothing to update
+on the machine.
+
 ### fixed — a cancelled deployment target that was already installing shows how the install ended
 
 A cancel cannot stop an install the agent has already started, and the agent's
