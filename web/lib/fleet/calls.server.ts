@@ -1,7 +1,8 @@
 /**
  * `fleet_calls/{commandId}`: the server-only record that binds a started call
  * to the machine that started it (ADR 0017). dispatch writes and reads it; this
- * module names it, and clears it when a machine or a site goes.
+ * module names it, and clears it when a machine or a site goes. a task for hoot
+ * has one too, under its turn id.
  */
 
 import type { Firestore } from 'firebase-admin/firestore';
@@ -14,11 +15,15 @@ export interface FleetCallRecord {
   siteId: string;
   /** the machine that started the call, the only one that may read it. */
   callerMachineId: string;
-  /** the machine the call acts on. */
-  machineId: string;
+  /** the machine the call acts on; a task for hoot may act on several and names none. */
+  machineId?: string;
   tool: string;
   createdAt: number;
   expiresAt: number;
+  /** a task's chat, which with the record's id names its turn. */
+  chatId?: string;
+  /** when a task's answer was handed over. the record stays for the hourly count. */
+  collectedAt?: number;
 }
 
 /**

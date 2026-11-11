@@ -8,6 +8,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import {
+  ASK_HOOT_TOOL,
   MACHINE_PARAM,
   fleetCatalog,
   findFleetServerTool,
@@ -39,18 +40,35 @@ const SERVER_TOOLS: Array<[name: string, tier: ToolTier, target: 'site' | 'machi
 
 /** every catalog tool that acts on one machine, whoever answers it. */
 function machineTools(maxTier: ToolTier) {
-  return fleetCatalog(maxTier).filter((def) => findFleetServerTool(def.name)?.target !== 'site');
+  return fleetCatalog(maxTier).filter(
+    (def) => def.name !== ASK_HOOT_TOOL && findFleetServerTool(def.name)?.target !== 'site',
+  );
 }
 
 describe('fleetCatalog', () => {
-  it.each(TIERS)('at tier %i holds the server tools and the machine tools up to that tier', (tier) => {
+  it.each(TIERS)('at tier %i holds the server tools, the task for hoot from tier 2, and the machine tools', (tier) => {
     const serverNames = SERVER_TOOLS.filter(([, needs]) => needs <= tier).map(([name]) => name);
     const agentNames = allTools
       .filter((def) => def.tier <= tier && !SERVER_SIDE_TOOLS.has(def.name))
       .map((def) => def.name);
     const catalog = fleetCatalog(tier);
-    expect(catalog.map((def) => def.name)).toEqual([...serverNames, ...agentNames]);
+    expect(catalog.map((def) => def.name)).toEqual([
+      ...serverNames,
+      ...(tier >= 2 ? [ASK_HOOT_TOOL] : []),
+      ...agentNames,
+    ]);
     for (const def of catalog) expect(def.tier).toBeLessThanOrEqual(tier);
+  });
+
+  it('offers ask_hoot as a tier 2 tool that takes a prompt and names its machines itself', () => {
+    const def = findFleetTool(ASK_HOOT_TOOL, 2)!;
+    expect(def.tier).toBe(2);
+    expect(def.parameters.required).toEqual(['prompt']);
+    expect(Object.keys(def.parameters.properties)).toEqual(['prompt', 'machines']);
+    expect(findFleetTool(ASK_HOOT_TOOL, 1)).toBeNull();
+    // neither answered inline nor queued to one machine
+    expect(findFleetServerTool(ASK_HOOT_TOOL)).toBeNull();
+    expect(allTools.map((tool) => tool.name)).not.toContain(ASK_HOOT_TOOL);
   });
 
   it('names no tool twice', () => {

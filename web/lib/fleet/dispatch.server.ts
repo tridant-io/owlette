@@ -7,6 +7,7 @@
  * (`FleetServerTool`) passes the same checks and is answered in the response.
  * a started call is read by its `callId`, `cmd:<machine>:<commandId>`, and the
  * read that hands over a terminal status deletes the result, so it is the last.
+ * a task for hoot (`ask_hoot`) is started and read in `task.server.ts`.
  *
  * a call is bound to the machine that started it by a server-only record,
  * `fleet_calls/{commandId}`: a command id is no secret (the target's agent logs
@@ -17,7 +18,6 @@
  * the capability the tool's tier needs.
  */
 
-import type { NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { problem, problemValidation, ProblemType } from '@/lib/apiErrors';
 import { Capability, hasCapability } from '@/lib/capabilities';
@@ -27,7 +27,7 @@ import {
   ExecuteMachineCommandError,
 } from '@/lib/actions/executeMachineCommand.server';
 import { commandErrorToProblem } from '@/lib/machineCommandProblem';
-import { COMMAND_ID_RE, lookupCommandStatus, type CommandStatus } from '@/lib/commandStatus.server';
+import { COMMAND_ID_RE, lookupCommandStatus } from '@/lib/commandStatus.server';
 import {
   COMMAND_TIMEOUT_MS,
   MAX_TOOL_TIMEOUT_SECONDS,
@@ -35,46 +35,29 @@ import {
 } from '@/lib/hoot-utils.server';
 import { isValidMachineId } from '@/lib/hoot/target';
 import logger from '@/lib/logger';
-import { EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
+import { EXISTING_COMMAND_MAPPINGS, declaredParams, type McpToolDefinition } from '@/lib/mcp-tools';
 import { FLEET_CALLS_COLLECTION, type FleetCallRecord } from '@/lib/fleet/calls.server';
-import { findFleetServerTool, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
+import { ASK_HOOT_TOOL, findFleetServerTool, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
 import type {
   AdmitFleetCall,
-  FleetAnswer,
-  FleetCallDenial,
+  FleetCallRead,
+  FleetCallStart,
   FleetContentItem,
   FleetContext,
-  FleetServerTool,
 } from '@/lib/fleet/context';
-
-/** `deny` is absent when `admit` refused: the request handler recorded that one. */
-export interface FleetRefusal {
-  ok: false;
-  response: NextResponse;
-  deny?: FleetCallDenial;
-}
-
-export type FleetCallStart =
-  | { ok: true; kind: 'answered'; body: FleetAnswer }
-  | { ok: true; kind: 'started'; body: { callId: string; timeoutSeconds: number } }
-  | FleetRefusal;
-
-export interface FleetCallState {
-  status: CommandStatus;
-  content?: FleetContentItem[];
-  error?: string;
-}
-
-export type FleetCallRead = { ok: true; body: FleetCallState } | FleetRefusal;
+import {
+  CALL_RECORD_GRACE_MS,
+  callNotFound,
+  denied,
+  isLive,
+  machineNotGranted,
+} from '@/lib/fleet/refusals.server';
+import { isFleetTaskCallId, readFleetTask, startFleetTask } from '@/lib/fleet/task.server';
 
 const CALL_ID_PREFIX = 'cmd:';
 
 /** how long a command may run when its tool names no timeout: hoot's wait for one. */
 const DEFAULT_CALL_TIMEOUT_SECONDS = COMMAND_TIMEOUT_MS / 1000;
-
-// a record outlives its call's timeout by an hour, so a script still polling
-// at the edge finds it; after that the next call anyone starts prunes it.
-const CALL_RECORD_GRACE_MS = 60 * 60 * 1000;
 
 // firestore's limit for one batch; whatever is left goes at the next call.
 const PRUNE_BATCH_LIMIT = 500;
@@ -91,36 +74,6 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-function denied(response: NextResponse, reason: string, tool: string | null, machineId: string | null): FleetRefusal {
-  return { ok: false, response, deny: { reason, tool, machineId } };
-}
-
-function machineNotGranted(machine: string): NextResponse {
-  return problem({
-    type: ProblemType.Forbidden,
-    title: 'machine not granted',
-    status: 403,
-    detail: `this machine's grant does not reach ${machine}`,
-    code: 'machine_not_granted',
-  });
-}
-
-function callNotFound(): FleetRefusal {
-  return {
-    ok: false,
-    response: problem({
-      type: ProblemType.NotFound,
-      title: 'call not found',
-      status: 404,
-      detail: 'no such call: it never started, or its result was already collected',
-    }),
-  };
-}
-
-function isLive(expiresAt: unknown, now: number): boolean {
-  return typeof expiresAt === 'number' && expiresAt > now;
-}
-
 /**
  * the tool's own timeout when it defines `timeout_seconds` (the caller's value,
  * else the declared default the agent applies), clamped to hoot's cap; the
@@ -135,17 +88,6 @@ function callTimeoutSeconds(def: McpToolDefinition, toolParams: Record<string, u
   // value (TdrDelay, 2-300), not how long the call runs, and no call finishes
   // sooner than the agent picks it up.
   return Math.min(Math.max(Math.ceil(asked), DEFAULT_CALL_TIMEOUT_SECONDS), MAX_TOOL_TIMEOUT_SECONDS);
-}
-
-/**
- * what a server tool is handed: the parameters its definition declares and no
- * others, so nothing the caller adds reaches the action behind the tool.
- */
-function declaredParams(tool: FleetServerTool, params: Record<string, unknown>): Record<string, unknown> {
-  const declared = tool.definition.parameters.properties;
-  return Object.fromEntries(
-    Object.entries(params).filter(([key]) => Object.prototype.hasOwnProperty.call(declared, key)),
-  );
 }
 
 /**
@@ -217,10 +159,11 @@ export async function startFleetCall(
   const serverTool = findFleetServerTool(def.name);
   const capability = fleetToolCapability(def);
   const { machine, toolParams } = splitFleetParams(input.params);
+  if (def.name === ASK_HOOT_TOOL) return startFleetTask(ctx, toolParams, admit);
   if (serverTool?.target === 'site') {
     const refused = await admit({ capability, tool: def.name, machineId: null });
     if (refused) return { ok: false, response: refused };
-    return { ok: true, kind: 'answered', body: await serverTool.run(ctx, declaredParams(serverTool, toolParams)) };
+    return { ok: true, kind: 'answered', body: await serverTool.run(ctx, declaredParams(serverTool.definition, toolParams)) };
   }
 
   if (machine === null || !isValidMachineId(machine)) {
@@ -273,7 +216,7 @@ export async function startFleetCall(
     return {
       ok: true,
       kind: 'answered',
-      body: await serverTool.run(ctx, machine, declaredParams(serverTool, toolParams)),
+      body: await serverTool.run(ctx, machine, declaredParams(serverTool.definition, toolParams)),
     };
   }
 
@@ -349,6 +292,7 @@ function contentFor(result: Record<string, unknown> | string | undefined): Fleet
 
 /** a poll is a read: no admit, no audit row. */
 export async function readFleetCall(ctx: FleetContext, callId: string): Promise<FleetCallRead> {
+  if (isFleetTaskCallId(callId)) return readFleetTask(ctx, callId);
   const parsed = parseCallId(callId);
   if (!parsed) return callNotFound();
   const { machine, commandId } = parsed;

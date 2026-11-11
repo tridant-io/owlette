@@ -10,6 +10,7 @@ import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
   EXISTING_COMMAND_MAPPINGS,
+  declaredParams,
   takesActiveHoursOverride,
   withoutActiveHoursOverride,
   type McpToolDefinition,
@@ -2272,6 +2273,10 @@ export function buildExecutableTools(
           toolParams = grant.input;
           envelope = grant.envelope;
         }
+        // a machine's task reaches the tools as the model's words, so as in the
+        // machine's own calls a tool gets the parameters it declares and no
+        // others. after the refusals above, which read what the model sent.
+        if (options.machineActor) toolParams = declaredParams(offered, toolParams);
 
         // Run on the web server: no agent relay, so toolCallbacks never fire.
         if (SERVER_SIDE_TOOLS.has(toolName)) {

@@ -6,6 +6,7 @@
 import type { NextResponse } from 'next/server';
 import type { Firestore } from 'firebase-admin/firestore';
 import type { Capability, MachineActor } from '@/lib/capabilities';
+import type { CommandStatus } from '@/lib/commandStatus.server';
 import type { McpToolDefinition } from '@/lib/mcp-tools';
 import type { FleetGrant } from '@/lib/fleet/policy.server';
 
@@ -52,6 +53,27 @@ export type FleetContentItem =
 export type FleetAnswer =
   | { status: 'completed'; content: FleetContentItem[] }
   | { status: 'failed'; error: string };
+
+/** `deny` is absent when `admit` refused: the request handler recorded that one. */
+export interface FleetRefusal {
+  ok: false;
+  response: NextResponse;
+  deny?: FleetCallDenial;
+}
+
+export type FleetCallStart =
+  | { ok: true; kind: 'answered'; body: FleetAnswer }
+  | { ok: true; kind: 'started'; body: { callId: string; timeoutSeconds: number } }
+  | FleetRefusal;
+
+/** a started call, as a poll reads it. */
+export interface FleetCallState {
+  status: CommandStatus;
+  content?: FleetContentItem[];
+  error?: string;
+}
+
+export type FleetCallRead = { ok: true; body: FleetCallState } | FleetRefusal;
 
 /**
  * a tool the server answers itself, with no command to an agent. dispatch does

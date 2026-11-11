@@ -75,7 +75,7 @@ interface HootRequestBody {
  * never narrow a turn — a follow-up note quoting `@kiosk-01` is the assistant's
  * own words coming back, not a targeting instruction.
  */
-const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_)/;
+const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_|task_msg_)/;
 
 /**
  * What the request ASKS to target: the new `target.machineIds`, else the legacy

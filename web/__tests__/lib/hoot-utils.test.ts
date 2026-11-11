@@ -2539,6 +2539,31 @@ describe('the hoot actor', () => {
       }
     });
 
+    it('hands a tool only the parameters it declares', async () => {
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      const { db } = createProcessConfigDb([]);
+      const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+        ...KEY_OWNER,
+        machineScope: ['m1'],
+        machineActor: LOBBY,
+      });
+
+      await tools.add_process.execute({
+        name: 'Notepad',
+        exe_path: 'C:/Windows/notepad.exe',
+        not_a_field: 'x',
+        override_active_hours: true,
+      });
+
+      // the whole input: the turn's machine, and what the tool declares
+      expect(mockCreateProcess.mock.calls[0][1]).toEqual({
+        machineId: 'm1',
+        name: 'Notepad',
+        exe_path: 'C:/Windows/notepad.exe',
+      });
+    });
+
     it('is never offered a tool that leaves something standing in a person\'s name', () => {
       const db = {} as unknown as FirebaseFirestore.Firestore;
       const offeredTo = (options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null }) =>
