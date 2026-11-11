@@ -51,7 +51,14 @@ export type SystemActor = {
   name: SystemActorName;
 };
 
-export type AuditActor = UserActor | SystemActor;
+/** a granted machine on the fleet routes (ADR 0017); its audit string is `machine:<machineId>`. */
+export type MachineActor = {
+  type: 'machine';
+  siteId: string;
+  machineId: string;
+};
+
+export type AuditActor = UserActor | SystemActor | MachineActor;
 
 export type AuditTargetKind =
   | 'site'
@@ -298,11 +305,14 @@ function redactActorForLog(actor: AuditActor): Record<string, unknown> {
       ...(actor.apiKeyId ? { apiKeyIdPrefix: actor.apiKeyId.slice(0, 8) } : {}),
     };
   }
+  // a machine id is a hostname that log lines carry whole everywhere, not a uid
+  if (actor.type === 'machine') return { type: 'machine', machineId: actor.machineId };
   return { type: 'system', name: actor.name };
 }
 
 function actorRoleLabel(actor: AuditActor): string {
   if (actor.type === 'system') return `system:${actor.name}`;
+  if (actor.type === 'machine') return 'machine';
   return actor.apiKeyId ? `api-key:${actor.role}` : actor.role;
 }
 

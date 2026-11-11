@@ -21,7 +21,7 @@ The owner's goal is a comprehensive fleet control system with two front doors to
 
 ### Principal
 - A new actor type, `{ type: 'machine', siteId, machineId, maxTier, machineIds }`, exists only on new routes under `/api/agent/fleet/`. The existing site routes are untouched: `authorizedSiteHandler` assumes a user throughout (`ctx.actor.userId` is read across the action cores), so the fleet routes get their own wrapper.
-- A machine actor holds two capabilities, `MACHINE_VIEW` and `MACHINE_EXEC_COMMAND`, on its own site only. It never holds a site-wide capability and never carries an active-hours override (ADR 0013).
+- A machine actor holds two capabilities, `MACHINE_VIEW` and `MACHINE_EXEC_COMMAND`, on its own site only. A command always names a machine its grant covers and needs tier 2 or 3; with no machine named it may only list. It never holds a site-wide capability and never carries an active-hours override (ADR 0013).
 
 ### Credential
 - The script never sees the agent token. It needs fleet access and nothing else, and on macOS and Linux the token store is the service's alone.

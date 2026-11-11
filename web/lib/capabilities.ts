@@ -1,3 +1,4 @@
+import { scopeCovers } from '@/lib/machineAccess';
 import type { SwoopMode } from '@/lib/swoopMode';
 
 export const Capability = {
@@ -37,6 +38,10 @@ export const Capability = {
   // process, schedule and display config the kill switch exists to keep
   // reachable. Site admin/owner, exactly as it was under MACHINE_CONFIG_WRITE.
   SWOOP_SETTINGS_MANAGE: 'SWOOP_SETTINGS_MANAGE',
+  // granting machines of a site the fleet mcp (ADR 0017): which machines may
+  // act, at what tier, on which machines. site admin and owner, and site-wide,
+  // so a scoped admin never holds it: a grant reaches machines beyond theirs.
+  FLEET_SETTINGS_MANAGE: 'FLEET_SETTINGS_MANAGE',
   MACHINE_CONFIG_WRITE: 'MACHINE_CONFIG_WRITE',
   MACHINE_REMOVE: 'MACHINE_REMOVE',
   DEPLOYMENT_MANAGE: 'DEPLOYMENT_MANAGE',
@@ -145,7 +150,21 @@ export type SystemActor = {
   siteId: string;
 };
 
-export type Actor = UserActor | SystemActor;
+/**
+ * a machine a site admin has granted, calling the fleet routes with its fleet
+ * session (ADR 0017). it exists only on those routes: nothing that resolves a
+ * person or a member row ever sees one.
+ */
+export type MachineActor = {
+  type: 'machine';
+  siteId: string;
+  machineId: string;
+  maxTier: 1 | 2 | 3;
+  /** the machines it may act on, as `scopeCovers` reads them: null only for an explicit whole-site grant, `[]` for none */
+  machineIds: readonly string[] | null;
+};
+
+export type Actor = UserActor | SystemActor | MachineActor;
 
 /** one site's standing as its member row states it. */
 export interface MemberStanding {
@@ -223,6 +242,7 @@ const SITE_ADMIN_CAPABILITIES: readonly Capability[] = [
   Capability.MACHINE_EXEC_COMMAND,
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.SWOOP_SETTINGS_MANAGE,
+  Capability.FLEET_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   // Site-scoped (see SITE_SCOPED_CAPABILITIES): admins can remove machines on their
   // OWN assigned sites; superadmins on any site.
@@ -254,6 +274,7 @@ const SITE_SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
   Capability.SWOOP_SETTINGS_MANAGE,
+  Capability.FLEET_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   Capability.MACHINE_REMOVE,
   Capability.DEPLOYMENT_MANAGE,
@@ -331,7 +352,7 @@ export function isSiteScopedCapability(capability: Capability): boolean {
 
 /** the person's explicit swoop mode on a site, or null when their role decides. */
 export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | null {
-  if (actor.type === 'system' || !actor.swoopModes) return null;
+  if (actor.type !== 'user' || !actor.swoopModes) return null;
   // own properties only, for the reason `hasCapability` gives for siteRoles
   if (!Object.prototype.hasOwnProperty.call(actor.swoopModes, siteId)) return null;
   return actor.swoopModes[siteId];
@@ -357,7 +378,10 @@ export function machineScopeOf(actor: UserActor, siteId: string): readonly strin
  * may this actor do this, on this site, on this machine?
  *
  * system actors answer from SystemCapabilityMatrix, and a superadmin holds
- * everything.
+ * everything. a granted machine holds MACHINE_VIEW and MACHINE_EXEC_COMMAND on
+ * its own site and nothing else: on a named machine only when its grant covers
+ * it, MACHINE_EXEC_COMMAND only at tier 2 or 3, and with no machine named only
+ * MACHINE_VIEW, the fleet routes' list call.
  * a person's site-scoped capability passes three steps, in order:
  * 1. the role matrix, from their site role;
  * 2. their swoop mode (release 2), which alone decides MACHINE_REMOTE_VIEW and
@@ -381,6 +405,18 @@ export function hasCapability(
       if (actor.siteId !== siteId) return false;
     }
     return true;
+  }
+
+  if (actor.type === 'machine') {
+    if (capability !== Capability.MACHINE_VIEW && capability !== Capability.MACHINE_EXEC_COMMAND) return false;
+    if (!siteId || actor.siteId !== siteId) return false;
+    // a malformed list reaches nothing, as a person's scope does in machineScopeOf
+    if (actor.machineIds !== null && !Array.isArray(actor.machineIds)) return false;
+    // tier 1 only reads, and a tier that is not 2 or 3 is read as tier 1
+    if (capability === Capability.MACHINE_EXEC_COMMAND && actor.maxTier !== 2 && actor.maxTier !== 3) return false;
+    // with no machine named it may only list; a command always names its machine
+    if (machineId === undefined) return capability === Capability.MACHINE_VIEW;
+    return scopeCovers(actor.machineIds, machineId);
   }
 
   // Superadmin short-circuits BEFORE any lookup. It is a platform-wide role, not

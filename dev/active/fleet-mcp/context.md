@@ -34,7 +34,7 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 - `web/lib/capabilities.ts` — `Actor` union (types ~97-124), `hasCapability` (~233-275), a new capability
 - `web/lib/auditLog.server.ts` — the separate `AuditActor` union (~42-54), `redactActorForLog` (~292), `actorRoleLabel` (~304)
 - `web/lib/rateLimit.server.ts` — `Bucket` (~110), limits (~40, ~80), `bucketForActor` (~128), `actorIdentifier` (~133), `rateLimitSubjectKey` (~139), `rateLimitedReasonForActor` (~149)
-- `web/lib/actions/auditActor.server.ts` (~12), `web/app/api/_shared.ts` (~291) — audit-string builders
+- `web/lib/actions/auditActor.server.ts` — `machineAuditActor(machineId)`; `web/app/api/_shared.ts` is not touched (its builder takes a user)
 - other places that switch on `actor.type`, touched only if `tsc` demands a branch: `web/lib/authorizedHandler.server.ts` (`authToActor` ~250, `auditActorRoleLabel` ~428), `web/lib/systemInvoker.server.ts` (`validateActor` ~181), `web/lib/talons/store.server.ts` (~283, ~303), `web/lib/talons/engine.server.ts` (~239), `web/lib/swoop/policy.server.ts` (~181), `web/lib/actions/deleteSite.server.ts` (~103)
 - `web/app/api/sites/[siteId]/machines/[machineId]/commands/[commandId]/route.ts` — its lookup moves to `commandStatus.server.ts`
 - `web/app/api/sites/[siteId]/agent-tokens/revoke/route.ts`, the machine-removal action, `web/lib/actions/deleteSite.server.ts` — session cleanup

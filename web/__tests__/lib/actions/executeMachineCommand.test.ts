@@ -39,6 +39,7 @@ import {
   type ExecuteMachineCommandContext,
 } from '@/lib/actions/executeMachineCommand.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import type { Actor } from '@/lib/capabilities';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 
@@ -768,6 +769,24 @@ describe('executeMachineCommand — active-hours override', () => {
     },
   );
 
+  it('refuses an override from a granted machine (machine:x) and writes nothing (ADR 0017)', async () => {
+    const fake = buildFakeDb();
+    const auditActor = machineAuditActor('x');
+    expect(auditActor).toBe('machine:x');
+    await expect(
+      executeMachineCommand(
+        ctxFor({
+          actor: { type: 'machine', siteId: SITE, machineId: 'x', maxTier: 3, machineIds: null },
+          auditActor,
+        }),
+        { type: 'reboot_machine', payload: {}, activeHoursOverride: { reason: 'show is over' } },
+        { db: fake.db },
+      ),
+    ).rejects.toMatchObject({ status: 400, code: 'active_hours_override_not_allowed' });
+    expect(fake.setCalls).toHaveLength(0);
+    expect(mockedEmit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['an empty reason', { reason: '' }],
     ['a blank reason', { reason: '   ' }],
@@ -841,7 +860,7 @@ describe('resolveActiveHoursOverride', () => {
     });
   });
 
-  it.each(['system:hoot', 'system:talon', 'user:', ''])('refuses an override from the %p actor', (actor) => {
+  it.each(['system:hoot', 'system:talon', 'machine:x', 'user:', ''])('refuses an override from the %p actor', (actor) => {
     expect(resolveActiveHoursOverride({ reason: 'late show' }, actor)).toMatchObject({
       ok: false,
       code: 'active_hours_override_not_allowed',
