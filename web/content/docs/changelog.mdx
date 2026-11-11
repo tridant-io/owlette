@@ -7,6 +7,32 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### changed — a failed download's error names the link without its query string
+
+When an installer or an agent update cannot be downloaded, the error on the
+target and in the activity log now shows the link up to its question mark. Takes
+an agent update.
+
+### fixed — a process closed by name stays closed until the install ends
+
+A managed process closed because its program name was listed, and not because it
+was ticked, started again a few seconds later, while the installer was still
+running. It is now held until the install ends, like a ticked one, and starts
+again then. Other managed processes that run the same program are held with it.
+Takes an agent update.
+
+### fixed — an install closes your apps only when it is ready to run
+
+A deployment closed the processes you chose first, and only then downloaded the
+installer and checked it. A download that failed, a checksum that did not match,
+or a machine with nobody logged in stopped the show and installed nothing. The
+agent now downloads and checks first, and closes the processes last, right
+before it runs the installer. An install with no checksum is refused before
+anything is downloaded. On a Mac or Linux machine, where a deployment cannot
+install, nothing is closed any more. A target now reads downloading, then
+closing processes, then installing, and the show keeps running through the
+download. Takes an agent update.
+
 ### fixed — saving a talon edit keeps the switch where it is now
 
 The talon editor sent the on or off state from the moment it was opened. If the
