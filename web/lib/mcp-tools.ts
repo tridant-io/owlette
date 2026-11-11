@@ -58,6 +58,18 @@ export function withoutActiveHoursOverride(def: McpToolDefinition): McpToolDefin
   return { ...def, parameters: { ...def.parameters, properties } };
 }
 
+/**
+ * A tool's input cut down to the parameters `def` declares. A granted machine's
+ * call, and a turn it started, hand a tool nothing else (ADR 0017).
+ */
+export function declaredParams(def: McpToolDefinition, input: unknown): Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return {};
+  const declared = def.parameters.properties;
+  return Object.fromEntries(
+    Object.entries(input).filter(([key]) => Object.prototype.hasOwnProperty.call(declared, key)),
+  );
+}
+
 // Tier 1: Read-Only Tools
 
 const tier1Tools: McpToolDefinition[] = [

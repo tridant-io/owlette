@@ -201,3 +201,34 @@ def test_a_missing_firebase_client_is_an_error_string():
 
     assert result.startswith('Error:')
     assert idle()
+
+
+# the fleet grant is a site setting too
+
+class Keeper:
+    def __init__(self):
+        self.asked = 0
+
+    def request_refresh(self):
+        self.asked += 1
+
+
+def test_the_refresh_tells_the_fleet_session_keeper_to_ask_again():
+    client, keeper = GatedClient(), Keeper()
+    client.release.set()
+
+    handle_site_settings_refresh(
+        dict(CMD), 'cmd-1', SimpleNamespace(firebase_client=client, fleet_session=keeper),
+    )
+
+    assert keeper.asked == 1
+
+
+def test_the_keeper_is_told_even_with_no_firebase_client():
+    keeper = Keeper()
+
+    handle_site_settings_refresh(
+        dict(CMD), 'cmd-1', SimpleNamespace(firebase_client=None, fleet_session=keeper),
+    )
+
+    assert keeper.asked == 1

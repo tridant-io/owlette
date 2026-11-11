@@ -213,6 +213,7 @@ import {
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_NOTE_LENGTH,
   SITE_WIDE_SERVER_TOOLS,
+  PERSON_ONLY_TOOLS,
   type BuildExecutableToolsOptions,
 } from '@/lib/hoot-utils.server';
 
@@ -220,7 +221,7 @@ import { allTools } from '@/lib/mcp-tools';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { MAX_TARGET_MACHINES } from '@/lib/hoot/target';
 import { InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
-import { Capability, hasCapability, type UserActor } from '@/lib/capabilities';
+import { Capability, hasCapability, type MachineActor, type UserActor } from '@/lib/capabilities';
 
 beforeEach(() => {
   mockCreateProcess.mockReset();
@@ -1794,6 +1795,18 @@ describe('active-hours override', () => {
     ],
     ['the conversations API', { userId: 'uid_alice', userRole: 'admin', machineScope: null, requireTier3Approval: true }],
     ['an unattended system actor', { systemActor: 'cortex_autonomous', machineScope: null, allowActiveHoursOverride: true }],
+    [
+      // the key owner's turn in every other way, and still nobody to ask
+      'a turn a granted machine started',
+      {
+        userId: 'uid_alice',
+        userRole: 'admin',
+        userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+        machineScope: null,
+        allowActiveHoursOverride: true,
+        machineActor: { type: 'machine', siteId: 's1', machineId: 'lobby-01', maxTier: 3, machineIds: null },
+      },
+    ],
   ];
   const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
 
@@ -2836,6 +2849,112 @@ describe('the hoot actor', () => {
 
     expect(actor.siteRoles).toEqual({});
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(false);
+  });
+
+  // a granted machine's own call, or a turn it started on the key owner's key:
+  // the action runs as the machine, and its rows say which machine asked
+  describe('when a granted machine asks', () => {
+    const KEY_OWNER: BuildExecutableToolsOptions = {
+      userId: 'u1',
+      userRole: 'member',
+      userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+      machineScope: null,
+    };
+    const LOBBY: MachineActor = {
+      type: 'machine',
+      siteId: 's1',
+      machineId: 'lobby-01',
+      maxTier: 2,
+      machineIds: ['m1'],
+    };
+
+    /** the context each process tool hands its action. */
+    async function contextsFor(options: BuildExecutableToolsOptions) {
+      mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      mockDeleteProcess.mockResolvedValue({ processId: 'proc-1', alreadyDeleted: false });
+      const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+      const toolDefs = allTools.filter((tool) =>
+        ['update_process', 'add_process', 'delete_process'].includes(tool.name),
+      );
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', toolDefs, false, [], options);
+      await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+      await tools.add_process.execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' });
+      await tools.delete_process.execute({ process_name: 'TouchDesigner' });
+      return [mockUpdateProcess, mockCreateProcess, mockDeleteProcess].map((mock) => mock.mock.calls[0][0]);
+    }
+
+    it('hands every process tool the machine as its actor and its audit name, over the key owner', async () => {
+      const contexts = await contextsFor({ ...KEY_OWNER, machineActor: LOBBY });
+
+      expect(contexts).toHaveLength(3);
+      for (const ctx of contexts) {
+        expect(ctx).toEqual({ siteId: 's1', actor: LOBBY, auditActor: 'machine:lobby-01' });
+      }
+    });
+
+    it('does the same with no person at all, as a direct call has none', async () => {
+      for (const ctx of await contextsFor({ machineActor: LOBBY })) {
+        expect(ctx).toEqual({ siteId: 's1', actor: LOBBY, auditActor: 'machine:lobby-01' });
+      }
+    });
+
+    it('hands a tool only the parameters it declares', async () => {
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      const { db } = createProcessConfigDb([]);
+      const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+        ...KEY_OWNER,
+        machineScope: ['m1'],
+        machineActor: LOBBY,
+      });
+
+      await tools.add_process.execute({
+        name: 'Notepad',
+        exe_path: 'C:/Windows/notepad.exe',
+        not_a_field: 'x',
+        override_active_hours: true,
+      });
+
+      // the whole input: the turn's machine, and what the tool declares
+      expect(mockCreateProcess.mock.calls[0][1]).toEqual({
+        machineId: 'm1',
+        name: 'Notepad',
+        exe_path: 'C:/Windows/notepad.exe',
+      });
+    });
+
+    it('is never offered a tool that leaves something standing in a person\'s name', () => {
+      const db = {} as unknown as FirebaseFirestore.Firestore;
+      const offeredTo = (options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null }) =>
+        Object.keys(buildExecutableTools(db, 's1', 'm1', 'c1', allTools, false, [], options));
+
+      const toMachine = offeredTo({ ...KEY_OWNER, machineScope: null, machineActor: { ...LOBBY, machineIds: null } });
+      for (const name of PERSON_ONLY_TOOLS) expect(toMachine).not.toContain(name);
+      expect([...PERSON_ONLY_TOOLS].sort()).toEqual(
+        ['cancel_followup', 'create_talon', 'schedule_followup', 'set_talon_enabled'],
+      );
+      // the rest of the whole-site turn is as the key owner's would be
+      const toPerson = offeredTo({ ...KEY_OWNER, machineScope: null });
+      expect(toMachine).toEqual(toPerson.filter((name) => !PERSON_ONLY_TOOLS.has(name)));
+      for (const name of PERSON_ONLY_TOOLS) expect(toPerson).toContain(name);
+    });
+
+    it('names the person when no machine asked', async () => {
+      for (const ctx of await contextsFor(KEY_OWNER)) {
+        expect(ctx.auditActor).toBe('cortex:user_u1');
+        expect(ctx.actor).toMatchObject({ type: 'user', userId: 'u1', siteRoles: { s1: 'admin' } });
+      }
+    });
+
+    it('lets a system actor win over it', async () => {
+      const contexts = await contextsFor({ systemActor: 'cortex_autonomous', machineActor: LOBBY });
+
+      for (const ctx of contexts) {
+        expect(ctx.auditActor).toBe('system:cortex_autonomous');
+        expect(ctx.actor).toEqual({ type: 'system', name: 'cortex_autonomous', siteId: 's1' });
+      }
+    });
   });
 });
 

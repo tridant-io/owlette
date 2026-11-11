@@ -33,6 +33,11 @@ jest.mock('@/lib/membership.server', () => ({
   pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
 }));
 
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
+}));
+
 type Doc = Record<string, unknown>;
 // the whole fake store, keyed by document path
 let mockDocs: Record<string, Doc> = {};
@@ -182,6 +187,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(mockTxUpdate).toHaveBeenCalledWith('agent_tokens/reg-code', expect.objectContaining({ used: true }));
     expect(pairedAtWrite('new-pc')?.slice(1)).toEqual([{ pairedAt: 'SERVER_TIMESTAMP' }, { merge: true }]);
     expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
     expect(mockGetEntitlements).not.toHaveBeenCalled();
     expect(mockPlanRead).not.toHaveBeenCalled();
   });
@@ -212,6 +218,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(mockCreateCustomToken).toHaveBeenCalled();
     expect(pairedAtWrite('home-pc')).toBeUndefined();
     expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
   });
 
   it('never stamps a nested doc for a machine id with a slash', async () => {

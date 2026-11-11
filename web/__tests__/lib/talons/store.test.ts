@@ -760,6 +760,15 @@ describe('createTalon', () => {
     expect(storedTalon(created.id).chatId).toBe('chat-7');
     expect(auditAttributes()).toMatchObject({ via: 'cortex', chatId: 'chat-7' });
   });
+
+  it('never takes a granted machine as author, and writes nothing (ADR 0017)', async () => {
+    const machine: Actor = { type: 'machine', siteId: SITE, machineId: 'm1', maxTier: 3, machineIds: null };
+    await expect(
+      createTalon(db, ctxFor(machine, { auditActor: 'machine:m1' }), talonInput()),
+    ).rejects.toThrow('a machine never authors a talon');
+    expect(fake.docs.size).toBe(0);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
 });
 
 // updateTalon

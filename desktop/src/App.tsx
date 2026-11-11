@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { AppMenu } from '@/components/AppMenu'
+import { ConnectAgentDialog } from '@/components/ConnectAgentDialog'
 import { ConfirmDialog, type ConfirmRequest } from '@/components/ConfirmDialog'
 import { DropConfirm } from '@/components/DropConfirm'
 import { DropOverlay } from '@/components/DropOverlay'
@@ -114,7 +115,7 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const [dropped, setDropped] = useState<DropCard[]>([])
-  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | null>(null)
+  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | 'agent' | null>(null)
   const [host, setHost] = useState<string | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
   // Owned here, not in the pane: the pane remounts per process
@@ -535,6 +536,7 @@ function App() {
             onJoinSite={() => setMenuDialog('join')}
             onLeaveSite={() => setMenuDialog('leave')}
             onReportIssue={() => setMenuDialog('report')}
+            onConnectAgent={() => setMenuDialog('agent')}
             startOnLogin={startOnLogin}
             onStartOnLoginChange={(next) => {
               void setStartupLink(next).then(setStartOnLogin, (cause: unknown) =>
@@ -713,6 +715,7 @@ function App() {
           onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
+        <ConnectAgentDialog open={menuDialog === 'agent'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />
 
         <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />

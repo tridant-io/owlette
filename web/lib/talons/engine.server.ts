@@ -237,6 +237,7 @@ export async function runTalonManual(
 }
 
 function describeActor(actor: Actor): string {
+  if (actor.type === 'machine') return `machine:${actor.machineId}`;
   return actor.type === 'user' ? `user:${actor.userId}` : `system:${actor.name}`;
 }
 

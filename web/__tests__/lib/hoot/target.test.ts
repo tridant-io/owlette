@@ -617,6 +617,11 @@ describe('readHootTurnMetadata', () => {
     });
   });
 
+  it.each(['chat', 'mention', 'resume', 'followup', 'talon', 'machine'])('reads a stamp whose turn came by %s', (via) => {
+    // a source the reader does not know would cost the transcript its label
+    expect(readHootTurnMetadata({ hoot: { ...valid.hoot, via } })?.via).toBe(via);
+  });
+
   it('reads the dynamic flag, and only from a literal true', () => {
     expect(readHootTurnMetadata({ hoot: { ...valid.hoot, dynamic: true } })?.dynamic).toBe(true);
     // The stamp is re-sent by the client, so a truthy-but-not-true value must
