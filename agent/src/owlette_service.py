@@ -5797,10 +5797,17 @@ class OwletteService:
             # seconds must land the second flip too. check_path too: one save asks
             # about up to three fields, and each folder opened in the browser is one
             # more, with the route's rate limit and path_commands' slots as the bound.
+            # cancel_installation too: two deployments cancelled inside five seconds
+            # are two installs to stop, and the refused cancel would be recorded
+            # as cancelled while its install carried on. install_software too: the
+            # slow lane already runs installs one at a time, and one that ends
+            # inside five seconds, refused or cancelled, would get the install
+            # queued behind it refused.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
                                 'swoop_refresh', 'site_settings_refresh',
-                                'check_path'):
+                                'check_path', 'cancel_installation',
+                                'install_software'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
@@ -6070,9 +6077,14 @@ class OwletteService:
                         self.firebase_client.update_command_progress(cmd_id, 'downloading', deployment_id)
 
                     logging.debug(f"Downloading installer to: {temp_installer_path}")
-                    download_success, actual_installer_path = installer_utils.download_file(installer_url, temp_installer_path)
+                    download_success, actual_installer_path = installer_utils.download_file(
+                        installer_url, temp_installer_path,
+                        should_stop=lambda: installer_utils.cancel_requested(cmd_id),
+                    )
 
                     if not download_success:
+                        if installer_utils.cancel_requested(cmd_id):
+                            return f"{installer_utils.INSTALL_CANCELLED} during the download"
                         return (
                             f"Error: Failed to download installer from "
                             f"{installer_utils.redact_query_strings(installer_url)}"
@@ -6094,6 +6106,9 @@ class OwletteService:
                     if not install_token:
                         return "Error: No interactive user session available for installation. A user must be logged in."
 
+                    if installer_utils.cancel_requested(cmd_id):
+                        return f"{installer_utils.INSTALL_CANCELLED} before anything was closed"
+
                     # only now, when nothing but the installer itself can still
                     # fail: a failed download, a wrong checksum or a machine
                     # with nobody logged in must not have stopped the show
@@ -6104,6 +6119,12 @@ class OwletteService:
                             close_processes, suppress_projects, deployment_id, cmd_id,
                             locked_project_ids,
                         )
+
+                    # the last look and the point of no return, in one step: a
+                    # cancel either gets here first or finds the installer
+                    # launched, and a launched installer is left to finish
+                    if not installer_utils.claim_launch(cmd_id):
+                        return f"{installer_utils.INSTALL_CANCELLED} before the installer ran"
 
                     if self.firebase_client:
                         self.firebase_client.update_command_progress(cmd_id, 'installing', deployment_id)
@@ -6178,23 +6199,29 @@ class OwletteService:
 
             elif cmd_type == 'cancel_installation':
                 installer_name = cmd_data.get('installer_name')
+                deployment_id = cmd_data.get('deployment_id')
+                target = installer_name or deployment_id
 
-                if not installer_name:
-                    return "Error: No installer name provided for cancellation"
+                if not target:
+                    return "Error: No deployment id or installer name provided for cancellation"
 
-                logging.info(f"Cancellation requested for: {installer_name}")
+                logging.info(f"Cancellation requested for: {target}")
 
-                success, message = installer_utils.cancel_installation(
-                    installer_name,
-                    self.active_installations
-                )
+                # nothing is killed here. an install that has not launched its
+                # installer stops itself at its next look; a launched installer
+                # is left to finish, because ending one part-way can leave the
+                # machine without the program at all
+                cancelled, launched = installer_utils.request_cancel(installer_name, deployment_id)
+                if cancelled:
+                    logging.info(f"Installation cancelled: {target}")
+                    return f"Installation cancelled: {target}"
 
-                if success:
-                    logging.info(f"Installation cancelled: {installer_name}")
-                    return f"Installation cancelled: {installer_name}"
+                if launched:
+                    message = f"{target} is already installing and will finish"
                 else:
-                    logging.warning(f"Cancellation failed: {message}")
-                    return f"Cancellation failed: {message}"
+                    message = f"No active installation found for {target}"
+                logging.warning(f"Cancellation failed: {message}")
+                return f"Cancellation failed: {message}"
 
             elif cmd_type == 'uninstall_software':
                 if sys.platform == 'darwin':

@@ -7,6 +7,30 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — an install queued behind one that ended at once is no longer refused
+
+When an install on a machine ended within five seconds, because it was refused
+or cancelled, the next install waiting for that machine was refused as rate
+limited and failed. Installs already run one at a time, so the limit no longer
+applies to them. A deployment refused inside active hours can also be retried
+with a reason straight away. Takes an agent update.
+
+### fixed — cancelling a deployment stops it on the machine
+
+Cancelling a target the machine had already picked up marked it cancelled while
+the install carried on: the cancel waited in line behind the install it was
+meant to stop. The agent now acts on a cancel at once. An install that is still
+waiting never starts. One that is downloading stops the download and deletes
+what it fetched, with nothing closed and nothing installed. One that is closing
+processes does not run the installer, and the processes start again. Once the
+installer is running it is left to finish, because an installer stopped part-way
+can leave the machine without the program; the target then shows how that
+install ended, and the deployments page says so on the cancel button. Each
+stopped install writes a deployment cancelled row to the activity log, and two
+deployments cancelled one after the other are both stopped. A cancel never
+touches another deployment, a later retry, or a new install of the same
+installer. Takes an agent update.
+
 ### changed — a failed download's error names the link without its query string
 
 When an installer or an agent update cannot be downloaded, the error on the
