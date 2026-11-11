@@ -1634,8 +1634,9 @@ async function executeAddProcessTool(
       const result = await createProcess(
         actionContextForHoot(siteId, options),
         {
-          machineId,
           ...params,
+          // last, so the tool's input can never name another machine
+          machineId,
         } as Parameters<typeof createProcess>[1],
       );
       return {

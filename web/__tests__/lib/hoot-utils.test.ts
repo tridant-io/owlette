@@ -1496,6 +1496,51 @@ describe('buildExecutableTools', () => {
     );
   });
 
+  it('adds a process to the machine the turn is on, whatever machine the tool input names', async () => {
+    // the input is the model's, and a person can ask a model to send anything
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1',
+      'm1',
+      'c1',
+      [toolDef],
+      false,
+      [],
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'] },
+    );
+
+    const result = await tools.add_process.execute({
+      name: 'Notepad',
+      exe_path: 'C:/Windows/notepad.exe',
+      machineId: 'm2',
+    });
+
+    expect(result).toEqual({ ok: true, processId: 'proc-2', name: 'Notepad' });
+    expect(mockCreateProcess).toHaveBeenCalledTimes(1);
+    expect(mockCreateProcess.mock.calls[0][1]).toMatchObject({ machineId: 'm1', name: 'Notepad' });
+  });
+
+  it('adds a process to each machine of a fan-out and to no other', async () => {
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1',
+      '__site__',
+      'c1',
+      [toolDef],
+      true,
+      ['m1', 'm3'],
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'] },
+    );
+
+    await tools.add_process.execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machineId: 'm2' });
+
+    expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId).sort()).toEqual(['m1', 'm3']);
+  });
+
   it('returns structured update_process error when process_name is not found', async () => {
     const { db } = createProcessConfigDb([
       { id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' },
