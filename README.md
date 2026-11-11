@@ -43,7 +43,7 @@ push software silently to any number of Windows machines: NSIS, Inno Setup, MSI,
 drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; re-deploys and machines that already hold a chunk skip it. every deploy is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowlisted destination.
 
 **hoot: ai assistant**
-LLM-powered fleet management in natural language. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, shareable conversations, and Anthropic and OpenAI providers.
+LLM-powered fleet management in natural language. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, shareable conversations, and Anthropic and OpenAI providers. with hoot mcp, an AI agent running on one of your machines gets the same tools on the others, and the machine's pairing is the credential: no API key.
 
 **talons: automations**
 site-scoped automations: a trigger (a schedule, a machine or process event, a metric threshold), an optional condition, and one or more outputs. hoot can write them for you, and every run is recorded.
@@ -183,6 +183,7 @@ full documentation is available at **[owlette.app/docs](https://owlette.app/docs
 - [remote deployment](https://owlette.app/docs/dashboard/deployments): silent software installation across machines
 - [roost](https://owlette.app/docs/dashboard/roost): content-addressed project sync, versions, rollback
 - [hoot](https://owlette.app/docs/dashboard/hoot) and its [tools](https://owlette.app/docs/reference/hoot-tools): the AI assistant
+- [hoot mcp](https://owlette.app/docs/agent/hoot-mcp): hoot's tools for an AI agent on your machines
 - [talons](https://owlette.app/docs/dashboard/talons): automations
 - [API reference](https://owlette.app/docs/api) and [CLI](https://owlette.app/docs/cli/overview)
 - [architecture](https://owlette.app/docs/architecture): system design and data flow

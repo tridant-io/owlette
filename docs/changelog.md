@@ -10,6 +10,20 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### added — hoot mcp: an AI agent on one machine can act on the others
+
+An AI agent running on a paired Windows machine (Claude Code, or any MCP client)
+can now use hoot's tools on the other machines of its site. The owlette agent
+on that machine is the MCP server and the machine's pairing is the credential:
+there is no API key and nothing to sign in to. It is off until a site owner or
+admin turns it on, in the admin panel under hoot, and says for each machine how
+far it may go (read, bounded changes or privileged) and on which machines. A
+machine can also hand hoot a task in words and read the answer back; that runs
+on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
+is in the audit log under the machine. Update the machine the AI agent runs on
+to use it; the machines it acts on need no update. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+
 ### fixed — saving a talon edit keeps the switch where it is now
 
 The talon editor sent the on or off state from the moment it was opened. If the
