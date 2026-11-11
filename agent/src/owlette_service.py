@@ -19,6 +19,7 @@ import session_state
 import watchdog_state
 import config_sync
 import configure_site
+import fleet_session
 from command_router import COMMAND_DEFERRED, CommandRouter
 from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
@@ -1863,6 +1864,12 @@ class OwletteService:
         # alongside the presence flush rather than after it.
         self._stop_swoop()
 
+        # The fleet session file must not outlive the service that keeps it.
+        try:
+            self.fleet_session.withdraw()
+        except Exception as e:
+            logging.debug(f"[SHUTDOWN] fleet session withdraw failed: {e}")
+
         # Every Firestore call below now has 3s to land instead of 30.
         if self.firebase_client:
             try:
@@ -3180,9 +3187,12 @@ class OwletteService:
         up to an hour, and site members could keep chatting with and running
         tools on a revoked machine through it. A relaunch exits on its own
         once the config carries no site.
+        The fleet session file goes too: it is this machine's leave to act on
+        the site's other machines, good for up to 15 minutes more.
         """
         configure_site.unpair(reason)
         self._stop_swoop()
+        self.fleet_session.withdraw()
         if self._is_cortex_alive():
             try:
                 psutil.Process(self.cortex_pid).terminate()
@@ -9696,6 +9706,13 @@ class OwletteService:
         self._cortex_token_published = ()
         self._cortex_token_error = None
 
+        # This machine's fleet session (ADR 0017), fetched off the loop and kept
+        # where the logged-in user's MCP script reads it. The client is looked
+        # up on every refresh: a re-pair replaces it.
+        self.fleet_session = fleet_session.FleetSessionKeeper(
+            lambda: getattr(self, 'firebase_client', None)
+        )
+
         # Before Firebase init, which can take seconds — the user needs immediate
         # feedback that the service is starting.
         self._try_launch_tray()
@@ -9975,6 +9992,8 @@ class OwletteService:
                 self._try_launch_cortex()
 
                 self._process_cortex_ipc_commands()
+
+                self.fleet_session.tick()
 
                 self._process_privileged_requests()
 

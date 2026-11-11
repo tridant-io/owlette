@@ -7,12 +7,14 @@ import {
   GlobalRoleCapabilityMatrix,
   SystemCapabilityMatrix,
   hasCapability,
+  explicitSwoopMode,
   isMachineCapability,
   isSiteScopedCapability,
   MACHINE_CAPABILITIES,
   machineScopeOf,
   siteStanding,
   type Actor,
+  type MachineActor,
   type MemberStanding,
   type SiteRole,
   type SystemActorName,
@@ -29,6 +31,7 @@ const SITE_SCOPED: Capability[] = [
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
   Capability.SWOOP_SETTINGS_MANAGE,
+  Capability.FLEET_SETTINGS_MANAGE,
   Capability.MACHINE_CONFIG_WRITE,
   Capability.MACHINE_REMOVE,
   Capability.DEPLOYMENT_MANAGE,
@@ -86,6 +89,7 @@ describe('Capability enum', () => {
         'MACHINE_REMOTE_CONTROL',
         'MACHINE_REMOTE_VIEW',
         'SWOOP_SETTINGS_MANAGE',
+        'FLEET_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -131,6 +135,7 @@ describe('SiteRoleCapabilityMatrix', () => {
         'MACHINE_REMOTE_CONTROL',
         'MACHINE_EXEC_COMMAND',
         'SWOOP_SETTINGS_MANAGE',
+        'FLEET_SETTINGS_MANAGE',
         'MACHINE_CONFIG_WRITE',
         'MACHINE_REMOVE',
         'DEPLOYMENT_MANAGE',
@@ -1032,6 +1037,162 @@ describe('hasCapability — machine scope after the role and the swoop mode (own
           expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(today);
         }
       }
+    }
+  });
+});
+
+describe('hasCapability — a granted machine (ADR 0017)', () => {
+  const HELD: Capability[] = [Capability.MACHINE_VIEW, Capability.MACHINE_EXEC_COMMAND];
+
+  function machineActor(overrides: Partial<MachineActor> = {}): MachineActor {
+    return {
+      type: 'machine',
+      siteId: 'site_a',
+      machineId: 'm0',
+      maxTier: 2,
+      machineIds: ['m1', 'm2'],
+      ...overrides,
+    };
+  }
+
+  it.each(HELD)('holds %s on a machine its grant covers', (cap) => {
+    const actor = machineActor();
+    expect(hasCapability(actor, cap, 'site_a', 'm1')).toBe(true);
+    expect(hasCapability(actor, cap, 'site_a', 'm2')).toBe(true);
+  });
+
+  it('with no machine named it may list, and never run a command, whatever its grant', () => {
+    for (const machineIds of [['m1', 'm2'], [], null]) {
+      const actor = machineActor({ machineIds });
+      expect(hasCapability(actor, Capability.MACHINE_VIEW, 'site_a')).toBe(true);
+      expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a')).toBe(false);
+    }
+  });
+
+  it('tiers 2 and 3 hold both on a covered machine', () => {
+    for (const maxTier of [2, 3] as const) {
+      const actor = machineActor({ maxTier });
+      for (const cap of HELD) expect(hasCapability(actor, cap, 'site_a', 'm1')).toBe(true);
+    }
+  });
+
+  it('tier 1 reads a covered machine and never runs a command on it', () => {
+    const actor = machineActor({ maxTier: 1, machineIds: null });
+    expect(hasCapability(actor, Capability.MACHINE_VIEW, 'site_a', 'm1')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm1')).toBe(false);
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a')).toBe(false);
+  });
+
+  it('a malformed tier reads as tier 1', () => {
+    for (const maxTier of [0, 4, '3', undefined]) {
+      const actor = machineActor({ maxTier: maxTier as unknown as MachineActor['maxTier'], machineIds: null });
+      expect(hasCapability(actor, Capability.MACHINE_VIEW, 'site_a', 'm1')).toBe(true);
+      expect(hasCapability(actor, Capability.MACHINE_VIEW, 'site_a')).toBe(true);
+      expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 'site_a', 'm1')).toBe(false);
+    }
+  });
+
+  it('holds every other capability on no machine and at no level, FLEET_SETTINGS_MANAGE included', () => {
+    const actor = machineActor({ machineIds: null });
+    const others = ALL_CAPABILITIES.filter((cap) => !HELD.includes(cap));
+    expect(others).toContain(Capability.FLEET_SETTINGS_MANAGE);
+    for (const cap of others) {
+      for (const machineId of ['m1', undefined]) {
+        expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(false);
+      }
+      expect(hasCapability(actor, cap)).toBe(false);
+    }
+  });
+
+  it('holds nothing on another site, nor with no site named, even on a machine id its grant lists', () => {
+    for (const machineIds of [['m1'], null]) {
+      const actor = machineActor({ machineIds });
+      for (const cap of HELD) {
+        expect(hasCapability(actor, cap, 'site_b', 'm1')).toBe(false);
+        expect(hasCapability(actor, cap, 'site_b')).toBe(false);
+        expect(hasCapability(actor, cap, undefined, 'm1')).toBe(false);
+        expect(hasCapability(actor, cap)).toBe(false);
+      }
+    }
+  });
+
+  it('refuses a machine outside its machineIds, itself included unless listed', () => {
+    const actor = machineActor({ machineIds: ['m1'] });
+    for (const cap of HELD) {
+      expect(hasCapability(actor, cap, 'site_a', 'm1')).toBe(true);
+      expect(hasCapability(actor, cap, 'site_a', 'm3')).toBe(false);
+      expect(hasCapability(actor, cap, 'site_a', 'm0')).toBe(false);
+    }
+  });
+
+  it('an empty list reaches no machine', () => {
+    const actor = machineActor({ machineIds: [] });
+    for (const cap of HELD) {
+      for (const machineId of ['m0', 'm1', 'm2']) {
+        expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(false);
+      }
+    }
+  });
+
+  it('an explicit whole-site grant reaches every machine of its site', () => {
+    const actor = machineActor({ machineIds: null });
+    for (const cap of HELD) {
+      for (const machineId of ['m0', 'm1', 'any-other']) {
+        expect(hasCapability(actor, cap, 'site_a', machineId)).toBe(true);
+      }
+    }
+  });
+
+  it('a malformed machineIds reaches nothing, and a prototype name is no machine', () => {
+    for (const bad of ['m1', { m1: true }, undefined]) {
+      const actor = machineActor({ machineIds: bad as unknown as string[] });
+      for (const cap of HELD) {
+        expect(() => hasCapability(actor, cap, 'site_a', 'm1')).not.toThrow();
+        expect(hasCapability(actor, cap, 'site_a', 'm1')).toBe(false);
+        expect(hasCapability(actor, cap, 'site_a')).toBe(false);
+      }
+    }
+    for (const machineId of ['__proto__', 'constructor', 'toString']) {
+      expect(hasCapability(machineActor(), Capability.MACHINE_VIEW, 'site_a', machineId)).toBe(false);
+    }
+  });
+
+  it('carries no swoop mode', () => {
+    expect(explicitSwoopMode(machineActor(), 'site_a')).toBeNull();
+  });
+});
+
+describe('FLEET_SETTINGS_MANAGE — granting machines the fleet mcp', () => {
+  it('owner and site admin hold it on their site only; a member never does', () => {
+    for (const siteRole of ['admin', 'owner'] as SiteRole[]) {
+      const actor = userActor({ siteRoles: { site_a: siteRole } });
+      expect(hasCapability(actor, Capability.FLEET_SETTINGS_MANAGE, 'site_a')).toBe(true);
+      expect(hasCapability(actor, Capability.FLEET_SETTINGS_MANAGE, 'site_b')).toBe(false);
+      expect(hasCapability(actor, Capability.FLEET_SETTINGS_MANAGE)).toBe(false);
+    }
+    const member = userActor({ siteRoles: { site_a: 'member' } });
+    expect(hasCapability(member, Capability.FLEET_SETTINGS_MANAGE, 'site_a')).toBe(false);
+  });
+
+  it('a scoped admin or owner never holds it, with or without a machine named', () => {
+    for (const siteRole of ['admin', 'owner'] as SiteRole[]) {
+      const actor = userActor(siteStanding([['site_a', { role: siteRole, swoopMode: null, machineIds: ['m1'] }]]));
+      for (const machineId of ['m1', undefined]) {
+        expect(hasCapability(actor, Capability.FLEET_SETTINGS_MANAGE, 'site_a', machineId)).toBe(false);
+      }
+    }
+  });
+
+  it('is site-scoped and site-wide, and a superadmin holds it', () => {
+    expect(isSiteScopedCapability(Capability.FLEET_SETTINGS_MANAGE)).toBe(true);
+    expect(isMachineCapability(Capability.FLEET_SETTINGS_MANAGE)).toBe(false);
+    const superadmin = userActor({ role: 'superadmin', siteRoles: {} });
+    expect(hasCapability(superadmin, Capability.FLEET_SETTINGS_MANAGE, 'site_a')).toBe(true);
+  });
+
+  it('no system actor holds it', () => {
+    for (const name of Object.keys(SystemCapabilityMatrix) as SystemActorName[]) {
+      expect(hasCapability(systemActor({ name, siteId: 'site_a' }), Capability.FLEET_SETTINGS_MANAGE, 'site_a')).toBe(false);
     }
   });
 });

@@ -60,6 +60,10 @@ const PYTHON_REL: &str = "python/bin/python3";
 /// The agent script that hosts every headless mode.
 const SCRIPT_REL: &str = "agent/src/configure_site.py";
 
+/// The MCP server an AI agent's client starts for hoot mcp, beside the other
+/// agent scripts.
+const HOOT_MCP_SCRIPT_REL: &str = "agent/src/fleet_mcp.py";
+
 /// Where a feedback payload is staged for `--report-issue`. The script deletes
 /// it as soon as it has been read.
 const REPORT_DIR_REL: &str = "tmp";
@@ -537,9 +541,45 @@ fn emit(app: &AppHandle, event: AgentCliEvent) {
   }
 }
 
+/// The interpreter and the script an MCP client starts to reach hoot from this
+/// machine, in that order. They are shown to be copied, so each is spelled
+/// with the platform's own separators. None off windows: only there does the
+/// service keep the session the script needs.
+pub fn hoot_mcp_command() -> Option<Vec<String>> {
+  if !cfg!(windows) {
+    return None;
+  }
+  Some(hoot_mcp_command_under(&paths::install_root()))
+}
+
+fn hoot_mcp_command_under(install: &Path) -> Vec<String> {
+  [PYTHON_REL, HOOT_MCP_SCRIPT_REL]
+    .iter()
+    .map(|rel| {
+      rel
+        .split('/')
+        .fold(install.to_path_buf(), |path, part| path.join(part))
+        .to_string_lossy()
+        .into_owned()
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn the_hoot_mcp_command_is_the_interpreter_then_the_script_in_native_separators() {
+    let install = Path::new("root").join("Owlette");
+    let command = hoot_mcp_command_under(&install);
+    let python = PYTHON_REL.split('/').fold(install.clone(), |path, part| path.join(part));
+    let script = install.join("agent").join("src").join("fleet_mcp.py");
+    assert_eq!(command, vec![python.to_string_lossy().into_owned(), script.to_string_lossy().into_owned()]);
+    if cfg!(windows) {
+      assert!(command.iter().all(|part| !part.contains('/')), "{command:?}");
+    }
+  }
 
   #[test]
   fn every_mode_maps_to_exactly_one_flag() {

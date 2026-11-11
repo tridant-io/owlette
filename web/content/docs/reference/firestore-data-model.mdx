@@ -82,6 +82,8 @@ firestore/
 |-- agent_refresh_tokens/{tokenHash}               rules
 |-- agent_tokens/{tokenId}                         rules
 |-- device_codes/{phrase}                          rules
+|-- fleet_sessions/{tokenHash}
+|-- fleet_calls/{callId}
 |-- billing_usage/{payerUid}/days/{YYYY-MM-DD}
 |-- plan_snapshot/{payerUid}
 `-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
@@ -127,7 +129,7 @@ the row that grants site access. `canAccessSite()`, `canAccessWholeSite()`, `can
 
 ### `sites/{siteId}/settings/{settingId}`
 
-per-site settings. **access**: site members read `swoop`, `display` and `cortex`; only whole-site members read `alerts`; writes are server only.
+per-site settings. **access**: site members read `swoop`, `display` and `cortex`; only whole-site members read `alerts` and `fleet`; writes are server only.
 
 | doc ID | written by | fields |
 | --- | --- | --- |
@@ -135,6 +137,7 @@ per-site settings. **access**: site members read `swoop`, `display` and `cortex`
 | `swoop` | `PATCH /api/sites/{siteId}/swoop-settings` | `enabled` (only a literal `true` turns swoop on), `excludedMachineIds` (default `[]`), `membersMayWatch` (default `true`), `indicator` (`banner`, `tray` or `none`; default `banner`), `updatedAt`. agents never read it. |
 | `display` | `PATCH /api/sites/{siteId}/display-settings` | `keepAwake` (missing means `true`: on by default), `updatedAt`. agents cannot read it; they learn it from `GET /api/agent/site`, and online machines get a `site_settings_refresh` command when it changes. |
 | `alerts` | `PUT /api/sites/{siteId}/alerts` | `rules[]`: `{ id, name, metric, operator, value, severity (info, warning, critical), channels (email, webhook), enabled, cooldownMinutes }`. read by the metrics function to evaluate thresholds. |
+| `fleet` | `PATCH /api/sites/{siteId}/fleet-settings` | [hoot mcp](/docs/agent/hoot-mcp): `enabled` (only a literal `true` turns it on) and `senders`, a map of machine ID to `{ maxTier (1, 2 or 3), machineIds? (the machines it may act on), wholeSite? (true for every machine) }`, with `updatedAt`. a sender with neither `machineIds` nor `wholeSite` reaches nothing. agents never read it. |
 
 `sites/{siteId}/settings/llm` is **dead**: the site-level LLM key was removed in 3.0.0 and nothing reads it. LLM keys live per user at `users/{uid}/settings/llm`.
 
@@ -520,7 +523,7 @@ chunk bytes and version bodies live in R2, never in Firestore:
 
 ### `chats/{chatId}`
 
-every dashboard hoot conversation, and the autonomous and talon conversations. IDs are `chat_{ms}_{random}` for a user chat, `auto_{ms}_{machine}` for an autonomous investigation, and `talon_{ms}_{runId}` for a talon's hoot output.
+every dashboard hoot conversation, and the autonomous and talon conversations. IDs are `chat_{ms}_{random}` for a user chat, `auto_{ms}_{machine}` for an autonomous investigation, `talon_{ms}_{runId}` for a talon's hoot output, and `machine_{ms}_{random}` for a task a machine handed hoot.
 
 **access**: the owner reads, creates, updates and deletes their own; any whole-site member reads an autonomous chat on their site.
 
@@ -533,7 +536,7 @@ every dashboard hoot conversation, and the autonomous and talon conversations. I
 | `targetMachineId`, `machineName` | string or null | legacy target context, still written. for a set, `targetMachineId` is its **first** ID, so a client that reads only this field narrows to one machine rather than widening to the site. `machineName` is the server-built label (`All Machines`, a machine name, or `kiosk-01, kiosk-02 +3`) a share page shows. |
 | `title` | string | set from the first message, then by the categorizer. |
 | `category` | string | `Performance`, `Crashes`, `Network`, `Display`, `Processes`, `System Info`, `Configuration` or `General`. absent until categorized; the conversation list shows such chats under **unsorted**. |
-| `source` | string | `autonomous` or `talon`. absent on user chats. |
+| `source` | string | `autonomous`, `talon`, or `machine` for a task from [hoot mcp](/docs/agent/hoot-mcp), which belongs to the site owner and also carries `callerMachineId`. absent on user chats. |
 | `messages` | array | the whole conversation as AI SDK UI messages, `{ id, role, parts[], metadata }`, rewritten in full on each persist. |
 | `eventId`, `autonomousSummary` | string or null | autonomous event linkage. |
 | `talonId`, `runId`, `correlationId` | string | talon chats only. |
@@ -702,6 +705,8 @@ these are server only unless noted.
 | `agent_refresh_tokens/{tokenHash}` | hashed agent refresh tokens: `siteId`, `machineId`, `version`, `createdBy`, `createdAt`, `lastUsed`, `agentUid`, and for rotation `predecessorHash`, `supersededAt`, `supersededBy`, `retiresAt`. `expiresAt` absent means the token never expires. see [token management](/docs/dashboard/admin/token-management). |
 | `agent_tokens/{tokenId}` | legacy registration codes, still written by the installer-generation and setup-token routes. |
 | `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`. `status` is `refused`, with the message in `refusedReason`, when the plan's machine limit turned the authorization down. see [authentication](/docs/reference/authentication). |
+| `fleet_sessions/{tokenHash}` | a [hoot mcp](/docs/agent/hoot-mcp) session, keyed by the SHA-256 of its token: `siteId`, `machineId`, `createdAt`, `expiresAt` (15 minutes). deleted when the machine is turned off as a sender, removed, re-paired or has its agent token revoked. |
+| `fleet_calls/{callId}` | what binds a call a machine started to that machine, so no other can read its result: `siteId`, `callerMachineId`, `machineId` (the machine acted on), `tool`, `createdAt`, `expiresAt`; a task for hoot also carries `chatId` and, once its answer is read, `collectedAt`. keyed by the command ID, or by the turn ID for a task. |
 | `cli_device_codes/{phrase}` | the CLI's sign-in phrase: `deviceCodeHash`, `status`, `createdAt`, `expiresAt` (10 minutes), `authorizedBy`, `authorizedAt`, `siteId`, `keyId`, `encryptedCredentials`. |
 | `app_links/{codeHash}` | a one-time code that signs in [owlette swoop](/docs/reference/authentication#signing-in-owlette-swoop), keyed by the code's SHA-256: `status` (`pending`, `approved` or `used`), `createdAt`, `expiresAt` (60 seconds for a code from the dashboard, 10 minutes for one the app started), `secretHash` (an app-started code only), and once approved the approver's `uid`, `mfaSatisfiedBy` and `mfaCompletedAt`, then `usedAt`. an expired record is refused when read, not swept. |
 | `mfa_pending/{uid}` | a TOTP setup secret while enrollment is in progress. |

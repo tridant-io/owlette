@@ -53,6 +53,7 @@ import {
   type ProcessSummary,
   type PromptLocalTime,
 } from '@/lib/llm';
+import type { MachineActor } from '@/lib/capabilities';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import {
   buildExecutableTools,
@@ -160,6 +161,12 @@ export interface StartTurnParams {
    * for a person rather than auto-executing.
    */
   forceTier3Approval?: boolean;
+  /**
+   * The granted machine that started this turn (ADR 0017), when `userId` did
+   * not. The turn still runs on `userId`'s key and `access`; its server-side
+   * tools act, and are audited, as the machine.
+   */
+  machineActor?: MachineActor;
   source?: 'user' | 'followup' | 'talon';
 }
 
@@ -631,6 +638,7 @@ export function startTurn(
           userRole: params.access.role,
           userStanding: params.access.standing,
           machineScope,
+          machineActor: params.machineActor,
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),

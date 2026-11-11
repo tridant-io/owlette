@@ -438,12 +438,14 @@ describe('authorizedSiteHandler — kill switches', () => {
 });
 
 describe('authorizedSiteHandler — swoop capabilities are exempt from the capability kill switch', () => {
-  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities', () => {
+  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities and the fleet grant', () => {
     // SWOOP_SETTINGS_MANAGE belongs here because it is the switch in front of
     // the other two: a bypassable enablement route lets a member turn swoop on
-    // and then pass the exempt watch check on merit.
+    // and then pass the exempt watch check on merit. FLEET_SETTINGS_MANAGE is
+    // the same kind of switch: bypassable, a member could grant a machine
+    // commands over the whole site.
     expect([...BYPASS_EXEMPT_CAPABILITIES].sort()).toEqual(
-      ['MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SWOOP_SETTINGS_MANAGE'].sort()
+      ['FLEET_SETTINGS_MANAGE', 'MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SWOOP_SETTINGS_MANAGE'].sort()
     );
   });
 

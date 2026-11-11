@@ -10,6 +10,7 @@ import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { siteAuditActor } from '@/lib/actions/auditActor.server';
 import { emitMutation } from '@/lib/auditLogClient';
 import { writeCommandFanOut } from '@/lib/commandLifecycle';
+import { revokeFleetSessions } from '@/lib/fleet/session.server';
 
 type RouteParams = {
   siteId: string;
@@ -45,6 +46,25 @@ async function queueUnpair(
         `Revoke: unpair command not queued for machine ${result.machineId} in site ${siteId}: ${result.error}`,
       );
     }
+  }
+}
+
+/**
+ * A fleet session (ADR 0017) outlives the refresh token that minted it by up to
+ * 15 minutes, and the fleet routes never re-check pairing, so a revoke ends it
+ * here. `machineId` absent means the whole site. Never fatal, like the unpair:
+ * the tokens are already gone, and a session left behind expires on its own.
+ */
+async function endFleetSessions(
+  db: Firestore,
+  scope: { siteId: string; machineId?: string },
+): Promise<void> {
+  try {
+    await revokeFleetSessions(db, scope);
+  } catch (err) {
+    logger.warn(
+      `Revoke: fleet sessions not ended for ${scope.machineId ?? 'every machine'} in site ${scope.siteId}: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -168,6 +188,7 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         db,
         tokensSnapshot.docs.map((doc) => doc.ref),
       );
+      await endFleetSessions(db, { siteId });
       // Only machines that still had a usable token have an agent to cut off.
       const now = Date.now();
       await queueUnpair(
@@ -210,13 +231,13 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
 
       await tokenRef.delete();
       revokedCount = 1;
-      await queueUnpair(
-        db,
-        siteId,
-        isTokenDead(tokenData, Date.now()) ? [] : [tokenData?.machineId],
-        auditActor,
-        ctx.correlationId,
-      );
+      // A dead token had no agent behind it: nothing to cut off or unpair.
+      const cutOff =
+        !isTokenDead(tokenData, Date.now()) && typeof tokenData?.machineId === 'string'
+          ? [tokenData.machineId]
+          : [];
+      for (const id of cutOff) await endFleetSessions(db, { siteId, machineId: id });
+      await queueUnpair(db, siteId, cutOff, auditActor, ctx.correlationId);
 
       logger.info(`Revoked token ${tokenId} for site ${siteId}`);
       emitRevoked(
@@ -258,7 +279,8 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         }
 
         revokedCount = await deleteRefsInChunks(db, pick ? [pick.ref] : []);
-        // No live token means no agent to cut off: nothing to queue.
+        // No live token means no agent to cut off: nothing to end or queue.
+        if (pick) await endFleetSessions(db, { siteId, machineId });
         await queueUnpair(db, siteId, pick ? [machineId] : [], auditActor, ctx.correlationId);
 
         logger.info(`Revoked ${revokedCount} current token for machine ${machineId} in site ${siteId}`);
@@ -277,6 +299,7 @@ export const POST = withRateLimit(authorizedSiteHandler<RouteParams>({
         db,
         tokensSnapshot.docs.map((doc) => doc.ref),
       );
+      await endFleetSessions(db, { siteId, machineId });
       const now = Date.now();
       const hadUsableToken = tokensSnapshot.docs.some((doc) => !isTokenDead(doc.data(), now));
       await queueUnpair(db, siteId, hadUsableToken ? [machineId] : [], auditActor, ctx.correlationId);

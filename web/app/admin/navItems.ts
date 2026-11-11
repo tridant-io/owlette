@@ -17,6 +17,7 @@ import {
   Bell,
   MonitorPlay,
   Inbox,
+  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react';
 import type { UserRole } from '@/contexts/AuthContext';
@@ -25,7 +26,7 @@ import type { UserRole } from '@/contexts/AuthContext';
 export type AdminMinRole = 'admin' | 'superadmin';
 
 /** The sidebar's sections, in the order they are shown. */
-export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'configuration', 'support'] as const;
+export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'hoot', 'configuration', 'support'] as const;
 export type AdminNavGroup = (typeof ADMIN_NAV_GROUPS)[number];
 
 export interface AdminNavItem {
@@ -79,6 +80,14 @@ const NAV_ITEMS: AdminNavItem[] = [
     description: 'view and end live swoop sessions',
     minRole: 'admin',
     group: 'fleet',
+  },
+  {
+    name: 'settings',
+    href: '/admin/hoot',
+    icon: SlidersHorizontal,
+    description: 'which machines may act on others through hoot',
+    minRole: 'admin',
+    group: 'hoot',
   },
   {
     name: 'alerts',
