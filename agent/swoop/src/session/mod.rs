@@ -5375,7 +5375,7 @@ mod host {
         #[cfg(windows)]
         #[test]
         #[ignore = "paints a window on this box's real desktop, captures it and opens its encoder"]
-        fn a_still_screen_refines_after_motion_on_nvenc() {
+        fn a_still_screen_refines_after_motion() {
             // nvenc first: on the dev box an nvenc session opened after this
             // process probed the media foundation rungs fails
             // NV_ENC_ERR_INVALID_VERSION
