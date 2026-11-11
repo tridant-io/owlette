@@ -29,7 +29,7 @@ import {
 } from '@/lib/actions/computeInstallerChecksum.server';
 import { resolveActiveHoursOverride } from '@/lib/actions/executeMachineCommand.server';
 import { siteAuditActor } from '@/lib/actions/auditActor.server';
-import { failedByUninstall } from '@/lib/deploymentStatuses';
+import { retryableTarget } from '@/lib/deploymentStatuses';
 import type { DeploymentTarget } from '@/hooks/useDeployments';
 
 type RouteParams = { siteId: string; deploymentId: string };
@@ -111,9 +111,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           ? (data.targets as DeploymentTarget[])
           : [];
         const inCall = (t: DeploymentTarget) => !machineFilter || machineFilter.has(t.machineId);
-        // an install retry would put back a program whose uninstall failed.
-        const retryable = (t: DeploymentTarget) => t.status === 'failed' && !failedByUninstall(t);
-        const failed = targets.filter((t) => inCall(t) && retryable(t));
+        const failed = targets.filter((t) => inCall(t) && retryableTarget(t));
 
         if (failed.length === 0) {
           if (targets.some((t) => inCall(t) && t.status === 'failed')) {
@@ -193,7 +191,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
           // `DeploymentTarget` union.
           const machineIds: string[] = [];
           const updatedTargets: Array<Record<string, unknown>> = freshTargets.map((target) => {
-            if (!callSet.has(target.machineId) || !retryable(target)) {
+            if (!callSet.has(target.machineId) || !retryableTarget(target)) {
               return target as unknown as Record<string, unknown>;
             }
             machineIds.push(target.machineId);

@@ -10,6 +10,16 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — the deployments page offers cancel and retry only where they work
+
+The x on a machine that was already installing did nothing: the server refused
+the cancel and the page said nothing. The x now shows only on a machine that has
+not started installing, and a cancel or retry the server refuses, because the
+machine moved on while the click was on its way, says so in plain words. A
+machine whose uninstall failed no longer offers retry this machine, and retry
+failed shows only when an install failed: a retry installs, and would put the
+program back. Nothing to update on the machine.
+
 ### fixed — a cancel that cannot reach a machine still cancels what it stopped
 
 When the cancel command could not be written to one machine, a cancel had
@@ -50,9 +60,10 @@ one. Nothing to update on the machine.
 
 A deployment target whose uninstall failed could be picked up by retry failed,
 which installs, and so put the program back. A failed target now records which
-command failed, and a retry skips a failed uninstall; when it is the only failed
-target, the retry says to run the uninstall again. Over the API the target
-carries `failedCommandType`. Nothing to update on the machine.
+command failed, and a retry skips a failed uninstall: the page offers no retry
+on that machine, and over the API a retry that reaches only failed uninstalls is
+refused. Over the API the target carries `failedCommandType`. Nothing to update
+on the machine.
 
 ### fixed — an uninstall started from a deployment updates that deployment
 

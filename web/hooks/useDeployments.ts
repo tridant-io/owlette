@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
-import { firestoreTsToMs, type FirestoreTs } from './useFirestore';
+import { ApiRequestError, firestoreTsToMs, type FirestoreTs } from './useFirestore';
 
 export interface DeploymentTemplate {
   id: string;
@@ -116,7 +116,7 @@ export function useDeploymentTemplates(siteId: string) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(template),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to create deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to create deployment template'));
 
     const result = await response.json();
     return result.templateId as string;
@@ -130,7 +130,7 @@ export function useDeploymentTemplates(siteId: string) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(template),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to update deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to update deployment template'));
   };
 
   const deleteTemplate = async (templateId: string) => {
@@ -139,7 +139,7 @@ export function useDeploymentTemplates(siteId: string) {
     const response = await fetch(`${deploymentTemplateUrl(siteId)}/${encodeURIComponent(templateId)}`, {
       method: 'DELETE',
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to delete deployment template'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to delete deployment template'));
   };
 
   return { templates, loading, error, createTemplate, updateTemplate, deleteTemplate };
@@ -240,7 +240,7 @@ export function useDeployments(siteId: string) {
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to create deployment'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to create deployment'));
 
     const result = await response.json();
     return result.deploymentId as string;
@@ -271,16 +271,15 @@ export function useDeployments(siteId: string) {
         ...overrideBody(options),
       }),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to retry deployment'));
+    if (!response.ok) throw await readApiRequestError(response, 'failed to retry deployment');
 
     const result = await response.json();
     return result.retried as number;
   };
 
   /** cancels one machine's target; the rest of the deployment carries on. */
-  const cancelDeployment = async (deploymentId: string, machineId: string, installer_name: string) => {
+  const cancelDeployment = async (deploymentId: string, machineId: string) => {
     if (!db || !siteId) throw new Error('Firebase not configured');
-    void installer_name;
 
     const response = await fetch(`${deploymentsUrl(siteId)}/${encodeURIComponent(deploymentId)}/cancel`, {
       method: 'POST',
@@ -290,9 +289,7 @@ export function useDeployments(siteId: string) {
       },
       body: JSON.stringify({ machines: [machineId] }),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to cancel deployment'));
-
-    return `cancel-deployment-${deploymentId}`;
+    if (!response.ok) throw await readApiRequestError(response, 'failed to cancel deployment');
   };
 
   const deleteDeployment = async (deploymentId: string) => {
@@ -306,7 +303,7 @@ export function useDeployments(siteId: string) {
       },
       body: JSON.stringify({}),
     });
-    if (!response.ok) throw new Error(await readApiError(response, 'Failed to delete deployment'));
+    if (!response.ok) throw new Error(await readApiError(response, 'failed to delete deployment'));
   };
 
   const checkMachineHasActiveDeployment = (machineId: string): boolean => {
@@ -379,10 +376,20 @@ function makeIdempotencyKey(prefix: string): string {
 }
 
 async function readApiError(response: Response, fallback: string): Promise<string> {
+  return (await readApiRequestError(response, fallback)).message;
+}
+
+/** the refusal with its problem `code`, for a caller that words its own message. */
+async function readApiRequestError(response: Response, fallback: string): Promise<ApiRequestError> {
+  let body: { detail?: string; title?: string; code?: string } | null = null;
   try {
-    const body = await response.json();
-    return body.detail ?? body.title ?? `${fallback} (${response.status})`;
+    body = await response.json();
   } catch {
-    return `${fallback} (${response.status})`;
+    // no problem body: the message names the status instead
   }
+  return new ApiRequestError(
+    response.status,
+    body?.detail ?? body?.title ?? `${fallback} (${response.status})`,
+    body?.code,
+  );
 }

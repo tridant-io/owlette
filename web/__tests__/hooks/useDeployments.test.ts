@@ -20,7 +20,7 @@ import { useDeployments } from '@/hooks/useDeployments';
 
 const SITE_ID = 'site-a';
 
-describe('useDeployments.cancelDeployment', () => {
+describe('useDeployments cancel and retry', () => {
   const fetchMock = jest.fn();
   let originalFetch: typeof global.fetch;
 
@@ -38,7 +38,7 @@ describe('useDeployments.cancelDeployment', () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ cancelled: 1 }) });
     const { result } = renderHook(() => useDeployments(SITE_ID));
 
-    await result.current.cancelDeployment('deploy-1', 'kiosk-02', 'vlc.exe');
+    await result.current.cancelDeployment('deploy-1', 'kiosk-02');
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -58,8 +58,37 @@ describe('useDeployments.cancelDeployment', () => {
     });
     const { result } = renderHook(() => useDeployments(SITE_ID));
 
-    await expect(
-      result.current.cancelDeployment('deploy-1', 'kiosk-02', 'vlc.exe'),
-    ).rejects.toThrow(/matching the machines filter/);
+    const refused = result.current.cancelDeployment('deploy-1', 'kiosk-02');
+    await expect(refused).rejects.toThrow(/matching the machines filter/);
+    // the page words its own message from the code
+    await expect(refused).rejects.toMatchObject({ status: 409, code: 'no_cancellable_targets' });
+  });
+
+  it("carries the problem's code on a refused retry too", async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ code: 'no_failed_targets', detail: 'no targets in `failed` state to retry' }),
+    });
+    const { result } = renderHook(() => useDeployments(SITE_ID));
+
+    const refused = result.current.retryDeployment('deploy-1', ['kiosk-02']);
+    await expect(refused).rejects.toThrow('no targets in `failed` state to retry');
+    await expect(refused).rejects.toMatchObject({ status: 409, code: 'no_failed_targets' });
+  });
+
+  it('falls back to lowercase copy with the status when the answer has no problem body', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON');
+      },
+    });
+    const { result } = renderHook(() => useDeployments(SITE_ID));
+
+    await expect(result.current.cancelDeployment('deploy-1', 'kiosk-02')).rejects.toThrow(
+      'failed to cancel deployment (502)',
+    );
   });
 });

@@ -7,6 +7,8 @@
  * same transaction, so no agent stub is needed for that step), and the cancel-X
  * gone. Then stubs the agent completing the command to prove pending → completed.
  * A second case adds a queued machine and proves the X cancels only its own.
+ * A third proves an installing target has no X, and that a cancel the server
+ * refuses, because the machine started installing mid-click, shows the reason.
  */
 
 import { test, expect } from '@playwright/test';
@@ -151,4 +153,47 @@ test('admin cancels one machine of a deployment — the other machine stays queu
   expect(targets.find((t) => t.machineId === OTHER_MACHINE_ID)!.status).toBe('pending');
   const otherCancels = (await getPendingCommandIds(SITE_ID, OTHER_MACHINE_ID)).filter((id) => id.startsWith('cancel_'));
   expect(otherCancels).toHaveLength(0);
+});
+
+test('an installing target has no cancel, and a cancel the server refuses says why', async ({ page }) => {
+  const db = getAdminDb();
+  const deploymentRef = db.collection('sites').doc(SITE_ID).collection('deployments').doc(DEPLOYMENT_ID);
+  await deploymentRef.update({
+    targets: [
+      { machineId: MACHINE_ID, status: 'downloading', progress: 30 },
+      { machineId: OTHER_MACHINE_ID, status: 'installing', progress: 60 },
+    ],
+  });
+
+  await page.goto('/deployments');
+  await expect(page.getByRole('heading', { name: 'deployments', exact: true })).toBeVisible({ timeout: 10_000 });
+  await page.getByText(DEPLOYMENT_NAME, { exact: true }).click();
+
+  const lines = page.locator('div.flex.items-center.justify-between');
+  const targetRow = lines.filter({ hasText: MACHINE_ID, hasNotText: OTHER_MACHINE_ID }).first();
+  const installingRow = lines.filter({ hasText: OTHER_MACHINE_ID, hasNotText: MACHINE_ID }).first();
+  await expect(installingRow.getByText('installing', { exact: true })).toBeVisible();
+  await expect(installingRow.getByRole('button', { name: /cancel deployment to/ })).toHaveCount(0);
+
+  // the machine starts installing while the click is on its way
+  await page.route('**/deployments/*/cancel', async (route) => {
+    await deploymentRef.update({
+      targets: [
+        { machineId: MACHINE_ID, status: 'installing', progress: 10 },
+        { machineId: OTHER_MACHINE_ID, status: 'installing', progress: 60 },
+      ],
+    });
+    await route.continue();
+  });
+  await targetRow.getByRole('button', { name: `cancel deployment to ${MACHINE_ID}` }).click();
+
+  await expect(
+    page
+      .locator('[data-sonner-toast]')
+      .filter({ hasText: `${MACHINE_ID} has already started installing or finished, so it can't be cancelled` }),
+  ).toBeVisible({ timeout: 5_000 });
+  const targets = (await deploymentRef.get()).data()!.targets as Array<{ machineId: string; status: string }>;
+  expect(targets.find((t) => t.machineId === MACHINE_ID)!.status).toBe('installing');
+  const cancels = (await getPendingCommandIds(SITE_ID, MACHINE_ID)).filter((id) => id.startsWith('cancel_'));
+  expect(cancels).toHaveLength(0);
 });

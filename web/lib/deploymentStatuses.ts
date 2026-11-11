@@ -40,3 +40,8 @@ export function failedByUninstall(target: { failedCommandType?: unknown; error?:
     (typeof target.error === 'string' && NAMELESS_UNINSTALL_ERRORS.has(target.error))
   );
 }
+
+/** a `failed` target a retry may take: its install failed, not its uninstall. */
+export function retryableTarget(target: { status?: unknown; failedCommandType?: unknown; error?: unknown }): boolean {
+  return target.status === 'failed' && !failedByUninstall(target);
+}

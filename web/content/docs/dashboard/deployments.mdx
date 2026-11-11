@@ -129,12 +129,13 @@ each finished target also writes `deployment_completed` or `deployment_failed` t
 
 - **retry failed**, in the row's menu (**more options**), requeues every failed target on the same record. the targets go back to `pending` with their errors cleared, and the deployment returns to `in_progress`. no new record is made
 - **retry this machine**, on a failed target's line, does the same for that one machine
-- a target whose **uninstall** failed is not retried: a retry installs, and would put the program back. run **uninstall software** again for it. when it is the only failed target, the retry is refused with `409 no_failed_targets`, and the page shows why
+- a target whose **uninstall** failed is not retried: a retry installs, and would put the program back. its line has no **retry this machine**, and **retry failed** shows only while another target's install failed. run **uninstall software** again for it. over the API, a retry that reaches only such targets is refused with `409 no_failed_targets`
+- when a machine is no longer a failed install by the time the retry reaches it, for example it left `failed`, the page says so and nothing is retried. any other refusal shows the server's reason
 - two retries at once, or one while a machine reports, do not undo each other, and a machine that already left `failed` is not sent a second install. a machine that timed out while offline still has its first install queued; the retry replaces it, so the machine runs one
 
 a deployment created before checksums were pinned has none. a retry then downloads and hashes the installer first, which takes a while for a large file (the button spins), and saves the checksum on the record.
 
-a retry sends the installer, flags, checksum, verify path and parallel setting again, but not the processes to close. close them yourself first, or start a new deployment.
+a retry sends the installer, flags, checksum, verify path, parallel setting and the processes to close again.
 
 a retry does not carry the deployment's active-hours reason over: it asks its own. when a machine it retries is inside its active hours, **retry inside active hours?** lists those machines and needs a reason for **retry anyway**.
 
@@ -142,12 +143,11 @@ a retry does not carry the deployment's active-hours reason over: it asks its ow
 
 ## cancelling
 
-the × on a target that is `pending`, `closing_processes`, `downloading` or `installing` cancels **that machine only**, and asks for no confirm. the other machines in the deployment carry on:
+the × on a target that is `pending`, `closing_processes` or `downloading` cancels **that machine only**, and asks for no confirm. the other machines in the deployment carry on. the target is marked `cancelled` at once.
 
-- a target still `pending`, `closing_processes` or `downloading` has its queued install removed, gets a `cancel_installation` command, and is marked `cancelled`
-- a target that is `installing` cannot be cancelled. the × shows on it, but the request is refused with `409 no_cancellable_targets`, and the page shows nothing
+a cancel only stops an install the agent has not picked up: the queued install is removed, and the machine never runs it. an install the agent has picked up, which by then usually shows `closing_processes` or `downloading`, is marked `cancelled` too, but the agent carries on with it: it has closed, or is closing, the processes you chose. when it reports, the line shows that install's result, `completed` or `failed`.
 
-a cancel is only certain for a target the agent has not picked up. one already closing processes or downloading is marked `cancelled`, but the agent has no installer running to stop yet, so the install can carry on and the target can still end `completed`.
+a target that is `installing` or finished cannot be cancelled, and has no ×. a machine that started installing while the click was on its way is not cancelled: the server refuses with `409 no_cancellable_targets`, and the page says the machine has already started installing or finished.
 
 ---
 
