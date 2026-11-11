@@ -2,8 +2,9 @@
 /**
  * @jest-environment jsdom
  *
- * the admin panel's hoot page: one site's switch and senders at a time, for a
- * site the person administers whole and no other.
+ * the admin panel's hoot page: one site's hoot settings at a time, for a site
+ * the person administers whole and no other. the approval switch asks before
+ * it turns off, and the senders show only while their switch is on.
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -35,9 +36,17 @@ jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites, loading: false }),
 }));
 
-const fleetSettingsFor = jest.fn((_siteId: string) => ({ settings: { enabled: false, senders: {} }, loading: false }));
+let fleetEnabled = false;
+const fleetSettingsFor = jest.fn((_siteId: string) => ({
+  settings: { enabled: fleetEnabled, senders: {} },
+  loading: false,
+}));
 jest.mock('@/hooks/useFleetSettings', () => ({
   useFleetSettings: (siteId: string) => fleetSettingsFor(siteId),
+}));
+let requireApproval = true;
+jest.mock('@/hooks/useHootApprovalSetting', () => ({
+  useHootApprovalSetting: () => ({ requireApproval }),
 }));
 jest.mock('@/hooks/useSiteMachines', () => ({
   useSiteMachines: () => ({ machines: [], error: null, refresh: jest.fn() }),
@@ -56,6 +65,8 @@ beforeEach(() => {
   ];
   administered = ['site-a', 'site-b'];
   lastSiteId = null;
+  fleetEnabled = false;
+  requireApproval = true;
   updateLastSite.mockReset();
   fleetSettingsFor.mockClear();
   fetchMock.mockReset().mockResolvedValue({ ok: true, json: async () => ({}) });
@@ -125,10 +136,74 @@ describe('the switch', () => {
     expect(JSON.parse(init.body)).toEqual({ enabled: true });
   });
 
-  it('sits in a panel above the senders', () => {
+  it('shows the senders under it while it is on', () => {
+    fleetEnabled = true;
     render(<HootSettingsPage />);
 
     expect(screen.getByRole('region', { name: 'machines' })).toContainElement(theSwitch());
     expect(screen.getByRole('region', { name: 'machines that act on others' })).toBeInTheDocument();
+    expect(screen.queryByText('turn this on to choose which machines may act.')).not.toBeInTheDocument();
+  });
+
+  it('hides the senders while it is off, and says how to get them', () => {
+    render(<HootSettingsPage />);
+
+    expect(screen.queryByRole('region', { name: 'machines that act on others' })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'machines' })).toHaveTextContent(
+      'turn this on to choose which machines may act.',
+    );
+  });
+});
+
+describe('the approval switch', () => {
+  const approval = () => screen.getByRole('switch', { name: 'require approval for privileged tools' });
+
+  it('is on by default, in its own panel', () => {
+    render(<HootSettingsPage />);
+
+    expect(screen.getByRole('region', { name: 'approval' })).toContainElement(approval());
+    expect(approval()).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('asks before it turns off, and writes nothing until the answer', async () => {
+    const user = userEvent.setup();
+    lastSiteId = 'site-b';
+    render(<HootSettingsPage />);
+
+    await user.click(approval());
+
+    expect(await screen.findByText('disable tier-3 approval site-wide?')).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'disable approval' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe('/api/sites/site-b/hoot-settings');
+    expect(init.method).toBe('PATCH');
+    expect(JSON.parse(init.body)).toEqual({ requireTier3Approval: false });
+  });
+
+  it('writes nothing when the question is cancelled', async () => {
+    const user = userEvent.setup();
+    render(<HootSettingsPage />);
+
+    await user.click(approval());
+    await user.click(await screen.findByRole('button', { name: 'cancel' }));
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('turns back on in one click', async () => {
+    const user = userEvent.setup();
+    requireApproval = false;
+    render(<HootSettingsPage />);
+
+    expect(approval()).toHaveAttribute('aria-checked', 'false');
+    await user.click(approval());
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ requireTier3Approval: true });
+    expect(screen.queryByText('disable tier-3 approval site-wide?')).not.toBeInTheDocument();
   });
 });

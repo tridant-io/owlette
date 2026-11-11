@@ -37,8 +37,12 @@ test.describe('owner of site-C', () => {
 
     const enable = page.getByRole('switch', { name: 'let machines act on other machines' });
     await expect(enable).toHaveAttribute('aria-checked', 'false');
+    // off, the machines are not listed: one line says how to get them
+    await expect(page.getByText('turn this on to choose which machines may act.')).toBeVisible();
+    await expect(page.getByTestId('fleet-senders')).toHaveCount(0);
     await enable.click();
     await expect(enable).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByText('turn this on to choose which machines may act.')).toHaveCount(0);
 
     const row = page.getByTestId(`fleet-sender-${SENDER}`);
     await row.getByRole('switch').click();

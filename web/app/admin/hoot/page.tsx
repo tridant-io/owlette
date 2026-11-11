@@ -38,7 +38,7 @@ export default function HootSettingsPage() {
         <AdminPageHeader
           className="mb-6 md:mb-8"
           title="hoot"
-          description="what hoot may do on a site beyond its chat"
+          description="how far hoot may go on a site"
           toolbar={
             sites.length > 1 && (
               <Select value={selectedSiteId} onValueChange={handleSiteChange}>

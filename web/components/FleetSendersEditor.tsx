@@ -17,6 +17,7 @@ export const FLEET_COPY = {
   switchLabel: 'let machines act on other machines',
   switchDescription:
     "a machine you choose can use hoot's tools on other machines in this site, through an ai agent running on it. off until you turn it on.",
+  offHint: 'turn this on to choose which machines may act.',
   panelTitle: 'machines that act on others',
   panelDescription: 'choose which machines may act, how far, and on which machines. each change saves as you make it.',
   senderToggle: 'may act on others',
