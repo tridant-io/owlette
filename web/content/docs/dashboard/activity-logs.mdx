@@ -102,7 +102,7 @@ one row per machine when its install, or an agent update sent with a deployment,
 |---|---|---|---|
 | `deployment_completed` | deployment completed | info | the install finished on that machine |
 | `deployment_failed` | deployment failed | error | it failed there; the details carry the agent's result |
-| `deployment_cancelled` | deployment cancelled | warning | listed in the filter, but the current agent does not write it: a cancelled target leaves no row |
+| `deployment_cancelled` | deployment cancelled | warning | a cancel stopped the install on that machine before its installer ran; the details say how far it had got. a target cancelled before its machine picked the install up leaves no row, and neither does any cancel on an agent older than 4.2.0 |
 
 see [deployments](/docs/dashboard/deployments).
 

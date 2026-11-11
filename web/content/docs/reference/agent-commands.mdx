@@ -39,7 +39,7 @@ besides `type`, `status: "pending"` and the command's own fields, an entry carri
 
 ### lanes
 
-the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh` and `check_path`.
+the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh`, `unpair`, `check_path` and, from agent 4.2.0, `cancel_installation`: on the worker it waited behind the install it was meant to stop.
 
 everything else goes through **one worker**, one command at a time, so installs, updates and roost syncs never overlap. that includes process control and reboots: a `restart_process` queued behind an install waits for it. the worker's queue holds 50 commands; one that arrives to a full queue is failed with `Command queue full — too many pending installs`.
 
@@ -47,7 +47,7 @@ everything else goes through **one worker**, one command at a time, so installs,
 
 the agent refuses a second command of the same type for the same process within 5 seconds. the key is the type plus `process_id`, `processId` or `process_name`, so commands that name no process share one key per type. the refusal, `Error: rate limited - <type> executed too recently, try again in a few seconds`, is recorded as failed.
 
-exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types, `site_settings_refresh` and `check_path`. `cancel_mcp_tool` never reaches the check.
+exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types, `site_settings_refresh`, `check_path` and, from agent 4.2.0, `cancel_installation` and `install_software`: the worker already runs installs one at a time, and an install that ended inside five seconds, refused or cancelled, got the one queued behind it refused. `cancel_mcp_tool` never reaches the check.
 
 ### active hours
 
@@ -59,7 +59,7 @@ the refusal is a failed command:
 Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00
 ```
 
-an install is refused before it closes any process. each refusal logs `active_hours_refused` to the site log, and it counts toward the rate limit above like any other run, so a retry with an override straight after a refusal waits 5 seconds.
+an install is refused before it closes any process. each refusal logs `active_hours_refused` to the site log. a refused reboot or shutdown counts toward the rate limit above like any other run, so a retry with an override straight after the refusal waits 5 seconds. an install is exempt from agent 4.2.0, so its retry runs at once; on an older agent it waits too.
 
 two ways through:
 
@@ -72,7 +72,7 @@ the agent writes the window it enforces to the machine document as `activeHours:
 
 ### completed, failed or cancelled
 
-a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. two exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel, and `cancel_mcp_tool` writes its target `cancelled` itself.
+a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. three exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel or the installer had already launched; an `install_software` that a cancel stopped is recorded as `cancelled`, with the result `cancelled by user`; and `cancel_mcp_tool` writes its target `cancelled` itself.
 
 these come back `completed` although the command did not do its job, so check `result` as well as `status`:
 
@@ -94,7 +94,7 @@ an `mcp_tool_call` whose tool failed is `completed` too: the tool's own error, `
 
 ### progress
 
-while it works, a command merges partial records under its ID: `running` (with `startedAt` and `type`, before every command), then `closing_processes`, `downloading`, `installing` or `uninstalling` where they apply. a change of status always writes; repeats of one status are throttled. the record has room for a `progress` percentage, but no handler sets one today.
+while it works, a command merges partial records under its ID: `running` (with `startedAt` and `type`, before every command the agent starts; an install cancelled while it waited never starts, and goes straight to its `cancelled` record), then `downloading`, `closing_processes`, `installing` or `uninstalling` where they apply (an agent older than 4.2.0 writes `closing_processes` before `downloading`). a change of status always writes; repeats of one status are throttled. the record has room for a `progress` percentage, but no handler sets one today.
 
 a roost sync reports its progress to `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` instead: `pending`, `downloading`, `assembling`, then `committed`, `failed` or `cancelled`.
 
@@ -208,8 +208,8 @@ every agent reports `capabilities.displayRemoteApply: 1`, whatever its platform,
 
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
-| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects`; `activeHoursOverride` | refused inside [active hours](#active-hours) without an override, before anything is closed. otherwise closes `close_processes` and locks `suppress_projects`, downloads, refuses the file without a checksum or on a mismatch, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. fails when there is no console session | not supported: the agent closes the named processes, downloads and verifies, then fails with `No interactive user session available for installation…` |
-| `cancel_installation` | `installer_name`, `deployment_id` | kills the installer's process tree and deletes the download | nothing to cancel |
+| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects`; `activeHoursOverride` | refused inside [active hours](#active-hours) without an override, or without a checksum, before anything is downloaded or closed. otherwise downloads, refuses the file on a checksum mismatch, fails when there is no console session, and only then closes `close_processes` and keeps them and `suppress_projects` from relaunching until the install ends, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. an agent older than 4.2.0 closes first, before the download, and holds down only `suppress_projects` | not supported: the agent downloads and verifies, then fails with `No interactive user session available for installation…`, and closes nothing. an agent older than 4.2.0 closes the named processes first |
+| `cancel_installation` | `deployment_id`, or `installer_name` alone | stops the `install_software` the agent holds for that deployment, as long as its installer has not launched: one still waiting never starts, one that is downloading stops the download, and one that is closing processes does not run the installer. the install is recorded `cancelled` and what it downloaded is deleted. an installer that has launched is left to finish, and the cancel answers `Cancellation failed: … is already installing and will finish`. a cancel that matches no install the agent holds does nothing, then or later. an agent older than 4.2.0 refuses it without `installer_name`, and runs it only after the install has ended, when there is nothing left to stop | the same; an install never gets as far as an installer there |
 | `uninstall_software` | `software_name`, `uninstall_command`, `silent_flags`, `installer_type`, `verify_paths`, `timeout_seconds` (default 1200), `deployment_id` | runs the uninstaller with silent flags, detected from `installer_type` when absent, then checks `verify_paths` and the registry. writers also send `close_processes`, which the agent does not read | macOS: only an application bundle (`installer_type: "app"`) that the software inventory lists at that moment; the agent quits what runs from it, then removes the bundle. Linux: fails |
 | `cancel_uninstall` | `software_name` | kills the uninstaller tracked as `uninstall_<software_name>` | macOS has nothing long-running to cancel; Linux never starts one |
 | `refresh_software_inventory` | none | forces an inventory sync. nothing queues it any more | macOS lists application bundles, Linux `dpkg` packages |
