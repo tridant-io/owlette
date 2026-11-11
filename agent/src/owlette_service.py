@@ -2656,8 +2656,16 @@ class OwletteService:
 
     def _try_launch_cortex(self):
         """Launch the Cortex process with cooldown. Mirrors _try_launch_tray() pattern.
-        Returns True if launched (or already running), False if skipped/failed."""
-        if not shared_utils.is_cortex_enabled():
+        Returns True if launched (or already running), False if skipped/failed.
+
+        Off Windows it first brings the access token hoot reads into step, so a
+        launch always finds one and a switched-off or unpaired machine loses it.
+        """
+        config = shared_utils.read_config() or {}
+        enabled = shared_utils.is_cortex_enabled(config)
+        paired = bool(config.get('firebase', {}).get('enabled'))
+        self._publish_cortex_token(enabled and paired)
+        if not enabled:
             return False
 
         if self._is_cortex_alive():
@@ -2683,6 +2691,34 @@ class OwletteService:
                 self._cortex_last_launch_time = now
             logging.debug("Could not launch Cortex (no user session?)")
             return False
+
+    def _publish_cortex_token(self, wanted):
+        """Off Windows, keep the access token hoot reads in step with the daemon's.
+
+        hoot runs as the console user and the token store is the daemon's alone
+        there, so the daemon hands it the one-hour access token: written when it
+        changes, withdrawn when hoot is off or the machine is unpaired.
+        """
+        if sys.platform == 'win32':
+            return
+        import auth_manager
+
+        manager = getattr(self.firebase_client, 'auth_manager', None) if wanted else None
+        current = manager.current_token() if manager else (None, None)
+        if current == self._cortex_token_published:
+            return
+        try:
+            if current[0]:
+                auth_manager.publish_token(*current)
+            else:
+                auth_manager.withdraw_token()
+            self._cortex_token_published = current
+            self._cortex_token_error = None
+        except OSError as e:
+            # retried on every tick, said once per cause
+            if str(e) != self._cortex_token_error:
+                self._cortex_token_error = str(e)
+                logging.warning(f"Could not update hoot's access token: {e}")
 
     def _process_cortex_ipc_commands(self):
         """Hand any pending Cortex IPC commands to the drain worker.
@@ -9591,6 +9627,10 @@ class OwletteService:
         # Cortex (local AI agent) launch tracking
         self._cortex_last_launch_time = 0
         self._cortex_launch_cooldown = 30
+        # off windows: the (token, expiry) last published for hoot, empty so the
+        # first tick acts and withdraws a stale one, and the last write failure
+        self._cortex_token_published = ()
+        self._cortex_token_error = None
 
         # Before Firebase init, which can take seconds — the user needs immediate
         # feedback that the service is starting.
