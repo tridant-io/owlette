@@ -7,8 +7,6 @@ import { Panel } from '@/components/admin/Panel';
 import { toast } from '@/lib/toast';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { useDisplaySettings } from '@/hooks/useDisplaySettings';
-import { useFleetSettings } from '@/hooks/useFleetSettings';
-import { FLEET_COPY, FleetSendersEditor } from '@/components/FleetSendersEditor';
 
 interface SiteSettingSwitchProps {
   id: string;
@@ -73,48 +71,34 @@ function SiteSettingSwitch({ id, label, description, checked, loading, url, fiel
 export function SiteSwitches({ siteId }: { siteId: string }) {
   const swoop = useSwoopSettings(siteId);
   const display = useDisplaySettings(siteId);
-  const fleet = useFleetSettings(siteId);
   const base = `/api/sites/${encodeURIComponent(siteId)}`;
 
-  // only a site owner or admin reaches this section (SiteSettings), which is who holds FLEET_SETTINGS_MANAGE
   return (
-    <div className="space-y-4">
-      <Panel id="site-section-swoop" title="swoop & screens" description="these switches act the moment they move.">
-        <div className="space-y-3">
-          <SiteSettingSwitch
-            id={`swoop-${siteId}`}
-            label="swoop"
-            description={
-              swoop.settings.membersMayWatch
-                ? "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members."
-                : "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members."
-            }
-            checked={swoop.settings.enabled}
-            loading={swoop.loading}
-            url={`${base}/swoop-settings`}
-            field="enabled"
-          />
-          <SiteSettingSwitch
-            id={`keep-awake-${siteId}`}
-            label="keep screens awake"
-            description="machines on this site never sleep, blank or lock"
-            checked={display.settings.keepAwake}
-            loading={display.loading}
-            url={`${base}/display-settings`}
-            field="keepAwake"
-          />
-          <SiteSettingSwitch
-            id={`fleet-${siteId}`}
-            label={FLEET_COPY.switchLabel}
-            description={FLEET_COPY.switchDescription}
-            checked={fleet.settings.enabled}
-            loading={fleet.loading}
-            url={`${base}/fleet-settings`}
-            field="enabled"
-          />
-        </div>
-      </Panel>
-      <FleetSendersEditor siteId={siteId} />
-    </div>
+    <Panel id="site-section-swoop" title="swoop & screens" description="these switches act the moment they move.">
+      <div className="space-y-3">
+        <SiteSettingSwitch
+          id={`swoop-${siteId}`}
+          label="swoop"
+          description={
+            swoop.settings.membersMayWatch
+              ? "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members."
+              : "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members."
+          }
+          checked={swoop.settings.enabled}
+          loading={swoop.loading}
+          url={`${base}/swoop-settings`}
+          field="enabled"
+        />
+        <SiteSettingSwitch
+          id={`keep-awake-${siteId}`}
+          label="keep screens awake"
+          description="machines on this site never sleep, blank or lock"
+          checked={display.settings.keepAwake}
+          loading={display.loading}
+          url={`${base}/display-settings`}
+          field="keepAwake"
+        />
+      </div>
+    </Panel>
   );
 }

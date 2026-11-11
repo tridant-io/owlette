@@ -1,8 +1,8 @@
 /**
  * the grant that lets a machine act on other machines of its site (ADR 0017),
- * in the swoop & screens section of the site's settings. an owner turns it on,
+ * on the admin panel's hoot page. an owner turns it on,
  * adds a sender at tier 2 with one machine, and finds it kept after a reload.
- * a member is turned away from the settings, so never sees the section.
+ * a member is turned away from the admin panel, so never sees the page.
  */
 
 import { test, expect } from '@playwright/test';
@@ -33,7 +33,7 @@ test.describe('owner of site-C', () => {
   test.use(roleState('owner'));
 
   test('turns it on, adds a sender at tier 2 with one machine, and keeps it across a reload', async ({ page }) => {
-    await page.goto(`/admin/sites/${SITE_ID}?section=swoop`);
+    await page.goto('/admin/hoot');
 
     const enable = page.getByRole('switch', { name: 'let machines act on other machines' });
     await expect(enable).toHaveAttribute('aria-checked', 'false');
@@ -72,7 +72,7 @@ test.describe('owner of site-C', () => {
   test('privileged shows the one warning line', async ({ page }) => {
     // its own sender, so the test stands without the one before it
     await fleetDoc().set({ enabled: true, senders: { [SENDER]: { maxTier: 1 } } });
-    await page.goto(`/admin/sites/${SITE_ID}?section=swoop`);
+    await page.goto('/admin/hoot');
 
     const row = page.getByTestId(`fleet-sender-${SENDER}`);
     await expect(row.getByText('shell commands')).toHaveCount(0);
@@ -86,8 +86,8 @@ test.describe('owner of site-C', () => {
 test.describe('member of site-A', () => {
   test.use(roleState('member'));
 
-  test('does not see the section', async ({ page }) => {
-    await page.goto('/admin/sites/site-A?section=swoop');
+  test('does not see the page', async ({ page }) => {
+    await page.goto('/admin/hoot');
 
     // the admin panel turns a plain member away to the dashboard
     await expect(page).toHaveURL(/\/dashboard/);

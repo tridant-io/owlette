@@ -12,7 +12,7 @@ import { useSiteMachines } from '@/hooks/useSiteMachines';
 import { storedFleetGrant, type FleetGrant, type StoredFleetGrant } from '@/lib/fleet/grant';
 import { toast } from '@/lib/toast';
 
-// placeholder copy: the feature's name is not settled
+// every word the admin panel's hoot page shows for the grant (ADR 0017)
 export const FLEET_COPY = {
   switchLabel: 'let machines act on other machines',
   switchDescription:
