@@ -10,6 +10,7 @@ type TestUserActor = {
   userId: string;
   role: 'member' | 'admin' | 'superadmin';
   siteRoles: Record<string, 'owner' | 'admin' | 'member'>;
+  machineScopes: Record<string, readonly string[] | null>;
 };
 
 const SUPERADMIN: TestUserActor = {
@@ -17,6 +18,7 @@ const SUPERADMIN: TestUserActor = {
   userId: 'test-admin',
   role: 'superadmin',
   siteRoles: {},
+  machineScopes: {},
 };
 
 let tokenDocs: TokenDoc[] = [];
@@ -191,7 +193,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   // on site-scoped AGENT_TOKEN_REVOKE, so a site admin could revoke a token they
   // could not list. These three cases fail if that split ever comes back.
   it('lets a site admin list tokens for a site they are assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
     tokenDocs = [
       { id: 'live', siteId: 'site-a', machineId: 'm1', createdAt: timestamp('2026-02-01T00:00:00Z') },
     ];
@@ -206,7 +208,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a site admin listing tokens for a site they are NOT assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-b/agent-tokens'),
@@ -217,7 +219,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a member listing tokens on their own site', async () => {
-    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' } };
+    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-a/agent-tokens'),

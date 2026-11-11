@@ -115,7 +115,7 @@ curl -fsS "https://owlette.app/api/whoami" \
 
 ## scopes
 
-each key carries a `scopes` array. a request is allowed only when one entry matches the operation's resource, ID, and permission, **and** the key's owner could make the same request themselves — a key never grants more than its user holds.
+each key carries a `scopes` array. a request is allowed only when one entry matches the operation's resource, ID, and permission, **and** the key's owner could make the same request themselves — a key never grants more than its user holds, the owner's [machine scope](/docs/reference/authentication#machine-scope) included. when the owner's access to a site is limited to some machines, their key reaches only those machines there, even with `machine=*`: any other machine answers `404`, and the site's site-wide routes answer `403`.
 
 ```json
 [

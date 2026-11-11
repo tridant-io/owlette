@@ -5,7 +5,8 @@
  * `mcp_tool_call`'s agent command id, from `stream/current.toolCommands`.
  *
  * Authorization, in order: resolveAuth (401) → requireScope(chat=<siteId>:write), api-key
- * callers only → verifyUserSiteAccess → chat must exist on `siteId` and belong to the
+ * callers only → verifyUserSiteAccess → `machineId` in the caller's machine scope (404
+ * 'machine not found or no access') → chat must exist on `siteId` and belong to the
  * caller → `commandId` must appear in that chat's `toolCommands` index AND the request's
  * machineId must match the key it was recorded under. The last check is what stops a caller
  * cancelling arbitrary machine commands through a chat they happen to own.
@@ -31,6 +32,7 @@ import {
 } from '@/lib/actions/executeMachineCommand.server';
 import { getUserIdFromSession, withRateLimit } from '@/lib/withRateLimit';
 import { siteStanding, type Actor, type Role } from '@/lib/capabilities';
+import { scopeCovers } from '@/lib/machineAccess';
 
 /** `stream/current.toolCommands`: toolCallId → machineId → { commandId }. Declared locally
  * to keep this route off the server-only turn store's type surface. */
@@ -126,6 +128,12 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // a machine outside the caller's machine scope answers as a missing one (ADR 0016),
+    // before any chat read
+    if (!scopeCovers(access.standing.machineIds, machineId)) {
+      return NextResponse.json({ error: 'machine not found or no access' }, { status: 404 });
+    }
+
     // Chat-scoped and owner-only.
     const chatSnap = await db.collection('chats').doc(chatId).get();
     const chatData = chatSnap.data();
@@ -181,7 +189,7 @@ async function handleCancelTool(request: NextRequest): Promise<NextResponse> {
       role,
       // Per-site standing from the same access check above; the global `role`
       // beside it grants nothing on a site.
-      ...siteStanding([[siteId, { role: access.siteRole, swoopMode: access.swoopMode }]]),
+      ...siteStanding([[siteId, access.standing]]),
     };
 
     let queued;

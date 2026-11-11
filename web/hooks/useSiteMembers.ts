@@ -33,15 +33,19 @@ export interface SiteMember {
   displayName: string | null;
   /** their own swoop mode on this site. null means their role decides. */
   swoop: SwoopMode | null;
+  /** their machine scope: null for the whole site, else only these machines. */
+  machineIds: string[] | null;
 }
 
 /**
  * a picked candidate is added by uid, a typed full email by email. without
- * swoop the new row carries no mode, so their role decides.
+ * swoop the new row carries no mode, so their role decides. without machineIds
+ * they reach the whole site.
  */
 export type AddSiteMemberInput = {
   role: AddableSiteMemberRole;
   swoop?: SwoopMode;
+  machineIds?: string[];
 } & ({ uid: string; email?: undefined } | { email: string; uid?: undefined });
 
 export interface AddSiteMemberResult {
@@ -60,6 +64,8 @@ export interface UpdateSiteMemberInput {
   role?: AddableSiteMemberRole;
   /** null puts them back on their role's default. */
   swoop?: SwoopMode | null;
+  /** null gives them the whole site back. */
+  machineIds?: string[] | null;
 }
 
 export interface UpdateSiteMemberResult {
@@ -67,6 +73,7 @@ export interface UpdateSiteMemberResult {
   uid: string;
   role: AddableSiteMemberRole;
   swoop: SwoopMode | null;
+  machineIds: string[] | null;
 }
 
 export interface RemoveSiteMemberResult {
@@ -208,12 +215,13 @@ export function useSiteMembers(
             'content-type': 'application/json',
             'Idempotency-Key': makeIdempotencyKey('site-member-add'),
           },
-          // stringify drops what is undefined: the identifier not given, and an unset swoop
+          // stringify drops what is undefined: the identifier not given, an unset swoop and no machine scope
           body: JSON.stringify({
             uid: input.uid,
             email: input.email,
             role: input.role,
             swoop: input.swoop,
+            machineIds: input.machineIds,
           }),
         },
       );

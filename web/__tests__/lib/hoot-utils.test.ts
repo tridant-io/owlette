@@ -197,6 +197,7 @@ import {
   MAX_TOOL_TIMEOUT_SECONDS,
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_NOTE_LENGTH,
+  SITE_WIDE_SERVER_TOOLS,
   type BuildExecutableToolsOptions,
 } from '@/lib/hoot-utils.server';
 
@@ -586,7 +587,7 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-04' },
     ]);
 
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([
       { id: 'kiosk-01', online: true, hootEnabled: true, activeHoursGuard: false },
       { id: 'kiosk-02', online: false, hootEnabled: false, activeHoursGuard: false },
       { id: 'kiosk-03', online: true, hootEnabled: true, activeHoursGuard: false },
@@ -597,7 +598,7 @@ describe('listSiteMachines', () => {
 
   it('reports an empty site as no machines', async () => {
     const { db } = createSiteMachinesDb([]);
-    await expect(listSiteMachines(db, 's1')).resolves.toEqual([]);
+    await expect(listSiteMachines(db, 's1', null)).resolves.toEqual([]);
   });
 
   it("carries each machine's reported timezone, so a turn's prompt costs no extra read", async () => {
@@ -608,7 +609,7 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-03', online: true, machine_timezone_iana: 5 },
     ]);
 
-    const [withZone, withoutZone, badZone] = await listSiteMachines(db, 's1');
+    const [withZone, withoutZone, badZone] = await listSiteMachines(db, 's1', null);
     expect(withZone.timezone).toBe('America/New_York');
     expect(withoutZone.timezone).toBeUndefined();
     expect(badZone.timezone).toBeUndefined();
@@ -627,9 +628,33 @@ describe('listSiteMachines', () => {
       { id: 'kiosk-06', online: true, capabilities: { activeHoursGuard: 1 } },
     ]);
 
-    const machines = await listSiteMachines(db, 's1');
+    const machines = await listSiteMachines(db, 's1', null);
     expect(machines.map((machine) => machine.activeHoursGuard)).toEqual([true, false, false, false, false, false]);
     expect(machinesGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists only the machines a scope names, off the same one read', async () => {
+    const { db, machinesGet } = createSiteMachinesDb([
+      { id: 'kiosk-01', online: true },
+      { id: 'kiosk-02', online: true },
+      { id: 'kiosk-03', online: true },
+    ]);
+
+    const scoped = await listSiteMachines(db, 's1', ['kiosk-03', 'kiosk-01', 'gone-01']);
+    expect(scoped.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-03']);
+    expect(machinesGet).toHaveBeenCalledTimes(1);
+    // no machines is nothing, never the whole site
+    await expect(listSiteMachines(db, 's1', [])).resolves.toEqual([]);
+    const whole = await listSiteMachines(db, 's1', null);
+    expect(whole.map((machine) => machine.id)).toEqual(['kiosk-01', 'kiosk-02', 'kiosk-03']);
+  });
+
+  it('refuses a missing scope rather than reading it as the whole site', async () => {
+    const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }]);
+
+    await expect(
+      listSiteMachines(db, 's1', undefined as unknown as readonly string[] | null),
+    ).rejects.toThrow(TypeError);
   });
 });
 
@@ -703,7 +728,7 @@ describe('resolveHootTargets', () => {
   it('resolves "all machines" to every online, hoot-enabled machine', async () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -720,7 +745,7 @@ describe('resolveHootTargets', () => {
   it('resolves an explicit subset, in the order it was asked for', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-03', 'kiosk-01'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
   });
@@ -728,7 +753,7 @@ describe('resolveHootTargets', () => {
   it('keeps a single explicit machine off the fan-out path', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-02'], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
   });
@@ -738,7 +763,7 @@ describe('resolveHootTargets', () => {
     // the exact offline copy e2e pins all hang off fanOut.
     const { db } = createSiteMachinesDb([{ id: 'only-01', online: true }]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['only-01'], fanOut: false } });
   });
@@ -748,6 +773,7 @@ describe('resolveHootTargets', () => {
 
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01', 'kiosk-01', 'kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01', 'kiosk-02'] } });
@@ -760,7 +786,7 @@ describe('resolveHootTargets', () => {
   ])('refuses %s with 400 and never widens to the site', async (_label, requested, offenders) => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    await expect(resolveHootTargets(db, 's1', { requested })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 400,
       reason: 'unknown_machine',
@@ -779,7 +805,7 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: requested as string[] }),
+      resolveHootTargets(db, 's1', { requested: requested as string[], machineScope: null }),
     ).resolves.toEqual({ ok: false, status: 400, reason: 'invalid_target', machineIds: [] });
     // A malformed id would be a path traversal against sites/{id}/machines.
     expect(machinesGet).not.toHaveBeenCalled();
@@ -792,7 +818,7 @@ describe('resolveHootTargets', () => {
     }));
     const { db } = createSiteMachinesDb(fleet);
 
-    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id) });
+    const result = await resolveHootTargets(db, 's1', { requested: fleet.map((m) => m.id), machineScope: null });
 
     expect(result).toMatchObject({ ok: true });
     expect((result as { resolved: { ids: string[] } }).resolved.ids).toHaveLength(
@@ -806,7 +832,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01', 'kiosk-02'], machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -827,7 +853,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: true, cortexEnabled: false },
     ]);
 
-    const result = await resolveHootTargets(db, 's1', { requested: null });
+    const result = await resolveHootTargets(db, 's1', { requested: null, machineScope: null });
 
     expect(result).toEqual({
       ok: true,
@@ -845,7 +871,7 @@ describe('resolveHootTargets', () => {
       { id: 'kiosk-02', online: false },
     ]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'machine_offline',
@@ -856,7 +882,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 423 when the kill switch is the whole reason', async () => {
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toEqual({
       ok: false,
       status: 423,
       reason: 'hoot_disabled',
@@ -869,7 +895,7 @@ describe('resolveHootTargets', () => {
     // single-machine status code must not move.
     const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: false, cortexEnabled: false }]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'] })).resolves.toMatchObject({
+    await expect(resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: null })).resolves.toMatchObject({
       status: 503,
       reason: 'machine_offline',
     });
@@ -878,7 +904,7 @@ describe('resolveHootTargets', () => {
   it('refuses with 503 when the site has no machines at all', async () => {
     const { db } = createSiteMachinesDb([]);
 
-    await expect(resolveHootTargets(db, 's1', { requested: null })).resolves.toEqual({
+    await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toEqual({
       ok: false,
       status: 503,
       reason: 'no_machines',
@@ -892,6 +918,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-02'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-02'], fanOut: false } });
@@ -905,6 +932,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: ['kiosk-01'],
       mentions: ['kiosk-03'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
@@ -916,6 +944,7 @@ describe('resolveHootTargets', () => {
     const result = await resolveHootTargets(db, 's1', {
       requested: null,
       mentions: ['kiosk-03', 'kiosk-01'],
+      machineScope: null,
     });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-03', 'kiosk-01'], fanOut: true } });
@@ -924,7 +953,7 @@ describe('resolveHootTargets', () => {
   it('ignores an empty mention list and keeps the selection', async () => {
     const { db } = createSiteMachinesDb(FLEET);
 
-    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [] });
+    const result = await resolveHootTargets(db, 's1', { requested: ['kiosk-01'], mentions: [], machineScope: null });
 
     expect(result).toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'] } });
   });
@@ -940,7 +969,7 @@ describe('resolveHootTargets', () => {
       const { db } = createSiteMachinesDb([{ id: 'kiosk-01', online: true }, machine]);
 
       await expect(
-        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'] }),
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: null }),
       ).resolves.toEqual({ ok: false, status, reason, machineIds: ['kiosk-02'] });
     },
   );
@@ -949,7 +978,7 @@ describe('resolveHootTargets', () => {
     const { db } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-99'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'unknown_machine', machineIds: ['kiosk-99'] });
   });
 
@@ -957,15 +986,84 @@ describe('resolveHootTargets', () => {
     const { db, machinesGet } = createSiteMachinesDb(FLEET);
 
     await expect(
-      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'] }),
+      resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-01/commands'], machineScope: null }),
     ).resolves.toMatchObject({ status: 400, reason: 'invalid_target' });
     expect(machinesGet).not.toHaveBeenCalled();
+  });
+
+  describe('for someone limited to some machines', () => {
+    const SCOPE = ['kiosk-01'];
+
+    it('resolves "all machines" to the machines in scope only', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: SCOPE })).resolves.toEqual({
+        ok: true,
+        // one machine in scope keeps the single path, as a one-machine site does
+        resolved: { ids: ['kiosk-01'], fanOut: false, skipped: { offline: [], disabled: [] } },
+      });
+    });
+
+    it.each([
+      ['a machine outside it', ['kiosk-02'], ['kiosk-02']],
+      ['a set that reaches past it', ['kiosk-01', 'kiosk-03'], ['kiosk-03']],
+    ])('refuses %s as unknown, saying no more than for a machine that is not there', async (_label, requested, offenders) => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested, machineScope: SCOPE })).resolves.toEqual({
+        ok: false,
+        status: 400,
+        reason: 'unknown_machine',
+        machineIds: offenders,
+      });
+    });
+
+    it('refuses a mention of a machine outside it as unknown', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: null, mentions: ['kiosk-02'], machineScope: SCOPE }),
+      ).resolves.toEqual({ ok: false, status: 400, reason: 'unknown_machine', machineIds: ['kiosk-02'] });
+    });
+
+    it('resolves a machine in scope as it would for the whole site', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-01'], machineScope: SCOPE }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-01'], fanOut: false } });
+    });
+
+    it('reaches nothing with no machines in scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: [] })).resolves.toEqual({
+        ok: false,
+        status: 503,
+        reason: 'no_machines',
+        machineIds: [],
+      });
+    });
+
+    it('leaves the whole site unchanged with a null scope', async () => {
+      const { db } = createSiteMachinesDb(FLEET);
+
+      await expect(resolveHootTargets(db, 's1', { requested: null, machineScope: null })).resolves.toMatchObject({
+        ok: true,
+        resolved: { ids: ['kiosk-01', 'kiosk-02', 'kiosk-03'], fanOut: true },
+      });
+      await expect(
+        resolveHootTargets(db, 's1', { requested: ['kiosk-02'], mentions: ['kiosk-03'], machineScope: null }),
+      ).resolves.toMatchObject({ ok: true, resolved: { ids: ['kiosk-03'] } });
+    });
   });
 });
 
 describe('buildExecutableTools', () => {
+  const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null };
+
   it('creates an executable tool for each definition', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
 
     expect(Object.keys(tools)).toHaveLength(allTools.length);
     for (const def of allTools) {
@@ -975,12 +1073,51 @@ describe('buildExecutableTools', () => {
   });
 
   it('site mode creates tools for fan-out execution', () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2']);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', '', 'c1', allTools, true, ['m1', 'm2'], WHOLE_SITE);
     expect(Object.keys(tools)).toHaveLength(allTools.length);
   });
 
+  it.each([
+    ['a single machine', false],
+    ['a fan-out', true],
+  ])('offers someone limited to some machines no site-wide tool, on %s', (_label, siteMode) => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', siteMode ? '__site__' : 'm1', 'c1', allTools, siteMode, siteMode ? ['m1'] : [],
+      { machineScope: ['m1'] },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+    // everything else, the per-machine server-side tools included, stays on offer
+    expect(offered.sort()).toEqual(
+      allTools.map((def) => def.name).filter((name) => !SITE_WIDE_SERVER_TOOLS.has(name)).sort(),
+    );
+    expect(offered).toEqual(expect.arrayContaining(['update_process', 'get_system_presets', 'schedule_followup']));
+  });
+
+  it('offers no site-wide tool when the scope is missing, rather than reading it as the whole site', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore,
+      's1', 'm1', 'c1', allTools, false, [],
+      {} as BuildExecutableToolsOptions & { machineScope: readonly string[] | null },
+    );
+
+    const offered = Object.keys(tools);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(offered).not.toContain(name);
+  });
+
+  it('names exactly the five site-wide tools, each a tool that exists', () => {
+    // a renamed tool would silently fall out of the set and be offered again
+    expect([...SITE_WIDE_SERVER_TOOLS].sort()).toEqual(
+      ['create_talon', 'deploy_software', 'get_site_logs', 'list_talons', 'set_talon_enabled'],
+    );
+    const names = allTools.map((def) => def.name);
+    for (const name of SITE_WIDE_SERVER_TOOLS) expect(names).toContain(name);
+  });
+
   it('asks for approval on tier-3 calls and lets tier-1/2 calls run', async () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools);
+    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
     for (const def of allTools) {
       // A call without an override: the tier alone decides.
       expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(def.tier >= 3);
@@ -996,7 +1133,7 @@ describe('buildExecutableTools', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', 'm1', 'c1', allTools, false, [],
-      { requireTier3Approval: false },
+      { ...WHOLE_SITE, requireTier3Approval: false },
     );
     for (const def of allTools) {
       expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(false);
@@ -1048,7 +1185,7 @@ describe('buildExecutableTools', () => {
       { id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' },
     ]);
     const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
-    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef]);
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], WHOLE_SITE);
 
     const result = await tools.update_process.execute({
       process_name: 'Missing',
@@ -1135,7 +1272,8 @@ describe('active-hours override', () => {
   const PERSON: BuildExecutableToolsOptions = {
     userId: 'uid_alice',
     userRole: 'admin',
-    userSiteRole: 'admin',
+    userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+    machineScope: null,
     allowActiveHoursOverride: true,
   };
   const REBOOT_NOW = { override_active_hours: true, reason: 'the show ended early' };
@@ -1285,9 +1423,17 @@ describe('active-hours override', () => {
   });
 
   const NO_PERSON_TURNS: Array<[string, BuildExecutableToolsOptions]> = [
-    ['a follow-up or talon turn', { userId: 'uid_alice', userRole: 'admin', userSiteRole: 'admin' }],
-    ['the conversations API', { userId: 'uid_alice', userRole: 'admin', requireTier3Approval: true }],
-    ['an unattended system actor', { systemActor: 'cortex_autonomous', allowActiveHoursOverride: true }],
+    [
+      'a follow-up or talon turn',
+      {
+        userId: 'uid_alice',
+        userRole: 'admin',
+        userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+        machineScope: null,
+      },
+    ],
+    ['the conversations API', { userId: 'uid_alice', userRole: 'admin', machineScope: null, requireTier3Approval: true }],
+    ['an unattended system actor', { systemActor: 'cortex_autonomous', machineScope: null, allowActiveHoursOverride: true }],
   ];
   const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
 
@@ -2119,7 +2265,7 @@ describe('verifyUserSiteAccess', () => {
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSuperadmin).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
-    expect(access.siteRole).toBeNull();
+    expect(access.standing.role).toBeNull();
   });
 
   it('an owner membership grants ownership and site-admin', async () => {
@@ -2129,7 +2275,7 @@ describe('verifyUserSiteAccess', () => {
       member: member('owner'),
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
-    expect(access.siteRole).toBe('owner');
+    expect(access.standing.role).toBe('owner');
     expect(access.isSiteOwner).toBe(true);
     expect(access.isSiteAdmin).toBe(true);
   });
@@ -2153,24 +2299,48 @@ describe('verifyUserSiteAccess', () => {
     });
     const access = await verifyUserSiteAccess(db, 'u1', 's1');
     expect(access.isSiteAdmin).toBe(false);
-    expect(access.siteRole).toBe('member');
+    expect(access.standing.role).toBe('member');
   });
 
-  it('returns the swoop mode the member row carries, beside the site role', async () => {
+  it('returns the swoop mode the member row carries, in the standing beside the site role', async () => {
     const heldToView = makeAccessDb({
       users: { role: 'member' },
       sites: {},
       member: { ...member('admin'), swoop: 'view' },
     });
-    await expect(verifyUserSiteAccess(heldToView, 'u1', 's1')).resolves.toMatchObject({
-      siteRole: 'admin',
-      swoopMode: 'view',
-    });
+    const held = await verifyUserSiteAccess(heldToView, 'u1', 's1');
+    expect(held.standing).toMatchObject({ role: 'admin', swoopMode: 'view' });
+    // the standing is the one place they live
+    expect(held).not.toHaveProperty('siteRole');
+    expect(held).not.toHaveProperty('swoopMode');
 
     const byRole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('admin') });
     await expect(verifyUserSiteAccess(byRole, 'u1', 's1')).resolves.toMatchObject({
-      siteRole: 'admin',
-      swoopMode: null,
+      standing: { role: 'admin', swoopMode: null },
+    });
+  });
+
+  it('returns the whole standing, machine scope included, while the role still decides the tier', async () => {
+    const scoped = makeAccessDb({
+      users: { role: 'member' },
+      sites: {},
+      member: { ...member('admin'), swoop: 'control', machineIds: ['m2', 'm1'] },
+    });
+    const access = await verifyUserSiteAccess(scoped, 'u1', 's1');
+    expect(access.standing).toEqual({ role: 'admin', swoopMode: 'control', machineIds: ['m1', 'm2'] });
+    // a scoped admin keeps tier 3; the scope narrows where it applies
+    expect(access.isSiteAdmin).toBe(true);
+    expect(resolveHootMaxTier(access)).toBe(3);
+
+    const whole = makeAccessDb({ users: { role: 'member' }, sites: {}, member: member('member') });
+    await expect(verifyUserSiteAccess(whole, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: 'member', swoopMode: null, machineIds: null },
+    });
+
+    // a superadmin holds no row and reaches the whole site
+    const superadmin = makeAccessDb({ users: { role: 'superadmin' }, sites: {} });
+    await expect(verifyUserSiteAccess(superadmin, 'u1', 's1')).resolves.toMatchObject({
+      standing: { role: null, swoopMode: null, machineIds: null },
     });
   });
 
@@ -2246,8 +2416,8 @@ describe('the hoot actor', () => {
     const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
       userId: 'u1',
       userRole: access.role,
-      userSiteRole: access.siteRole,
-      userSwoopMode: access.swoopMode,
+      userStanding: access.standing,
+      machineScope: access.standing.machineIds,
     });
     await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
     return mockUpdateProcess.mock.calls[0][0].actor;
@@ -2256,17 +2426,56 @@ describe('the hoot actor', () => {
   it('carries an admin held to view, so it never controls', async () => {
     const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active', swoop: 'view' });
 
-    expect(actor.swoopModes?.s1).toBe('view');
+    expect(actor.swoopModes.s1).toBe('view');
     expect(hasCapability(actor, Capability.MACHINE_REMOTE_CONTROL, 's1')).toBe(false);
     // the mode changes swoop and nothing else
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1')).toBe(true);
   });
 
-  it('builds the same actor as before from a row with no mode', async () => {
+  it('carries the machine scope beside the swoop mode, so it reaches only those machines', async () => {
+    const actor = await hootActorFor({
+      uid: 'u1',
+      role: 'admin',
+      status: 'active',
+      swoop: 'view',
+      machineIds: ['m1'],
+    });
+
+    expect(actor.machineScopes.s1).toEqual(['m1']);
+    expect(actor.swoopModes.s1).toBe('view');
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(true);
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm2')).toBe(false);
+    // nothing site-wide, whatever the role
+    expect(hasCapability(actor, Capability.MACHINE_EXEC_COMMAND, 's1')).toBe(false);
+  });
+
+  it('builds an actor with no mode and the whole site from a row that carries neither', async () => {
     const actor = await hootActorFor({ uid: 'u1', role: 'admin', status: 'active' });
 
-    expect(actor).toEqual({ type: 'user', userId: 'u1', role: 'member', siteRoles: { s1: 'admin' } });
-    expect(actor).not.toHaveProperty('swoopModes');
+    expect(actor).toEqual({
+      type: 'user',
+      userId: 'u1',
+      role: 'member',
+      siteRoles: { s1: 'admin' },
+      swoopModes: {},
+      machineScopes: { s1: null },
+    });
+  });
+
+  it('denies every site-scoped capability with no standing', async () => {
+    mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+    const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+    const toolDef = allTools.find((tool) => tool.name === 'update_process')!;
+    const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+      userId: 'u1',
+      userRole: 'admin',
+      machineScope: null,
+    });
+    await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+    const actor: UserActor = mockUpdateProcess.mock.calls[0][0].actor;
+
+    expect(actor.siteRoles).toEqual({});
+    expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(false);
   });
 });
 
@@ -2351,6 +2560,7 @@ describe('capture_screenshot toModelOutput', () => {
     const tools = buildExecutableTools(
       {} as unknown as FirebaseFirestore.Firestore,
       's1', siteMode ? '' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [],
+      { machineScope: null },
     );
     return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => {
       type: string;

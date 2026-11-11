@@ -195,13 +195,17 @@ type FollowupTargetResolution =
  * the resolver's business and are skipped there (D-A/D-B). Only when nothing
  * survives does the follow-up fail, which beats starting a turn whose tools
  * would queue commands under a machine document that no longer exists.
+ *
+ * `machineScope` is the owner's machine scope as it stands now. A machine dropped from
+ * it reads as one that left the site, so it drops out the same way.
  */
 async function resolveFollowupTarget(
   db: Firestore,
   siteId: string,
   target: HootTarget,
+  machineScope: readonly string[] | null,
 ): Promise<FollowupTargetResolution> {
-  const outcome = await resolveHootTargets(db, siteId, { requested: target.machineIds });
+  const outcome = await resolveHootTargets(db, siteId, { requested: target.machineIds, machineScope });
   if (outcome.ok) return { ok: true, target, resolved: outcome.resolved };
 
   // `unknown_machine` is the one refusal a follow-up outlives, and only for an
@@ -222,7 +226,7 @@ async function resolveFollowupTarget(
   }
 
   const narrowed: HootTarget = { machineIds: remaining };
-  const retry = await resolveHootTargets(db, siteId, { requested: remaining });
+  const retry = await resolveHootTargets(db, siteId, { requested: remaining, machineScope });
   return retry.ok
     ? { ok: true, target: narrowed, resolved: retry.resolved }
     : { ok: false, turnError: retry.reason };
@@ -283,7 +287,12 @@ async function dispatchFollowup(
     return { outcome: 'failed', turnError: 'chat_owner_mismatch' };
   }
 
-  const targets = await resolveFollowupTarget(db, followup.siteId, scheduledTarget(followup));
+  const targets = await resolveFollowupTarget(
+    db,
+    followup.siteId,
+    scheduledTarget(followup),
+    access.standing.machineIds,
+  );
   if (!targets.ok) {
     return { outcome: 'failed', turnError: targets.turnError };
   }

@@ -194,7 +194,7 @@ beforeEach(() => {
     }
     return data;
   });
-  mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: {} });
+  mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: {}, machineIds: null });
 });
 
 describe('/api/keys POST', () => {

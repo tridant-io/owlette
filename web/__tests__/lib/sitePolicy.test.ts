@@ -1,7 +1,8 @@
 /** @jest-environment node */
 
 /**
- * `deriveSwoopMode`, `listUserStanding` and the `swoopMode` fact in
+ * `deriveSwoopMode`, `deriveMachineIds`, `memberStanding`, `standingOf`,
+ * `listUserStanding` and the `swoopMode` and `machineIds` facts in
  * `web/lib/sitePolicy.server.ts`. A member row has one reading, whether access
  * reads it for the one site a request names or a listing reads it for every
  * site the user is on.
@@ -32,10 +33,14 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 import {
+  deriveMachineIds,
   deriveMembership,
   deriveSwoopMode,
   listUserStanding,
+  memberStanding,
   resolveSiteAccess,
+  standingOf,
+  type SiteAccessFacts,
 } from '@/lib/sitePolicy.server';
 
 const UID = 'uid-alice';
@@ -53,6 +58,10 @@ const ROWS: Array<[string, Record<string, unknown>]> = [
   ['site-invited', { uid: UID, role: 'admin', status: 'invited', swoop: 'control' }],
   ['site-no-status', { uid: UID, role: 'member', swoop: 'view' }],
   ['site-unknown-role', { uid: UID, role: 'superadmin', status: 'active', swoop: 'control' }],
+  ['site-member-scoped', { uid: UID, role: 'member', status: 'active', swoop: 'control', machineIds: ['m2', 'm1'] }],
+  ['site-admin-scope-malformed', { uid: UID, role: 'admin', status: 'active', machineIds: 'm1' }],
+  ['site-owner-scoped', { uid: UID, role: 'owner', status: 'active', machineIds: ['m1'] }],
+  ['site-invited-scoped', { uid: UID, role: 'admin', status: 'invited', machineIds: ['m1'] }],
   ['__proto__', { uid: UID, role: 'member', status: 'active', swoop: 'view' }],
 ];
 
@@ -93,6 +102,59 @@ describe('deriveSwoopMode', () => {
   });
 });
 
+describe('deriveMachineIds', () => {
+  it('is null for a row that grants nothing, whatever it carries', () => {
+    expect(deriveMachineIds(null, null)).toBeNull();
+    const invited = { role: 'admin', status: 'invited', machineIds: ['m1'] };
+    expect(deriveMachineIds(invited, deriveMembership(invited))).toBeNull();
+  });
+
+  it('is null with no field: the whole site', () => {
+    expect(deriveMachineIds({ role: 'member', status: 'active' }, 'member')).toBeNull();
+  });
+
+  it('reads a list sorted, and a malformed value as no machines', () => {
+    expect(deriveMachineIds({ role: 'member', status: 'active', machineIds: ['m2', 'm1'] }, 'member')).toEqual([
+      'm1',
+      'm2',
+    ]);
+    for (const malformed of ['m1', null, { m1: true }, 3]) {
+      expect(deriveMachineIds({ role: 'admin', status: 'active', machineIds: malformed }, 'admin')).toEqual([]);
+    }
+  });
+
+  it('reads an owner row too, because the rules do', () => {
+    expect(deriveMachineIds({ role: 'owner', status: 'active', machineIds: ['m1'] }, 'owner')).toEqual(['m1']);
+  });
+});
+
+describe('memberStanding', () => {
+  it('is the three derive functions on every row', () => {
+    for (const [, row] of ROWS) {
+      const role = deriveMembership(row);
+      expect(memberStanding(row)).toEqual({
+        role,
+        swoopMode: deriveSwoopMode(row, role),
+        machineIds: deriveMachineIds(row, role),
+      });
+    }
+    expect(memberStanding(null)).toEqual({ role: null, swoopMode: null, machineIds: null });
+  });
+});
+
+describe('standingOf', () => {
+  it('copies the role, the mode and the machine scope out of the facts', () => {
+    const facts = {
+      membershipRole: 'admin',
+      swoopMode: 'view',
+      machineIds: ['m1'],
+      globalRole: 'superadmin',
+      siteId: 'site-a',
+    } as unknown as SiteAccessFacts;
+    expect(standingOf(facts)).toEqual({ role: 'admin', swoopMode: 'view', machineIds: ['m1'] });
+  });
+});
+
 describe('listUserStanding', () => {
   it("queries the user's member rows across every site", async () => {
     await listUserStanding(UID);
@@ -100,21 +162,24 @@ describe('listUserStanding', () => {
     expect(mockWhere).toHaveBeenCalledWith('uid', '==', UID);
   });
 
-  it('maps each active row to its role and swoop mode, and skips inactive rows and unknown roles', async () => {
+  it('maps each active row to its standing, and skips inactive rows and unknown roles', async () => {
     mockMemberDocs = [
       ...ROWS.filter(([siteId]) => siteId !== '__proto__').map(([siteId, row]) => memberDoc(siteId, row)),
       { ref: { parent: { parent: null } }, data: () => ({ uid: UID, role: 'admin', status: 'active' }) },
     ];
 
     expect(await listUserStanding(UID)).toEqual({
-      'site-member': { role: 'member', swoopMode: null },
-      'site-member-control': { role: 'member', swoopMode: 'control' },
-      'site-member-none': { role: 'member', swoopMode: 'none' },
-      'site-admin': { role: 'admin', swoopMode: null },
-      'site-admin-view': { role: 'admin', swoopMode: 'view' },
-      'site-admin-malformed': { role: 'admin', swoopMode: 'none' },
-      'site-admin-null': { role: 'admin', swoopMode: 'none' },
-      'site-owner': { role: 'owner', swoopMode: null },
+      'site-member': { role: 'member', swoopMode: null, machineIds: null },
+      'site-member-control': { role: 'member', swoopMode: 'control', machineIds: null },
+      'site-member-none': { role: 'member', swoopMode: 'none', machineIds: null },
+      'site-admin': { role: 'admin', swoopMode: null, machineIds: null },
+      'site-admin-view': { role: 'admin', swoopMode: 'view', machineIds: null },
+      'site-admin-malformed': { role: 'admin', swoopMode: 'none', machineIds: null },
+      'site-admin-null': { role: 'admin', swoopMode: 'none', machineIds: null },
+      'site-owner': { role: 'owner', swoopMode: null, machineIds: null },
+      'site-member-scoped': { role: 'member', swoopMode: 'control', machineIds: ['m1', 'm2'] },
+      'site-admin-scope-malformed': { role: 'admin', swoopMode: null, machineIds: [] },
+      'site-owner-scoped': { role: 'owner', swoopMode: null, machineIds: ['m1'] },
     });
   });
 
@@ -127,27 +192,30 @@ describe('listUserStanding', () => {
     expect(Object.getOwnPropertyDescriptor(standing, '__proto__')?.value).toEqual({
       role: 'member',
       swoopMode: 'view',
+      machineIds: null,
     });
     expect(Object.getPrototypeOf({})).toBe(Object.prototype);
   });
 
-  it('reads every row exactly as access does', async () => {
+  it('reads every row exactly as memberStanding does', async () => {
     const standing = await listUserStanding(UID);
 
     for (const [siteId, row] of ROWS) {
-      const role = deriveMembership(row);
-      if (role === null) {
+      if (deriveMembership(row) === null) {
         expect(own(standing, siteId)).toBeUndefined();
       } else {
-        expect(own(standing, siteId)).toEqual({ role, swoopMode: deriveSwoopMode(row, role) });
+        expect(own(standing, siteId)).toEqual(memberStanding(row));
       }
     }
   });
 });
 
 describe('resolveSiteAccess', () => {
-  /** the one `getAll` access makes: the site, the user, and `memberRow` as the member document. */
-  function fakeDb(memberRow: Record<string, unknown> | null): FirebaseFirestore.Firestore {
+  /** the one `getAll` access makes: the site, `userRow` as the user, and `memberRow` as the member document. */
+  function fakeDb(
+    memberRow: Record<string, unknown> | null,
+    userRow: Record<string, unknown> = { role: 'member' },
+  ): FirebaseFirestore.Firestore & { getAll: jest.Mock } {
     const snap = (data: Record<string, unknown> | null) => ({
       exists: data !== null,
       data: () => data ?? undefined,
@@ -158,13 +226,14 @@ describe('resolveSiteAccess', () => {
     });
     return {
       collection: (name: string) => ({ doc: (id: string) => docRef(`${name}/${id}`) }),
-      getAll: async (...refs: Array<{ path: string }>) =>
+      getAll: jest.fn(async (...refs: Array<{ path: string }>) =>
         refs.map((ref) => {
           if (ref.path.includes('/members/')) return snap(memberRow);
-          if (ref.path.startsWith('users/')) return snap({ role: 'member' });
+          if (ref.path.startsWith('users/')) return snap(userRow);
           return snap({ name: 'a site' });
         }),
-    } as unknown as FirebaseFirestore.Firestore;
+      ),
+    } as unknown as FirebaseFirestore.Firestore & { getAll: jest.Mock };
   }
 
   it('puts the same swoop mode in facts as the listing reads off the same row', async () => {
@@ -182,5 +251,30 @@ describe('resolveSiteAccess', () => {
     const outcome = await resolveSiteAccess(UID, 'site-member', fakeDb(null));
     expect(outcome).toMatchObject({ ok: false, reason: 'no_access' });
     expect(outcome.facts.swoopMode).toBeNull();
+  });
+
+  it.each<[string, Record<string, unknown> | null, Record<string, unknown>, readonly string[] | null]>([
+    ['no field', { uid: UID, role: 'member', status: 'active' }, { role: 'member' }, null],
+    ['a list', { uid: UID, role: 'admin', status: 'active', machineIds: ['m2', 'm1'] }, { role: 'member' }, ['m1', 'm2']],
+    ['a malformed value', { uid: UID, role: 'admin', status: 'active', machineIds: 'm1' }, { role: 'member' }, []],
+    ['a superadmin with a scoped row', { uid: UID, role: 'member', status: 'active', machineIds: ['m1'] }, { role: 'superadmin' }, null],
+    ['an inactive row', { uid: UID, role: 'admin', status: 'invited', machineIds: ['m1'] }, { role: 'member' }, null],
+    ['no member row', null, { role: 'member' }, null],
+  ])('puts the machine scope in facts: %s', async (_name, memberRow, userRow, expected) => {
+    const db = fakeDb(memberRow, userRow);
+    const outcome = await resolveSiteAccess(UID, 'site-a', db);
+
+    expect(outcome.facts.machineIds).toEqual(expected);
+    // the scope rides the one read access already makes
+    expect(db.getAll).toHaveBeenCalledTimes(1);
+    expect(db.getAll.mock.calls[0]).toHaveLength(3);
+  });
+
+  it('puts the same machine scope in facts as memberStanding reads off the same row', async () => {
+    for (const [siteId, row] of ROWS) {
+      const outcome = await resolveSiteAccess(UID, siteId, fakeDb(row));
+      expect(outcome.facts.machineIds).toEqual(memberStanding(row).machineIds);
+      expect(standingOf(outcome.facts)).toEqual(memberStanding(row));
+    }
   });
 });

@@ -119,6 +119,11 @@ function request(body: Record<string, unknown> = {}): NextRequest {
   });
 }
 
+/** verifyUserSiteAccess's answer; `machineIds` null is the whole site. */
+function siteAccess(role: 'admin' | 'member', machineIds: readonly string[] | null = null) {
+  return { role, siteRole: role, swoopMode: null, standing: { role, swoopMode: null, machineIds } };
+}
+
 /** The single audit row, with the command id the route minted. */
 function soleAudit() {
   expect(emitMutation).toHaveBeenCalledTimes(1);
@@ -137,7 +142,7 @@ beforeEach(() => {
   // `siteRole` is what grants since the per-site-roles migration; the global
   // `role` beside it confers nothing on a site. The route requires
   // MACHINE_EXEC_COMMAND, which the `admin` membership carries.
-  mockVerifyAccess.mockResolvedValue({ role: 'admin', siteRole: 'admin' });
+  mockVerifyAccess.mockResolvedValue(siteAccess('admin'));
   mockPendingSet.mockResolvedValue(undefined);
   mockCompletedUpdate.mockResolvedValue(undefined);
   mockRequireEntitlement.mockImplementation(realRequireEntitlement);
@@ -159,7 +164,7 @@ describe('POST /api/hoot/provision-key — the payer plan', () => {
   });
 
   it('answers a read-only member 403 before the plan is looked up', async () => {
-    mockVerifyAccess.mockResolvedValue({ role: 'member', siteRole: 'member' });
+    mockVerifyAccess.mockResolvedValue(siteAccess('member'));
 
     const res = await POST(request());
     expect(res.status).toBe(403);
@@ -235,7 +240,7 @@ describe('POST /api/hoot/provision-key — audit', () => {
     // reserved by firestore.rules to the service account and the machine's own
     // agent, so this route IS the boundary — and with only a membership check a
     // read-only member could make any machine overwrite its stored LLM credential.
-    mockVerifyAccess.mockResolvedValue({ role: 'member', siteRole: 'member' });
+    mockVerifyAccess.mockResolvedValue(siteAccess('member'));
 
     const res = await POST(request());
     expect(res.status).toBe(403);
@@ -243,10 +248,59 @@ describe('POST /api/hoot/provision-key — audit', () => {
     expect(emitMutation).not.toHaveBeenCalled();
   });
 
-
   it('emits nothing when required fields are missing', async () => {
     const res = await POST(request({ apiKey: undefined }));
     expect(res.status).toBe(400);
     expect(emitMutation).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/hoot/provision-key — machine scope', () => {
+  function agentAnswers() {
+    mockPendingSet.mockImplementation(async (payload: Record<string, unknown>) => {
+      const [commandId] = Object.keys(payload);
+      completedDoc = { [commandId]: { status: 'completed' } };
+    });
+  }
+
+  it('answers a scoped admin 404 on a machine outside the scope, with nothing queued or written', async () => {
+    // before machine scope reached this route, its actor was whole site, so a
+    // scoped admin passed the site-level MACHINE_EXEC_COMMAND check here
+    mockVerifyAccess.mockResolvedValue(siteAccess('admin', ['other-01']));
+    agentAnswers();
+
+    const res = await POST(request());
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'machine not found or no access' });
+    expect(mockRequireEntitlement).not.toHaveBeenCalled();
+    expect(mockPendingSet).not.toHaveBeenCalled();
+    expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('queues as before for a scoped admin on a machine inside the scope', async () => {
+    mockVerifyAccess.mockResolvedValue(siteAccess('admin', [MACHINE]));
+    agentAnswers();
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ success: true });
+    expect(mockPendingSet).toHaveBeenCalledTimes(1);
+    expect(soleAudit().targetId).toBe(MACHINE);
+  });
+
+  it('still refuses a scoped member on a machine inside the scope: the role decides', async () => {
+    mockVerifyAccess.mockResolvedValue(siteAccess('member', [MACHINE]));
+
+    const res = await POST(request());
+    expect(res.status).toBe(403);
+    expect(mockPendingSet).not.toHaveBeenCalled();
+  });
+
+  it('leaves a whole-site admin unchanged on any machine', async () => {
+    agentAnswers();
+
+    const res = await POST(request({ machineId: 'other-01' }));
+    expect(res.status).toBe(200);
+    expect(soleAudit().targetId).toBe('other-01');
   });
 });

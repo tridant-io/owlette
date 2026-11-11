@@ -63,9 +63,11 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+// a spy, so blocks 19-23 can tell the wrapper's scope step from a later refusal
+const mockWriteAuditEntry = jest.fn();
 jest.mock('@/lib/auditLog.server', () => ({
   generateCorrelationId: () => 'corr_esc',
-  writeAuditEntry: async () => {},
+  writeAuditEntry: (...a: unknown[]) => mockWriteAuditEntry(...a),
   writeAuditEntryBlocking: async () => {},
   writeGlobalAuditEntryBlocking: async () => {},
 }));
@@ -94,6 +96,14 @@ const mockDeleteSite = jest.fn(async (_ctx: unknown, input: { siteId: string }) 
 }));
 jest.mock('@/lib/actions/deleteSite.server', () => ({
   deleteSite: (ctx: unknown, input: { siteId: string }) => mockDeleteSite(ctx, input),
+}));
+
+// the site's swoop sessions: block 23 is about who reaches the list, not what is
+// on it, and the double has no collectionGroup to list them from.
+const mockListLiveSwoopSessionsForSite = jest.fn(async (_args: { siteId: string }) => []);
+jest.mock('@/lib/swoop/sessionStore.server', () => ({
+  ...jest.requireActual('@/lib/swoop/sessionStore.server'),
+  listLiveSwoopSessionsForSite: (args: { siteId: string }) => mockListLiveSwoopSessionsForSite(args),
 }));
 
 // --- Firestore double with optimistic concurrency ---------------------------
@@ -288,8 +298,8 @@ const mockListUserStanding = jest.fn(async (uid: string) => {
   for (const [path, row] of docs) {
     const match = MEMBER_ROW_PATH.exec(path);
     if (!match || match[2] !== uid) continue;
-    const role = deriveMembership(row);
-    if (role !== null) bySite[match[1]] = { role, swoopMode: deriveSwoopMode(row, role) };
+    const standing = memberStanding(row);
+    if (standing.role !== null) bySite[match[1]] = standing;
   }
   return bySite;
 });
@@ -301,7 +311,7 @@ jest.mock('@/lib/sitePolicy.server', () => ({
 import { GET as membersGET, POST as membersPOST } from '@/app/api/sites/[siteId]/members/route';
 import { GET as candidatesGET } from '@/app/api/sites/[siteId]/member-candidates/route';
 import type { MemberStanding } from '@/lib/capabilities';
-import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { memberStanding } from '@/lib/sitePolicy.server';
 import {
   DELETE as memberDELETE,
   PATCH as memberPATCH,
@@ -309,6 +319,8 @@ import {
 import { DELETE as siteDELETE } from '@/app/api/sites/[siteId]/route';
 import { POST as transferPOST } from '@/app/api/sites/[siteId]/transfer-ownership/route';
 import { POST as uninstallPOST } from '@/app/api/sites/[siteId]/deployments/[deploymentId]/uninstall/route';
+import { PATCH as hootEnabledPATCH } from '@/app/api/sites/[siteId]/machines/[machineId]/hoot-enabled/route';
+import { GET as swoopSessionsGET } from '@/app/api/sites/[siteId]/swoop/sessions/route';
 
 const SITE = 'site-alpha';
 const OWNER = 'uid_owner';
@@ -320,8 +332,8 @@ function seedUser(uid: string, data: Record<string, unknown> = {}): void {
   docs.set(`users/${uid}`, { email: `${uid}@example.test`, role: 'member', sites: [], ...data });
 }
 
-function seedMemberRow(uid: string, role: string): void {
-  docs.set(`sites/${SITE}/members/${uid}`, { uid, role, status: 'active' });
+function seedMemberRow(uid: string, role: string, extra: Record<string, unknown> = {}): void {
+  docs.set(`sites/${SITE}/members/${uid}`, { uid, role, status: 'active', ...extra });
 }
 
 /** Session auth (no api key), so scope checks are bypassed and only role matters. */
@@ -329,15 +341,19 @@ function authAs(uid: string): void {
   mockResolveAuth.mockResolvedValue({ userId: uid, keyContext: null });
 }
 
-/** api-key auth carrying exactly `perms` on every site. */
-function authAsKey(uid: string, perms: Array<'read' | 'write' | 'admin'>): void {
+/** api-key auth carrying exactly `perms` on every site, or on every machine. */
+function authAsKey(
+  uid: string,
+  perms: Array<'read' | 'write' | 'admin'>,
+  resource: 'site' | 'machine' = 'site',
+): void {
   mockResolveAuth.mockResolvedValue({
     userId: uid,
     keyContext: {
       keyId: 'key_esc',
       environment: 'live',
       isLegacy: false,
-      scopes: [{ resource: 'site', id: '*', permissions: perms }],
+      scopes: [{ resource, id: '*', permissions: perms }],
       expiresAt: null,
     },
   });
@@ -1303,6 +1319,278 @@ describe.each([true, false])(
       expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { swoop?: string }).swoop).toBe(
         'control',
       );
+    });
+  },
+);
+
+/**
+ * 19-23. machine scope (ADR 0016). a row with `machineIds` reaches only those
+ * machines and holds nothing site-wide, whatever its role or swoop mode.
+ *
+ * the wrapper's scope step refuses a site-wide route before it reads the kill
+ * switch, so it holds with the switch off too. with the switch off, the members
+ * GET has no handler re-check behind it, and the PATCH, POST and DELETE
+ * re-checks answer `site_member_manage_required`. so each refusal here also pins
+ * the scope step's own answer and its `machine_scope_site_wide` audit row.
+ *
+ * NEGATIVE CONTROL RUN 2026-11-09: removing the wrapper's scope step reddens
+ * every refusal in blocks 19, 20, 22 and 23 (17 cases). with the switch off, a
+ * scoped admin's members GET then answers 200, so the step is the only thing
+ * holding it. block 21 is held by the owner guards, not by the scope step.
+ */
+const SCOPED_ADMIN = 'uid_scoped_admin';
+const SCOPED_MEMBER = 'uid_scoped_member';
+const IN_SCOPE = 'm1';
+const OUT_OF_SCOPE = 'm2';
+
+/** two machines, an admin scoped to the first, and a member scoped to it with swoop control. */
+function seedScoped(): void {
+  for (const machineId of [IN_SCOPE, OUT_OF_SCOPE]) {
+    docs.set(`sites/${SITE}/machines/${machineId}`, { machineId, cortexEnabled: true });
+  }
+  seedUser(SCOPED_ADMIN, { role: 'member', sites: [SITE] });
+  seedMemberRow(SCOPED_ADMIN, 'admin', { machineIds: [IN_SCOPE] });
+  seedUser(SCOPED_MEMBER, { role: 'member', sites: [SITE] });
+  seedMemberRow(SCOPED_MEMBER, 'member', { machineIds: [IN_SCOPE], swoop: 'control' });
+}
+
+/** the wrapper's scope step refused: its 403, and its audit row. returns the body. */
+async function expectScopeStepRefusal(res: Response): Promise<Record<string, unknown>> {
+  expect(res.status).toBe(403);
+  const body = await res.json();
+  expect(body.detail).toBe('capability not granted');
+  expect(mockWriteAuditEntry).toHaveBeenCalledWith(
+    SITE,
+    expect.objectContaining({ outcome: 'deny', denyReason: 'machine_scope_site_wide' }),
+  );
+  return body;
+}
+
+const MEMBER_VERBS = ['GET', 'POST', 'PATCH', 'DELETE'] as const;
+
+describe.each([true, false])(
+  '19. a scoped admin cannot reach the member surface, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    /** add OUTSIDER, promote MEMBER, or remove MEMBER: someone else's row each time. */
+    const call = (verb: (typeof MEMBER_VERBS)[number]) => {
+      const membersUrl = `http://localhost/api/sites/${SITE}/members`;
+      const memberUrl = `${membersUrl}/${MEMBER}`;
+      if (verb === 'GET') return membersGET(createMockRequest(membersUrl, { method: 'GET' }), params());
+      if (verb === 'POST') {
+        return membersPOST(
+          createMockRequest(membersUrl, {
+            method: 'POST',
+            headers: { 'Idempotency-Key': `esc-scoped-add-${enforcement}` },
+            body: { uid: OUTSIDER, role: 'member' },
+          }),
+          params(),
+        );
+      }
+      if (verb === 'PATCH') {
+        return memberPATCH(
+          createMockRequest(memberUrl, { method: 'PATCH', body: { role: 'admin' } }),
+          params({ uid: MEMBER }),
+        );
+      }
+      return memberDELETE(createMockRequest(memberUrl, { method: 'DELETE' }), params({ uid: MEMBER }));
+    };
+
+    it.each(MEMBER_VERBS)('refuses %s with the scope step, and writes nothing', async (verb) => {
+      authAs(SCOPED_ADMIN);
+      await expectScopeStepRefusal(await call(verb));
+
+      expect(docs.has(`sites/${SITE}/members/${OUTSIDER}`)).toBe(false);
+      expect((docs.get(`sites/${SITE}/members/${MEMBER}`) as { role: string }).role).toBe('member');
+    });
+
+    it.each(MEMBER_VERBS)('POSITIVE CONTROL: a whole-site admin reaches %s', async (verb) => {
+      authAs(ADMIN);
+      expect((await call(verb)).status).toBe(200);
+    });
+  },
+);
+
+describe.each([true, false])(
+  '20. a scoped member cannot widen their own scope, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    const widen = (uid: string) =>
+      memberPATCH(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members/${uid}`, {
+          method: 'PATCH',
+          body: { machineIds: null },
+        }),
+        params({ uid }),
+      );
+
+    it.each([
+      ['a scoped member', SCOPED_MEMBER],
+      ['a scoped admin', SCOPED_ADMIN],
+    ])('refuses %s widening their own row', async (_who, uid) => {
+      authAs(uid);
+      // the scope step answers before the handler's self-guard can
+      await expectScopeStepRefusal(await widen(uid));
+
+      expect((docs.get(`sites/${SITE}/members/${uid}`) as { machineIds?: string[] }).machineIds).toEqual([
+        IN_SCOPE,
+      ]);
+    });
+
+    it("POSITIVE CONTROL: a whole-site admin clears someone else's scope", async () => {
+      authAs(ADMIN);
+      const res = await widen(SCOPED_MEMBER);
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).machineIds).toBeNull();
+      // the delete sentinel removed the field: whole site, not `[]` or null
+      expect(docs.get(`sites/${SITE}/members/${SCOPED_MEMBER}`)).not.toHaveProperty('machineIds');
+    });
+  },
+);
+
+describe('21. the owner cannot be scoped', () => {
+  beforeEach(() => {
+    seedScoped();
+  });
+
+  it('refuses PATCH machineIds on the owner row with 409', async () => {
+    authAs(ADMIN);
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${OWNER}`, {
+        method: 'PATCH',
+        body: { machineIds: [IN_SCOPE] },
+      }),
+      params({ uid: OWNER }),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('cannot_change_owner_role');
+    expect(docs.get(`sites/${SITE}/members/${OWNER}`)).not.toHaveProperty('machineIds');
+  });
+
+  it('refuses POST of the owner with machineIds with 409 target_is_owner', async () => {
+    authAs(ADMIN);
+    const res = await membersPOST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+        method: 'POST',
+        headers: { 'Idempotency-Key': 'esc-scope-owner' },
+        body: { uid: OWNER, role: 'member', machineIds: [IN_SCOPE] },
+      }),
+      params(),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe('target_is_owner');
+    expect(docs.get(`sites/${SITE}/members/${OWNER}`)).toEqual({
+      uid: OWNER,
+      role: 'owner',
+      status: 'active',
+    });
+  });
+
+  it('POSITIVE CONTROL: an admin row is scoped', async () => {
+    authAs(OWNER);
+    const res = await memberPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members/${ADMIN}`, {
+        method: 'PATCH',
+        body: { machineIds: [IN_SCOPE] },
+      }),
+      params({ uid: ADMIN }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(docs.get(`sites/${SITE}/members/${ADMIN}`)).toMatchObject({
+      role: 'admin',
+      machineIds: [IN_SCOPE],
+    });
+  });
+});
+
+describe('22. an api key owned by a scoped admin is bounded by the scope', () => {
+  beforeEach(() => {
+    seedScoped();
+    authAsKey(SCOPED_ADMIN, ['write'], 'machine');
+  });
+
+  const turnHootOff = (machineId: string) =>
+    hootEnabledPATCH(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/hoot-enabled`, {
+        method: 'PATCH',
+        body: { enabled: false },
+      }),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  it('refuses a machine=*:write key on a machine outside the scope with 404', async () => {
+    const res = await turnHootOff(OUT_OF_SCOPE);
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).detail).toBe('machine not found or no access');
+    expect(mockWriteAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'machine_out_of_scope' }),
+    );
+    expect(docs.get(`sites/${SITE}/machines/${OUT_OF_SCOPE}`)).toMatchObject({ cortexEnabled: true });
+  });
+
+  it('POSITIVE CONTROL: the same key reaches the machine in scope', async () => {
+    const res = await turnHootOff(IN_SCOPE);
+
+    expect(res.status).toBe(200);
+    expect(docs.get(`sites/${SITE}/machines/${IN_SCOPE}`)).toMatchObject({ cortexEnabled: false });
+  });
+});
+
+describe.each([true, false])(
+  '23. a scoped member set to swoop control holds nothing site-wide, capability_enforcement %s',
+  (enforcement) => {
+    beforeEach(() => {
+      mockCapabilityEnforcement = enforcement;
+      seedScoped();
+    });
+
+    const listMembers = () =>
+      membersGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, { method: 'GET' }),
+        params(),
+      );
+    const listSwoopSessions = () =>
+      swoopSessionsGET(
+        createMockRequest(`http://localhost/api/sites/${SITE}/swoop/sessions`, { method: 'GET' }),
+        params(),
+      );
+
+    it('refuses the members list', async () => {
+      authAs(SCOPED_MEMBER);
+      await expectScopeStepRefusal(await listMembers());
+    });
+
+    it("refuses the site's swoop sessions, and never lists them", async () => {
+      authAs(SCOPED_MEMBER);
+      const body = await expectScopeStepRefusal(await listSwoopSessions());
+
+      // the coded refusal swoop's viewer reads as a withdrawal
+      expect(body.code).toBe('capability_missing');
+      expect(mockListLiveSwoopSessionsForSite).not.toHaveBeenCalled();
+    });
+
+    it('POSITIVE CONTROL: a whole-site admin gets both', async () => {
+      authAs(ADMIN);
+      expect((await listMembers()).status).toBe(200);
+
+      const res = await listSwoopSessions();
+      expect(res.status).toBe(200);
+      expect((await res.json()).data.sessions).toEqual([]);
+      expect(mockListLiveSwoopSessionsForSite).toHaveBeenCalledWith({ siteId: SITE });
     });
   },
 );

@@ -14,6 +14,7 @@ every alert for a site goes to each person on the site's member list who has an 
 
 - their switch for that category has to be on. every switch is on unless it was turned off
 - a machine they have muted is left out of their email. a mute is stored by machine ID, so it also covers a machine with the same ID on another site
+- someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) gets alerts for those machines only. an email that names no machine, such as a site-wide [talon](/docs/dashboard/talons#outputs) run, skips them
 - their **additional CC recipients** (up to five) are copied on every alert email they get
 
 if the site has nobody who could be emailed at all, or the list could not be built, the alert goes to the deployment's `ADMIN_EMAIL_PROD` (or `ADMIN_EMAIL_DEV`) instead. when there are people but every one of them turned the category off, nothing is sent.

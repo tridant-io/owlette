@@ -31,7 +31,7 @@ import {
 } from '@/lib/apiErrors';
 import { applyAuthDeprecations, readAndParseJsonBody } from '@/app/api/_shared';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
-import { Capability, hasCapability } from '@/lib/capabilities';
+import { Capability, hasCapability, machineScopeOf } from '@/lib/capabilities';
 import logger from '@/lib/logger';
 import { evaluateSwoopAccess } from '@/lib/swoop/policy.server';
 import { SWOOP_END_REASONS, isSwoopEndReason } from '@/lib/swoop/backoff';
@@ -91,13 +91,16 @@ const readHandler: SiteRouteHandler<SwoopRouteParams> = async (_request, ctx, { 
 
     // the people in it are named to the people in it, so a member who may
     // watch learns no name until they are in the room. an email goes only to
-    // a site owner or admin by role, or a superadmin, never by capability: what
-    // someone may do in swoop is not the same question as whose address they may see.
+    // an owner or admin of the whole site, or a superadmin, never by capability:
+    // what someone may do in swoop is not the same question as whose address
+    // they may see, and an admin limited to some machines does not see the site's.
     const names = session.viewers.some((viewer) => viewer.uid === ctx.actor.userId)
       ? await viewerNames([session])
       : null;
     const siteRole = ctx.actor.siteRoles[ctx.siteId];
-    const withEmail = ctx.actor.role === 'superadmin' || siteRole === 'owner' || siteRole === 'admin';
+    const withEmail =
+      ctx.actor.role === 'superadmin' ||
+      ((siteRole === 'owner' || siteRole === 'admin') && machineScopeOf(ctx.actor, ctx.siteId) === null);
     // the bar shows kick only where the kick route would say yes, and never on
     // your own seats: a second tab of yours is closed, not kicked.
     const mayKick = hasCapability(ctx.actor, Capability.SWOOP_SETTINGS_MANAGE, ctx.siteId);

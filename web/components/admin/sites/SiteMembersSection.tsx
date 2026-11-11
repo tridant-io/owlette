@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { Crown, Loader2, MoreVertical, Plus, ShieldAlert, UserCog, UserMinus, Users } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { SiteMemberApiError, useSiteMembers, type SiteMember } from '@/hooks/useSiteMembers';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { useTalonReassign, type SiteAuthoredTalons } from '@/hooks/useTalonReassign';
@@ -13,6 +14,7 @@ import { CompactButton } from '@/components/admin/CompactButton';
 import { Panel } from '@/components/admin/Panel';
 import { AddMemberDialog } from '@/components/admin/sites/AddMemberDialog';
 import { ChangeAccessDialog, memberLabel } from '@/components/admin/sites/ChangeAccessDialog';
+import { accessLabel } from '@/components/admin/sites/MachineAccessField';
 import { displayRole, type DisplayedRole } from '@/components/admin/sites/displayRole';
 import { NO_SUCCESSOR, TalonSuccessorPicker } from '@/components/TalonSuccessorPicker';
 import { Badge } from '@/components/ui/badge';
@@ -59,15 +61,53 @@ function RoleBadge({ role }: { role: DisplayedRole }) {
   );
 }
 
+const NO_MACHINES: SiteMachine[] = [];
+
+function LoadError({ message, action, onRetry }: { message: string; action: string; onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 bg-danger-surface border border-danger-border rounded-lg p-4">
+      <p className="text-danger">{message}</p>
+      <Button variant="outline" size="sm" onClick={onRetry}>
+        {action}
+      </Button>
+    </div>
+  );
+}
+
+/** the machines a scope names, by name, where an id the site no longer has shows as itself */
+function AccessCell({ machineIds, machines }: { machineIds: string[] | null; machines: SiteMachine[] }) {
+  const label = accessLabel(machineIds);
+  if (!machineIds?.length) return <span className="text-foreground">{label}</span>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span tabIndex={0} className="text-foreground cursor-help">
+          {label}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <ul className="max-w-xs space-y-0.5">
+          {machineIds.map((id) => (
+            <li key={id}>{machines.find((m) => m.id === id)?.name ?? id}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
- * a site's members: who can reach it, their site role and their swoop mode. every
- * role word goes through `displayRole`, so `superadmin` never reaches the screen.
+ * a site's members: who can reach it, their site role, their swoop mode and their
+ * machine scope. every role word goes through `displayRole`, so `superadmin` never
+ * reaches the screen.
  */
 export function SiteMembersSection({ siteId }: { siteId: string }) {
   const { user } = useAuth();
   const { members, loading, error, refresh, addMember, removeMember, updateMember } = useSiteMembers(siteId);
   const { fetchSiteAuthored } = useTalonReassign();
   const { membersMayWatch } = useSwoopSettings(siteId).settings;
+  const siteMachines = useSiteMachines(siteId);
+  const machines = siteMachines.machines ?? NO_MACHINES;
 
   const [addOpen, setAddOpen] = useState(false);
   const [accessTarget, setAccessTarget] = useState<SiteMember | null>(null);
@@ -148,16 +188,18 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
       <Panel
         id="site-section-members"
         title="members"
-        description="the people who can reach this site, their role and their swoop."
+        description="the people who can reach this site, their role, their swoop and their access."
         actions={<CompactButton icon={Plus} label="add member" onClick={() => setAddOpen(true)} />}
       >
-        {error && (
-          <div className="flex items-center justify-between gap-3 bg-danger-surface border border-danger-border rounded-lg p-4">
-            <p className="text-danger">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => void refresh()}>
-              retry
-            </Button>
-          </div>
+        {error && <LoadError message={error} action="retry" onRetry={() => void refresh()} />}
+
+        {/* without them the access picker lists no machines, and the column shows ids */}
+        {siteMachines.error && (
+          <LoadError
+            message={`machines couldn't load: ${siteMachines.error}`}
+            action="reload machines"
+            onRetry={() => void siteMachines.refresh()}
+          />
         )}
 
         {loading && (
@@ -170,20 +212,21 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
         {!loading && !error && (
           <div className="border border-border rounded-lg overflow-x-auto">
             {/* below md each member stacks into a block: name and options, then the
-                email, then the role with the swoop beside it */}
+                email, then the role with the swoop and the access beside it */}
             <table className="block w-full md:table">
               <thead className="hidden md:table-header-group">
                 <tr className="border-b border-border bg-background/50">
                   <th className="text-left p-4 text-sm font-medium text-foreground">member</th>
                   <th className="text-left p-4 text-sm font-medium text-foreground">role</th>
                   <th className="text-left p-4 text-sm font-medium text-foreground">swoop</th>
+                  <th className="text-left p-4 text-sm font-medium text-foreground">access</th>
                   <th className="text-right p-4 text-sm font-medium text-foreground">actions</th>
                 </tr>
               </thead>
               <tbody className="block md:table-row-group">
                 {members.length === 0 ? (
                   <tr className="block md:table-row">
-                    <td colSpan={4} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
+                    <td colSpan={5} className="block md:table-cell p-6 md:p-8 text-center text-muted-foreground">
                       no members found
                     </td>
                   </tr>
@@ -231,12 +274,18 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
                           <RoleBadge role={shown} />
                         </td>
 
-                        {/* centred on the role line below md, so the label lines up with the badge's text */}
-                        <td className="order-4 self-center pr-3 pt-1 pb-3 text-xs md:p-4 md:text-sm">
+                        {/* centred on the role line below md, so the label lines up with the badge's text. it
+                            takes what the badge leaves and wraps there, so a long access never drops a line */}
+                        <td className="order-4 min-w-0 flex-1 self-center pr-3 pt-1 pb-3 text-xs md:p-4 md:text-sm">
                           <span className="text-foreground">{swoop}</span>
                           {shown !== 'owner' && member.swoop === null && (
                             <span className="text-muted-foreground"> · by role</span>
                           )}
+                          <span className="text-muted-foreground md:hidden"> · {accessLabel(member.machineIds)}</span>
+                        </td>
+
+                        <td className="hidden p-4 text-sm md:table-cell">
+                          <AccessCell machineIds={member.machineIds} machines={machines} />
                         </td>
 
                         <td className="order-2 w-12 pr-3 pt-2 pb-1 md:w-auto md:p-4">
@@ -310,6 +359,7 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
         <AddMemberDialog
           siteId={siteId}
           membersMayWatch={membersMayWatch}
+          machines={machines}
           addMember={addMember}
           onOpenChange={setAddOpen}
         />
@@ -317,8 +367,10 @@ export function SiteMembersSection({ siteId }: { siteId: string }) {
 
       {accessTarget && (
         <ChangeAccessDialog
+          siteId={siteId}
           member={accessTarget}
           membersMayWatch={membersMayWatch}
+          machines={machines}
           updateMember={updateMember}
           onOpenChange={(open) => {
             if (!open) setAccessTarget(null);

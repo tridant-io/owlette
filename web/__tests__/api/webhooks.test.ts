@@ -86,7 +86,7 @@ const DELIVERY = 'abcdef123__wh_test_0000000001';
  */
 function authed() {
   mockResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   seedSiteOwner(SITE, 'user-1');
 }
 
@@ -101,7 +101,7 @@ function authedAsNonOwner(
   sites: string[],
 ) {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
-  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {} });
+  mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: {}, machineIds: null });
   seedSiteOwner(SITE, 'someone-else');
   // Standing is a member row now. Mirror the global role onto each site the
   // fixture claims, which is what that role used to confer there; superadmins

@@ -124,9 +124,19 @@ export type UserActor = {
   /**
    * explicit swoop modes by site, from the member row's `swoop`. a site absent
    * here follows its role. only MACHINE_REMOTE_VIEW and MACHINE_REMOTE_CONTROL
-   * read it. built only through `siteStanding`.
+   * read it. required, and written only by `siteStanding`, so the compiler names
+   * any builder that skips it: a dropped mode hands an admin held to view their
+   * control back.
    */
-  swoopModes?: Readonly<Record<string, SwoopMode>>;
+  swoopModes: Readonly<Record<string, SwoopMode>>;
+  /**
+   * machine scopes by site, from the member row's `machineIds`: the machines
+   * the person reaches there, or null for the whole site. `siteStanding` writes
+   * an entry for every site in `siteRoles`. a site with no entry reaches
+   * nothing. required, so the compiler names any builder that skips
+   * `siteStanding`: a dropped scope hands a scoped member the whole site.
+   */
+  machineScopes: Readonly<Record<string, readonly string[] | null>>;
 };
 
 export type SystemActor = {
@@ -141,36 +151,46 @@ export type Actor = UserActor | SystemActor;
 export interface MemberStanding {
   role: SiteRole | null;
   swoopMode: SwoopMode | null;
+  /** the member row's machine scope (`parseMachineIds`); null means the whole site. */
+  machineIds: readonly string[] | null;
 }
 
 /**
  * every UserActor built from a member row gets its per-site fields here, so
  * whatever the row carries reaches every gate. a builder that dropped the mode
- * would hand an admin held to view their control back.
+ * would hand an admin held to view their control back, and one that dropped
+ * the scope would hand a scoped member the whole site.
  *
  * takes `[siteId, standing]` pairs, not a record keyed by site id: a request's
  * site id as a computed key, or written as one, reads as prototype pollution
  * to the code scanner (js/remote-property-injection, 311-313 and 425-429),
  * however the object was made. pairs say the same thing without one.
  *
- * `swoopModes` is returned only when some site has a mode, so an actor built
- * from rows that carry none is the actor from before the field existed.
+ * all three maps are always returned. `swoopModes` holds the sites with a
+ * mode. `machineScopes` holds an entry for every site in `siteRoles`, null for
+ * the whole site, owner rows included: the rules scope an owner row that
+ * carries the field, and the writers never put it there.
  */
 export function siteStanding(bySite: Iterable<readonly [string, MemberStanding]>): {
   siteRoles: Record<string, SiteRole>;
-  swoopModes?: Record<string, SwoopMode>;
+  swoopModes: Record<string, SwoopMode>;
+  machineScopes: Record<string, readonly string[] | null>;
 } {
   const roles: Array<readonly [string, SiteRole]> = [];
   const modes: Array<readonly [string, SwoopMode]> = [];
-  for (const [siteId, { role, swoopMode }] of bySite) {
+  const scopes: Array<readonly [string, readonly string[] | null]> = [];
+  for (const [siteId, { role, swoopMode, machineIds }] of bySite) {
     if (role === null) continue;
     roles.push([siteId, role]);
     // the owner always controls, so an owner row's mode is never carried
     if (role !== 'owner' && swoopMode !== null) modes.push([siteId, swoopMode]);
+    scopes.push([siteId, machineIds]);
   }
-  return modes.length > 0
-    ? { siteRoles: recordOf(roles), swoopModes: recordOf(modes) }
-    : { siteRoles: recordOf(roles) };
+  return {
+    siteRoles: recordOf(roles),
+    swoopModes: recordOf(modes),
+    machineScopes: recordOf(scopes),
+  };
 }
 
 /**
@@ -250,6 +270,27 @@ const SITE_SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.SITE_DELETE,
 ]);
 
+/**
+ * these act on one machine, and they are the only capabilities a scoped actor
+ * can hold. every other site-scoped capability is site-wide, the machine-sized
+ * ones included: MACHINE_REMOVE changes the site's fleet, UNINSTALL_TRIGGER is
+ * the deploy page's surface, MACHINE_ENROLL and AGENT_TOKEN_REVOKE mint and
+ * revoke the site's agent credentials, and SWOOP_SETTINGS_MANAGE also gates
+ * kill and the site's swoop sessions list (release 2). the owner kept the first
+ * two site-wide (open question 2, 2026-11-04).
+ */
+export const MACHINE_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
+  Capability.MACHINE_VIEW,
+  Capability.MACHINE_REMOTE_VIEW,
+  Capability.MACHINE_EXEC_COMMAND,
+  Capability.MACHINE_REMOTE_CONTROL,
+  Capability.MACHINE_CONFIG_WRITE,
+]);
+
+export function isMachineCapability(capability: Capability): boolean {
+  return MACHINE_CAPABILITIES.has(capability);
+}
+
 /** What each PER-SITE role grants on the site it is held for. */
 export const SiteRoleCapabilityMatrix: Readonly<Record<SiteRole, readonly Capability[]>> = {
   member: SITE_MEMBER_CAPABILITIES,
@@ -296,10 +337,41 @@ export function explicitSwoopMode(actor: Actor, siteId: string): SwoopMode | nul
   return actor.swoopModes[siteId];
 }
 
+/**
+ * the machines a person reaches on a site, or null for the whole site. a map
+ * without the site, or an entry that is neither null nor a list, reaches
+ * nothing. the map is required, so only a test literal, which tsc never
+ * checks, can lack it; such an actor reaches nothing too. a superadmin without
+ * one stays whole-site, though every caller answers a superadmin before asking.
+ */
+export function machineScopeOf(actor: UserActor, siteId: string): readonly string[] | null {
+  if (!actor.machineScopes) return actor.role === 'superadmin' ? null : [];
+  // own properties only, for the reason `hasCapability` gives for siteRoles
+  if (!Object.prototype.hasOwnProperty.call(actor.machineScopes, siteId)) return [];
+  const machineScope = actor.machineScopes[siteId];
+  if (machineScope === null) return null;
+  return Array.isArray(machineScope) ? machineScope : [];
+}
+
+/**
+ * may this actor do this, on this site, on this machine?
+ *
+ * system actors answer from SystemCapabilityMatrix, and a superadmin holds
+ * everything.
+ * a person's site-scoped capability passes three steps, in order:
+ * 1. the role matrix, from their site role;
+ * 2. their swoop mode (release 2), which alone decides MACHINE_REMOTE_VIEW and
+ *    MACHINE_REMOTE_CONTROL when the row sets one, never on an owner row;
+ * 3. their machine scope: a scoped actor holds only the machine-class
+ *    capabilities (MACHINE_CAPABILITIES), and only on a machine in scope. no
+ *    `machineId` denies a scoped actor, so a site-level check never reaches a
+ *    scoped person, and a whole-site person never needs one.
+ */
 export function hasCapability(
   actor: Actor,
   capability: Capability,
-  siteId?: string
+  siteId?: string,
+  machineId?: string
 ): boolean {
   if (actor.type === 'system') {
     const allowed = SystemCapabilityMatrix[actor.name];
@@ -331,17 +403,24 @@ export function hasCapability(
     if (!Object.prototype.hasOwnProperty.call(actor.siteRoles, siteId)) return false;
     const siteRole = actor.siteRoles[siteId];
     if (siteRole === undefined) return false;
-    // the owner always controls, whatever a hand-built actor carries
+    // 1. the role matrix, 2. a person's swoop mode. the owner always controls,
+    // whatever a hand-built actor carries
+    let held = SiteRoleCapabilityMatrix[siteRole].includes(capability);
     if (
       (capability === Capability.MACHINE_REMOTE_VIEW || capability === Capability.MACHINE_REMOTE_CONTROL) &&
       siteRole !== 'owner'
     ) {
       const mode = explicitSwoopMode(actor, siteId);
       if (mode !== null) {
-        return capability === Capability.MACHINE_REMOTE_CONTROL ? mode === 'control' : mode !== 'none';
+        held = capability === Capability.MACHINE_REMOTE_CONTROL ? mode === 'control' : mode !== 'none';
       }
     }
-    return SiteRoleCapabilityMatrix[siteRole].includes(capability);
+    if (!held) return false;
+    // 3. machine scope: a scoped actor holds machine-class capabilities on its machines only
+    const machineScope = machineScopeOf(actor, siteId);
+    if (machineScope === null) return true;
+    if (!MACHINE_CAPABILITIES.has(capability)) return false;
+    return machineId !== undefined && machineScope.includes(machineId);
   }
 
   // Not site-scoped: the global role grants self-service and nothing else.

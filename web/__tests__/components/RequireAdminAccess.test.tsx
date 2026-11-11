@@ -235,13 +235,13 @@ describe('visibleNavItems', () => {
         ({ group, items }) => `${group}: ${items.map((item) => item.name).join(', ')}`,
       ),
     ).toEqual([
-      'people: users, sites',
-      'fleet: installers, agent tokens, swoop',
+      'people: users',
+      'fleet: sites, installers, agent tokens, swoop',
       'configuration: alerts, schedules, template library, webhooks',
       'support: issues, email',
     ]);
+    // a site admin has no people section: users is a superadmin's alone
     expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
-      'people',
       'fleet',
       'configuration',
     ]);

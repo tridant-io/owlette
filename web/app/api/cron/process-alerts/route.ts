@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
@@ -169,7 +169,7 @@ export async function GET(request: NextRequest) {
         // Per-recipient, so each carries its own unsubscribe link.
         for (const recipient of recipients) {
           try {
-            const userAlerts = siteAlerts.filter(a => !recipient.mutedMachines.includes(a.machineId));
+            const userAlerts = siteAlerts.filter(a => recipientWantsMachine(recipient, a.machineId));
             if (userAlerts.length === 0) continue;
 
             const unsubscribeUrl = recipient.userId !== 'fallback'

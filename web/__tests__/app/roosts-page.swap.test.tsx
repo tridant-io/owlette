@@ -58,6 +58,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     role: 'admin',
     isSuperadmin: false,
     isSiteAdmin: () => true,
+    machineScope: () => null,
     userSites: ['site-a'],
     lastSiteId: 'site-a',
     lastMachineIds: {},

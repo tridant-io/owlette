@@ -44,6 +44,9 @@ jest.mock('@/contexts/AuthContext', () => ({
       mutedMachines: [],
     },
     isSiteAdmin: () => true,
+    isMachineAdmin: () => true,
+    machineScope: () => null,
+    siteRole: () => 'admin',
   }),
 }));
 

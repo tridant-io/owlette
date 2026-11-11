@@ -116,7 +116,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 
 import { GET } from '@/app/api/sites/[siteId]/member-candidates/route';
 import { siteStanding, type MemberStanding, type SiteRole } from '@/lib/capabilities';
-import { deriveMembership, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { memberStanding } from '@/lib/sitePolicy.server';
 
 const TARGET = 'site-a';
 const SELF = 'uid-self';
@@ -138,16 +138,15 @@ function seedUser(uid: string, data: Row = {}): void {
 function standingOf(uid: string): Record<string, MemberStanding & { role: SiteRole }> {
   const bySite: Record<string, MemberStanding & { role: SiteRole }> = Object.create(null);
   for (const [siteId, roster] of Object.entries(mockRosters)) {
-    const row = roster[uid] ?? null;
-    const role = deriveMembership(row);
-    if (role !== null) bySite[siteId] = { role, swoopMode: deriveSwoopMode(row, role) };
+    const standing = memberStanding(roster[uid] ?? null);
+    if (standing.role !== null) bySite[siteId] = { ...standing, role: standing.role };
   }
   return bySite;
 }
 
 /** a session whose actor is built from the target site's row, as the wrapper builds it. */
 function sessionAs(uid: string, globalRole: 'member' | 'superadmin' = 'member'): void {
-  const onTarget = standingOf(uid)[TARGET] ?? { role: null, swoopMode: null };
+  const onTarget = standingOf(uid)[TARGET] ?? { role: null, swoopMode: null, machineIds: null };
   mockCtx = {
     actor: { type: 'user', userId: uid, role: globalRole, ...siteStanding([[TARGET, onTarget]]) },
     auth: { userId: uid, keyContext: null },
@@ -293,6 +292,77 @@ describe('GET /api/sites/{siteId}/member-candidates', () => {
       const { body } = await list();
 
       expect(uidsOf(body)).toEqual(['uid-y']);
+    });
+
+    describe('who is a scoped admin on another site', () => {
+      beforeEach(() => {
+        seedRow(TARGET, SELF, 'admin');
+        seedRow('site-b', SELF, 'admin');
+        seedRow('site-b', 'uid-y', 'member');
+        seedRow('site-c', SELF, 'admin', { machineIds: ['m1'] });
+        seedRow('site-c', 'uid-q', 'member');
+        for (const uid of [SELF, 'uid-y', 'uid-q']) seedUser(uid);
+      });
+
+      it('is offered the whole-site rosters and never the scoped one', async () => {
+        sessionAs(SELF);
+
+        const { status, body } = await list();
+
+        expect(status).toBe(200);
+        expect(uidsOf(body)).toEqual(['uid-y']);
+        // a scope holds nothing site-wide, so site-c's roster is never read
+        expect(mockReads).not.toHaveBeenCalledWith('sites/site-c/members');
+      });
+
+      it("rebuilds every standing map, so the wrapper's one-site scope map is not kept", async () => {
+        // the wrapper's actor names only this site, and its map always carries
+        // this site's scope too. kept, that map would read site-b as no
+        // machines and drop its people.
+        mockCtx = {
+          actor: {
+            type: 'user',
+            userId: SELF,
+            role: 'member',
+            siteRoles: { [TARGET]: 'admin' },
+            swoopModes: {},
+            machineScopes: { [TARGET]: null },
+          },
+          auth: { userId: SELF, keyContext: null },
+        };
+
+        const { status, body } = await list();
+
+        expect(status).toBe(200);
+        expect(uidsOf(body)).toEqual(['uid-y']);
+        expect(mockReads).not.toHaveBeenCalledWith('sites/site-c/members');
+      });
+    });
+
+    it("rebuilds every standing map with nothing scoped, so the wrapper's scope map is never kept", async () => {
+      // with no site scoped the rebuilt standing still writes machineScopes, so
+      // the spread replaces the wrapper's one-site map rather than keeping it
+      seedRow(TARGET, SELF, 'admin');
+      seedRow('site-b', SELF, 'admin');
+      seedRow('site-b', 'uid-y', 'member');
+      for (const uid of [SELF, 'uid-y']) seedUser(uid);
+      mockCtx = {
+        actor: {
+          type: 'user',
+          userId: SELF,
+          role: 'member',
+          siteRoles: { [TARGET]: 'admin' },
+          swoopModes: {},
+          machineScopes: { [TARGET]: null },
+        },
+        auth: { userId: SELF, keyContext: null },
+      };
+
+      const { status, body } = await list();
+
+      expect(status).toBe(200);
+      expect(uidsOf(body)).toEqual(['uid-y']);
+      expect(mockReads).toHaveBeenCalledWith('sites/site-b/members');
     });
   });
 

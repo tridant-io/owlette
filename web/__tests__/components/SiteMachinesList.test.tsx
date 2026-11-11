@@ -137,6 +137,27 @@ describe('SiteMachinesList — restart', () => {
   });
 });
 
+describe('SiteMachinesList — loading', () => {
+  it('lists the site machines, and says a failed load with a retry that loads again', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({}) });
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <SiteMachinesList siteId="site-A" />
+      </TooltipProvider>,
+    );
+
+    expect(await screen.findByText('failed to load machines (503)')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/sites/site-A/machines');
+
+    listResponds([{ ...base, id: 'kiosk-1', name: 'lobby screen' }]);
+    await user.click(screen.getByRole('button', { name: 'retry' }));
+
+    expect(await screen.findByText('lobby screen')).toBeInTheDocument();
+    expect(screen.queryByText('failed to load machines (503)')).not.toBeInTheDocument();
+  });
+});
+
 describe('SiteMachinesList — remove', () => {
   const lobby = { ...base, id: 'kiosk-1', name: 'lobby screen' };
 

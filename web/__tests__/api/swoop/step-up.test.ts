@@ -383,6 +383,23 @@ describe('GET swoop/step-up', () => {
     expect(mockCheckRateLimit).not.toHaveBeenCalled();
     expect(mocks.set).not.toHaveBeenCalled();
   });
+
+  it('answers a scoped member on their machine, and 404 on another', async () => {
+    mocks.memberDocs.set(`${SITE}/${MEMBER}`, {
+      ...mocks.memberDocs.get(`${SITE}/${MEMBER}`),
+      machineIds: [MACHINE],
+    });
+    signIn(MEMBER);
+    openWindow(MEMBER);
+
+    const mine = await parseResponse(await get());
+    const other = await parseResponse(await get('machine-2'));
+
+    expect(mine.status).toBe(200);
+    expect(mine.body.data).toEqual({ open: true, sessionPassedCeremony: true });
+    expect(other.status).toBe(404);
+    expect(other.body.detail).toBe('machine not found or no access');
+  });
 });
 
 describe('swoop/step-up — network binding', () => {

@@ -46,7 +46,7 @@ from the process row, the machine card or the edit dialog:
 | **kill** | queue a `kill_process` command. enabled for `RUNNING`, `LAUNCHING` or `STALLED` processes. | `MACHINE_EXEC_COMMAND` |
 | **delete** | remove the process from the machine configuration. a running process is not stopped. | `MACHINE_CONFIG_WRITE` |
 
-site admins, site owners and superadmins hold `MACHINE_CONFIG_WRITE` and `MACHINE_EXEC_COMMAND`. members can see process state and configuration but cannot create, edit, delete, schedule, change launch mode, restart or kill.
+site admins and site owners whose access covers the machine, and superadmins, hold `MACHINE_CONFIG_WRITE` and `MACHINE_EXEC_COMMAND`: an admin [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) manages processes on those machines. members can see process state and configuration but cannot create, edit, delete, schedule, change launch mode, restart or kill.
 
 restart and kill send commands to the agent. create, edit, delete, launch-mode and schedule changes update the machine configuration the agent watches.
 

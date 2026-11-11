@@ -59,10 +59,10 @@ export default function SwoopPage({
   const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
     useSwoopSession(siteId, machineId);
   const { isSiteAdmin, isSiteOwner } = useAuth();
-  // the keyboard follows the machine's system. no hook reads one machine
-  // document, so this takes it off the site's list; an agent that reports no
-  // system is a windows one.
-  const { machines } = useMachines(siteId);
+  // the keyboard follows the machine's system, read off this one machine's
+  // document: a scoped member may read no other. a refused read or an agent
+  // that reports no system is a windows one, and never says the machine left.
+  const { machines } = useMachines(siteId, [machineId]);
   const osFamily = machines.find((machine) => machine.machineId === machineId)?.osFamily ?? 'windows';
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
