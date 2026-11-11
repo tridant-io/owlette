@@ -7,6 +7,13 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### fixed — saving a talon edit keeps the switch where it is now
+
+The talon editor sent the on or off state from the moment it was opened. If the
+talon was switched off in the meantime, by the system after repeated failures or
+by someone else, saving the edit switched it back on. The editor now saves the
+state the talon has when you save. Nothing to update on the machine.
+
 ### fixed — a talon switched back on gets its ten tries back
 
 A talon that failed ten runs in a row switched off, and when someone switched it

@@ -149,6 +149,13 @@ export default function TalonsPage() {
   // not "none", and rendering an empty state early flashes the wrong answer.
   const loading = sitesLoading || talonsLoading;
 
+  // the live entry, not the copy taken at open: every save carries `enabled`, and
+  // the system may switch the talon off mid-edit. the copy stays as the fallback
+  // so a talon deleted mid-edit does not turn the form into a create.
+  const liveEditingTalon = editingTalon
+    ? (talons.find((talon) => talon.id === editingTalon.id) ?? editingTalon)
+    : undefined;
+
   return (
     <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
@@ -268,7 +275,7 @@ export default function TalonsPage() {
             online: m.online,
             processes: m.processes,
           }))}
-          talon={editingTalon ?? undefined}
+          talon={liveEditingTalon}
           isSiteAdmin={isSiteAdmin(currentSiteId)}
         />
       )}
