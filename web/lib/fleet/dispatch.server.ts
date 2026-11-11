@@ -36,6 +36,7 @@ import {
 import { isValidMachineId } from '@/lib/hoot/target';
 import logger from '@/lib/logger';
 import { EXISTING_COMMAND_MAPPINGS, type McpToolDefinition } from '@/lib/mcp-tools';
+import { FLEET_CALLS_COLLECTION, type FleetCallRecord } from '@/lib/fleet/calls.server';
 import { LIST_MACHINES_TOOL, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
 import { grantCovers } from '@/lib/fleet/policy.server';
 import type { AdmitFleetCall, FleetCallDenial, FleetContext } from '@/lib/fleet/context';
@@ -64,20 +65,6 @@ export interface FleetCallState {
 }
 
 export type FleetCallRead = { ok: true; body: FleetCallState } | FleetRefusal;
-
-/** `fleet_calls/{commandId}`, server-only; times are epoch milliseconds. */
-export interface FleetCallRecord {
-  siteId: string;
-  /** the machine that started the call, the only one that may read it. */
-  callerMachineId: string;
-  /** the machine the call acts on. */
-  machineId: string;
-  tool: string;
-  createdAt: number;
-  expiresAt: number;
-}
-
-export const FLEET_CALLS_COLLECTION = 'fleet_calls';
 
 const CALL_ID_PREFIX = 'cmd:';
 

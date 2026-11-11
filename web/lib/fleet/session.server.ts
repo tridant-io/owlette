@@ -35,7 +35,7 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function deleteRefsInBatches(db: Firestore, refs: DocumentReference[]): Promise<number> {
+export async function deleteRefsInBatches(db: Firestore, refs: DocumentReference[]): Promise<number> {
   for (let i = 0; i < refs.length; i += DELETE_BATCH_SIZE) {
     const batch = db.batch();
     for (const ref of refs.slice(i, i + DELETE_BATCH_SIZE)) {

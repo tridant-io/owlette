@@ -6,6 +6,7 @@
  * site. machine ids start as hostnames and get reused, and the desktop app's own
  * leave-site deletes the doc without reaching `removeMachine`, so a machine that
  * pairs anew must start with no member's grant. one still on the site keeps them.
+ * the site's fleet grant (ADR 0017) is pruned in the same case, for the same reason.
  */
 
 jest.mock('@/lib/logger', () => ({
@@ -20,6 +21,11 @@ jest.mock('firebase-admin/firestore', () => ({
 const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
 jest.mock('@/lib/membership.server', () => ({
   pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
+}));
+
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
 }));
 
 type Doc = Record<string, unknown>;
@@ -69,6 +75,13 @@ describe('recordPairing', () => {
     expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'kiosk-01' });
   });
 
+  it('takes a machine whose doc did not exist out of the fleet grant too, once', async () => {
+    await recordPairing('site-1', 'kiosk-01');
+
+    expect(mockFleetPrune).toHaveBeenCalledTimes(1);
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'kiosk-01' });
+  });
+
   it('keeps the grants and the first pairedAt of a machine still on the site', async () => {
     mockDocs[MACHINE] = { pairedAt: 'FIRST' };
 
@@ -76,6 +89,7 @@ describe('recordPairing', () => {
 
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
   });
 
   it('stamps a legacy machine doc with no pairedAt, and keeps its grants', async () => {
@@ -85,9 +99,10 @@ describe('recordPairing', () => {
 
     expect(mockTxSet).toHaveBeenCalledWith(MACHINE, { pairedAt: 'SERVER_TIMESTAMP' }, { merge: true });
     expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
   });
 
-  it('logs a failed prune and still resolves, with pairedAt stamped', async () => {
+  it('logs a failed prune and still resolves, with pairedAt stamped and the fleet grant pruned', async () => {
     mockPrune.mockRejectedValueOnce(new Error('members query down'));
 
     await expect(recordPairing('site-1', 'kiosk-01')).resolves.toBeUndefined();
@@ -97,6 +112,19 @@ describe('recordPairing', () => {
       expect.stringContaining('machine scopes not pruned'),
       expect.objectContaining({ context: 'pairing', data: { error: 'members query down' } }),
     );
+    expect(mockFleetPrune).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed fleet prune and still resolves', async () => {
+    mockFleetPrune.mockRejectedValueOnce(new Error('settings transaction down'));
+
+    await expect(recordPairing('site-1', 'kiosk-01')).resolves.toBeUndefined();
+
+    expect(mockPrune).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('fleet grant not pruned'),
+      expect.objectContaining({ context: 'pairing', data: { error: 'settings transaction down' } }),
+    );
   });
 
   it('prunes nothing when the machine doc could not be read, which proves nothing', async () => {
@@ -105,6 +133,7 @@ describe('recordPairing', () => {
     await expect(recordPairing('site-1', 'kiosk-01')).resolves.toBeUndefined();
 
     expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('pairedAt not stamped'),
       expect.objectContaining({ context: 'pairing' }),
@@ -117,5 +146,6 @@ describe('recordPairing', () => {
     expect(mockRunTransaction).not.toHaveBeenCalled();
     expect(mockTxSet).not.toHaveBeenCalled();
     expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
   });
 });

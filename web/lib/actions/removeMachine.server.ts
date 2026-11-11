@@ -10,8 +10,9 @@
  * ended the same best-effort way, as `machine_removed`: their records are a
  * subcollection of the deleted doc and outlive it, and that end is how every
  * viewer of the machine learns it left the site rather than waiting on it.
- * The id then leaves every member's machine scope, best-effort too: machine ids
- * get reused, and a failed prune is caught when the id next pairs
+ * The id then leaves every member's machine scope, and the site's fleet grant
+ * with its fleet sessions and call records (ADR 0017), best-effort too: machine
+ * ids get reused, and a failed prune is caught when the id next pairs
  * (`recordPairing`).
  *
  * No active-deployment guard: the legacy client-side check was racy against
@@ -25,6 +26,7 @@ import { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import type { Actor } from '@/lib/capabilities';
+import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
@@ -133,6 +135,19 @@ export async function removeMachine(
     await pruneMachineFromMembers({ siteId, machineId, db });
   } catch (err) {
     logger.warn('removeMachine: machine scope prune failed (non-fatal)', {
+      context: 'removeMachine',
+      data: {
+        siteId,
+        machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  try {
+    await pruneMachineFromFleet({ siteId, machineId, db });
+  } catch (err) {
+    logger.warn('removeMachine: fleet prune failed (non-fatal)', {
       context: 'removeMachine',
       data: {
         siteId,

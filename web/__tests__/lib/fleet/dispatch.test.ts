@@ -40,12 +40,11 @@ import { MAX_TOOL_TIMEOUT_SECONDS } from '@/lib/hoot-utils.server';
 import { problemPlanRequired, problemRateLimited } from '@/lib/apiErrors';
 import type { AdmitFleetCall, FleetContext } from '@/lib/fleet/context';
 import type { FleetGrant } from '@/lib/fleet/policy.server';
+import { FLEET_CALLS_COLLECTION, type FleetCallRecord } from '@/lib/fleet/calls.server';
 import {
-  FLEET_CALLS_COLLECTION,
   readFleetCall,
   startFleetCall,
   type FleetCallRead,
-  type FleetCallRecord,
   type FleetCallStart,
 } from '@/lib/fleet/dispatch.server';
 
