@@ -15,7 +15,7 @@ import {
 } from '@/lib/serviceHealth'
 
 /**
- * SCM re-query interval — the app's only timer. A dead service stops writing
+ * SCM re-query interval. A dead service stops writing
  * `service_status.json`, so there are no events left and the staleness rule (the
  * tray's two minutes) can only be applied by asking again. An SCM query costs
  * microseconds and never touches the seam files.
@@ -30,8 +30,8 @@ export interface ServiceHealthStore {
   statusFile: ServiceStatusFile | null
   /** True while a start request is in flight (it may be waiting on a UAC prompt). */
   starting: boolean
-  error: string | null
   refresh: () => void
+  /** Rejects with the host's reason (declined prompt, disabled service), for the caller to show. */
   start: () => Promise<void>
   /**
    * Claim the service's state for an operation that deliberately stops it (e.g.
@@ -43,10 +43,6 @@ export interface ServiceHealthStore {
   hold: () => () => void
 }
 
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 /**
  * `OwletteService`'s state and the status file it publishes. On launch an
  * installed-but-stopped service is started — opening the app is a clear signal
@@ -56,7 +52,6 @@ export function useServiceHealth(): ServiceHealthStore {
   const [status, setStatus] = useState<ServiceStatus | null>(null)
   const [statusFile, setStatusFile] = useState<ServiceStatusFile | null>(null)
   const [starting, setStarting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   const disposed = useRef(false)
   const autoStarted = useRef(false)
@@ -90,8 +85,8 @@ export function useServiceHealth(): ServiceHealthStore {
       .then((next) => {
         if (!disposed.current) setStatus(next)
       })
-      .catch((cause) => {
-        if (!disposed.current) setError(message(cause))
+      .catch(() => {
+        // the footer keeps the last answer; the next poll asks again.
       })
   }, [])
 
@@ -102,7 +97,6 @@ export function useServiceHealth(): ServiceHealthStore {
 
   const start = useCallback(async (allowElevation = true) => {
     setStarting(true)
-    setError(null)
     try {
       await serviceStart(allowElevation)
       // An elevated start only confirms the shell accepted the request — observe
@@ -110,8 +104,6 @@ export function useServiceHealth(): ServiceHealthStore {
       START_CONFIRM_DELAYS_MS.forEach((delay) => {
         timers.current.push(setTimeout(() => refresh(), delay))
       })
-    } catch (cause) {
-      if (!disposed.current) setError(message(cause))
     } finally {
       if (!disposed.current) setStarting(false)
     }
@@ -165,12 +157,13 @@ export function useServiceHealth(): ServiceHealthStore {
         // service still down, the next status poll gets another chance.
         if (isUpdateInProgress(marker, Date.now())) return
         autoStarted.current = true
-        void start(false)
+        // unasked, so a refusal stays quiet: the footer's start button remains.
+        void start(false).catch(() => undefined)
       })
     return () => {
       cancelled = true
     }
   }, [status, start])
 
-  return { status, statusFile, starting, error, refresh, start, hold }
+  return { status, statusFile, starting, refresh, start, hold }
 }

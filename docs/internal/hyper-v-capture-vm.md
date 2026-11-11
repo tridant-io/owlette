@@ -29,7 +29,7 @@ idempotent: re-running after a failure resumes rather than colliding.
 - **Windows 11 ISO.** Get it from
   <https://www.microsoft.com/software-download/windows11> ("Download Windows 11
   Disk Image"), ~6-8 GB. Verify it is really UEFI-bootable before blaming the VM
-  — see [the ISO is not the usual suspect](#the-iso-is-not-the-usual-suspect).
+  — see [the ISO is not the usual suspect](#the-iso-is-not-the-usual-suspect--but-rule-it-out-in-one-step).
 - **Disk.** 80 GB dynamic VHDX; a fresh Win11 guest settles around 12 GB and
   grows from there. The host needs real headroom for snapshots.
 - **An interactive session on the host.** Every step needs a UAC prompt, and a

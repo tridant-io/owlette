@@ -9,12 +9,13 @@
 //! else can write it, and it quotes the one-shot nonce the daemon last issued.
 //!
 //! A request is `{"verb", "nonce"}`, plus `server` on a `pair` and `category`,
-//! `description` and `attachLogs` on a `report_issue`, written 0600 as
-//! `<id>.json.tmp` and renamed into place — the daemon reads a `.json` the
-//! moment it appears. The answer is `<id>.result`, the JSON-line protocol the
-//! agent's headless modes write to stdout, read as it grows until a terminal
-//! event (`authorized`, `done` or `error`). Only then is it removed: a `pair`
-//! keeps writing into it for the ten minutes it polls.
+//! `description`, `attachLogs`, `screenshots` and `videos` on a
+//! `report_issue`, written 0600 as `<id>.json.tmp` and renamed into place —
+//! the daemon reads a `.json` the moment it appears. The answer is
+//! `<id>.result`, the JSON-line protocol the agent's headless modes write to
+//! stdout, read as it grows until a terminal event (`authorized`, `done` or
+//! `error`). Only then is it removed: a `pair` keeps writing into it for the
+//! ten minutes it polls.
 
 use std::fs;
 use std::io::{ErrorKind, Read, Write};

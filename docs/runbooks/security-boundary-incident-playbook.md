@@ -22,7 +22,7 @@ Triage:
 
 1. Break down denials by `capability`, `role`, `site`, and route.
 2. Query `sites/{siteId}/audit_log` by `outcome=deny` and `capability`.
-3. Confirm the user's role from `users/{uid}` and site assignment.
+3. Confirm the user's site role from `sites/{siteId}/members/{uid}` (`role`, `status`); `users/{uid}.role` only says whether they are a superadmin, who reaches every site without a membership; no other value of it grants anything on a site.
 4. Check the route's configured capability and `web/lib/capabilities.ts`.
 5. If only `role=member` is denied for command paths, that is expected for milestone A and is not an incident.
 

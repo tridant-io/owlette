@@ -120,8 +120,9 @@ pub trait Encoder: Send {
 
     /// Deliver finished frames through `sink` as they complete instead of
     /// answering them from `encode`, so the next capture overlaps this
-    /// encode. A backend that encodes asynchronously takes it (VideoToolbox);
-    /// the rest answer from `encode`, which is what the default keeps.
+    /// encode. A backend that encodes asynchronously takes it (VideoToolbox
+    /// and `mf-hw`); the rest answer from `encode`, which is what the default
+    /// keeps.
     fn set_sink(&mut self, _sink: Sink) {}
 
     /// Move the CBR target. Called by the rate governor, several times a

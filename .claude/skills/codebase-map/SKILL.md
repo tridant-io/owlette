@@ -109,4 +109,4 @@ settings (`temperatureUnit`, `timezone`, `timeFormat`, `timeDisplayMode`, `theme
 
 - `agent/src/` — the Python agent: module map in the backend-dev-guidelines skill ([SKILL.md](../backend-dev-guidelines/SKILL.md), [agent-architecture.md](../backend-dev-guidelines/agent-architecture.md)).
 - `agent/host/` (Rust service host), `agent/swoop/` (Rust streamer), `desktop/` (Tauri app — `desktop/README.md`).
-- `infra/` (Cloudflare terraform, R2), `scripts/` (`scripts/README.md`), `cli/`, `sdks/`, `functions/`, `test/integration/`, `docs/`.
+- `infra/` (Cloudflare terraform, R2), `scripts/` (`scripts/README.md`), `cli/`, `sdks/`, `functions/`, `test/` (`infra/`, `load/`), `docs/`.

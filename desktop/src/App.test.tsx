@@ -11,10 +11,13 @@ const host = vi.hoisted(() => ({
   status: (() => 'folder') as (path: string) => PathStatus | Promise<PathStatus>,
   fileChanged: [] as ((event: { payload: unknown }) => void)[],
   picked: vi.fn(),
+  service: {} as unknown,
+  start: vi.fn(),
+  startOnLogin: null as boolean | null,
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: async (command: string, args: { path?: string; json?: unknown } = {}) => {
+  invoke: async (command: string, args: { path?: string; json?: unknown; allowElevation?: boolean } = {}) => {
     switch (command) {
       case 'path_status':
         return host.status(args.path as string)
@@ -35,7 +38,13 @@ vi.mock('@tauri-apps/api/core', () => ({
       case 'sidebar_collapsed':
         return false
       case 'service_status':
-        return { state: 'running', startType: 'auto', statusFile: { exists: false } }
+        return host.service
+      case 'service_start':
+        return host.start(args.allowElevation)
+      case 'startup_link_enabled':
+        return host.startOnLogin
+      case 'appearance_theme':
+        return 'system'
       default:
         return null
     }
@@ -112,6 +121,54 @@ beforeEach(() => {
   host.status = only('C:\\show')
   host.fileChanged = []
   host.picked.mockReset()
+  host.service = { state: 'running', startType: 'auto', statusFile: { exists: false } }
+  host.start.mockReset()
+  host.startOnLogin = null
+})
+
+describe('start on login in the window menu', () => {
+  /** the menu's checkbox, opened from the keyboard: jsdom has no PointerEvent. */
+  async function startOnLoginItem() {
+    fireEvent.keyDown(screen.getByTestId('app-menu-trigger'), { key: 'Enter' })
+    return screen.findByTestId('menu-start-on-login')
+  }
+
+  it('shows a change made from the tray once the window comes back', async () => {
+    host.startOnLogin = false
+    render(<App />)
+    expect((await startOnLoginItem()).getAttribute('aria-checked')).toBe('false')
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+
+    // the tray rewrote the shortcut while the window was hidden, which does not unmount it
+    host.startOnLogin = true
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'))
+    })
+
+    expect((await startOnLoginItem()).getAttribute('aria-checked')).toBe('true')
+  })
+})
+
+describe('starting the service from the footer', () => {
+  it('says why a start the operator asked for failed, and keeps the launch-time start quiet', async () => {
+    host.service = {
+      installed: true,
+      running: false,
+      state: 'stopped',
+      startType: 'auto_start',
+      statusFile: { exists: false, ageSecs: null, stale: true },
+    }
+    host.start.mockRejectedValue('elevation was declined or could not be started')
+    render(<App />)
+    await waitFor(() => expect(host.start).toHaveBeenCalledWith(false))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'start service' }))
+
+    expect(await screen.findByText('could not start the service')).toBeTruthy()
+    expect(screen.getByText('elevation was declined or could not be started')).toBeTruthy()
+    expect(host.start.mock.calls).toEqual([[false], [true]])
+  })
 })
 
 describe('the warning about a path', () => {

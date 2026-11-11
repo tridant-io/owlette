@@ -206,6 +206,16 @@ REBOOT_SUCCESS_DETECTION_WINDOW_SECONDS = 60 * 60
 _CRASH_LOOP_QUEUED_BY = 'system:crash_loop'
 
 
+def _seconds(value, default):
+    """A typed config value as seconds, or `default` unless it is a finite,
+    non-negative number. Read at every launch, where a raise ends the main loop."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    return seconds if 0 <= seconds < float('inf') else default
+
+
 def _inside_active_hours():
     """`(window, now)` while this Windows machine is inside its active hours,
     else None.
@@ -4598,9 +4608,9 @@ class OwletteService:
 
         if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
-            delay = float(process.get('time_delay', 0))
+            delay = _seconds(process.get('time_delay'), 0)
 
-            time_to_init = float(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id))
+            time_to_init = _seconds(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id), 0)
 
             last_info = self.last_started.get(process_list_id, {})
             last_time = last_info.get('time')
@@ -4786,7 +4796,7 @@ class OwletteService:
                 # (TouchDesigner) being double-launched before psutil sees them.
                 last_time = last_info.get('time')
                 if last_time:
-                    time_to_init = max(float(process.get('time_to_init', 0) or TIME_TO_INIT), 60.0)
+                    time_to_init = max(_seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT), 60.0)
                     elapsed = (self.current_time - last_time).total_seconds()
                     if elapsed < time_to_init:
                         return  # Still cooling down, skip this cycle
@@ -4795,7 +4805,7 @@ class OwletteService:
                 # an adopted pid never passed through _record_launch.
                 osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
-                time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
+                time_to_init = _seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
                     shared_utils.update_process_status_in_json(last_pid, 'LAUNCHING', self.firebase_client, process_id=process_list_id)
                     new_pid = None
@@ -6017,7 +6027,7 @@ class OwletteService:
                         logging.debug(f"Auto-derived verify_path from /DIR: {verify_path}")
 
                 logging.info(f"Starting software installation: {installer_name}")
-                logging.debug(f"URL: {installer_url}")
+                logging.debug(f"URL: {installer_utils.redact_query_strings(installer_url)}")
                 logging.debug(f"Flags: {silent_flags}")
                 logging.debug(f"Timeout: {timeout_seconds} seconds")
                 if expected_sha256:
@@ -8820,7 +8830,7 @@ class OwletteService:
         logging.info(f"Current version: {shared_utils.APP_VERSION}")
         logging.info(f"Target version: {target_version}")
         logging.info("="*60)
-        logging.debug(f"Installer URL: {installer_url}")
+        logging.debug(f"Installer URL: {installer_utils.redact_query_strings(installer_url)}")
         logging.debug(f"Checksum: {expected_sha256[:16]}...")
 
         os_family = shared_utils.get_os_family_arch()[0]

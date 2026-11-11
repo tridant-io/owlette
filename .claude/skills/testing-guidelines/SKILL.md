@@ -1,11 +1,11 @@
 ---
 name: testing-guidelines
-description: "How Owlette is tested and how to run each suite: web Jest, Playwright e2e on the Firebase emulators (npm run e2e), Firestore rules tests (npm run test:rules), agent pytest via agent/.venv, integration tests against dev.owlette.app, and the mocks and fixtures to reuse. Use when writing, adding or running tests, e2e, a failing or flaky test, coverage, mocks, CI test failures, or checks before a push."
+description: "How Owlette is tested and how to run each suite: web Jest, Playwright e2e on the Firebase emulators (npm run e2e), Firestore rules tests (npm run test:rules), agent pytest via agent/.venv, the live smoke suite against dev.owlette.app (npm run smoke:dev), and the mocks and fixtures to reuse. Use when writing, adding or running tests, e2e, a failing or flaky test, coverage, mocks, CI test failures, or checks before a push."
 ---
 
 # Testing Guidelines
 
-**Applies To**: `web/` (Jest, Playwright), `agent/` (pytest), `test/integration/` (integration)
+**Applies To**: `web/` (Jest, Playwright, the live smoke suite), `agent/` (pytest)
 
 ---
 
@@ -24,8 +24,8 @@ cd web && npm run test:rules
 # Agent tests (from the repo root; macOS/Linux: agent/.venv/bin/python)
 agent/.venv/Scripts/python -m pytest agent/tests/
 
-# Integration tests (hits real dev.owlette.app, needs .env.test)
-cd test/integration && python -m pytest -m api -v
+# Live smoke suite (a real browser against dev.owlette.app; credentials in web/e2e-live/README.md)
+cd web && npm run smoke:dev
 ```
 
 Before pushing web changes, run `/preflight`: security alerts, lint, typecheck, unit, rules and e2e, in the order CI runs them. The commit/push hook (`.claude/hooks/pre-commit-check.mjs`) runs `tsc --noEmit` + the whole jest suite for web edits, and `py_compile` + `pytest agent/tests/ -x` for agent edits.
@@ -40,7 +40,7 @@ Before pushing web changes, run `/preflight`: security alerts, lint, typecheck, 
 | **Rules** | `web/__tests__/rules/` | Jest + Firestore emulator | `firestore.rules` allows and denies | None |
 | **E2E** | `web/e2e/specs/` | Playwright + Firebase emulators | Critical user flows in a real browser | None |
 | **Agent** | `agent/tests/` (`unit/`, `integration/`, `lifecycle/`) | pytest | Agent modules with mocked HTTP/Firestore | None |
-| **Integration** | `test/integration/api/` | pytest + requests | Real endpoints on dev.owlette.app | API key required |
+| **Live smoke** | `web/e2e-live/` | Playwright against dev.owlette.app | What the emulators cannot show: a hoot turn on a real LLM, passkeys, a share link, dev's real rules and indexes | Dev service account and keys (`web/e2e-live/README.md`) |
 
 New user-facing web behaviour ships with an e2e test.
 
@@ -137,52 +137,18 @@ mock_system_metrics      # CPU/memory/disk/GPU/processes dict
 ```python
 @pytest.mark.windows     # Windows-only (conftest auto-skips it on other platforms)
 @pytest.mark.unit        # Unit tests
-@pytest.mark.integration # Integration tests
-@pytest.mark.slow        # Long-running
-@pytest.mark.firebase    # Firebase-related (should use mocks)
 ```
 
 CI: the `agent tests` workflow (`agent-tests.yml`) runs the suite on Windows, macOS and Linux. The rest of the suite stubs the Claude Agent SDK; `agent/tests/unit/test_claude_agent_sdk_surface.py` is the one file that checks the real installed SDK.
 
 ---
 
-## Integration Testing (pytest + requests)
+## Live smoke suite
 
-### Setup (one-time)
-```bash
-cd test/integration
-cp .env.test.example .env.test
-# Edit .env.test:
-#   OWLETTE_API_URL=https://dev.owlette.app
-#   OWLETTE_API_KEY=owk_your_key_here    # Generate from settings > api keys
-#   OWLETTE_SITE_ID=your-site-id
-#   OWLETTE_MACHINE_ID=your-machine-id
-pip install -r requirements.txt
-```
-
-### Run Commands
-```bash
-cd test/integration
-python -m pytest -m api -v              # All API tests
-python -m pytest api/test_processes.py -v  # Single file
-python -m pytest -m readonly -v          # Safe read-only tests only
-python -m pytest -m "api and not destructive" -v  # Skip create/delete tests
-```
-
-**Stale:** `test_auth.py`, `test_commands.py`, `test_deployments.py`, `test_machines.py`, `test_processes.py` and the `process_cleanup` fixture still call `/api/admin/*`, which was removed in 644c57f2 (the routes now live under `/api/sites/{siteId}/...`). Expect those to fail against current dev until they are ported.
-
-### Markers
-```python
-@pytest.mark.api         # All API tests
-@pytest.mark.readonly    # Safe — only reads data
-@pytest.mark.destructive # Creates/modifies data (has cleanup fixtures)
-@pytest.mark.integration # Integration tests
-@pytest.mark.slow        # Large downloads, long installs (pytest-timeout is 600s)
-```
-
-### Cleanup
-
-Tests that create resources append their ids to the `process_cleanup` / `deployment_cleanup` fixtures (`test/integration/api/conftest.py`), which delete them in teardown.
+`cd web && npm run smoke:dev` drives a real browser against dev.owlette.app. It runs on the
+maintainer's workstation, never in CI, and a green run on the commit being promoted is
+required before `dev` is merged to `main`. Prerequisites, credentials and what it covers:
+`web/e2e-live/README.md`.
 
 ---
 
@@ -193,5 +159,5 @@ Tests that create resources append their ids to the `process_cleanup` / `deploym
 3. **Test error paths** — Firebase operations fail in production
 4. **Don't test shadcn/ui** — test your composition of primitives, not the primitives
 5. **API route tests use `/** @jest-environment node */`** — server code, not jsdom
-6. **Integration tests need `.env.test`** — never commit credentials
+6. **The live smoke suite's credentials are gitignored** — never commit them
 7. **A bug fix starts with a failing test**

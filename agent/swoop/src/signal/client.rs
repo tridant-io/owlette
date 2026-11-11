@@ -93,6 +93,9 @@ struct Viewer {
     /// §10's lease renewal binds to this in preference to the offer.
     dtls_fingerprint: Option<String>,
     verified_ctl: Option<bool>,
+    /// The certificate this viewer's peer answers with, canonical. Every peer
+    /// generates its own, so a second viewer's bind must not replace it.
+    host_fingerprint: Option<String>,
 }
 
 impl Viewer {
@@ -115,8 +118,6 @@ pub struct SignalClient {
     jti: JtiSet,
     admission: Admission,
     viewers: BTreeMap<String, Viewer>,
-    /// Canonical, set by Task 3.8 once the local dtls certificate exists.
-    host_fingerprint: Option<String>,
     /// The last `error` code the room sent, so a close can be read together
     /// with the frame that preceded it.
     last_error: Option<String>,
@@ -135,7 +136,6 @@ impl SignalClient {
             jti: JtiSet::new(),
             admission: Admission::new(Limits::from_enablement(&bundle.enablement)),
             viewers: BTreeMap::new(),
-            host_fingerprint: None,
             last_error: None,
         })
     }
@@ -148,12 +148,19 @@ impl SignalClient {
         self.admission.live()
     }
 
-    /// Task 3.8 hands over the local dtls certificate fingerprint as soon as it
-    /// has one. Nothing can be answered before this: §9's mac is over it.
-    pub fn set_host_fingerprint(&mut self, raw: &str) -> anyhow::Result<()> {
-        self.host_fingerprint =
-            Some(canonical_fingerprint(raw).ok_or_else(|| anyhow::anyhow!("not a fingerprint"))?);
-        Ok(())
+    /// The fingerprint of the certificate this viewer's peer answers with,
+    /// handed over when the peer binds. That viewer cannot be answered before
+    /// this: §9's mac is over it.
+    pub fn set_host_fingerprint(&mut self, viewer: &str, raw: &str) -> anyhow::Result<()> {
+        let canonical =
+            canonical_fingerprint(raw).ok_or_else(|| anyhow::anyhow!("not a fingerprint"))?;
+        match self.viewers.get_mut(viewer) {
+            Some(state) => {
+                state.host_fingerprint = Some(canonical);
+                Ok(())
+            }
+            None => Err(anyhow::anyhow!("no such viewer")),
+        }
     }
 
     /// The fingerprint of an established dtls session, which §10 binds a lease
@@ -469,9 +476,10 @@ impl SignalClient {
     /// brief says `host-ready`; the contract is the one to implement.)
     pub fn answer(&self, viewer: &str, sdp: &str) -> anyhow::Result<Message> {
         let host_fingerprint = self
-            .host_fingerprint
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("no host fingerprint yet"))?;
+            .viewers
+            .get(viewer)
+            .and_then(|state| state.host_fingerprint.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("no host fingerprint for this viewer yet"))?;
         // macing a fingerprint the answer does not actually carry would hand the
         // browser a mac it can verify over a certificate nobody is using.
         let in_sdp = fingerprint_from_sdp(sdp)
@@ -1078,7 +1086,7 @@ pub(crate) mod tests {
         // no fingerprint, no answer: there would be nothing to mac.
         assert!(client.answer(&viewer, &sdp).is_err());
 
-        client.set_host_fingerprint(&host_fingerprint).expect("it is a fingerprint");
+        client.set_host_fingerprint(&viewer, &host_fingerprint).expect("it is a fingerprint");
         let Message::Answer { to, mac, .. } = client.answer(&viewer, &sdp).expect("it answers")
         else {
             panic!("answer() returns an answer");
@@ -1091,6 +1099,41 @@ pub(crate) mod tests {
         // over a fingerprint nobody is using verifies and proves nothing.
         let other = read("signaling/signal-offer.json");
         assert!(client.answer(&viewer, other["message"]["sdp"].as_str().unwrap()).is_err());
+    }
+
+    /// Every peer generates its own certificate, so each viewer is answered
+    /// over its own. A re-offer is an ice restart, and the first viewer's must
+    /// still be answered after a second viewer's peer was bound.
+    #[test]
+    fn a_viewer_is_answered_over_its_own_peer_after_another_one_binds() {
+        let (mut client, first) = client_with_viewer();
+        let mut join = read("signaling/signal-viewer-join.json")["message"].clone();
+        join["viewer"] = json!("viewer_0000000002");
+        let later = Instant::now() + Duration::from_secs(5);
+        assert!(matches!(
+            client.handle_at(&join.to_string(), later)[..],
+            [Effect::Admitted { .. }]
+        ));
+        let mut offer = read("signaling/signal-offer.json")["message"].clone();
+        offer["from"] = json!("viewer_0000000002");
+        assert!(matches!(client.handle_at(&offer.to_string(), later)[..], [Effect::Offer { .. }]));
+
+        // two peers, two certificates. the golden offer's sdp stands in for the
+        // second peer's answer: all this needs is a second fingerprint.
+        let first_sdp = read("signaling/signal-answer.json")["message"]["sdp"]
+            .as_str()
+            .expect("sdp")
+            .to_owned();
+        let second_sdp = offer["sdp"].as_str().expect("sdp").to_owned();
+        client
+            .set_host_fingerprint(&first, &fingerprint_from_sdp(&first_sdp).unwrap())
+            .expect("it is a fingerprint");
+        client
+            .set_host_fingerprint("viewer_0000000002", &fingerprint_from_sdp(&second_sdp).unwrap())
+            .expect("it is a fingerprint");
+
+        assert!(client.answer(&first, &first_sdp).is_ok(), "the first viewer's ice restart");
+        assert!(client.answer("viewer_0000000002", &second_sdp).is_ok());
     }
 
     #[test]

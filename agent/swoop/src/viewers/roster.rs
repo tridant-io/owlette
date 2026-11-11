@@ -14,14 +14,6 @@
 //! a token claims). A later task that wants to flip control for a viewer has to
 //! produce a verified claim set to do it.
 //!
-//! # The five public fields are contract
-//!
-//! `session/tiers.rs` builds its `TierViewer` from `viewer_id`, `ctl` and
-//! `codec_class`; the session loop reads `lease_expires_at` beside
-//! [`lease::LeaseLedger`](super::lease::LeaseLedger)'s own bookkeeping. Neither
-//! file may be edited from here, so renaming one of those fields is a break in
-//! two modules at once.
-//!
 //! # What the browser is told
 //!
 //! [`Presence`] is host → viewer and carries no token, no fingerprint and no

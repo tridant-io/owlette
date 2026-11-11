@@ -71,8 +71,9 @@ const HELPER_EXIT_GRACE_MS = 5_000
 
 /**
  * Helper lines about the service, suppressed. `configure_site.py --leave` still
- * asks NSSM to stop/start but runs unelevated, so both calls fail — which is
- * why this dialog stops the service itself. Echoing them would narrate nothing.
+ * asks the service manager to stop/start (`osadapter.service_control`) but runs
+ * unelevated, so both calls fail — which is why this dialog stops the service
+ * itself. Echoing them would narrate nothing.
  */
 const HELPER_SERVICE_STATUSES = new Set(['stopping the service', 'restarting the service'])
 
@@ -205,10 +206,10 @@ function failedCopy(failure: Failure, site: string, result: Result): string {
 }
 
 /**
- * Leave a site: confirm, then watch it happen. Order is the legacy GUI's
- * (`owlette_gui.on_leave_site_click`, :1994-2074) — sync off in `config.json`
- * and the machine document deleted while the service is STOPPED, so nothing
- * recreates the row between delete and restart.
+ * Leave a site: confirm, then watch it happen. Order is that of the python GUI
+ * 3.0.0 removed — sync off in `config.json` and the machine document deleted
+ * while the service is STOPPED, so nothing recreates the row between delete and
+ * restart.
  *
  * The stop happens here, not in the helper: `configure_site.py` runs as the
  * logged-in user and lacks SERVICE_STOP, so it asked, was refused, and carried

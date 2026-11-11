@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronUp, Clock, Minus, Plus, Trash2 } from 'lucide-react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { DayPillSelector } from '@/components/DayPillSelector'
 import { WeekSummaryBar } from '@/components/WeekSummaryBar'
 import { Button } from '@/components/ui/button'
@@ -45,6 +45,8 @@ interface TimePickerProps {
   value: string // "HH:MM" 24-hour format
   onChange: (value: string) => void
   compact?: boolean
+  /** Accessible name of the field; the ±15 steppers are named after it. */
+  label?: string
 }
 
 function formatTimeDisplay(value: string, use24h: boolean): string {
@@ -109,9 +111,10 @@ function parseTimeInput(input: string, use24h: boolean, currentHour24?: number):
 }
 
 /** Not exported (unlike the web's): the dashboard schedule popover has no counterpart here. */
-function TimePicker({ value, onChange, compact }: TimePickerProps) {
+function TimePicker({ value, onChange, compact, label = 'time' }: TimePickerProps) {
   const use24h = USE_24H
   const [draft, setDraft] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const [h, m] = value.split(':').map(Number)
 
@@ -130,6 +133,12 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
     setDraft(null)
   }
 
+  const step = (deltaMinutes: number) => {
+    const next = adjust(deltaMinutes)
+    // mid-edit the field shows its draft, so the draft follows the step
+    if (document.activeElement === inputRef.current) setDraft(formatTimeDisplay(next, use24h))
+  }
+
   const displayed = formatTimeDisplay(value, use24h)
   const inputWidth = use24h ? 'w-14' : 'w-[4.5rem]'
   const inputPy = compact ? 'py-0.5 text-[11px]' : 'py-1 text-sm'
@@ -137,7 +146,9 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
   return (
     <div className="flex items-center gap-0.5">
       <input
+        ref={inputRef}
         type="text"
+        aria-label={label}
         value={draft ?? displayed}
         onChange={(e) => setDraft(e.target.value)}
         onFocus={(e) => {
@@ -166,25 +177,23 @@ function TimePicker({ value, onChange, compact }: TimePickerProps) {
         className={`${inputPy} ${inputWidth} rounded-md border border-border bg-background text-foreground font-medium text-center cursor-text outline-none focus:border-muted-foreground transition-colors`}
         title="type a time (e.g. 9:00, 5pm, 17:00) or use ↑↓ arrows"
       />
+      {/* pointerdown is cancelled so a mouse step leaves focus, and any draft, in the
+          field; the step itself runs on click, which the keyboard also fires */}
       <div className="flex flex-col">
         <button
           type="button"
-          aria-label="+15 min"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setDraft(formatTimeDisplay(adjust(15), use24h))
-          }}
+          aria-label={`${label}, 15 minutes later`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(15)}
           className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
         >
           <ChevronUp className="h-2.5 w-2.5" />
         </button>
         <button
           type="button"
-          aria-label="-15 min"
-          onMouseDown={(e) => {
-            e.preventDefault()
-            setDraft(formatTimeDisplay(adjust(-15), use24h))
-          }}
+          aria-label={`${label}, 15 minutes earlier`}
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => step(-15)}
           className="text-muted-foreground hover:text-foreground cursor-pointer leading-none py-px"
         >
           <ChevronDown className="h-2.5 w-2.5" />
@@ -280,6 +289,7 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                 <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color.pill}`} />
                 <input
                   type="text"
+                  aria-label="block name"
                   value={block.name || ''}
                   onChange={(e) => updateBlockName(blockIndex, e.target.value)}
                   placeholder={`block ${blockIndex + 1}`}
@@ -316,12 +326,14 @@ export function ScheduleBlocksEditor({ blocks, onChange, compact }: ScheduleBloc
                   <div key={rangeIndex} className="space-y-1">
                     <div className="flex items-center gap-2">
                       <TimePicker
+                        label="start time"
                         value={range.start}
                         onChange={(v) => updateRange(blockIndex, rangeIndex, 'start', v)}
                         compact={compact}
                       />
                       <span className="text-muted-foreground text-xs">to</span>
                       <TimePicker
+                        label="stop time"
                         value={range.stop}
                         onChange={(v) => updateRange(blockIndex, rangeIndex, 'stop', v)}
                         compact={compact}

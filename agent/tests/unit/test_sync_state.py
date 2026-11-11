@@ -75,7 +75,7 @@ def test_context_manager_closes_on_exit(tmp_path):
         )
     # Connection is closed after exit, so any op must fail.
     with pytest.raises((sqlite3.ProgrammingError, AssertionError, AttributeError)):
-        state.list_pending_distributions()
+        state.find_distribution('s', 'f', 'm')
 
 
 def test_schema_version_stamped_after_create(tmp_path):
@@ -246,15 +246,49 @@ def test_find_distribution_by_natural_key(tmp_path):
         assert state.find_distribution('s', 'f', 'never') is None
 
 
-def test_list_pending_distributions(tmp_path):
+def test_scrub_due_lists_only_the_version_on_disk(tmp_path, monkeypatch):
+    """a superseded version is not what the tree holds: scrubbing it re-hashes
+    the unchanged files again and reports its overwritten ones as drift."""
+    import itertools
+
+    import sync_state
+
+    ticks = itertools.count(1_000_000)
+    monkeypatch.setattr(sync_state, '_now', lambda: next(ticks))
     with SyncState(str(tmp_path / 'state.db')) as state:
-        d1 = state.start_distribution(site_id='s', roost_id='f1', version_id='m', version_url='u', files=[], chunks=[])
-        d2 = state.start_distribution(site_id='s', roost_id='f2', version_id='m', version_url='u', files=[], chunks=[])
-        state.set_distribution_state(d2, 'committed')
-        pending = state.list_pending_distributions()
-        ids = [p['id'] for p in pending]
-        assert d1 in ids
-        assert d2 not in ids
+        def commit(roost_id, version_id):
+            row = state.find_distribution('s', roost_id, version_id)
+            dist_id = row['id'] if row else state.start_distribution(
+                site_id='s', roost_id=roost_id, version_id=version_id, version_url='u',
+                files=[], chunks=[], extract_root=str(tmp_path / roost_id),
+            )
+            state.set_distribution_state(dist_id, 'committed')
+            return dist_id
+
+        v1 = commit('show', 'v1')
+        v2 = commit('show', 'v2')
+        lobby = commit('lobby', 'v1')
+        assert {r['id'] for r in state.list_scrub_due(max_age_seconds=0)} == {v2, lobby}
+
+        commit('show', 'v1')  # a rollback commits v1 again
+        assert {r['id'] for r in state.list_scrub_due(max_age_seconds=0)} == {v1, lobby}
+
+
+def test_retire_interrupted_fails_only_rows_an_earlier_process_left(tmp_path):
+    db = tmp_path / 'state.db'
+    with SyncState(str(db)) as before_restart:
+        cut_off = before_restart.start_distribution(
+            site_id='s', roost_id='f1', version_id='m', version_url='u', files=[], chunks=[],
+        )
+        before_restart.set_distribution_state(cut_off, 'downloading')
+
+    with SyncState(str(db)) as state:
+        live = state.start_distribution(
+            site_id='s', roost_id='f2', version_id='m', version_url='u', files=[], chunks=[],
+        )
+        assert state.retire_interrupted() == 1
+        assert state.get_distribution(cut_off)['state'] == 'failed'
+        assert state.get_distribution(live)['state'] == 'pending'
 
 
 

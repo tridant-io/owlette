@@ -36,7 +36,11 @@ export interface SetRestartScheduleResult {
   machineId: string;
 }
 
-const TIME_RE = /^\d{2}:\d{2}$/;
+// the agent skips an entry whose time no clock has or whose days it does not
+// know, so a schedule that fails these would be stored and never fire. same
+// checks as the restart presets.
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const VALID_DAYS = new Set(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']);
 
 function validateSchedule(s: unknown): asserts s is RestartScheduleInput {
   if (!s || typeof s !== 'object' || Array.isArray(s)) {
@@ -73,11 +77,15 @@ function validateSchedule(s: unknown): asserts s is RestartScheduleInput {
         'Schedule entry `id` is required.',
       );
     }
-    if (!Array.isArray(entry.days) || entry.days.length === 0) {
+    if (
+      !Array.isArray(entry.days) ||
+      entry.days.length === 0 ||
+      !entry.days.every((day) => VALID_DAYS.has(day))
+    ) {
       throw new ActionInputError(
         400,
         'invalid_schedule_entry',
-        'Schedule entry `days` must be a non-empty array.',
+        'Schedule entry `days` must be a non-empty array of mon/tue/wed/thu/fri/sat/sun.',
       );
     }
     if (typeof entry.time !== 'string' || !TIME_RE.test(entry.time)) {
@@ -103,8 +111,13 @@ export async function setRestartSchedule(
     .collection('machines')
     .doc(input.machineId);
 
+  const { enabled, entries } = input.schedule;
+  const rebootSchedule: RestartScheduleInput = {
+    enabled,
+    entries: entries.map(({ id, days, time }) => ({ id, days, time })),
+  };
   // `rebootSchedule` field name is a wire contract read by deployed agents — keep it.
-  await configRef.set({ rebootSchedule: input.schedule }, { merge: true });
+  await configRef.set({ rebootSchedule }, { merge: true });
 
   emitMutation({
     kind: 'process_mutated',

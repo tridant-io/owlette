@@ -724,6 +724,37 @@ describe('POST /api/sites/{siteId}/deployments/{deploymentId}/retry', () => {
     expect(mocks.update.mock.calls[0][0].sha256_checksum).toBeUndefined();
   });
 
+  it('carries the processes to close and the projects to hold, as the first attempt did', async () => {
+    queueIdempotencyMiss();
+    mocks.get.mockResolvedValueOnce(
+      docSnapshot(DEPLOYMENT, {
+        installer_name: 'td.exe',
+        installer_url: 'https://example.com/td.exe',
+        silent_flags: '/S',
+        sha256_checksum: 'ab'.repeat(32),
+        close_processes: ['TouchDesigner.exe'],
+        suppress_projects: ['C:\\show\\main.toe'],
+        targets: [{ machineId: 'm1', status: 'failed' }],
+        status: 'failed',
+      }),
+    );
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/deployments/${DEPLOYMENT}/retry`,
+      { method: 'POST', headers: idempotencyHeaders('idem-retry-close'), body: {} },
+    );
+    const res = await retryPOST(req, {
+      params: Promise.resolve({ siteId: SITE, deploymentId: DEPLOYMENT }),
+    });
+    expect(res.status).toBe(200);
+
+    const mergeCalls = mocks.set.mock.calls.filter(
+      (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+    );
+    const cmd = mergeCalls[0][0][Object.keys(mergeCalls[0][0])[0]];
+    expect(cmd.close_processes).toEqual(['TouchDesigner.exe']);
+    expect(cmd.suppress_projects).toEqual(['C:\\show\\main.toe']);
+  });
+
   it('retries only the machines in the body filter', async () => {
     queueIdempotencyMiss();
     mocks.get.mockResolvedValueOnce(

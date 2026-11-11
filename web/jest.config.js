@@ -32,9 +32,6 @@ const config = {
   setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 
   moduleNameMapper: {
-    // CSS modules
-    '^.+\\.module\\.(css|sass|scss)$': 'identity-obj-proxy',
-
     // plain CSS
     '^.+\\.(css|sass|scss)$': '<rootDir>/__mocks__/styleMock.js',
 

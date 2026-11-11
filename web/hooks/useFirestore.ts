@@ -1756,14 +1756,6 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
         processId
       });
 
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to update process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
-
       throw error;
     }
   };
@@ -1799,14 +1791,6 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
         machineId,
         processId
       });
-
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to delete process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
 
       throw error;
     }
@@ -1874,14 +1858,6 @@ export function useMachines(siteId: string, machineIds?: readonly string[] | nul
         machineId,
         processData
       });
-
-      if (e?.code === 'permission-denied') {
-        throw new Error('Permission denied: Unable to create process configuration. Please check Firestore security rules.');
-      } else if (e?.code === 'not-found') {
-        throw new Error('Machine or config document not found. The machine may have been removed.');
-      } else if (e?.code === 'unavailable') {
-        throw new Error('Firestore is temporarily unavailable. Please try again in a moment.');
-      }
 
       throw error;
     }

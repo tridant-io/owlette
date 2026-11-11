@@ -4596,8 +4596,8 @@ paths:
           required: false
           schema:
             type: string
-            enum: [scheduled, canary, complete, aborted]
-          description: Filter by rollout stage. `fleet` is not accepted as a filter.
+            enum: [scheduled, canary, fleet, complete, aborted]
+          description: Filter by rollout stage.
       responses:
         '200':
           description: Paginated deployments.
@@ -6958,7 +6958,8 @@ paths:
                   type: object
                   description: |
                     Per-type parameters. `reboot_machine` /
-                    `shutdown_machine` accept `delay_seconds` (>=0) and
+                    `shutdown_machine` accept `delay_seconds` (>=0), which the
+                    agent ignores (the countdown is 60 seconds), and
                     `active_hours_override`; `reboot_machine` also accepts
                     `when`. A malformed override (missing, blank or over-long
                     `reason`, or any other key), an override on another type,
@@ -9443,8 +9444,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 launch_mode:
                   type: string
@@ -9535,8 +9536,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 autolaunch: { type: boolean }
                 launch_mode:
@@ -11533,8 +11534,10 @@ components:
             ignore it. Not validated by the API; reads back as `Show` when never set.
         time_delay:
           type: string
+          description: Seconds to wait before a relaunch, as a string. Always a number of zero or more.
         time_to_init:
           type: string
+          description: Seconds the process is given to start, as a string. Always a number of zero or more.
         relaunch_attempts:
           type: string
           description: Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`.
@@ -11578,7 +11581,7 @@ components:
           type: number
         days:
           type: array
-          items: { type: string }
+          items: { type: string, example: "mon", description: "`mon` … `sun`. A full or capitalised English day name is stored as its three-letter name; anything else is refused." }
         ranges:
           type: array
           minItems: 1
@@ -11586,8 +11589,8 @@ components:
             type: object
             required: [start, stop]
             properties:
-              start: { type: string }
-              stop: { type: string }
+              start: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "09:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
+              stop: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "17:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
 
     ScheduleTimeRange:
       description: A single start/stop time range within a schedule.
@@ -14437,8 +14440,12 @@ components:
       description: |
         Webhook subscription wrapper with activity fields. Returned on
         `GET /api/webhooks`, `GET /api/webhooks/{webhookId}` and PATCH.
-        `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` are not
-        updated by the dispatcher yet; read delivery history instead.
+        `lastDeliveryAt` and `lastDeliveryStatus` are not updated yet.
+        `failureCount` counts the `machine.offline` sender's consecutive
+        failures: after 10 it switches the subscription off, which reads here
+        as `paused`, and a PATCH with `paused: false` turns it back on and
+        starts the count over. For the dispatcher's deliveries, read delivery
+        history.
       allOf:
         - $ref: '#/components/schemas/WebhookSubscription'
         - type: object

@@ -96,7 +96,7 @@ owlette process create --site <siteId> --machine <machineId> --name <name> --exe
 | `--launch-mode <mode>` | `off` or `always` | no | `off` leaves the process unmanaged; `always` keeps it running and relaunches it after a crash |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
 
-`--priority` and `--visibility` are stored exactly as given — the server does not check them, and the CLI's `--help` lists other spellings. use the values the dashboard writes, shown above. both apply only on Windows; macOS and Linux agents ignore them.
+`--priority` and `--visibility` are stored exactly as given — the server does not check them. use the values the dashboard writes, shown above and in the CLI's `--help`. both apply only on Windows; macOS and Linux agents ignore them.
 
 `--launch-mode scheduled` passes the CLI's check but the server refuses it with `400 missing_schedules`, because `create` cannot send schedule blocks. create the process, then run [`schedule`](#schedule) with `--mode scheduled`.
 

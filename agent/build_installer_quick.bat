@@ -109,7 +109,9 @@ if not exist "build\installer_package\app\owlette-swoop-viewer.exe" (
 :: Re-copy the swoop streamer if it has been rebuilt since the last full build.
 :: Like the desktop app above and unlike the service host below, it is NOT built
 :: here: its dependency graph is minutes, not the ~30 seconds this script is for.
-:: Run `cargo build --release` in agent\swoop yourself, then come back here.
+:: Run `cargo build --release --features audio-opus` in agent\swoop yourself
+:: (the full build's command: without the feature the streamer has no audio),
+:: then come back here.
 mkdir build\installer_package\swoop 2>nul
 set "SWOOP_EXE=%~dp0swoop\target\release\owlette-swoop.exe"
 if exist "%SWOOP_EXE%" (
@@ -120,7 +122,7 @@ if not exist "build\installer_package\swoop\owlette-swoop.exe" (
     echo ERROR: No swoop streamer in the installer package and none built at:
     echo   %SWOOP_EXE%
     echo Run build_installer_full.bat, or build it manually with:
-    echo   cd swoop ^&^& cargo build --release
+    echo   cd swoop ^&^& set "CMAKE_POLICY_VERSION_MINIMUM=3.5" ^&^& cargo build --release --features audio-opus
     echo.
     pause
     exit /b 1

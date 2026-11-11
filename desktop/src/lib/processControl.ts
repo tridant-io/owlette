@@ -5,7 +5,7 @@
  * - **kill**: terminate, THEN write `KILLED`. The service treats the exit as intentional.
  * - **restart**: write `RESTARTING` on BOTH sides of the kill. The service skips the crash alert,
  *   screenshot and Cortex event, writes a `process_restarted` audit event, and relaunches within
- *   one tick (`owlette_service.py:2598-2630`).
+ *   one tick (`PROCESS_RESTARTING_STATUS` in `owlette_service.py`).
  *
  * The sides are deliberate. `KILLED` asserts the process is gone, so writing it early would lie
  * whenever the kill fails. `RESTARTING` asserts only intent and needs both writes:
@@ -15,7 +15,7 @@
  *
  * Writing early means it can outlive a kill that never happened — {@link stopProcess} undoes that.
  *
- * Both flows are purely local, no cloud command, matching `owlette_gui.py:1182-1303`.
+ * Both flows are purely local, no cloud command, as in the python GUI that 3.0.0 removed.
  */
 
 import { terminatePid, type TerminateMethod } from '@/lib/ipc'

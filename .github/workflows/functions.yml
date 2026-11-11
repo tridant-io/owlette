@@ -53,12 +53,8 @@ jobs:
         working-directory: functions
         run: npm run build
 
-      # No lint step: functions/package.json carries a vestigial
-      # `lint: eslint --ext .ts src/` script, but eslint is not a dependency
-      # there and there is no eslint config in functions/, so it exits 1 on
-      # "'eslint' is not recognized". Wiring a gate onto a script that cannot
-      # run would just be a red X. Adding eslint to functions/ is a separate
-      # call (it means a new dependency).
+      # No lint step: functions' `lint` script is `tsc --noEmit`, which the
+      # build above already covers.
       - name: test
         working-directory: functions
         run: npm test

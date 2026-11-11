@@ -172,15 +172,18 @@ holds to the same host check. Anything else opens
 the picker. The origin of a given URL is remembered in `viewer.json` in the
 per-user app data directory (`%APPDATA%\app.owlette.swoop-viewer` on Windows)
 as `{"origin":"https://dev.owlette.app"}`, and a launch with no argument opens
-`<that origin>/swoop`, or `https://owlette.app/swoop` before anything was
-remembered. A second launch never becomes a second process: the
-single-instance plugin hands its argument to the running one, which opens or
-raises the right window, and a second launch with no argument raises the main
-window as it is. macOS delivers `owlette-swoop://` links as an Apple event
-rather than an argument; `tauri-plugin-deep-link` covers both. A launch
-straight into a session opens only the main window, on that session, no picker. On macOS that
-link arrives just after the app starts, so a launch with no argument there
-waits 500 ms for one before it opens the picker.
+`<that origin>/swoop`. Before anything was remembered it takes the server this
+machine's agent talks to (`firebase.api_base` in its `config.json` when that is
+an allowed origin, else `dev.owlette.app` for a development agent), and
+`https://owlette.app/swoop` where there is no agent. A second launch never
+becomes a second process: the single-instance plugin hands its argument to the
+running one, which opens or raises the right window, and a second launch with
+no argument raises the main window as it is. macOS delivers `owlette-swoop://`
+links as an Apple event rather than an argument; `tauri-plugin-deep-link`
+covers both. A launch straight into a session opens only the main window, on
+that session, no picker. On macOS that link arrives just after the app starts,
+so a launch with no argument there waits 500 ms for one before it opens the
+picker.
 
 **Navigation.** A window may navigate only to the allowed origins,
 `*.firebaseapp.com` and `accounts.google.com` (sign-in). A `window.open` of a
@@ -316,7 +319,7 @@ desktop/
 │  ├─ assets/fonts/      # self-hosted Geist / Geist Mono (variable woff2)
 │  ├─ components/        # the process list and detail, schedule editor, join/leave site, drop confirm,
 │  │                     #   restart countdown, permission banner (macOS), report issue, status footer
-│  ├─ components/ui/     # 22 shadcn primitives, verbatim from web/
+│  ├─ components/ui/     # 14 shadcn primitives, verbatim from web/
 │  ├─ hooks/             # config, app states, file watch, service health, file drop, launch flags
 │  ├─ lib/ipc.ts         # typed wrappers for every host command + event
 │  ├─ lib/owletteConfig.ts   # config.json schema + the transforms behind every write
@@ -374,8 +377,8 @@ reason `local_tray`. No elevation. macOS and Linux do not offer it yet: there
 the daemon refuses a flag the console user wrote, and the request seam has no
 kill verb. `exit` stops the service and quits; the stop needs administrator
 rights, so it raises one UAC prompt (the one elevation a click may cause). The window's menu (`AppMenu`) is `swoop`,
-the site action, `config`, `logs`, `docs`, `submit issue`, `appearance`,
-`start on login`, `restart service` and `reload window`. Both `swoop` entries
+`docs`, `submit issue`, `config`, `logs`, `appearance`, `start on login`,
+`restart service`, `reload window`, and the site action last. Both `swoop` entries
 open owlette swoop, the viewer app, on `<dashboard>/swoop` (`src/viewer_launch.rs`):
 the dashboard is the one `config.json`'s `firebase.api_base` names, and the app
 is looked for beside this exe on Windows and Linux and at
@@ -483,8 +486,10 @@ Rules the host enforces, all sourced from `agent/src/shared_utils.py`:
   the service refreshes it on a 30 s throttle, so anything under two minutes is
   normal.
 
-`src/lib/ipc.ts` is the only place allowed to call `invoke`: one typed function
-per command, plus the event subscriptions.
+Each command is called through typed wrappers in one file, and only the wrappers
+call `invoke`: most live in `src/lib/ipc.ts` with the event subscriptions, the
+agent CLI's in `src/lib/agentCli.ts` and the issue attachments' in
+`src/lib/issueAttachments.ts`.
 
 ### The request seam (macOS and Linux)
 
@@ -589,14 +594,15 @@ the files in `web/components/ui/` and `web/lib/utils.ts`; the `@` alias in
 compile here with their `@/lib/utils` imports untouched. When a primitive changes
 in `web/`, re-copy it rather than editing this copy. (`.oxlintrc.json` turns
 `react/only-export-components` off for that directory for the same reason: the
-`buttonVariants`/`badgeVariants` co-exports are shadcn's shape, not ours to fix.)
+`buttonVariants` co-export is shadcn's shape, not ours to fix.)
 
 Three of the primitives are hand-customised in `web/` and easy to clobber by
 re-running `npx shadcn add`:
 
-- `button.tsx`: `.btn-sweep` in the cva base, **no** `hover:bg-*` on any variant
-  (the sweep supplies hover), `link` variant uses `.hl-link`, plus the extra
-  `icon-sm` / `icon-lg` sizes.
+- `button.tsx`: `.btn-sweep` on every variant except `link`, **no** `hover:bg-*`
+  on any variant (the sweep supplies hover), `link` variant uses `.hl-link`
+  (with `.btn-sweep` too its text paints nothing), plus the extra `icon-sm` /
+  `icon-lg` sizes.
 - `input.tsx`: `aria-invalid:ring-[3px]` unconditionally, not only when focused.
 - `sonner.tsx`: owlette toast palette and lucide icon set.
 

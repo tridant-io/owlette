@@ -105,9 +105,16 @@ site/
 # fix, as the `logs/` negations above.
 !web/app/api/agent/site/
 build/
+# `build/` is unanchored too, so it also hid the tracked macOS and Linux
+# packaging in agent/build/ and any file a packaging change adds there. Same
+# fix: re-include the folder, ignore what is in it, then re-include those two;
+# their own .gitignore files drop work/, cache/ and the built packages.
+!agent/build/
+agent/build/*
+!agent/build/linux/
+!agent/build/macos/
 dist/
 /installer/
-agent/build/
 agent/build_log.txt
 agent/build_output.txt
 agent/dist/

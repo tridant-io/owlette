@@ -4,8 +4,8 @@
 //! anything, with a log line that names the OS. Nothing here captures, scales
 //! or injects. The capture source and the scaler are uninhabited: `open` is the
 //! only way to one and it always refuses, so no method on either is reachable.
-//! macOS takes its capture, scaler, injector and watcher from here until Task
-//! 5.1 wires its own.
+//! macOS borrows three names from here: `painted_pointer`, `process` and
+//! `DesktopWatcher`.
 
 use std::convert::Infallible;
 use std::env::consts::OS;

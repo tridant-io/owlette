@@ -4,6 +4,7 @@ Installer utilities for downloading and executing software installers.
 
 import os
 import logging
+import re
 import subprocess
 import tempfile
 import requests
@@ -118,6 +119,16 @@ def restore_registry_keys(hidden_keys: List[dict]) -> None:
         logging.info(f"Restored {len(hidden_keys)} registry key(s)")
 
 
+# requests puts the url, signature and all, in its exception messages.
+_QUERY_STRING = re.compile(r'\?[^\s\'"()]+')
+
+
+def redact_query_strings(text) -> str:
+    """str(text) with every URL query string cut, for logs and stored errors: a
+    signed url's query is its credential. Host and path stay, for diagnosis."""
+    return _QUERY_STRING.sub('?<redacted>', str(text))
+
+
 def download_file(
     url: str,
     dest_path: str,
@@ -137,7 +148,7 @@ def download_file(
     locked destination raises PermissionError instead, so a success is always
     ``dest_path`` itself.
     """
-    logging.debug(f"Starting download from {url}")
+    logging.debug(f"Starting download from {redact_query_strings(url)}")
 
     os.makedirs(os.path.dirname(dest_path), exist_ok=True)
 
@@ -202,16 +213,16 @@ def download_file(
             return True, dest_path
 
         except requests.exceptions.Timeout as e:
-            last_error = f"Timeout on attempt {attempt}: {e}"
+            last_error = f"Timeout on attempt {attempt}: {redact_query_strings(e)}"
             logging.warning(last_error)
         except requests.exceptions.ConnectionError as e:
-            last_error = f"Connection error on attempt {attempt}: {e}"
+            last_error = f"Connection error on attempt {attempt}: {redact_query_strings(e)}"
             logging.warning(last_error)
         except requests.exceptions.RequestException as e:
-            last_error = f"Request error on attempt {attempt}: {e}"
+            last_error = f"Request error on attempt {attempt}: {redact_query_strings(e)}"
             logging.warning(last_error)
         except Exception as e:
-            last_error = f"Unexpected error on attempt {attempt}: {e}"
+            last_error = f"Unexpected error on attempt {attempt}: {redact_query_strings(e)}"
             logging.warning(last_error)
 
         if os.path.exists(dest_path):

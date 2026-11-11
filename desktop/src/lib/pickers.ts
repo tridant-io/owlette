@@ -12,9 +12,10 @@ import { launchCopy } from '@/lib/launchCopy'
 import type { PathField } from '@/lib/missingPath'
 
 /**
- * Where to open the picker. The current value is offered as the starting point, but a
- * path that no longer exists is dropped: Windows opens on the desktop when the default
- * path is bad, which looks like a bug.
+ * Where to open the picker: the current value, trimmed, or the dialog's own choice when
+ * it is blank. Nothing here checks that it exists; Windows opens on the desktop when the
+ * default path is bad, which is why the missing-path dialog browses from
+ * `nearestExistingFolder` instead.
  */
 function startingPoint(current: string | undefined): string | undefined {
   const value = current?.trim()

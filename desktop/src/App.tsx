@@ -99,7 +99,7 @@ function fileNameOf(path: string): string {
  * The owlette configuration window: a view over three files in
  * `%PROGRAMDATA%\Owlette` owned by the python service, edited read-modify-write.
  * No cloud client here on purpose — the service is the only thing that talks to
- * owlette and uploads the config it reads from disk (`owlette_gui.py:2403-2408`).
+ * owlette and uploads the config it reads from disk.
  */
 function App() {
   const config = useOwletteConfig()
@@ -139,15 +139,13 @@ function App() {
   }, [])
 
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
-  useEffect(() => {
-    startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
-  }, [])
 
   // macOS Screen Recording and Accessibility, re-read whenever the window
   // comes back: Screen Recording takes effect on relaunch, but the banner
   // should at least stop showing once the user has switched it on and come back.
   // Accessibility takes effect at once, so its notice also re-reads it on a
-  // timer while it shows.
+  // timer while it shows. start on login too: the tray toggles the same
+  // shortcut while the window is hidden, and hiding does not unmount it.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
   const [accessibility, setAccessibility] = useState<boolean | null>(null)
   const readAccessibility = useCallback(() => {
@@ -162,6 +160,7 @@ function App() {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
       readAccessibility()
       readClipboardSharing()
+      startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
     }
     read()
     window.addEventListener('focus', read)
@@ -393,7 +392,7 @@ function App() {
       // whatever mode it is switched to, so kill/restart stay offered until it
       // is actually gone (the service prunes dead pids). Only a dead row gets
       // the intent written over it — `INACTIVE` for off, `QUEUED` while the
-      // service picks it up — as `owlette_gui.on_launch_mode_change` did.
+      // service picks it up — as the python GUI did before 3.0.0 removed it.
       const pid = livePidForProcess(appStates.states, selected.id)
       if (pid === null) return
       const status = statusForProcess(appStates.states, selected.id)
@@ -677,7 +676,15 @@ function App() {
           hostname={host}
           starting={health.starting}
           // macos: launchd keeps the agent running; this app cannot start it
-          onStart={IS_MAC ? undefined : () => void health.start()}
+          onStart={
+            IS_MAC
+              ? undefined
+              : () => {
+                  void health.start().catch((cause: unknown) =>
+                    toast.error('could not start the service', { description: message(cause) }),
+                  )
+                }
+          }
           onJoin={() => setMenuDialog('join')}
         />
 

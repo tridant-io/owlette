@@ -20,6 +20,11 @@ const VERSION_FILES = {
   viewerConf: path.join(ROOT, 'desktop', 'viewer', 'tauri.conf.json'),
 };
 
+const LOCKFILES = {
+  web: path.join(ROOT, 'web', 'package-lock.json'),
+  desktop: path.join(ROOT, 'desktop', 'package-lock.json'),
+};
+
 // Own reader/writer: TOML, and only the [package] version may change —
 // dependency `version = "..."` keys must not match. Every Rust crate carries
 // the product version: Tauri stamps the desktop app's and owlette swoop's into
@@ -49,10 +54,25 @@ function writeCargoVersion(cargoToml, version) {
   fs.writeFileSync(cargoToml, updated, 'utf8');
 }
 
+// npm rewrites a lockfile's own two version fields only on its next install, so
+// a bump leaves them stale. Edit just those two in place, keeping every other
+// byte, and leave the file alone if the result would differ anywhere else.
+function writeLockfileVersion(lockfile, version) {
+  const content = fs.readFileSync(lockfile, 'utf8');
+  const updated = content
+    .replace(/^(\{\s*"name": "[^"]*",\s*"version": ")[^"]*(")/, `$1${version}$2`)
+    .replace(/("packages": \{\s*"": \{\s*"name": "[^"]*",\s*"version": ")[^"]*(")/, `$1${version}$2`);
+  const expected = JSON.parse(content);
+  expected.version = version;
+  expected.packages[''].version = version;
+  if (JSON.stringify(JSON.parse(updated)) !== JSON.stringify(expected)) return false;
+  fs.writeFileSync(lockfile, updated, 'utf8');
+  return true;
+}
+
 const DOC_FILES = {
   readme: path.join(ROOT, 'README.md'),
   claudemd: path.join(ROOT, '.claude', 'CLAUDE.md'),
-  versionMgmt: path.join(ROOT, 'docs', 'internal', 'version-management.md'),
 };
 
 // YYYY-MM-DD, for "Last Updated" fields.
@@ -81,9 +101,7 @@ function writeVersion(file, version) {
   }
 }
 
-// `oldVersion` targets lines like "**Current:** X.Y.Z" precisely, so independent
-// versions (firestore rules) are left alone.
-function updateDocVersion(file, version, oldVersion) {
+function updateDocVersion(file, version) {
   let content = fs.readFileSync(file, 'utf8');
   let updated = false;
 
@@ -94,29 +112,6 @@ function updateDocVersion(file, version, oldVersion) {
       content = content.replace(badgePattern, `$1${version}$2`);
       updated = true;
     }
-
-    // Legacy **Version X.Y.Z** format.
-    const readmePattern = /\*\*Version \d+\.\d+\.\d+\*\*/;
-    if (readmePattern.test(content)) {
-      content = content.replace(readmePattern, `**Version ${version}**`);
-      updated = true;
-    }
-  } else if (file === DOC_FILES.versionMgmt) {
-    // Only lines matching the PREVIOUS product version, so the independent
-    // firestore-rules "**Current:**" line is left alone.
-    const escapedPrev = oldVersion.replace(/\./g, '\\.');
-    const currentPattern = new RegExp(`\\*\\*Current:\\*\\* ${escapedPrev}`, 'g');
-    if (currentPattern.test(content)) {
-      content = content.replace(currentPattern, `**Current:** ${version}`);
-      updated = true;
-    }
-
-    // Supports **Last Updated:** and **Last Updated**:.
-    const lastUpdatedPattern = /\*\*Last Updated:?\*\*:? \d{4}-\d{2}-\d{2}/;
-    if (lastUpdatedPattern.test(content)) {
-      content = content.replace(lastUpdatedPattern, `**Last Updated:** ${todayISO()}`);
-      updated = true;
-    }
   } else if (file === DOC_FILES.claudemd) {
     const headerPattern = /\*\*Version\*\*: \d+\.\d+\.\d+/;
     if (headerPattern.test(content)) {
@@ -124,32 +119,9 @@ function updateDocVersion(file, version, oldVersion) {
       updated = true;
     }
 
-    // The three-line version-files list.
-    const versionFilesPattern = /- `\/VERSION` - Product release version \(\d+\.\d+\.\d+\)\n- `agent\/VERSION` - Agent binary version \(\d+\.\d+\.\d+\)\n- `web\/package\.json` - Web app version \(\d+\.\d+\.\d+\)/;
-    if (versionFilesPattern.test(content)) {
-      const replacement = `- \`/VERSION\` - Product release version (${version})\n- \`agent/VERSION\` - Agent binary version (${version})\n- \`web/package.json\` - Web app version (${version})`;
-      content = content.replace(versionFilesPattern, replacement);
-      updated = true;
-    }
-
     const lastUpdatedPattern = /\*\*Last Updated\*\*: \d{4}-\d{2}-\d{2}/;
     if (lastUpdatedPattern.test(content)) {
       content = content.replace(lastUpdatedPattern, `**Last Updated**: ${todayISO()}`);
-      updated = true;
-    }
-
-    // **Current Version**: X.Y.Z (Month D, YYYY)
-    const currentVersionPattern = /\*\*Current Version\*\*: \d+\.\d+\.\d+/;
-    if (currentVersionPattern.test(content)) {
-      const now = new Date();
-      const monthNames = ["January", "February", "March", "April", "May", "June",
-        "July", "August", "September", "October", "November", "December"];
-      const dateStr = `${monthNames[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`;
-
-      content = content.replace(
-        /\*\*Current Version\*\*: \d+\.\d+\.\d+ \([^)]+\)/,
-        `**Current Version**: ${version} (${dateStr})`
-      );
       updated = true;
     }
   }
@@ -192,9 +164,11 @@ function syncVersions(newVersion) {
 
   writeVersion(VERSION_FILES.web, newVersion);
   console.log(`  ✅ Updated web/package.json → ${newVersion}`);
+  reportLockfile('web/package-lock.json', LOCKFILES.web, newVersion);
 
   writeVersion(VERSION_FILES.desktopPkg, newVersion);
   console.log(`  ✅ Updated desktop/package.json → ${newVersion}`);
+  reportLockfile('desktop/package-lock.json', LOCKFILES.desktop, newVersion);
 
   writeVersion(VERSION_FILES.tauriConf, newVersion);
   console.log(`  ✅ Updated desktop/src-tauri/tauri.conf.json → ${newVersion}`);
@@ -213,39 +187,40 @@ function syncVersions(newVersion) {
 
   writeCargoVersion(CARGO_TOMLS.swoop, newVersion);
   console.log(`  ✅ Updated agent/swoop/Cargo.toml → ${newVersion}`);
-  console.log('     (Cargo.lock and package-lock.json follow on the next build/install)');
+  console.log('     (each Cargo.lock follows on the next build)');
 
-  if (updateDocVersion(DOC_FILES.readme, newVersion, oldVersion)) {
+  if (updateDocVersion(DOC_FILES.readme, newVersion)) {
     console.log(`  ✅ Updated README.md → ${newVersion}`);
   }
 
-  if (updateDocVersion(DOC_FILES.claudemd, newVersion, oldVersion)) {
+  if (updateDocVersion(DOC_FILES.claudemd, newVersion)) {
     console.log(`  ✅ Updated .claude/CLAUDE.md → ${newVersion}`);
   }
 
-  if (updateDocVersion(DOC_FILES.versionMgmt, newVersion, oldVersion)) {
-    console.log(`  ✅ Updated docs/internal/version-management.md → ${newVersion}`);
-  }
-
   console.log('\n✨ All versions synced!\n');
-  console.log('⚠️  Remember to:');
-  console.log('   1. Update docs/changelog.md with release notes');
-  console.log('   2. Commit changes: git commit -am "chore: Bump version to ' + newVersion + '"');
-  console.log('   3. Create tag: git tag v' + newVersion);
-  console.log('   4. Push with tags: git push origin main --tags\n');
-  // Printed, not run: a bump has no installer to photograph yet, and this
-  // script edits version files and nothing else.
-  console.log('   After building the installer: cd web && npm run screenshots:desktop');
-  console.log('   (refreshes the agent docs screenshots from the shipping desktop app)\n');
+  console.log('Next: the release steps in docs/runbooks/agent-installer-release.md');
+  console.log('(both changelogs, a local commit, then build and upload before anything is pushed or tagged)\n');
 }
 
-const args = process.argv.slice(2);
+function reportLockfile(name, lockfile, version) {
+  if (writeLockfileVersion(lockfile, version)) {
+    console.log(`  ✅ Updated ${name} → ${version}`);
+  } else {
+    console.log(`  ⚠️  Left ${name} alone (unexpected layout); its next npm install sets the version`);
+  }
+}
 
-if (args.length === 0) {
-  showVersions();
-} else if (args.length === 1) {
-  syncVersions(args[0]);
-} else {
-  console.error('Usage: node scripts/sync-versions.js [new-version]');
-  process.exit(1);
+module.exports = { writeLockfileVersion };
+
+if (require.main === module) {
+  const args = process.argv.slice(2);
+
+  if (args.length === 0) {
+    showVersions();
+  } else if (args.length === 1) {
+    syncVersions(args[0]);
+  } else {
+    console.error('Usage: node scripts/sync-versions.js [new-version]');
+    process.exit(1);
+  }
 }

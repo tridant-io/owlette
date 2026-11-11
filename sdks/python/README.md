@@ -7,11 +7,17 @@ Requires Python ≥ 3.10.
 
 ## install
 
+`owlette-sdk` is not on PyPI yet. Until the pre-release is published, install it from a checkout of this repository:
+
+```bash
+pip install -e <path-to-checkout>/sdks/python
+```
+
+Once it is published:
+
 ```bash
 pip install --pre owlette-sdk
 ```
-
-`owlette-sdk` pre-release install is the public launch target. Until the Wave 5.3 distribution gate is complete and the PyPI pre-release is visible, install from the monorepo source checkout.
 
 ## quickstart
 

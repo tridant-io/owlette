@@ -90,7 +90,7 @@ Owlette-Installer-v<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVE
    - If pairing does not complete, the installer says so and prints both recovery routes. The service is already running, so pairing later is all that is left
 
 6. **Shortcuts Creation**
-   - Start Menu shortcuts for GUI and tray icon
+   - Start Menu shortcuts: Owlette, owlette swoop, View Logs, Edit Configuration and Uninstall
    - Startup folder shortcut for tray icon (auto-starts on login)
 
 ## Post-Installation
@@ -119,7 +119,7 @@ Owlette-Installer-v<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVE
 
 **Token lifecycle:**
 - Access token: Valid for 1 hour (auto-refreshes)
-- Refresh token: Valid for 30 days (stored encrypted)
+- Refresh token: never expires; an admin can revoke it (stored encrypted)
 - Automatic refresh: Agent handles this transparently
 
 **Token revocation:**
@@ -137,8 +137,8 @@ sc query OwletteService
 View logs:
 ```bash
 # Service logs
-type C:\ProgramData\Owlette\agent\logs\service_stdout.log
-type C:\ProgramData\Owlette\agent\logs\service_stderr.log
+type C:\ProgramData\Owlette\logs\service_stdout.log
+type C:\ProgramData\Owlette\logs\service_stderr.log
 ```
 
 ## Uninstallation
@@ -158,7 +158,7 @@ The uninstaller will:
 
 ## Troubleshooting
 
-### Port 8765 Already in Use
+### Pairing Cannot Reach the Server
 
 If pairing cannot reach the server:
 1. Check outbound HTTPS access to `owlette.app` or `dev.owlette.app`
@@ -181,12 +181,11 @@ Machines with no WebView2 runtime get the console pairing flow instead of the wi
 
 ### Service Won't Start
 
-Check logs at `C:\ProgramData\Owlette\agent\logs\` for error messages.
+Check logs at `C:\ProgramData\Owlette\logs\` for error messages.
 
 Common issues:
 - Missing or expired pairing tokens
 - Python dependencies missing (re-run installer)
-- Port conflicts (check firewall settings)
 
 ## Advanced Options
 

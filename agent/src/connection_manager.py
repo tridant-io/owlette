@@ -19,6 +19,7 @@ from enum import Enum, auto
 from typing import Callable, Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
+import health_probe
 import shared_utils
 import watchdog_state
 
@@ -662,9 +663,19 @@ class ConnectionManager:
         jitter_factor = self.BACKOFF_JITTER + random.random() * self.BACKOFF_JITTER
         return base_wait * jitter_factor
 
+    def _connectivity_targets(self):
+        """CONNECTIVITY_HOSTS, then the API host on 443. Lazy, so config is read
+        only when no resolver answers."""
+        yield from self.CONNECTIVITY_HOSTS
+        # a network that lets only https out never answers on 53, yet the agent
+        # works there: what it needs is the API host, the target health_probe uses.
+        api_host = health_probe.extract_host(shared_utils.get_configured_api_base())
+        if api_host:
+            yield api_host, health_probe.NETWORK_PROBE_PORT
+
     def _check_internet(self) -> bool:
-        """Quick TCP connectivity probe against CONNECTIVITY_HOSTS; True if any answers."""
-        for host, port in self.CONNECTIVITY_HOSTS:
+        """Quick TCP connectivity probe against _connectivity_targets; True if any answers."""
+        for host, port in self._connectivity_targets():
             try:
                 with socket.create_connection(
                     (host, port),

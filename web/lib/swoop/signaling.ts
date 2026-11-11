@@ -48,9 +48,6 @@ export const CLOSE_AUTH = 4401;
 /** the worker's close code for a flood limit. */
 export const CLOSE_FLOOD = 4008;
 
-/** the auth-signal vocabulary, and it is exactly three words. */
-const AUTH_SIGNALS: ReadonlySet<string> = new Set(['auth', 'token_expired', 'unknown_kid']);
-
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 15000;
 
@@ -380,12 +377,6 @@ export class SwoopSignaling {
       }
       this.hello = message;
       this.authRetried = false;
-    }
-
-    if (message.type === 'error' && AUTH_SIGNALS.has(message.code)) {
-      // close 4401 follows this frame; the redial happens there, once.
-      this.options.onMessage(message);
-      return;
     }
 
     this.options.onMessage(message);

@@ -57,6 +57,9 @@ describe('Button', () => {
     expect(classes[3]).toContain('size-10')
     // link opts into the glyph-accurate text highlight instead.
     expect(classes[4]).toContain('hl-link')
+    // .btn-sweep comes later in globals.css and would win background-image,
+    // leaving the link's transparent text painted by nothing (web 528823dd).
+    expect(classes[4]).not.toContain('btn-sweep')
   })
 })
 

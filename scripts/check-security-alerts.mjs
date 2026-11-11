@@ -282,7 +282,7 @@ const ECOSYSTEM_MANIFESTS = {
   rust: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'desktop/viewer/Cargo.lock', 'agent/swoop/Cargo.lock'],
   cargo: ['agent/host/Cargo.lock', 'desktop/src-tauri/Cargo.lock', 'desktop/viewer/Cargo.lock', 'agent/swoop/Cargo.lock'],
   pip: ['agent/requirements.txt', 'agent/requirements-dev.txt', 'sdks/python/pyproject.toml',
-    'test/integration/requirements.txt', 'test/infra/agent-runner/requirements.txt'],
+    'test/infra/agent-runner/requirements.txt'],
 };
 
 /**

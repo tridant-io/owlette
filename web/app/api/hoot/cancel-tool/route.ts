@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { ApiAuthError, resolveAuth, requireScope } from '@/lib/apiAuth.server';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
 import { apiError } from '@/lib/apiErrorResponse';
 import { verifyUserSiteAccess } from '@/lib/hoot-utils.server';
 import {
@@ -58,7 +59,8 @@ function isNonEmptyString(value: unknown): value is string {
 /**
  * Poll `commands/completed` for the CANCEL command's own ack: immediately, then every second
  * to the deadline. `status: 'running'` is the agent's in-flight marker — non-terminal, keep
- * polling. Consumed acks are deleted best-effort so the doc doesn't grow unbounded.
+ * polling ({@link isTerminalCommandStatus}). Consumed acks are deleted best-effort so the doc
+ * doesn't grow unbounded.
  */
 async function pollForCancelAck(
   db: FirebaseFirestore.Firestore,
@@ -80,7 +82,7 @@ async function pollForCancelAck(
     const entry = snap.exists
       ? ((snap.data() ?? {})[cancelCommandId] as Record<string, unknown> | undefined)
       : undefined;
-    if (entry && entry.status !== 'running') {
+    if (entry && isTerminalCommandStatus(entry.status)) {
       await completedRef
         .update({ [cancelCommandId]: FieldValue.delete() })
         .catch(() => undefined);

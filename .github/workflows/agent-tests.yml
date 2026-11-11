@@ -15,16 +15,27 @@ name: agent tests
 #     (versitygw, test/infra/docker-compose.yml). That is the only place the
 #     manifest-fetch -> chunk-download -> assemble pipeline is exercised
 #     against real S3-compatible storage.
+#
+# agent/host and agent/swoop are rust, tested by rust-build.yml. pytest reads
+# only the swoop protocol vectors from there, plus one web routing table.
 on:
   pull_request:
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
   push:
     branches: [main, dev]
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
 
@@ -106,9 +117,7 @@ jobs:
       # 3.11 mirrors production: build_installer_full.bat embeds
       # python-3.11.8-embed-amd64 and build-installer.yml pins the same
       # toolchain version. It is also the floor — agent/requirements.txt no
-      # longer resolves on 3.10 (Pillow 13.0.0 requires >=3.11), so the
-      # "Python 3.9+" line in the docs and pytest.ini's `minversion = 3.9`
-      # are both stale.
+      # longer resolves on 3.10 (Pillow 13.0.0 requires >=3.11).
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'

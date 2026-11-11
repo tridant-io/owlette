@@ -4,12 +4,21 @@ command-line client for the [owlette.app](https://owlette.app) public api. authe
 
 ## install
 
+`@owlette/cli` is not on npm yet. Until the `rc` tag is published, install from a checkout of this repository:
+
 ```bash
-npm install -g @owlette/cli@rc
+cd cli
+npm install
+npm run build
+npm link
 owlette --version
 ```
 
-`@owlette/cli@rc` is the public launch target. Until the Wave 5.3 distribution gate is complete and the npm `rc` tag is visible, install from the monorepo source checkout.
+Once it is published:
+
+```bash
+npm install -g @owlette/cli@rc
+```
 
 ## 30-second auth + push
 
@@ -29,7 +38,7 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 - `chat` - create, list, send, rename, and delete hoot chat sessions.
 - `deploy` - manage classic installer deploys; use `roost deploy` for content-addressed project deploys.
 - `process` - manage process lifecycle on site machines.
-- `key` - create, list, rotate, and revoke api keys.
+- `key` - list your api keys and mint new ones with the calling key's scopes; rotate and revoke them in the dashboard.
 - `site` - list accessible sites and inspect site details.
 - `user` - manage platform users when your key has superadmin scope.
 - `installer` - list, inspect latest, upload, set latest, and delete installer binaries.
@@ -49,7 +58,7 @@ plan without them every command made with a key fails that way, and
 `owlette auth login` cannot complete — the browser shows why, and the cli
 reports the phrase as expired. See [plans](https://owlette.app/docs/plans).
 
-full docs at [docs/cli/overview.md](https://github.com/tridant-io/owlette/tree/main/docs/cli/overview.md) (or owlette.app/docs/cli once published).
+full docs at [owlette.app/docs/cli/overview](https://owlette.app/docs/cli/overview).
 
 ## license
 

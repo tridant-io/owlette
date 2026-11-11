@@ -1,5 +1,8 @@
 name: playwright e2e
 
+# past web/ and functions/: the files outside web/ that its jest suite reads
+# (the swoop vectors and keymap, the cron registry, the env manifest). a change
+# to scripts/ alone runs the script tests in claude-hooks.yml, not this.
 on:
   pull_request:
     paths:
@@ -9,6 +12,10 @@ on:
       - 'firestore.indexes.json'
       - 'storage.rules'
       - 'firebase.json'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'agent/swoop/testdata/keymap.json'
+      - 'infra/cron-jobs.json'
+      - 'scripts/env-manifest.json'
       - '.github/workflows/e2e.yml'
   push:
     branches: [main, dev]
@@ -19,6 +26,10 @@ on:
       - 'firestore.indexes.json'
       - 'storage.rules'
       - 'firebase.json'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'agent/swoop/testdata/keymap.json'
+      - 'infra/cron-jobs.json'
+      - 'scripts/env-manifest.json'
       - '.github/workflows/e2e.yml'
 
 concurrency:

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { collection, limit, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, limit, onSnapshot, orderBy, query, where } from 'firebase/firestore';
 import { toast } from '@/lib/toast';
 import { db } from '@/lib/firebase';
 import { launchCopy, type LaunchCopy } from '@/lib/launchCopy';
@@ -72,10 +72,15 @@ export function useAgentAlertToasts(
     const ids: string[] | null = scopeKey === null ? null : JSON.parse(scopeKey);
     if (ids?.length === 0) return;
 
+    // ordered, or firestore sorts by document id: log ids are random, so the
+    // limit would keep an arbitrary 20 and a new alert would rarely be one of
+    // them. backed by the (action, timestamp desc) composite index, and by
+    // (action, machineId, timestamp desc) for a scoped query.
     const q = query(
       collection(db, 'sites', siteId, 'logs'),
       where('action', '==', 'exe_missing'),
       ...(ids ? [where('machineId', 'in', ids.slice(0, MAX_MACHINE_SCOPE))] : []),
+      orderBy('timestamp', 'desc'),
       limit(20),
     );
     let initialSnapshot = true;

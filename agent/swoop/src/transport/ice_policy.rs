@@ -317,10 +317,9 @@ pub enum IceEvent {
     Connected { relayed: bool },
     /// The selected pair changed under a live session.
     PairChanged { relayed: bool },
-    /// Checks are failing but the pair has not been given up on yet.
+    /// Checks are failing but the pair has not been given up on yet. str0m's
+    /// agent has no `failed` state: this is the last word it gives.
     Disconnected,
-    /// ICE gave up.
-    Failed,
     /// A network interface came up, went down or changed address.
     InterfaceChanged,
 }
@@ -333,8 +332,6 @@ pub enum RestartReason {
     RelayPromotion,
     /// `disconnected` outlasted [`DISCONNECTED_GRACE`].
     LinkDown,
-    /// ICE reported `failed`.
-    Failed,
     /// The machine's interfaces changed under a live session.
     InterfaceChanged,
 }
@@ -438,10 +435,6 @@ impl IcePolicy {
                 }
                 self.down_since.get_or_insert(now);
                 None
-            }
-            IceEvent::Failed => {
-                // No grace: `failed` is ICE saying the checks are over.
-                self.restart(now, RestartReason::Failed)
             }
             IceEvent::InterfaceChanged => self.restart(now, RestartReason::InterfaceChanged),
         }
@@ -1095,17 +1088,6 @@ mod tests {
     }
 
     #[test]
-    fn failed_restarts_at_once() {
-        let base = Instant::now();
-        let mut policy = IcePolicy::new();
-
-        assert_eq!(
-            policy.observe(base, IceEvent::Failed),
-            Some(IceAction::RestartIce(RestartReason::Failed))
-        );
-    }
-
-    #[test]
     fn an_interface_burst_is_one_restart() {
         let base = Instant::now();
         let mut policy = IcePolicy::new();
@@ -1136,8 +1118,8 @@ mod tests {
         let base = Instant::now();
         let mut policy = IcePolicy::new();
         policy.observe(base, IceEvent::Connected { relayed: true });
-        // A failure inside the promotion window takes the restart.
-        policy.observe(at(base, 500), IceEvent::Failed);
+        // An interface change inside the promotion window takes the restart.
+        policy.observe(at(base, 500), IceEvent::InterfaceChanged);
 
         // The promotion falls due inside the cooldown, so it is refused — and
         // it is spent rather than held, or one attempt becomes two.

@@ -27,7 +27,7 @@ interface RestartCountdownProps {
 }
 
 /**
- * The reboot prompt, ported from `agent/src/prompt_restart.py`.
+ * The reboot prompt, ported from the python one 3.0.0 removed (`prompt_restart.py`).
  *
  * The service relaunches the app with `--restart-prompt` after a process burns through
  * its relaunch budget: two minutes, a pause the operator can hold, restart-now, cancel.
