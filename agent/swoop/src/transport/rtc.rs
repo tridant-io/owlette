@@ -1955,7 +1955,15 @@ mod tests {
         assert_eq!(peer.stats().datagrams_dropped, 0);
 
         drop(peer);
-        server.pump();
+        // the release crosses the loopback after the drop, so one pump can run
+        // before it lands: give it the same 40 turns of 5 ms the allocation gets
+        for _ in 0..40 {
+            server.pump();
+            if server.released {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(server.released, "the peer did not give its allocation back");
     }
 
