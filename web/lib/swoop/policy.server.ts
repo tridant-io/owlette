@@ -3,7 +3,8 @@
  *
  * Three layers, and they are deliberately separate:
  *   - the capability matrix (`lib/capabilities.ts`), with a person's swoop
- *     mode, says who may watch or control at all;
+ *     mode and machine scope, says who may watch or control at all, and on
+ *     which machines;
  *   - the site's `sites/{siteId}/settings/swoop` document says whether the
  *     feature is on here, which machines are excluded, and whether plain
  *     members may watch — `membersMayWatch` is enforced HERE and never in the
@@ -226,9 +227,11 @@ export function evaluateSwoopAccess(input: SwoopAccessInput): SwoopDecision {
     return deny(403, 'machine_excluded', 'swoop is excluded on this machine.');
   }
 
+  // the machine rides along so a machine outside the person's scope refuses here,
+  // before step_up_required, so no window is ever written for it
   const capability =
     input.intent === 'control' ? Capability.MACHINE_REMOTE_CONTROL : Capability.MACHINE_REMOTE_VIEW;
-  if (!hasCapability(input.actor, capability, input.siteId)) {
+  if (!hasCapability(input.actor, capability, input.siteId, input.machineId)) {
     return deny(403, 'capability_missing', 'you do not have permission to do this.');
   }
 

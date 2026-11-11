@@ -55,8 +55,9 @@ export default function RoostsPageClient() {
     currentSite,
     siteTimezone,
     hasNoSites,
+    limitedOnly,
     selectSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const roostGated = usePlanGated('roost', siteOwner);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
@@ -365,7 +366,7 @@ export default function RoostsPageClient() {
                 site-less accounts spinning forever with no next step. */}
             {hasNoSites ? (
               <div className="p-8">
-                <NoSitesEmptyState action="manage roosts" />
+                <NoSitesEmptyState action="manage roosts" limited={limitedOnly} />
               </div>
             ) : sitesLoading || !currentSiteId || roostsLoading ? (
               <div className="p-8 text-center">

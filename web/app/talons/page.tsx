@@ -16,6 +16,7 @@ import ConfirmDialog from '@/components/ConfirmDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
+import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { PageHeader } from '@/components/PageHeader';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
@@ -45,8 +46,9 @@ export default function TalonsPage() {
     sitesLoading,
     currentSiteId,
     currentSite,
+    limitedOnly,
     selectSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const talonsGated = usePlanGated('talons', siteOwner);
 
@@ -200,12 +202,7 @@ export default function TalonsPage() {
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : !currentSiteId ? (
-          <Card className="border-border bg-card/50 p-8 text-center">
-            <p className="text-sm text-foreground">no sites available</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              you need site access to manage talons. ask a site admin to add you.
-            </p>
-          </Card>
+          <NoSitesEmptyState action="manage talons" limited={limitedOnly} />
         ) : talons.length === 0 ? (
           // Compact on purpose: it sits where the list would and must not push the page down.
           <Card className="border-border bg-card/50 p-6 text-center">

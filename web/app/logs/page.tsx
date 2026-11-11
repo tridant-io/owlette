@@ -17,7 +17,7 @@ import { Button } from '@/components/ui/button';
 import { ChevronDown, ChevronsUpDown, ChevronsDownUp, Filter, X, Trash2, ScrollText, AlertTriangle, AlertCircle, Camera, Search } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { TruncatedText } from '@/components/ui/truncated-text';
-import { actionDeleteScope, planActionFilter } from '@/lib/logFilters';
+import { FIRESTORE_IN_LIMIT, actionDeleteScope, planActionFilter } from '@/lib/logFilters';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -273,6 +273,14 @@ const formatAction = (action: string) => {
 // visible 50). Bounded so a busy site can't trigger an unbounded read.
 const SEARCH_POOL_CAP = 2000;
 
+// the action `in`'s share of firestore's 30 disjunctions. the query and the
+// in-memory narrowing both read it, so they agree on what the server filtered.
+function actionInLimit(scope: readonly string[] | null, machine: string): number {
+  return scope && machine === 'all'
+    ? Math.max(1, Math.floor(FIRESTORE_IN_LIMIT / scope.length))
+    : FIRESTORE_IN_LIMIT;
+}
+
 // Firestore query for a site's logs honouring the active filters. Always ordered by
 // timestamp desc so the page shows the most recent matches, not an arbitrary
 // __name__-ordered slice. Every filter combination is backed by a composite index in
@@ -281,6 +289,10 @@ const SEARCH_POOL_CAP = 2000;
 //
 // Past 30 selected actions the query drops the action clause entirely and the
 // caller narrows in memory; see `planActionFilter`.
+//
+// a scoped member may read log docs only by machine (rules 2.12.0), so with no
+// machine picked the query carries `machineId in scope`. null when the scope
+// holds no machine the query could ask for, as the rules would refuse it.
 function buildLogsQuery(
   logsRef: Query,
   filters: {
@@ -291,15 +303,20 @@ function buildLogsQuery(
     dateFrom: string;
     dateTo: string;
   },
-  max: number
-): Query {
+  max: number,
+  scope: readonly string[] | null
+): Query | null {
+  if (scope && (scope.length === 0 || (filters.machine !== 'all' && !scope.includes(filters.machine)))) {
+    return null;
+  }
   const dateRange = getDateRange(filters.datePreset, filters.dateFrom, filters.dateTo);
 
   let q: Query = query(logsRef, orderBy('timestamp', 'desc'), limit(max));
 
-  const actionPlan = planActionFilter(filters.actions, ACTION_TYPE_COUNT);
+  const actionPlan = planActionFilter(filters.actions, ACTION_TYPE_COUNT, actionInLimit(scope, filters.machine));
   if (actionPlan.inValues) q = query(q, where('action', 'in', actionPlan.inValues));
   if (filters.machine !== 'all') q = query(q, where('machineId', '==', filters.machine));
+  else if (scope) q = query(q, where('machineId', 'in', scope));
   if (filters.level !== 'all') q = query(q, where('level', '==', filters.level));
   if (dateRange.from) q = query(q, where('timestamp', '>=', Timestamp.fromDate(dateRange.from)));
   if (dateRange.to) q = query(q, where('timestamp', '<=', Timestamp.fromDate(dateRange.to)));
@@ -455,7 +472,7 @@ const LogRow = React.memo(function LogRow({
 
 export default function LogsPage() {
   const router = useRouter();
-  const { user, loading, userPreferences, isSiteAdmin } = useAuth();
+  const { user, loading, userPreferences, isSiteAdmin, machineScope } = useAuth();
   const {
     sites,
     sitesLoading,
@@ -472,6 +489,7 @@ export default function LogsPage() {
   // member never sees a control that would 403. Hidden, not disabled, matching the
   // dashboard's write-action gating.
   const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId);
+  const scope = currentSiteId ? machineScope(currentSiteId) : null;
   // crash screenshots are part of control; only on a site the viewer owns, see useSitePlan.
   const { controlLocked } = useSitePlan(currentSiteId, currentSite?.owner);
 
@@ -580,8 +598,8 @@ export default function LogsPage() {
   // the search pool (the full filtered set, loaded on demand; on-screen logs until it
   // arrives) over formatted label, raw action, machine, process, level and details.
   const actionPlan = useMemo(
-    () => planActionFilter(filterActions, ACTION_TYPE_COUNT),
-    [filterActions],
+    () => planActionFilter(filterActions, ACTION_TYPE_COUNT, actionInLimit(scope, filterMachine)),
+    [filterActions, scope, filterMachine],
   );
 
   // Selections too wide for Firestore's `in` are narrowed here instead, so what
@@ -651,8 +669,15 @@ export default function LogsPage() {
     const q = buildLogsQuery(
       logsRef,
       { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-      LOGS_PER_PAGE + 1
+      LOGS_PER_PAGE + 1,
+      scope
     );
+    if (!q) {
+      setLogs([]);
+      setHasMore(false);
+      setLogsLoading(false);
+      return;
+    }
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as LogEvent));
@@ -675,7 +700,7 @@ export default function LogsPage() {
     });
 
     return () => unsubscribe();
-  }, [currentSiteId, sitesLoading, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, sitesLoading, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // While searching, load the full set matching the current server-side filters (capped)
   // so search spans the whole scope. Re-runs on filter change, not per keystroke.
@@ -696,8 +721,14 @@ export default function LogsPage() {
         const q = buildLogsQuery(
           logsRef,
           { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-          SEARCH_POOL_CAP + 1
+          SEARCH_POOL_CAP + 1,
+          scope
         );
+        if (!q) {
+          setSearchPool([]);
+          setSearchPoolTruncated(false);
+          return;
+        }
         const snapshot = await getDocs(q);
         if (cancelled) return;
 
@@ -716,7 +747,7 @@ export default function LogsPage() {
 
     return () => { cancelled = true; };
     // `isSearching` (not `searchTerm`) so we don't refetch on every keystroke.
-  }, [isSearching, currentSiteId, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [isSearching, currentSiteId, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // Infinite scroll — load more logs
   const loadMore = useCallback(async () => {
@@ -731,8 +762,10 @@ export default function LogsPage() {
       const baseQuery = buildLogsQuery(
         logsRef,
         { actions: filterActions, machine: filterMachine, level: filterLevel, datePreset: filterDatePreset, dateFrom: filterDateFrom, dateTo: filterDateTo },
-        LOGS_PER_PAGE + 1
+        LOGS_PER_PAGE + 1,
+        scope
       );
+      if (!baseQuery) return;
       const q = query(baseQuery, startAfter(lastDoc));
 
       const snapshot = await getDocs(q);
@@ -755,7 +788,7 @@ export default function LogsPage() {
     } finally {
       setIsFetchingMore(false);
     }
-  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
+  }, [currentSiteId, lastDoc, hasMore, isFetchingMore, scope, filterActions, filterMachine, filterLevel, filterDatePreset, filterDateFrom, filterDateTo]);
 
   // IntersectionObserver for infinite scroll sentinel
   useEffect(() => {

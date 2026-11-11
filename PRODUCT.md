@@ -32,7 +32,7 @@ success means the installation stays up, and when it doesn't, the operator finds
 - **web dashboard** (owlette.app; dev.owlette.app is the dev environment): real-time fleet view, machine detail, process management, deployments, roost, hoot, logs, alerts, admin. used on desktop browsers and on phones.
 - **desktop tray app** (`desktop/`, Tauri) on each managed machine: the local UI for config, processes and site membership. it uses the same design system as the web dashboard.
 - **pairing**: an installer shows a 3-word pairing phrase, which is authorized from the dashboard, from a phone, or passed silently (`/ADD=<phrase> /SILENT`) for bulk installs.
-- **organization**: sites (by location, department or project) hold machines. roles are member, admin and superadmin, with site-level permissions.
+- **organization**: sites (by location, department or project) hold machines. roles are member, admin and superadmin, with site-level permissions, and a role on a site can be limited to some of its machines.
 - **public and developer surfaces**: landing page, docs at `/docs`, OpenAPI reference at `/docs/api`, machine-facing `/llms.txt` and `/for-ai`, the REST API with scoped keys, the `@owlette/cli` CLI and the TypeScript SDK.
 - **out-of-app touchpoints**: alert emails (branded templates via Resend) and webhooks.
 

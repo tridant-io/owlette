@@ -198,6 +198,10 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
         });
 
         if (!streamResult.ok) {
+          // the conversation's machine has left the caller's scope: answer as any route does (ADR 0016)
+          if (streamResult.status === 404) {
+            return problemNotFound('machine not found or no access');
+          }
           return problem({
             type: ProblemType.ServiceUnavailable,
             title: 'hoot stream unavailable',

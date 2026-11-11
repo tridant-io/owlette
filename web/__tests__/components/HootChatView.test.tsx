@@ -83,8 +83,14 @@ const mockRouter = { push: jest.fn(), replace: jest.fn() };
 const mockUpdateLastMachine = jest.fn();
 const mockUpdateLastSite = jest.fn();
 let mockLastMachineIds: Record<string, string | string[]> = {};
+/** Each scoped site's machine scope; a site not listed is whole site. */
+let mockScopes: Record<string, string[]> = {};
 let mockChatOptions:
-  | { selection?: HootTarget; onChatLoaded?: (loaded: ChatLoadedTarget) => void }
+  | {
+      selection?: HootTarget;
+      includeAutonomous?: boolean;
+      onChatLoaded?: (loaded: ChatLoadedTarget) => void;
+    }
   | null = null;
 
 const mockChat = {
@@ -134,6 +140,7 @@ jest.mock('@/contexts/AuthContext', () => ({
     userSites: ['site-a', 'site-b'],
     isSuperadmin: true,
     isSiteAdmin: () => false,
+    machineScope: (siteId: string) => mockScopes[siteId] ?? null,
     loading: false,
     lastSiteId: 'site-a',
     lastMachineIds: mockLastMachineIds,
@@ -150,11 +157,15 @@ jest.mock('@/hooks/usePlan', () => ({
 jest.mock('@/hooks/useFirestore', () => ({
   useSites: () => ({ sites: mockSites, loading: false }),
   // Site-aware, because "the header followed the chat's site" is only visible
-  // through the machines that site has.
-  useMachines: (siteId: string) => ({
-    machines: mockMachinesBySite[siteId] ?? mockMachines,
-    loading: false,
-  }),
+  // through the machines that site has. a scope narrows the listing as the real
+  // hook's `documentId() in` query does.
+  useMachines: (siteId: string, machineIds?: readonly string[] | null) => {
+    const machines = mockMachinesBySite[siteId] ?? mockMachines;
+    return {
+      machines: machineIds == null ? machines : machines.filter((m) => machineIds.includes(m.machineId)),
+      loading: false,
+    };
+  },
 }));
 
 jest.mock('@/hooks/useHoot', () => ({
@@ -305,6 +316,7 @@ beforeEach(() => {
   mockMachinesBySite = {};
   mockConversations = [];
   mockLastMachineIds = {};
+  mockScopes = {};
   mockChat.chatId = CHAT_ID;
   mockChatOptions = null;
   mockCollapsedGroups = new Set<string>();
@@ -518,6 +530,28 @@ describe('HootChatView target selection', () => {
     // Still the same conversation, now aimed at nothing.
     expect(mockChat.startNewChat).not.toHaveBeenCalled();
     expect(mockChat.retargetActiveChat).toHaveBeenCalledWith({ machineIds: [] });
+  });
+});
+
+describe('HootChatView machine scope', () => {
+  it('lists only in-scope machines and leaves autonomous chats out on a scoped site', async () => {
+    mockScopes = { 'site-a': ['kiosk-01', 'kiosk-03'] };
+    await openPicker();
+
+    expect(row('kiosk-01')).toBeInTheDocument();
+    expect(row('kiosk-03 offline')).toBeInTheDocument();
+    expect(screen.queryByRole('menuitemcheckbox', { name: 'kiosk-02' })).toBeNull();
+    expect(mockChatOptions?.includeAutonomous).toBe(false);
+  });
+
+  it("lists every machine and the autonomous chats when only another site is scoped", async () => {
+    mockScopes = { 'site-b': ['edge-01'] };
+    await openPicker();
+
+    expect(row('kiosk-01')).toBeInTheDocument();
+    expect(row('kiosk-02')).toBeInTheDocument();
+    expect(row('kiosk-03 offline')).toBeInTheDocument();
+    expect(mockChatOptions?.includeAutonomous).toBe(true);
   });
 });
 

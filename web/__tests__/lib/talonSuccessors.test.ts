@@ -84,10 +84,10 @@ describe('siteTalonSuccessors', () => {
   // shaped like the rows GET /api/sites/{siteId}/members returns: `role` is the
   // site role from the member row, `globalRole` the account's own
   const MEMBERS = [
-    { uid: 'zoe-owner', email: 'zoe@example.com', displayName: null, role: 'owner', globalRole: 'member' },
-    { uid: 'bea-admin', email: 'Bea@example.com', displayName: null, role: 'admin', globalRole: 'member' },
-    { uid: 'amy-admin', email: 'amy@example.com', displayName: null, role: 'admin', globalRole: 'admin' },
-    { uid: 'mem', email: 'mem@example.com', displayName: null, role: 'member', globalRole: 'admin' },
+    { uid: 'zoe-owner', email: 'zoe@example.com', displayName: null, role: 'owner', globalRole: 'member', machineIds: null },
+    { uid: 'bea-admin', email: 'Bea@example.com', displayName: null, role: 'admin', globalRole: 'member', machineIds: null },
+    { uid: 'amy-admin', email: 'amy@example.com', displayName: null, role: 'admin', globalRole: 'admin', machineIds: null },
+    { uid: 'mem', email: 'mem@example.com', displayName: null, role: 'member', globalRole: 'admin', machineIds: null },
   ];
 
   it("offers the site's owners and admins, in label order, ignoring case", () => {
@@ -112,12 +112,32 @@ describe('siteTalonSuccessors', () => {
   it('falls back to display name, then uid, when there is no email', () => {
     expect(
       siteTalonSuccessors([
-        { uid: 'u1', email: null, displayName: 'Ada', role: 'admin' },
-        { uid: 'u2', email: null, displayName: null, role: 'owner' },
+        { uid: 'u1', email: null, displayName: 'Ada', role: 'admin', machineIds: null },
+        { uid: 'u2', email: null, displayName: null, role: 'owner', machineIds: null },
       ]),
     ).toEqual([
       { uid: 'u1', label: 'Ada' },
       { uid: 'u2', label: 'u2' },
     ]);
+  });
+
+  it('drops a scoped admin, even one scoped to no machines, and keeps whole-site owners and admins', () => {
+    // the server refuses a scoped successor `insufficient_role`: TALON_MANAGE is site-wide
+    const uids = siteTalonSuccessors([
+      ...MEMBERS,
+      { uid: 'scoped-admin', email: 'scoped@example.com', displayName: null, role: 'admin', machineIds: ['m1'] },
+      { uid: 'empty-admin', email: 'empty@example.com', displayName: null, role: 'admin', machineIds: [] },
+      { uid: 'whole-admin', email: 'whole@example.com', displayName: null, role: 'admin', machineIds: null },
+    ]).map((c) => c.uid);
+    expect(uids).toEqual(['amy-admin', 'bea-admin', 'whole-admin', 'zoe-owner']);
+  });
+
+  it('drops a row whose machine scope is missing, rather than reading it as the whole site', () => {
+    const row = { uid: 'unknown-admin', email: 'unknown@example.com', displayName: null, role: 'admin' };
+    const uids = siteTalonSuccessors([
+      ...MEMBERS,
+      row as typeof row & { machineIds: null },
+    ]).map((c) => c.uid);
+    expect(uids).toEqual(['amy-admin', 'bea-admin', 'zoe-owner']);
   });
 });

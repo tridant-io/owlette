@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { IconButton } from '@/components/ui/icon-button';
 import { CopySiteIdButton } from './CopySiteIdButton';
 import { highlightMatch } from './highlightMatch';
+import { accessLabel } from './MachineAccessField';
 
 function SkeletonRows() {
   return (
@@ -92,7 +93,7 @@ function SiteRow({
 /** admin panel → sites: the caller's sites (every site, for a superadmin), with a gear on each one they administer. */
 export function SiteList() {
   const router = useRouter();
-  const { user, isSuperadmin, isSiteAdmin, isSiteOwner } = useAuth();
+  const { user, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope, siteRole } = useAuth();
   const { sites, sitesLoading, sitesError, currentSiteId } = useCurrentSite();
   const [filter, setFilter] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
@@ -133,7 +134,12 @@ export function SiteList() {
   }, [sites, query, isSuperadmin, ownerEmailByUid, currentSiteId]);
 
   const accessFor = (site: Site): ReactNode => {
-    if (!isSuperadmin) return isSiteOwner(site.id) ? 'owner' : isSiteAdmin(site.id) ? 'admin' : 'member';
+    if (!isSuperadmin) {
+      // isSiteAdmin means the whole site, so a scoped admin would read "member": the row's own role says admin
+      const scope = machineScope(site.id);
+      if (scope !== null) return `${siteRole(site.id) ?? 'member'} · ${accessLabel(scope)}`;
+      return isSiteOwner(site.id) ? 'owner' : isSiteAdmin(site.id) ? 'admin' : 'member';
+    }
     if (!site.owner) {
       return (
         <span className="text-muted-foreground/80" title="no owner recorded">

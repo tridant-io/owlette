@@ -10,7 +10,8 @@
  *
  * Three mutually exclusive paths:
  *   - site mode (`SITE_TARGET_ID`): server-side llm + fan-out tools, over the
- *     machines that are online AND have the hoot kill switch on (D-A)
+ *     machines that are online AND have the hoot kill switch on (D-A), within
+ *     the caller's machine scope
  *   - single machine, local hoot + site-admin caller: the agent runs the llm and
  *     streams via firestore onSnapshot
  *   - single machine, fallback: server-side llm + tool relay
@@ -23,6 +24,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import { getSiteTimezone } from '@/lib/talons/store.server';
+import { scopeCovers } from '@/lib/machineAccess';
 import {
   resolveLlmConfig,
   verifyUserSiteAccess,
@@ -86,9 +88,11 @@ export async function runHootStream(
   const isSiteMode = machineId === SITE_TARGET_ID;
   const access = await verifyUserSiteAccess(db, userId, siteId);
   const maxToolTier = req.maxToolTier ?? resolveHootMaxTier(access);
+  const machineScope = access.standing.machineIds;
 
   if (isSiteMode) {
-    const machines = await listSiteMachines(db, siteId);
+    // a scoped caller's site is the machines in their scope
+    const machines = await listSiteMachines(db, siteId, machineScope);
     const online = machines.filter((machine) => machine.online);
     if (online.length === 0) {
       return {
@@ -124,6 +128,7 @@ export async function runHootStream(
         maxToolTier,
         dispatchMachines,
         access.role,
+        machineScope,
         req.onAssistantText,
       ),
     };
@@ -131,6 +136,12 @@ export async function runHootStream(
 
   if (!machineId) {
     return { ok: false, status: 400, error: 'machineId is required for single-machine mode' };
+  }
+
+  // before any machine read, so a scoped caller never learns whether a machine
+  // outside their scope exists or is online
+  if (!scopeCovers(machineScope, machineId)) {
+    return { ok: false, status: 404, error: 'machine not found or no access' };
   }
 
   const online = await isMachineOnline(db, siteId, machineId);
@@ -181,6 +192,7 @@ export async function runHootStream(
       chatId,
       maxToolTier,
       access.role,
+      machineScope,
       req.onAssistantText,
     ),
   };
@@ -402,10 +414,11 @@ function handleServerSideLLM(
   chatId: string,
   maxToolTier: ToolTier,
   userRole: string | null,
+  machineScope: readonly string[] | null,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole),
+    runServerSideLLM(db, userId, siteId, machineId, machineName, messages, chatId, maxToolTier, userRole, machineScope),
     onAssistantText,
   );
 }
@@ -420,6 +433,7 @@ async function runServerSideLLM(
   chatId: string,
   maxToolTier: ToolTier,
   userRole: string | null,
+  machineScope: readonly string[] | null,
 ): Promise<Response> {
   const [llmConfig, processes, requireTier3Approval, machine] = await Promise.all([
     resolveLlmConfig(db, userId),
@@ -439,7 +453,7 @@ async function runServerSideLLM(
     toolDefs,
     false,
     [],
-    { userId, userRole, requireTier3Approval, activeHoursGuardIds },
+    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);
@@ -471,10 +485,11 @@ function handleSiteWideMode(
   maxToolTier: ToolTier,
   dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
+  machineScope: readonly string[] | null,
   onAssistantText?: (text: string) => Promise<void> | void,
 ): Response {
   return wrapWithAssistantTap(
-    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole),
+    runSiteWideMode(db, userId, siteId, messages, chatId, maxToolTier, dispatchMachines, userRole, machineScope),
     onAssistantText,
   );
 }
@@ -489,6 +504,7 @@ async function runSiteWideMode(
   /** Online AND hoot-enabled — the kill switch is applied before we get here. */
   dispatchMachines: SiteMachineSummary[],
   userRole: string | null,
+  machineScope: readonly string[] | null,
 ): Promise<Response> {
   const [llmConfig, requireTier3Approval, siteTimeZone] = await Promise.all([
     resolveLlmConfig(db, userId),
@@ -508,7 +524,7 @@ async function runSiteWideMode(
     toolDefs,
     true,
     machineIds,
-    { userId, userRole, requireTier3Approval, activeHoursGuardIds },
+    { userId, userRole, machineScope, requireTier3Approval, activeHoursGuardIds },
   );
 
   const model = createModel(llmConfig);

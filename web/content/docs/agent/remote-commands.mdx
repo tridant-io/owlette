@@ -140,7 +140,7 @@ the server queues these itself; nothing else should write them.
 | `swoop_refresh` | the site turned swoop on or off; the agent updates its standing connection to the signalling room | `{}` |
 | `site_settings_refresh` | a site setting the agent mirrors changed — today the [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) switch; the agent reads its site's settings again | `{}` |
 
-a swoop command carries a session ID and nothing else: the pending document is readable by every member of the site, so the session's keys and tokens never travel in it, and a swoop command with any other field is refused. all four run on the fast command lane, so a kill never waits behind an install.
+a swoop command carries a session ID and nothing else: the pending document is readable by every member whose access covers the machine, so the session's keys and tokens never travel in it, and a swoop command with any other field is refused. all four run on the fast command lane, so a kill never waits behind an install.
 
 ---
 

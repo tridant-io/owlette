@@ -68,13 +68,13 @@ send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also 
 
 | route | API-key scope | also requires |
 |---|---|---|
-| `POST /api/chunks/check` | `site=<siteId>:write` | membership of the site |
+| `POST /api/chunks/check` | `site=<siteId>:write` | whole-site membership of the site |
 | `POST /api/chunks/upload-urls` | `site=<siteId>:write` | site admin or owner role |
-| `GET` or `POST /api/chunks/download-urls` | `site=<siteId>:read` | membership of the site; an agent token for the same site also works |
+| `GET` or `POST /api/chunks/download-urls` | `site=<siteId>:read` | whole-site membership of the site; an agent token for the same site also works |
 | `POST /api/chunks/{digest}/mount` | `site=<siteId>:write` | site admin or owner role |
-| `GET /api/chunks/{digest}/referrers` | `site=<siteId>:read` | membership of the site |
+| `GET /api/chunks/{digest}/referrers` | `site=<siteId>:read` | whole-site membership of the site |
 
-a key without the scope gets `403 scope_insufficient`. a member without the admin or owner role gets `403 forbidden` (`capability not granted`) on upload-urls and mount. see [authentication](/docs/api/authentication) for scope syntax.
+a key without the scope gets `403 scope_insufficient`. a member without the admin or owner role gets `403 forbidden` (`capability not granted`) on upload-urls and mount. a member whose access is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403 forbidden` on every chunk route, whatever their role. see [authentication](/docs/api/authentication) for scope syntax.
 
 every chunk route also accepts the optional `Roost-Version: 2026-04-22` header. leave it out and the response carries `X-Roost-Version-Missing: true`; send an unsupported date and you get `400 unsupported_version`.
 

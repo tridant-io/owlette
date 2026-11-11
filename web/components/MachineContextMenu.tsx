@@ -49,12 +49,16 @@ interface MachineContextMenuProps {
    */
   rebootDeferredUntil?: number;
   /**
-   * Site-scoped admin gate. When false the menu hides every write action
-   * (restart/shutdown/cancel, revoke token, remove machine) and keeps only the
-   * user-scoped + read-only items. Contract:
+   * whole-site admin gate: revoke token, remove machine and "turn on swoop…",
+   * which reach past this machine. Contract:
    * dev/active/permission-model-split/manual-smoke-checklist.md.
    */
   isSiteAdmin?: boolean;
+  /**
+   * admin on this machine, whole site or scoped (`isMachineAdmin` in
+   * AuthContext): restart, shutdown, cancel and schedule restarts.
+   */
+  isMachineAdmin?: boolean;
   onRemoveMachine: () => void;
   onRestart?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
   onShutdown?: (options?: PowerCommandOptions) => Promise<PowerCommandSent | void>;
@@ -70,9 +74,10 @@ interface MachineContextMenuProps {
   /**
    * `capabilities.swoop === 1` from the heartbeat: the machine has a streamer
    * installed. Swoop then replaces live view in the online block, unless the
-   * site has swoop off (`swoopOff`). Whether this user may actually get a
-   * session is still decided server-side (site enablement, membersMayWatch,
-   * step-up); `swoopOff` only stops the menu offering one the server refuses.
+   * site has swoop off (`swoopOff`) or the viewer has none (`noSwoop`). Whether
+   * this user may actually get a session is still decided server-side (site
+   * enablement, membersMayWatch, step-up); `swoopOff` and `noSwoop` only stop
+   * the menu offering one the server refuses.
    */
   swoopCapable?: boolean;
   /**
@@ -95,6 +100,11 @@ interface MachineContextMenuProps {
    * instead of a viewer the server refuses.
    */
   swoopOff?: boolean;
+  /**
+   * the viewer's swoop mode on this site is none (`swoopMode` in AuthContext):
+   * the menu offers no swoop at all, as on a machine without a streamer.
+   */
+  noSwoop?: boolean;
   /** Opens the site's editor, where the swoop switch lives. */
   onSiteSettings?: () => void;
   onViewDisplays?: () => void;
@@ -147,6 +157,7 @@ export function MachineContextMenu({
   shuttingDown,
   rebootDeferredUntil,
   isSiteAdmin,
+  isMachineAdmin,
   onRemoveMachine,
   onRestart,
   onShutdown,
@@ -159,6 +170,7 @@ export function MachineContextMenu({
   onSwoop,
   onSwoopApp,
   swoopOff,
+  noSwoop,
   onSiteSettings,
   onViewDisplays,
   rebootSchedule,
@@ -176,8 +188,9 @@ export function MachineContextMenu({
   const power = usePowerCommand(siteId);
   const { userPreferences, updateUserPreferences } = useAuth();
   const isMuted = userPreferences.mutedMachines.includes(machineId);
-  const watching = isOnline && swoopCapable && !swoopOff ? (swoopViewers ?? 0) : 0;
-  const showScreen = isOnline && !planLocked && (swoopCapable || !controlLocked);
+  const offersSwoop = swoopCapable && !noSwoop;
+  const watching = isOnline && offersSwoop && !swoopOff ? (swoopViewers ?? 0) : 0;
+  const showScreen = isOnline && !planLocked && (offersSwoop || !controlLocked);
   const showViewDisplays = !!onViewDisplays && !planLocked;
   const scheduleRestartsItem = (
     <DropdownMenuItem
@@ -332,7 +345,7 @@ export function MachineContextMenu({
         </Tooltip>
         {/* wider for the "remote control · part of core" row, which overflows w-52 */}
         <DropdownMenuContent align="end" className={cn('border-border bg-raised', controlLocked ? 'w-60' : 'w-52')}>
-          {isOnline && isSiteAdmin && !planLocked && (
+          {isOnline && isMachineAdmin && !planLocked && (
             <>
               {rebooting ? (
                 cancelRestartItem
@@ -416,7 +429,7 @@ export function MachineContextMenu({
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}
-          {!isOnline && isSiteAdmin && !planLocked && (
+          {!isOnline && isMachineAdmin && !planLocked && (
             <>
               {/* Offline machines can still be scheduled: the restart schedule is
                   written to the config doc and the agent applies it from local
@@ -436,7 +449,7 @@ export function MachineContextMenu({
                   the site's swoop off, live view comes back and the swoop row
                   says how to turn it on. A plan without swoop links to the plan
                   page instead, since turning the switch on would not help. */}
-              {swoopCapable && swoopOff && !swoopLocked && (isSiteAdmin ? (
+              {offersSwoop && swoopOff && !swoopLocked && (isSiteAdmin ? (
                 <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
@@ -457,14 +470,14 @@ export function MachineContextMenu({
                   </span>
                 </DropdownMenuItem>
               ))}
-              {swoopCapable && swoopLocked ? (
+              {offersSwoop && swoopLocked ? (
                 <UpgradeMenuItem
                   icon={MonitorPlay}
                   label="swoop"
                   tier="pro"
                   testId="machine-context-menu-swoop-upgrade"
                 />
-              ) : swoopCapable && !swoopOff ? (
+              ) : offersSwoop && !swoopOff ? (
                 // a split row, as restart's: swoop in this browser, or in the desktop app
                 <div className="flex items-stretch gap-1">
                   <DropdownMenuItem

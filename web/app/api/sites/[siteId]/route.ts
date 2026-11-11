@@ -48,7 +48,8 @@ function auditActor(ctx: SiteHandlerContext): string {
 export async function GET(request: NextRequest, { params }: { params: Promise<RouteParams> }) {
   try {
     const { siteId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    // a scoped member reads it too: the site document says nothing about machines
+    const auth = await requireSiteAuthAndScope(request, siteId, 'read', { machineScope: 'admit' });
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();

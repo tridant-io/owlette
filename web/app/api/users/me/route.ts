@@ -37,6 +37,7 @@ import {
 import {
   Capability,
   hasCapability,
+  siteStanding,
   type Actor,
   type Role,
   type UserActor,
@@ -77,7 +78,7 @@ async function resolveSelfActor(request: NextRequest): Promise<ActorRecord> {
     rawRole === 'superadmin' || rawRole === 'admin' ? rawRole : 'member';
   // No site is in scope: USER_SELF_DELETE is a platform capability, so no
   // per-site standing is resolved and nothing site-scoped is reachable here.
-  const actor: UserActor = { type: 'user', userId, role, siteRoles: {} };
+  const actor: UserActor = { type: 'user', userId, role, ...siteStanding([]) };
   return { actor, userId, role };
 }
 
