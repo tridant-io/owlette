@@ -7,7 +7,8 @@
  *
  * Audited = the route's own source, or a module it imports one level out from
  * `lib/actions/`, `lib/talons/` or a co-located `app/api/**` helper, calls
- * `authorizedSiteHandler`, `authorizedPlatformHandler`, or `emitMutation`.
+ * `authorizedSiteHandler`, `authorizedPlatformHandler`, `admitFleetCall`, or
+ * `emitMutation`.
  *
  * Granularity is the FILE, not the method — those markers are file-level, so a
  * file mixing an audited POST with an unaudited DELETE is indistinguishable
@@ -149,6 +150,9 @@ const MUTATING_METHODS = ['DELETE', 'PATCH', 'POST', 'PUT'] as const;
 const AUDIT_MARKERS: readonly RegExp[] = [
   /\bauthorizedSiteHandler\s*(?:<[^>]*>)?\s*\(/,
   /\bauthorizedPlatformHandler\s*(?:<[^>]*>)?\s*\(/,
+  // a fleet route's call (lib/fleet/handler.server.ts): dispatch runs the admission it returns, which
+  // writes the blocking allow row. fleetHandler alone audits only its refusals, so it is no marker.
+  /\badmitFleetCall\s*\(/,
   /\bemitMutation\s*\(/,
 ];
 
@@ -278,6 +282,12 @@ describe('audit coverage of mutating api routes', () => {
   it('scans the whole api tree', () => {
     expect(routes.length).toBeGreaterThan(100);
     expect(mutatingRoutes.length).toBeGreaterThan(50);
+  });
+
+  it('counts a fleet route as audited by its call admission, not by fleetHandler alone', () => {
+    expect(hasAuditMarker('return startFleetCall(ctx, body, admitFleetCall(request, ctx));')).toBe(true);
+    expect(hasAuditMarker('export const POST = fleetHandler(handler);')).toBe(false);
+    expect(hasAuditMarker('import { admitFleetCall } from "@/lib/fleet/handler.server";')).toBe(false);
   });
 
   it('every mutating route is audited, exempt, or a declared known gap', () => {

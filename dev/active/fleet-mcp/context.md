@@ -6,7 +6,10 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 ## Key Files
 
 ### Create (web)
-- `web/lib/fleet/policy.server.ts` — grant parser and loader (`sites/{siteId}/settings/fleet`)
+- `web/lib/fleet/grant.ts` — the grant's parser and helpers, pure, shared with the dashboard hook
+- `web/lib/fleet/policy.server.ts` — the grant's loader (`sites/{siteId}/settings/fleet`), re-exporting the parser
+- `web/lib/fleet/context.ts` — `FleetContext`, and the admission a call passes through
+- `web/lib/agentAuth.server.ts` — `agentClaims`, moved out of the swoop routes so the session route can share it
 - `web/lib/fleet/session.server.ts` — mint, verify and revoke fleet sessions (`fleet_sessions/{sha256}`)
 - `web/lib/fleet/catalog.server.ts` — the tool catalog a machine caller sees
 - `web/lib/fleet/handler.server.ts` — the request wrapper for the fleet routes
@@ -98,7 +101,7 @@ Line numbers are from dev at 293f5d08 and drift; treat them as "about here".
 
 The session route is the one the agent calls, with its own ID token:
 
-- `POST /api/agent/fleet/session` → `200 { "token": "owf_…", "expiresAt": <epoch seconds>, "ttlSeconds": 900 }`, or `403 fleet_not_granted`
+- `POST /api/agent/fleet/session` → `200 { "token": "owf_…", "expiresAt": <epoch seconds>, "ttlSeconds": 900 }`; `401 unauthorized` (not an agent's ID token); `401 pairing_revoked` (no live agent token, or the machine row is gone); `403 fleet_not_granted`; `429` (30 an hour per machine)
 
 The other three take `Authorization: Bearer <fleet session token>`.
 
@@ -114,7 +117,11 @@ Rules the script relies on, so that new tools and new result kinds never need an
 - **`callId` is opaque and arrives percent-encoded** in the poll path, colons included (`cmd%3Amachine-2%3Aabc`). The route decodes it.
 - **A refusal on any fleet route is remembered** by the script and shown by `fleet_status`, so an assistant can see why it has no tools.
 
-Errors are RFC 7807 problems with a `code`: `fleet_session_invalid` (401), `fleet_not_granted`, `tool_not_allowed`, `machine_not_granted` (403), `hoot_disabled`, `machine_offline` (409), `plan_required` (402).
+- **A call belongs to the machine that started it.** Starting a call writes `fleet_calls/{commandId}` (`siteId`, `callerMachineId`, `machineId`, `tool`, `createdAt`, `expiresAt`). A read needs that record to match the caller, the site and the machine in the `callId`; anything else is the same 404 as an unknown id, and nothing is read or deleted. Without it a machine could read the result of any command on a machine its grant covers, whatever its tier. A record lives for its call's timeout plus an hour; the next call anyone starts deletes expired ones, with one bounded query that reads no live record.
+- **Audit.** A request that only reads (the tool list, a poll) writes no audit row. A call writes one row: an allow row with the tool and the machine at the moment it is admitted, written before the call runs, or a deny row with the reason. The queued command carries its own mutation row with the tool's name.
+- **Rate limits.** Every request is charged the view limit once at entry (300 a minute per machine). A tier 2 or 3 call is also charged the command limit once (60 a minute per machine). The session route is limited per machine, not per IP.
+
+Errors are RFC 7807 problems with a `code`: `fleet_session_invalid`, `unauthorized`, `pairing_revoked` (401), `plan_required` (402), `fleet_not_granted`, `tool_not_allowed`, `machine_not_granted` (403), `not_found` (404), `hoot_disabled`, `machine_offline`, `held_restart_unsupported` (409), `validation_failed` (400), `rate_limited` (429), `service_unavailable` (503).
 
 ## Next Steps
 

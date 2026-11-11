@@ -8,6 +8,10 @@
  * a client able to read or write one could give itself a machine's reach over
  * its site.
  *
+ * `fleet_calls/*` binds a started call to the machine that started it, and is
+ * covered by the same catch-all deny. a client able to write one could read,
+ * and so collect, another caller's command result.
+ *
  * `sites/{siteId}/settings/fleet` is the grant. the generic settings rule lets
  * a site's people read it and only the server write it. a client able to write
  * it could grant any machine any tier.
@@ -32,6 +36,15 @@ const SITE = 'site-A';
 const OTHER_SITE = 'site-B';
 const MACHINE = 'machine-X';
 const SESSION = 'a'.repeat(64);
+const CALL = 'cmd_abc123_xyz';
+const callRecord = () => ({
+  siteId: SITE,
+  callerMachineId: MACHINE,
+  machineId: 'machine-Y',
+  tool: 'get_system_info',
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 60 * 60 * 1000,
+});
 
 const OWNER_UID = 'owner-uid';
 const ADMIN_UID = 'admin-uid';
@@ -86,6 +99,7 @@ beforeEach(async () => {
       createdAt: new Date(),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000),
     });
+    await setDoc(doc(db, 'fleet_calls', CALL), callRecord());
   });
 });
 
@@ -114,6 +128,28 @@ describe('fleet_sessions is denied to every client context', () => {
   it.each(everyClient)('denies %s deleting a session', async (_who, context) => {
     const db = await context();
     await assertFails(deleteDoc(doc(db, 'fleet_sessions', SESSION)));
+  });
+});
+
+describe('fleet_calls is denied to every client context', () => {
+  it.each(everyClient)('denies %s a read of a call record', async (_who, context) => {
+    const db = await context();
+    await assertFails(getDoc(doc(db, 'fleet_calls', CALL)));
+  });
+
+  it.each(everyClient)('denies %s listing the call records', async (_who, context) => {
+    const db = await context();
+    await assertFails(getDocs(collection(db, 'fleet_calls')));
+  });
+
+  it.each(everyClient)('denies %s writing a call record', async (_who, context) => {
+    const db = await context();
+    await assertFails(setDoc(doc(db, 'fleet_calls', 'cmd_other_1'), callRecord()));
+  });
+
+  it.each(everyClient)('denies %s deleting a call record', async (_who, context) => {
+    const db = await context();
+    await assertFails(deleteDoc(doc(db, 'fleet_calls', CALL)));
   });
 });
 

@@ -158,6 +158,22 @@ export const issueLogsUploadRateLimit = redis
   : null;
 
 /**
+ * fleet session mints, per machine and never per ip (the site's machines share
+ * one NAT address): the agent renews every 10 minutes, 6 an hour, so 30 leaves
+ * room for service restarts and settings refreshes and still bounds a loop.
+ */
+export const FLEET_SESSION_RATE_LIMIT_PER_HOUR = 30;
+
+export const fleetSessionRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(FLEET_SESSION_RATE_LIMIT_PER_HOUR, '1 h'),
+      prefix: 'fleet-session',
+      analytics: true,
+    })
+  : null;
+
+/**
  * Web issue upload urls: 20/hr per user. One call signs a whole issue's
  * screenshots and videos (up to 100 MB), so twenty covers retries and still
  * bounds how much one account can land in the bucket.
