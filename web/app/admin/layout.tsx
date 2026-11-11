@@ -11,7 +11,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useAuth } from '@/contexts/AuthContext';
 import { useDevicePrefFlag, useDevicePrefNumber } from '@/hooks/useDevicePrefFlag';
 import { useScrollFade } from '@/hooks/useScrollFade';
-import { groupNavItems, navItemMatches, requiredRoleForPath, visibleNavItems } from './navItems';
+import { activeNavItem, groupNavItems, requiredRoleForPath, visibleNavItems } from './navItems';
 
 /** Resizable sidebar bounds (lg+ expanded state only; the icon rail is fixed). */
 const SIDEBAR_MIN_W = 200;
@@ -84,7 +84,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     resizeRef.current = null;
     setResizing(false);
   };
-  const navSections = groupNavItems(visibleNavItems(role, administersAnySite));
+  const navItems = visibleNavItems(role, administersAnySite);
+  const navSections = groupNavItems(navItems);
+  const activeItem = activeNavItem(navItems, pathname);
   const requiredRole = requiredRoleForPath(pathname);
 
   // Lazy initializer, not an effect: the first render needs the right back-target
@@ -292,7 +294,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   <div aria-hidden className="hidden lg:block mx-2 mb-3 border-t border-border" />
                 )}
                 {section.items.map((item) => {
-                  const isActive = navItemMatches(item, pathname);
+                  const isActive = item === activeItem;
                   const Icon = item.icon;
 
                   return (

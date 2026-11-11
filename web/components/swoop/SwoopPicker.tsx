@@ -30,7 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopWindowControls, TRAFFIC_LIGHTS_INSET_PX, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
-import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { swoopSettingsPath } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 import { viewerLabel } from '@/lib/swoop/viewerName';
@@ -495,8 +495,8 @@ function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string
         <>
           swoop is off for this site ·{' '}
           {canEnable ? (
-            <Link href={siteSettingsPath(siteId, 'swoop')} className="hl-link text-accent-cyan">
-              open site settings
+            <Link href={swoopSettingsPath(siteId)} className="hl-link text-accent-cyan">
+              open swoop settings
             </Link>
           ) : (
             'ask a site owner or admin to turn it on'

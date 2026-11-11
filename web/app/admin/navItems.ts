@@ -16,6 +16,7 @@ import {
   Clock,
   Bell,
   MonitorPlay,
+  SlidersHorizontal,
   Inbox,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,8 +25,11 @@ import type { UserRole } from '@/contexts/AuthContext';
 /** Lowest global role a destination admits; 'admin' also admits superadmins. */
 export type AdminMinRole = 'admin' | 'superadmin';
 
-/** The sidebar's sections, in the order they are shown. */
-export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'configuration', 'support'] as const;
+/**
+ * The sidebar's sections, in the order they are shown. A feature with settings
+ * of its own gets a section after fleet (owner, 2026-11-11).
+ */
+export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'swoop', 'configuration', 'support'] as const;
 export type AdminNavGroup = (typeof ADMIN_NAV_GROUPS)[number];
 
 export interface AdminNavItem {
@@ -73,12 +77,20 @@ const NAV_ITEMS: AdminNavItem[] = [
     group: 'fleet',
   },
   {
-    name: 'swoop',
+    name: 'live sessions',
     href: '/admin/swoop',
     icon: MonitorPlay,
     description: 'view and end live swoop sessions',
     minRole: 'admin',
-    group: 'fleet',
+    group: 'swoop',
+  },
+  {
+    name: 'settings',
+    href: '/admin/swoop/settings',
+    icon: SlidersHorizontal,
+    description: 'turn swoop on or off for a site',
+    minRole: 'admin',
+    group: 'swoop',
   },
   {
     name: 'alerts',
@@ -152,13 +164,24 @@ export function visibleNavItems(
  * with no matching nav entry fails closed to superadmin.
  */
 export function requiredRoleForPath(pathname: string | null): AdminMinRole {
-  const match = NAV_ITEMS.find((item) => navItemMatches(item, pathname));
-  return match?.minRole ?? 'superadmin';
+  return activeNavItem(NAV_ITEMS, pathname)?.minRole ?? 'superadmin';
 }
 
 /** Whether `pathname` is the destination's page or one of its subpages. */
 export function navItemMatches(item: AdminNavItem, pathname: string | null): boolean {
   return pathname === item.href || !!pathname?.startsWith(`${item.href}/`);
+}
+
+/**
+ * The destination `pathname` belongs to: the longest matching href, so a page
+ * that is also another's subpath (swoop settings under live sessions) is its own.
+ */
+export function activeNavItem(items: AdminNavItem[], pathname: string | null): AdminNavItem | undefined {
+  let best: AdminNavItem | undefined;
+  for (const item of items) {
+    if (navItemMatches(item, pathname) && (!best || item.href.length > best.href.length)) best = item;
+  }
+  return best;
 }
 
 /** The visible items split into their sections, empty sections dropped. */

@@ -5,7 +5,9 @@
  * admin panel → sites → a site: its loading, not-found and member-only states,
  * the header with the site ID and the caller's role, one section at a time
  * (danger zone for owners and superadmins only), and where a delete sends the
- * caller. the five sections are stubs; each has its own test.
+ * caller. the four sections and the keep screens awake switch are stubs; each
+ * has its own test. swoop's switch lives on /admin/swoop/settings, and its old
+ * section link goes there.
  */
 
 import React from 'react';
@@ -80,7 +82,7 @@ jest.mock('@/components/SiteMachinesList', () => ({
   SiteMachinesList: ({ siteId }: { siteId: string }) => <div data-testid="machines-section" data-site={siteId} />,
 }));
 jest.mock('@/components/admin/sites/SiteSwitches', () => ({
-  SiteSwitches: ({ siteId }: { siteId: string }) => <div data-testid="swoop-section" data-site={siteId} />,
+  KeepScreensAwakeSwitch: ({ siteId }: { siteId: string }) => <div data-testid="keep-awake-switch" data-site={siteId} />,
 }));
 jest.mock('@/components/admin/sites/SiteDangerZone', () => ({
   SiteDangerZone: (props: DangerProps) => {
@@ -234,21 +236,21 @@ describe('the header', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'bravo' })).toBeInTheDocument();
     expect(screen.queryByText('owner')).toBeNull();
     expect(screen.queryByText('admin')).toBeNull();
-    expect(sectionNames()).toEqual(['general', 'members', 'machines', 'swoop & screens', 'danger zone']);
+    expect(sectionNames()).toEqual(['general', 'members', 'machines', 'danger zone']);
   });
 });
 
 describe('sections', () => {
-  it('gives an admin four sections, with no danger zone', () => {
+  it('gives an admin three sections, with no danger zone', () => {
     renderSettings('site-a');
 
-    expect(sectionNames()).toEqual(['general', 'members', 'machines', 'swoop & screens']);
+    expect(sectionNames()).toEqual(['general', 'members', 'machines']);
   });
 
-  it('gives an owner five, the danger zone last', () => {
+  it('gives an owner four, the danger zone last', () => {
     renderSettings('site-c');
 
-    expect(sectionNames()).toEqual(['general', 'members', 'machines', 'swoop & screens', 'danger zone']);
+    expect(sectionNames()).toEqual(['general', 'members', 'machines', 'danger zone']);
   });
 
   it('renders general for an admin who asks for the danger zone', () => {
@@ -262,17 +264,16 @@ describe('sections', () => {
   it('calls onSectionChange with the section clicked', async () => {
     const { user, onSectionChange } = renderSettings('site-a');
 
-    await user.click(screen.getByRole('button', { name: 'swoop & screens' }));
+    await user.click(screen.getByRole('button', { name: 'machines' }));
 
     expect(onSectionChange).toHaveBeenCalledTimes(1);
-    expect(onSectionChange).toHaveBeenCalledWith('swoop');
+    expect(onSectionChange).toHaveBeenCalledWith('machines');
   });
 
   it.each([
     ['general', 'general', 'general-section'],
     ['members', 'members', 'members-section'],
     ['machines', 'machines', 'machines-section'],
-    ['swoop', 'swoop & screens', 'swoop-section'],
     ['danger', 'danger zone', 'danger-section'],
   ] as const)('%s renders that section for the site, and only that one', (section, label, testId) => {
     renderSettings('site-c', section);
@@ -296,6 +297,40 @@ describe('sections', () => {
     expect(within(panel).getByRole('heading', { level: 2 })).toHaveAttribute('id', 'site-section-machines');
     expect(panel).toHaveTextContent("restart or remove this site's machines. add one from the dashboard's + button.");
     expect(within(panel).getByTestId('machines-section')).toHaveAttribute('data-site', 'site-a');
+  });
+
+  it('holds keep screens awake in the machines section, above the list', () => {
+    renderSettings('site-a', 'machines');
+
+    const screens = screen.getByRole('region', { name: 'screens' });
+    expect(within(screens).getByRole('heading', { level: 2 })).toHaveAttribute('id', 'site-section-screens');
+    expect(screens).toHaveTextContent('this switch acts the moment it moves.');
+    expect(within(screens).getByTestId('keep-awake-switch')).toHaveAttribute('data-site', 'site-a');
+    const regions = screen.getAllByRole('region').map((region) => region.getAttribute('aria-labelledby'));
+    expect(regions).toEqual(['site-section-screens', 'site-section-machines']);
+  });
+
+  it.each(['general', 'members', 'danger'] as const)('has no keep screens awake in %s', (section) => {
+    renderSettings('site-c', section);
+
+    expect(screen.queryByTestId('keep-awake-switch')).toBeNull();
+  });
+
+  it("links general to the site's swoop settings", () => {
+    renderSettings('site-a');
+
+    const features = screen.getByRole('region', { name: 'features' });
+    expect(features).toHaveTextContent('these keep their settings on their own page in the admin panel.');
+    expect(within(features).getByRole('link', { name: 'swoop settings' })).toHaveAttribute(
+      'href',
+      '/admin/swoop/settings?site=site-a',
+    );
+  });
+
+  it('links swoop settings from general only', () => {
+    renderSettings('site-a', 'machines');
+
+    expect(screen.queryByRole('link', { name: 'swoop settings' })).toBeNull();
   });
 
   it("hands the danger zone the site, and its delete goes to useSites' deleteSite", async () => {
@@ -407,6 +442,15 @@ describe('/admin/sites/[siteId]', () => {
     await openPage('site-a');
 
     expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-a');
+  });
+
+  it("sends the old swoop section to the site's swoop settings, rendering nothing on the way", async () => {
+    mockSearch = 'section=swoop';
+    await openPage('site a');
+
+    expect(mockReplace).toHaveBeenCalledWith('/admin/swoop/settings?site=site%20a');
+    expect(screen.queryByRole('group', { name: 'site settings sections' })).toBeNull();
+    expect(screen.queryByTestId(/-section$/)).toBeNull();
   });
 
   it('replaces the url on a section change, without scrolling', async () => {

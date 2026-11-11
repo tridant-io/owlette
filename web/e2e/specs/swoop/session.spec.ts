@@ -541,9 +541,9 @@ test.describe('the viewer page', () => {
     await expect(page.getByRole('dialog')).toHaveCount(0);
     // said in the middle of the stage, with the way on (#323): never a spinner beside it.
     await expect(page.getByText(/connecting/i)).toHaveCount(0);
-    await expect(alertLine(page).getByRole('link', { name: 'open site settings' })).toHaveAttribute(
+    await expect(alertLine(page).getByRole('link', { name: 'open swoop settings' })).toHaveAttribute(
       'href',
-      `/admin/sites/${SITE_ID}?section=swoop`,
+      `/admin/swoop/settings?site=${SITE_ID}`,
     );
     await expect(alertLine(page).getByRole('link', { name: 'back to dashboard' })).toBeVisible();
     await expect(page.getByTestId('session-bar').getByRole('link', { name: 'back to dashboard' })).toBeVisible();

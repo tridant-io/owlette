@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { SearchX } from 'lucide-react';
+import Link from 'next/link';
+import { MonitorPlay, SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites, type Site } from '@/hooks/useFirestore';
-import { SITE_SECTIONS, SITE_SECTION_LABELS, type SiteSection } from '@/lib/siteSettingsPath';
+import { SITE_SECTIONS, SITE_SECTION_LABELS, swoopSettingsPath, type SiteSection } from '@/lib/siteSettingsPath';
 import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
 import { Panel } from '@/components/admin/Panel';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
@@ -12,9 +13,10 @@ import { CopySiteIdButton } from '@/components/admin/sites/CopySiteIdButton';
 import { SiteDangerZone } from '@/components/admin/sites/SiteDangerZone';
 import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
-import { SiteSwitches } from '@/components/admin/sites/SiteSwitches';
+import { KeepScreensAwakeSwitch } from '@/components/admin/sites/SiteSwitches';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 /**
  * one site's settings, a section at a time. it holds no router: the caller owns
@@ -106,20 +108,41 @@ export function SiteSettings({
       </div>
 
       {effective === 'general' && (
-        <SiteGeneralSection key={`${site.id}:${site.name}:${site.timezone ?? ''}`} site={site} onSave={updateSite} />
+        <div className="space-y-4">
+          <SiteGeneralSection key={`${site.id}:${site.name}:${site.timezone ?? ''}`} site={site} onSave={updateSite} />
+          {/* a feature with its own section in the admin panel keeps the site's settings for it there */}
+          <Panel
+            id="site-section-features"
+            title="features"
+            description="these keep their settings on their own page in the admin panel."
+          >
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link href={swoopSettingsPath(site.id)}>
+                  <MonitorPlay aria-hidden="true" />
+                  swoop settings
+                </Link>
+              </Button>
+            </div>
+          </Panel>
+        </div>
       )}
       {/* the sections with dialogs are keyed on the site, so one left open never acts on the next site */}
       {effective === 'members' && <SiteMembersSection key={site.id} siteId={site.id} />}
       {effective === 'machines' && (
-        <Panel
-          id="site-section-machines"
-          title="machines"
-          description="restart or remove this site's machines. add one from the dashboard's + button."
-        >
-          <SiteMachinesList key={site.id} siteId={site.id} />
-        </Panel>
+        <div className="space-y-4">
+          <Panel id="site-section-screens" title="screens" description="this switch acts the moment it moves.">
+            <KeepScreensAwakeSwitch siteId={site.id} />
+          </Panel>
+          <Panel
+            id="site-section-machines"
+            title="machines"
+            description="restart or remove this site's machines. add one from the dashboard's + button."
+          >
+            <SiteMachinesList key={site.id} siteId={site.id} />
+          </Panel>
+        </div>
       )}
-      {effective === 'swoop' && <SiteSwitches siteId={site.id} />}
       {effective === 'danger' && (
         <SiteDangerZone
           key={site.id}

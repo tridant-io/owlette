@@ -398,10 +398,10 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: 'swoop is excluded on this machine.',
       refusal: 'machine_excluded',
-      settingsHref: '/admin/sites/site-1?section=swoop',
+      settingsHref: '/admin/swoop/settings?site=site-1',
     });
     expect(screen.queryByText(/turn it on/)).toBeNull();
-    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 
   it('says a plan refusal is about the plan, with the way to upgrade, not the swoop switch', () => {
@@ -409,13 +409,13 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/admin/sites/site-1?section=swoop',
+      settingsHref: '/admin/swoop/settings?site=site-1',
       upgradeHref: '/settings/plan',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
     expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
     expect(screen.queryByText(/turn it on/)).toBeNull();
-    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 
   it('tells someone who does not pay for the site to ask its owner, with no upgrade link', () => {
@@ -423,7 +423,7 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/admin/sites/site-1?section=swoop',
+      settingsHref: '/admin/swoop/settings?site=site-1',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
     expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();
@@ -435,14 +435,14 @@ describe('SwoopStage — a session that failed or ended', () => {
       error: 'capability not granted',
       refusal: 'capability_missing',
       // an admin held to no swoop still gets a settings link, and the switch there is not what refused them
-      settingsHref: '/admin/sites/site-1?section=swoop',
+      settingsHref: '/admin/swoop/settings?site=site-1',
     });
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent("you can't use swoop on this site");
     expect(alert).toHaveTextContent('a site owner or admin sets who can watch and control. ask one of them.');
     expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
     expect(screen.queryByText(/capability not granted/)).toBeNull();
-    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 });
 

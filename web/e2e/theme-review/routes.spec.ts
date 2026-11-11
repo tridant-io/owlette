@@ -152,7 +152,40 @@ const CAPTURES: Capture[] = [
     (page): Capture => ({ slug: `admin-${page}`, path: `/admin/${page}`, role: 'superadmin', scenario: 'dashboard-mixed-states' }),
   ),
   { slug: 'admin-site-settings', path: (siteId) => `/admin/sites/${siteId}?section=members`, role: 'superadmin', scenario: 'dashboard-mixed-states' },
-  { slug: 'admin-site-swoop', path: (siteId) => `/admin/sites/${siteId}?section=swoop`, role: 'superadmin', scenario: 'dashboard-mixed-states' },
+  {
+    slug: 'admin-site-general',
+    path: (siteId) => `/admin/sites/${siteId}`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('link', { name: 'swoop settings', exact: true })).toBeVisible({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-site-machines',
+    path: (siteId) => `/admin/sites/${siteId}?section=machines`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: 'keep screens awake', exact: true })).toBeEnabled({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-swoop-settings',
+    path: (siteId) => `/admin/swoop/settings?site=${siteId}`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeEnabled({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-sidebar',
+    path: (siteId) => `/admin/swoop/settings?site=${siteId}`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeEnabled({ timeout: 15_000 }),
+    // the sidebar shows beside the page from lg up; below it is a drawer behind the menu button
+    act: async (page) => {
+      const menu = page.getByRole('button', { name: 'open admin menu' });
+      if (await menu.isVisible()) await menu.click();
+      await expect(page.locator('#admin-sidebar').getByRole('group', { name: 'swoop', exact: true })).toBeVisible();
+    },
+  },
 ];
 
 /** releases as the field has them: the newest on every platform, an old one windows-only */

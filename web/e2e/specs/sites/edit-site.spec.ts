@@ -1,14 +1,15 @@
 /**
- * sites: a site's settings page, its general and swoop & screens sections
+ * sites: a site's settings page, its general section and the site's two switches
  *
  * superadmin opens /admin/sites/site-to-rename, renames the site in general and
  * saves: the toast, the new title, and an Admin SDK read of sites/site-to-rename.name.
  * an empty name toasts an error and writes nothing. the site is the spec's own,
  * re-seeded before every test, so the shared site-A / site-B baseline stays untouched.
  *
- * swoop & screens (?section=swoop) holds the site's two switches, swoop and keep
- * screens awake. they act at once, with no save, so the spec flips each and reads
- * back sites/site-to-rename/settings/{swoop,display}.
+ * keep screens awake sits in the machines section (?section=machines), and general
+ * links to the site's swoop settings (/admin/swoop/settings?site=...), where the
+ * swoop switch is. both act at once, with no save, so the spec flips each and reads
+ * back sites/site-to-rename/settings/{display,swoop}.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -73,7 +74,7 @@ test('saving an empty name shows an error and writes nothing', async ({ page }) 
   expect(snap.data()!.name).toBe(ORIGINAL_NAME);
 });
 
-test.describe('the swoop & screens switches', () => {
+test.describe("the site's switches", () => {
   const settingsDoc = (name: 'swoop' | 'display') =>
     getAdminDb().collection('sites').doc(RENAMEABLE_SITE_ID).collection('settings').doc(name);
 
@@ -84,31 +85,47 @@ test.describe('the swoop & screens switches', () => {
     await settingsDoc('swoop').delete();
   });
 
-  test('swoop and keep screens awake write their documents at once', async ({ page }) => {
-    await page.goto(`/admin/sites/${RENAMEABLE_SITE_ID}?section=swoop`);
+  test('keep screens awake, in the machines section, writes its document at once', async ({ page }) => {
+    await page.goto(`/admin/sites/${RENAMEABLE_SITE_ID}?section=machines`);
 
-    const swoop = page.getByRole('switch', { name: 'swoop', exact: true });
-    const keepAwake = page.getByRole('switch', { name: 'keep screens awake', exact: true });
+    const screens = page.getByRole('region', { name: 'screens', exact: true });
+    const keepAwake = screens.getByRole('switch', { name: 'keep screens awake', exact: true });
+    await expect(screens).toContainText('machines on this site never sleep, blank or lock');
+    await expect(page.getByRole('region', { name: 'machines', exact: true })).toBeVisible();
+    // the swoop switch left the site's page
+    await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toHaveCount(0);
 
-    // enabled means the snapshot has answered; with no documents, swoop is off and
-    // keep screens awake is on.
+    // enabled means the snapshot has answered; with no document, keep screens awake is on.
+    // the switch is controlled by its snapshot, so the flip on screen is the document
+    // answering, not the click.
     await expect(keepAwake).toBeEnabled();
     await expect(keepAwake).toBeChecked();
-    await expect(swoop).toBeEnabled();
-    await expect(swoop).not.toBeChecked();
-
-    // each switch is controlled by its snapshot, so the flip on screen is the
-    // document answering, not the click.
     await keepAwake.click();
     await expect(keepAwake).not.toBeChecked();
+
+    expect((await settingsDoc('display').get()).data()?.keepAwake).toBe(false);
+    expect((await settingsDoc('swoop').get()).exists).toBe(false);
+  });
+
+  test("general links to the site's swoop settings, where the switch writes at once", async ({ page }) => {
+    await openGeneralSection(page);
+    await page
+      .getByRole('region', { name: 'features', exact: true })
+      .getByRole('link', { name: 'swoop settings', exact: true })
+      .click();
+
+    await expect(page).toHaveURL(new RegExp(`/admin/swoop/settings\\?site=${RENAMEABLE_SITE_ID}$`));
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
+    const panel = page.getByRole('region', { name: ORIGINAL_NAME, exact: true });
+    const swoop = panel.getByRole('switch', { name: 'swoop', exact: true });
+
+    // with no document, swoop is off
+    await expect(swoop).toBeEnabled();
+    await expect(swoop).not.toBeChecked();
     await swoop.click();
     await expect(swoop).toBeChecked();
 
-    const [display, swoopSettings] = await Promise.all([
-      settingsDoc('display').get(),
-      settingsDoc('swoop').get(),
-    ]);
-    expect(display.data()?.keepAwake).toBe(false);
-    expect(swoopSettings.data()?.enabled).toBe(true);
+    expect((await settingsDoc('swoop').get()).data()?.enabled).toBe(true);
+    expect((await settingsDoc('display').get()).exists).toBe(false);
   });
 });

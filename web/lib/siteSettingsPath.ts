@@ -1,10 +1,10 @@
 /**
  * the one builder for every link to a site's settings: the header, the site
  * list's gear, the dashboard's "turn on swoop…", the swoop picker and the swoop
- * viewer.
+ * viewer. swoop's switch has its own page in the admin panel's swoop section.
  */
 
-export const SITE_SECTIONS = ['general', 'members', 'machines', 'swoop', 'danger'] as const;
+export const SITE_SECTIONS = ['general', 'members', 'machines', 'danger'] as const;
 
 export type SiteSection = (typeof SITE_SECTIONS)[number];
 
@@ -12,7 +12,6 @@ export const SITE_SECTION_LABELS: Record<SiteSection, string> = {
   general: 'general',
   members: 'members',
   machines: 'machines',
-  swoop: 'swoop & screens',
   danger: 'danger zone',
 };
 
@@ -23,4 +22,13 @@ export function parseSiteSection(raw: string | null): SiteSection {
 export function siteSettingsPath(siteId: string, section?: SiteSection): string {
   const path = `/admin/sites/${encodeURIComponent(siteId)}`;
   return section && section !== 'general' ? `${path}?section=${section}` : path;
+}
+
+export function swoopSettingsPath(siteId: string): string {
+  return `/admin/swoop/settings?site=${encodeURIComponent(siteId)}`;
+}
+
+/** where a section that left the site's page lives now, so its old links still land on it. */
+export function movedSiteSectionPath(siteId: string, raw: string | null): string | null {
+  return raw === 'swoop' ? swoopSettingsPath(siteId) : null;
 }

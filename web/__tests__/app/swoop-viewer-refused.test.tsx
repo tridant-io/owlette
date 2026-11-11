@@ -90,20 +90,20 @@ it('a session refused for good says why in the middle, and does not say it is co
   expect(screen.queryByText(/connecting/i)).toBeNull();
 });
 
-it('tells an admin to turn swoop on and links to the site’s settings', async () => {
+it('tells an admin to turn swoop on and links to the site’s swoop settings', async () => {
   siteAdmin = true;
   const notice = await openViewer();
-  expect(notice).toHaveTextContent('turn it on in site settings.');
-  expect(within(notice).getByRole('link', { name: 'open site settings' })).toHaveAttribute(
+  expect(notice).toHaveTextContent('turn it on in swoop settings.');
+  expect(within(notice).getByRole('link', { name: 'open swoop settings' })).toHaveAttribute(
     'href',
-    '/admin/sites/site%201?section=swoop',
+    '/admin/swoop/settings?site=site%201',
   );
 });
 
 it('tells a member who can turn it on, with no settings link', async () => {
   const notice = await openViewer();
   expect(notice).toHaveTextContent('ask a site owner or admin to turn it on.');
-  expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
+  expect(within(notice).queryByRole('link', { name: 'open swoop settings' })).toBeNull();
 });
 
 it('a plan without swoop says so and links the owner to the plan, not the switch, and does not retry', async () => {
@@ -117,7 +117,7 @@ it('a plan without swoop says so and links the owner to the plan, not the switch
   expect(notice).toHaveTextContent('swoop is part of pro.');
   expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
   expect(notice).not.toHaveTextContent(/turn it on|reconnecting in/);
-  expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
+  expect(within(notice).queryByRole('link', { name: 'open swoop settings' })).toBeNull();
 });
 
 it('a member on a site whose plan leaves swoop out is told to ask the owner, with no upgrade link', async () => {

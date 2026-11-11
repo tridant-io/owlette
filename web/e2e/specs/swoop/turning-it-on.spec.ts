@@ -1,10 +1,11 @@
 /**
  * swoop — finding the switch. while a site has swoop off, a machine that can
- * stream sends an admin from its menu to the swoop & screens section of the
- * site's settings, and tells a member who can turn swoop on, with live view in
- * the meantime. the site switcher opens the current site's settings in one
- * click, and `/admin/sites/<siteId>?section=swoop`, the link the swoop picker
- * and the viewer give an admin while swoop is off, lands on the switch.
+ * stream sends an admin from its menu to the site's swoop settings
+ * (`/admin/swoop/settings?site=<siteId>`), and tells a member who can turn swoop
+ * on, with live view in the meantime. the site switcher opens the current site's
+ * settings in one click, and `/admin/sites/<siteId>?section=swoop`, the link the
+ * swoop picker and the viewer gave an admin before swoop had its own section,
+ * still lands on the switch.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -43,9 +44,11 @@ async function openMachineMenu(page: Page) {
   return menu;
 }
 
-async function expectSwoopSection(page: Page) {
-  await expect(page).toHaveURL(/\/admin\/sites\/site-A\?section=swoop$/);
-  await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toHaveAttribute('aria-checked', 'false');
+async function expectSwoopSettings(page: Page) {
+  await expect(page).toHaveURL(/\/admin\/swoop\/settings\?site=site-A$/);
+  await expect(
+    page.getByRole('region', { name: 'Site A (Assigned)', exact: true }).getByRole('switch', { name: 'swoop', exact: true }),
+  ).toHaveAttribute('aria-checked', 'false');
 }
 
 test.describe('admin on site-A', () => {
@@ -58,7 +61,7 @@ test.describe('admin on site-A', () => {
 
     await menu.getByTestId('machine-context-menu-swoop-off').click();
 
-    await expectSwoopSection(page);
+    await expectSwoopSettings(page);
   });
 
   test('the site switcher opens site settings', async ({ page }) => {
@@ -70,10 +73,10 @@ test.describe('admin on site-A', () => {
     await expect(page.getByRole('heading', { level: 1, name: 'Site A (Assigned)' })).toBeVisible();
   });
 
-  test('the swoop section link lands on the switch', async ({ page }) => {
+  test('the old swoop section link lands on the switch', async ({ page }) => {
     await page.goto(`/admin/sites/${SITE_ID}?section=swoop`);
 
-    await expectSwoopSection(page);
+    await expectSwoopSettings(page);
   });
 });
 

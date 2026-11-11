@@ -128,6 +128,13 @@ for (const theme of ['dark', 'light'] as const) {
         });
       }
 
+      // the heading renders before the site list resolves, so the scan waits for the switch
+      test('/admin/swoop/settings has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/swoop/settings?site=site-A');
+        await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeEnabled({ timeout: 10_000 });
+        await expectNoSeriousA11yViolations(page);
+      });
+
       // the heading renders before the list does, so the scan waits for a row
       test('/admin/sites has no serious/critical axe violations', async ({ page }) => {
         await page.goto('/admin/sites');

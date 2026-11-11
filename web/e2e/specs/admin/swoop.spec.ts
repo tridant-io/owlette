@@ -1,5 +1,10 @@
 /**
- * Admin — swoop sessions page.
+ * Admin — the sidebar's swoop section: its live sessions page and its settings
+ * page.
+ *
+ * Settings picks a site from the site selector the other site-scoped admin pages
+ * use, offering only the sites whose switch the caller may change, and the swoop
+ * switch there writes `sites/{site}/settings/swoop` at once.
  *
  * Session records are server-only (`sites/{site}/machines/{m}/swoop_sessions/{sid}`,
  * no rule reaches them), so the page reads them through
@@ -16,16 +21,18 @@
 
 import crypto from 'crypto';
 import { test, expect, type Page } from '@playwright/test';
+import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { roleState } from '../../helpers/roles';
-import { seedMachine, seedSite, type TestUser } from '../../helpers/seed';
+import { seedMachine, seedSite, TEST_USERS, type TestUser } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const SITE_ID = `site-admin-swoop-${SUFFIX}`;
 const SITE_OWNER = 'someone-else';
 const MACHINE_ID = `mach-admin-swoop-${SUFFIX}`;
 const SID = `sid-admin-swoop-${SUFFIX}`;
+const SITE_NAME = `Swoop admin ${SUFFIX}`;
 const MACHINE_PATH = `sites/${SITE_ID}/machines/${MACHINE_ID}`;
 
 let viewer: TestUser;
@@ -33,7 +40,7 @@ let viewer: TestUser;
 const sessionDoc = () => getAdminDb().doc(`${MACHINE_PATH}/swoop_sessions/${SID}`);
 
 test.beforeAll(async () => {
-  await seedSite({ id: SITE_ID, name: `Swoop admin ${SUFFIX}`, owner: SITE_OWNER, timezone: 'UTC' });
+  await seedSite({ id: SITE_ID, name: SITE_NAME, owner: SITE_OWNER, timezone: 'UTC' });
   // no monitors: a hardware subdoc would outlive the machine doc's delete.
   await seedMachine(SITE_ID, MACHINE_ID, { monitorCount: 0 });
   // a viewer of this site's machine is a member of this site, not of site-A.
@@ -62,12 +69,19 @@ test.afterAll(async () => {
   await db.doc(`${MACHINE_PATH}/swoop_step_up_revocations/current`).delete();
   await db.doc(`${MACHINE_PATH}/commands/pending`).delete();
   await db.doc(MACHINE_PATH).delete();
+  // the settings test's switch writes this one.
+  await db.doc(`sites/${SITE_ID}/settings/swoop`).delete();
   await db.doc(`sites/${SITE_ID}/members/${SITE_OWNER}`).delete();
   await db.doc(`sites/${SITE_ID}/members/${viewer.uid}`).delete();
   await db.doc(`sites/${SITE_ID}`).delete();
   await db.doc(`users/${viewer.uid}`).delete();
   await getAdminAuth().deleteUser(viewer.uid);
 });
+
+/** the sidebar's links in one of its sections, in order. */
+function sidebarSection(page: Page, name: string) {
+  return page.locator('#admin-sidebar').getByRole('group', { name, exact: true }).getByRole('link');
+}
 
 async function gotoSwoopSessions(page: Page) {
   await page.goto('/admin/swoop');
@@ -81,6 +95,17 @@ async function gotoSwoopSessions(page: Page) {
 
 test.describe('as a superadmin', () => {
   test.use(roleState('superadmin'));
+
+  // picking a site saves it as the superadmin's last site, which every later
+  // superadmin spec would open on: the suite runs one worker, so put it back
+  const superadminDoc = () => getAdminDb().collection('users').doc(TEST_USERS.superadmin.uid);
+  let savedLastSite: string | undefined;
+  test.beforeAll(async () => {
+    savedLastSite = (await superadminDoc().get()).get('lastSiteId') as string | undefined;
+  });
+  test.afterAll(async () => {
+    await superadminDoc().update({ lastSiteId: savedLastSite ?? FieldValue.delete() });
+  });
 
   test('lists the live session with its viewer and ends it with a kill', async ({ page }) => {
     await gotoSwoopSessions(page);
@@ -110,6 +135,50 @@ test.describe('as a superadmin', () => {
     const queued = Object.values(pending.data() ?? {}) as Array<{ type?: string; sid?: string }>;
     expect(queued.some((cmd) => cmd.type === 'swoop_kill' && cmd.sid === SID)).toBe(true);
   });
+
+  test('the sidebar has a swoop section, after fleet, with live sessions and settings', async ({ page }) => {
+    await gotoSwoopSessions(page);
+
+    const sections = page.locator('#admin-sidebar').getByRole('group');
+    await expect(sections).toHaveText([/^people/, /^fleet/, /^swoop/, /^configuration/, /^support/]);
+    await expect(sidebarSection(page, 'fleet')).toHaveText(['sites', 'installers', 'agent tokens']);
+    const swoop = sidebarSection(page, 'swoop');
+    await expect(swoop).toHaveText(['live sessions', 'settings']);
+    await expect(swoop.nth(0)).toHaveAttribute('href', '/admin/swoop');
+    await expect(swoop.nth(1)).toHaveAttribute('href', '/admin/swoop/settings');
+    await expect(swoop.nth(0)).toHaveAttribute('aria-current', 'page');
+
+    await swoop.nth(1).click();
+    await expect(page).toHaveURL(/\/admin\/swoop\/settings$/);
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
+    // only the page itself is current, not live sessions, whose path it extends
+    await expect(swoop.nth(1)).toHaveAttribute('aria-current', 'page');
+    await expect(swoop.nth(0)).not.toHaveAttribute('aria-current');
+  });
+
+  test('swoop settings picks a site, and its switch writes at once', async ({ page }) => {
+    await page.goto('/admin/swoop/settings');
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await page.getByRole('combobox', { name: 'site', exact: true }).click();
+    await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/admin/swoop/settings\\?site=${SITE_ID}$`));
+
+    const swoop = page.getByRole('region', { name: SITE_NAME, exact: true }).getByRole('switch', { name: 'swoop', exact: true });
+    // enabled means the snapshot has answered; with no document, swoop is off. the
+    // switch follows its snapshot, so the flip on screen is the document answering.
+    await expect(swoop).toBeEnabled();
+    await expect(swoop).not.toBeChecked();
+    await swoop.click();
+    await expect(swoop).toBeChecked();
+    expect((await getAdminDb().doc(`sites/${SITE_ID}/settings/swoop`).get()).data()?.enabled).toBe(true);
+
+    // a reload keeps the site, and the switch stays where it was left
+    await page.reload();
+    await expect(page.getByRole('region', { name: SITE_NAME, exact: true }).getByRole('switch', { name: 'swoop', exact: true })).toBeChecked();
+  });
 });
 
 test.describe('as a site admin of another site', () => {
@@ -123,5 +192,16 @@ test.describe('as a site admin of another site', () => {
 
     await expect(page.getByText(MACHINE_ID)).toHaveCount(0);
     await expect(page.getByText(viewer.email)).toHaveCount(0);
+  });
+
+  test('swoop settings never opens a site the admin does not run, even when the url names it', async ({ page }) => {
+    await page.goto(`/admin/swoop/settings?site=${SITE_ID}`);
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+
+    // a site the admin does run opens instead
+    await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeVisible();
+    await expect(page.getByRole('region', { name: SITE_NAME, exact: true })).toHaveCount(0);
   });
 });

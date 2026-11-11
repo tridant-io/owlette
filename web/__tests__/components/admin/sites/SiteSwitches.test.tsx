@@ -2,14 +2,15 @@
 /**
  * @jest-environment jsdom
  *
- * the swoop & screens section. each switch PATCHes its own settings route the
- * moment it moves, follows its snapshot, and says something only when the
- * write fails.
+ * a site's two immediate switches: swoop, on admin panel → swoop → settings, and
+ * keep screens awake, on the site's machines section. each PATCHes its own
+ * settings route the moment it moves, follows its snapshot, and says something
+ * only when the write fails.
  */
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SiteSwitches } from '@/components/admin/sites/SiteSwitches';
+import { KeepScreensAwakeSwitch, SwoopSwitch } from '@/components/admin/sites/SiteSwitches';
 
 // the switches follow these snapshots; swoop off and keep awake on are each one's default.
 let membersMayWatch = true;
@@ -41,28 +42,28 @@ beforeEach(() => {
   toastError.mockReset();
 });
 
+// both at once, so each test also proves a write moves only its own switch
 function renderSwitches() {
   const user = userEvent.setup();
-  render(<SiteSwitches siteId="site-a" />);
+  render(
+    <>
+      <SwoopSwitch siteId="site-a" />
+      <KeepScreensAwakeSwitch siteId="site-a" />
+    </>,
+  );
   return user;
 }
 
 const swoopSwitch = () => screen.getByRole('switch', { name: 'swoop' });
 const keepAwakeSwitch = () => screen.getByRole('switch', { name: 'keep screens awake' });
 
-describe('the swoop & screens section', () => {
-  it('is a panel holding both switches, each following its snapshot', () => {
+describe('the switches', () => {
+  it('each follows its snapshot, with its own id and copy', () => {
     renderSwitches();
 
-    const section = screen.getByRole('region', { name: 'swoop & screens' });
-    expect(within(section).getByRole('heading', { level: 2 })).toHaveAttribute('id', 'site-section-swoop');
-    expect(within(section).getByText('these switches act the moment they move.')).toBeInTheDocument();
-    expect(within(section).getByRole('switch', { name: 'swoop' })).toHaveAttribute('id', 'swoop-site-a');
+    expect(swoopSwitch()).toHaveAttribute('id', 'swoop-site-a');
     expect(swoopSwitch()).toHaveAttribute('aria-checked', 'false');
-    expect(within(section).getByRole('switch', { name: 'keep screens awake' })).toHaveAttribute(
-      'id',
-      'keep-awake-site-a',
-    );
+    expect(keepAwakeSwitch()).toHaveAttribute('id', 'keep-awake-site-a');
     expect(keepAwakeSwitch()).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('machines on this site never sleep, blank or lock')).toBeInTheDocument();
   });
@@ -107,6 +108,16 @@ describe('what each switch writes', () => {
     expect(url).toBe('/api/sites/site-a/display-settings');
     expect(init.method).toBe('PATCH');
     expect(JSON.parse(init.body)).toEqual({ keepAwake: false });
+  });
+
+  it('encodes the site id in the route', async () => {
+    const user = userEvent.setup();
+    render(<SwoopSwitch siteId="elm gate" />);
+
+    await user.click(swoopSwitch());
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/sites/elm%20gate/swoop-settings');
   });
 
   it('disables a switch while its write is in flight, and says nothing on success', async () => {
