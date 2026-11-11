@@ -10,6 +10,17 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — swoop has its own section in the admin panel
+
+The admin panel's sidebar has a swoop section, after fleet, with two pages: live
+sessions, the list of everyone in a swoop session that was swoop under fleet,
+and settings, where a site owner or admin turns swoop on or off for a site
+picked at the top. A site's settings page no longer has a swoop & screens
+section: keep screens awake is in its machines section, and its general section
+links to the site's swoop settings. Old links to the swoop & screens section,
+turn on swoop… in a machine's menu, and open swoop settings in the swoop picker
+and the viewer all open the new page. Nothing to update on the machine.
+
 ### fixed — saving a talon edit keeps the switch where it is now
 
 The talon editor sent the on or off state from the moment it was opened. If the

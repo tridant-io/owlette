@@ -1,6 +1,6 @@
 ---
 title: "admin panel"
-description: "the admin panel is where a site's owners and admins manage members, agent tokens, live swoop sessions, schedule presets, alert rules and webhooks. who can do what is decided by your role on each site. installers, the template library, user accounts and email are internal owlette pages, hidden from customer accounts."
+description: "the admin panel is where a site's owners and admins manage members, agent tokens, live swoop sessions and swoop settings, schedule presets, alert rules and webhooks. who can do what is decided by your role on each site. installers, the template library, user accounts and email are internal owlette pages, hidden from customer accounts."
 keywords: ["permissions", "roles", "rbac", "access control", "who can do what", "site owner", "site admin", "capabilities", "superadmin"]
 ---
 
@@ -10,18 +10,19 @@ the admin panel holds two kinds of page: site-scoped pages, for the people who r
 
 ## site-scoped pages
 
-these open for anyone who is an **owner** or **admin** of the whole site on at least one site:
+these open for anyone who is an **owner** or **admin** of the whole site on at least one site. the sidebar groups them: **fleet** holds sites and agent tokens, **swoop** holds live sessions and settings, and **configuration** holds schedules, alerts and webhooks.
 
 | page | URL | what it does |
 |------|-----|--------------|
-| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines, its switches, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
+| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
 | agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
-| swoop | `/admin/swoop` | see everyone in a [swoop](/docs/dashboard/swoop) session right now, and end a session |
+| swoop → live sessions | `/admin/swoop` | see everyone in a [swoop](/docs/dashboard/swoop) session right now, and end a session |
+| swoop → settings | `/admin/swoop/settings` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for a site |
 | schedules | `/admin/schedules` | manage [schedule presets](/docs/dashboard/admin/schedule-presets) |
 | alerts | `/admin/alerts` | manage a site's threshold alert rules. see [email alerts](/docs/dashboard/admin/email-alerts) |
 | webhooks | `/admin/webhooks` | manage a site's outbound [webhook](/docs/dashboard/admin/webhooks) subscriptions |
 
-**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop page simply leaves those sites out.
+**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop pages leave those sites out: live sessions doesn't list them, and settings doesn't offer them.
 
 ---
 
@@ -38,8 +39,8 @@ your role is set **per site**: the same person can own one site, administer a se
 | role on a site | what it can do there | admin panel |
 |------|-------------|-------------|
 | **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
-| **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the six site-scoped pages above, with whole-site access |
-| **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one | the six site-scoped pages above |
+| **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the seven site-scoped pages above, with whole-site access |
+| **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one | the seven site-scoped pages above |
 
 a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) on a site can change what they get from swoop there, and nothing else.
 
@@ -58,7 +59,7 @@ ownership is not a role anyone can assign: it moves by transfer, from the curren
 ## opening the panel
 
 - **profile menu** → **admin panel**. the entry shows once you are an owner or admin of the whole site on at least one site, and opens on **sites** (owlette's superadmins land on installers)
-- **direct URLs**: `/admin/sites`, `/admin/sites/{siteId}`, `/admin/tokens`, `/admin/swoop`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
+- **direct URLs**: `/admin/sites`, `/admin/sites/{siteId}`, `/admin/tokens`, `/admin/swoop`, `/admin/swoop/settings`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
 
 someone who is owner or admin of the whole site on no site, an admin limited to some machines included, is sent back to the dashboard with **access denied**, and so is a site admin who opens an internal page directly.
 

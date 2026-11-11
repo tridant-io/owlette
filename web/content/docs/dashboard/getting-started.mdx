@@ -74,12 +74,12 @@ you're automatically assigned as the owner with full access.
 
 ## site settings
 
-a site's settings are a page in the admin panel. the switcher's **site settings** opens it for the site you are on, and admin panel → **sites** lists every site you belong to, with a gear on each you run. owners and admins open it; members don't. its **general** section changes the **site name** and **timezone**, which apply on **save**, and its **swoop & screens** section holds the site's two switches, which take effect the moment they move:
+a site's settings are a page in the admin panel. the switcher's **site settings** opens it for the site you are on, and admin panel → **sites** lists every site you belong to, with a gear on each you run. owners and admins open it; members don't. its **general** section changes the **site name** and **timezone**, which apply on **save**. a site has two switches, which take effect the moment they move:
 
-| switch | default | what it does |
-|---|---|---|
-| **swoop** | off | lets this site's machines be watched and controlled from a browser or owlette swoop. by default, members watch, and owners and admins watch and control. see [swoop](/docs/dashboard/swoop#turning-it-on). |
-| **keep screens awake** | on | machines on this site never sleep, blank or lock. |
+| switch | where | default | what it does |
+|---|---|---|---|
+| **swoop** | admin panel → **swoop** → **settings**, which the site's **general** section links to | off | lets this site's machines be watched and controlled from a browser or owlette swoop. by default, members watch, and owners and admins watch and control. see [swoop](/docs/dashboard/swoop#turning-it-on). |
+| **keep screens awake** | the site's **machines** section | on | machines on this site never sleep, blank or lock. |
 
 see [sites](/docs/dashboard/admin/sites) for every section of the page.
 
@@ -147,7 +147,7 @@ see [machine monitoring](/docs/dashboard/machine-monitoring).
 - **roost** — content-addressed file sync, version publishing, and rollback at `/roosts`
 - **deploy** — software deployment and agent updates
 - **logs** — the activity event viewer
-- **admin panel** — site admins manage sites (members, machines, switches), agent tokens, schedule presets, alert rules, webhooks and live swoop sessions for the sites they belong to
+- **admin panel** — site admins manage sites (members, machines, keep screens awake), agent tokens, live swoop sessions and swoop settings, schedule presets, alert rules and webhooks for the sites they belong to
 
 the site switcher in the header, or in the menu on a phone, moves between your sites, and with more than ten sites it has a filter that finds one by its name or ID.
 

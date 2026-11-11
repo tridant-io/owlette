@@ -52,7 +52,7 @@ site-scoped automations: a trigger (a schedule, a machine or process event, a me
 restart machines on a weekly schedule in their own timezone, store a machine's monitor layout and restore it when it drifts, and keep screens awake: a site switch that stops every machine sleeping, blanking or locking.
 
 **multi-site access control**
-organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site that can be limited to some of its machines; a platform superadmin reaches every site. a site's owners and admins run it from its settings page in the admin panel: members with their roles and swoop modes, machines, and the swoop and keep screens awake switches. sign-in with email, Google or a passkey, and a required second factor.
+organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site that can be limited to some of its machines; a platform superadmin reaches every site. a site's owners and admins run it from its settings page in the admin panel: members with their roles and swoop modes, and machines with the keep screens awake switch; the swoop switch is in the admin panel's own swoop section. sign-in with email, Google or a passkey, and a required second factor.
 
 **alerts, webhooks and api**
 threshold and offline alerts by email, signed webhooks for external systems, and an activity log across the fleet. a public REST API with an [OpenAPI reference](https://owlette.app/docs/api), a command line client (`@owlette/cli`), and SDKs for Node (`@owlette/sdk`) and Python (`owlette-sdk`).
