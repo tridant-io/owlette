@@ -164,6 +164,10 @@ export interface BuildExecutableToolsOptions {
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
+  /** Who a turn's audit rows name when `userId` did not start it: a granted
+   *  machine's `machine:<id>` (ADR 0017). Attribution only — the tools still act
+   *  on `userId`'s standing. `systemActor` wins over it. */
+  auditActor?: string;
   /** Chat this tool loop belongs to; defaulted from the positional `chatId` so
    *  server-side tools can stamp provenance (talon `createdVia` + `chatId`). */
   chatId?: string;
@@ -260,7 +264,7 @@ function actionContextForHoot(
   return {
     siteId,
     actor,
-    auditActor: `cortex:user_${userId}`,
+    auditActor: options.auditActor ?? `cortex:user_${userId}`,
   };
 }
 

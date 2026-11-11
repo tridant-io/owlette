@@ -160,6 +160,12 @@ export interface StartTurnParams {
    * for a person rather than auto-executing.
    */
   forceTier3Approval?: boolean;
+  /**
+   * Who started a turn that `userId` did not: a granted machine's
+   * `machine:<id>` (ADR 0017). The turn still runs on `userId`'s key and
+   * `access`; the audit rows of its server-side tools name this instead.
+   */
+  auditActor?: string;
   source?: 'user' | 'followup' | 'talon';
 }
 
@@ -626,6 +632,7 @@ export function startTurn(
           userRole: params.access.role,
           userStanding: params.access.standing,
           machineScope,
+          auditActor: params.auditActor,
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),

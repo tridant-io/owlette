@@ -499,6 +499,22 @@ describe('startTurn — happy path', () => {
     });
   });
 
+  it('hands the tools the audit actor of a turn a machine started', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams({ auditActor: 'machine:lobby-01' })));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      auditActor: 'machine:lobby-01',
+    });
+  });
+
+  it('hands the tools no audit actor on a turn a person started', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7].auditActor).toBeUndefined();
+  });
+
   it('hands the tools the swoop mode beside the site role, so an admin held to view stays held', async () => {
     await collectChunks(
       startTurn(

@@ -2477,6 +2477,56 @@ describe('the hoot actor', () => {
     expect(actor.siteRoles).toEqual({});
     expect(hasCapability(actor, Capability.MACHINE_CONFIG_WRITE, 's1', 'm1')).toBe(false);
   });
+
+  // a turn a granted machine started runs on the key owner's standing, and its
+  // rows have to say which machine asked
+  describe('on a turn that names its audit actor', () => {
+    const KEY_OWNER: BuildExecutableToolsOptions = {
+      userId: 'u1',
+      userRole: 'member',
+      userStanding: { role: 'admin', swoopMode: null, machineIds: null },
+      machineScope: null,
+    };
+
+    /** the context each process tool hands its action. */
+    async function contextsFor(options: BuildExecutableToolsOptions) {
+      mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      mockDeleteProcess.mockResolvedValue({ processId: 'proc-1', alreadyDeleted: false });
+      const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
+      const toolDefs = allTools.filter((tool) =>
+        ['update_process', 'add_process', 'delete_process'].includes(tool.name),
+      );
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', toolDefs, false, [], options);
+      await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+      await tools.add_process.execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' });
+      await tools.delete_process.execute({ process_name: 'TouchDesigner' });
+      return [mockUpdateProcess, mockCreateProcess, mockDeleteProcess].map((mock) => mock.mock.calls[0][0]);
+    }
+
+    it('writes that name on every process tool, and still acts as the key owner', async () => {
+      const contexts = await contextsFor({ ...KEY_OWNER, auditActor: 'machine:lobby-01' });
+
+      expect(contexts).toHaveLength(3);
+      for (const ctx of contexts) {
+        expect(ctx.auditActor).toBe('machine:lobby-01');
+        expect(ctx.actor).toMatchObject({ type: 'user', userId: 'u1', siteRoles: { s1: 'admin' } });
+      }
+    });
+
+    it('names the person when the turn names nobody else', async () => {
+      for (const ctx of await contextsFor(KEY_OWNER)) expect(ctx.auditActor).toBe('cortex:user_u1');
+    });
+
+    it('lets a system actor win over it', async () => {
+      const contexts = await contextsFor({ systemActor: 'cortex_autonomous', auditActor: 'machine:lobby-01' });
+
+      for (const ctx of contexts) {
+        expect(ctx.auditActor).toBe('system:cortex_autonomous');
+        expect(ctx.actor).toEqual({ type: 'system', name: 'cortex_autonomous', siteId: 's1' });
+      }
+    });
+  });
 });
 
 // resolveHootMaxTier
