@@ -10,6 +10,13 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### added — the tray and menu bar icon turn yellow while someone is connected through swoop
+
+While a swoop session is capturing this screen, the owlette icon in the tray
+(Windows, Linux) or the menu bar (macOS) turns yellow, whatever the site's
+indicator setting says: a machine always shows that someone is connected.
+Errors still show red, and the yellow goes out when the capture stops.
+
 ### changed — a plan belongs to a site, and its owner pays for it
 
 None of this is enforced or billed yet: plans stay switched off during the

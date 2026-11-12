@@ -81,15 +81,20 @@ const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/normal.png");
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/disconnected.png");
 #[cfg(not(target_os = "macos"))]
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/error.png");
+#[cfg(not(target_os = "macos"))]
+const ICON_SWOOP: &[u8] = include_bytes!("../icons/tray/swoop.png");
 // macos tints a template (black on alpha) to match the menubar; the eye and the
 // closed eye are templates. error is the same eye glyph in flat system red, not a
-// template, so that one state shouts without breaking the menubar's style.
+// template, so that one state shouts without breaking the menubar's style. the
+// swoop glyph is the same shape in flat system yellow, also not a template.
 #[cfg(target_os = "macos")]
 const ICON_NORMAL: &[u8] = include_bytes!("../icons/tray/template-normal.png");
 #[cfg(target_os = "macos")]
 const ICON_DISCONNECTED: &[u8] = include_bytes!("../icons/tray/template-disconnected.png");
 #[cfg(target_os = "macos")]
 const ICON_ERROR: &[u8] = include_bytes!("../icons/tray/glyph-error.png");
+#[cfg(target_os = "macos")]
+const ICON_SWOOP: &[u8] = include_bytes!("../icons/tray/glyph-swoop.png");
 
 /// Monitor granularity; the cadences below are multiples of it, so one thread
 /// drives both the status poll and the error flash.
@@ -126,7 +131,9 @@ const SEED_TIMEOUT: Duration = Duration::from_millis(500);
 /// transition rather than the icon vanishing first.
 const EXIT_SETTLE: Duration = Duration::from_secs(2);
 
-/// Overall health, in the three buckets the icon can show.
+/// What the icon shows: the three health buckets, plus `Swoop`, which is never
+/// a health code ([`TrayView::code`] is never `Swoop`) — [`icon_code`] folds it
+/// in while a session is capturing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusCode {
   /// Service running and reaching the cloud.
@@ -135,6 +142,8 @@ enum StatusCode {
   Warning,
   /// Service stopped, or a health probe failed.
   Error,
+  /// Someone is connected through swoop. Icon only.
+  Swoop,
 }
 
 impl StatusCode {
@@ -143,6 +152,7 @@ impl StatusCode {
       StatusCode::Normal => ICON_NORMAL,
       StatusCode::Warning => ICON_DISCONNECTED,
       StatusCode::Error => ICON_ERROR,
+      StatusCode::Swoop => ICON_SWOOP,
     }
   }
 }
@@ -210,6 +220,19 @@ enum PaintOutcome {
   /// At least one write was refused; a partial tick counts as refused, so the
   /// half that did not land is retried.
   Refused(String),
+}
+
+/// The icon for a view: error, then swoop, then disconnected, then normal.
+///
+/// Swoop shows under every indicator policy, `none` included: a host always
+/// displays that someone is connected (owner, 2026-11-12). The policy only
+/// steers the toast and the banner.
+fn icon_code(view: &TrayView) -> StatusCode {
+  if view.code != StatusCode::Error && view.swoop.is_some() {
+    StatusCode::Swoop
+  } else {
+    view.code
+  }
 }
 
 /// Which icon a tick shows: the error state alternates with the normal icon to
@@ -397,8 +420,8 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
   let menu = build_menu(app, &view)?;
   let tray = TrayIconBuilder::with_id(TRAY_ID)
-    .icon(icon_for(view.code))
-    .icon_as_template(icon_is_template(view.code))
+    .icon(icon_for(icon_code(&view)))
+    .icon_as_template(icon_is_template(icon_code(&view)))
     .tooltip(tooltip(&paths::install_root(), &view))
     .menu(&menu.menu)
     // Windows defaults to the menu on either button; left click must open the
@@ -647,7 +670,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
           degraded_since = None;
           degraded_notified = false;
         }
-        StatusCode::Warning => {
+        StatusCode::Warning | StatusCode::Swoop => {
           // Icon-only tier: Warning time never accrues toward an Error toast.
           degraded_since = None;
         }
@@ -706,7 +729,7 @@ fn monitor(app: AppHandle, stop: Arc<AtomicBool>, repaint: Arc<AtomicBool>) {
     if let Some(view) = &current {
       paint.tick(
         &mut ShellWriter(&app),
-        view.code,
+        icon_code(view),
         flash_dim,
         wanted_tooltip.as_deref(),
         now,
@@ -808,9 +831,9 @@ fn icon_for(code: StatusCode) -> Image<'static> {
 }
 
 /// Whether macos should tint the icon to the menubar: the eye and the closed
-/// eye blend in, the red error glyph keeps its colour.
+/// eye blend in, the red error and yellow swoop glyphs keep their colour.
 fn icon_is_template(code: StatusCode) -> bool {
-  cfg!(target_os = "macos") && !matches!(code, StatusCode::Error)
+  cfg!(target_os = "macos") && !matches!(code, StatusCode::Error | StatusCode::Swoop)
 }
 
 /// Outcome of one status evaluation.
@@ -1933,7 +1956,12 @@ mod tests {
   fn every_embedded_icon_decodes() {
     // 36 px is the menubar's 18 pt at 2x; the orbs are 64 px
     let edge = if cfg!(target_os = "macos") { 36 } else { 64 };
-    for code in [StatusCode::Normal, StatusCode::Warning, StatusCode::Error] {
+    for code in [
+      StatusCode::Normal,
+      StatusCode::Warning,
+      StatusCode::Error,
+      StatusCode::Swoop,
+    ] {
       let image = Image::from_bytes(code.icon_bytes()).expect("icon should decode");
       assert_eq!((image.width(), image.height()), (edge, edge));
     }
@@ -2421,5 +2449,61 @@ mod tests {
     assert!(!offers_swoop_kill(&view));
     view.swoop = swoop_view(&StatusDoc::Stale, RUNNING);
     assert!(!offers_swoop_kill(&view));
+  }
+
+  fn view_with(code: StatusCode, swoop: Option<SwoopView>) -> TrayView {
+    TrayView {
+      code,
+      service: "service: running".to_string(),
+      status: "status: connected to TEC".to_string(),
+      health: None,
+      swoop,
+      start_on_login: false,
+    }
+  }
+
+  #[test]
+  fn the_icon_turns_yellow_while_a_session_is_capturing_under_every_policy() {
+    // `none` included: the policy steers the toast and banner, never the icon
+    for indicator in ["tray", "banner", "none"] {
+      let swoop = swoop_view(&swoop_doc(true, 1, 0, indicator), RUNNING);
+      let view = view_with(StatusCode::Normal, swoop);
+      assert_eq!(icon_code(&view), StatusCode::Swoop, "indicator: {indicator}");
+    }
+  }
+
+  #[test]
+  fn the_icon_precedence_is_error_then_swoop_then_disconnected_then_normal() {
+    let live = || swoop_view(&swoop_doc(true, 1, 0, "none"), RUNNING);
+    assert_eq!(icon_code(&view_with(StatusCode::Error, live())), StatusCode::Error);
+    assert_eq!(icon_code(&view_with(StatusCode::Warning, live())), StatusCode::Swoop);
+    assert_eq!(icon_code(&view_with(StatusCode::Normal, live())), StatusCode::Swoop);
+    assert_eq!(icon_code(&view_with(StatusCode::Warning, None)), StatusCode::Warning);
+    assert_eq!(icon_code(&view_with(StatusCode::Normal, None)), StatusCode::Normal);
+    assert_eq!(icon_code(&view_with(StatusCode::Error, None)), StatusCode::Error);
+  }
+
+  #[test]
+  fn the_yellow_goes_out_with_the_session() {
+    let mut view = view_with(
+      StatusCode::Normal,
+      swoop_view(&swoop_doc(true, 1, 0, "none"), RUNNING),
+    );
+    let mut paint = PaintState::new(Instant::now());
+    let mut shell = FakeShell::new(0);
+    tick(&mut paint, &mut shell, icon_code(&view));
+    assert_eq!(shell.icon_on_screen, Some(StatusCode::Swoop));
+
+    // the swoop state alone changes the icon: the health code stays Normal
+    view.swoop = swoop_view(&swoop_doc(false, 0, 0, "none"), RUNNING);
+    tick(&mut paint, &mut shell, icon_code(&view));
+    assert_eq!(shell.icon_on_screen, Some(StatusCode::Normal));
+  }
+
+  #[test]
+  fn the_yellow_icon_is_never_a_template_and_the_error_flash_is_unchanged() {
+    assert!(!icon_is_template(StatusCode::Swoop));
+    assert_eq!(frame_for(StatusCode::Swoop, true), StatusCode::Swoop);
+    assert_eq!(frame_for(StatusCode::Error, true), StatusCode::Normal);
   }
 }
