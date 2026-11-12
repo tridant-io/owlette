@@ -1,5 +1,5 @@
 # fleet mcp — Tasks
-**Progress**: 23/36 complete (0.1 to 0.3, waves 1 to 4, 5.2, waves 9, 10 and 11); 0.4 half done (Linux measured, macOS owed)
+**Progress**: 31/36 complete (wave 0, waves 1 to 5, waves 9 to 12); 7.1, 7.2 and 8.1 done for macOS only, Linux as the acting machine waits (owner, 2026-11-11); 13.1 done but for the release; 6.1 is the 4.2.0 release
 
 Rules every task obeys:
 - Read `context.md` first: it holds the decisions, the session file contract and the fleet API contract.
@@ -30,7 +30,7 @@ Rules every task obeys:
   - Do: Using the harness in `web/__tests__/rules/harness.ts` (see `denials.test.ts` and `membership.test.ts` for the shape), assert against the unmodified `firestore.rules`: (a) `fleet_sessions/{id}` denies get, list and every write to a signed-in site member, to an agent token (`role: 'agent'` with `site_id` and `machine_id` claims) and to an unauthenticated client; (b) `sites/{siteId}/settings/fleet` is readable by a member of that site, not readable by a non-member, and not writable by any client. Record what an agent token of the same site may do with (b). If an expectation fails, do not edit the rules: stop and report, because a rules change needs the owner's explicit request.
   - Done when: `cd web && npm run test:rules` passes with the new file, or a written report names the failing expectation.
 
-- [ ] **Task 0.4: macOS and Linux access spike** (Linux measured 2026-11-10, macOS owed, see `gates/0.4-posix-access.md`)
+- [x] **Task 0.4: macOS and Linux access spike** (Linux measured 2026-11-10, macOS 2026-11-11, see `gates/0.4-posix-access.md`)
   - Files: `dev/active/fleet-mcp/gates/0.4-posix-access.md` (new)
   - Do: On the MacBook and the kiosk VM (access notes are in the owner's session memory, not in this repo), as the logged-in console user and not root, check read-only: whether the user can execute the bundled interpreter (`/Library/Application Support/Owlette/runtime/python/bin/python3`; `/opt/owlette/python/bin/python3`) and `import mcp`; the user's groups against `_owlette` (macOS) and `owlette` (Linux); owner, group and mode of the data root, `ipc/` and `ipc/requests`; which account the service runs as. Then, with sudo, create one test file under `ipc/fleet/` owned by the console user with mode 0400, confirm the user can read it and another account cannot, and remove it. Change nothing else on either device.
   - Done when: the gate file states per platform, with command output, whether the interpreter is launchable by the console user and the exact owner, group and mode the session file and its directory need.
@@ -125,7 +125,7 @@ Depends on: Wave 3 for the contract; Task 0.2.
 ## Wave 5: Proof on dev, desktop snippet
 Depends on: Wave 4; the web waves live on dev (the owner's word to push).
 
-- [ ] **Task 5.1: Two-machine proof on dev**
+- [x] **Task 5.1: Two-machine proof on dev** (2026-11-11; from an MCP client script and from a Claude Code session)
   - Files: `dev/active/fleet-mcp/proof-wave5.md` (new)
   - Do: Ask the owner before registering the server in Claude Code and before any tier-2 action, and ask which target and which process to use. On dev, grant this dev box as a sender with one target. Register: `claude mcp add hoot -- "C:\ProgramData\Owlette\python\python.exe" "C:\ProgramData\Owlette\agent\src\fleet_mcp.py"`. Then record, from a Claude Code session: the tool list; `list_machines`; one tier-1 read on the target; one tier-2 action on the agreed process; the refusals (a machine outside the targets, a target with hoot off, a tier-3 tool at tier 2); removing the grant in the dashboard with the client connected and the next call refused within 10 seconds; the audit log rows with actor `machine:<this box>`.
   - Done when: the proof file shows each line with its output and the audit row ids, and says plainly what was not verified.
@@ -146,12 +146,12 @@ Depends on: Wave 5.
 ## Wave 7: macOS and Linux
 Depends on: Task 0.4, Wave 6.
 
-- [ ] **Task 7.1: The session file on macOS and Linux**
+- [ ] **Task 7.1: The session file on macOS and Linux** (macOS DONE 2026-11-11, PR #502; Linux waits)
   - Files: `agent/src/fleet_session.py`, `agent/src/osadapter/posix.py` (and `darwin.py` / `linux.py` if the difference is per platform), `agent/tests/unit/test_fleet_session.py`, `agent/tests/unit/test_osadapter_contract.py`; packaging scripts only if gate 0.4 found the interpreter cannot be launched by the console user
   - Do: Apply gate 0.4's findings. Write the session file so the console user can read it and accounts outside the service group cannot; the precedent in `context.md` is 0640 `root:<service group>` under `ipc/`, written with `shared_utils.open_new_file` and `shared_utils.grant_data_group`. Delete it when the grant goes or the machine is unpaired. If the interpreter is not launchable by the console user, stop and report the options from the gate file before changing any packaging script.
   - Done when: unit tests cover the file's mode and group, and its removal; the agent suite passes on Linux and macOS.
 
-- [ ] **Task 7.2: Script launch and setup copy on macOS and Linux**
+- [ ] **Task 7.2: Script launch and setup copy on macOS and Linux** (macOS DONE 2026-11-11, PR #502; Linux waits)
   - Files: `agent/src/fleet_mcp.py` (only if a path differs), `desktop/src/components/ConnectAgentDialog.tsx`, `desktop/src-tauri/src/commands.rs`, the docs page from task 4.3
   - Do: Make the desktop app's setup command right for macOS and Linux (interpreter and script paths from `context.md`) and drop the Windows-only guard. Update the docs page with both commands.
   - Done when: the desktop app shows the right command on each platform, in a screenshot each.
@@ -159,7 +159,7 @@ Depends on: Task 0.4, Wave 6.
 ## Wave 8: macOS and Linux proof
 Depends on: Wave 7.
 
-- [ ] **Task 8.1: Proof on the MacBook and the kiosk VM, and packages**
+- [ ] **Task 8.1: Proof on the MacBook and the kiosk VM, and packages** (macOS DONE 2026-11-11, `proof-wave8.md`, on an in-place install; the pkg is the 4.2.0 release's; Linux waits)
   - Files: `dev/active/fleet-mcp/proof-wave8.md` (new)
   - Do: Build the pkg on the MacBook and the deb on the kiosk VM as the release rule says. Install each, grant each machine as a sender on dev, and repeat task 5.1's lines with the script launched by the console user through an `mcp.client.stdio` client (and Claude Code where it is installed). Note which tools are refused as Windows-only on these targets.
   - Done when: the proof file shows each line per platform, and says plainly what was not verified.
@@ -198,32 +198,32 @@ Depends on: Wave 3, Task 9.1.
 ## Wave 12: Areas
 Depends on: Wave 11. Each task adds its own area file under `web/lib/fleet/tools/`, its own tests, and one line in `serverTools` (`web/lib/fleet/catalog.server.ts`); run them one after another, or merge that line by hand. Each tool calls the existing action core its dashboard or API route uses, takes the machine's audit actor, checks the grant and the hoot switch for every machine it names, and declares its tier. Operations only: nothing that manages members, API keys, agent tokens, webhooks, pairing, machine removal or billing. A tool that names several machines asks `hasCapability` once per machine.
 
-- [ ] **Task 12.1: roost**
+- [x] **Task 12.1: roost** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/roost.ts`, `web/__tests__/lib/fleet/tools/roost.test.ts` (new)
   - Do: Tools to list roosts and versions (tier 1), deploy a version to targets inside the grant and roll back (tier 3), on the cores behind `web/app/api/roosts/[roostId]/deploy/route.ts` and the rollback route. A deploy whose targets fall outside the grant is refused whole.
   - Done when: tests cover the reads, a deploy inside the grant, a deploy refused outside it, and the audit actor.
 
-- [ ] **Task 12.2: deployments and owlette updates**
+- [x] **Task 12.2: deployments and owlette updates** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/deployments.ts`, its test (new)
   - Do: Tools to list deployments and read one (tier 1), cancel one (tier 2), and send `update_owlette` to a machine (tier 3), on `web/lib/actions/createDeployment.server.ts` and the command path. A deploy tool (tier 3) and the preset list belong here too, on `createDeployment`: hoot's own `deploy_software` writes install commands outside `executeMachineCommand`, so task 11.1 left it and `get_system_presets` out. The agent's active-hours guard still applies and a machine can never override it; say so in the tool descriptions.
   - Done when: tests cover each tool, the grant check and the audit actor.
 
-- [ ] **Task 12.3: reboot schedules**
+- [x] **Task 12.3: reboot schedules** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/schedules.ts`, its test (new)
   - Do: Tools to read and set a machine's reboot schedule, on the core behind `web/app/api/sites/[siteId]/machines/[machineId]/reboot-schedule/`. Read is tier 1, set is tier 3.
   - Done when: tests cover both tools, the grant check and the audit actor.
 
-- [ ] **Task 12.4: displays**
+- [x] **Task 12.4: displays** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/displays.ts`, its test (new)
   - Do: Tools to read a machine's saved display layout and its display settings (tier 1), on the cores behind `.../display-layout/` and `sites/[siteId]/display-settings/`. Applying a topology already exists as a machine tool; do not duplicate it.
   - Done when: tests cover the reads and the grant check.
 
-- [ ] **Task 12.5: reads — metrics history, audit log, alert rules, software inventory**
+- [x] **Task 12.5: reads — metrics history, audit log, alert rules, software inventory** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/reads.ts`, `web/lib/fleet/reads.server.ts` (new), their tests (new)
   - Do: Four tier-1 tools. The dashboard reads metrics history, screenshot history and installed software straight from Firestore in hooks (`web/hooks/useHistoricalMetrics.ts`, `useScreenshotHistory.ts`, `useUninstall.ts`), and alert rules have no reader; write small server readers in `reads.server.ts` for metrics history (bounded range and point count), installed software and alert rules, and use the existing audit-log core for the audit log (rows for machines inside the grant only).
   - Done when: tests cover each reader's bounds, the grant filter and an empty result.
 
-- [ ] **Task 12.6: screenshots as images**
+- [x] **Task 12.6: screenshots as images** (2026-11-11, PR #501)
   - Files: `web/lib/fleet/tools/screenshots.ts`, its test (new)
   - Do: (No result-mapper hook exists: task 11.1 did not build one, since this task may not need it.) Make `capture_screenshot` return an `image_url` content item (the signed read URL the public poll route already mints) so the script hands the agent an image. Add a tier-1 tool listing a machine's recent screenshots with signed URLs. Today a fleet `capture_screenshot` is queued as `mcp_tool_call`, so its result comes back as text and the image branch in dispatch is never reached. Route it as the `capture_screenshot` command type, whose result the shared lookup signs a URL for.
   - Done when: tests cover the envelope and the grant check; on dev, a Claude Code session sees the picture.
@@ -231,7 +231,7 @@ Depends on: Wave 11. Each task adds its own area file under `web/lib/fleet/tools
 ## Wave 13: Catalog docs, proof, release
 Depends on: Wave 12, Wave 10.
 
-- [ ] **Task 13.1: Catalog reference with a drift test, proof, release**
+- [ ] **Task 13.1: Catalog reference with a drift test, proof, release** (reference and drift test in PR #501, proof in `proof-wave13.md`, 2026-11-12; the release is 4.2.0)
   - Files: a reference page under `web/content/docs/reference/`, `web/__tests__/lib/fleet/catalogDocs.test.ts` (new), `dev/active/fleet-mcp/proof-wave13.md` (new), release files as in task 6.1
   - Do: Write the catalog reference (every tool, its tier, its parameters) and a test that fails when the page and the registry disagree on tool names or tiers. Repeat the proof on dev for one tool from each area and for `ask_hoot`. Release as in task 6.1.
   - Done when: the drift test passes, the proof file is complete, and the release is on dev.
@@ -303,3 +303,19 @@ Depends on: Wave 12, Wave 10.
 - Two more answers from the owner on the hoot page, both built: while "let machines act on other machines" is off the list of machines is hidden behind one line, "turn this on to choose which machines may act."; and "require approval for privileged tools" (the site's tier 3 approval) is a switch on `/admin/hoot` (`web/components/admin/HootApprovalSwitch.tsx`), gone from the hoot chat header (`HootApprovalToggle.tsx` is deleted). It still asks before it turns off. The live-suite guard (`web/__tests__/e2eLiveGuard.test.ts`) knows the switch's new name. One thing that move breaks, told to owlette-f8: the product video script `web/e2e/videos/12-cortex.video.ts` highlighted the shield in the chat header for its beat b06; the highlight is removed so the script still runs, and the beat needs re-shooting to show the switch where it is now.
 - 5.2 done: the desktop app's menu has **connect an ai agent** (only where the host has a command, which is Windows for now), opening `desktop/src/components/ConnectAgentDialog.tsx`: the `claude mcp add hoot -- "<python>" "<script>"` line with click-to-copy, the same two paths for any other MCP client, who turns the machine on and where, and a link to the guide. The host command is `hoot_mcp_command` (`desktop/src-tauri/src/agent_cli.rs`, `commands.rs`, `lib.rs`), built from the install root with the platform's own separators. Vitest covers the dialog and the menu row; `npx tauri build --no-bundle` builds. Screenshots, light and dark, of the menu and the dialog: `dev/scratch/fleet-ui-shots/desktop-app-*.png`. They are the app's built frontend in a browser with the host stubbed, not the installed app: this box's installed app was left alone because the owner was working on it remotely. The real app is part of the proof.
 - Next: 5.1, the proof on dev, once #495 is merged and deployed.
+- 5.1 done, 2026-11-11 evening, with the owner at TEC-A4D: `proof-wave5.md`. #495 is merged (dev `4e80a640`) and deployed. One elevated swap put dev's agent source (`40be4df9`) into this box's installed 4.1.27 (backup at `C:\ProgramData\Owlette\agent\src-backup-proof-20261111-181757`); the same swap served owlette-3e's proof of #496. Against dev.owlette.app, through the installed `fleet_mcp.py` and the pairing alone: session 6.3 s after the owner turned the row on; 15 tools at "read" and 38 at "bounded changes"; `list_machines` narrowed to the grant; reads and a `restart_process` on owlette-kiosk; one `ask_hoot` turn answered in 8.6 s; refusals for a machine outside the grant and for tier 3 tools; the row turned off with a client connected and the next call refused 1.4 s after the save. Audit rows as `machine:TEC-A4D` are in the proof file.
+- Owed from 5.1, said in the proof file: the same calls from a real Claude Code session (needs the owner's ok to register the server, and the row on again), a machine with hoot off as the machine acted on, the refusals' audit rows (authorization decisions the API key cannot read), the installed desktop app's dialog.
+- Found by the proof, none fixed: the released agent's `get_process_list` reports a running process as KILLED after a second quick restart (a stale entry in `app_states.json` wins; hoot repeats it); `list_machines` gives `os: null` for the kiosk; the audit row of a grant change names the senders but not the tier or the machines; `ask_hoot` leaves no row in the site's audit list; a cut sender keeps its session file until its next refresh (up to 10 minutes), though the server refuses at once.
+- This box's installed agent stays on dev's source until the next install or an elevated restore.
+- 5.1's Claude Code pass, 2026-11-11 20:39 PST, on the owner's go: hoot registered for one scratch folder (`claude mcp add hoot -- ...`), one headless Claude Code 2.1.322 session, registration removed. Its own calls: `fleet_status`, `list_machines` (owlette-kiosk), `get_system_info`, `restart_process` on `lab-sleep`, `get_process_list`, and a refusal for TEC-MBA. In `proof-wave5.md`. An earlier session, run while the row had no machines picked, got `[]` and `machine_not_granted`.
+- The `get_process_list` finding is fixed: PR #498 (`fix/process-list-stale-state`, `3195659e`), merged into dev at `c2f34bdc` on the owner's word to owlette-f8. A restart leaves the old pid's KILLED row in `app_states.json` until the five-minute cleanup; the tool took the first row for a process, the dashboard the last; both now ask `shared_utils.state_rows_by_process`. Proven on the kiosk: KILLED on the released files, RUNNING with the fix installed while the old row was still in the file; the kiosk's original files are back.
+- Still owed from 5.1 at that point (closed later the same evening, next entry): a machine with hoot off as the machine acted on, the installed desktop app's dialog; the refusals' audit rows stay owed. Still unfixed: `os: null` in `list_machines`, the grant change's audit row, no audit row for `ask_hoot`, a cut sender's session file living up to 10 minutes.
+- 2026-11-11, 21:20 to 22:10 PST, after the owner asked why the verifications were not finished. Done, all in `proof-wave5.md`: the refusal for a machine with hoot off (`hoot_disabled`, hoot switched off on owlette-kiosk for 37 s through the dev API); a Mac as the machine acted on (TEC-MBA: `get_system_info`, `add_process`, `restart_process`, `get_process_list`, `kill_process`, `delete_process`); PR #498's before and after on the Mac (second PR comment); the desktop app's **connect an ai agent** dialog in the real app on TEC-A4D (dev's build run against the installed agent, no elevation, click-to-copy read back from the clipboard).
+- Still owed: the refusals' audit rows on dev (authorization decisions carry no `recordedAt`, so the audit-log API never lists them and no page shows them; reading Firestore directly waits on the owner's word). Not planned: #498 installed on a Windows machine.
+- Owner ruling, 2026-11-11 21:30: "hoot should just live under 'fleet' as it's own item, like 'swoop'"; no hoot section, no "settings" item. owlette-f8 carries it on `feat/admin-feature-sections` with the hoot page's rework (swoop stays one item too) and takes two fixes for the senders rows: a row switched on opens on "pick machines", and a row that is on and reaches no machines says so. The owner missed "on which machines" three times that evening. My own start on it (`fix/hoot-nav-item`) was dropped and handed over as a patch.
+- **The night of 2026-11-11.** Owner, 22:30: "we need mac as one acting too -- linux can wait.; we need all areas as tools, not just some. this must be complete for 4.2.0", then "we need all of this tonight". Built in parallel by executors, reviewed, and merged by owlette-f8 on the owner's word as each turned green.
+- PR #500 (merged, dev `6070e3d8`): a cut sender is told at once (`site_settings_refresh` to senders a write cuts, only machines still in the site), the grant change's audit row carries `changedSenders`, `list_machines` reports `os` from `osFamily` plus `osVersion`. Seen live: a cut Mac dropped its file 8 s after the save.
+- PR #501 (merged, dev `00548c8c`): wave 12 and the docs half of 13.1. A third server-tool kind, `target: 'machines'` (`context.ts`, `dispatch.server.ts`): the tool names its machines, dispatch checks each before any allow row and refuses the call whole, at most 50 a call. Nineteen new tools in `web/lib/fleet/tools/`: `reads`, `screenshots`, `displays`, `schedules`, `deployments`, `roost`; `capture_screenshot` now travels as its own command type and returns an image. roost's deploy and rollback moved out of their routes into `web/lib/actions/deployRoost.server.ts` and `rollbackRoost.server.ts` (the routes keep auth, kill switch and idempotency; their 195 tests pass unedited; `approvedMachines` guard). Rules made on the way: a site-wide read that cannot be narrowed (alert rules, audit log, display settings) answers only a grant on the whole site, as people limited to some machines are refused them (`wholeSiteOnly`); a deployment or roost is visible, and writable, only when every machine it names is inside the grant, and otherwise answers as not found; roost writes meet the plan gate and the kill switch. Reference page `web/content/docs/reference/hoot-mcp-tools.mdx` with `web/__tests__/lib/fleet/catalogDocs.test.ts`.
+- PR #502 (open, head `ed53a776`, merges after its checks): `agent/src/fleet_session.py` on macOS (file 0640 `root:_owlette`, created 0600 and opened to the group after the handover, every operation through a checked descriptor of the folder), the desktop dialog's macOS command, single-quoted for zsh. Linux stays off.
+- Proofs: `proof-wave8.md` (a Mac acting, end to end, and the cut) and `proof-wave13.md` (one tool per area on dev). Owed: the privileged area tools doing real work on a machine (shown refused below their tier only), the dialog in a built macOS app, the three site-wide reads answered to a whole-site grant.
+- Left for after: the guide `agent/hoot-mcp.mdx` (owlette-f8's page PR first: the Mac, `list_machines`' fields, the cut, a link to the reference, and the audit sentence, which claims refused calls are in the audit log: they are stored as authorization decisions the audit-log API does not list, and showing them needs a new event kind and a functions deploy); Linux as the acting machine (the keeper's POSIX path is written for both, only `_SUPPORTED` and a proof stand between).

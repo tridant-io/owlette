@@ -1,7 +1,7 @@
 ---
 title: "hoot mcp"
 description: "hoot mcp lets an AI agent running on one of your machines act on the other machines of its site, with hoot's tools. the owlette agent already installed there is the MCP server, and the machine's pairing is the credential: no API key, no CLI."
-keywords: ["mcp", "model context protocol", "claude code", "ai agent", "let machines act on other machines", "machine to machine", "sender", "fleet", "ask_hoot", "list_machines", "fleet_status", "claude mcp add", "no api key", "tool not allowed", "machine not granted"]
+keywords: ["mcp", "model context protocol", "claude code", "ai agent", "mac", "macos", "let machines act on other machines", "machine to machine", "sender", "fleet", "ask_hoot", "list_machines", "fleet_status", "claude mcp add", "no api key", "tool not allowed", "machine not granted"]
 ---
 
 an AI agent on a paired machine (Claude Code, or any client that speaks [MCP](https://modelcontextprotocol.io)) connects to the owlette agent installed beside it and gets tools that act on other machines in the same site: read a machine's state, restart a process, change a setting, hand [hoot](/docs/dashboard/hoot) a task.
@@ -9,7 +9,7 @@ an AI agent on a paired machine (Claude Code, or any client that speaks [MCP](ht
 nothing new is installed and nothing is signed in. the machine was paired to its site when owlette was installed, and that pairing is what the server trusts. what the machine may do with it is yours to say, per machine, in the admin panel. it is **off until you turn it on**.
 
 <Callout type="info" title="where it runs">
-the machine the AI agent runs on must be on Windows, on owlette 4.2.0 or later. the machines it acts on can be on any platform owlette supports. macOS and Linux machines as the acting side come in a later release.
+the machine the AI agent runs on must be on Windows or macOS, on owlette 4.2.0 or later. the machines it acts on can be on any platform owlette supports. a Linux machine as the acting side comes in a later release. on a Mac it works for the user who was at the console when owlette was installed.
 </Callout>
 
 ---
@@ -31,9 +31,9 @@ the three steps are hoot's [tool tiers](/docs/reference/hoot-tools#tier-system):
 
 | setting | tier | what the machine may do |
 |---|---|---|
-| **read** | 1 | read state: system information, processes, logs, screenshots |
-| **bounded changes** | 2 | tier 1, plus changes with validated parameters: start, stop and restart a process, edit the processes owlette manages, hand hoot a task |
-| **privileged** | 3 | tier 2, plus shell commands, scripts, files, reboot and shutdown |
+| **read** | 1 | read state: system information, processes, logs, screenshots already taken, metrics history, installed software, deployments and roosts |
+| **bounded changes** | 2 | tier 1, plus changes with validated parameters: start, stop and restart a process, edit the processes owlette manages, take a screenshot, cancel a deployment, hand hoot a task |
+| **privileged** | 3 | tier 2, plus shell commands, scripts, files, reboot and shutdown, a reboot schedule, software deployments, owlette updates, and roost deploys and rollbacks |
 
 <Callout type="warning" title="privileged has nobody approving">
 in the dashboard, hoot stops before a tier 3 tool and waits for you to approve it. a machine acting on its own has nobody to ask, so a machine set to **privileged** runs those tools at once. give it to a machine only if you would let whoever uses that machine run a shell on the machines it reaches.
@@ -65,10 +65,16 @@ the owlette desktop app on the machine shows the command below, ready to copy: o
 
 ### Claude Code
 
-on the machine, in a terminal:
+on a Windows machine, in a terminal:
 
 ```powershell
 claude mcp add hoot -- "C:\ProgramData\Owlette\python\python.exe" "C:\ProgramData\Owlette\agent\src\fleet_mcp.py"
+```
+
+on a Mac, in Terminal:
+
+```bash
+claude mcp add hoot -- '/Library/Application Support/Owlette/runtime/python/bin/python3' '/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py'
 ```
 
 then ask Claude to run `fleet_status`. it answers with the site, the machine and when its session expires, or says why it has none.
@@ -77,10 +83,10 @@ then ask Claude to run `fleet_status`. it answers with the site, the machine and
 
 register a stdio server with this command and these arguments:
 
-| | |
-|---|---|
-| command | `C:\ProgramData\Owlette\python\python.exe` |
-| arguments | `C:\ProgramData\Owlette\agent\src\fleet_mcp.py` |
+| | Windows | macOS |
+|---|---|---|
+| command | `C:\ProgramData\Owlette\python\python.exe` | `/Library/Application Support/Owlette/runtime/python/bin/python3` |
+| arguments | `C:\ProgramData\Owlette\agent\src\fleet_mcp.py` | `/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py` |
 
 it needs no environment variables and no key.
 
@@ -93,13 +99,15 @@ the list comes from the server each time the client asks, cut to what the machin
 | tool | tier | what it does |
 |---|---|---|
 | `fleet_status` | none | answered on the machine itself: whether it may act, as which machine, on which site, and until when |
-| `list_machines` | 1 | the machines it may act on: id, online or not, seconds since the last heartbeat, OS, agent version, whether hoot is on |
+| `list_machines` | 1 | the machines it may act on: id, online or not, seconds since the last heartbeat, OS (windows, macos or linux) and its version, agent version, whether hoot is on |
 | `get_site_logs` | 1 | the site's activity log, for the machines it may act on |
 | hoot's machine tools | 1 to 3 | every tool in the [hoot tools reference](/docs/reference/hoot-tools) that runs on a machine, each with one more parameter, `machine`, naming the machine to act on |
 | `update_process`, `add_process`, `delete_process` | 2 | edit the processes owlette manages on a machine. these change its configuration and work while the machine is offline |
 | `ask_hoot` | 2 | hand hoot a task in words and get its written answer back |
 
-a tool that acts on a machine takes that machine's id as `machine`, from `list_machines`. one call acts on one machine.
+these are the ones an agent reaches for first. the rest, by area (metrics history, installed software, screenshots, displays, reboot schedules, deployments and owlette updates, roost), are in the [hoot mcp tools reference](/docs/reference/hoot-mcp-tools), each with its tier and what it acts on.
+
+a tool that acts on a machine takes that machine's id as `machine`, from `list_machines`. one call acts on one machine, except the few that name several, such as a deployment or a roost: those are refused whole unless every machine they name is one the calling machine may act on.
 
 a tool that waits on a machine runs for as long as the tool needs, up to 55 minutes; the client waits for it.
 
@@ -130,13 +138,13 @@ a refused call answers with a reason the AI agent can read. the common ones:
 | `hoot_unavailable` | `ask_hoot` has no LLM key to run on |
 | `rate_limited` | too many calls: 60 commands a minute per machine, or the task limits above |
 
-turning a machine off in that list, or turning the site's switch off, ends what it can do within seconds, a session in use included. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them.
+turning a machine off in that list, or turning the site's switch off, ends what it can do within seconds, a session in use included: the server refuses its next call, and its agent is told at once and deletes its session. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them.
 
 ---
 
 ## what the audit log shows
 
-every call a machine makes is in the site's [audit log](/docs/cli/reference/audit-log) under the machine, as `machine:<machine id>`: an entry when the call is allowed, naming the tool and the machine it acts on, or an entry with the reason when it is refused. a command it queues, and a process it adds, changes or removes, carries the same name.
+what a machine changes is in the site's [audit log](/docs/cli/reference/audit-log) under the machine, as `machine:<machine id>`: a command it queues, a process it adds, changes or removes, a deployment it starts or cancels, a roost it deploys or rolls back. a change to which machines may act is there too, under whoever made it, with what changed for each machine. every call is also recorded as allowed or refused, with the tool, the machine it names and the reason, but those records are not in the audit log's list yet.
 
 reads that only look something up (the tool list, checking on a call that is still running) write no entry.
 
@@ -165,8 +173,8 @@ sequenceDiagram
 ```
 
 - the service asks the server for a **fleet session** with the machine's pairing, and renews it every ten minutes while the machine is allowed. the session lasts 15 minutes and works on these calls only: it cannot do anything else the agent can.
-- the service keeps the session in `C:\ProgramData\Owlette\ipc\fleet\session.json`, which the signed-in user can read and cannot change. the script reads it for each call and never sees the agent's own tokens.
-- when the machine is turned off in the admin panel, unpaired or shut down, the service deletes the file.
+- the service keeps the session in `C:\ProgramData\Owlette\ipc\fleet\session.json`, which the signed-in user can read and cannot change. on a Mac it is `/Library/Application Support/Owlette/ipc/fleet/session.json`, readable by owlette's own group and nobody else. the script reads it for each call and never sees the agent's own tokens.
+- when the machine is turned off in the admin panel, unpaired or shut down, the service deletes the file. a machine turned off in the admin panel is told at once, so the file is gone within seconds.
 - a command reaches the other machine the way one sent from the dashboard does, so everything on the [remote commands](/docs/agent/remote-commands) page holds for it.
 
 ---
