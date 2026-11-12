@@ -505,6 +505,19 @@ def test_a_refused_handoff_clears_the_marker_it_wrote(
     assert not (tmp_path / 'Owlette' / 'logs' / 'update_in_progress.json').exists()
 
 
+def test_a_failed_download_names_the_link_without_its_query_string(
+        update_service, monkeypatch):
+    monkeypatch.setattr(
+        installer_utils, 'download_file', lambda url, dest_path, **kwargs: (False, ''))
+
+    result = update_service._run_self_update(
+        'cmd-1', {'installer_url': 'https://example.invalid/a.deb?key=abc123',
+                  'checksum_sha256': 'f' * 64}, '9.9.9', 'linux')
+
+    assert result == ('Error: initiating update failed: Failed to download installer '
+                      'after 3 retries from https://example.invalid/a.deb?<redacted>')
+
+
 def test_the_worker_reports_what_the_lane_can_no_longer_see(
         update_service, tmp_path, monkeypatch):
     """The command was accepted and the lane moved on, so a refusal reached

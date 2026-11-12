@@ -149,6 +149,16 @@ describe('cancel', () => {
     }
   });
 
+  it('says on the x that an installer already running finishes', async () => {
+    await expand('vlc rollout');
+
+    await userEvent.hover(screen.getByRole('button', { name: 'cancel deployment to m-downloading' }));
+
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'cancel this machine. an installer that is already running finishes',
+    );
+  });
+
   it('cancels only the machine clicked', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ cancelled: 1 }) });
     await expand('vlc rollout');

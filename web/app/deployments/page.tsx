@@ -333,16 +333,23 @@ const DeploymentRow = React.memo(function DeploymentRow({
                           );
                         })()}
                         {PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status) && (
-                          <Button
-                            size="sm"
-                            variant="ghost-destructive"
-                            disabled={cancelling.has(cancelKey(deployment.id, target.machineId))}
-                            onClick={() => onCancel(deployment.id, target.machineId)}
-                            aria-label={`cancel deployment to ${target.machineId}`}
-                            className="h-7 px-2 cursor-pointer"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost-destructive"
+                                disabled={cancelling.has(cancelKey(deployment.id, target.machineId))}
+                                onClick={() => onCancel(deployment.id, target.machineId)}
+                                aria-label={`cancel deployment to ${target.machineId}`}
+                                className="h-7 px-2 cursor-pointer"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>cancel this machine. an installer that is already running finishes</p>
+                            </TooltipContent>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
