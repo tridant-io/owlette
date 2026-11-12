@@ -24,11 +24,9 @@ export function siteSettingsPath(siteId: string, section?: SiteSection): string 
   return section && section !== 'general' ? `${path}?section=${section}` : path;
 }
 
-export function swoopSettingsPath(siteId: string): string {
-  return `/admin/swoop/settings?site=${encodeURIComponent(siteId)}`;
-}
+export const SWOOP_SETTINGS_PATH = '/admin/swoop/settings';
 
 /** where a section that left the site's page lives now, so its old links still land on it. */
-export function movedSiteSectionPath(siteId: string, raw: string | null): string | null {
-  return raw === 'swoop' ? swoopSettingsPath(siteId) : null;
+export function movedSiteSectionPath(raw: string | null): string | null {
+  return raw === 'swoop' ? SWOOP_SETTINGS_PATH : null;
 }

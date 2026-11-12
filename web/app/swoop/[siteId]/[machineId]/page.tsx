@@ -18,7 +18,7 @@ import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } f
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
-import { swoopSettingsPath } from '@/lib/siteSettingsPath';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 import {
   applyBarPosition,
   currentBarPosition,
@@ -154,7 +154,7 @@ export default function SwoopPage({
           restarting={restarting}
           linkLost={!stats.linkUp}
           refusal={refusal}
-          settingsHref={isSiteAdmin(siteId) ? swoopSettingsPath(siteId) : null}
+          settingsHref={isSiteAdmin(siteId) ? SWOOP_SETTINGS_PATH : null}
           // a site runs on its owner's plan, so only the owner is sent to upgrade it
           upgradeHref={isSiteOwner(siteId) ? '/settings/plan' : null}
           noPath={noPath}

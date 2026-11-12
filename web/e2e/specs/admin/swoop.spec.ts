@@ -2,9 +2,8 @@
  * Admin — the sidebar's swoop section: its live sessions page and its settings
  * page.
  *
- * Settings picks a site from the site selector the other site-scoped admin pages
- * use, offering only the sites whose switch the caller may change, and the swoop
- * switch there writes `sites/{site}/settings/swoop` at once.
+ * Settings is one table, a row per site the caller may change with its swoop
+ * switch, which writes `sites/{site}/settings/swoop` at once.
  *
  * Session records are server-only (`sites/{site}/machines/{m}/swoop_sessions/{sid}`,
  * no rule reaches them), so the page reads them through
@@ -21,11 +20,10 @@
 
 import crypto from 'crypto';
 import { test, expect, type Page } from '@playwright/test';
-import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { roleState } from '../../helpers/roles';
-import { seedMachine, seedSite, TEST_USERS, type TestUser } from '../../helpers/seed';
+import { seedMachine, seedSite, type TestUser } from '../../helpers/seed';
 
 const SUFFIX = crypto.randomBytes(4).toString('hex');
 const SITE_ID = `site-admin-swoop-${SUFFIX}`;
@@ -96,17 +94,6 @@ async function gotoSwoopSessions(page: Page) {
 test.describe('as a superadmin', () => {
   test.use(roleState('superadmin'));
 
-  // picking a site saves it as the superadmin's last site, which every later
-  // superadmin spec would open on: the suite runs one worker, so put it back
-  const superadminDoc = () => getAdminDb().collection('users').doc(TEST_USERS.superadmin.uid);
-  let savedLastSite: string | undefined;
-  test.beforeAll(async () => {
-    savedLastSite = (await superadminDoc().get()).get('lastSiteId') as string | undefined;
-  });
-  test.afterAll(async () => {
-    await superadminDoc().update({ lastSiteId: savedLastSite ?? FieldValue.delete() });
-  });
-
   test('lists the live session with its viewer and ends it with a kill', async ({ page }) => {
     await gotoSwoopSessions(page);
 
@@ -156,17 +143,13 @@ test.describe('as a superadmin', () => {
     await expect(swoop.nth(0)).not.toHaveAttribute('aria-current');
   });
 
-  test('swoop settings picks a site, and its switch writes at once', async ({ page }) => {
+  test("swoop settings lists the site, and its row's switch writes at once", async ({ page }) => {
     await page.goto('/admin/swoop/settings');
     await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
       timeout: 10_000,
     });
 
-    await page.getByRole('combobox', { name: 'site', exact: true }).click();
-    await page.getByRole('option', { name: SITE_NAME, exact: true }).click();
-    await expect(page).toHaveURL(new RegExp(`/admin/swoop/settings\\?site=${SITE_ID}$`));
-
-    const swoop = page.getByRole('region', { name: SITE_NAME, exact: true }).getByRole('switch', { name: 'swoop', exact: true });
+    const swoop = page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true });
     // enabled means the snapshot has answered; with no document, swoop is off. the
     // switch follows its snapshot, so the flip on screen is the document answering.
     await expect(swoop).toBeEnabled();
@@ -175,9 +158,9 @@ test.describe('as a superadmin', () => {
     await expect(swoop).toBeChecked();
     expect((await getAdminDb().doc(`sites/${SITE_ID}/settings/swoop`).get()).data()?.enabled).toBe(true);
 
-    // a reload keeps the site, and the switch stays where it was left
+    // a reload reads it back
     await page.reload();
-    await expect(page.getByRole('region', { name: SITE_NAME, exact: true }).getByRole('switch', { name: 'swoop', exact: true })).toBeChecked();
+    await expect(page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true })).toBeChecked();
   });
 });
 
@@ -194,14 +177,14 @@ test.describe('as a site admin of another site', () => {
     await expect(page.getByText(viewer.email)).toHaveCount(0);
   });
 
-  test('swoop settings never opens a site the admin does not run, even when the url names it', async ({ page }) => {
-    await page.goto(`/admin/swoop/settings?site=${SITE_ID}`);
+  test('swoop settings never lists a site the admin does not run', async ({ page }) => {
+    await page.goto('/admin/swoop/settings');
     await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
       timeout: 10_000,
     });
 
-    // a site the admin does run opens instead
-    await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeVisible();
-    await expect(page.getByRole('region', { name: SITE_NAME, exact: true })).toHaveCount(0);
+    // the site the admin does run is listed
+    await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeVisible();
+    await expect(page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true })).toHaveCount(0);
   });
 });

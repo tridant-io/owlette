@@ -149,11 +149,6 @@ test("a site's settings fit, section by section", async ({ page }) => {
 
   await expectFullyWithinViewport(page, page.getByLabel('site name', { exact: true }), 'the site name input');
   await expectFullyWithinViewport(page, page.getByRole('button', { name: 'save', exact: true }), 'save');
-  await expectFullyWithinViewport(
-    page,
-    page.getByRole('link', { name: 'swoop settings', exact: true }),
-    'the swoop settings link',
-  );
 
   await sections.getByRole('button', { name: 'members', exact: true }).tap();
   await expectFullyWithinViewport(page, page.getByRole('button', { name: 'add member', exact: true }), 'add member');
@@ -193,15 +188,14 @@ test("a site's settings fit, section by section", async ({ page }) => {
   await assertNoHorizontalOverflow(page);
 });
 
-test("a site's swoop settings fit", async ({ page }) => {
-  await page.goto(`/admin/swoop/settings?site=${TAKEN_SITE_ID}`);
+test('swoop settings fit', async ({ page }) => {
+  await page.goto('/admin/swoop/settings');
   await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
 
-  // a superadmin runs every site, so the site picker shows; the switch is only reached, never tapped
-  await expectFullyWithinViewport(page, page.getByRole('combobox', { name: 'site', exact: true }), 'the site picker');
+  // the switch writes the moment it moves, so here it is only reached, never tapped
   await expectFullyWithinViewport(
     page,
-    page.getByRole('region', { name: TAKEN_SITE_NAME, exact: true }).getByRole('switch', { name: 'swoop', exact: true }),
+    page.getByRole('switch', { name: `swoop on ${TAKEN_SITE_NAME}`, exact: true }),
     'the swoop switch',
   );
   await assertNoHorizontalOverflow(page);

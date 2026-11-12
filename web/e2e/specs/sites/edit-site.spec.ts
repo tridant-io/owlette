@@ -6,10 +6,10 @@
  * an empty name toasts an error and writes nothing. the site is the spec's own,
  * re-seeded before every test, so the shared site-A / site-B baseline stays untouched.
  *
- * keep screens awake sits in the machines section (?section=machines), and general
- * links to the site's swoop settings (/admin/swoop/settings?site=...), where the
- * swoop switch is. both act at once, with no save, so the spec flips each and reads
- * back sites/site-to-rename/settings/{display,swoop}.
+ * keep screens awake sits in the machines section (?section=machines), and the
+ * swoop switch in the site's row on swoop settings (/admin/swoop/settings). both
+ * act at once, with no save, so the spec flips each and reads back
+ * sites/site-to-rename/settings/{display,swoop}.
  */
 
 import { test, expect, type Page } from '@playwright/test';
@@ -107,17 +107,12 @@ test.describe("the site's switches", () => {
     expect((await settingsDoc('swoop').get()).exists).toBe(false);
   });
 
-  test("general links to the site's swoop settings, where the switch writes at once", async ({ page }) => {
-    await openGeneralSection(page);
-    await page
-      .getByRole('region', { name: 'features', exact: true })
-      .getByRole('link', { name: 'swoop settings', exact: true })
-      .click();
-
-    await expect(page).toHaveURL(new RegExp(`/admin/swoop/settings\\?site=${RENAMEABLE_SITE_ID}$`));
-    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
-    const panel = page.getByRole('region', { name: ORIGINAL_NAME, exact: true });
-    const swoop = panel.getByRole('switch', { name: 'swoop', exact: true });
+  test("the site's row on swoop settings writes its switch at once", async ({ page }) => {
+    await page.goto('/admin/swoop/settings');
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
+      timeout: 10_000,
+    });
+    const swoop = page.getByRole('switch', { name: `swoop on ${ORIGINAL_NAME}`, exact: true });
 
     // with no document, swoop is off
     await expect(swoop).toBeEnabled();

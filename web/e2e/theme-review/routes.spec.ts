@@ -157,7 +157,7 @@ const CAPTURES: Capture[] = [
     path: (siteId) => `/admin/sites/${siteId}`,
     role: 'superadmin',
     scenario: 'dashboard-mixed-states',
-    ready: (page) => expect(page.getByRole('link', { name: 'swoop settings', exact: true })).toBeVisible({ timeout: 15_000 }),
+    ready: (page) => expect(page.getByLabel('site name', { exact: true })).toBeVisible({ timeout: 15_000 }),
   },
   {
     slug: 'admin-site-machines',
@@ -168,17 +168,17 @@ const CAPTURES: Capture[] = [
   },
   {
     slug: 'admin-swoop-settings',
-    path: (siteId) => `/admin/swoop/settings?site=${siteId}`,
+    path: '/admin/swoop/settings',
     role: 'superadmin',
     scenario: 'dashboard-mixed-states',
-    ready: (page) => expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeEnabled({ timeout: 15_000 }),
+    ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
   },
   {
     slug: 'admin-sidebar',
-    path: (siteId) => `/admin/swoop/settings?site=${siteId}`,
+    path: '/admin/swoop/settings',
     role: 'superadmin',
     scenario: 'dashboard-mixed-states',
-    ready: (page) => expect(page.getByRole('switch', { name: 'swoop', exact: true })).toBeEnabled({ timeout: 15_000 }),
+    ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
     // the sidebar shows beside the page from lg up; below it is a drawer behind the menu button
     act: async (page) => {
       const menu = page.getByRole('button', { name: 'open admin menu' });

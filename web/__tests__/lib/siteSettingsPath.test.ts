@@ -5,7 +5,6 @@ import {
   movedSiteSectionPath,
   parseSiteSection,
   siteSettingsPath,
-  swoopSettingsPath,
 } from '@/lib/siteSettingsPath';
 
 describe('siteSettingsPath', () => {
@@ -40,21 +39,14 @@ describe('parseSiteSection', () => {
   });
 });
 
-describe('swoopSettingsPath', () => {
-  it('names the site in the query, encoded', () => {
-    expect(swoopSettingsPath('elm-gate')).toBe('/admin/swoop/settings?site=elm-gate');
-    expect(swoopSettingsPath('elm gate&x')).toBe('/admin/swoop/settings?site=elm%20gate%26x');
-  });
-});
-
 describe('movedSiteSectionPath', () => {
-  it("sends the old swoop section to the site's swoop settings", () => {
-    expect(movedSiteSectionPath('elm gate', 'swoop')).toBe('/admin/swoop/settings?site=elm%20gate');
+  it('sends the old swoop section to swoop settings', () => {
+    expect(movedSiteSectionPath('swoop')).toBe('/admin/swoop/settings');
   });
 
   it('leaves every section still on the page, and anything unknown, where it is', () => {
     for (const raw of [null, '', ...SITE_SECTIONS, 'SWOOP', 'billing']) {
-      expect(movedSiteSectionPath('elm-gate', raw)).toBeNull();
+      expect(movedSiteSectionPath(raw)).toBeNull();
     }
   });
 });

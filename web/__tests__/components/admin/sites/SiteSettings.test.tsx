@@ -316,23 +316,6 @@ describe('sections', () => {
     expect(screen.queryByTestId('keep-awake-switch')).toBeNull();
   });
 
-  it("links general to the site's swoop settings", () => {
-    renderSettings('site-a');
-
-    const features = screen.getByRole('region', { name: 'features' });
-    expect(features).toHaveTextContent('these keep their settings on their own page in the admin panel.');
-    expect(within(features).getByRole('link', { name: 'swoop settings' })).toHaveAttribute(
-      'href',
-      '/admin/swoop/settings?site=site-a',
-    );
-  });
-
-  it('links swoop settings from general only', () => {
-    renderSettings('site-a', 'machines');
-
-    expect(screen.queryByRole('link', { name: 'swoop settings' })).toBeNull();
-  });
-
   it("hands the danger zone the site, and its delete goes to useSites' deleteSite", async () => {
     renderSettings('site-c', 'danger');
 
@@ -444,11 +427,11 @@ describe('/admin/sites/[siteId]', () => {
     expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-a');
   });
 
-  it("sends the old swoop section to the site's swoop settings, rendering nothing on the way", async () => {
+  it('sends the old swoop section to swoop settings, rendering nothing on the way', async () => {
     mockSearch = 'section=swoop';
     await openPage('site a');
 
-    expect(mockReplace).toHaveBeenCalledWith('/admin/swoop/settings?site=site%20a');
+    expect(mockReplace).toHaveBeenCalledWith('/admin/swoop/settings');
     expect(screen.queryByRole('group', { name: 'site settings sections' })).toBeNull();
     expect(screen.queryByTestId(/-section$/)).toBeNull();
   });

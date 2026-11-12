@@ -90,13 +90,13 @@ it('a session refused for good says why in the middle, and does not say it is co
   expect(screen.queryByText(/connecting/i)).toBeNull();
 });
 
-it('tells an admin to turn swoop on and links to the site’s swoop settings', async () => {
+it('tells an admin to turn swoop on and links to swoop settings', async () => {
   siteAdmin = true;
   const notice = await openViewer();
   expect(notice).toHaveTextContent('turn it on in swoop settings.');
   expect(within(notice).getByRole('link', { name: 'open swoop settings' })).toHaveAttribute(
     'href',
-    '/admin/swoop/settings?site=site%201',
+    '/admin/swoop/settings',
   );
 });
 

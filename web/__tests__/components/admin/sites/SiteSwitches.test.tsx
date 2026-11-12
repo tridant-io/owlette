@@ -2,10 +2,10 @@
 /**
  * @jest-environment jsdom
  *
- * a site's two immediate switches: swoop, on admin panel → swoop → settings, and
- * keep screens awake, on the site's machines section. each PATCHes its own
- * settings route the moment it moves, follows its snapshot, and says something
- * only when the write fails.
+ * a site's two immediate switches: swoop, in the site's row on admin panel →
+ * swoop → settings, and keep screens awake, on the site's machines section. each
+ * PATCHes its own settings route the moment it moves, follows its snapshot, and
+ * says something only when the write fails.
  */
 
 import { render, screen, waitFor } from '@testing-library/react';
@@ -13,9 +13,8 @@ import userEvent from '@testing-library/user-event';
 import { KeepScreensAwakeSwitch, SwoopSwitch } from '@/components/admin/sites/SiteSwitches';
 
 // the switches follow these snapshots; swoop off and keep awake on are each one's default.
-let membersMayWatch = true;
 jest.mock('@/hooks/useSwoopSettings', () => ({
-  useSwoopSettings: () => ({ settings: { enabled: false, membersMayWatch }, loading: false }),
+  useSwoopSettings: () => ({ settings: { enabled: false }, loading: false }),
 }));
 jest.mock('@/hooks/useDisplaySettings', () => ({
   useDisplaySettings: () => ({ settings: { keepAwake: true }, loading: false }),
@@ -35,7 +34,6 @@ jest.mock('@/lib/toast', () => ({
 const fetchMock = jest.fn();
 
 beforeEach(() => {
-  membersMayWatch = true;
   fetchMock.mockReset().mockResolvedValue({ ok: true, json: async () => ({}) });
   global.fetch = fetchMock as unknown as typeof fetch;
   toastSuccess.mockReset();
@@ -47,14 +45,14 @@ function renderSwitches() {
   const user = userEvent.setup();
   render(
     <>
-      <SwoopSwitch siteId="site-a" />
+      <SwoopSwitch siteId="site-a" siteName="Alpha" />
       <KeepScreensAwakeSwitch siteId="site-a" />
     </>,
   );
   return user;
 }
 
-const swoopSwitch = () => screen.getByRole('switch', { name: 'swoop' });
+const swoopSwitch = () => screen.getByRole('switch', { name: 'swoop on Alpha' });
 const keepAwakeSwitch = () => screen.getByRole('switch', { name: 'keep screens awake' });
 
 describe('the switches', () => {
@@ -66,22 +64,6 @@ describe('the switches', () => {
     expect(keepAwakeSwitch()).toHaveAttribute('id', 'keep-awake-site-a');
     expect(keepAwakeSwitch()).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText('machines on this site never sleep, blank or lock')).toBeInTheDocument();
-  });
-
-  it.each([
-    [
-      true,
-      "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members.",
-    ],
-    [
-      false,
-      "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members.",
-    ],
-  ])('says who swoops by default when membersMayWatch is %p', (mayWatch, copy) => {
-    membersMayWatch = mayWatch;
-    renderSwitches();
-
-    expect(screen.getByText(copy)).toBeInTheDocument();
   });
 });
 
@@ -112,7 +94,7 @@ describe('what each switch writes', () => {
 
   it('encodes the site id in the route', async () => {
     const user = userEvent.setup();
-    render(<SwoopSwitch siteId="elm gate" />);
+    render(<SwoopSwitch siteId="elm gate" siteName="Alpha" />);
 
     await user.click(swoopSwitch());
 

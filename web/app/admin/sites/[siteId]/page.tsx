@@ -11,7 +11,7 @@ function SiteSettingsContent({ siteId }: { siteId: string }) {
   const router = useRouter();
   const raw = useSearchParams().get('section');
   // a bookmark or an older build's link to a section that moved out still lands on it
-  const movedTo = movedSiteSectionPath(siteId, raw);
+  const movedTo = movedSiteSectionPath(raw);
   useEffect(() => {
     if (movedTo) router.replace(movedTo);
   }, [movedTo, router]);

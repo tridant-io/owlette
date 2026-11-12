@@ -7,10 +7,10 @@ import { toast } from '@/lib/toast';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { useDisplaySettings } from '@/hooks/useDisplaySettings';
 
-interface SiteSettingSwitchProps {
+interface ImmediateSwitchProps {
   id: string;
+  /** the switch's accessible name, and what a failure toast says could not change. */
   label: string;
-  description: string;
   checked: boolean;
   loading: boolean;
   /** PATCHed with `{ [field]: next }` the moment the switch moves. */
@@ -23,7 +23,7 @@ interface SiteSettingSwitchProps {
  * online machines, which a cancel could not take back. the switch follows its
  * snapshot hook, so only a failure needs saying.
  */
-function SiteSettingSwitch({ id, label, description, checked, loading, url, field }: SiteSettingSwitchProps) {
+function ImmediateSwitch({ id, label, checked, loading, url, field }: ImmediateSwitchProps) {
   const [busy, setBusy] = useState(false);
 
   const save = async (next: boolean) => {
@@ -50,38 +50,26 @@ function SiteSettingSwitch({ id, label, description, checked, loading, url, fiel
   };
 
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 space-y-0.5">
-        <Label htmlFor={id} className="text-foreground">
-          {label}
-        </Label>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-      <Switch
-        id={id}
-        checked={checked}
-        onCheckedChange={(next) => void save(next)}
-        disabled={busy || loading}
-      />
-    </div>
+    <Switch
+      id={id}
+      aria-label={label}
+      checked={checked}
+      onCheckedChange={(next) => void save(next)}
+      disabled={busy || loading}
+    />
   );
 }
 
 const siteApi = (siteId: string) => `/api/sites/${encodeURIComponent(siteId)}`;
 
-/** the site's swoop switch, on admin panel → swoop → settings. */
-export function SwoopSwitch({ siteId }: { siteId: string }) {
+/** a site's swoop switch, in its row on admin panel → swoop → settings. */
+export function SwoopSwitch({ siteId, siteName }: { siteId: string; siteName: string }) {
   const swoop = useSwoopSettings(siteId);
 
   return (
-    <SiteSettingSwitch
+    <ImmediateSwitch
       id={`swoop-${siteId}`}
-      label="swoop"
-      description={
-        swoop.settings.membersMayWatch
-          ? "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members."
-          : "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members."
-      }
+      label={`swoop on ${siteName}`}
       checked={swoop.settings.enabled}
       loading={swoop.loading}
       url={`${siteApi(siteId)}/swoop-settings`}
@@ -93,16 +81,24 @@ export function SwoopSwitch({ siteId }: { siteId: string }) {
 /** the site's keep screens awake switch, on its settings page's machines section. */
 export function KeepScreensAwakeSwitch({ siteId }: { siteId: string }) {
   const display = useDisplaySettings(siteId);
+  const id = `keep-awake-${siteId}`;
 
   return (
-    <SiteSettingSwitch
-      id={`keep-awake-${siteId}`}
-      label="keep screens awake"
-      description="machines on this site never sleep, blank or lock"
-      checked={display.settings.keepAwake}
-      loading={display.loading}
-      url={`${siteApi(siteId)}/display-settings`}
-      field="keepAwake"
-    />
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0 space-y-0.5">
+        <Label htmlFor={id} className="text-foreground">
+          keep screens awake
+        </Label>
+        <p className="text-xs text-muted-foreground">machines on this site never sleep, blank or lock</p>
+      </div>
+      <ImmediateSwitch
+        id={id}
+        label="keep screens awake"
+        checked={display.settings.keepAwake}
+        loading={display.loading}
+        url={`${siteApi(siteId)}/display-settings`}
+        field="keepAwake"
+      />
+    </div>
   );
 }
