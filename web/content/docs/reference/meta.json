@@ -6,6 +6,7 @@
     "authentication",
     "agent-commands",
     "hoot-tools",
+    "hoot-mcp-tools",
     "firestore-data-model"
   ]
 }

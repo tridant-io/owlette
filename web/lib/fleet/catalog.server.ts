@@ -16,8 +16,14 @@ import {
 import { SERVER_SIDE_TOOLS } from '@/lib/hoot-utils.server';
 import { stripActiveHoursOverride } from '@/lib/actions/executeMachineCommand.server';
 import type { FleetServerTool } from '@/lib/fleet/context';
+import { deploymentTools } from '@/lib/fleet/tools/deployments.server';
+import { displayTools } from '@/lib/fleet/tools/displays.server';
 import { hootServerTools } from '@/lib/fleet/tools/hoot.server';
 import { listMachinesTool } from '@/lib/fleet/tools/machines.server';
+import { readTools } from '@/lib/fleet/tools/reads.server';
+import { roostTools } from '@/lib/fleet/tools/roost.server';
+import { scheduleTools } from '@/lib/fleet/tools/schedules.server';
+import { screenshotTools } from '@/lib/fleet/tools/screenshots.server';
 
 export const MACHINE_PARAM = 'machine';
 export const ASK_HOOT_TOOL = 'ask_hoot';
@@ -45,7 +51,16 @@ const askHootTool: McpToolDefinition = {
 };
 
 /** a new area's tools join here. */
-const serverTools: readonly FleetServerTool[] = [listMachinesTool, ...hootServerTools];
+const serverTools: readonly FleetServerTool[] = [
+  listMachinesTool,
+  ...hootServerTools,
+  ...readTools,
+  ...screenshotTools,
+  ...displayTools,
+  ...scheduleTools,
+  ...deploymentTools,
+  ...roostTools,
+];
 
 function withMachineParam(def: McpToolDefinition): McpToolDefinition {
   return {

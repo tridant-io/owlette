@@ -661,6 +661,39 @@ describe('startFleetCall: the two mappings', () => {
     expect(admit).toHaveBeenCalledWith({ capability: Capability.MACHINE_VIEW, tool: 'get_system_info', machineId: M1 });
   });
 
+  it('capture_screenshot queues the capture_screenshot command type with its monitor, and reads back as an image', async () => {
+    const { callId } = started(
+      await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, monitor: 2 } }, admit),
+    );
+    const cmd = onlyPending(M1);
+    expect(cmd).toMatchObject({ type: 'capture_screenshot', monitor: 2, status: 'pending', machineId: M1 });
+    expect(cmd).not.toHaveProperty('tool_name');
+    expect(cmd).not.toHaveProperty('machine');
+    const commandId = callId.split(':').pop()!;
+    docs.set(completedPath(M1), {
+      [commandId]: { type: 'capture_screenshot', status: 'completed', result: { storage_path: 'screenshots/a.jpg' } },
+    });
+    expect(readBody(await readFleetCall(TIER2_TO_M1, callId)).content).toEqual([
+      {
+        type: 'image_url',
+        url: 'https://signed.example/screenshots/a.jpg',
+        text: 'screenshot: https://signed.example/screenshots/a.jpg',
+      },
+    ]);
+  });
+
+  it.each([
+    ['no monitor', {}],
+    ['a monitor that is a string', { monitor: 'all' }],
+    ['a negative monitor', { monitor: -1 }],
+    ['a fractional monitor', { monitor: 1.5 }],
+  ])('capture_screenshot with %s sends no monitor, so the agent takes its default', async (_label, extra) => {
+    started(await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, ...extra } }, admit));
+    const cmd = onlyPending(M1);
+    expect(cmd.type).toBe('capture_screenshot');
+    expect(cmd).not.toHaveProperty('monitor');
+  });
+
   it('queues as the calling machine, with the correlation id, and the audit row names it and the tool', async () => {
     started(await startFleetCall(TIER2_TO_M1, { tool: 'restart_process', params: { machine: M1, process_name: 'td.exe' } }, admit));
     const cmd = onlyPending(M1);
