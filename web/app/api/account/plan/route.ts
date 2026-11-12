@@ -12,7 +12,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { ApiAuthError, requireSessionOrIdToken } from '@/lib/apiAuth.server';
-import { problemForbidden, problemFromError, problemUnauthorized } from '@/lib/apiErrors';
+import { mfaChallengeProblem, problemForbidden, problemFromError, problemUnauthorized } from '@/lib/apiErrors';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
@@ -213,9 +213,9 @@ export const GET = withRateLimit(
       return NextResponse.json(body);
     } catch (error) {
       if (error instanceof ApiAuthError) {
-        return error.status === 403
+        return mfaChallengeProblem(error) ?? (error.status === 403
           ? problemForbidden('agent credentials cannot read an account plan')
-          : problemUnauthorized();
+          : problemUnauthorized());
       }
       return problemFromError(error, 'account/plan:GET');
     }

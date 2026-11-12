@@ -24,12 +24,20 @@ import {
 import {
   freshCeremonyCovers,
   hasEnrolledFactor,
+  hasOpenStepUpWindow,
   openStepUpWindow,
   openStepUpWindowFromCeremony,
   type SignInCeremony,
+  type StepUpTarget,
 } from '@/lib/swoop/policy.server';
 import { recordSwoopStepUpOpened, type SwoopAuditBase } from '@/lib/swoop/audit.server';
-import { recordVerifiedNetwork } from '@/lib/swoop/networks.server';
+import {
+  controlNetwork,
+  networkAdmitsFreshCeremony,
+  networkAdmitsWindow,
+  networkBindingMode,
+  recordVerifiedNetwork,
+} from '@/lib/swoop/networks.server';
 import type { RequestNetwork } from '@/lib/network.server';
 
 /** `reason` is the audit code for the refusal, never the ceremony's detail. */
@@ -141,6 +149,27 @@ export async function requestSignInCeremony(
         ceremonyNetwork: login.mfaNetwork,
       }
     : { sessionPassedCeremony: false, ceremonyAt: undefined };
+}
+
+/**
+ * Does the login session behind this request have the step-up on this machine,
+ * without opening or extending anything? Either an open window, or a sign-in
+ * ceremony fresh enough to count as one. The network binding decides only in
+ * `enforce`, and is never recorded here, so a polling caller writes nothing.
+ */
+export async function stepUpReadsOpen(
+  request: NextRequest,
+  target: StepUpTarget,
+  ceremony: SignInCeremony,
+): Promise<boolean> {
+  const binding =
+    networkBindingMode() === 'enforce' ? await controlNetwork(request, target.userId) : null;
+  return (
+    ((binding === null || networkAdmitsWindow(binding)) &&
+      (await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: ceremony.sessionPassedCeremony }))) ||
+    ((binding === null || networkAdmitsFreshCeremony(binding, ceremony.ceremonyNetwork)) &&
+      (await freshCeremonyCovers({ ...target, ...ceremony })))
+  );
 }
 
 /**

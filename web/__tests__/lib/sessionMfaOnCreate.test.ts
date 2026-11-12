@@ -141,6 +141,22 @@ describe('resolveMfaOnSessionCreate', () => {
     it('rejects prev.mfaVerified === false', () => {
       expectChallenge(preservablePrev({ mfaVerified: false }));
     });
+
+    it.each([
+      ['the account cutoff', { sessionsValidAfter: NOW - 1_000 }],
+      ['a password reset', { tokensRevokedAt: NOW - 1_000 }],
+    ])('rejects a prior session minted before %s, and keeps one minted after', (_name, cutoff) => {
+      const decide = (issuedAt: number) =>
+        resolveMfaOnSessionCreate({
+          prev: { ...preservablePrev(), issuedAt },
+          resolved: { ...REQUIRED, ...cutoff },
+          userId: USER,
+          now: NOW,
+          deviceTrusted: false,
+        });
+      expect(decide(NOW - 2_000)).toEqual({ mfaRequired: true, mfaVerified: false });
+      expect(decide(NOW - 500).mfaVerified).toBe(true);
+    });
   });
 
   describe('device-trust birth path (required, preserve inapplicable)', () => {

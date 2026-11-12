@@ -306,6 +306,15 @@ def test_run_command_refuses_a_windows_only_command_off_windows(linux, tracked):
     assert tracked == []
 
 
+@pytest.mark.parametrize('command', ['env', 'env sh -c id'])
+def test_run_command_refuses_env_off_windows(linux, tracked, command):
+    # env runs the command after it, so it is not an allow-listed command itself
+    result = mcp_tools.execute_tool('run_command', {'command': command})
+
+    assert 'not in the allow-list' in result['error']
+    assert tracked == []
+
+
 @pytest.mark.skipif(sys.platform != 'win32', reason='the Windows allow-list')
 def test_run_command_keeps_windows_backslashes(tracked):
     mcp_tools.execute_tool('run_command', {'command': r'type C:\ProgramData\x.txt'})

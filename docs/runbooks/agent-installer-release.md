@@ -21,7 +21,7 @@ This document is only for the installer surface. For non-installer deploys, use 
 - CMake, on `PATH` or the copy inside the Visual Studio install: the swoop build compiles the vendored opus with it, and the full build stops without it.
 - The `.pkg` and `.deb`: `agent/build/macos/build.sh` on a Mac that holds the Developer ID identities and a notarytool profile, and `agent/build/linux/build.sh` on Ubuntu 24.04. The tag's CI build (path b) runs after the upload (step 8), so it cannot supply the files that roll out.
 - `/.claude/.env.local` containing `OWLETTE_API_KEY`.
-- API key scope: `installer=*:write`.
+- API key scope: `installer=*:write`, plus `installer=*:admin` to set latest (`--set-latest`, `setAsLatest: true`).
 - Installer upload keys must be minted by a superadmin.
 - Push access to `dev` or the appropriate release branch.
 - Firebase admin access for `installer_metadata` visibility, if needed.
@@ -296,7 +296,7 @@ If omitted, the server computes the checksum.
 ### common errors
 
 - `400` missing idempotency key: add `Idempotency-Key` to step 1 or step 3.
-- `403` wrong scope: confirm `installer=*:write` and superadmin-minted key.
+- `403` wrong scope: confirm `installer=*:write`, `installer=*:admin` when `setAsLatest` is true, and a superadmin-minted key.
 - `412 checksum_mismatch`: recompute sha256 for the exact uploaded file and retry with a new key.
 - `409 installer_published` (step 1 or 3): the version's file for this platform is already on the download host, which caches it as immutable. Bump the version.
 - A `500` from step 3 on R2 can leave the record pointing at a file that never reached the download host (the copy failed). Finalize the same `uploadId` again (an R2 upload does not expire at finalize), or re-run the script with the same files and a new `--key-tag`.
@@ -327,7 +327,7 @@ If omitted, the server computes the checksum.
   - `agent/build/linux/Owlette-Installer-vX.Y.Z.deb` (when the release ships Linux)
 - [ ] `--env` names the intended environment.
 - [ ] `OWLETTE_API_KEY` (dev) or `OWLETTE_API_KEY_PROD` (prod) is loaded from `/.claude/.env.local`.
-- [ ] API key scope is `installer=*:write`.
+- [ ] API key scope is `installer=*:write`, plus `installer=*:admin` when passing `--set-latest`.
 - [ ] `node scripts/upload-installer.mjs` is given one file per platform, with `--set-latest` only when ready to roll out.
 - [ ] The run ends with a `latest:` line naming every platform uploaded.
 - [ ] With `--set-latest`, the `tridant id:` line says `registered`, or the failure is retried from `/admin/installers`.
@@ -381,7 +381,7 @@ curl -s -X POST "$BASE_URL/api/installer/<version>/set-latest" \
   -H "Idempotency-Key: installer-set-latest-<version>-$(date +%s)"
 ```
 
-The upload key from the API steps above (`installer=*:write`) is refused here. The call moves the pointer in one transaction. On dev it also registers the version with tridant id, which yanks any registered release above it, and the download host refuses a re-upload of a file it already holds (`409 installer_published`); prod does neither until it is promoted to 4.x. Either way, never re-upload the old version to demote.
+A key with `installer=*:write` alone is refused here. The call moves the pointer in one transaction. On dev it also registers the version with tridant id, which yanks any registered release above it, and the download host refuses a re-upload of a file it already holds (`409 installer_published`); prod does neither until it is promoted to 4.x. Either way, never re-upload the old version to demote.
 
 Soft-delete is gated by `min-active-versions >= 2`; the system should not delete the only active version.
 

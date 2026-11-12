@@ -285,6 +285,8 @@ function makeBatch() {
  * else rejects with the real `auth/user-not-found` code the route branches on.
  */
 const authEmailToUid: Record<string, string> = {};
+/** sign-in shape by address; an address with none carries no provider data. */
+const authEmailRecord: Record<string, { emailVerified: boolean; providerData: Array<{ providerId: string }> }> = {};
 const mockGetUserByEmail = jest.fn(async (email: string) => {
   const uid = authEmailToUid[email];
   if (!uid) {
@@ -294,7 +296,7 @@ const mockGetUserByEmail = jest.fn(async (email: string) => {
     err.code = 'auth/user-not-found';
     throw err;
   }
-  return { uid, email };
+  return { uid, email, ...authEmailRecord[email] };
 });
 
 jest.mock('@/lib/firebase-admin', () => ({
@@ -406,8 +408,18 @@ function seedUser(uid: string, data: Record<string, unknown>): void {
 }
 
 /** Register an address in the Admin Auth directory so it resolves to `uid`. */
-function seedAuthEmail(email: string, uid: string): void {
+function seedAuthEmail(
+  email: string,
+  uid: string,
+  signIn?: { provider: 'password' | 'google.com'; emailVerified: boolean },
+): void {
   authEmailToUid[email] = uid;
+  if (signIn) {
+    authEmailRecord[email] = {
+      emailVerified: signIn.emailVerified,
+      providerData: [{ providerId: signIn.provider }],
+    };
+  }
 }
 
 /**
@@ -451,6 +463,7 @@ beforeEach(() => {
   for (const k of Object.keys(docStore)) delete docStore[k];
   for (const k of Object.keys(collectionDocs)) delete collectionDocs[k];
   for (const k of Object.keys(authEmailToUid)) delete authEmailToUid[k];
+  for (const k of Object.keys(authEmailRecord)) delete authEmailRecord[k];
 });
 
 // GET /api/sites/{siteId}/members
@@ -971,6 +984,55 @@ describe('POST /api/sites/{siteId}/members', () => {
 
       expect(res.status).toBe(404);
       expect(body.code).toBe('not_found');
+    });
+
+    // an address is only an alias for whoever registered it, and a password
+    // account has not shown it owns the address until it verifies
+    it('refuses a password account whose email is not verified, and adds nothing', async () => {
+      authedAsSuperadminWithKey();
+      seedSite(SITE);
+      seedUser('alice', { role: 'member', sites: [] });
+      seedAuthEmail('alice@example.com', 'alice', { provider: 'password', emailVerified: false });
+
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          body: { email: 'alice@example.com', role: 'member' },
+        }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+      const body = await res.json();
+
+      expect(res.status).toBe(409);
+      expect(body.code).toBe('email_unverified');
+      expect(body.detail).toBe(
+        'alice@example.com has not verified their email address yet. ask them to verify it, then add them again',
+      );
+      expect(docStore[`sites/${SITE}/members/alice`]).toBeUndefined();
+      expect(docStore['users/alice']?.data?.sites).toEqual([]);
+      expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['a verified password account', { provider: 'password', emailVerified: true }],
+      ['a google account', { provider: 'google.com', emailVerified: true }],
+      ['a google account its provider left unverified', { provider: 'google.com', emailVerified: false }],
+    ] as const)('adds %s by email', async (_who, signIn) => {
+      authedAsSuperadminWithKey();
+      seedSite(SITE);
+      seedUser('alice', { role: 'member', sites: [] });
+      seedAuthEmail('alice@example.com', 'alice', signIn);
+
+      const res = await membersPOST(
+        createMockRequest(`http://localhost/api/sites/${SITE}/members`, {
+          method: 'POST',
+          body: { email: 'alice@example.com', role: 'member' },
+        }),
+        { params: Promise.resolve({ siteId: SITE }) },
+      );
+
+      expect(res.status).toBe(200);
+      expect(docStore['users/alice']?.data?.sites).toContain(SITE);
     });
 
     it('returns 400 when the resolved user is soft-deleted', async () => {

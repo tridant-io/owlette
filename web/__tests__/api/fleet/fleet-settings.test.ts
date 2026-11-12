@@ -69,6 +69,12 @@ jest.mock('@/lib/apiAuth.server', () => {
   return { ...actual, resolveAuth: (...a: unknown[]) => mockResolveAuth(...a) };
 });
 
+const mockGetSession = jest.fn();
+jest.mock('@/lib/sessionManager.server', () => ({
+  ...jest.requireActual('@/lib/sessionManager.server'),
+  getSessionFromRequest: (...a: unknown[]) => mockGetSession(...a),
+}));
+
 const mockRevoke = jest.fn();
 jest.mock('@/lib/fleet/session.server', () => ({
   revokeFleetSessions: (...a: unknown[]) => mockRevoke(...a),
@@ -111,8 +117,14 @@ function patch(body: unknown) {
   return PATCH(createMockRequest(url, { method: 'PATCH', body }), siteContext());
 }
 
+/** the login cookie of a person who passed their second factor at sign-in. */
+function verifiedSession(userId: string) {
+  return { userId, expiresAt: Date.now() + 60_000, mfaRequired: true, mfaVerified: true };
+}
+
 function signIn(userId: string): void {
   mockResolveAuth.mockResolvedValue({ userId, keyContext: null });
+  mockGetSession.mockResolvedValue(verifiedSession(userId));
 }
 
 function stageMachine(machineId: string): void {
@@ -458,6 +470,65 @@ describe('PATCH fleet-settings: what is stored', () => {
         droppedMachineIds: ['machine-gone'],
       },
     });
+  });
+});
+
+describe('PATCH fleet-settings: raising a tier needs a verified session', () => {
+  const NOT_VERIFIED: Array<[string, Record<string, unknown>]> = [
+    ['an id token, no login cookie', {}],
+    ['a password-only cookie', { ...verifiedSession(ADMIN), mfaVerified: false }],
+    ['an account with no second factor', { ...verifiedSession(ADMIN), mfaRequired: false }],
+    ['an expired cookie', { ...verifiedSession(ADMIN), expiresAt: Date.now() - 1 }],
+    ["another user's cookie", verifiedSession('someone-else')],
+  ];
+
+  const RAISES: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ['a stored sender raised', { [M1]: { maxTier: 1, machineIds: [M2] } }, { [M1]: { maxTier: 2, machineIds: [M2] } }],
+    ['a stored sender raised to 3', { [M1]: { maxTier: 2 } }, { [M1]: { maxTier: 3 } }],
+    ['a new sender at tier 2', {}, { [M1]: { maxTier: 2 } }],
+    ['a new sender that names no tier, so gets 2', {}, { [M1]: {} }],
+    ['one raised beside one kept', { [M1]: { maxTier: 1 }, [M2]: { maxTier: 3 } }, { [M1]: { maxTier: 3 }, [M2]: { maxTier: 3 } }],
+  ];
+
+  it.each(NOT_VERIFIED)('refuses a raise with %s, writing nothing', async (_case, session) => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 1 } } });
+    mockGetSession.mockResolvedValue(session);
+
+    await expectRefused(await patch({ senders: { [M1]: { maxTier: 3 } } }), 403, 'verified_session_required');
+  });
+
+  it.each(RAISES)('refuses %s without a verified session', async (_case, stored, senders) => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: stored });
+    mockGetSession.mockResolvedValue({ ...verifiedSession(ADMIN), mfaVerified: false });
+
+    await expectRefused(await patch({ senders }), 403, 'verified_session_required');
+  });
+
+  it.each(RAISES)('takes %s with a verified session', async (_case, stored, senders) => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: stored });
+
+    expect((await patch({ senders })).status).toBe(200);
+  });
+
+  it.each([
+    ['a lowered tier', { [M1]: { maxTier: 3 } }, { [M1]: { maxTier: 1 } }],
+    ['a tier kept, named', { [M1]: { maxTier: 3, machineIds: [M2] } }, { [M1]: { maxTier: 3, machineIds: [M2, M3] } }],
+    ['a tier kept, unnamed', { [M1]: { maxTier: 3 } }, { [M1]: { wholeSite: true } }],
+    ['a new sender at tier 1', {}, { [M1]: { maxTier: 1 } }],
+    ['a sender removed', { [M1]: { maxTier: 3 } }, {}],
+  ])('takes %s without a verified session', async (_case, stored, senders) => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: stored });
+    mockGetSession.mockResolvedValue({});
+
+    expect((await patch({ senders })).status).toBe(200);
+    expect(settingsWrites()).toHaveLength(1);
+  });
+
+  it('takes the switch alone without a verified session', async () => {
+    staged.set(SETTINGS_PATH, { enabled: false, senders: { [M1]: { maxTier: 3 } } });
+    mockGetSession.mockResolvedValue({});
+
+    expect((await patch({ enabled: true })).status).toBe(200);
   });
 });
 

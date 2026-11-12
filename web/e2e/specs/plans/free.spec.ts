@@ -146,6 +146,8 @@ test.describe('owlette free', () => {
     await signIn(page, PAYER);
     await page.goto(`/add?code=${phrase}`);
     await expect(page.getByLabel(/pairing phrase/i)).toHaveValue(phrase);
+    await page.getByRole('button', { name: /^continue$/i }).click();
+    await expect(page.getByTestId('add-machine-name')).toHaveText(PAIRING_MACHINE);
     await page.getByRole('button', { name: /authorize machine/i }).click();
 
     await expect(page.getByText(MACHINE_LIMIT_ERROR)).toBeVisible();
@@ -203,11 +205,23 @@ test.describe('owlette free', () => {
       upgradeUrl: '/settings/plan',
     });
 
+    const installer = {
+      version: '0.0.417',
+      files: {
+        windows_x64: {
+          download_url: 'https://e2e.invalid/Owlette-Installer-v0.0.417.exe',
+          checksum_sha256: 'a'.repeat(64),
+        },
+      },
+    };
+    const installerDoc = getAdminDb().doc(`installer_metadata/data/versions/${installer.version}`);
+    await installerDoc.set(installer);
     const update = await sendCommand(page, 'update_owlette', {
-      installer_url: 'https://e2e.invalid/Owlette-Installer-v4.1.7.exe',
-      target_version: '4.1.7',
-      checksum_sha256: 'a'.repeat(64),
+      installer_url: installer.files.windows_x64.download_url,
+      target_version: installer.version,
+      checksum_sha256: installer.files.windows_x64.checksum_sha256,
     });
+    await installerDoc.delete();
     expect(update.status).toBe(202);
     expect(await pendingTypes()).toEqual(['update_owlette']);
   });

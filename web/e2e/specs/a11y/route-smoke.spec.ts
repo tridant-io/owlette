@@ -84,7 +84,7 @@ for (const theme of ['dark', 'light'] as const) {
     test.describe('public a11y smoke', () => {
       test.use({ storageState: { cookies: [], origins: [] } });
 
-      for (const route of ['/', '/docs/agent/installation', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?success=true', '/demo', '/login', '/register']) {
+      for (const route of ['/', '/docs/agent/installation', '/privacy', '/terms', '/legal/dmca', '/unsubscribe?token=a11y-smoke', '/demo', '/login', '/register']) {
         test(`${route} has no serious/critical axe violations`, async ({ page }) => {
           await page.goto(route);
           await expect(page.locator('body')).toBeVisible();

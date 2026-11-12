@@ -32,8 +32,12 @@ the three steps are hoot's [tool tiers](/docs/reference/hoot-tools#tier-system):
 | setting | tier | what the machine may do |
 |---|---|---|
 | **read** | 1 | read state: system information, processes, logs, screenshots already taken, metrics history, installed software, deployments and roosts |
-| **bounded changes** | 2 | tier 1, plus changes with validated parameters: start, stop and restart a process, edit the processes owlette manages, take a screenshot, cancel a deployment, hand hoot a task |
-| **privileged** | 3 | tier 2, plus shell commands, scripts, files, reboot and shutdown, a reboot schedule, software deployments, owlette updates, and roost deploys and rollbacks |
+| **bounded changes** | 2 | tier 1, plus changes with validated parameters: start, stop and restart a process, change a process's name, priority and visibility, take a screenshot, cancel a deployment, hand hoot a task |
+| **privileged** | 3 | tier 2, plus shell commands, scripts, files, reboot and shutdown, a reboot schedule, software deployments, owlette updates, roost deploys and rollbacks, and any change to what a machine launches |
+
+a call that changes what a machine launches is tier 3, whatever its tool's tier. that includes adding or removing a process, any process field but its name, priority and visibility, and a launch mode. a machine set lower gets `max_tool_tier_exceeded`.
+
+raising how far a machine may go needs a dashboard session that passed your second factor, as raising an API key's tool tier does. lowering it, or turning a machine off, doesn't.
 
 <Callout type="warning" title="privileged has nobody approving">
 in the dashboard, hoot stops before a tier 3 tool and waits for you to approve it. a machine acting on its own has nobody to ask, so a machine set to **privileged** runs those tools at once. give it to a machine only if you would let whoever uses that machine run a shell on the machines it reaches.
@@ -131,6 +135,9 @@ a refused call answers with a reason the AI agent can read. the common ones:
 |---|---|
 | `fleet_not_granted` | the site's switch is off, or this machine is not turned on in the list under it |
 | `tool_not_allowed` | the tool is above what the machine is set to, or is not one a machine may call |
+| `tool_params_invalid` | the call's parameters don't match the tool's definition: an unknown or missing parameter, or a value the tool doesn't take. nothing ran |
+| `max_tool_tier_exceeded` | the call changes what a machine launches, which needs **privileged** |
+| `registry_value_refused` | `registry_operation` named a value hoot's tools never reach: one whose name looks like a secret, Winlogon's values other than the automatic sign-in ones, or what a service runs |
 | `machine_not_granted` | the machine named is not one this machine may act on |
 | `hoot_disabled` | hoot is turned off on the machine named. that switch stops machines as it stops people |
 | `machine_offline` | the machine named is not online, and the tool needs its agent to answer |
@@ -138,7 +145,7 @@ a refused call answers with a reason the AI agent can read. the common ones:
 | `hoot_unavailable` | `ask_hoot` has no LLM key to run on |
 | `rate_limited` | too many calls: 60 commands a minute per machine, or the task limits above |
 
-turning a machine off in that list, or turning the site's switch off, ends what it can do within seconds, a session in use included: the server refuses its next call, and its agent is told at once and deletes its session. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them.
+turning a machine off in that list, or turning the site's switch off, ends what it can do within seconds, a session in use included: the server refuses its next call, and its agent is told at once and deletes its session. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them. a code generated to reinstall any machine doesn't reinstall one that acts on others: generate one that names it.
 
 ---
 

@@ -37,11 +37,19 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
-// Mock global fetch
+// passes every url by default; the send-time cases refuse one
+const mockValidateWebhookUrl = jest.fn();
+jest.mock('@/lib/webhookUrl', () => ({
+  validateWebhookUrl: (raw: unknown) => mockValidateWebhookUrl(raw),
+}));
+
+// Mock global fetch; the redirect cases put the real one back
+const realFetch = global.fetch;
 const mockFetch = jest.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
 import { fireWebhooks, testWebhook } from '@/lib/webhookSender.server';
+import { startRedirectTrap } from '../api/helpers/redirectTrap';
 import { createPlanMemo } from '@/lib/planPause.server';
 import crypto from 'crypto';
 
@@ -62,6 +70,11 @@ describe('webhookSender', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockSecretDocs = [];
+    mockValidateWebhookUrl.mockImplementation(async (raw: string) => ({
+      ok: true,
+      url: raw,
+      hostname: new URL(raw).hostname,
+    }));
   });
 
   describe('fireWebhooks', () => {
@@ -431,6 +444,65 @@ describe('webhookSender', () => {
         .digest('hex');
 
       expect(opts.headers['X-owlette-Signature']).toBe(`sha256=${expectedSig}`);
+    });
+  });
+
+  describe('the url at send time', () => {
+    const refused = {
+      ok: false,
+      reason: 'private_ip',
+      detail: 'hooks.example.com resolves to private ipv4 10.0.0.5',
+    };
+
+    afterEach(() => {
+      mockFetch.mockReset();
+    });
+
+    it('fireWebhooks does not follow a redirect, and counts it as a failed delivery', async () => {
+      const trap = await startRedirectTrap();
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc({ url: trap.url })] });
+      mockFetch.mockImplementation(realFetch);
+      try {
+        expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+        expect(trap.hits()).toBe(0);
+        expect(mockUpdate).toHaveBeenCalledWith(
+          expect.objectContaining({ lastStatus: 302, failCount: 1 }),
+        );
+      } finally {
+        await trap.close();
+      }
+    });
+
+    it('fireWebhooks re-checks the url, and counts a refused one as a failed delivery', async () => {
+      mockValidateWebhookUrl.mockResolvedValue(refused);
+      mockGet.mockResolvedValue({ empty: false, docs: [makeWebhookDoc()] });
+
+      expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
+      expect(mockValidateWebhookUrl).toHaveBeenCalledWith('https://hooks.example.com/abc');
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ lastStatus: 0, failCount: 1 }),
+      );
+    });
+
+    it('testWebhook does not follow a redirect', async () => {
+      const trap = await startRedirectTrap();
+      mockFetch.mockImplementation(realFetch);
+      try {
+        expect(await testWebhook(trap.url, 'secret123')).toEqual({ status: 302 });
+        expect(trap.hits()).toBe(0);
+      } finally {
+        await trap.close();
+      }
+    });
+
+    it('testWebhook re-checks the url, and sends nothing to a refused one', async () => {
+      mockValidateWebhookUrl.mockResolvedValue(refused);
+
+      const result = await testWebhook('https://hooks.example.com/test', 'secret123');
+
+      expect(result).toEqual({ status: 0, error: refused.detail });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 });

@@ -13,12 +13,33 @@ import pytest
 import owlette_service
 
 
+CONSOLE_SID = 'S-1-5-21-111-222-333-1001'
+OTHER_SID = 'S-1-5-21-111-222-333-1002'
+
+
 class FakeManager:
     def __init__(self):
         self.kills = []
 
     def kill(self, reason='kill', sid=None):
         self.kills.append((reason, sid))
+
+
+@pytest.fixture(autouse=True)
+def owner(monkeypatch):
+    """every file reads as owned by owner['sid'], the console user's unless a
+    test says otherwise: the tray writes the flag unelevated. the real owner
+    check runs, link checks included."""
+    if sys.platform != 'win32':
+        return None
+    import acl_hardening
+    import win32security
+    owner = {'sid': CONSOLE_SID}
+    monkeypatch.setattr(acl_hardening, 'console_user_sid',
+                        lambda: win32security.ConvertStringSidToSid(CONSOLE_SID))
+    monkeypatch.setattr(acl_hardening, '_native_read_owner',
+                        lambda path: win32security.ConvertStringSidToSid(owner['sid']))
+    return owner
 
 
 @pytest.fixture
@@ -77,6 +98,18 @@ def test_a_directory_under_the_flag_name_is_not_a_kill(service, tmp_path):
     service._check_tray_swoop_kill()
 
     assert service.swoop_manager.kills == []
+
+
+@windows_only
+def test_a_flag_another_account_wrote_is_removed_not_obeyed(service, tmp_path, owner):
+    # tmp\ takes files from every local account, not only the console user's
+    owner['sid'] = OTHER_SID
+    flag(tmp_path).write_text('local_tray')
+
+    service._check_tray_swoop_kill()
+
+    assert service.swoop_manager.kills == []
+    assert not flag(tmp_path).exists()
 
 
 @windows_only

@@ -116,8 +116,9 @@ _APP_ROOT = os.path.dirname(
 
 
 # app_root marks entries under {app}; repair_all only touches those on an
-# installed tree.
-_SpecEntry = namedtuple('_SpecEntry', ['path', 'aces', 'app_root'])
+# installed tree. owner, when set, is the sid repair_all also makes the owner.
+_SpecEntry = namedtuple('_SpecEntry', ['path', 'aces', 'app_root', 'owner'],
+                        defaults=[None])
 
 
 def _build_specs() -> List['_SpecEntry']:
@@ -182,6 +183,14 @@ def _build_specs() -> List['_SpecEntry']:
         entries.append(
             _SpecEntry(os.path.join(_DATA_ROOT, 'ipc', name), console_dir, False)
         )
+    # hoot downloads the claude cli here and runs it, both as the console user,
+    # and hashes it only at its own launch. the installer creates the directory;
+    # one an older hoot made is owned by its creator, and an owner keeps
+    # WRITE_DAC whatever the dacl says, so the repair takes ownership too.
+    entries.append(_SpecEntry(
+        os.path.join(_DATA_ROOT, 'cache', 'claude-cli'), console_dir, False,
+        SID_ADMINISTRATORS,
+    ))
     entries.append(
         _SpecEntry(os.path.join(_DATA_ROOT, 'ipc', 'fleet'), console_read_dir, False)
     )
@@ -223,17 +232,19 @@ def _native_read_owner(path: str):
     return sd.GetSecurityDescriptorOwner()
 
 
-def _native_write_dacl(path: str, dacl) -> None:
+def _native_write_dacl(path: str, dacl, owner_sid=None) -> None:
     import win32security
     protected = getattr(
         win32security, 'PROTECTED_DACL_SECURITY_INFORMATION', None,
     )
     if protected is None:  # pragma: no cover - constant present on supported builds
         protected = -2147483648  # 0x80000000 as a signed c long
+    info = win32security.DACL_SECURITY_INFORMATION | protected
+    if owner_sid is not None:
+        info |= win32security.OWNER_SECURITY_INFORMATION
     win32security.SetNamedSecurityInfo(
-        path, win32security.SE_FILE_OBJECT,
-        win32security.DACL_SECURITY_INFORMATION | protected,
-        None, None, dacl, None,
+        path, win32security.SE_FILE_OBJECT, info,
+        owner_sid, None, dacl, None,
     )
 
 
@@ -345,9 +356,10 @@ def is_trusted_owner(path: str, user_sid=None) -> bool:
         return False
 
 
-def apply(path: str, spec: AclSpec) -> None:
-    """Write ``spec`` as a protected DACL on ``path``. ``spec`` must be concrete
-    (no CONSOLE_USER markers). Raises ``AclApplyError`` on failure."""
+def apply(path: str, spec: AclSpec, owner=None) -> None:
+    """Write ``spec`` as a protected DACL on ``path``, and ``owner`` as its owner
+    in the same write when one is given. ``spec`` must be concrete (no
+    CONSOLE_USER markers). Raises ``AclApplyError`` on failure."""
     try:
         import win32security
         dacl = win32security.ACL()
@@ -355,7 +367,7 @@ def apply(path: str, spec: AclSpec) -> None:
             dacl.AddAccessAllowedAceEx(
                 win32security.ACL_REVISION, flags, mask, sid,
             )
-        _native_write_dacl(path, dacl)
+        _native_write_dacl(path, dacl, owner_sid=owner)
     except Exception as e:
         raise AclApplyError(f'failed to apply DACL to {path}: {e}') from e
 
@@ -395,6 +407,18 @@ def matches(path: str, spec: AclSpec) -> bool:
         return actual == expected
     except Exception as e:
         logger.debug('acl matches: comparison failed for %s: %s', path, e)
+        return False
+
+
+def _owned_by(path: str, owner) -> bool:
+    """True when ``owner`` is None or already owns ``path``. Never raises."""
+    if owner is None:
+        return True
+    try:
+        import win32security
+        return (win32security.ConvertSidToStringSid(_native_read_owner(path))
+                == win32security.ConvertSidToStringSid(owner))
+    except Exception:
         return False
 
 
@@ -473,7 +497,8 @@ def repair_all(log=None, session_change=False) -> List[str]:
     present), so a run from a source checkout never touches the checkout. In
     DevMode one extra Modify ACE for the current interactive account is
     tolerated on ``app``; ``agent\\src`` is never re-asserted here because it is
-    a child of ``agent``.
+    a child of ``agent``. An entry that names an owner is also repaired when
+    another principal owns it, and the write sets both.
 
     ``session_change`` marks a run started by a console session change: the
     console-user entries are expected to change then, so their repairs log at
@@ -519,9 +544,10 @@ def repair_all(log=None, session_change=False) -> List[str]:
             # accept exactly one extra developer ace, and only on {app}\app.
             if dev and _is_dev_tolerant(path) and console_sid is not None:
                 variants.append(spec + [(console_sid, _MODIFY, _INHERIT)])
-            if any(matches(path, variant) for variant in variants):
+            if (any(matches(path, variant) for variant in variants)
+                    and _owned_by(path, entry.owner)):
                 continue
-            apply(path, spec)
+            apply(path, spec, owner=entry.owner)
             repaired.append(path)
             if session_change and follows_console_user(entry):
                 _safe_log(

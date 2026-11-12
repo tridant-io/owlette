@@ -14,8 +14,10 @@
  * Signature: stripe-style `Roost-Signature: t=<unix>,v1=<hex>`, matching
  * `functions/src/webhookDispatch.ts`. v1 covers `"<t>.<canonicalBody>"`, so
  * the timestamp is signed and receivers can enforce the 5-minute tolerance.
+ * A redirect is returned as the status, never followed.
  *
- * Scope: site:<id>:write, so probe firings are auditable.
+ * Scope: site:<id>:write, so probe firings are auditable, plus WEBHOOK_MANAGE
+ * and `webhookProbeRateLimit` per user.
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -29,14 +31,17 @@ import {
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
+import { checkRateLimit, webhookProbeRateLimit } from '@/lib/rateLimit';
 import { isValidWebhookEvent } from '@/lib/webhookEvents';
 import { signPayload } from '@/lib/webhookSignature';
 import { validateWebhookUrl } from '@/lib/webhookUrl';
+import { rateLimitedResponse } from '@/lib/withRateLimit';
 
 import {
   applyAuthDeprecations,
   parseJsonBody,
   requireSiteAuthAndScope,
+  requireWebhookManageCapability,
   validateSiteIdBody,
 } from '../../_shared';
 
@@ -158,6 +163,12 @@ export async function POST(request: NextRequest) {
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'write');
     if (!auth.ok) return auth.response;
 
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
+
+    const rateResult = await checkRateLimit(webhookProbeRateLimit, `webhook_probe:${auth.userId}`);
+    if (!rateResult.success) return rateLimitedResponse(rateResult, 'endpoint-rate');
+
     const parsed = await parseJsonBody(request);
     if (!parsed.ok) return parsed.response;
     const body = (parsed.body ?? {}) as ProbeBody;
@@ -257,6 +268,7 @@ export async function POST(request: NextRequest) {
         method: 'POST',
         headers,
         body: canonicalBody,
+        redirect: 'manual',
         signal: controller.signal,
       });
       status = resp.status;

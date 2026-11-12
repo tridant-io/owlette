@@ -62,8 +62,9 @@ _SYSTEMD_START_TYPES = {
     'masked': 'disabled', 'masked-runtime': 'disabled',
 }
 
-# A systemd unit name or a launchd label, either with an instance suffix.
-_SERVICE_NAME = re.compile(r'^[\w.@:\-]+$')
+# A systemd unit name or a launchd label, either with an instance suffix. Never a
+# leading dash: systemctl and launchctl would read it as an option.
+_SERVICE_NAME = re.compile(r'^[\w.@:][\w.@:\-]*\Z')
 
 # What manage_windows_service can do here: launchd has no pause/continue, and
 # systemd's restart policy is unit configuration, not a runtime call.

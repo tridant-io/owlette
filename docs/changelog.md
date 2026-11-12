@@ -10,6 +10,203 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — a new password or a factor change signs your other sessions out
+
+A dashboard session started before your password was reset or changed now stops working
+within a minute, and one started before a second factor was added or removed stops at once,
+except in the browser that made that change. A superadmin's 2FA reset now signs the account
+out the same way. A browser that was signed out signs in again and is asked for its second
+factor. Sessions on an account that changed none of these carry on.
+
+### changed — two-factor codes have a per-account limit, and work once
+
+Each account gets 10 two-factor code attempts, authenticator or backup code, in any 15
+minutes, counted together at sign-in, when removing the authenticator app, when generating
+new backup codes and at swoop's prompt, from any address. Past that the answer is
+`429 mfa_attempts_exceeded` until the window moves on. An authenticator code is accepted once, so a second sign-in in
+the same 30 seconds waits for the next code. Passkeys are not counted.
+
+### changed — an account with no second factor sets one up before using the API
+
+An account that has to set up a second factor now gets `403` with `mfa_setup_required` from
+the API on its dashboard session or Firebase ID token, as the dashboard already sent it to
+`/setup-2fa`. The routes that set up a factor still answer, and its API keys keep working.
+
+### changed — hoot always asks before it changes what a machine launches
+
+A hoot call that changes what a machine runs, or when, or that can run code, now waits for
+a person's approval in the chat, at any tier and whether or not the site's tier-3 approval
+is on, which now governs only reboot, shutdown and file reads: a process's
+launch target, arguments, working directory, launch mode, schedule, launch delay, restart
+limits, adding or deleting a process, scheduled tasks, a service's startup and failure
+recovery, installing or removing a Windows feature, scheduled update installs, registry
+writes, a talon that acts by itself, and shell commands, scripts, file writes and
+deployments. The card spells out the values, and an approval runs only the call the card
+showed, once: the same input, on the machines it named or fewer. Where nobody can answer a card
+the change doesn't run: talons with "let hoot act", autonomous hoot and the public
+conversations API refuse it and say why, and a follow-up waits for you. Autonomous hoot also
+refuses the tools that can run anything, whatever `maxTier` says, and autonomous hoot,
+talons and follow-ups are no longer offered `manage_scheduled_task`,
+`manage_windows_service` or `registry_operation`, including their read actions.
+
+`registry_operation` no longer reaches Winlogon's password, Shell or Userinit, or what a
+service runs. Local hoot no longer has `set_launch_mode` or the tools that run code, and a
+conversation goes to it only on an agent of this version or later. Every command a chat tool
+queues now writes an audit row with the tool and a hash of the call, and an approved launch
+change records its old and new values first, and doesn't run if that record can't be written.
+Free-form values such as arguments and scripts go in as a keyed hash and a length.
+
+### changed — API calls need the second factor on accounts that have one
+
+On an account with a second factor, a dashboard session now reaches the API only once its
+sign-in has passed that factor, and a Firebase ID token for the account is refused: both
+get `403 mfa_challenge_required`. A script that calls the API with an ID token for such an
+account needs an API key instead, and managing keys, which `/api/keys` won't do through a
+key, moves to the dashboard. API keys and machines are unaffected. Nothing to update on the
+machine.
+
+### changed — renaming or removing a passkey asks for your second factor
+
+Renaming or removing a passkey now asks you to verify a factor you have first, as adding
+one already did. Adding or removing a passkey or the authenticator app, and a superadmin's
+reset of your second factors, now emails your account's address. Nothing to update on the
+machine.
+
+### changed — API keys have a tool tier
+
+Each API key now has a tool tier, `maxToolTier`, which caps the hoot tools it runs through
+`mcp_tool_call` on the machine commands route: 1 runs read-only tools, 2 adds process,
+service and system setting changes, and 3 adds commands, scripts, files, deployments,
+restarts and anything that changes what a machine launches. Every existing key is tier 1,
+so a script that runs a tier-2 or tier-3 tool that way gets `403 max_tool_tier_exceeded`
+until the key's owner raises its tier, in the key's editor under settings → api keys or
+with `PATCH /api/keys/{keyId}`. Creating, raising or rotating a key above tier 1 needs a
+dashboard session that passed its second factor; anything else, an ID token included, gets
+`403 verified_session_required`. A call that changes what a machine launches, such as
+`update_process` with a new target or `manage_scheduled_task` `create`, counts as tier 3
+whatever its tool's tier, so a tier-2 key no longer runs it. A person's tier-3 call through
+that route now needs an open step-up window on the machine, the one swoop's control uses,
+else `401 step_up_required`. The other command types have no tier. `owlette key create` and
+`owlette auth login` make tier-1 keys, and hoot conversations through a key stay read only.
+Nothing to update on the machine.
+
+### changed — the commands route checks a tool call before it queues it
+
+`mcp_tool_call` now checks `tool_params` against the tool's definition: an unknown tool or
+parameter, a missing required one, or a value the tool doesn't take answers
+`400 tool_params_invalid`, naming the parameter, and nothing is queued. Hoot refuses such a
+call with the same code. A tool call to a machine with hoot switched off answers
+`423 hoot_disabled`. `update_owlette` takes only a published installer, from any caller: its
+`installer_url` and `checksum_sha256` must match a file of `target_version`, or of the
+latest version when none is named, else `403 installer_not_published`. A tool call's audit
+row records the tool, its parameter names and a hash of the call, never the values. Nothing
+to update on the machine.
+
+### changed — Firestore rules 2.13.0: only the server adds commands
+
+An agent's token can now only take entries out of its machine's `commands/pending`, and the
+server adds every command. Every agent from 3.2.0 on works as before. Nothing to update on
+the machine.
+
+### changed — on macOS and Linux, an administrator moves a paired machine
+
+From owlette 4.2.0 on macOS and Linux, **leave site** in the owlette app, and pairing a
+machine that already belongs to a site, need an administrator account on the machine: root,
+or a member of `admin`, `sudo` or `wheel`. Anyone else is told that only an administrator
+can change the site this machine belongs to, and nothing changes. A machine with no site
+pairs for whoever is signed in. A paired machine stays with the server and machine ID it
+paired with, whatever `config.json` or `config/machine_id` say. Windows asks for an
+administrator to leave, as it already did.
+
+### changed — API keys go in a header
+
+A key in the query string, `?api_key=`, no longer authenticates a request: send it as
+`Authorization: Bearer` or `x-api-key`. A browser `EventSource`, which cannot set headers,
+needs a fetch-based stream reader for `/api/events/stream`, and `owlette listen` sends its
+key in a header. Nothing to update on the machine.
+
+### changed — promoting an installer needs installer admin
+
+An installer upload that marks its version latest now needs `installer=*:admin` on the API
+key, as set-latest does; with `installer=*:write` alone it answers `403 scope_insufficient`
+before anything is uploaded. An upload marks its version latest by default, so a write-only
+key sends `setAsLatest: false`, `set_as_latest=False` from the Python SDK, or
+`owlette installer upload --no-set-latest`. Nothing to update on the machine.
+
+### changed — webhooks and the audit log are for site owners and admins
+
+Reading a site's webhooks, their deliveries and the site's audit log now needs a site owner
+or admin, as changing a webhook already did, and so do retrying a delivery and the test
+probe. A member who opens settings → webhooks is told the site's admins manage them, and the
+API answers a member's session or key with `403 forbidden`. Nothing to update on the
+machine.
+
+### changed — webhook deliveries follow no redirects
+
+A webhook delivery, and a talon's webhook output, no longer follows a redirect: a `3xx`
+answer fails the delivery at once with `http_<status>`, so point the subscription at its
+final URL. Each delivery attempt checks the URL again by the rules for creating one, and one
+that no longer passes fails with `url_refused_<code>`. The test probe reports a redirect as
+its status, and each person can probe 60 times an hour. Nothing to update on the machine.
+
+### changed — adding a member needs a verified address
+
+Adding someone to a site by email now answers `409 email_unverified` when they signed up
+with a password and have not verified that address yet. Ask them to verify it from the email
+owlette sent them, then add them again. People who sign in with Google are never asked.
+Nothing to update on the machine.
+
+### changed — unsubscribe asks first
+
+The **unsubscribe** link at the foot of an alert email now opens a page whose **turn off
+alert emails** button turns them all off, because mail scanners open links on their own.
+Opening the link alone changes nothing, and `POST /api/unsubscribe` with the link's token
+does what the button does. Nothing to update on the machine.
+
+### changed — screenshots open through a signed link
+
+A screenshot's `url`, on the machine's `lastScreenshot` and in its screenshot history, is
+now `/api/sites/{siteId}/machines/{machineId}/screenshots/image?path=…`, which sends anyone
+with access to the machine on to a link that works for an hour. The record also carries the
+image's storage `path`. Hoot and talons hand their model a fresh link the same way. Nothing
+to update on the machine.
+
+### changed — pairing a machine already on the site asks first
+
+Authorizing a pairing phrase for a machine that is already on the site now asks you to
+**replace machine** first, at `owlette.app/add`, in the dashboard's **add machine** dialog
+and on the getting-started card, which all show the machine's name before you authorize. A
+generated code pairs a machine already on the site only when it names that machine, or when
+**let this code reinstall any machine already on this site** was ticked; any other machine
+gets `409` with a message it shows, and the code stays unspent. Over the API, the authorize
+route answers `409 machine_exists` until the body names the machine as `replaceMachineId`,
+and `preview: true` looks the machine up without changing anything. Nothing to update on the
+machine.
+
+### changed — the agent fetches hoot's key itself
+
+From owlette 4.2.0, when you set hoot's key on a machine, the agent fetches it from owlette
+with its own credentials, once, and the server deletes its copy then, or when the command
+ends.
+
+### changed — swoop starts the picture once the viewer has verified
+
+From owlette 4.2.0, the machine sends a swoop viewer nothing, no picture, sound, cursor,
+viewer list or clipboard, until the viewer has presented its connect token, which it does the
+moment the session opens. A viewer that presents none within 30 seconds is disconnected.
+
+### changed — hoot reads what a machine reports as data
+
+Process names, logs, error messages, file contents and an agent's alert reach hoot's model
+inside a marked block, and hoot's instructions say that nothing in a tool result or such a
+block is an instruction: hoot reports on it, and says so when any of it asks for something.
+This covers chats and autonomous investigations. Nothing to update on the machine.
+
+### changed — the owlette app loads only its own files
+
+From owlette 4.2.0, the owlette app's window runs under a content security policy: it loads
+only the app's own scripts, styles and images, and talks only to the app itself.
+
 ### added — the tray and menu bar icon turn yellow while someone is connected through swoop
 
 While a swoop session is capturing this screen, the owlette icon in the tray
@@ -191,7 +388,9 @@ can now use hoot's tools on the other machines of its site. The owlette agent
 on that machine is the MCP server and the machine's pairing is the credential:
 there is no API key and nothing to sign in to. It is off until a site owner or
 admin turns it on, in the admin panel under hoot, and says for each machine how
-far it may go (read, bounded changes or privileged) and on which machines.
+far it may go (read, bounded changes or privileged, which any change to what a
+machine launches needs, and raising it takes a session that passed a second
+factor) and on which machines.
 Beside hoot's own machine tools it can read a machine's metrics history,
 installed software, recent screenshots (as pictures), saved display layout and
 reboot schedule; set that schedule; list, start and cancel software

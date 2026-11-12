@@ -12,7 +12,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { escalate } from '@/lib/hoot-escalation.server';
-import { hootInternalSecret } from '@/lib/hootInternalSecret';
+import { hootInternalSecret, hootInternalSecretMatches } from '@/lib/hootInternalSecret';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 
 /** Process pending escalations for all sites. */
 async function processEscalations(): Promise<{ processed: number; errors: number }> {
@@ -70,16 +71,14 @@ async function processEscalations(): Promise<{ processed: number; errors: number
 }
 
 export async function POST(request: NextRequest) {
-  const secret = hootInternalSecret();
-  if (!secret) {
+  if (!hootInternalSecret()) {
     return NextResponse.json(
       { error: 'Escalation endpoint not configured' },
       { status: 503 },
     );
   }
 
-  const headerSecret = request.headers.get('x-cortex-secret');
-  if (headerSecret !== secret) {
+  if (!hootInternalSecretMatches(request.headers.get('x-cortex-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
@@ -89,17 +88,14 @@ export async function POST(request: NextRequest) {
 
 /** GET for cron-style polling; protected by CRON_SECRET. */
 export async function GET(request: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const headerSecret = request.headers.get('authorization')?.replace('Bearer ', '');
-
-  if (!cronSecret) {
+  if (!process.env.CRON_SECRET) {
     return NextResponse.json(
       { error: 'Escalation endpoint not configured' },
       { status: 503 },
     );
   }
 
-  if (headerSecret !== cronSecret) {
+  if (!cronSecretMatches(request.headers.get('authorization')?.replace('Bearer ', ''))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

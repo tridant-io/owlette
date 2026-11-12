@@ -306,8 +306,8 @@ def finalize_screenshot(
     timeout_s: int = FINALIZE_TIMEOUT_S,
 ) -> dict:
     """
-    POST .../screenshots/finalize. Web flips the object to public-read, writes
-    `machine.lastScreenshot`, appends history, returns the public URL.
+    POST .../screenshots/finalize. Web writes `machine.lastScreenshot`, appends
+    history, and returns the url the dashboard opens the screenshot through.
     """
     url = api_base.rstrip('/') + FINALIZE_PATH_TMPL.format(
         site_id=site_id, machine_id=machine_id
@@ -366,7 +366,7 @@ def capture_and_upload(
     """
     Full pipeline; returns the command's `result` envelope:
     `{storage_path, url, size_kb, monitor, monitor_count}` — `url` is the
-    public read URL finalize also wrote to machine.lastScreenshot.
+    url finalize also wrote to machine.lastScreenshot.
 
     The budget arguments default to the on-demand settings; a caller that runs
     somewhere it cannot afford them — the crash path is inline on the monitor

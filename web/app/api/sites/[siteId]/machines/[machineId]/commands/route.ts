@@ -6,12 +6,20 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
-import { problemFromError, problemValidation } from '@/lib/apiErrors';
+import { problem, problemFromError, problemValidation, ProblemType } from '@/lib/apiErrors';
 import { commandErrorToProblem, unsupportedCommandType } from '@/lib/machineCommandProblem';
 import { applyAuthDeprecations, readAndParseJsonBody } from '../../../../../_shared';
 import { withIdempotency } from '@/lib/idempotency';
-import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
+import {
+  authorizedSiteHandler,
+  type SiteHandlerContext,
+  type SiteRouteHandler,
+} from '@/lib/authorizedHandler.server';
+import { normalizeMaxToolTier } from '@/lib/apiKeyTypes';
 import { Capability } from '@/lib/capabilities';
+import { callTier, registryValueRefusal } from '@/lib/hoot/launchChange';
+import { toolTierOf } from '@/lib/mcp-tools';
+import { requestSignInCeremony, stepUpReadsOpen } from '@/lib/swoop/stepUp.server';
 import {
   ALLOWED_COMMAND_TYPES,
   executeMachineCommand,
@@ -370,6 +378,57 @@ const VIEW_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'stop_live_view',
 ]);
 
+/**
+ * Who may run this tool here. An api key runs up to its `maxToolTier`; a person
+ * runs tier 3 only on an open step-up window for this machine. Tiers come from
+ * lib/mcp-tools.ts, where a name nobody classified counts as tier 3, and a call
+ * that changes what the machine launches counts as tier 3 whatever its tool's tier,
+ * as hoot asks a person for one (ADR 0019).
+ */
+async function toolCallRefusal(
+  request: NextRequest,
+  ctx: SiteHandlerContext,
+  machineId: string,
+  toolName: string,
+  toolParams: unknown,
+): Promise<NextResponse | null> {
+  // the registry values hoot refuses are refused here too, for an agent too old to refuse them itself
+  const registryRefusal = registryValueRefusal(toolName, toolParams);
+  if (registryRefusal) {
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: registryRefusal.status,
+      detail: registryRefusal.detail,
+      code: registryRefusal.error,
+    });
+  }
+  const tier = callTier(toolName, toolParams, toolTierOf(toolName));
+  const key = ctx.auth.keyContext;
+  if (key) {
+    const maxToolTier = normalizeMaxToolTier(key.maxToolTier);
+    if (tier <= maxToolTier) return null;
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: 403,
+      detail: `this call is tier ${tier} and this api key's maxToolTier is ${maxToolTier}. the key's owner can raise it on the api keys page.`,
+      code: 'max_tool_tier_exceeded',
+    });
+  }
+  if (tier < 3) return null;
+  const userId = ctx.actor.userId;
+  const ceremony = await requestSignInCeremony(request, userId);
+  if (await stepUpReadsOpen(request, { userId, siteId: ctx.siteId, machineId }, ceremony)) return null;
+  return problem({
+    type: ProblemType.Unauthorized,
+    title: 'step-up required',
+    status: 401,
+    detail: 'this call is tier 3 and needs an open step-up window on this machine. confirm your identity, then try again.',
+    code: 'step_up_required',
+  });
+}
+
 const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params }) => {
   try {
     const { machineId } = await params;
@@ -389,6 +448,17 @@ const coreHandler: SiteRouteHandler<RouteParams> = async (request, ctx, { params
       async () => {
         const normalized = normalizeCommandBody(body);
         if (!normalized.ok) return normalized.response;
+
+        if (normalized.type === 'mcp_tool_call') {
+          const refusal = await toolCallRefusal(
+            request,
+            ctx,
+            machineId,
+            normalized.payload.tool_name as string,
+            normalized.payload.tool_params ?? {},
+          );
+          if (refusal) return refusal;
+        }
 
         try {
           const result = await executeMachineCommand(

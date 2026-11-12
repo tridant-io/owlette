@@ -34,12 +34,11 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'agent/alert',
   // pairing-phrase issuance for a not-yet-authenticated agent — bootstrap step of the device-code flow.
   'agent/auth/device-code',
-  // agent polls for its own pairing result; token-flow lease state, no operator actor.
-  'agent/auth/device-code/poll',
-  // registration-code -> token exchange; agent authentication itself, no operator actor.
-  'agent/auth/exchange',
   // agent refresh-token rotation; authentication lifecycle, no operator actor.
   'agent/auth/refresh',
+  // agent collects the hoot key queued for it (agent bearer token) and the handoff is deleted on
+  // read; the operator's provision is audited by hoot/provision-key, the fetch has no operator actor.
+  'agent/hoot/key',
   // agent screenshot ingest (agent bearer token); telemetry upload, not an operator mutation.
   'agent/screenshot',
   // agent fetches its own session bundle (agent bearer token); mints short-lived credentials, persists nothing.
@@ -115,7 +114,7 @@ export const EXEMPT_ROUTES: readonly string[] = [
   // nothing. The superadmin download, GET `admin/issues/[id]/logs`, is a read and so not scanned
   // here; it writes its own blocking `global/audit_log` row and one in the issue's site audit log.
   'sites/[siteId]/machines/[machineId]/issue-logs/upload-url',
-  // agent-side screenshot pipeline (machine scope): publishes the uploaded object and records the capture.
+  // agent-only screenshot pipeline (the machine's own token): records the uploaded capture.
   'sites/[siteId]/machines/[machineId]/screenshots/finalize',
   // agent-side screenshot pipeline (machine scope): mints a signed PUT url, writes nothing.
   'sites/[siteId]/machines/[machineId]/screenshots/upload-url',
@@ -124,6 +123,9 @@ export const EXEMPT_ROUTES: readonly string[] = [
   'talons/internal/match',
   // superadmin template preview send; email only, no persisted state.
   'test-email',
+  // signed-link self-service: turns off the link holder's own alert emails, which their
+  // account settings change unaudited too. No operator actor.
+  'unsubscribe',
   // self-delete cascade: writes its own blocking `global/audit_log` row inline (see the route header).
   'users/me',
   // stateless signature probe against a caller-supplied url; creates or modifies no subscription.

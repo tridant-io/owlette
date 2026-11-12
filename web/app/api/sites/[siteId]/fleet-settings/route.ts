@@ -11,7 +11,8 @@
  *
  * api keys are refused on both verbs, as on swoop-settings and
  * display-settings: granting a machine is a person's decision, made with a
- * session.
+ * session. raising a sender's tier, a new sender's above 1 included, needs a
+ * session that passed a second factor, as raising a key's tool tier does.
  */
 
 import { NextResponse } from 'next/server';
@@ -25,10 +26,12 @@ import {
 import { Capability } from '@/lib/capabilities';
 import { loadFleetSettings } from '@/lib/fleet/policy.server';
 import {
+  raisesFleetTier,
   setFleetSettings,
   storedFleetSettings,
   type SetFleetSettingsInput,
 } from '@/lib/actions/setFleetSettings.server';
+import { requireVerifiedSessionForToolTier } from '@/app/api/keys/_shared';
 import { ActionInputError } from '@/lib/actions/createProcess.server';
 
 interface FleetSettingsParams {
@@ -69,11 +72,18 @@ const writeHandler: SiteRouteHandler<FleetSettingsParams> = async (request, ctx)
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
+    const input = (parsed.body ?? {}) as SetFleetSettingsInput;
 
-    // keys were refused above, so the actor is always a signed-in user.
+    // keys were refused above, so the actor is always a signed-in user. raising
+    // a sender's tier asks what raising an api key's tool tier asks.
+    if (raisesFleetTier(await loadFleetSettings(ctx.siteId), input)) {
+      const unverified = await requireVerifiedSessionForToolTier(request, ctx.actor.userId);
+      if (unverified) return unverified;
+    }
+
     const result = await setFleetSettings(
       { siteId: ctx.siteId, actor: ctx.actor, auditActor: `user:${ctx.actor.userId}` },
-      (parsed.body ?? {}) as SetFleetSettingsInput,
+      input,
       { correlationId: ctx.correlationId },
     );
 

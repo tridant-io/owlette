@@ -152,13 +152,14 @@ function authedSession(): ResolvedAuth {
   return { userId: 'user-1', keyContext: null };
 }
 
-function authedKey(): ResolvedAuth {
+function authedKey(maxToolTier?: 1 | 2 | 3): ResolvedAuth {
   return {
     userId: 'user-1',
     keyContext: {
       keyId: 'key-test',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       scopes: [{ resource: 'chat', id: '*', permissions: ['write'] }] as any,
+      ...(maxToolTier ? { maxToolTier } : {}),
       environment: 'live',
       expiresAt: Date.now() + 60_000,
       isLegacy: false,
@@ -377,8 +378,8 @@ describe('POST /api/hoot — turn-start audit', () => {
 });
 
 describe('POST /api/hoot — turn-start guards', () => {
-  it('hands an api-key caller an access level capped below site admin', async () => {
-    mockResolveAuth.mockResolvedValue(authedKey());
+  it.each([undefined, 3] as const)('hands an api-key caller at maxToolTier %s an access level capped below site admin', async (maxToolTier) => {
+    mockResolveAuth.mockResolvedValue(authedKey(maxToolTier));
 
     const res = await TURN(turnRequest());
     expect(res.status).toBe(200);
@@ -827,6 +828,17 @@ describe('POST /api/hoot — approval resume binding', () => {
     expect(mockAcquireTurnLock).not.toHaveBeenCalled();
     expect(mockStartTurn).not.toHaveBeenCalled();
     expect(emitMutation).not.toHaveBeenCalled();
+  });
+
+  it('refuses a resume when the chat doc is gone, since nothing then says whose it is', async () => {
+    chatDoc = null;
+    mockReadTurnRecord.mockResolvedValue(priorTurn());
+
+    const res = await TURN(turnRequest({ messages: approvalHistory() }));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'approval_stale' });
+    expect(mockStartTurn).not.toHaveBeenCalled();
   });
 
   it('refuses a resume whose requesting message is no longer the record', async () => {

@@ -45,8 +45,9 @@ export function isMfaChallengeRequired(err: unknown): boolean {
  * `fallback` covers a response with no JSON at all (a proxy 502, say).
  */
 async function passkeyApiError(res: Response, fallback: string): Promise<PasskeyApiError> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
-  return new PasskeyApiError(body.error || fallback, body.code);
+  // the gate answers `{ error, code }`; a session refused before it answers a problem with `detail`
+  const body = (await res.json().catch(() => ({}))) as { error?: string; detail?: string; code?: string };
+  return new PasskeyApiError(body.error || body.detail || fallback, body.code);
 }
 
 export function usePasskeys(userId: string | undefined) {

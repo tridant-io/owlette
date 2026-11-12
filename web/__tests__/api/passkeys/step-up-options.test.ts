@@ -26,7 +26,7 @@ jest.mock('@/lib/apiAuth.server', () => {
   }
   return {
     ApiAuthError,
-    requireSession: async () => 'uid-1',
+    requirePreMfaSession: async () => 'uid-1',
     assertActiveUser: async () => undefined,
   };
 });

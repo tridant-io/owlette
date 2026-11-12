@@ -209,6 +209,7 @@ describe('/api/account/api-keys', () => {
     expect(json.name).toBe('Deploy');
     expect(json.key).toMatch(/^owk_live_/);
     expect(json.environment).toBe('live');
+    expect(json.maxToolTier).toBe(1);
     expect(json.keyPrefix).toBe(json.key.slice(0, 15));
     expect(json.expiresAt).toEqual(expect.any(Number));
     expect(json.scopes).toEqual(
@@ -292,6 +293,25 @@ describe('/api/account/api-keys', () => {
       p.startsWith('api_keys/'),
     )?.[1];
     expect(lookupRecord).toMatchObject({ scopes: callerScopes });
+  });
+
+  it("a child key starts at the default tool tier, whatever the caller's is", async () => {
+    mockKeyContext = {
+      scopes: [{ resource: 'site', id: 'site-1', permissions: ['read'] }],
+      maxToolTier: 3,
+    } as typeof mockKeyContext;
+
+    const res = await POST(new NextRequest('http://localhost/api/account/api-keys', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Child key', maxToolTier: 3 }),
+    }));
+    expect(res.status).toBe(200);
+
+    const lookupRecord = Array.from(store.entries()).find(([p]) =>
+      p.startsWith('api_keys/'),
+    )?.[1] as Record<string, unknown>;
+    expect(lookupRecord.maxToolTier).toBeUndefined();
   });
 
   it('audits child-key creation under the caller API key actor', async () => {

@@ -830,6 +830,41 @@ describe('flood limits', () => {
     viewer.close();
   });
 
+  it('caps a frame as the host reads it: with the fields the room adds, in utf-8 bytes', async () => {
+    const machine = machineId('stamped');
+    const host = await dialAgent(hostToken(machine), machine);
+    await host.waitFor('hello');
+    const viewer = await dialBrowser(viewerToken(machine), machine);
+    const viewerId = (await viewer.waitFor('hello')).id as string;
+    await host.waitFor('viewer-join');
+
+    const offer = (sdp: string) => JSON.stringify({ type: 'offer', sdp });
+    const bytes = (text: string) => new TextEncoder().encode(text).length;
+    // exactly 64 KiB as sent, and over it once the room has stamped it.
+    const atCap = offer('x'.repeat(LIMITS.messageBytes - offer('').length));
+    expect(atCap.length).toBe(LIMITS.messageBytes);
+    viewer.sendRaw(atCap);
+    // under 64 KiB in characters, over it in bytes.
+    const wide = offer('é'.repeat(40000));
+    expect(wide.length).toBeLessThan(LIMITS.messageBytes);
+    expect(bytes(wide)).toBeGreaterThan(LIMITS.messageBytes);
+    viewer.sendRaw(wide);
+    await waitForCount(() => viewer.frames.filter((frame) => frame.code === 'message_too_large').length, 2);
+
+    // and the largest frame the room forwards is exactly the cap, stamped.
+    const stamp = JSON.stringify({ from: viewerId, fromRole: 'viewer', serverTimeMs: Date.now() });
+    const fits = offer('x'.repeat(LIMITS.messageBytes - offer('').length - stamp.length + 1));
+    viewer.sendRaw(fits);
+    const forwarded = await host.waitFor('offer');
+    expect(bytes(JSON.stringify(forwarded))).toBe(LIMITS.messageBytes);
+
+    await settle();
+    expect(framesOf(host, 'offer')).toHaveLength(1);
+    expect(host.closed).toBe(null);
+    viewer.close();
+    host.close();
+  });
+
   it('refuses a binary frame', async () => {
     const machine = machineId('binary');
     const viewer = await dialBrowser(viewerToken(machine), machine);

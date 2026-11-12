@@ -313,7 +313,8 @@ probe deliveries send the same four headers plus `User-Agent: roost-probe/1.0`; 
 
 - **queueing.** when an event happens, one delivery is queued for each matching subscription that is neither paused nor deleted. a dispatcher runs once a minute and sends up to 200 due deliveries per run.
 - **at-least-once.** a delivery can arrive more than once, for example when your receiver processes it but times out before answering. deduplicate on `Roost-Delivery`.
-- **response handling.** your receiver has 10 seconds to answer; a slower answer counts as a network error. redirects are followed. `2xx` is success. network errors, timeouts, `408`, `425`, `429` and `5xx` are retried. any other status fails the delivery at once, with `lastError: "http_<status>"`.
+- **response handling.** your receiver has 10 seconds to answer; a slower answer counts as a network error. redirects are not followed, so point the subscription at the final URL. `2xx` is success. network errors, timeouts, `408`, `425`, `429` and `5xx` are retried. any other status, a `3xx` included, fails the delivery at once, with `lastError: "http_<status>"`.
+- **the URL at send time.** every attempt checks the URL again, by the rules for [create](#create). one that no longer passes fails the delivery at once, with `lastError: "url_refused_<code>"`, `private_ip` for example; one whose host does not resolve is retried like a network error.
 - **retries.** after a failed attempt `n`, the next attempt waits 5 seconds × 3<sup>n−1</sup>, capped at 1 hour, with ±20% jitter: about 5 s, 15 s, 45 s, 2 m 15 s, 6 m 45 s, 20 m 15 s, then 1 h. a wait shorter than a minute lands on the next dispatcher run. each attempt is signed with a fresh `t`; `Roost-Delivery` does not change.
 - **give-up.** a delivery gets 10 attempts. after the 10th failure it is marked `failed` with `lastError: "retry_exhausted: <reason>"`. the dispatcher never pauses a subscription; only the [machine.offline](#machineoffline) sender disables one.
 - **pause and delete.** pausing or deleting a subscription stops new deliveries from being queued for it. deliveries already queued are still sent.
@@ -333,9 +334,8 @@ send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also 
 
 | route | API-key scope | role |
 |---|---|---|
-| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | whole-site member |
-| `POST /api/webhooks`, `PATCH` or `DELETE /api/webhooks/{webhookId}`, `POST .../rotate-secret` | `site=<siteId>:write` | site admin or owner |
-| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | whole-site member |
+| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | site admin or owner |
+| `POST /api/webhooks`, `PATCH` or `DELETE /api/webhooks/{webhookId}`, `POST .../rotate-secret`, `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | site admin or owner |
 
 a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). webhooks span the site's machines, so a member whose access is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403 forbidden` on every route here, whatever their role. the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
 
@@ -501,6 +501,8 @@ curl -fsS -X POST "$OWLETTE_API_URL/api/webhooks/probe?siteId=kiosk-fleet-01" \
 - `payload` is optional: a JSON object to send as `data` instead of the canned example.
 - `signingSecret` is optional: at least 32 characters. without it the server generates one and returns it.
 - the probe waits up to 10 seconds for your receiver. it is not retried, not stored in delivery history, and every call sends again.
+- a redirect comes back as the `status`, and is not followed.
+- each person can probe 60 times an hour; past that the probe answers `429 rate_limited`.
 
 the response is `200` whatever your receiver answered:
 
@@ -572,10 +574,11 @@ errors use `application/problem+json`; branch on `code`. see [errors](/docs/api/
 | `unsupported_version` | 400 | the `Roost-Version` header names an unsupported date. |
 | `idempotency_key_invalid` | 400 | the `Idempotency-Key` is longer than 255 characters. |
 | `unauthorized` / `token_expired` | 401 | no valid credential, or an expired API key. |
-| `forbidden` | 403 | your account is inactive, or create, update, delete or rotate-secret without the site admin or owner role. |
+| `forbidden` | 403 | your account is inactive, or you do not hold the site admin or owner role. |
 | `scope_insufficient` | 403 | the API key lacks the `site=<siteId>` scope the route needs. |
 | `not_found` | 404 | the site, subscription or delivery does not exist, the subscription is deleted, or the delivery belongs to another subscription. |
 | `idempotency_key_mismatch` | 422 | an `Idempotency-Key` was reused with a different body. |
+| `rate_limited` | 429 | more than 60 probes in an hour; wait `Retry-After` seconds. |
 | `internal_error` | 500 | unexpected server error, or a retry whose subscription has no stored secret; quote the `requestId`. |
 
 ---

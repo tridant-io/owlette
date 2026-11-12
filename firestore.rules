@@ -1,10 +1,11 @@
 rules_version = '2';
 
 // Owlette Firestore Security Rules
-// Version: 2.12.0 - a member row may carry machineIds: that member reaches only those
-//                   machines (canAccessMachine) and nothing site-wide
-//                   (canAccessWholeSite); 2.11.0 made webhook documents site-admin read
-// Last Updated: 2026-11-04
+// Version: 2.13.0 - agents only remove entries from commands/pending, and a client writes
+//                   a chat only as a person's (source absent or 'user'); 2.12.0 let a member
+//                   row carry machineIds: that member reaches only those machines
+//                   (canAccessMachine) and nothing site-wide (canAccessWholeSite)
+// Last Updated: 2026-11-11
 //
 // Security Model:
 // - Global roles: superadmin (platform-wide) | everyone else (no implicit site privilege)
@@ -346,8 +347,18 @@ service cloud.firestore {
           allow read: if canAccessMachine(siteId, machineId) ||
                          isServiceAccount() ||
                          agentCanAccessMachine(siteId, machineId);
-          allow write: if isServiceAccount() ||
-                          agentCanAccessMachine(siteId, machineId);
+          // The service executes what lands in pending, so an agent's token only
+          // takes entries out of it: every fielded agent's one write there is a
+          // field delete. No create: that delete on a missing doc would otherwise
+          // recreate it, empty, under a machine the server just removed.
+          allow create: if isServiceAccount() ||
+                           (commandDoc != 'pending' &&
+                            agentCanAccessMachine(siteId, machineId));
+          allow update: if isServiceAccount() ||
+                           (agentCanAccessMachine(siteId, machineId) &&
+                            (commandDoc != 'pending' ||
+                             (request.resource.data.diff(resource.data).addedKeys().size() == 0 &&
+                              request.resource.data.diff(resource.data).changedKeys().size() == 0)));
           allow delete: if isServiceAccount() ||
                            agentCanAccessMachine(siteId, machineId);
         }
@@ -917,10 +928,18 @@ service cloud.firestore {
                      (resource.data.userId == request.auth.uid ||
                       (resource.data.source == 'autonomous' &&
                        canAccessWholeSite(resource.data.siteId)));
+      // A client writes only a person's chat (source absent or 'user'); the server
+      // writes every other source, and whole-site members read the autonomous ones.
+      // An update may keep the source a server-written chat already has.
       allow create: if isAuthenticated() &&
-                     request.resource.data.userId == request.auth.uid;
-      allow update, delete: if isAuthenticated() &&
-                               resource.data.userId == request.auth.uid;
+                     request.resource.data.userId == request.auth.uid &&
+                     request.resource.data.get('source', 'user') == 'user';
+      allow update: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid &&
+                       (request.resource.data.get('source', 'user') == 'user' ||
+                        request.resource.data.get('source', null) == resource.data.get('source', null));
+      allow delete: if isAuthenticated() &&
+                       resource.data.userId == request.auth.uid;
 
       match /messages/{messageId} {
         // Chat messages within a conversation

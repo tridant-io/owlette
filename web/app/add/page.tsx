@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { AuthShell } from '@/components/auth/AuthShell';
+import { PairingReview } from '@/components/PairingReview';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Loader2, CheckCircle2, Monitor } from 'lucide-react';
+import { Loader2, CheckCircle2 } from 'lucide-react';
 import { toast } from '@/lib/toast';
+import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
 
 interface Site {
   id: string;
@@ -24,10 +26,17 @@ export default function AddMachinePage() {
   const [loading, setLoading] = useState(true);
   const [sites, setSites] = useState<Site[]>([]);
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
-  const [pairPhrase, setPairPhrase] = useState('');
-  const [isAuthorizing, setIsAuthorizing] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState(false);
-  const [machineId, setMachineId] = useState<string | null>(null);
+  const {
+    phrase: pairPhrase,
+    setPhrase: setPairPhrase,
+    review,
+    lookUp,
+    authorize,
+    cancel,
+    isAuthorizing,
+    success: isAuthorized,
+    authorizedMachineId: machineId,
+  } = useDeviceCodeAuthorize(selectedSiteId);
   /**
    * Whether the selection was auto-made (single-site convenience) rather than
    * chosen. The first pass no longer races `role` — the fetch waits for
@@ -54,7 +63,7 @@ export default function AddMachinePage() {
         setPairPhrase(code);
       }
     }
-  }, []);
+  }, [setPairPhrase]);
 
   useEffect(() => {
     async function fetchSites() {
@@ -130,7 +139,7 @@ export default function AddMachinePage() {
     }
   }, [authLoading, user, router]);
 
-  const handleAuthorize = async () => {
+  const handleContinue = () => {
     if (!pairPhrase.trim()) {
       toast.error('please enter a pairing phrase');
       return;
@@ -139,46 +148,7 @@ export default function AddMachinePage() {
       toast.error('please select a site');
       return;
     }
-
-    setIsAuthorizing(true);
-
-    try {
-      const response = await fetch('/api/agent/auth/device-code/authorize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pairPhrase: pairPhrase.trim().toLowerCase(),
-          siteId: selectedSiteId,
-        }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        // The route returns 404 for two different things. "Pairing phrase not
-        // found." is the one that can mean the machine paired against a
-        // different owlette server, so only that one gets the wrong-server hint
-        // — "Pairing phrase has expired." is strictly more precise and must
-        // reach the operator verbatim, as must the 409 already-used message.
-        // `response.status` is out of scope in the catch, so choose here.
-        if (response.status === 404 && /not found/i.test(data.error ?? '')) {
-          throw new Error(
-            `phrase not found on ${host} — it may have expired, or the machine may be pairing with a different owlette server.`
-          );
-        }
-        throw new Error(data.error || 'Authorization failed');
-      }
-
-      const data = await response.json();
-      setIsAuthorized(true);
-      setMachineId(data.machineId);
-      toast.success('machine authorized');
-    } catch (error: unknown) {
-      console.error('Error authorizing:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(message || 'failed to authorize machine');
-    } finally {
-      setIsAuthorizing(false);
-    }
+    lookUp();
   };
 
   // Before the !user guard on purpose: the footer band below reads user.email.
@@ -237,7 +207,7 @@ export default function AddMachinePage() {
           value={pairPhrase}
           onChange={(e) => setPairPhrase(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && selectedSiteId) handleAuthorize();
+            if (e.key === 'Enter' && selectedSiteId && !review) handleContinue();
           }}
           className="bg-muted/50 border-border text-foreground placeholder:text-muted-foreground font-mono"
           autoFocus
@@ -268,26 +238,33 @@ export default function AddMachinePage() {
         )}
       </div>
 
-      {/* Authorize Button */}
-      {pairPhrase.trim() && selectedSiteId && (
-        <Button
-          onClick={handleAuthorize}
-          disabled={isAuthorizing}
-          className="w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+      {/* The machine the phrase names, then the approval */}
+      {review ? (
+        <PairingReview
+          review={review}
+          busy={isAuthorizing}
+          onAuthorize={authorize}
+          onCancel={cancel}
           size="lg"
-        >
-          {isAuthorizing ? (
-            <>
-              <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-              authorizing...
-            </>
-          ) : (
-            <>
-              <Monitor className="h-5 w-5 mr-2" />
-              authorize machine
-            </>
-          )}
-        </Button>
+        />
+      ) : (
+        pairPhrase.trim() && selectedSiteId && (
+          <Button
+            onClick={handleContinue}
+            disabled={isAuthorizing}
+            className="w-full cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            size="lg"
+          >
+            {isAuthorizing ? (
+              <>
+                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                looking up machine...
+              </>
+            ) : (
+              'continue'
+            )}
+          </Button>
+        )
       )}
 
     </AuthShell>

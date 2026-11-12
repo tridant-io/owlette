@@ -131,9 +131,9 @@ node scripts/check-membership-read-path.mjs --env=prod --list-scoped
 While it lists any row:
 - Never roll the web back by redeploying an older Railway deployment.
 - Never let the Vercel standby serve older code: a failover to it is a rollback too.
-- Never restore rules older than 2.12.0.
+- Never restore rules older than 2.12.0. From 4.2.0 the floor is 2.13.0 whatever the list says: see "firestore rules" below.
 Remove the scoped members first, with the `DELETE /api/sites/{siteId}/members/{uid}` the script prints for each row (the owner's call, and mutating).
-Only once the list is empty: revert the web, then the rules, then the usage function (`getUsageSummaryHttp`).
+Only once the list is empty: revert the web, then the rules' machine-scope part on top of 2.13.0, then the usage function (`getUsageSummaryHttp`).
 ### web (Railway)
 Rollback model: revert the offending commit on `dev` or `main`, push, and Railway auto-redeploys.
 Use revert when the bad commit is isolated:
@@ -219,6 +219,7 @@ firebase deploy --only firestore:rules
 Migration ordering trap:
 - Rule changes paired with data migrations cannot be rolled back out-of-order.
 - Rules older than 2.12.0 widen every scoped member: see "machine scope trap" above.
+- Rules floor from 4.2.0: 2.13.0. The service runs whatever lands in `commands/pending`, and from 2.13.0 only the server adds to it; an agent's token only takes entries out. Never restore an older file: fix a rules regression forward on top of 2.13.0.
 - Live admins can lose access if rules are restored before compatible data state.
 - See `scripts/README.md:111-114`.
 After deploy:

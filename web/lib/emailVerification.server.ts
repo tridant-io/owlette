@@ -6,8 +6,9 @@
  * /verify-email link (no continue-URL or authorized-domain dependency) and send
  * our branded email through Resend.
  *
- * Nothing is gated on the result. Callers: the first bootstrap of a password
- * account and the banner's resend (`POST /api/auth/verify-email`).
+ * Sign-in is not gated on the result; adding a member by email is
+ * (`POST /api/sites/{siteId}/members`). Callers of the send: the first bootstrap
+ * of a password account and the banner's resend (`POST /api/auth/verify-email`).
  */
 
 import type { UserRecord } from 'firebase-admin/auth';

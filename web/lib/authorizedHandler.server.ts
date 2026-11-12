@@ -51,6 +51,7 @@ import {
 } from '@/lib/sitePolicy.server';
 import {
   problem,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
   problemPlanRequired,
@@ -314,7 +315,7 @@ function authErrorToResponse(err: ApiAuthError): NextResponse {
     });
   }
   if (err.status === 401) return problemUnauthorized(err.message);
-  if (err.status === 403) return problemForbidden(err.message);
+  if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden(err.message);
   if (err.status === 404) return problemNotFound(err.message);
   return problem({
     type: ProblemType.Internal,

@@ -3,14 +3,15 @@
  *
  * Last step of the agent's `capture_screenshot` pipeline, after it PUTs bytes
  * to the signed URL from `/screenshots/upload-url`: verify the object landed
- * and its path matches this site+machine, make it public-read, write
- * `machines/{id}.lastScreenshot`, append a history doc and prune to 20.
+ * and its path matches this site+machine, write `machines/{id}.lastScreenshot`
+ * with the path and its image-route url, append a history doc and prune to 20.
+ * The object stays private.
  *
  * A separate step because pre-registering would flash a stub lastScreenshot,
- * agents hold no GCS credentials (no makePublic / public URLs), and a bucket
- * trigger would add latency and infra for a one-line action.
+ * and a bucket trigger would add latency and infra for a one-line action.
  *
- * Auth: `machine=<id>:write` or agent ID-token, as on /screenshots/upload-url.
+ * Auth: only this machine's own agent ID-token; a member or api key gets 403,
+ * so a capture on record always came from the machine.
  * Naturally idempotent apart from the history append, which pruning absorbs.
  * Not separately rate limited: every call needs a storagePath minted by an already-counted
  * /screenshots/upload-url request, so billing both legs would halve the machine's screenshot
@@ -20,22 +21,24 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import {
+  problemForbidden,
   problemFromError,
   problemNotFound,
   problemValidation,
 } from '@/lib/apiErrors';
-import {
-  applyAuthDeprecations,
-  requireMachineAuthAndScope,
-} from '../../../../../../_shared';
+import { requireMachineAuthAndScope } from '../../../../../../_shared';
 import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { screenshotImageUrl, screenshotRecordPath } from '@/lib/screenshotStorage.server';
+import { resolveAgentPrincipal } from '@/lib/sitePolicy.server';
 
 interface RouteParams {
   params: Promise<{ siteId: string; machineId: string }>;
 }
 
 const ALLOWED_CONTENT_TYPES = new Set(['image/png', 'image/jpeg']);
+
+const NOT_THIS_AGENT = "only this machine's own agent can record its screenshots";
 
 // Screenshot history kept per machine; older entries are pruned on finalize.
 const MAX_HISTORY = 20;
@@ -106,13 +109,16 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId, machineId } = await params;
 
-    const auth = await requireMachineAuthAndScope(
-      request,
-      siteId,
-      machineId,
-      'write',
-    );
-    if (!auth.ok) return auth.response;
+    const agent = await resolveAgentPrincipal(request, siteId, machineId);
+    if (agent?.matched === 'mismatch') return problemForbidden(NOT_THIS_AGENT);
+    if (!agent) {
+      // not an agent: machine auth answers a missing, expired or bad credential
+      // (401) or a site the caller cannot see (404); whoever it lets through is a
+      // person or an api key, and still not this machine's agent
+      const auth = await requireMachineAuthAndScope(request, siteId, machineId, 'write');
+      if (!auth.ok) return auth.response;
+      return problemForbidden(NOT_THIS_AGENT);
+    }
 
     let body: FinalizeBody;
     try {
@@ -179,11 +185,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       );
     }
 
-    // Mirror the legacy endpoint's setMetadata so CDN/browser handling of the
-    // public URL matches, despite the signed URL already binding a type.
+    // Mirror the legacy endpoint's setMetadata so browser handling of the signed
+    // read url matches, despite the signed upload url already binding a type.
     await file.setMetadata({
       contentType,
-      cacheControl: 'public, max-age=60',
+      cacheControl: 'private, max-age=60',
       metadata: {
         machineId,
         siteId,
@@ -204,12 +210,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       Math.round((Number.isFinite(objectSizeBytes) ? objectSizeBytes : 0) / 1024),
     );
 
-    // Public-read so the dashboard renders a plain storage.googleapis.com URL
-    // without a signed-URL roundtrip per poll.
-    await file.makePublic();
-
-    // ?t= cache-buster in case two captures ever share a storagePath.
-    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${body.storagePath}?t=${Date.now()}`;
+    const url = screenshotImageUrl(siteId, machineId, body.storagePath);
 
     const db = getAdminDb();
     const machineRef = db
@@ -221,7 +222,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     await machineRef.set(
       {
         lastScreenshot: {
-          url: publicUrl,
+          url,
+          path: body.storagePath,
           timestamp: FieldValue.serverTimestamp(),
           sizeKB,
         },
@@ -232,7 +234,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     // History feed for the screenshot-dialog sidebar.
     const screenshotsCol = machineRef.collection('screenshots');
     await screenshotsCol.add({
-      url: publicUrl,
+      url,
+      path: body.storagePath,
       timestamp: FieldValue.serverTimestamp(),
       sizeKB,
       monitor,
@@ -244,24 +247,11 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     if (allDocs.size > MAX_HISTORY) {
       const toDelete = allDocs.docs.slice(0, allDocs.size - MAX_HISTORY);
       for (const docSnap of toDelete) {
-        const data = docSnap.data();
-        try {
-          // Strip the storage prefix and ?t= to get the bucket-relative path.
-          const rawUrl = typeof data.url === 'string' ? data.url : '';
-          const prefix = `${bucket.name}/`;
-          const pathStart = rawUrl.indexOf(prefix);
-          if (pathStart !== -1) {
-            const tail = rawUrl.slice(pathStart + prefix.length);
-            const qIdx = tail.indexOf('?');
-            const oldPath = qIdx === -1 ? tail : tail.slice(0, qIdx);
-            if (oldPath) {
-              await bucket.file(oldPath).delete().catch(() => {
-                // Already gone (manual delete, lifecycle rule) — best-effort.
-              });
-            }
-          }
-        } catch {
-          /* swallow — pruning is best-effort */
+        const oldPath = screenshotRecordPath(docSnap.data(), bucket.name);
+        if (oldPath) {
+          await bucket.file(oldPath).delete().catch(() => {
+            // Already gone (manual delete, lifecycle rule) — best-effort.
+          });
         }
         await docSnap.ref.delete();
       }
@@ -274,18 +264,15 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       `[screenshots/finalize] ${sanitizeForLog(machineId)} (${sizeKB}KB, monitor=${sanitizeForLog(monitor)}) → ${sanitizeForLog(body.storagePath)}`,
     );
 
-    return applyAuthDeprecations(
-      NextResponse.json({
-        ok: true,
-        data: {
-          url: publicUrl,
-          storagePath: body.storagePath,
-          sizeKB,
-          monitor,
-        },
-      }),
-      auth.scopeCheck,
-    );
+    return NextResponse.json({
+      ok: true,
+      data: {
+        url,
+        storagePath: body.storagePath,
+        sizeKB,
+        monitor,
+      },
+    });
   } catch (err) {
     return problemFromError(
       err,

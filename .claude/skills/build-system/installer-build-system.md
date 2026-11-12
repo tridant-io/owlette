@@ -181,7 +181,7 @@ During installation (or from the desktop app) the agent pairs without a browser 
 - dev → project_id: `owlette-dev-3838a`, api_base: `https://dev.owlette.app/api`
 - prod → project_id: `owlette-prod-90a12`, api_base: `https://owlette.app/api`
 
-The old localhost:8765 browser-callback flow and its `POST /api/agent/auth/exchange` were replaced by device-code pairing in 2.4.1; the route still exists, but no agent calls it: the agent's half, `AuthManager.exchange_registration_code`, is removed.
+The old localhost:8765 browser-callback flow and its `POST /api/agent/auth/exchange` were replaced by device-code pairing in 2.4.1, and both halves are gone: the agent's `AuthManager.exchange_registration_code` and the route.
 
 ---
 

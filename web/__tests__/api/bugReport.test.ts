@@ -13,6 +13,7 @@ import { createMockRequest } from './helpers/utils';
 
 const mockVerifyIdToken = jest.fn();
 const mockRequireSession = jest.fn();
+const mockAssertIdTokenPassesMfa = jest.fn();
 const mockHead = jest.fn();
 const mockSend = jest.fn();
 const written: { id: string; data: Record<string, unknown> }[] = [];
@@ -56,6 +57,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 jest.mock('@/lib/apiAuth.server', () => ({
   ...jest.requireActual('@/lib/apiAuth.server'),
   requireSession: (...args: unknown[]) => mockRequireSession(...args),
+  assertIdTokenPassesMfa: (...args: unknown[]) => mockAssertIdTokenPassesMfa(...args),
 }));
 jest.mock('@/lib/withRateLimit', () => ({ withRateLimit: (h: unknown) => h }));
 jest.mock('@/lib/resendClient.server', () => ({
@@ -85,6 +87,8 @@ beforeEach(() => {
   docSeq = 0;
   mockVerifyIdToken.mockReset();
   mockRequireSession.mockReset();
+  mockAssertIdTokenPassesMfa.mockReset();
+  mockAssertIdTokenPassesMfa.mockResolvedValue(undefined);
   mockHead.mockReset();
   mockSend.mockReset();
   mockSend.mockResolvedValue({});
@@ -483,6 +487,29 @@ describe('POST /api/bug-report', () => {
     const res = await report({ logsKey: KEY }, {});
     expect(res.status).toBe(400);
     expect(mockHead).not.toHaveBeenCalled();
+    expect(written).toHaveLength(0);
+  });
+
+  it('refuses a session still owing its second factor, with the code the client keys off', async () => {
+    const { ApiAuthError } = jest.requireActual('@/lib/apiAuth.server');
+    mockRequireSession.mockRejectedValueOnce(
+      new ApiAuthError(403, 'complete two-factor verification first', { code: 'mfa_challenge_required' }),
+    );
+    const res = await report({}, {});
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(written).toHaveLength(0);
+  });
+
+  it('refuses a user id token for an account holding a factor', async () => {
+    const { ApiAuthError } = jest.requireActual('@/lib/apiAuth.server');
+    mockVerifyIdToken.mockResolvedValue({ uid: 'user-1' });
+    mockAssertIdTokenPassesMfa.mockRejectedValueOnce(
+      new ApiAuthError(403, 'complete two-factor verification first', { code: 'mfa_challenge_required' }),
+    );
+    const res = await report({});
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
     expect(written).toHaveLength(0);
   });
 

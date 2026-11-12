@@ -11,7 +11,8 @@
  * GET /api/webhooks?siteId=...&limit=&cursor= — cursor-paginated list,
  * soft-deleted filtered out, never includes signingSecret.
  *
- * Scope: site:<id>:write for POST, site:<id>:read for GET.
+ * Scope: site:<id>:write for POST, site:<id>:read for GET; both need
+ * WEBHOOK_MANAGE.
  */
 
 import { randomBytes } from 'node:crypto';
@@ -230,6 +231,9 @@ export async function GET(request: NextRequest) {
 
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
 
     const parsedPagination = parsePagination(request.nextUrl.searchParams, {
       defaultPageSize: DEFAULT_LIST_LIMIT,

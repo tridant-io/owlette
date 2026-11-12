@@ -8,7 +8,7 @@ keywords: ["agent token", "refresh token", "revoke machine", "decommission", "re
 
 <Callout type="info" title={"permissions"}>
 
-the page opens for anyone who is an owner or admin on at least one site. listing and revoking both need `AGENT_TOKEN_REVOKE` on the site, so a token you cannot list is a token you cannot revoke. issuing one, by authorizing a pairing phrase or generating an installer registration code, needs `MACHINE_ENROLL`, which the same roles hold.
+the page opens for anyone who is an owner or admin on at least one site. listing and revoking both need `AGENT_TOKEN_REVOKE` on the site, so a token you cannot list is a token you cannot revoke. issuing one, by authorizing a pairing phrase or generating one, needs `MACHINE_ENROLL`, which the same roles hold.
 
 </Callout>
 
@@ -89,10 +89,9 @@ the refresh endpoint allows 120 requests per hour per IP address, shared by ever
 ## lifecycle
 
 ```text
-1. issuing a token starts with a short-lived code, which needs MACHINE_ENROLL:
-   - an installer registration code expires after 24 hours
-   - a pairing phrase expires after 10 minutes
-2. once the code is authorized, the server creates:
+1. issuing a token starts with a pairing phrase, which expires after 10 minutes
+   and needs MACHINE_ENROLL to authorize
+2. once the phrase is authorized, the server creates:
    - a Firebase ID token for immediate use
    - a random refresh token
    - a record in agent_refresh_tokens keyed by the token's SHA-256 hash
@@ -124,7 +123,7 @@ records live in the `agent_refresh_tokens` collection, server-side only. the doc
 | `siteId` | the site the token authorizes |
 | `machineId` | the machine ID. a refresh from a different machine ID is refused with `403` |
 | `version` | the agent version from pairing |
-| `createdBy` | the user who authorized the pairing or generated the registration code |
+| `createdBy` | the user who authorized the pairing |
 | `createdAt` | when this record was created |
 | `lastUsed` | when it was last used to refresh |
 | `agentUid` | the agent's Firebase Auth identity |

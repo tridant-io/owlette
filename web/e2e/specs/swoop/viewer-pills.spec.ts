@@ -30,6 +30,7 @@ import { getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
 import { FakeSwoopHost } from '../../helpers/swoopHost';
+import { unspentTotp } from '../../helpers/totp';
 
 authenticator.options = { step: 30, window: 1 };
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -51,9 +52,7 @@ async function signIn(page: Page, user: TestUser, secret?: string): Promise<void
   await page.getByRole('button', { name: /sign in with email/i }).click();
   if (secret) {
     await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
-    // a code about to roll over could land after it has
-    if (authenticator.timeRemaining() <= 5) await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
-    await page.getByPlaceholder('000000').fill(authenticator.generate(secret));
+    await page.getByPlaceholder('000000').fill(await unspentTotp(page, secret));
     await page.getByRole('button', { name: /^verify$/i }).click();
   }
   await expect(page).toHaveURL(/\/dashboard/, { timeout: 20_000 });

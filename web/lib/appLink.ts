@@ -68,9 +68,12 @@ export async function completeAppLinkSignIn(customToken: string): Promise<void> 
   await postJson('/api/auth/session', { userId: user.uid, idToken });
 }
 
-/** Same-origin relative paths only; `//host` and `/\host` both leave the site. */
+/** Same-origin relative paths only: no `//host`, no backslash, no control character. */
 export function safeNextPath(value: string | null, fallback = '/swoop'): string {
-  return value && value.startsWith('/') && !value.startsWith('//') && !value.includes('\\')
+  return value &&
+    value.startsWith('/') &&
+    !value.startsWith('//') &&
+    !Array.from(value).some((c) => c === '\\' || c.charCodeAt(0) < 0x20)
     ? value
     : fallback;
 }

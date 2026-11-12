@@ -110,6 +110,10 @@ export function PasskeyManager({
       toast.success('passkey renamed');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'failed to rename passkey');
+      if (isMfaChallengeRequired(err)) {
+        setEditingId(null);
+        onChallengeRequired?.();
+      }
     }
   };
 
@@ -123,6 +127,10 @@ export function PasskeyManager({
       onChange?.();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'failed to delete passkey');
+      if (isMfaChallengeRequired(err)) {
+        setDeleteTarget(null);
+        onChallengeRequired?.();
+      }
     } finally {
       setDeleting(false);
     }
@@ -303,7 +311,7 @@ export function PasskeyManager({
               you won&apos;t be able to sign in with this passkey anymore.
             </DialogDescription>
           </DialogHeader>
-          {/* Warn, never block — removal is always allowed. */}
+          {/* warn, never block: a verified session may remove its last factor. */}
           {isLastFactor && passkeys.length === 1 && (
             <div className="flex items-start gap-2 rounded-md border border-warning-border bg-warning-surface p-3">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />

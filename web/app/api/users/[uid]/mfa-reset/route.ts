@@ -8,7 +8,8 @@
  *
  * Steps: (1) delete `users/{uid}/passkeys`, (2) rewrite the factor inventory via
  * `applyMfaFactorChange` + `recountPasskeys` (clears TOTP, secret and backup codes
- * in the same write), (3) revoke trusted devices, (4) emit a mutation audit row.
+ * in the same write), (3) revoke trusted devices, (4) emit a mutation audit row,
+ * (5) email the target.
  *
  * ORDER IS LOAD-BEARING: credentials before inventory. A crash between them leaves
  * the account locked out — the state it was already in, and a retry finishes the
@@ -18,7 +19,7 @@
  * reason: the tally is read inside the transaction that writes it, so a failed
  * delete shows up instead of being papered over.
  *
- * Steps 3-4 are best-effort tails — trust records are inert once no factors remain
+ * Steps 3-5 are best-effort tails — trust records are inert once no factors remain
  * — so a failure there must not fail a reset that already landed.
  *
  * The inventory (`users/{uid}.mfaFactors` + its derived flags) is written ONLY
@@ -48,6 +49,7 @@ import { applyAuthDeprecations } from '../../../_shared';
 import { applyMfaFactorChange, readMfaFactors } from '@/lib/mfaFactors.server';
 import { revokeAllTrustedDevices } from '@/lib/deviceTrust.server';
 import { emitMutation } from '@/lib/auditLogClient';
+import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
 
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -195,6 +197,11 @@ export const POST = authorizedPlatformHandler<RouteParams>({
         setupReArmed: after.requiresMfaSetup,
       },
     });
+
+    // (5) a reset of a factor-less account changed nothing worth telling them.
+    if (before.totp || deletedPasskeys > 0) {
+      await sendMfaFactorNotice(userData.email, { change: 'reset', factor: 'second factors' });
+    }
 
     return applyAuthDeprecations(
       NextResponse.json({

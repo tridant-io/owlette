@@ -23,9 +23,10 @@ import {
   type AuthenticationResponseJSON,
 } from '@simplewebauthn/server';
 import { isoBase64URL } from '@simplewebauthn/server/helpers';
-import { verifyTOTP, verifyBackupCode } from '@/lib/totp';
+import { verifyBackupCode } from '@/lib/totp';
 import { decrypt, isEncryptionConfigured } from '@/lib/encryption.server';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { MFA_ATTEMPTS_EXCEEDED, consumeTotpCode, spendMfaAttempt } from '@/lib/mfaAttempts.server';
 import {
   getRpId,
   getExpectedOrigins,
@@ -116,11 +117,12 @@ export function parseMfaProof(body: unknown): MfaProofParse {
   );
 }
 
-/** Verify a TOTP code against the account's stored (encrypted) secret. */
-function verifyStoredTotp(
+/** Verify a TOTP code against the account's stored (encrypted) secret, spending its step. */
+async function verifyStoredTotp(
+  userId: string,
   code: string,
   userData: FirebaseFirestore.DocumentData,
-): MfaProofOutcome {
+): Promise<MfaProofOutcome> {
   const encryptedSecret = userData.mfaSecret;
   if (!encryptedSecret || typeof encryptedSecret !== 'string') {
     return reject(400, 'this account has no authenticator enrolled.', 'totp_not_enrolled');
@@ -138,7 +140,7 @@ function verifyStoredTotp(
     secret = encryptedSecret;
   }
 
-  if (!verifyTOTP(code, secret)) {
+  if (!(await consumeTotpCode(userId, code, secret))) {
     return reject(400, 'invalid verification code', 'invalid_mfa_proof');
   }
   return { ok: true, factorUsed: 'totp' };
@@ -266,9 +268,12 @@ export async function verifyMfaProof(
   proof: MfaProof,
   userData: FirebaseFirestore.DocumentData,
 ): Promise<MfaProofOutcome> {
+  if (proof.kind !== 'passkey' && !(await spendMfaAttempt(userId)).success) {
+    return reject(429, 'too many attempts. try again in a few minutes.', MFA_ATTEMPTS_EXCEEDED);
+  }
   switch (proof.kind) {
     case 'totp':
-      return verifyStoredTotp(proof.code, userData);
+      return verifyStoredTotp(userId, proof.code, userData);
     case 'backup_code':
       return consumeBackupCode(userId, proof.code);
     case 'passkey':

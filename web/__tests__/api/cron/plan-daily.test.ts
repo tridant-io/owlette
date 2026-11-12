@@ -1,5 +1,6 @@
 /** @jest-environment node */
 
+import crypto from 'crypto';
 import { NextRequest } from 'next/server';
 
 const mockRunPlanDaily = jest.fn();
@@ -57,6 +58,16 @@ describe('GET /api/cron/plan-daily', () => {
     const res = await GET(request('cron-secret'));
     expect(res.status).toBe(401);
     expect(mockRunPlanDaily).not.toHaveBeenCalled();
+  });
+
+  it('compares the secret in constant time', async () => {
+    const compare = jest.spyOn(crypto, 'timingSafeEqual');
+    try {
+      expect((await GET(request('cron-secreT'))).status).toBe(401);
+      expect(compare).toHaveBeenCalledTimes(1);
+    } finally {
+      compare.mockRestore();
+    }
   });
 
   it('runs the job and answers its summary', async () => {

@@ -220,6 +220,10 @@ Name: "{commonappdata}\Owlette"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\config"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\logs"; Permissions: users-modify
 Name: "{commonappdata}\Owlette\cache"; Permissions: users-modify
+; hoot's CLI cache: made here so it exists at the service's first start, whose
+; ACL repair (acl_hardening) narrows it to the console user. No Permissions:
+; they would only add to what cache\ passes down.
+Name: "{commonappdata}\Owlette\cache\claude-cli"
 Name: "{commonappdata}\Owlette\tmp"; Permissions: users-modify
 ; ipc keeps users-modify: the console user writes the cortex command queue, and
 ; the service tightens the cortex_* trio to a protected DACL at start-up.

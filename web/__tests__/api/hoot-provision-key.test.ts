@@ -3,8 +3,9 @@
 /**
  * Audit coverage for POST /api/hoot/provision-key (talons wave 5.4).
  *
- * The route queues a `provision_cortex_key` machine command carrying a raw LLM
- * api key, then blocks polling for the agent's terminal status. The mutation is
+ * The route queues a `provision_cortex_key` machine command, then blocks polling
+ * for the agent's terminal status. A 4.2.0 agent's command carries a key id and
+ * fetches the key itself; an older agent's carries the key. The mutation is
  * the queue write, so the `site_mutated` / `llm_key.provision` row is emitted
  * there — before the poll, and regardless of how the poll ends. The key must
  * never appear in the row.
@@ -66,31 +67,52 @@ const RAW_KEY = 'sk-ant-super-secret-value';
 const mockPendingSet = jest.fn();
 const mockPendingUpdate = jest.fn();
 const mockCompletedUpdate = jest.fn();
+const mockKeySet = jest.fn();
+const mockKeyDelete = jest.fn();
 /** What the agent has written back under `commands/completed`, by command id. */
 let completedDoc: Record<string, unknown>;
+/** Machine documents by id; a missing id is a machine with no document. */
+let machines: Record<string, Record<string, unknown>>;
 
-function commandDoc(id: string) {
-  if (id === 'pending') {
+function makeDoc(docPath: string) {
+  const [, , , machineId, sub, id] = docPath.split('/');
+  if (sub === 'commands' && id === 'pending') {
     return { set: mockPendingSet, update: mockPendingUpdate };
   }
+  if (sub === 'commands') {
+    return {
+      get: async () => ({ data: () => completedDoc }),
+      update: mockCompletedUpdate,
+    };
+  }
+  if (sub === 'hoot_key_handoffs') {
+    return {
+      id,
+      set: (data: unknown) => mockKeySet(docPath, data),
+      delete: () => mockKeyDelete(docPath),
+    };
+  }
   return {
-    get: async () => ({ data: () => completedDoc }),
-    update: mockCompletedUpdate,
+    get: async () => ({ exists: machineId in machines, data: () => machines[machineId] }),
+    collection: (name: string) => makeCollection(`${docPath}/${name}`),
+  };
+}
+
+function makeCollection(collectionPath: string) {
+  return {
+    doc: (id: string) => {
+      const docPath = `${collectionPath}/${id}`;
+      return docPath.split('/').length < 4
+        ? { collection: (name: string) => makeCollection(`${docPath}/${name}`) }
+        : makeDoc(docPath);
+    },
   };
 }
 
 const fakeDb = {
   collection: (name: string) => {
     if (name !== 'sites') throw new Error(`unexpected collection: ${name}`);
-    return {
-      doc: () => ({
-        collection: () => ({
-          doc: () => ({
-            collection: () => ({ doc: (id: string) => commandDoc(id) }),
-          }),
-        }),
-      }),
-    };
+    return makeCollection(name);
   },
 };
 
@@ -101,6 +123,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 import { POST } from '@/app/api/hoot/provision-key/route';
 import { problemPlanRequired } from '@/lib/apiErrors';
 import { emitMutation } from '@/lib/auditLogClient';
+import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
 
 const { requireEntitlement: realRequireEntitlement } = jest.requireActual('@/lib/plan.server');
@@ -136,8 +159,26 @@ function soleAudit() {
   };
 }
 
+/** The one pending entry the route queued: its command id and its fields. */
+function solePending() {
+  expect(mockPendingSet).toHaveBeenCalledTimes(1);
+  const [[commandId, entry]] = Object.entries(mockPendingSet.mock.calls[0][0]);
+  return { commandId, entry: entry as Record<string, unknown> };
+}
+
+beforeAll(() => {
+  process.env.LLM_ENCRYPTION_KEY = 'test-llm-encryption-key-not-a-real-one';
+});
+
+afterAll(() => {
+  delete process.env.LLM_ENCRYPTION_KEY;
+});
+
 beforeEach(() => {
   jest.clearAllMocks();
+  machines = { [MACHINE]: { agent_version: '4.2.0' } };
+  mockKeySet.mockResolvedValue(undefined);
+  mockKeyDelete.mockResolvedValue(undefined);
   mockRequireSession.mockResolvedValue('user-1');
   // `siteRole` is what grants since the per-site-roles migration; the global
   // `role` beside it confers nothing on a site. The route requires
@@ -302,5 +343,68 @@ describe('POST /api/hoot/provision-key — machine scope', () => {
     const res = await POST(request({ machineId: 'other-01' }));
     expect(res.status).toBe(200);
     expect(soleAudit().targetId).toBe('other-01');
+  });
+});
+
+describe('POST /api/hoot/provision-key — how the key reaches the machine', () => {
+  function agentAnswers(status = 'completed') {
+    mockPendingSet.mockImplementation(async (payload: Record<string, unknown>) => {
+      const [commandId] = Object.keys(payload);
+      completedDoc = { [commandId]: { status } };
+    });
+  }
+
+  it('queues a key id and no key for a 4.2.0 agent; the key waits encrypted under the machine', async () => {
+    agentAnswers();
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+
+    const { entry } = solePending();
+    expect(entry).not.toHaveProperty('api_key');
+    expect(JSON.stringify(mockPendingSet.mock.calls)).not.toContain(RAW_KEY);
+    expect(entry).toMatchObject({ type: 'provision_cortex_key', provider: 'anthropic' });
+    expect(entry.key_id).toEqual(expect.stringMatching(/^[A-Za-z0-9_-]{1,64}$/));
+
+    expect(mockKeySet).toHaveBeenCalledTimes(1);
+    const [keyPath, stored] = mockKeySet.mock.calls[0] as [string, Record<string, unknown>];
+    expect(keyPath).toBe(`sites/${SITE}/machines/${MACHINE}/hoot_key_handoffs/${entry.key_id}`);
+    expect(JSON.stringify(stored)).not.toContain(RAW_KEY);
+    expect(decryptApiKey(stored.apiKeyEncrypted as string)).toBe(RAW_KEY);
+  });
+
+  it('queues the key itself for an agent older than 4.2.0, which only reads it there', async () => {
+    machines[MACHINE] = { agent_version: '4.1.28' };
+    agentAnswers();
+
+    const res = await POST(request());
+    expect(res.status).toBe(200);
+
+    const { entry } = solePending();
+    expect(entry).toMatchObject({ type: 'provision_cortex_key', api_key: RAW_KEY, provider: 'anthropic' });
+    expect(entry).not.toHaveProperty('key_id');
+    expect(mockKeySet).not.toHaveBeenCalled();
+  });
+
+  it('queues a key id when the machine reports no agent version', async () => {
+    machines = {};
+    agentAnswers();
+
+    await POST(request());
+
+    expect(solePending().entry).not.toHaveProperty('api_key');
+    expect(mockKeySet).toHaveBeenCalledTimes(1);
+  });
+
+  it('drops a key the agent never fetched once the command ends', async () => {
+    agentAnswers('failed');
+
+    const res = await POST(request());
+    expect(res.status).toBe(500);
+
+    const { entry } = solePending();
+    expect(mockKeyDelete).toHaveBeenCalledWith(
+      `sites/${SITE}/machines/${MACHINE}/hoot_key_handoffs/${entry.key_id}`,
+    );
   });
 });

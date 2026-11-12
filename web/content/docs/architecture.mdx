@@ -143,6 +143,7 @@ Cloud Functions run on Firebase (2nd gen, Node.js 22). the exported inventory is
 | **sweepExpiredApiKeysDaily** | Cloud Scheduler, 03:00 UTC | marks expired user API keys so settings and API auth stop treating them as active. |
 | **sweepExpiredIdempotencyCacheDaily** | Cloud Scheduler, 03:30 UTC | removes expired idempotency cache entries from `idempotency_cache/{hash}`. |
 | **onTalonLogEventCreated** | Firestore `onDocumentCreated` on `sites/{siteId}/logs/{logId}` | forwards `process_restarted` and the `display_*` events, which agents write straight into the site log, to the talon matcher, so talons can fire on them. |
+| **onDeploymentLogCreated** | Firestore `onDocumentCreated` on `sites/{siteId}/logs/{logId}` | cuts URL query strings out of a `deployment_failed` row's details, keeping the host and path. |
 
 **deployment:**
 

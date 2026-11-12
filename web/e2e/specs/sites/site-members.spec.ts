@@ -17,7 +17,7 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import type { MemberCandidate } from '@/lib/memberCandidates';
 import { authHeaders, mintApiKey, revokeApiKey } from '../../helpers/apiKey';
-import { getAdminDb } from '../../helpers/emulator';
+import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { roleState } from '../../helpers/roles';
 import {
   grantMembership,
@@ -237,6 +237,28 @@ test.describe('the members section, as a site admin', () => {
 
     await expect(page.getByText(/already on this site/i)).toBeVisible();
     expect(await readMemberRow(member.uid)).toEqual(before);
+  });
+
+  test('a full email whose password account has not verified it adds no one', async ({ page }) => {
+    const unverified = { uid: 'unverified-e2e', email: 'unverified@e2e.test' };
+    await getAdminAuth().createUser({ ...unverified, password: 'unverified-e2e-password', emailVerified: false });
+    await getAdminDb().doc(`users/${unverified.uid}`).set({ email: unverified.email, role: 'member', sites: [] });
+    try {
+      await openMembers(page);
+      const { dialog, search } = await openAddMember(page);
+      await search.fill(unverified.email);
+      await dialog.getByRole('button', { name: 'add member', exact: true }).click();
+
+      await expect(
+        page.getByText(
+          `${unverified.email} has not verified their email address yet. ask them to verify it, then add them again`,
+        ),
+      ).toBeVisible();
+      expect(await readMemberRow(unverified.uid)).toBeNull();
+    } finally {
+      await getAdminAuth().deleteUser(unverified.uid);
+      await getAdminDb().doc(`users/${unverified.uid}`).delete();
+    }
   });
 
   test('change access makes a member an admin', async ({ page }) => {

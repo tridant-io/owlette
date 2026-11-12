@@ -26,13 +26,19 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{Map, Value};
 #[cfg(windows)]
-use windows::core::{w, PCWSTR};
+use windows::core::{w, PCWSTR, PWSTR};
 #[cfg(windows)]
-use windows::Win32::Foundation::{HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+  CloseHandle, LocalFree, HANDLE, HLOCAL, WAIT_ABANDONED, WAIT_OBJECT_0,
+};
+#[cfg(windows)]
+use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
+#[cfg(windows)]
+use windows::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
 #[cfg(windows)]
 use windows::Win32::System::Threading::{
-  CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject, MUTEX_MODIFY_STATE,
-  SYNCHRONIZATION_SYNCHRONIZE,
+  CreateMutexW, GetCurrentProcess, OpenMutexW, OpenProcessToken, ReleaseMutex, WaitForSingleObject,
+  MUTEX_MODIFY_STATE, SYNCHRONIZATION_SYNCHRONIZE,
 };
 
 /// Name of the cross-process mutex. Byte-identical to the Python constant —
@@ -221,6 +227,7 @@ pub fn write_json(path: &Path, value: &Value) -> Result<WriteOutcome, JsonIoErro
     }
   }
 
+  let keep_agent_dacl = keeps_agent_dacl(path, &crate::paths::data_root());
   let guard = acquire_lock();
   guard.warn_if_unprotected(path, "write");
 
@@ -229,7 +236,7 @@ pub fn write_json(path: &Path, value: &Value) -> Result<WriteOutcome, JsonIoErro
 
   for attempt in 1..=MAX_ATTEMPTS {
     let temp = temp_path(path);
-    match write_then_rename(&temp, path, text.as_bytes()) {
+    match write_then_rename(&temp, path, text.as_bytes(), keep_agent_dacl) {
       Ok(()) => {
         return Ok(WriteOutcome {
           lock: guard.outcome,
@@ -281,14 +288,151 @@ fn temp_path(path: &Path) -> PathBuf {
   path.with_file_name(format!("{file_name}.{}.{seq}.tmp", std::process::id()))
 }
 
-fn write_then_rename(temp: &Path, dest: &Path, bytes: &[u8]) -> Result<(), JsonIoError> {
+/// Whether `path` is `tmp/app_states.json` under `root`, the one file whose
+/// replacement keeps the agent's protected dacl rather than taking its
+/// directory's (`shared_utils._json_file_dacl`): the service resolves process
+/// identities from its rows, and its directory lets every local account write.
+/// `config.json` keeps its directory's acl, as the agent leaves it.
+fn keeps_agent_dacl(path: &Path, root: &Path) -> bool {
+  crate::paths::compare_key(path)
+    == crate::paths::compare_key(&root.join(crate::paths::APP_STATES_REL))
+}
+
+/// The scratch file, carrying the agent's dacl before a byte is written when
+/// `keep_agent_dacl`. Created here and shared with nobody, as python's writer
+/// creates it: whoever creates a file owns it and can rewrite its dacl, and a
+/// link already at the name is refused rather than followed. A dacl that
+/// cannot be set leaves the write standing on the directory's acl, as python's
+/// does.
+#[cfg(windows)]
+fn create_temp(temp: &Path, keep_agent_dacl: bool) -> std::io::Result<File> {
+  use std::os::windows::fs::OpenOptionsExt;
+  use windows::Win32::Foundation::GENERIC_WRITE;
+  use windows::Win32::Storage::FileSystem::{FILE_FLAG_OPEN_REPARSE_POINT, WRITE_DAC};
+
+  if !keep_agent_dacl {
+    return File::create(temp);
+  }
+  let file = fs::OpenOptions::new()
+    .write(true)
+    .create_new(true)
+    .access_mode(GENERIC_WRITE.0 | WRITE_DAC.0)
+    .share_mode(0)
+    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+    .open(temp)?;
+  if let Err(error) = set_agent_dacl(&file) {
+    log::warn!(
+      "{} keeps its inherited permissions: {error}",
+      temp.display()
+    );
+  }
+  Ok(file)
+}
+
+#[cfg(not(windows))]
+fn create_temp(temp: &Path, _keep_agent_dacl: bool) -> std::io::Result<File> {
+  File::create(temp)
+}
+
+#[cfg(windows)]
+fn set_agent_dacl(file: &File) -> windows::core::Result<()> {
+  use std::os::windows::io::AsRawHandle;
+  use windows::core::{BOOL, HSTRING};
+  use windows::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SetSecurityInfo, SDDL_REVISION_1,
+    SE_FILE_OBJECT,
+  };
+  use windows::Win32::Security::{
+    GetSecurityDescriptorDacl, ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    PSECURITY_DESCRIPTOR,
+  };
+
+  let sddl = HSTRING::from(agent_dacl_sddl()?);
+  // SAFETY: the descriptor is the OS's, read only while it is alive and
+  // released with LocalFree; the handle is this file's, open for the call.
+  unsafe {
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      &sddl,
+      SDDL_REVISION_1,
+      &mut descriptor,
+      None,
+    )?;
+    let mut present = BOOL::default();
+    let mut defaulted = BOOL::default();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let applied = GetSecurityDescriptorDacl(descriptor, &mut present, &mut dacl, &mut defaulted)
+      .and_then(|()| {
+        SetSecurityInfo(
+          HANDLE(file.as_raw_handle()),
+          SE_FILE_OBJECT,
+          DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+          None,
+          None,
+          Some(dacl),
+          None,
+        )
+        .ok()
+      });
+    let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+    applied
+  }
+}
+
+/// The SDDL form of python's user-session dacl for `app_states.json`: SYSTEM
+/// and Administrators full, Users read, and modify (generic read, write and
+/// execute, and delete) for this process's user, protected from inheritance.
+#[cfg(windows)]
+fn agent_dacl_sddl() -> windows::core::Result<String> {
+  Ok(format!(
+    "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{})",
+    process_user_sid()?
+  ))
+}
+
+/// This process's token user, as a string SID.
+#[cfg(windows)]
+fn process_user_sid() -> windows::core::Result<String> {
+  // SAFETY: the token handle is closed on every path once read; the buffer is
+  // sized by the first call and u64-aligned for TOKEN_USER; the SID string is
+  // copied out before the LocalFree that releases it.
+  unsafe {
+    let mut token = HANDLE::default();
+    OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token)?;
+    let mut needed = 0u32;
+    let _ = GetTokenInformation(token, TokenUser, None, 0, &mut needed);
+    let mut buffer = vec![0u64; (needed as usize).div_ceil(8)];
+    let read = GetTokenInformation(
+      token,
+      TokenUser,
+      Some(buffer.as_mut_ptr().cast()),
+      needed,
+      &mut needed,
+    );
+    let _ = CloseHandle(token);
+    read?;
+    let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
+    let mut text = PWSTR::null();
+    ConvertSidToStringSidW(user.User.Sid, &mut text)?;
+    let sid = String::from_utf16_lossy(text.as_wide());
+    let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+    Ok(sid)
+  }
+}
+
+fn write_then_rename(
+  temp: &Path,
+  dest: &Path,
+  bytes: &[u8],
+  keep_agent_dacl: bool,
+) -> Result<(), JsonIoError> {
   let io_err = |path: &Path, source: std::io::Error| JsonIoError::Io {
     path: path.to_path_buf(),
     source,
   };
 
   {
-    let mut file = File::create(temp).map_err(|err| io_err(temp, err))?;
+    let mut file = create_temp(temp, keep_agent_dacl).map_err(|err| io_err(temp, err))?;
     file.write_all(bytes).map_err(|err| io_err(temp, err))?;
     // Flush before rename: a kiosk losing power mid-write must not come back with an empty
     // present config.json.
@@ -639,6 +783,86 @@ mod tests {
       assert_eq!(second.outcome, LockOutcome::Timeout, "{:?}", second.outcome);
       assert!(second.file.is_none());
     }
+  }
+
+  #[test]
+  fn only_app_states_keeps_the_agents_dacl() {
+    use crate::paths::{APP_STATES_REL, CONFIG_REL, SERVICE_STATUS_REL};
+
+    let root = crate::paths::data_root_from(Some("owlette-root".as_ref()), None);
+    assert!(keeps_agent_dacl(&root.join(APP_STATES_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join(CONFIG_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join(SERVICE_STATUS_REL), &root));
+    assert!(!keeps_agent_dacl(&root.join("app_states.json"), &root));
+  }
+
+  /// A file's dacl, as SDDL.
+  #[cfg(windows)]
+  fn sddl_of(path: &Path) -> String {
+    use windows::core::HSTRING;
+    use windows::Win32::Security::Authorization::{
+      ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
+      SE_FILE_OBJECT,
+    };
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    // SAFETY: both buffers come from the OS and are released with LocalFree
+    // once the string has been copied out.
+    unsafe {
+      let mut descriptor = PSECURITY_DESCRIPTOR::default();
+      GetNamedSecurityInfoW(
+        &HSTRING::from(path.as_os_str()),
+        SE_FILE_OBJECT,
+        DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        None,
+        None,
+        &mut descriptor,
+      )
+      .ok()
+      .expect("the file's security descriptor");
+      let mut text = PWSTR::null();
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor,
+        SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION,
+        &mut text,
+        None,
+      )
+      .expect("as sddl");
+      let sddl = String::from_utf16_lossy(text.as_wide());
+      let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+      let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+      sddl
+    }
+  }
+
+  /// The service resolves process identities from `app_states.json`'s rows, so
+  /// the agent gives the file a protected dacl: writable by the console user,
+  /// read-only to every other account. This app replaces the file on a kill, a
+  /// restart or a launch-mode change, and every replacement carries that dacl
+  /// rather than its directory's. Anything else keeps its directory's.
+  #[cfg(windows)]
+  #[test]
+  fn app_states_keeps_the_agents_dacl_across_a_desktop_write() {
+    let scratch = Scratch::new("dacl");
+    let app_states = scratch.path("app_states.json");
+    let user = process_user_sid().expect("this process has a user");
+    // SYSTEM and Administrators full, Users read, this user modify, and none of
+    // the directory's.
+    let agents = format!("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{user})");
+
+    for round in 0..2 {
+      let temp = temp_path(&app_states);
+      write_then_rename(&temp, &app_states, b"{}", true).expect("write");
+      assert_eq!(sddl_of(&app_states), agents, "after write {round}");
+    }
+
+    let config = scratch.path("config.json");
+    write_then_rename(&temp_path(&config), &config, b"{}", false).expect("write");
+    let inherited = sddl_of(&config);
+    assert!(!inherited.starts_with("D:P"), "{inherited}");
   }
 
   #[cfg(windows)]

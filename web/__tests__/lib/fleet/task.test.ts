@@ -368,12 +368,12 @@ describe('a task that is refused', () => {
   });
 
   it.each([
-    ['machine_offline', 503, 'machine_offline'],
-    ['no_machines', 503, 'machine_offline'],
-    ['hoot_disabled', 423, 'hoot_disabled'],
-  ])('409 when no machine can take it (%s)', async (reason, status, code) => {
+    ['machine_offline', 503, 409, 'machine_offline'],
+    ['no_machines', 503, 409, 'machine_offline'],
+    ['hoot_disabled', 423, 423, 'hoot_disabled'],
+  ])('refuses when no machine can take it (%s)', async (reason, status, answered, code) => {
     mockResolveHootTargets.mockResolvedValue({ ok: false, status, reason, machineIds: [M1] });
-    const res = await refusedWith(ask(TIER2, { prompt: 'p', machines: [M1] }), 409, code);
+    const res = await refusedWith(ask(TIER2, { prompt: 'p', machines: [M1] }), answered, code);
 
     expect(res.deny).toEqual({ reason: code, tool: 'ask_hoot', machineId: null });
     expect(records()).toEqual([]);

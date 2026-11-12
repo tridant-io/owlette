@@ -115,11 +115,11 @@ The only global role that grants anything: owlette's own operators, who run plat
 _Avoid_: "admin" without saying site admin or superadmin
 
 **API key**:
-A scoped, expiring `owk_live_` key whose scopes each name a resource, an ID and exact permissions. A key never grants more than its owner holds.
+A scoped, expiring `owk_live_` key whose scopes each name a resource, an ID and exact permissions. A key never grants more than its owner holds. Its `maxToolTier` caps the tool tier it can run through the commands route; missing means 1.
 _Avoid_: token, secret, credential
 
 **Step-up**:
-A fresh second-factor check (passkey, authenticator code or backup code) that swoop control requires, valid for that user and machine for 7 days. A second factor passed at sign-in in the last five minutes counts as one for the machines opened in those five minutes. With network binding enforced, a window counts only from a network (ASN) the user passed a second factor on in the last 7 days, so a new network asks once.
+A fresh second-factor check (passkey, authenticator code or backup code) that swoop control requires, and a person's tier-3 tool call through the commands route, valid for that user and machine for 7 days. A second factor passed at sign-in in the last five minutes counts as one for the machines opened in those five minutes. With network binding enforced, a window counts only from a network (ASN) the user passed a second factor on in the last 7 days, so a new network asks once.
 _Avoid_: re-auth, 2FA prompt
 
 ### Environments and releases
@@ -234,11 +234,11 @@ owlette's built-in AI assistant: an LLM on a user's own Anthropic or OpenAI key 
 _Avoid_: cortex (its name before 3.0.0), copilot, chatbot, AI chat
 
 **Tool tier**:
-hoot's risk grouping of its tools: tier 1 reads, tier 2 makes bounded changes, tier 3 runs privileged actions (shell, files, deployments, reboot) and pauses for in-chat approval while the site's tier-3 approval is on.
+hoot's risk grouping of its tools: tier 1 reads, tier 2 makes bounded changes, tier 3 runs privileged actions (shell, files, deployments, reboot) and pauses for in-chat approval while the site's tier-3 approval is on. A call at any tier that changes what a machine launches always pauses for approval, and counts as tier 3 on the commands route and in a sender's call.
 _Avoid_: permission level
 
 **Local hoot**:
-hoot's model loop running on the agent itself through the Claude CLI, close to the machine and outside the web server's approval gate. Only the public conversations API reaches it.
+hoot's model loop running on the agent itself through the Claude CLI, close to the machine and outside the web server's approval gate, so it has no tool that changes what a machine launches or runs code. Two things reach it: the public conversations API, and the agent's own crash events, when `cortex.autonomousEnabled` is set in the machine's config.
 _Avoid_: agent hoot, offline hoot
 
 **hoot mcp**:

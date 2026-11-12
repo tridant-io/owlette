@@ -194,6 +194,26 @@ So before `dev` is merged into `main` for 4.1.28 or later:
 
 Steps 1 to 3 are safe on their own: no prod row carries `machineIds` yet, and a row without it is whole site under 2.12.0.
 
+### command queue (rules 2.13.0, release 4.2.0)
+
+Rules 2.13.0 let an agent's token only remove entries from its machine's `commands/pending`; only the server adds them.
+The file carries 2.12.0 as well, so a project still on older rules gets both in one deploy: run the machine scope steps above from 4.2.0's file and step 1 deploys 2.13.0.
+Every agent from 3.2.0 on only removes entries there, so no agent has to update first.
+Before `dev` is merged into `main` for 4.2.0:
+
+1. In `web`, run `npm run test:rules` and `npm run e2e:desktop-sync`, whose tier 0 spec (`e2e/desktop-sync/tier0-commands-pending.spec.ts`) runs a real agent's command flow against these rules.
+2. Deploy rules 2.13.0 to dev, if dev is not on it yet:
+
+   ```bash
+   firebase use dev
+   firebase deploy --only firestore:rules
+   ```
+
+3. On dev, queue a screenshot on an online machine and confirm it completes and its entry leaves `commands/pending`.
+4. Deploy the same file to prod (`firebase use prod`, then the same deploy), and repeat step 3 on one prod machine.
+
+Never deploy rules older than 2.13.0 to a project that has it (see [hotfix-rollback.md](hotfix-rollback.md)).
+
 The repo has no automated post-merge smoke job today.
 Do not assume a green push to `main` means every production surface is healthy.
 

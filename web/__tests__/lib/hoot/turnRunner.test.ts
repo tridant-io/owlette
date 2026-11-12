@@ -1588,14 +1588,14 @@ describe('startTurn — who can approve an active-hours override', () => {
       errorSpy.mockRestore();
     }
 
-    expect(toolOptions()).toMatchObject({ resumedToolCallIds: ['call_resumed'] });
+    expect(toolOptions()).toMatchObject({ incomingToolCallIds: ['call_resumed'] });
   });
 
-  it('a turn a person sent resumes nothing', async () => {
+  it('a turn with no tool calls in its messages lists none', async () => {
     await collectChunks(startTurn(fakeDb, baseParams()));
     await flushAsync();
 
-    expect(toolOptions()).toMatchObject({ resumedToolCallIds: [] });
+    expect(toolOptions()).toMatchObject({ incomingToolCallIds: [] });
   });
 });
 

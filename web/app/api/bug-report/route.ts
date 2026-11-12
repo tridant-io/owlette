@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
+import type { DecodedIdToken } from 'firebase-admin/auth';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { requireSession, ApiAuthError } from '@/lib/apiAuth.server';
+import { mfaChallengeProblem } from '@/lib/apiErrors';
+import { assertIdTokenPassesMfa, requireSession, ApiAuthError } from '@/lib/apiAuth.server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
 import { buildIssueEmail } from '@/lib/emailTemplates.server';
@@ -95,14 +97,15 @@ export const POST = withRateLimit(
       try {
         userId = await requireSession(request);
         isSession = true;
-      } catch {
+      } catch (sessionError) {
         const authHeader = request.headers.get('authorization') || '';
         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
         if (!token) {
-          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+          return mfaChallengeProblem(sessionError) ?? NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
         }
+        let decoded: DecodedIdToken;
         try {
-          const decoded = await getAdminAuth().verifyIdToken(token);
+          decoded = await getAdminAuth().verifyIdToken(token);
           userId = decoded.uid;
           if (
             decoded.role === 'agent' &&
@@ -114,6 +117,7 @@ export const POST = withRateLimit(
         } catch {
           return NextResponse.json({ error: 'Unauthorized: Invalid token' }, { status: 401 });
         }
+        await assertIdTokenPassesMfa(decoded);
       }
 
       const body = await request.json();
@@ -326,7 +330,7 @@ export const POST = withRateLimit(
       return NextResponse.json({ success: true, id: docRef.id, number });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
-        return NextResponse.json({ error: error.message }, { status: error.status });
+        return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
       }
       return apiError(error, 'bug-report');
     }

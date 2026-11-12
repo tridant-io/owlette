@@ -69,7 +69,7 @@ export function ApiKeysManager({ compact = false }: Props) {
     try {
       await updateKey(keyId, input);
       setEditingKeyId(null);
-      toast.success('key updated — new scopes apply immediately');
+      toast.success('key updated — changes apply immediately');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'failed to update key');
     }

@@ -19,7 +19,7 @@ import { generateTOTPSecret, generateQRCode } from '@/lib/totp';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSessionUser } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
 import { checkMfaEnrollmentGate } from '@/lib/mfaEnrollmentGate.server';
@@ -43,7 +43,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       );
     }
 
-    await requireSessionUser(request, userId);
+    await requirePreMfaSessionUser(request, userId);
     await assertActiveUser(userId);
 
     // Open while the account has no factor (mandatory-setup path).

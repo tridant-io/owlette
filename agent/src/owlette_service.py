@@ -863,10 +863,8 @@ _CORTEX_TOOL_PARAMS = {
     'restart_process': (frozenset({'process_name'}), frozenset()),
     'kill_process': (frozenset({'process_name'}), frozenset()),
     'start_process': (frozenset({'process_name'}), frozenset()),
-    'set_launch_mode': (frozenset({'process_name'}), frozenset({'mode', 'schedules'})),
     'capture_screenshot': (frozenset(), frozenset({'monitor'})),
 }
-_LAUNCH_MODES = frozenset({'off', 'always', 'scheduled'})
 
 
 def _console_session():
@@ -902,14 +900,25 @@ def _token_user_sid(token):
         return None
 
 
-def _discard_untrusted_file(path, what, level=logging.WARNING):
+def _discard_untrusted_file(path, what, level=logging.WARNING,
+                            owners='SYSTEM or Administrators'):
     """Log and delete a control file that fails acl_hardening.is_trusted_owner."""
     logging.log(level, f"Ignoring {what} {path}: not a single-link file owned by "
-                       f"SYSTEM or Administrators - deleting it")
+                       f"{owners} - deleting it")
     try:
         os.remove(path)
     except OSError as e:
         logging.log(level, f"Could not delete untrusted {what} {path}: {e}")
+
+
+def _console_users_flag(path, what):
+    """True when `path` is a single-link file of the console user's, SYSTEM's or
+    Administrators'. The desktop app writes its flags unelevated, and any local
+    account can create files in tmp\\, so any other flag is logged and deleted."""
+    if acl_hardening.is_trusted_owner(path, acl_hardening.console_user_sid()):
+        return True
+    _discard_untrusted_file(path, what, owners='SYSTEM, Administrators or the console user')
+    return False
 
 
 def _create_update_marker(path, marker):
@@ -972,6 +981,28 @@ def _pid_descends_from(pid, ancestor_pid, not_before, max_depth=5):
     except (psutil.Error, ValueError):
         return False
     return False
+
+
+def _is_hoot(pid):
+    """True when `pid` is a live hoot: the bundled interpreter running
+    owlette_cortex.py.
+
+    hoot writes tmp/cortex.pid as the console user, and an unpair ends the pid
+    taken for hoot as SYSTEM (root off Windows), so a pid counts only when the
+    live process says so. The same check keeps a pid a crashed hoot left behind
+    from passing for it once the pid is reused.
+    """
+    try:
+        proc = psutil.Process(pid)
+        with proc.oneshot():
+            if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
+                return False
+            exe, argv = proc.exe(), proc.cmdline()
+        return (len(argv) > 1
+                and os.path.samefile(exe, shared_utils.get_python_exe_path())
+                and os.path.samefile(argv[1], shared_utils.get_path('owlette_cortex.py')))
+    except (psutil.Error, OSError, ValueError):
+        return False
 
 
 def _read_console_users_file(path, limit):
@@ -1113,12 +1144,6 @@ def _cortex_command_refusal(cmd, process_names):
         name = params['process_name']
         if not isinstance(name, str) or name.lower() not in process_names:
             return 'process_name is not a configured process'
-    if 'mode' in params:
-        mode = params['mode']
-        if not isinstance(mode, str) or mode not in _LAUNCH_MODES:
-            return 'mode is not one of off, always, scheduled'
-    if 'schedules' in params and not isinstance(params['schedules'], list):
-        return 'schedules is not a list'
     if 'monitor' in params:
         monitor = params['monitor']
         if isinstance(monitor, bool) or not isinstance(monitor, int) or monitor < 0:
@@ -1414,7 +1439,7 @@ class OwletteService:
                 logging.warning("No site_id configured - cannot initialize Firebase client")
                 return False
 
-            project_id = shared_utils.read_config(['firebase', 'project_id']) or shared_utils.get_project_id()
+            project_id = shared_utils.get_configured_project_id()
             api_base = shared_utils.get_configured_api_base()
             cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 
@@ -2646,14 +2671,11 @@ class OwletteService:
     # ─── Cortex Process Management ──────────────────────────────────────
 
     def _is_cortex_alive(self):
-        """Check if the Cortex process is still running using tracked PID."""
+        """Check if the Cortex process is still running using tracked PID.
+        Either pid counts only while it is still hoot (_is_hoot)."""
         if self.cortex_pid:
-            try:
-                proc = psutil.Process(self.cortex_pid)
-                if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
-                    return True
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
+            if _is_hoot(self.cortex_pid):
+                return True
             self.cortex_pid = None
 
         # Fallback: check PID file written by Cortex itself
@@ -2662,11 +2684,10 @@ class OwletteService:
             try:
                 with open(pid_path, 'r') as f:
                     pid = int(f.read().strip())
-                proc = psutil.Process(pid)
-                if proc.is_running() and proc.status() != psutil.STATUS_ZOMBIE:
+                if _is_hoot(pid):
                     self.cortex_pid = pid
                     return True
-            except (ValueError, psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            except (ValueError, OSError):
                 pass
 
         return False
@@ -2843,12 +2864,12 @@ class OwletteService:
     def _restart_requested(self, path):
         """Whether a restart flag the daemon should honour is waiting.
 
-        On Windows the desktop app writes it after its own elevated click and
-        the tree is ACL'd. Off Windows `tmp/` is group-writable, so a flag the
-        console user wrote would restart the agent with none of the privileged
-        seam's nonce, rate limit or audit — the app asks through
-        `ipc/requests/` there instead, and a flag from any other account is
-        removed rather than obeyed.
+        On Windows the desktop app writes it unelevated, so it is obeyed only
+        as the console user's own (_console_users_flag). Off Windows `tmp/` is
+        group-writable, so a flag the console user wrote would restart the
+        agent with none of the privileged seam's nonce, rate limit or audit —
+        the app asks through `ipc/requests/` there instead, and a flag from any
+        other account is removed rather than obeyed.
 
         Off a link and not through one: `os.stat` on a symlink reports the
         target's owner, so a link to any root-owned file planted under this
@@ -2860,7 +2881,7 @@ class OwletteService:
         except OSError:
             return False
         if sys.platform == 'win32':
-            return True
+            return _console_users_flag(path, 'restart flag')
         if stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid():
             return True
         logging.warning(
@@ -2927,10 +2948,6 @@ class OwletteService:
             return self._handle_cortex_process_command('kill_process', process_name)
         elif tool_name == 'start_process':
             return self._handle_cortex_process_command('restart_process', process_name)
-        elif tool_name == 'set_launch_mode':
-            mode = tool_params.get('mode', 'off')
-            schedules = tool_params.get('schedules')
-            return self._handle_cortex_set_launch_mode(process_name, mode, schedules)
         elif tool_name == 'capture_screenshot':
             # The on-machine agent renders the bytes as an MCP image block, and
             # an IPC result is a local file rather than a Firestore document.
@@ -3037,21 +3054,6 @@ class OwletteService:
             logging.exception(
                 f"Cortex process command '{command_type}' failed for '{process_name}'")
             return {'status': 'failed', 'error': str(e)}
-
-    def _handle_cortex_set_launch_mode(self, process_name, mode, schedules=None):
-        """Handle a set_launch_mode command from Cortex IPC."""
-        config = shared_utils.read_config()
-        processes = config.get('processes', [])
-
-        for proc in processes:
-            if proc.get('name', '').lower() == process_name.lower():
-                proc['launch_mode'] = mode
-                if mode == 'scheduled' and schedules:
-                    proc['schedules'] = schedules
-                shared_utils.save_config(config)
-                return {'status': 'completed', 'result': f'Launch mode set to {mode} for {process_name}'}
-
-        return {'error': f'Process not found: {process_name}'}
 
     def _write_cortex_event(self, process_name, error_message, event_type):
         """Write an IPC event file for Cortex autonomous investigation.
@@ -3625,12 +3627,13 @@ class OwletteService:
         manager kill a dashboard swoop_kill without a sid makes, audited as
         local_tray. windows only, like the restart flag — off it tmp/ is
         group-writable, so a flag there is nobody's word, and the tray does not
-        offer the item. never raises.
+        offer the item; on windows only the console user's own flag counts
+        (_console_users_flag). never raises.
         """
         if sys.platform != 'win32':
             return
         flag = shared_utils.get_data_path(SWOOP_KILL_FLAG)
-        if not os.path.isfile(flag):
+        if not os.path.isfile(flag) or not _console_users_flag(flag, 'swoop kill flag'):
             return
         try:
             os.remove(flag)
@@ -8419,6 +8422,11 @@ class OwletteService:
             api_key = command_data.get('api_key', '')
             provider = command_data.get('provider', 'anthropic')
 
+            # from 4.2.0 the server sends a key_id; it still sends the key itself
+            # while the machine doc shows an older agent version
+            if not api_key and command_data.get('key_id'):
+                api_key = self._fetch_cortex_key(command_data['key_id'])
+
             if not api_key:
                 return "Error: No API key provided"
 
@@ -8442,6 +8450,29 @@ class OwletteService:
         except Exception as e:
             logging.error(f"Failed to provision Cortex key: {e}")
             return f"Error: {str(e)}"
+
+    def _fetch_cortex_key(self, key_id):
+        """the LLM key the server queued under key_id, fetched with this machine's token.
+
+        neither the key nor the token is logged: requests' errors carry the
+        status and url, never the body.
+        """
+        fb = self.firebase_client
+        auth_manager = getattr(fb, 'auth_manager', None)
+        if auth_manager is None:
+            raise RuntimeError('no authenticated cloud client')
+        token = auth_manager.get_valid_token()
+        if not token:
+            raise RuntimeError('no valid agent token')
+
+        response = requests.post(
+            f'{shared_utils.get_api_base_url()}/agent/hoot/key',
+            json={'siteId': fb.site_id, 'machineId': fb.machine_id, 'keyId': key_id},
+            headers={'Authorization': f'Bearer {token}'},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json().get('apiKey', '')
 
     def _try_user_session_tool(self, tool_name, tool_params):
         """Handle MCP tools that require user-session execution.

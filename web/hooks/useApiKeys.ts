@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import type { ApiKeyListItem, ApiKeyScope } from '@/lib/apiKeyTypes';
+import type { ToolTier } from '@/lib/mcp-tools';
 
 /**
  * The single owner of every `/api/keys` request — six inline fetch sites had
@@ -16,12 +17,14 @@ export interface CreateKeyInput {
   name: string;
   scopes: ApiKeyScope[];
   ttlDays?: number;
+  maxToolTier?: ToolTier;
 }
 
 /** `scopes` is a full replacement, not a merge — matches the route. */
 export interface UpdateKeyInput {
   name?: string;
   scopes?: ApiKeyScope[];
+  maxToolTier?: ToolTier;
 }
 
 export interface CreatedKey {

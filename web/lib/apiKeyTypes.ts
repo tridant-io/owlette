@@ -1,3 +1,5 @@
+import type { ToolTier } from '@/lib/mcp-tools';
+
 export type ApiKeyPermission = 'read' | 'write' | 'deploy' | 'rollback' | 'admin';
 export type ApiKeyResource =
   | 'roost'
@@ -62,6 +64,11 @@ export interface ApiKeyRecord {
   keyPrefix: string;
   environment: ApiKeyEnvironment;
   scopes: ApiKeyScope[];
+  /**
+   * The highest tool tier this key may run through the machine commands route.
+   * Missing means 1; read it through {@link normalizeMaxToolTier}.
+   */
+  maxToolTier?: ToolTier;
   /** Unix milliseconds. Keys MUST have an expiration (default 90d, max 365d). */
   expiresAt: number;
   createdAt: FirebaseFirestore.Timestamp | number;
@@ -98,6 +105,8 @@ export interface ApiKeyLookup {
   environment: ApiKeyEnvironment;
   /** Denormalized copy of scopes for fast enforcement without a second read. */
   scopes: ApiKeyScope[];
+  /** Denormalized like scopes, and the copy enforcement reads. */
+  maxToolTier?: ToolTier;
   expiresAt: number;
   /** Set during rotation grace period. Old key valid until retiresAt. */
   retiresAt?: number;
@@ -149,6 +158,32 @@ export const SCOPE_PRESET_DESCRIPTIONS: Record<ApiKeyScopePreset, string> = {
   admin: 'full access including admin permissions',
 };
 
+/** Ordered for the tool tier picker. */
+export const TOOL_TIERS: readonly ToolTier[] = [1, 2, 3];
+
+export const DEFAULT_MAX_TOOL_TIER: ToolTier = 1;
+
+export const TOOL_TIER_LABELS: Record<ToolTier, string> = {
+  1: 'tier 1: read only',
+  2: 'tier 2: machine changes',
+  3: 'tier 3: full control',
+};
+
+export const TOOL_TIER_DESCRIPTIONS: Record<ToolTier, string> = {
+  1: 'reads machine state, logs and settings. changes nothing.',
+  2: 'also starts, stops and restarts processes and services and changes system settings, but not what a machine launches.',
+  3: 'also runs commands and scripts, reads and writes files, deploys software, restarts machines and changes what a machine launches.',
+};
+
+export function isToolTier(value: unknown): value is ToolTier {
+  return value === 1 || value === 2 || value === 3;
+}
+
+/** A stored tool tier as enforcement reads it: anything but 2 or 3 is the default. */
+export function normalizeMaxToolTier(value: unknown): ToolTier {
+  return isToolTier(value) ? value : DEFAULT_MAX_TOOL_TIER;
+}
+
 export const DEFAULT_TTL_DAYS = 90;
 export const MAX_TTL_DAYS = 365;
 export const ROTATION_GRACE_MS = 24 * 60 * 60 * 1000;
@@ -193,6 +228,8 @@ export interface ApiKeyListItem {
   keyPrefix: string | null;
   environment: ApiKeyEnvironment | null;
   scopes: ApiKeyScope[] | null;
+  /** Normalised: a key with no stored value reads 1. */
+  maxToolTier: ToolTier;
   expiresAt: number | null;
   createdAt: number | null;
   lastUsedAt: number | null;
@@ -262,6 +299,7 @@ export function buildApiKeyListItem(
     environment:
       data.environment === 'live' || data.environment === 'test' ? data.environment : null,
     scopes: Array.isArray(data.scopes) ? (data.scopes as ApiKeyScope[]) : null,
+    maxToolTier: normalizeMaxToolTier(data.maxToolTier),
     expiresAt,
     createdAt: toEpochMillis(data.createdAt),
     lastUsedAt: toEpochMillis(data.lastUsedAt),

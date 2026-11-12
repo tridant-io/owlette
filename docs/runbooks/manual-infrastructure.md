@@ -171,8 +171,8 @@ And it compares key *presence*, never values (see the Vercel caveat below).
 
 The ones that are silent when wrong: `ROOST_ENV=prod` on the prod service (without it R2 writes go to
 the dev bucket), every `NEXT_PUBLIC_*` (build-time inlined — redeploy after adding one), and
-`CRON_SECRET` (rotating it silently invalidates every one-click unsubscribe link already sitting in a
-recipient's inbox, because `web/app/api/unsubscribe/route.ts:23-28` uses it as the HMAC key).
+`CRON_SECRET` (rotating it silently invalidates every unsubscribe link already sitting in a
+recipient's inbox, because `web/app/api/unsubscribe/route.ts` uses it as the HMAC key).
 
 For prod only, mirror to the Vercel failover origin and re-run this after **every** prod secret
 rotation — it is the only way to guarantee the four `must-match` secrets actually match:

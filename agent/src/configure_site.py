@@ -1466,10 +1466,12 @@ def _group_add_command() -> Optional[str]:
 # the app still waiting on an answer.
 #
 # Anything else is unlinked and logged. `leave` is a verb by the owner's
-# decision of 2026-09-30: the app may take its machine out of its site on the
-# console user's explicit click, as it can on Windows. Every leave is audited
-# with the uid that asked, and the dashboard's remove and the uninstall-time
-# deregistration (`prerm` / `uninstall.sh`) work as they always did.
+# decision of 2026-09-30, narrowed on 2026-11-01: the site a machine answers to
+# decides what the daemon installs as root, so on a paired machine `pair` and
+# `leave` are an administrator's (`_site_change_refused`). A fresh machine still
+# pairs on the console user's click. Every leave is audited with the uid that
+# asked, and the dashboard's remove and the uninstall-time deregistration
+# (`prerm` / `uninstall.sh`) work as they always did.
 # `report_issue` carries the operator's category and description: building the
 # report reads root's logs and posting it takes the machine's own token, so the
 # app's own `--report-issue` could do neither.
@@ -1516,6 +1518,10 @@ REQUEST_RATE_LIMIT_SECONDS = 300
 REQUEST_VERBS = ('pair', 'cancel_pair', 'restart', 'reboot', 'leave', 'dismiss_reboot',
                  'report_issue')
 _RATE_LIMITED_VERBS = frozenset({'restart', 'reboot'})
+# The verbs that move a machine between sites.
+_SITE_CHANGE_VERBS = ('pair', 'leave')
+# What holds administrator rights: macOS's admin, Debian's sudo, Red Hat's wheel.
+_ADMIN_GROUPS = ('admin', 'sudo', 'wheel')
 # The servers a `pair` may name; main() turns the token into its environment.
 _PAIR_SERVERS = ('dev', 'prod')
 
@@ -1823,6 +1829,12 @@ def _execute_request(request: dict, reply_path: str, uid: int, cloud_detached) -
                                   'owlette is pairing this machine — cancel that first'))
         return _audit(verb, 'in_progress', 'a pairing started earlier is still polling', uid)
 
+    if verb in _SITE_CHANGE_VERBS and _site_change_refused(uid):
+        _write_reply(reply_path, ('error', 'only an administrator can change the site '
+                                           'this machine belongs to'))
+        return _audit(verb, 'refused', 'the machine is paired and the requester is not an '
+                                       'administrator', uid)
+
     if verb in _RATE_LIMITED_VERBS:
         waited = _seconds_since_last(verb)
         if waited is not None and waited < REQUEST_RATE_LIMIT_SECONDS:
@@ -1871,6 +1883,51 @@ def _execute_request(request: dict, reply_path: str, uid: int, cloud_detached) -
         _write_reply(reply_path, ('error', f'owlette could not {verb}: {e}'))
         return _audit(verb, 'failed', str(e), uid)
     return row
+
+
+def _site_change_refused(uid: int) -> bool:
+    """Whether a `pair` or `leave` from this uid is refused."""
+    return _bound_to_a_site() and not _requester_is_admin(uid)
+
+
+def _bound_to_a_site() -> bool:
+    """Whether this machine has a site to lose.
+
+    The token store as well as the config: config.json is the console user's to
+    edit, and blanking its site must not make a machine fresh. Only root can
+    write where the store sits. One that cannot be checked counts as there.
+    """
+    if _is_paired():
+        return True
+    import secure_storage
+
+    try:
+        return not secure_storage.get_storage().is_cleared()
+    except Exception as e:
+        logging.warning(f"Could not check the token store: {e}")
+        return True
+
+
+def _requester_is_admin(uid: int) -> bool:
+    """Whether the account that asked is root or in an administrator group."""
+    if uid == 0:
+        return True
+    import grp
+    import pwd
+
+    try:
+        account = pwd.getpwuid(uid)
+        member_of = set(os.getgrouplist(account.pw_name, account.pw_gid))
+    except (KeyError, OSError) as e:
+        logging.warning(f"Could not read the groups of uid {uid}: {e}")
+        return False
+    for name in _ADMIN_GROUPS:
+        try:
+            if grp.getgrnam(name).gr_gid in member_of:
+                return True
+        except KeyError:
+            continue
+    return False
 
 
 def _leave_from_seam(reply_path: str, cloud_detached) -> Optional[str]:

@@ -436,6 +436,11 @@ export class SignalRoom implements DurableObject {
     const msg = frame.msg;
     const to = typeof msg.to === 'string' ? msg.to : undefined;
     const forwarded = JSON.stringify({ ...msg, from: self.id, fromRole: self.role, serverTimeMs: nowMs });
+    // the cap is on the frame a peer reads, which is this one with the room's own
+    // fields on it, counted in utf-8 bytes as the host's websocket counts it.
+    if (new TextEncoder().encode(forwarded).length > LIMITS.messageBytes) {
+      return this.sendError(socket, 'message_too_large');
+    }
 
     if (msg.type === 'bye') {
       this.fanOut(self.role, forwarded, to);

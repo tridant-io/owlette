@@ -12,6 +12,7 @@ import { timestampToIso } from '@/lib/firestoreTime.server';
 import {
   problem,
   problemFromError,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
   problemPlanRequired,
@@ -66,7 +67,7 @@ export async function GET(request: NextRequest) {
             ...(err.details ?? {}),
           });
         }
-        if (err.status === 403) return problemForbidden();
+        if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden();
         if (err.status === 404) return problemNotFound();
         return problemUnauthorized();
       }
@@ -164,7 +165,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
           });
         }
         if (err.status === 401) return problemUnauthorized(err.message);
-        if (err.status === 403) return problemForbidden(err.message);
+        if (err.status === 403) return mfaChallengeProblem(err) ?? problemForbidden(err.message);
         if (err.status === 404) return problemNotFound(err.message);
         return problem({
           type: ProblemType.Internal,

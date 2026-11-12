@@ -4,7 +4,9 @@
  * a 'machines' tool names several machines in one call. dispatch checks each
  * of them as it checks the one a 'machine' tool names, and refuses the call
  * whole when one fails. the tool here is a stand-in registered through a
- * mocked catalog; the checks are dispatch's own.
+ * mocked catalog; the checks are dispatch's own. nobody classified the stand-in,
+ * so it counts as changing what a machine launches (ADR 0019): the grants here are
+ * tier 3.
  */
 
 import type { Firestore } from 'firebase-admin/firestore';
@@ -113,20 +115,20 @@ beforeEach(() => {
 
 describe('startFleetCall: a tool that names several machines', () => {
   it('runs once every machine is inside the grant, in the site and has hoot on, with an allow row each', async () => {
-    const res = await call({ maxTier: 2, machineIds: [M1, M2] }, { ids: [M1, M2, M1], not_declared: 'x' });
+    const res = await call({ maxTier: 3, machineIds: [M1, M2] }, { ids: [M1, M2, M1] });
 
     expect(res).toEqual({ ok: true, kind: 'answered', body: ANSWER });
     expect(admit.mock.calls.map(([admission]) => admission)).toEqual([
       { capability: Capability.MACHINE_EXEC_COMMAND, tool: TOOL, machineId: M1 },
       { capability: Capability.MACHINE_EXEC_COMMAND, tool: TOOL, machineId: M2 },
     ]);
-    // each machine once, and only the parameters the tool declares
+    // each machine once
     expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ machineId: SENDER }), [M1, M2], { ids: [M1, M2, M1] });
     expect(mockMachines).toHaveBeenCalledWith(expect.anything(), { ids: [M1, M2, M1] });
   });
 
   it('is refused whole when one machine is outside the grant, before any allow row', async () => {
-    const res = await refusedWith(call({ maxTier: 2, machineIds: [M1] }), 403, 'machine_not_granted');
+    const res = await refusedWith(call({ maxTier: 3, machineIds: [M1] }), 403, 'machine_not_granted');
 
     expect(res.deny).toEqual({ reason: 'machine_not_granted', tool: TOOL, machineId: M2 });
     expect(admit).not.toHaveBeenCalled();
@@ -135,14 +137,14 @@ describe('startFleetCall: a tool that names several machines', () => {
   it('is refused whole when one machine has hoot off', async () => {
     docs.set(`sites/${SITE}/machines/${M2}`, { online: true, cortexEnabled: false });
 
-    const res = await refusedWith(call({ maxTier: 2, machineIds: null }), 409, 'hoot_disabled');
+    const res = await refusedWith(call({ maxTier: 3, machineIds: null }), 423, 'hoot_disabled');
 
     expect(res.deny).toEqual({ reason: 'hoot_disabled', tool: TOOL, machineId: M2 });
     expect(admit).not.toHaveBeenCalled();
   });
 
   it('is refused whole when one machine is not in the site', async () => {
-    const res = await call({ maxTier: 2, machineIds: null }, { ids: [M1, M3] });
+    const res = await call({ maxTier: 3, machineIds: null }, { ids: [M1, M3] });
 
     expect(res.ok).toBe(false);
     if (!res.ok) {
@@ -161,7 +163,7 @@ describe('startFleetCall: a tool that names several machines', () => {
   ])('is refused as invalid when the call %s', async (_case, named) => {
     mockMachines.mockResolvedValue(named);
 
-    const res = await refusedWith(call({ maxTier: 2, machineIds: null }), 400, 'validation_failed');
+    const res = await refusedWith(call({ maxTier: 3, machineIds: null }), 400, 'validation_failed');
 
     expect(res.deny).toMatchObject({ reason: 'validation_failed', tool: TOOL });
     expect(admit).not.toHaveBeenCalled();
@@ -170,11 +172,22 @@ describe('startFleetCall: a tool that names several machines', () => {
   it('stops when the rate limit refuses one of its machines', async () => {
     admit.mockResolvedValueOnce(null).mockResolvedValueOnce(problemRateLimited(5));
 
-    const res = await call({ maxTier: 2, machineIds: [M1, M2] });
+    const res = await call({ maxTier: 3, machineIds: [M1, M2] });
 
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.response.status).toBe(429);
     expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('is refused as invalid when it sends a parameter the tool does not declare', async () => {
+    await refusedWith(call({ maxTier: 3, machineIds: null }, { ids: [M1], not_declared: 'x' }), 400, 'tool_params_invalid');
+    expect(mockMachines).not.toHaveBeenCalled();
+    expect(admit).not.toHaveBeenCalled();
+  });
+
+  it('is refused below tier 3, since nobody classified it', async () => {
+    await refusedWith(call({ maxTier: 2, machineIds: null }), 403, 'max_tool_tier_exceeded');
+    expect(admit).not.toHaveBeenCalled();
   });
 
   it('is not offered below its tier', async () => {

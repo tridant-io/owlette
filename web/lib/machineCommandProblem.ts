@@ -37,6 +37,24 @@ export function commandErrorToProblem(err: ExecuteMachineCommandError): NextResp
       code: err.code,
     });
   }
+  if (err.code === 'hoot_disabled') {
+    return problem({
+      type: ProblemType.Conflict,
+      title: 'hoot disabled',
+      status: err.status,
+      detail: err.detail,
+      code: err.code,
+    });
+  }
+  if (err.status === 403) {
+    return problem({
+      type: ProblemType.Forbidden,
+      title: 'forbidden',
+      status: err.status,
+      detail: err.detail,
+      code: err.code,
+    });
+  }
   if (err.status === 404) {
     return problem({
       type: ProblemType.NotFound,

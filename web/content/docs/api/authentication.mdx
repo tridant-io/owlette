@@ -1,10 +1,10 @@
 ---
 title: "authentication"
 description: "owlette public API calls authenticate with scoped, expiring owk_live_* API keys sent as a bearer token. the dashboard and setup flows use sessions or Firebase ID tokens, and a few surfaces — key management, swoop, display settings — refuse API keys outright."
-keywords: ["api key", "api token", "bearer token", "credentials", "scopes", "permissions", "x-api-key", "401", "403"]
+keywords: ["api key", "api token", "bearer token", "credentials", "scopes", "permissions", "x-api-key", "401", "403", "tool tier", "maxToolTier", "second factor", "id token"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-11
 
 ---
 
@@ -22,7 +22,7 @@ the same key also works in an `x-api-key` header, and is checked identically:
 x-api-key: owk_live_...
 ```
 
-a third form, `?api_key=owk_live_...` in the query string, still works but is deprecated: query strings end up in logs, proxies, and browser history. use it only where a client cannot set headers, such as a browser `EventSource` reading `GET /api/events/stream`.
+a key in the query string (`?api_key=owk_live_...`) is not accepted: query strings end up in logs, proxies, and browser history. a client that cannot set headers, such as a browser `EventSource`, needs a fetch-based stream reader instead.
 
 the CLI and both SDKs send `Authorization: Bearer`.
 
@@ -50,18 +50,30 @@ create keys in the dashboard at **settings → api keys** (`/settings/api-keys`)
 - a name (up to 100 characters)
 - scopes, from a preset or custom
 - an expiry, from 1 to 365 days (default 90)
+- a [tool tier](#tool-tiers) (default 1)
 
 copy the raw key immediately into a secrets manager. it is shown once.
 
 ### scripted
 
-`POST /api/keys` creates a key and takes the same fields: `name`, `scopes`, and an optional `ttlDays` (1–365, default 90). it requires a signed-in user session or a Firebase ID token — an API key cannot create, list, edit, rotate, or revoke keys, so a leaked key cannot mint a broader replacement for itself. an agent's machine token is refused too.
+`POST /api/keys` creates a key and takes the same fields: `name`, `scopes`, an optional `ttlDays` (1–365, default 90), and an optional `maxToolTier` (1, 2 or 3, default 1). it requires a signed-in user session or a Firebase ID token, subject to [the second factor](#sessions-and-id-tokens) — an API key cannot create, list, edit, rotate, or revoke keys, so a leaked key cannot mint a broader replacement for itself. an agent's machine token is refused too.
 
 the body may still carry `environment`, because older CLI and SDK builds send it; it is ignored, and every new key is `live`.
 
 `owlette auth login` mints its key through a device-code flow instead: the CLI shows a three-word pairing phrase, you approve it in the browser while signed in and pick the scopes and lifetime, and the CLI receives the key. see [`auth`](/docs/cli/reference/auth).
 
 `/api/account/api-keys` is a superadmin platform surface, not the self-service path.
+
+---
+
+## sessions and ID tokens
+
+the dashboard calls the API with its session cookie, and first-party tools can send a Firebase ID token as the bearer. neither carries scopes: each acts as its user. on an account that holds a second factor, which is every account past two-factor setup:
+
+- a session works once its sign-in has passed the second factor. until then the API answers `403 mfa_challenge_required`, and the dashboard sends you to `/verify-2fa`.
+- a Firebase ID token is refused with the same `403 mfa_challenge_required`, because it carries no second factor. call the API with a key instead, and manage keys, which `/api/keys/*` won't do through a key, in the dashboard.
+
+the routes that finish signing in or set up a factor take a session that has not passed it yet. API keys and agent tokens are unaffected.
 
 ---
 
@@ -87,6 +99,7 @@ curl -fsS "https://owlette.app/api/whoami" \
       { "resource": "site", "id": "kiosk-fleet-01", "permissions": ["read"] },
       { "resource": "machine", "id": "*", "permissions": ["read", "write"] }
     ],
+    "maxToolTier": 1,
     "environment": "live",
     "expiresAt": 1798049400000,
     "lastUsedAt": 1777408200000,
@@ -158,11 +171,33 @@ the dashboard offers four presets as starting points. each grants its permission
 
 narrow a preset to the sites and machines an integration actually touches before you save it.
 
+### tool tiers
+
+`mcp_tool_call` on [the machine commands route](/docs/agent/remote-commands) runs a hoot tool, and each tool has a [tier](/docs/reference/hoot-tools). a key runs tools up to its `maxToolTier`:
+
+| `maxToolTier` | runs |
+|---|---|
+| 1 | read-only tools. every key is here until its owner raises it, including keys made before the setting existed |
+| 2 | also process, service and system setting changes that leave what a machine launches alone |
+| 3 | also commands, scripts, file reads and writes, deployments and restarts, and any call that changes what a machine launches. a name that is not a known tool counts as tier 3 |
+
+a call's tier is its tool's, except that a call that [changes what a machine launches](/docs/dashboard/hoot#changing-what-a-machine-launches), such as `update_process` with a new target or `manage_scheduled_task` `create`, counts as tier 3 whatever its tool's tier. a call above the key's tier returns `403 max_tool_tier_exceeded`, and nothing reaches the machine.
+
+the parameters are checked against the tool's definition before anything is queued: an unknown tool or parameter, a missing required one, or a value the tool doesn't take returns `400 tool_params_invalid`, naming the parameter.
+
+- set it when creating the key, or later in the key's editor or with `PATCH /api/keys/{keyId}`.
+- going above 1, by creating, raising or rotating, needs a dashboard session that passed a second factor. anything else, an ID token included, returns `403 verified_session_required`. lowering a key needs no more than any other edit.
+- a rotation keeps the tier.
+- `owlette key create` and the CLI's device-code login always make tier 1 keys. raise one in the dashboard.
+- it says nothing about the other command types, or about hoot conversations, which stay read only through a key.
+
+a session or ID token has no `maxToolTier`. it runs tier 1 and 2, and tier 3, a launch change included, only from a dashboard session with an open [step-up](/docs/dashboard/swoop#the-second-factor) window on that machine, the same one swoop's control uses, else `401 step_up_required`. an ID token never holds that window.
+
 ### what an API key cannot do
 
 some surfaces need a person, not a key:
 
-- **key management.** `/api/keys/*` takes a session or Firebase ID token only.
+- **key management.** `/api/keys/*` takes a session or Firebase ID token only, subject to [the second factor](#sessions-and-id-tokens).
 - **swoop.** every swoop session route, the site swoop list, and `swoop-settings` refuse a key with `403 api_key_not_permitted` — swoop is a human-in-the-loop surface and a key has no second factor. see [swoop](/docs/dashboard/swoop).
 - **display settings.** `GET`/`PATCH /api/sites/{siteId}/display-settings` refuse a key the same way.
 - **member candidates.** `GET /api/sites/{siteId}/member-candidates` refuses a key the same way: a key scoped to one site must not read the rosters of its owner's other sites.
@@ -172,7 +207,7 @@ some surfaces need a person, not a key:
 
 ## editing key scopes
 
-a key scoped too narrowly does not have to be replaced. `PATCH /api/keys/{keyId}` edits `scopes` and/or `name` in place and leaves the secret alone — whatever already holds the key keeps working and picks up the new scopes on its next request.
+a key scoped too narrowly does not have to be replaced. `PATCH /api/keys/{keyId}` edits `scopes`, `name` and/or [`maxToolTier`](#tool-tiers) in place and leaves the secret alone — whatever already holds the key keeps working and picks up the new scopes on its next request.
 
 ```bash
 curl -X PATCH "https://owlette.app/api/keys/$KEY_ID" \
@@ -201,10 +236,10 @@ every key expires:
 
 a key within 14 days of expiry shows as expiring soon in the dashboard, and its owner is emailed ahead of the date.
 
-the lifecycle routes take a session or Firebase ID token:
+the lifecycle routes take a session or Firebase ID token, subject to [the second factor](#sessions-and-id-tokens):
 
-- `POST /api/keys/{keyId}/rotate` issues a replacement with the same name, scopes, and environment, and returns the new raw key once. an optional body `{ "ttlDays": 1–365 }` sets the new key's lifetime (default 90). the response's `previousKey.retiresAt` is when the old key stops working. a key that is revoked or already rotated returns `409`.
-- `PATCH /api/keys/{keyId}` edits scopes and name. see [editing key scopes](#editing-key-scopes).
+- `POST /api/keys/{keyId}/rotate` issues a replacement with the same name, scopes, tool tier and environment, and returns the new raw key once. an optional body `{ "ttlDays": 1–365 }` sets the new key's lifetime (default 90). the response's `previousKey.retiresAt` is when the old key stops working. a key that is revoked or already rotated returns `409`.
+- `PATCH /api/keys/{keyId}` edits scopes, name and tool tier. see [editing key scopes](#editing-key-scopes).
 - `DELETE /api/keys/{keyId}` revokes the key immediately and permanently. the record is kept and stamped `revokedAt`, so the key still appears in `GET /api/keys` with `revoked: true`. repeating the call is a no-op.
 
 rotate when a secret may have leaked or your rotation schedule says so; revoke when the integration is retired.
@@ -217,8 +252,12 @@ rotate when a secret may have leaked or your rotation schedule says so; revoke w
 |---|---|---|
 | 401 | `unauthorized` | the credential is missing, malformed, unknown, revoked, or a rotated key past its grace window |
 | 401 | `token_expired` | the key's `expiresAt` has passed. the body carries `expiredAt` |
+| 401 | `step_up_required` | a tier-3 tool call from a session with no open step-up window on that machine. see [tool tiers](#tool-tiers) |
+| 403 | `mfa_challenge_required` | a session that has not passed its second factor, or an ID token for an account that holds one. see [sessions and ID tokens](#sessions-and-id-tokens) |
 | 403 | `scope_insufficient` | the credential is valid but lacks the resource, ID, and permission the operation needs. the body's `required` names it |
 | 403 | `api_key_not_permitted` | the operation refuses API keys whatever their scopes. use a session |
+| 403 | `max_tool_tier_exceeded` | the tool's tier is above the key's `maxToolTier`. see [tool tiers](#tool-tiers) |
+| 403 | `verified_session_required` | a tool tier above 1 needs a dashboard session that passed a second factor. see [tool tiers](#tool-tiers) |
 | 403 | `forbidden` | the caller lacks the role, site membership, or capability, or their account is deactivated |
 | 404 | `not_found` | the resource is absent, or hidden from this caller so its existence does not leak |
 

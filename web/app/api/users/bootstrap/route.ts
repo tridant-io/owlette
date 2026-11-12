@@ -59,7 +59,7 @@ async function handleBootstrap(request: NextRequest): Promise<NextResponse> {
   try {
     let userId: string;
     try {
-      userId = await requireSessionOrIdToken(request);
+      userId = await requireSessionOrIdToken(request, { allowPreMfa: true });
     } catch (err) {
       if (err instanceof ApiAuthError) return problemUnauthorized(err.message);
       throw err;

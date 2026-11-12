@@ -3,7 +3,6 @@
  * Server-side only — never import this from a client component.
  */
 
-import { createHash } from 'crypto';
 import { tool, jsonSchema } from 'ai';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
@@ -19,8 +18,10 @@ import {
   type McpToolDefinition,
   type ToolTier,
 } from '@/lib/mcp-tools';
-import { canonicalJson } from '@/lib/auditLogVerify';
+import { emitMutation } from '@/lib/auditLogClient';
+import { generateCorrelationId, writeAuditEntryBlocking } from '@/lib/auditLog.server';
 import { sanitizeForLog } from '@/lib/logSanitize';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
 import type { LlmConfig } from '@/lib/llm';
 import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
@@ -34,6 +35,7 @@ import {
 } from '@/lib/actions/executeMachineCommand.server';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import { ProcessConfigError, type PublicProcessConfig } from '@/lib/processConfig.server';
+import { screenshotUrlForModel } from '@/lib/screenshotStorage.server';
 import {
   Capability,
   hasCapability,
@@ -58,6 +60,15 @@ import {
   type HootTarget,
   type ResolvedTargets,
 } from '@/lib/hoot/target';
+import {
+  changesWhatMachineLaunches,
+  launchChangeRefusal,
+  registryValueRefusal,
+  toolRefusal,
+  withoutSecretRegistryValues,
+} from '@/lib/hoot/launchChange';
+import { keyedHash, launchChangesForCall, toolCallHash } from '@/lib/hoot/launchAudit.server';
+import { approvedCallMatches, recordApprovalRequest } from '@/lib/hoot/approvalLedger.server';
 import type { TurnOwnership } from '@/lib/hoot/turnStore.server';
 import type { TalonStoreContext } from '@/lib/talons/store.server';
 
@@ -225,6 +236,13 @@ export interface BuildExecutableToolsOptions {
    *  the server-side and site-wide paths too, not just local Hoot. */
   requireTier3Approval?: boolean;
   /**
+   * A person can answer an approval card on this turn's chat, so a call that
+   * changes what a machine launches waits for them, whatever `requireTier3Approval`
+   * says. Off by default: every other turn refuses the call before anything is
+   * queued, because there is nobody to ask.
+   */
+  launchChangeApprovable?: boolean;
+  /**
    * A person drives this turn from a dashboard chat (a message they sent, or
    * their answer to an approval), so a call that sets `override_active_hours`
    * can go to their approval card. Off by default: follow-ups, talons and the
@@ -240,12 +258,14 @@ export interface BuildExecutableToolsOptions {
    */
   activeHoursGuardIds?: readonly string[];
   /**
-   * The tool calls this turn resumes after a person answered their approval.
-   * ai 7 re-runs `needsApproval` on them with the input the browser sent back,
-   * so their override is checked against what was recorded at asking time and
-   * never recorded anew.
+   * Every tool call id in the messages this turn was sent. ai 7 re-runs
+   * `needsApproval` on an approved one with the input the browser sent back, so a
+   * call with one of these ids is never recorded as asked: only a call the model
+   * produced in this turn's own step can raise a card.
    */
-  resumedToolCallIds?: readonly string[];
+  incomingToolCallIds?: readonly string[];
+  /** This turn, whose one-shot claim on an approved call dispatch looks for. */
+  turnId?: string;
   /** Per-tool-call dispatch hooks; site-wide fan-out fires onCommandQueued once
    *  per machine. SERVER_SIDE_TOOLS never dispatch, so they never fire those two. */
   toolCallbacks?: {
@@ -1696,6 +1716,98 @@ async function executeDeleteProcessTool(
   });
 }
 
+/** The configured process a relayed launch change names, for its audit row; a failed read just leaves `from` null. */
+async function readConfiguredProcess(
+  db: FirebaseFirestore.Firestore,
+  siteId: string,
+  machineId: string,
+  processName: unknown,
+): Promise<Record<string, unknown> | null> {
+  if (typeof processName !== 'string') return null;
+  try {
+    const config = await db.collection('config').doc(siteId).collection('machines').doc(machineId).get();
+    const processes = config.data()?.processes;
+    if (!Array.isArray(processes)) return null;
+    return processes.find((process: unknown) => isRecord(process) && process.name === processName) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One append-only row per command a chat tool actually queued: the tool, its
+ * parameter names and a hash of the call, never the values, because the agent logs
+ * a successful tier-2 call nowhere in the cloud. Written after the queue write, so
+ * it never says dispatched for a call that was refused.
+ */
+function auditHootDispatch(
+  siteId: string,
+  machineId: string,
+  toolName: string,
+  params: Record<string, unknown>,
+  commandId: string,
+  options: BuildExecutableToolsOptions,
+): void {
+  emitMutation({
+    kind: 'machine_command_dispatched',
+    siteId,
+    actor: actionContextForHoot(siteId, options).auditActor,
+    targetId: commandId,
+    attributes: {
+      commandType: toolName,
+      endpoint: 'hoot',
+      method: 'TOOL',
+      machineId,
+      paramNames: Object.keys(params),
+      paramsHash: keyedHash(toolCallHash(toolName, params)),
+    },
+  });
+}
+
+/** The talon tools change the site, not a machine. */
+const SITE_LEVEL_LAUNCH_TOOLS: ReadonlySet<string> = new Set(['create_talon', 'set_talon_enabled']);
+
+/**
+ * The record of an approved launch change, with its old and new values, written
+ * before anything changes. Blocking and fail-closed, like an unattended call's
+ * allow row: `emitMutation` drops a row it can't deliver, and a change to what a
+ * machine runs with no record of who approved it is the thing this gate exists to
+ * prevent. Throws when it can't be written; the caller refuses the call.
+ */
+async function recordApprovedLaunchChange(
+  db: FirebaseFirestore.Firestore,
+  siteId: string,
+  chatId: string,
+  machineIds: string[],
+  toolName: string,
+  params: Record<string, unknown>,
+  toolCallId: string | undefined,
+  options: BuildExecutableToolsOptions,
+): Promise<void> {
+  const siteLevel = SITE_LEVEL_LAUNCH_TOOLS.has(toolName);
+  const correlationId = generateCorrelationId();
+  await Promise.all(
+    (siteLevel ? [siteId] : machineIds).map(async (id) => {
+      const current = siteLevel ? null : await readConfiguredProcess(db, siteId, id, params.process_name);
+      await writeAuditEntryBlocking(siteId, {
+        correlationId,
+        actor: { type: 'user', userId: options.userId ?? 'unknown', role: normalizeActorRole(options.userRole) },
+        capability: Capability.MACHINE_EXEC_COMMAND,
+        target: siteLevel ? { kind: 'site', id } : { kind: 'machine', id, machineId: id },
+        outcome: 'allow',
+        metadata: {
+          toolName,
+          toolCallId: toolCallId ?? null,
+          chatId,
+          paramNames: Object.keys(params),
+          paramsHash: keyedHash(toolCallHash(toolName, params)),
+          launchChanges: launchChangesForCall(toolName, params, current),
+        },
+      });
+    }),
+  );
+}
+
 /**
  * Talon store is loaded at call time: `@/lib/talons/store.server` imports
  * `resolveLlmConfig` from this module, so a static import would be circular.
@@ -2127,9 +2239,6 @@ export async function executeServerSideTool(
   }
 }
 
-/** Like the approval ledger's: far beyond any approval a person still answers. */
-const OVERRIDE_REQUEST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
 function hasActiveHoursOverride(input: unknown): boolean {
   return isRecord(input) && input.override_active_hours === true;
 }
@@ -2137,11 +2246,6 @@ function hasActiveHoursOverride(input: unknown): boolean {
 function activeHoursOverrideReason(input: Record<string, unknown>): string | null {
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   return reason && reason.length <= OVERRIDE_REASON_MAX ? reason : null;
-}
-
-/** A tool call refused before anything is queued, in the shape the model reads. */
-function toolRefusal(error: string, detail: string, status: number): ProcessToolResult {
-  return { ok: false, error, detail, status };
 }
 
 /** The machines one call runs on and its input without the list that named them, or why it is refused. */
@@ -2241,25 +2345,6 @@ function activeHoursOverrideRefusal(
   return null;
 }
 
-/**
- * Where the server records an override it asked a person to approve. ai 7
- * resumes an approved call on the input the browser sends back, so this record
- * is how the resumed turn knows the card showed this exact call. No rules match
- * the subcollection, so clients are default-denied.
- */
-function overrideRequestRef(
-  db: FirebaseFirestore.Firestore,
-  chatId: string,
-  toolCallId: string,
-): FirebaseFirestore.DocumentReference {
-  return db.collection('chats').doc(chatId).collection('activeHoursOverrides').doc(toolCallId);
-}
-
-/** The whole call: a resumed input that differs in any field is not the one approved. */
-function overrideRequestHash(toolName: string, input: Record<string, unknown>): string {
-  return createHash('sha256').update(canonicalJson({ toolName, input })).digest('hex');
-}
-
 function withoutOverrideParams(params: Record<string, unknown>): Record<string, unknown> {
   const out = { ...params };
   for (const name of ACTIVE_HOURS_OVERRIDE_PARAMS) delete out[name];
@@ -2283,6 +2368,7 @@ async function grantActiveHoursOverride(
   toolCallId: string | undefined,
   options: BuildExecutableToolsOptions,
   siteMode: boolean,
+  machineIds: string[],
 ): Promise<OverrideGrant> {
   const input = withoutOverrideParams(params);
   if (!hasActiveHoursOverride(params)) return { ok: true, input, envelope: {} };
@@ -2290,8 +2376,8 @@ async function grantActiveHoursOverride(
   const refusal = activeHoursOverrideRefusal(params, options, siteMode);
   if (refusal) return { ok: false, result: refusal };
 
-  const request = toolCallId ? await overrideRequestRef(db, chatId, toolCallId).get() : null;
-  if (!request?.exists || request.data()?.inputHash !== overrideRequestHash(toolName, params)) {
+  const call = { toolName, inputHash: toolCallHash(toolName, params), machineIds };
+  if (!(await approvedCallMatches(db, chatId, toolCallId, options.turnId, call))) {
     return {
       ok: false,
       result: toolRefusal(
@@ -2339,7 +2425,7 @@ export function buildExecutableTools(
     chatMachineId: options.chatMachineId ?? (siteMode ? SITE_TARGET_ID : machineId),
   };
 
-  const resumedToolCallIds = new Set(options.resumedToolCallIds ?? []);
+  const incomingCallIds = new Set(options.incomingToolCallIds ?? []);
 
   // A turn nobody can approve is never offered the override pair, so a model
   // can't ask for one there; execute still refuses one sent anyway.
@@ -2366,8 +2452,11 @@ export function buildExecutableTools(
     const offered = namesMachines ? withCallMachines(withOverride, mustNameMachines) : withOverride;
     const targetsOf = (raw: unknown, toolCallId: string | undefined): CallTargets =>
       namesMachines
-        ? callTargets(raw, turnMachines, mustNameMachines, !!toolCallId && resumedToolCallIds.has(toolCallId))
+        ? callTargets(raw, turnMachines, mustNameMachines, !!toolCallId && incomingCallIds.has(toolCallId))
         : { ok: true, input: raw, targets: turnMachines };
+    const heldOnEveryTarget = (input: unknown, targets: string[]): boolean =>
+      targets.length > 0 &&
+      targets.every((mid) => heldRestartRefusal(toolName, input, guarded.has(mid)) !== null);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolConfig: any = {
@@ -2376,36 +2465,40 @@ export function buildExecutableTools(
       // Tier-3 pauses for in-chat approval: the AI SDK emits
       // `tool-approval-request` instead of calling `execute`. Chat-only —
       // autonomous Hoot uses buildAutonomousTools (no human to approve).
-      // An override asks a person whatever the tier or the site toggle, and is
-      // recorded as asked so the resumed turn can check it.
+      // A launch change and an override ask a person whatever the tier or the site
+      // toggle. Every card is recorded as asked, so the resumed turn can check it.
       needsApproval: async (rawInput: unknown, approvalOptions?: { toolCallId?: string }) => {
         const call = targetsOf(rawInput, approvalOptions?.toolCallId);
         // a call execute refuses for its machine list has nothing to approve either.
         if (!call.ok) return false;
         const { input, targets } = call;
         // nothing would be sent, so there is nothing to approve: execute refuses at once.
-        if (
-          targets.length > 0 &&
-          targets.every((mid) => heldRestartRefusal(toolName, input, guarded.has(mid)) !== null)
-        ) {
-          return false;
-        }
-        if (!takesOverride || !hasActiveHoursOverride(input)) return tierGate;
-        if (activeHoursOverrideRefusal(input as Record<string, unknown>, options, siteMode)) return false;
+        if (heldOnEveryTarget(input, targets)) return false;
+        const launchChange = changesWhatMachineLaunches(toolName, input);
+        // off means nobody can answer a card: execute runs now and refuses.
+        if (launchChange && options.launchChangeApprovable !== true) return false;
+        // the same: no card, because the call refuses whoever answers it.
+        if (registryValueRefusal(toolName, input)) return false;
+        if (toolParamRefusal(toolName, input)) return false;
+        const override = takesOverride && hasActiveHoursOverride(input);
+        if (override && activeHoursOverrideRefusal(input as Record<string, unknown>, options, siteMode)) return false;
+        if (!launchChange && !override && !tierGate) return false;
+
         const toolCallId = approvalOptions?.toolCallId;
         if (!toolCallId) return false;
-        if (resumedToolCallIds.has(toolCallId)) return true;
+        // what a client sent must never become the record of what was asked.
+        if (incomingCallIds.has(toolCallId)) return true;
         try {
-          await overrideRequestRef(db, chatId, toolCallId).set({
+          await recordApprovalRequest(db, chatId, toolCallId, {
             toolName,
-            inputHash: overrideRequestHash(toolName, input as Record<string, unknown>),
-            expiresAt: new Date(Date.now() + OVERRIDE_REQUEST_TTL_MS),
+            inputHash: toolCallHash(toolName, input as Record<string, unknown>),
+            machineIds: targets,
           });
           return true;
         } catch (error) {
           // no card the resumed turn could honour: execute runs now and refuses.
           console.error(
-            `[hoot] could not record the active-hours override for tool call ${sanitizeForLog(toolCallId)}:`,
+            `[hoot] could not record the approval request for tool call ${sanitizeForLog(toolCallId)}:`,
             error,
           );
           return false;
@@ -2415,18 +2508,25 @@ export function buildExecutableTools(
         const call = targetsOf(rawParams, execOptions?.toolCallId);
         if (!call.ok) return call.result;
         const { input: params, targets } = call;
+        const launchChange = changesWhatMachineLaunches(toolName, params);
+        if (launchChange && options.launchChangeApprovable !== true) return launchChangeRefusal();
+        // ahead of the agent, so a fielded one with the old allowlist never sees it.
+        const registryRefusal = registryValueRefusal(toolName, params);
+        if (registryRefusal) return registryRefusal;
+        const invalidParams = toolParamRefusal(toolName, params);
+        if (invalidParams) return toolRefusal('tool_params_invalid', invalidParams, 400);
+
         // Bridge per-turn toolCallbacks into per-dispatch hooks: the SDK passes
         // { toolCallId } as execute's 2nd arg; pair it with commandId + machineId.
         const toolCallbacks = options.toolCallbacks;
-        const hooksFor = (targetMachineId: string): AgentCommandHooks | undefined =>
-          toolCallbacks
-            ? {
-                onCommandQueued: (commandId) =>
-                  toolCallbacks.onCommandQueued?.(execOptions?.toolCallId ?? '', commandId, targetMachineId),
-                onPollTick: toolCallbacks.onPollTick,
-                abortSignal: toolCallbacks.abortSignal,
-              }
-            : undefined;
+        const hooksFor = (targetMachineId: string): AgentCommandHooks => ({
+          onCommandQueued: (commandId) => {
+            auditHootDispatch(siteId, targetMachineId, toolName, toolParams, commandId, options);
+            toolCallbacks?.onCommandQueued?.(execOptions?.toolCallId ?? '', commandId, targetMachineId);
+          },
+          onPollTick: toolCallbacks?.onPollTick,
+          abortSignal: toolCallbacks?.abortSignal,
+        });
 
         let toolParams = params as Record<string, unknown>;
         // ahead of the override grant: a held restart this agent can't hold is refused as that.
@@ -2438,7 +2538,7 @@ export function buildExecutableTools(
         if (takesOverride) {
           // refuses any override in a fan-out, so the fan-out below never needs an envelope.
           const grant = await grantActiveHoursOverride(
-            db, chatId, toolName, toolParams, execOptions?.toolCallId, options, siteMode,
+            db, chatId, toolName, toolParams, execOptions?.toolCallId, options, siteMode, targets,
           );
           if (!grant.ok) return grant.result;
           toolParams = grant.input;
@@ -2449,9 +2549,43 @@ export function buildExecutableTools(
         // others. after the refusals above, which read what the model sent.
         if (options.machineActor) toolParams = declaredParams(offered, toolParams);
 
+        // Anything that had to show a card runs only as the card showed it. An
+        // override was just checked against the same record, input and all.
+        if (
+          (launchChange || tierGate) &&
+          !(takesOverride && hasActiveHoursOverride(params)) &&
+          !heldOnEveryTarget(params, targets) &&
+          !(await approvedCallMatches(db, chatId, execOptions?.toolCallId, options.turnId, {
+            toolName,
+            inputHash: toolCallHash(toolName, params as Record<string, unknown>),
+            machineIds: targets,
+          }))
+        ) {
+          return toolRefusal(
+            'approval_does_not_match',
+            "this isn't the call the operator was asked to approve, or they answered after it lapsed, so nothing was sent or changed. call the tool again to ask them.",
+            403,
+          );
+        }
+
+        if (launchChange) {
+          try {
+            await recordApprovedLaunchChange(
+              db, siteId, chatId, targets, toolName, toolParams, execOptions?.toolCallId, options,
+            );
+          } catch (error) {
+            console.error(`[hoot] could not record an approved ${sanitizeForLog(toolName)}:`, error);
+            return toolRefusal(
+              'audit_unavailable',
+              'owlette could not record this approved change, so it did not make it. nothing was sent or changed. try again shortly.',
+              503,
+            );
+          }
+        }
+
         // Run on the web server: no agent relay, so toolCallbacks never fire.
         if (SERVER_SIDE_TOOLS.has(toolName)) {
-          return executeServerSideTool(
+          const result = await executeServerSideTool(
             db,
             siteId,
             targets,
@@ -2460,6 +2594,14 @@ export function buildExecutableTools(
             serverSideOptions,
             envelope,
           );
+          // the one server-side tool that queues machine commands with no audit row of
+          // its own; an error here means it stopped before queueing any.
+          if (isRecord(result) && typeof result.deployment_id === 'string') {
+            for (const mid of targets) {
+              auditHootDispatch(siteId, mid, toolName, toolParams, result.deployment_id, options);
+            }
+          }
+          return result;
         }
 
         if (siteMode) {
@@ -2474,7 +2616,10 @@ export function buildExecutableTools(
                   const result = await executeExistingCommand(db, siteId, mid, existingCmd, processName, toolParams, hooksFor(mid));
                   return { machine: mid, ...result as Record<string, unknown> };
                 }
-                const result = await executeToolOnAgent(db, siteId, mid, toolName, toolParams, chatId, hooksFor(mid));
+                const result = withoutSecretRegistryValues(
+                  toolName,
+                  await executeToolOnAgent(db, siteId, mid, toolName, toolParams, chatId, hooksFor(mid)),
+                );
                 return { machine: mid, ...(typeof result === 'object' && result !== null ? result as Record<string, unknown> : { result }) };
               } catch (err) {
                 return { machine: mid, error: err instanceof Error ? err.message : 'Unknown error' };
@@ -2490,14 +2635,23 @@ export function buildExecutableTools(
           return executeExistingCommand(db, siteId, machineId, existingCmd, processName, toolParams, hooksFor(machineId), envelope);
         }
 
-        return executeToolOnAgent(db, siteId, machineId, toolName, toolParams, chatId, hooksFor(machineId), envelope);
+        return withoutSecretRegistryValues(
+          toolName,
+          await executeToolOnAgent(db, siteId, machineId, toolName, toolParams, chatId, hooksFor(machineId), envelope),
+        );
       },
     };
 
     // capture_screenshot: inject the image as a vision block, not a URL string.
+    // The agent's url is the dashboard's route, so each projection, prior turns
+    // included, signs a fresh read url the provider can fetch.
     if (toolName === 'capture_screenshot') {
       type ScreenshotBlock = { type: 'text'; text: string } | { type: 'image-url'; url: string };
-      toolConfig.toModelOutput = ({ output }: { output: unknown }) => {
+      const readableUrl = async (raw: unknown, mid: unknown) =>
+        typeof raw === 'string' && raw && typeof mid === 'string'
+          ? screenshotUrlForModel(raw, siteId, mid)
+          : null;
+      toolConfig.toModelOutput = async ({ output }: { output: unknown }) => {
         const result = output as Record<string, unknown> | null;
 
         // Site-wide results are { machines: [...] } — one image block each; a
@@ -2509,7 +2663,7 @@ export function buildExecutableTools(
           const blocks: ScreenshotBlock[] = [];
           for (const m of machines) {
             const mid = (m.machine as string) || 'machine';
-            const murl = m.url as string | undefined;
+            const murl = await readableUrl(m.url, m.machine);
             if (murl) {
               blocks.push({ type: 'text' as const, text: `${mid}:` });
               blocks.push({ type: 'image-url' as const, url: murl });
@@ -2523,7 +2677,7 @@ export function buildExecutableTools(
           }
         }
 
-        const url = result?.url as string | undefined;
+        const url = await readableUrl(result?.url, machineId);
         const message = (result?.message as string) || (result?.error as string) || 'Screenshot captured';
 
         if (url) {

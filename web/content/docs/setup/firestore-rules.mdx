@@ -90,7 +90,7 @@ in the member/admin column, a **whole-site** row is a member row with no `machin
 | `site_ids/{siteId}` | single-document get only, never list; no write | same | same | write. tombstones for deleted sites, so an ID is never reused |
 | `sites/{siteId}` | read sites where you hold an active member row, a scoped one included; no write | read all sites; no write | no access | create/update/delete |
 | `sites/{siteId}/machines/{machineId}` | read machines your access covers; no write. a scoped member's list query must pin the IDs (`documentId() in` their machines), because rules are not filters | read all machines; no write | read/write/delete own machine only | full write |
-| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | read commands of machines your access covers; no write | read all commands; no write | read/write/delete own machine's commands | full write |
+| `sites/{siteId}/machines/{machineId}/commands/{commandDoc}` | read commands of machines your access covers; no write | read all commands; no write | read/write/delete own machine's commands, except `pending`, where it can only remove entries | full write |
 | `sites/{siteId}/machines/{machineId}/screenshots/{screenshotId}` | read on machines your access covers | read all | no access | write history entries |
 | `sites/{siteId}/machines/{machineId}/installed_software/{softwareId}` | read and delete inventory on machines your access covers | read and delete in all sites | read/write/delete own machine's inventory | full write |
 | `sites/{siteId}/machines/{machineId}/hardware/{docId}` | read on machines your access covers; no write | read all; no write | read/write own machine's hardware | full write |
@@ -205,7 +205,7 @@ then commit the restored file, so the repository matches what is live.
 
 ## versioning
 
-the rules version is independent of the product version. it is tracked in the header comment at the top of `firestore.rules`, with a line on what each version changed. the current version is **2.12.0**, which added machine scope.
+the rules version is independent of the product version. it is tracked in the header comment at the top of `firestore.rules`, with a line on what each version changed. the current version is **2.13.0**, in which an agent can only remove entries from its machine's `commands/pending`; only the server adds them. 2.12.0 added machine scope. every agent from 3.2.0 on only ever removes entries there, so 2.13.0 needs no agent update.
 
 2.12.0 rests on one invariant, written beside `canAccessSite` in the file: `canAccessSite` admits a scoped member, so it gates only the documents that say nothing about other machines (the site document, `settings/{swoop,display,cortex}`, and the schedule and reboot presets). a block that spans machines takes `canAccessWholeSite`, and a block under one machine takes `canAccessMachine`. a new block written with `canAccessSite` would hand every scoped member the whole collection.
 

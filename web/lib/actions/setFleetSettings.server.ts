@@ -152,6 +152,22 @@ function ownGrant(senders: Record<string, FleetGrant>, machineId: string): Fleet
   return Object.prototype.hasOwnProperty.call(senders, machineId) ? senders[machineId] : undefined;
 }
 
+/** a sender's tier after this write: the one asked for, else the one it holds, else a new sender's. */
+function tierAfter(before: FleetSettings, machineId: string, sender: ParsedSender): FleetGrant['maxTier'] {
+  return sender.maxTier ?? ownGrant(before.senders, machineId)?.maxTier ?? DEFAULT_SENDER_TIER;
+}
+
+/**
+ * whether `input` gives any sender a higher tier than it holds now, a new
+ * sender counting from 1. throws on input `setFleetSettings` would refuse.
+ */
+export function raisesFleetTier(before: FleetSettings, input: SetFleetSettingsInput): boolean {
+  const { senders } = parseInput(input);
+  return (senders ?? []).some(
+    ([id, sender]) => tierAfter(before, id, sender) > (ownGrant(before.senders, id)?.maxTier ?? 1),
+  );
+}
+
 /**
  * an id this write adds, as a sender or to a sender's list, must be a machine
  * of the site. one already stored that has since left the site is dropped from
@@ -216,10 +232,7 @@ export async function setFleetSettings(
       ? Object.fromEntries(
           requested.senders.map(([id, sender]): [string, FleetGrant] => [
             id,
-            {
-              maxTier: sender.maxTier ?? ownGrant(before.senders, id)?.maxTier ?? DEFAULT_SENDER_TIER,
-              machineIds: sender.machineIds,
-            },
+            { maxTier: tierAfter(before, id, sender), machineIds: sender.machineIds },
           ]),
         )
       : before.senders,

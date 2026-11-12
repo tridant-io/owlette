@@ -391,6 +391,42 @@ describe('owlette installer upload', () => {
     expect(process.exitCode).toBe(2);
   });
 
+  it.each([
+    [[], true],
+    [['--set-latest'], true],
+    [['--no-set-latest'], false],
+  ])('sends setAsLatest explicitly with flags %j', async (flags, expected) => {
+    const calls = installFetchSequence([
+      { payload: { uploadUrl: 'https://signed/u', uploadId: 'u-1' } },
+      { payload: '' },
+      { payload: { version: '2.11.0', download_url: 'd', checksum_sha256: 'a'.repeat(64), file_size: 1 } },
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(
+      ['--json', 'installer', 'upload', FAKE_FILE, '--version=2.11.0', ...flags],
+      { from: 'user' },
+    );
+    expect(calls).toHaveLength(3);
+    expect(JSON.parse(String(calls[0]!.init.body)).setAsLatest).toBe(expected);
+  });
+
+  it('names installer admin and --no-set-latest when a promoting upload is refused for scope', async () => {
+    const stderr: string[] = [];
+    (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {
+      stderr.push(typeof c === 'string' ? c : Buffer.from(c).toString('utf-8'));
+      return true;
+    });
+    installFetchSequence([
+      { payload: { code: 'scope_insufficient', detail: 'insufficient scope: requires admin on installer:*' }, status: 403 },
+    ]);
+    const program = buildProgram();
+    await program.parseAsync(['installer', 'upload', FAKE_FILE, '--version=2.11.0'], { from: 'user' });
+    const out = stderr.join('');
+    expect(out).toContain('installer=*:admin');
+    expect(out).toContain('--no-set-latest');
+    expect(process.exitCode).toBe(1);
+  });
+
   it('aborts before the signed-url PUT if step 1 fails', async () => {
     const stderr: string[] = [];
     (process.stderr.write as unknown as jest.Mock).mockImplementation((c: string | Uint8Array) => {

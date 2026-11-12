@@ -17,7 +17,7 @@
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { ApiAuthError, requireSession } from '@/lib/apiAuth.server';
-import { problemFromError, problemUnauthorized, problemValidation } from '@/lib/apiErrors';
+import { mfaChallengeProblem, problemFromError, problemUnauthorized, problemValidation } from '@/lib/apiErrors';
 import {
   ISSUE_LOGS_UPLOAD_TTL_SECONDS,
   presignIssueLogsUpload,
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       userId = await requireSession(request);
     } catch (err) {
-      if (err instanceof ApiAuthError) return problemUnauthorized(err.message);
+      if (err instanceof ApiAuthError) return mfaChallengeProblem(err) ?? problemUnauthorized(err.message);
       throw err;
     }
 

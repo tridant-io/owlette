@@ -164,6 +164,23 @@ export function problemForbidden(detail = 'access denied'): NextResponse {
   });
 }
 
+/**
+ * The answer for a session or id token that still owes its second factor, or has to set one up,
+ * null for any other error. Routes that collapse auth errors to a bare 401 or 403 check here
+ * first, because the client keys off the code to send the user to /verify-2fa or /setup-2fa.
+ */
+export function mfaChallengeProblem(err: unknown): NextResponse | null {
+  const { code, message } = (err ?? {}) as { code?: unknown; message?: string };
+  if (code !== 'mfa_challenge_required' && code !== 'mfa_setup_required') return null;
+  return problem({
+    type: ProblemType.Forbidden,
+    title: 'forbidden',
+    status: 403,
+    detail: message,
+    code,
+  });
+}
+
 export function problemNotFound(detail = 'resource not found'): NextResponse {
   return problem({
     type: ProblemType.NotFound,

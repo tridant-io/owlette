@@ -5,7 +5,7 @@
  *             response: { status, headers, body, durationMs } | null,
  *             attempt, nextAttemptAt, createdAt, completedAt, lastError }
  *
- * Scope: site:<id>:read. roost public api wave 6.6.
+ * Scope: site:<id>:read, plus WEBHOOK_MANAGE. roost public api wave 6.6.
  *
  * `deliveryId` is the firestore record id from the list response
  * ({publicDeliveryId}__{subscriptionId}), opaque to callers. The embedded
@@ -26,6 +26,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import {
   applyAuthDeprecations,
   requireSiteAuthAndScope,
+  requireWebhookManageCapability,
   validateSiteIdBody,
 } from '../../../../_shared';
 
@@ -64,6 +65,9 @@ export async function GET(
 
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
 
     const db = getAdminDb();
 

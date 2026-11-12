@@ -26,6 +26,7 @@ import { Plus, LayoutGrid, List, ChevronsUpDown, ChevronsDownUp, Square, Trash2,
 import { Table, TableBody } from '@/components/ui/table';
 import DownloadButton from '@/components/DownloadButton';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
+import { PairingReview } from '@/components/PairingReview';
 import { PageHeader } from '@/components/PageHeader';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 // Imported from the lightweight module, not @/components/charts' barrel, which would
@@ -1374,28 +1375,38 @@ export default function DashboardPage() {
                       <Input
                         value={emptyStateAuthorize.phrase}
                         onChange={(e) => emptyStateAuthorize.setPhrase(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') emptyStateAuthorize.authorize(); }}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !emptyStateAuthorize.review) emptyStateAuthorize.lookUp(); }}
                         placeholder="e.g., silver-compass-drift"
                         className="border-border bg-muted/50 font-mono text-foreground"
                         autoComplete="off"
                         data-testid="getting-started-enter-phrase"
                       />
-                      <Button
-                        onClick={() => emptyStateAuthorize.authorize()}
-                        disabled={!emptyStateAuthorize.phrase.trim() || emptyStateAuthorize.isAuthorizing}
-                        className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
-                        data-testid="getting-started-authorize"
-                      >
-                        {emptyStateAuthorize.isAuthorizing ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            authorizing...
-                          </>
-                        ) : (
-                          'authorize'
-                        )}
-                      </Button>
+                      {!emptyStateAuthorize.review && (
+                        <Button
+                          onClick={() => emptyStateAuthorize.lookUp()}
+                          disabled={!emptyStateAuthorize.phrase.trim() || emptyStateAuthorize.isAuthorizing}
+                          className="shrink-0 cursor-pointer disabled:cursor-not-allowed"
+                          data-testid="getting-started-authorize"
+                        >
+                          {emptyStateAuthorize.isAuthorizing ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              looking up...
+                            </>
+                          ) : (
+                            'continue'
+                          )}
+                        </Button>
+                      )}
                     </div>
+                    {emptyStateAuthorize.review && (
+                      <PairingReview
+                        review={emptyStateAuthorize.review}
+                        busy={emptyStateAuthorize.isAuthorizing}
+                        onAuthorize={emptyStateAuthorize.authorize}
+                        onCancel={emptyStateAuthorize.cancel}
+                      />
+                    )}
                     <button
                       type="button"
                       onClick={() => { setAddMachineTab('generate'); setAddMachineOpen(true); }}

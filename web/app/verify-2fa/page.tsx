@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils';
 import { browserSupportsWebAuthn, startAuthentication } from '@simplewebauthn/browser';
 import { useInAppBrowser } from '@/hooks/useInAppBrowser';
 import { toast } from '@/lib/toast';
+import { safeNextPath } from '@/lib/appLink';
 
 /**
  * `browserSupportsWebAuthn()` reads `window.PublicKeyCredential`, so answering it during
@@ -61,8 +62,10 @@ function Verify2FAContent() {
   const searchParams = useSearchParams();
   // Accept `redirect` (proxy + login page) and the historical `return`. Must be a
   // same-origin relative path, else /dashboard — open-redirect guard.
-  const rawReturn = searchParams.get('redirect') ?? searchParams.get('return') ?? '/dashboard';
-  const returnUrl = (rawReturn.startsWith('/') && !rawReturn.startsWith('//')) ? rawReturn : '/dashboard';
+  const returnUrl = safeNextPath(
+    searchParams.get('redirect') ?? searchParams.get('return'),
+    '/dashboard',
+  );
 
   const [verificationCode, setVerificationCode] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);

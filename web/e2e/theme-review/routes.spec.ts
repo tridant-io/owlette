@@ -48,7 +48,7 @@ const CAPTURES: Capture[] = [
   { slug: 'register', path: '/register', role: null },
   { slug: 'forgot-password', path: '/forgot-password', role: null },
   { slug: 'reset-password', path: '/reset-password?oobCode=theme-review', role: null },
-  { slug: 'unsubscribe', path: '/unsubscribe?success=true', role: null },
+  { slug: 'unsubscribe', path: '/unsubscribe?token=theme-review', role: null },
   { slug: 'not-found', path: '/this-page-does-not-exist', role: null },
   { slug: 'docs-index', path: '/docs', role: null },
   { slug: 'docs-article-code', path: '/docs/agent/installation', role: null },

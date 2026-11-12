@@ -20,7 +20,8 @@
  *                  that went out stale are corrected this way, never by re-uploading.
  *   --set-latest   promotes the version once the LAST file has finalized, so the
  *                  latest pointer carries every entry rather than the first one,
- *                  and registers it with tridant id.
+ *                  and registers it with tridant id. The key needs
+ *                  installer=*:admin for it; installer=*:write covers the rest.
  *   --key-tag      appended to the idempotency keys, to publish a version again
  *                  within 24h (e.g. moving it from firebase storage to R2).
  *   --allow-unsigned  uploads an .exe without a valid Windows signature, which is

@@ -4,7 +4,8 @@
  *
  * Tier 1 read-only and tier 2 process management are auto-approved; tier 3 is
  * privileged and requires in-chat user confirmation, as does any call that
- * overrides active hours.
+ * overrides active hours. A call that changes what a machine launches always
+ * asks, at any tier, and is refused with nobody to ask: lib/hoot/launchChange.ts.
  */
 
 export type ToolTier = 1 | 2 | 3;
@@ -368,6 +369,8 @@ const tier1Tools: McpToolDefinition[] = [
 
 // Tier 2: Process Management
 
+export const LAUNCH_APPROVAL_NOTE = "It waits for a person's approval in a dashboard chat, whatever the site's approval setting, and is refused where nobody can approve it.";
+
 const processScheduleBlocksSchema = {
   type: 'object',
   properties: {
@@ -534,7 +537,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'set_launch_mode',
-    description: 'Set the launch mode for an Owlette-configured process. Modes: "off" (not managed), "always" (24/7 with crash recovery), "scheduled" (runs during configured time windows only). When setting to "scheduled", also provide a schedules array with day/time blocks.',
+    description: 'Set the launch mode for an Owlette-configured process. Modes: "off" (not managed), "always" (24/7 with crash recovery), "scheduled" (runs during configured time windows only). When setting to "scheduled", also provide a schedules array with day/time blocks. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -581,7 +584,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'update_process',
-    description: 'Update an Owlette-configured process\'s configuration fields. Accepts a partial set of fields to change - only fields you provide are updated; others are left unchanged. Available fields: name (display name), exe_path (full path to the executable), file_path (project file or command arguments), cwd (working directory, optional), priority (\'Low\' | \'Normal\' | \'High\' | \'Realtime\'), visibility (\'Normal\' | \'Hidden\'), time_delay (launch delay seconds), time_to_init (init timeout seconds), relaunch_attempts (number of crash relaunches), launch_mode (\'off\' | \'always\' | \'scheduled\'), schedules (array of {days, ranges} blocks for scheduled mode), schedulePresetId (named preset id, or null to clear). Use this when the user asks to rename a process, fix a stale path, change priority/visibility, tune timing, or adjust the schedule.',
+    description: 'Update an Owlette-configured process\'s configuration fields. Accepts a partial set of fields to change - only fields you provide are updated; others are left unchanged. Available fields: name (display name), exe_path (full path to the executable), file_path (project file or command arguments), cwd (working directory, optional), priority (\'Low\' | \'Normal\' | \'High\' | \'Realtime\'), visibility (\'Normal\' | \'Hidden\'), time_delay (launch delay seconds), time_to_init (init timeout seconds), relaunch_attempts (number of crash relaunches), launch_mode (\'off\' | \'always\' | \'scheduled\'), schedules (array of {days, ranges} blocks for scheduled mode), schedulePresetId (named preset id, or null to clear). Use this when the user asks to rename a process, fix a stale path, change priority/visibility, tune timing, or adjust the schedule. Only name, priority and visibility change nothing about what the machine runs or when; any other field does: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -597,7 +600,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'add_process',
-    description: 'Create a new Owlette-managed process on a machine. Required fields: name, exe_path. Optional fields: file_path, cwd, priority, visibility, time_delay, time_to_init, relaunch_attempts, launch_mode, schedules, schedulePresetId. The new process is added with launch_mode=\'off\' by default; set explicitly to \'always\' or \'scheduled\' to enable management.',
+    description: 'Create a new Owlette-managed process on a machine. Required fields: name, exe_path. Optional fields: file_path, cwd, priority, visibility, time_delay, time_to_init, relaunch_attempts, launch_mode, schedules, schedulePresetId. The new process is added with launch_mode=\'off\' by default; set explicitly to \'always\' or \'scheduled\' to enable management. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -607,7 +610,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'delete_process',
-    description: 'Delete an Owlette-configured process by name. The process is removed from the machine\'s config. If the process is currently running, it remains running (the agent stops managing it but does not terminate). Use kill_process first if you want to actually stop the running process.',
+    description: 'Delete an Owlette-configured process by name. The process is removed from the machine\'s config. If the process is currently running, it remains running (the agent stops managing it but does not terminate). Use kill_process first if you want to actually stop the running process. ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -667,7 +670,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_service',
-    description: 'Full services.msc parity — start, stop, restart, pause/continue, set startup type, configure failure recovery, or get full service details. Use set_recovery to configure auto-restart on crash (critical for unattended media installations). Use get_details to query everything about a service in one call: status, startup type, binary path, dependencies, recovery config.',
+    description: 'Full services.msc parity — start, stop, restart, pause/continue, set startup type, configure failure recovery, or get full service details. Use set_recovery to configure auto-restart on crash (critical for unattended media installations). Use get_details to query everything about a service in one call: status, startup type, binary path, dependencies, recovery config. set_startup and set_recovery change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -744,7 +747,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_update',
-    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette 4.1.21 or later refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. limit_auto_restart, disable_auto_install and enable_auto_install need owlette 4.1.21 or later. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts.",
+    description: "Read and change how Windows Update installs updates and restarts the machine. Windows Update is the #1 threat to unattended 24/7 installations. get_status reports the machine's active hours and whether it is inside them now, the install and restart settings, any update deadline, the pause state, and whether a Windows Update restart is pending. Active hours hold Windows' own update restarts only until an update deadline passes, and owlette 4.1.21 or later refuses reboots, shutdowns and deployments inside them. To stop Windows restarting on its own, use limit_auto_restart: it sets active hours and removes restart deadlines, so Windows restarts for updates only outside active hours; a nightly restart can still happen. Use disable_auto_install only when the operator wants no update restarts at all: it stops automatic installs and so update restarts, but security updates then wait for a person to install them; enable_auto_install undoes it. limit_auto_restart, disable_auto_install and enable_auto_install need owlette 4.1.21 or later. set_scheduled_install turns on scheduled install: updates install at that time and Windows restarts the machine then to finish them. pause holds updates for up to 35 days, for example before a live event, and resume ends a pause. set_feature_deferral / set_quality_deferral delay update rollouts. set_scheduled_install changes when the machine runs and restarts: " + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -866,7 +869,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_scheduled_task',
-    description: 'Full Task Scheduler parity — list, enable, disable, delete, run_now, stop, create new tasks, get details, and get run history. Use create to schedule weekly memory-flush reboots, hourly health checks, boot-time media app launches, or event-triggered restarts. Specify the trigger (boot/daily/weekly/once/on_event/on_logon/on_idle), the action (run_program), the principal (SYSTEM/LOCAL_SERVICE/etc.), and settings (retry count, execution time limit, etc.).',
+    description: 'Full Task Scheduler parity — list, enable, disable, delete, run_now, stop, create new tasks, get details, and get run history. Use create to schedule weekly memory-flush reboots, hourly health checks, boot-time media app launches, or event-triggered restarts. Specify the trigger (boot/daily/weekly/once/on_event/on_logon/on_idle), the action (run_program), the principal (SYSTEM/LOCAL_SERVICE/etc.), and settings (retry count, execution time limit, etc.). Anything but list, get_details, get_history and stop changes what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -930,7 +933,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'registry_operation',
-    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. On owlette 4.1.21 or later it refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe.',
+    description: 'Read, write, or delete Windows registry values. Restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services, etc.) — system hives like SAM, SECURITY, and Cryptography are blocked. On owlette 4.1.21 or later it refuses to write or delete the active hours values; change those with manage_windows_update set_active_hours or limit_auto_restart. Use this for structured registry edits instead of execute_script + reg.exe. Under Winlogon it reaches only the auto-login values, never the password, and under a service only its Parameters key. A write or delete can change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1033,7 +1036,7 @@ const tier2Tools: McpToolDefinition[] = [
   },
   {
     name: 'manage_windows_feature',
-    description: 'Add, remove, or list Windows Optional Features (DISM, e.g. NetFx3, OpenSSH-Server), Windows Capabilities (FoD, e.g. OpenSSH.Client), or AppX Packages (Microsoft Store apps like OneDrive, Xbox Game Bar, Cortana, Teams). Use for kiosk provisioning — removing OneDrive/Xbox/Cortana bloat and installing needed features. Critical features for Owlette itself are blocklisted and cannot be disabled.',
+    description: 'Add, remove, or list Windows Optional Features (DISM, e.g. NetFx3, OpenSSH-Server), Windows Capabilities (FoD, e.g. OpenSSH.Client), or AppX Packages (Microsoft Store apps like OneDrive, Xbox Game Bar, Cortana, Teams). Use for kiosk provisioning — removing OneDrive/Xbox/Cortana bloat and installing needed features. Critical features for Owlette itself are blocklisted and cannot be disabled. install and remove change what the machine runs: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1117,7 +1120,9 @@ SCOPE: omit "scope" to cover every machine in the site. To target specific machi
 
 COPY STYLE: "name" and "description" are shown in the dashboard, which is all lowercase — write them lowercase (e.g. "restart td when the wall goes black").
 
-LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewer. cooldownMinutes 0-1440 (default 60) is the minimum gap between runs.`,
+LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewer. cooldownMinutes 0-1440 (default 60) is the minimum gap between runs.
+
+APPROVAL: a command output, or a hoot output with allowActions, makes a talon that acts on machines by itself. ${LAUNCH_APPROVAL_NOTE}`,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1161,7 +1166,7 @@ LIMITS: 20 talons per site. name 80 characters or fewer, description 500 or fewe
   },
   {
     name: 'set_talon_enabled',
-    description: 'Arm or disarm an existing talon. Enabling re-arms its schedule from now, so a talon that sat disabled for a while does not fire the moment it comes back. Disabling leaves the talon in place — it does not delete it. Get talon_id from list_talons; never guess it.',
+    description: 'Arm or disarm an existing talon. Enabling re-arms its schedule from now, so a talon that sat disabled for a while does not fire the moment it comes back. Disabling leaves the talon in place — it does not delete it. Get talon_id from list_talons; never guess it. Enabling one: ' + LAUNCH_APPROVAL_NOTE,
     tier: 2,
     parameters: {
       type: 'object',
@@ -1461,6 +1466,11 @@ export function toAISDKTools(tools: McpToolDefinition[]) {
     };
   }
   return result;
+}
+
+/** A tool's tier. A name nobody classified counts as the highest. */
+export function toolTierOf(toolName: string): ToolTier {
+  return getToolByName(toolName)?.tier ?? 3;
 }
 
 /** Does this tool require user confirmation before execution? */

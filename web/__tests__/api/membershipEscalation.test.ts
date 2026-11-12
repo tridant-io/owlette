@@ -1329,14 +1329,13 @@ describe.each([true, false])(
  *
  * the wrapper's scope step refuses a site-wide route before it reads the kill
  * switch, so it holds with the switch off too. with the switch off, the members
- * GET has no handler re-check behind it, and the PATCH, POST and DELETE
- * re-checks answer `site_member_manage_required`. so each refusal here also pins
- * the scope step's own answer and its `machine_scope_site_wide` audit row.
+ * GET, PATCH, POST and DELETE re-checks answer `site_member_manage_required`
+ * (block 24 for GET). so each refusal here also pins the scope step's own answer
+ * and its `machine_scope_site_wide` audit row.
  *
  * NEGATIVE CONTROL RUN 2026-11-09: removing the wrapper's scope step reddens
- * every refusal in blocks 19, 20, 22 and 23 (17 cases). with the switch off, a
- * scoped admin's members GET then answers 200, so the step is the only thing
- * holding it. block 21 is held by the owner guards, not by the scope step.
+ * every refusal in blocks 19, 20, 22 and 23 (17 cases). block 21 is held by the
+ * owner guards, not by the scope step.
  */
 const SCOPED_ADMIN = 'uid_scoped_admin';
 const SCOPED_MEMBER = 'uid_scoped_member';
@@ -1594,3 +1593,41 @@ describe.each([true, false])(
     });
   },
 );
+
+/**
+ * 24. the members list stays closed to a plain member with the kill switch off.
+ *
+ * the rules let a member read their own row and nobody else's, so the roster is
+ * SITE_MEMBER_MANAGE's alone. with `capability_enforcement === false` the
+ * wrapper skips that capability, so the handler re-checks it, as POST, PATCH and
+ * DELETE do (blocks 11, 14 and 15).
+ */
+describe('24. members GET re-checks SITE_MEMBER_MANAGE with the kill switch off', () => {
+  beforeEach(() => {
+    mockCapabilityEnforcement = false;
+  });
+
+  const listMembers = () =>
+    membersGET(
+      createMockRequest(`http://localhost/api/sites/${SITE}/members`, { method: 'GET' }),
+      params(),
+    );
+
+  it('refuses a plain member with 403 site_member_manage_required', async () => {
+    authAs(MEMBER);
+    const res = await listMembers();
+
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('site_member_manage_required');
+  });
+
+  it('POSITIVE CONTROL: a site admin with the switch off still gets the list', async () => {
+    authAs(ADMIN);
+    const res = await listMembers();
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).members.map((m: { uid: string }) => m.uid).sort()).toEqual(
+      [ADMIN, MEMBER, OWNER].sort(),
+    );
+  });
+});

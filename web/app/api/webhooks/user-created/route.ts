@@ -18,7 +18,7 @@ interface UserCreatedPayload {
 
 export async function POST(request: NextRequest) {
   try {
-    const sessionUserId = await requireSessionOrIdToken(request);
+    const sessionUserId = await requireSessionOrIdToken(request, { allowPreMfa: true });
 
     const payload: UserCreatedPayload = await request.json();
 

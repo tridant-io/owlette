@@ -699,6 +699,22 @@ class SecureStorage:
         token = self.get_refresh_token()
         return token is not None and len(token) > 0
 
+    def issued_claims(self) -> dict:
+        """The claims of the access token the server last issued this machine.
+
+        `aud` is the project, so the server, that issued it; `machine_id` is the
+        identity its refresh token is bound to. An expired token says the same,
+        and the signature is not checked: whoever can write this file already
+        holds the credential. Empty when there is no token to read.
+        """
+        token = self._load_data().get('access_token')
+        try:
+            payload = token.split('.')[1]
+            claims = json.loads(base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)))
+        except (AttributeError, IndexError, ValueError):
+            return {}
+        return claims if isinstance(claims, dict) else {}
+
     def is_configured(self) -> bool:
         """
         Check if agent is configured with valid credentials.

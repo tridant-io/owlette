@@ -23,13 +23,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { generateAuthenticationOptions } from '@simplewebauthn/server';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSession } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { getRpId, getUserPasskeys, storeChallenge } from '@/lib/webauthn.server';
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
     await assertActiveUser(userId);
 
     const passkeys = await getUserPasskeys(userId);

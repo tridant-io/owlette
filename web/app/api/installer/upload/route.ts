@@ -15,7 +15,7 @@
  * file published elsewhere (409 installer_differs).
  *
  * Auth (both verbs): an api key with `installer=*:write` (superadmin-only at minting),
- * or a superadmin session / id-token.
+ * plus `installer=*:admin` when the upload sets latest, or a superadmin session / id-token.
  *
  * Idempotency required on both; the same key + body within 24h replays the cached
  * response. api-sprint wave 1 track 1B.
@@ -30,6 +30,7 @@ import {
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
+import type { ResolvedAuth } from '@/lib/apiAuth.server';
 import { getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
@@ -56,6 +57,7 @@ import {
   applyAuthDeprecations,
   readAndParseJsonBody,
   requirePlatformAuthAndScope,
+  runScopeCheck,
 } from '../../_shared';
 
 const VERSION_REGEX = /^\d+\.\d+\.\d+$/;
@@ -163,6 +165,8 @@ export async function POST(request: NextRequest) {
           });
         }
         const setAsLatest = body.setAsLatest !== false; // default true
+        const promote = requirePromoteScope(auth.auth, setAsLatest);
+        if (promote) return promote;
 
         const db = getAdminDb();
         const onR2 = isInstallerR2Configured();
@@ -313,6 +317,9 @@ export async function PUT(request: NextRequest) {
             code: 'upload_not_pending',
           });
         }
+
+        const promote = requirePromoteScope(auth.auth, Boolean(uploadData.setAsLatest));
+        if (promote) return promote;
 
         const expiresAtMs =
           (typeof uploadData.expiresAt?.toMillis === 'function'
@@ -513,6 +520,13 @@ interface StoredUpload {
   sha256: string;
   contentType: string;
   downloadUrl: string;
+}
+
+/** moving `latest` takes `admin`, as set-latest does, so a promoting upload needs it on top of `write`. */
+function requirePromoteScope(auth: ResolvedAuth, setAsLatest: boolean): NextResponse | null {
+  if (!setAsLatest) return null;
+  const check = runScopeCheck(auth, 'installer', '*', 'admin');
+  return check.ok ? null : check.response;
 }
 
 function installerPublished(objectName: string, state: string) {

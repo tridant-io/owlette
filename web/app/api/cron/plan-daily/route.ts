@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { runPlanDaily } from '@/lib/planUsage.server';
 
@@ -13,8 +14,7 @@ import { runPlanDaily } from '@/lib/planUsage.server';
  *   header: X-Cron-Secret: <that environment's CRON_SECRET>
  */
 export async function GET(request: NextRequest) {
-  const cronSecret = request.headers.get('x-cron-secret');
-  if (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretMatches(request.headers.get('x-cron-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

@@ -208,7 +208,7 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
 # before step 4.
 ```
 
-**Manual curl fallback** (one file, when the script cannot run): the runbook's "the 3-step api upload (in detail)". Two traps it does not spell out: `grep OWLETTE_API_KEY` also matches `OWLETTE_API_KEY_PROD` (use `grep '^OWLETTE_API_KEY='`), and the server treats an omitted `setAsLatest` as `true`, so a bare POST promotes — the script sends `false` for every file but the last. The route requires an `Idempotency-Key` on the POST and the finalize PUT (not on the storage PUT), and the key needs the `installer=*:write` scope.
+**Manual curl fallback** (one file, when the script cannot run): the runbook's "the 3-step api upload (in detail)". Two traps it does not spell out: `grep OWLETTE_API_KEY` also matches `OWLETTE_API_KEY_PROD` (use `grep '^OWLETTE_API_KEY='`), and the server treats an omitted `setAsLatest` as `true`, so a bare POST promotes — the script sends `false` for every file but the last. The route requires an `Idempotency-Key` on the POST and the finalize PUT (not on the storage PUT), and the key needs the `installer=*:write` scope, plus `installer=*:admin` for the upload that sets latest (`--set-latest` on the last file): without it that upload is refused with `403 scope_insufficient`.
 
 ### hoot CLI pins — one document per platform, per environment
 

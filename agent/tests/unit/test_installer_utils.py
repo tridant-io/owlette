@@ -364,6 +364,20 @@ class TestGetTempInstallerPath:
         assert path == os.path.join('C:/temp', 'owlette_installers', 'setup.exe')
         mock_makedirs.assert_called_once()
 
+    @pytest.mark.parametrize('name', [
+        '../../setup.exe',
+        os.path.join('..', '..', 'setup.exe'),
+        os.path.join(os.path.abspath(os.sep), 'Windows', 'setup.exe'),
+    ])
+    @patch('installer_utils.os.makedirs')
+    @patch('installer_utils.tempfile.gettempdir', return_value='C:/temp')
+    def test_a_name_with_a_path_keeps_only_its_file_name(self, mock_tempdir, mock_makedirs, name):
+        # installer_name comes from the command; the download lands in the
+        # installers folder whatever it says
+        path = installer_utils.get_temp_installer_path(name)
+
+        assert path == os.path.join('C:/temp', 'owlette_installers', 'setup.exe')
+
 
 class TestCleanupInstaller:
     """Tests for cleanup_installer()"""

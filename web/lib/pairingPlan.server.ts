@@ -1,19 +1,19 @@
 /**
  * owlette free's machine limit where agent credentials are minted (adr 0018):
- * device-code authorize, the deferred `/ADD=` mint at poll, and registration-code
- * exchange. the agent writes its own machine doc, so minting is the only place
- * the limit can hold.
+ * device-code authorize and the deferred `/ADD=` mint at poll. the agent writes
+ * its own machine doc, so minting is the only place the limit can hold.
  *
  * a refusal is 402 `{ error }`, never 401/403: every fielded agent shows only
  * `error`, and a 401/403 on an agent auth route reads as a dead credential.
  *
- * the same three mints create the agent's auth user first, see ensureAgentAuthUser.
+ * both mints create the agent's auth user first, see ensureAgentAuthUser.
  */
 
 import type { Auth } from 'firebase-admin/auth';
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, type Transaction } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
+import { FLEET_SETTINGS_DOC, parseFleetSettings } from '@/lib/fleet/policy.server';
 import logger from '@/lib/logger';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { machineSlotAvailable } from '@/lib/plan.server';
@@ -28,6 +28,68 @@ export async function machineLimitRefusal(
   siteData?: Record<string, unknown> | null,
 ): Promise<string | null> {
   return (await machineSlotAvailable(siteId, machineId, siteData)) ? null : MACHINE_LIMIT_ERROR;
+}
+
+/** a machine id as the agent sends it, trimmed; null when absent, not ok when unusable as a doc id. */
+export function sanitizeMachineId(value: unknown): { ok: true; machineId: string | null } | { ok: false } {
+  if (value === undefined || value === null) {
+    return { ok: true, machineId: null };
+  }
+
+  if (typeof value !== 'string') {
+    return { ok: false };
+  }
+
+  const machineId = value.trim();
+  if (
+    machineId.length < 1 ||
+    machineId.length > 128 ||
+    machineId.includes('/') ||
+    /[\x00-\x1F]/.test(machineId)
+  ) {
+    return { ok: false };
+  }
+
+  return { ok: true, machineId };
+}
+
+/**
+ * the machine's doc on the site, or null for an id with a slash. ids are validated
+ * where they arrive; this keeps one from addressing a nested doc whatever the caller.
+ */
+function siteMachineRef(siteId: string, machineId: string) {
+  if (machineId.includes('/')) return null;
+  return getAdminDb().collection('sites').doc(siteId).collection('machines').doc(machineId);
+}
+
+/**
+ * whether the site already has `machineId`, read in `transaction`. both mints
+ * pair a machine already on the site only when the approval names it, or a
+ * generated code allows any.
+ */
+export async function machineOnSite(
+  transaction: Transaction,
+  siteId: string,
+  machineId: string,
+): Promise<boolean> {
+  const ref = siteMachineRef(siteId, machineId);
+  return ref ? (await transaction.get(ref)).exists : false;
+}
+
+/**
+ * whether `machineId` is a sender in the site's fleet grant, on or off, read in
+ * `transaction`. a code allowed to reinstall any machine still pairs a sender
+ * only when it names it, since the grant stays with the machine id.
+ */
+export async function fleetSenderOnSite(
+  transaction: Transaction,
+  siteId: string,
+  machineId: string,
+): Promise<boolean> {
+  const ref = getAdminDb().collection('sites').doc(siteId).collection('settings').doc(FLEET_SETTINGS_DOC);
+  const snap = await transaction.get(ref);
+  const { senders } = parseFleetSettings(snap.exists ? snap.data() : null);
+  return Object.prototype.hasOwnProperty.call(senders, machineId);
 }
 
 /**
@@ -64,11 +126,9 @@ export async function ensureAgentAuthUser(adminAuth: Auth, uid: string): Promise
 export async function recordPairing(siteId: string, machineId: string): Promise<void> {
   let existed = true;
   try {
-    // generate and exchange take the machine id unvalidated, and a slash would address a nested doc.
-    if (machineId.includes('/')) return;
-    const db = getAdminDb();
-    const ref = db.collection('sites').doc(siteId).collection('machines').doc(machineId);
-    existed = await db.runTransaction(async (transaction) => {
+    const ref = siteMachineRef(siteId, machineId);
+    if (!ref) return;
+    existed = await getAdminDb().runTransaction(async (transaction) => {
       const snap = await transaction.get(ref);
       if (snap.data()?.pairedAt == null) {
         transaction.set(ref, { pairedAt: FieldValue.serverTimestamp() }, { merge: true });

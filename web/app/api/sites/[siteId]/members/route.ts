@@ -15,7 +15,8 @@
  *      derived, and mirrors the id into the legacy `users/{uid}.sites[]` while
  *      that field still exists. `email` is the dashboard's affordance (an admin
  *      knows a colleague's address, not their uid) and resolves through Admin
- *      Auth to the same uid path. Idempotency-Key required. `roleHonored` says
+ *      Auth to the same uid path, and refuses a password account that has not
+ *      verified that address. Idempotency-Key required. `roleHonored` says
  *      whether the row was actually written at the requested role — adding an
  *      existing member is a 200 no-op, not a promotion. the body may also carry
  *      `swoop` (`none`, `view` or `control`), written on a new row only; the
@@ -26,7 +27,7 @@
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
  * POST. Site access is membership — a global `admin` role grants nothing here.
- * POST additionally re-checks the capability IN the handler, where the
+ * Both verbs re-check the capability IN the handler, where the
  * `capability_enforcement` kill switch cannot skip it — see
  * `refuseWithoutSiteMemberManage` in `_shared.ts`.
  *
@@ -34,6 +35,7 @@
  */
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
+import type { UserRecord } from 'firebase-admin/auth';
 import {
   problem,
   problemFromError,
@@ -50,6 +52,7 @@ import {
   readAndParseJsonBody,
   refuseWithoutSiteMemberManage,
 } from '../../../_shared';
+import { needsEmailVerification } from '@/lib/emailVerification.server';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
 import { deriveMachineIds, deriveSwoopMode } from '@/lib/sitePolicy.server';
 import { normalizeMachineIdsInput } from '@/lib/machineAccess';
@@ -116,6 +119,14 @@ export const GET = authorizedSiteHandler<RouteParams>({
 })(async (request: NextRequest, ctx, routeContext) => {
   try {
     const { siteId } = await routeContext.params;
+
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'listing members',
+      `/api/sites/${siteId}/members`,
+    );
+    if (manageRefusal) return manageRefusal;
 
     const db = getAdminDb();
 
@@ -293,9 +304,9 @@ export const POST = authorizedSiteHandler<RouteParams>({
         if (target.kind === 'uid') {
           targetUid = target.uid;
         } else {
+          let record: UserRecord;
           try {
-            const record = await getAdminAuth().getUserByEmail(target.email);
-            targetUid = record.uid;
+            record = await getAdminAuth().getUserByEmail(target.email);
           } catch (authErr) {
             if (
               (authErr as { code?: string } | null)?.code ===
@@ -305,6 +316,18 @@ export const POST = authorizedSiteHandler<RouteParams>({
             }
             throw authErr;
           }
+          // a password account's address is only proven once it is verified
+          if (needsEmailVerification(record)) {
+            return problem({
+              type: ProblemType.Conflict,
+              title: 'email not verified',
+              status: 409,
+              detail: `${target.email} has not verified their email address yet. ask them to verify it, then add them again`,
+              instance: `/api/sites/${siteId}/members`,
+              code: 'email_unverified',
+            });
+          }
+          targetUid = record.uid;
         }
 
         // scoping yourself changes the row that decides what you may do, which

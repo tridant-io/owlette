@@ -76,6 +76,11 @@ jest.mock('@/lib/talons/store.server', () => {
   };
 });
 
+jest.mock('@/lib/auditLog.server', () => ({
+  generateCorrelationId: () => 'corr-1',
+  writeAuditEntryBlocking: async () => undefined,
+}));
+
 import { buildExecutableTools, type BuildExecutableToolsOptions } from '@/lib/hoot-utils.server';
 import { getToolByName, getToolsByTier } from '@/lib/mcp-tools';
 import { TalonStoreError } from '@/lib/talons/store.server';
@@ -88,7 +93,23 @@ const SITE = 'site-a';
 const CHAT = 'chat-77';
 
 /** Sentinel — executors hand the db straight to the mocked store. */
-const db = { __db: 'sentinel' } as unknown as FirebaseFirestore.Firestore;
+const approvalRecords = new Map<string, unknown>();
+const db = {
+  __db: 'sentinel',
+  collection: () => ({
+    doc: () => ({
+      collection: (name: string) => ({
+        doc: (id: string) => ({
+          set: async (data: unknown) => void approvalRecords.set(`${name}/${id}`, data),
+          get: async () => ({
+            exists: approvalRecords.has(`${name}/${id}`),
+            data: () => approvalRecords.get(`${name}/${id}`),
+          }),
+        }),
+      }),
+    }),
+  }),
+} as unknown as FirebaseFirestore.Firestore;
 
 // `userStanding` is the standing that grants; `userRole` is the global tier and
 // confers nothing on a site. Omitting the former denies every site-scoped tool,
@@ -98,12 +119,16 @@ const ADMIN: BuildExecutableToolsOptions = {
   userRole: 'admin',
   userStanding: { role: 'admin', swoopMode: null, machineIds: null },
   machineScope: null,
+  launchChangeApprovable: true,
+  turnId: 'turn-1',
 };
 const MEMBER: BuildExecutableToolsOptions = {
   userId: 'uid_bob',
   userRole: 'member',
   userStanding: { role: 'member', swoopMode: null, machineIds: null },
   machineScope: null,
+  launchChangeApprovable: true,
+  turnId: 'turn-1',
 };
 
 /** The store context a chat-authored talon must be written with. */
@@ -134,6 +159,16 @@ function talonTools(options: BuildExecutableToolsOptions = ADMIN): Record<string
     [],
     options,
   );
+}
+
+/** A call that shows a card: the card is asked for, then answered. */
+async function approved(
+  tool: { needsApproval: (input: unknown, opts: unknown) => Promise<boolean>; execute: (input: unknown, opts: unknown) => Promise<unknown> },
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] });
+  approvalRecords.set('approvals/call_1', { turnId: 'turn-1' });
+  return tool.execute(input, { toolCallId: 'call_1' });
 }
 
 function talonInput(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -271,7 +306,8 @@ describe('create_talon', () => {
   });
 
   it('refuses a command output from a non-admin without touching the store', async () => {
-    const result = await talonTools(MEMBER).create_talon.execute(
+    const result = await approved(
+      talonTools(MEMBER).create_talon,
       talonInput({
         outputs: [{ type: 'command', commandType: 'restart_process', processName: 'TouchDesigner' }],
       }),
@@ -290,7 +326,8 @@ describe('create_talon', () => {
   it('lets a site admin author a command output', async () => {
     mockCreateTalon.mockResolvedValue(storedTalon);
 
-    const result = await talonTools().create_talon.execute(
+    const result = await approved(
+      talonTools().create_talon,
       talonInput({
         outputs: [{ type: 'command', commandType: 'restart_process', processName: 'TouchDesigner' }],
       }),
@@ -437,7 +474,7 @@ describe('set_talon_enabled', () => {
     ['a blank talon_id', { talon_id: '   ', enabled: true }, 'missing_talon_id'],
     ['a non-boolean enabled', { talon_id: 'tal_1', enabled: 'yes' }, 'invalid_enabled'],
   ])('rejects %s without calling the store', async (_label, params, code) => {
-    const result = await talonTools().set_talon_enabled.execute(params);
+    const result = await approved(talonTools().set_talon_enabled, params);
 
     expect(result).toMatchObject({ ok: false, error: code, status: 400 });
     expect(mockSetTalonEnabled).not.toHaveBeenCalled();
@@ -449,7 +486,7 @@ describe('set_talon_enabled', () => {
     );
 
     await expect(
-      talonTools().set_talon_enabled.execute({ talon_id: 'tal_9', enabled: true }),
+      approved(talonTools().set_talon_enabled, { talon_id: 'tal_9', enabled: true }),
     ).resolves.toEqual({
       ok: false,
       error: 'talon_not_found',

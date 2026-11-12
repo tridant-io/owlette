@@ -65,6 +65,16 @@ export const signupRateLimit = redis
     })
   : null;
 
+/** Second-factor codes: 10 per 15 min per account, whatever the ip, on every route that checks one. */
+export const mfaAttemptRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.slidingWindow(10, '15 m'),
+      prefix: 'mfa-attempt',
+      analytics: true,
+    })
+  : null;
+
 /** Token exchange / device code. 60/hr prod — bulk deploys share one IP. Dev 200/hr. */
 export const tokenExchangeRateLimit = redis
   ? new Ratelimit({
@@ -196,6 +206,19 @@ export const swoopStallReportRateLimit = redis
       redis,
       limiter: Ratelimit.fixedWindow(1, '30 s'),
       prefix: 'swoop-stall',
+      analytics: true,
+    })
+  : null;
+
+/**
+ * Webhook probes: 60/hr per user. A probe posts to a url the caller picks, so
+ * this bounds what one account can send while it iterates on a verifier.
+ */
+export const webhookProbeRateLimit = redis
+  ? new Ratelimit({
+      redis,
+      limiter: Ratelimit.fixedWindow(60, '1 h'),
+      prefix: 'webhook-probe',
       analytics: true,
     })
   : null;

@@ -180,7 +180,7 @@ the bucket follows the roost environment: `owlette-prod-issue-logs` for `prod`, 
 |----------|-------------|
 | `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the eight `/api/cron/*` routes (`api-key-expiry`, `display-alerts`, `health-check`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
 
-`CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent.
+`CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent. it has no default: without it an alert email to a person is not sent, since its unsubscribe link cannot be signed, and every unsubscribe link is refused.
 
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"

@@ -840,7 +840,8 @@ describe('POST /api/hoot/conversations/{conversationId}', () => {
       userId: 'user-1',
       auth: {
         userId: 'user-1',
-        keyContext: { keyId: 'k1', environment: 'live' },
+        // a key's own tool tier is about the commands route; chat stays read only
+        keyContext: { keyId: 'k1', environment: 'live', maxToolTier: 3 },
       },
       scopeCheck: { isLegacy: false },
     });

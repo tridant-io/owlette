@@ -13,8 +13,10 @@ import {
   type ScopeSelection,
   validateScopeSelection,
 } from '@/components/ApiKeyScopeFields';
+import { ApiKeyToolTierField } from '@/components/ApiKeyToolTierField';
 import {
   type ApiKeyScope,
+  DEFAULT_MAX_TOOL_TIER,
   DEFAULT_TTL_DAYS,
   MAX_TTL_DAYS,
 } from '@/lib/apiKeyTypes';
@@ -39,6 +41,7 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
   const [customScopes, setCustomScopes] = useState<ApiKeyScope[]>([
     { resource: 'site', id: '*', permissions: ['read', 'write'] },
   ]);
+  const [maxToolTier, setMaxToolTier] = useState(DEFAULT_MAX_TOOL_TIER);
   const [creating, setCreating] = useState(false);
 
   async function handleCreate() {
@@ -62,6 +65,7 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
         name: name.trim(),
         scopes: resolveScopes(preset, customScopes),
         ttlDays,
+        maxToolTier,
       });
     } finally {
       setCreating(false);
@@ -108,6 +112,8 @@ export function ApiKeyCreateForm({ onSubmit, onCancel }: Props) {
         onCustomScopesChange={setCustomScopes}
         disabled={creating}
       />
+
+      <ApiKeyToolTierField value={maxToolTier} onChange={setMaxToolTier} disabled={creating} />
 
       <div className="flex justify-end gap-2">
         <Button

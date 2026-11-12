@@ -15,6 +15,7 @@ this command drives `/api/account/api-keys`, the key route that accepts API-key 
 
 - **superadmin only** — the calling key needs `user=*:admin`; anything less gets `403 scope_insufficient`.
 - **scopes are copied, not chosen** — `create` clones the calling key's scopes exactly, so you cannot mint an `installer`- or `user`-scoped key unless the calling key already holds that scope.
+- **a new key starts at [tool tier](/docs/api/authentication#tool-tiers) 1**, whatever the calling key's is.
 - **no rotate, scope edit or revoke verb** — rotation and scope edits live on `/api/keys/{keyId}`, which accepts only a dashboard session. revocation also has an API-key route, `DELETE /api/account/api-keys/{keyId}`, but the CLI has no verb for it.
 
 for custom scopes, a different expiry, rotation, revocation, or anything a non-superadmin needs, use **settings → api keys** in the dashboard.

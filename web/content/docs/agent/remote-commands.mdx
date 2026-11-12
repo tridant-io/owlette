@@ -119,7 +119,9 @@ the agent does not provide a remote self-uninstall command. remote software remo
 |---------|-------------|--------------|
 | `mcp_tool_call` | execute a hoot tool | `{tool_name, tool_params, chat_id?}` |
 | `cancel_mcp_tool` | kill the process tree of an in-flight `mcp_tool_call` and mark it `cancelled` | `{target_command_id}` |
-| `provision_cortex_key` | encrypt and store the local hoot provider key in the agent's `config.json` | `{api_key, provider?}` |
+| `provision_cortex_key` | fetch the local hoot provider key with the agent's own token, then encrypt and store it in the agent's `config.json` | `{key_id, provider?}`; `{api_key, provider?}` for an agent older than 4.2.0 |
+
+who may send `mcp_tool_call` through the API, and which tools, depends on the caller: see [tool tiers](/docs/api/authentication#tool-tiers). it is refused while hoot is switched off on the machine.
 
 `cancel_mcp_tool` is handled inside the agent's Firestore client rather than the service dispatch chain, and runs on the fast command lane so it can interrupt the call it targets. cancelling is idempotent — an unknown or already-finished target returns a safe error. `provision_cortex_key` defaults `provider` to `anthropic`.
 

@@ -10,7 +10,7 @@ the agent takes its work from two Firestore documents per machine. this page lis
 
 ## the queue
 
-each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member whose access covers the machine can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
+each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member whose access covers the machine can read both; only the server and the machine's own agent write them, and in `commands/pending` the agent only removes entries (see the [data model](/docs/reference/firestore-data-model)).
 
 ```
 1. a writer merges one entry into commands/pending under a new command id
@@ -223,7 +223,7 @@ see [deployments](/docs/dashboard/deployments) and [platform support](/docs/refe
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
 | `update_owlette` | `installer_url`, `checksum_sha256` (both required); `target_version` (read from the URL when absent); `deployment_id` | refuses a second update within 10 minutes of one in progress, downloads into a staging folder only the service can write, checks the file is at least 1 MB and is this platform's installer, verifies the checksum, then hands it to the OS: a one-time scheduled task running as SYSTEM, with a recovery task that restarts the service if it does not come back. the command completes with `Self-update initiated via Task Scheduler` | the download and handoff run on a thread of their own, which writes the result. macOS: a run-once launchd job, `app.owlette.update`, runs `/usr/sbin/installer -pkg … -target /`. Linux: `apt-get install --simulate` first, then a transient `owlette-update` unit runs `apt-get install -y --allow-downgrades`. a refusal is `Error: update_unsatisfiable`, `update_deferred` (another package operation holds the lock, or an earlier update is still installing) or `update_handoff_failed` |
-| `provision_cortex_key` | `api_key`, `provider` (default `anthropic`) | encrypts the key with the token store's machine-bound key into `config.cortex.apiKeyEncrypted`, and sets `provider` and `enabled: true` | same |
+| `provision_cortex_key` | `key_id`, `provider` (default `anthropic`); an agent older than 4.2.0 gets `api_key` in place of `key_id` | fetches the key for `key_id` from `/api/agent/hoot/key` with its own token, encrypts it with the token store's machine-bound key into `config.cortex.apiKeyEncrypted`, and sets `provider` and `enabled: true` | same |
 
 see [self-update](/docs/agent/self-update).
 
@@ -287,7 +287,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 
 - **an `Idempotency-Key` header is required**: without one the request is refused with `400`. the same key and body within 24 hours replays the first response; the same key with another body is `422`. see [idempotency](/docs/api/idempotency)
 - **capability**: `capture_screenshot`, `start_live_view` and `stop_live_view` need `MACHINE_VIEW`, which site members hold. every other type needs `MACHINE_EXEC_COMMAND`: site owners and admins. an API key needs the machine's `write` scope either way
-- **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`. a `reboot_machine` with `when: "after_active_hours"` gets `409 held_restart_unsupported` on a machine without `capabilities.activeHoursGuard: 1` and an `agent_version` of 4.1.21 or later (an older agent, one rolled back below 4.1.21, macOS or Linux), whose agent would restart at once; nothing is queued
+- **refusals**: a machine whose `online` is `false` gets `409 machine_offline`, an unknown machine `404`, a type outside the list `400 unsupported_command_type`. an `update_owlette` that names no published installer gets `403 installer_not_published`. a `reboot_machine` with `when: "after_active_hours"` gets `409 held_restart_unsupported` on a machine without `capabilities.activeHoursGuard: 1` and an `agent_version` of 4.1.21 or later (an older agent, one rolled back below 4.1.21, macOS or Linux), whose agent would restart at once; nothing is queued
 - **`timeout_seconds`** (default 60, max 600) is stamped into every payload. only `restart_process` reads it at the agent, capped at 30, so an API restart waits the full 30 seconds for a graceful exit unless the body sends less. a `timeout_seconds` inside `params` is dropped
 - **active hours**: Windows always has active hours, 8 to 17 when nobody set any, so a daytime script's reboot or shutdown is refused by a guarded agent unless it sends `active_hours_override`. the request still answers `202`; the command then ends `failed` with the [active-hours refusal](#active-hours). to wait instead, send a reboot with `when: "after_active_hours"`
 
@@ -304,9 +304,9 @@ the route copies only these `params` into the command:
 | `set_launch_mode` | `process_name` and `mode`, both required; `schedules`, an array; `schedulePresetId`, which the agent does not read |
 | `apply_display_topology` | `layout`, an object, and `applyId`, both required |
 | `ack_display_topology` | `applyId`, required |
-| `mcp_tool_call` | `tool_name`, required; `tool_params`, an object, minus the override names; `chat_id`. no override is accepted |
+| `mcp_tool_call` | `tool_name`, required; `tool_params`, an object, minus the override names; `chat_id`. no override is accepted. the caller's [tool tier](/docs/api/authentication#tool-tiers) has to cover the call, where a launch change counts as tier 3, and hoot has to be on for the machine (`423 hoot_disabled`). `tool_params` has to match the tool's definition, else `400 tool_params_invalid`. the audit row records the tool name, its parameter names and a hash of the call, never the values |
 | `cancel_mcp_tool` | `target_command_id`, required |
-| `update_owlette` | `installer_url`, `checksum_sha256`, `target_version`, `deployment_id`. the route requires none of them; the agent refuses without the first two |
+| `update_owlette` | `installer_url` and `checksum_sha256`, required and matching a file of `target_version`, or of the latest version when it is left out; `deployment_id` |
 
 poll `GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}`, with the machine's `read` scope or site membership. it answers `pending`, `in_progress` (a running marker or a progress record), `completed` or `failed`; a `cancelled` command reads as `failed`. `error` appears only on a failed command, and `result` only when the agent answered with something: an object for `capture_screenshot`, where the route adds a fresh one-hour `screenshot_url`, or a sentence for `reboot_machine`, `shutdown_machine` and `cancel_reboot`, such as `Reboot deferred until 17:00 (machine time)`.
 

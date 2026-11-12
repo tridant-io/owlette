@@ -162,7 +162,7 @@ if __name__ == '__main__':
             if firebase_enabled:
                 try:
                     site_id = shared_utils.read_config(['firebase', 'site_id'])
-                    project_id = shared_utils.read_config(['firebase', 'project_id'])
+                    project_id = shared_utils.get_configured_project_id()
                     api_base = shared_utils.get_configured_api_base()
                     cache_path = shared_utils.get_data_path('cache/firebase_cache.json')
 

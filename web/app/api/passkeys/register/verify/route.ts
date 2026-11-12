@@ -21,7 +21,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import { isoBase64URL } from '@simplewebauthn/server/helpers';
 import { withRateLimit } from '@/lib/withRateLimit';
-import { ApiAuthError, assertActiveUser, requireSessionUser } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSessionUser } from '@/lib/apiAuth.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { emitMutation } from '@/lib/auditLogClient';
 import {
@@ -29,7 +29,8 @@ import {
   deriveMfaEnrolled,
 } from '@/lib/mfaFactors.server';
 import { checkMfaEnrollmentGate } from '@/lib/mfaEnrollmentGate.server';
-import { markSessionMfaVerified } from '@/lib/sessionManager.server';
+import { sendMfaFactorNotice } from '@/lib/mfaNotice.server';
+import { keepSessionPastCutoff, markSessionMfaVerified } from '@/lib/sessionManager.server';
 import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
   getRpId,
@@ -51,8 +52,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       return NextResponse.json({ error: 'Missing credential' }, { status: 400 });
     }
 
-    await requireSessionUser(request, userId);
-    await assertActiveUser(userId);
+    await requirePreMfaSessionUser(request, userId);
+    const userData = await assertActiveUser(userId);
 
     // THE ENROLLMENT GATE — shared with the TOTP routes (lib/mfaEnrollmentGate.server.ts).
     // The gate returns the inventory it read; `factorsBefore` is then compared against the
@@ -125,6 +126,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       !deriveMfaEnrolled(factorsBefore) && factorsAfter.mfaEnrolled;
     if (wasFirstFactor) {
       await markSessionMfaVerified(await signInCeremonyNetwork(request, userId));
+    } else {
+      await keepSessionPastCutoff(userId);
     }
 
     // Audit: registering a credential is the cheapest persistent-access move an attacker with
@@ -145,6 +148,8 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         firstFactor: wasFirstFactor,
       },
     });
+
+    await sendMfaFactorNotice(userData.email, { change: 'added', factor: 'passkey' });
 
     return NextResponse.json({ success: true, credentialId });
   } catch (error) {

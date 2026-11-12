@@ -27,6 +27,7 @@ import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { dedicatedUser, seedDedicatedUser } from '../../helpers/coverageSeed';
 import { grantMembership, seedMachine, seedSite, type TestUser } from '../../helpers/seed';
 import { ageSignInCeremony } from '../../helpers/signInCeremony';
+import { unspentTotp } from '../../helpers/totp';
 import { mintApiKey, revokeApiKey } from '../../helpers/apiKey';
 import { FakeSwoopHost, HOST_COLOUR, presentedPicture } from '../../helpers/swoopHost';
 
@@ -113,55 +114,33 @@ async function seedTotpUser(suffix: string): Promise<{ user: TestUser; secret: s
   return { user, secret };
 }
 
-/**
- * a code that is not the one just spent: the api refuses a replayed totp, and
- * the sign-in spent this period's, so a step-up straight after it waits for
- * the next period. `spent` is the code to move past; with none, only a period
- * about to roll over is waited out.
- */
-async function freshTotp(page: Page, secret: string, spent?: string): Promise<string> {
-  let code = authenticator.generate(secret);
-  if (spent !== undefined && code === spent) {
-    await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
-    code = authenticator.generate(secret);
-  } else if (authenticator.timeRemaining() <= 5) {
-    await page.waitForTimeout((authenticator.timeRemaining() + 1) * 1000);
-    code = authenticator.generate(secret);
-  }
-  return code;
-}
-
 /** the page's own refusal line, not next's route announcer. */
 const alertLine = (page: Page) => page.locator('p[role="alert"]');
 
 /**
- * signs in; returns the totp code the sign-in spent, so the next ceremony can move
- * past it. a totp sign-in is dated ten minutes back unless `fresh`, so the step-up
- * still asks. it lands on the dashboard, or on `redirect`; `inApp` is owlette
- * swoop's sign-in page.
+ * signs in. a totp sign-in is dated ten minutes back unless `fresh`, so the
+ * step-up still asks. it lands on the dashboard, or on `redirect`; `inApp` is
+ * owlette swoop's sign-in page.
  */
 async function signIn(
   page: Page,
   user: TestUser,
   secret?: string,
   { fresh = false, inApp = false, redirect }: { fresh?: boolean; inApp?: boolean; redirect?: string } = {},
-): Promise<string | undefined> {
+): Promise<void> {
   await page.goto(redirect ? `/login?redirect=${encodeURIComponent(redirect)}` : '/login');
   // inside owlette swoop the email form waits behind its link
   if (inApp) await page.getByRole('button', { name: 'or use your email and password' }).click();
   await page.getByLabel(/email/i).fill(user.email);
   await page.getByLabel(/password/i).first().fill(user.password);
   await page.getByRole('button', { name: /sign in with email/i }).click();
-  let spent: string | undefined;
   if (secret) {
     await expect(page).toHaveURL(/\/verify-2fa/, { timeout: 20_000 });
-    spent = await freshTotp(page, secret);
-    await page.getByPlaceholder('000000').fill(spent);
+    await page.getByPlaceholder('000000').fill(await unspentTotp(page, secret));
     await page.getByRole('button', { name: /^verify$/i }).click();
   }
   await expect(page).toHaveURL(redirect ? (url) => url.pathname === redirect : /\/dashboard/, { timeout: 20_000 });
   if (secret && !fresh) await ageSignInCeremony(page);
-  return spent;
 }
 
 async function swoopSettings(patch: Record<string, unknown>): Promise<void> {
@@ -324,7 +303,7 @@ test.describe('the viewer page', () => {
   test('control needs a live second factor: a code opens the session, and the record follows it to its end', async ({
     page,
   }) => {
-    const spent = await signIn(page, operator, operatorSecret);
+    await signIn(page, operator, operatorSecret);
     const seen = recordSwoopResponses(page);
     await page.goto(`/swoop/${SITE_ID}/${MACHINE_ID}`);
 
@@ -336,7 +315,7 @@ test.describe('the viewer page', () => {
       (r) => r.url().endsWith('/swoop/sessions') && r.request().method() === 'POST' && r.status() === 201,
       { timeout: 45_000 },
     ).catch(() => null);
-    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, operatorSecret, spent));
+    await dialog.getByPlaceholder('6-digit code').fill(await unspentTotp(page, operatorSecret));
     await dialog.getByRole('button', { name: /^confirm$/i }).click();
     const mintResponse = await minted;
     expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
@@ -390,7 +369,7 @@ test.describe('the viewer page', () => {
   });
 
   test('a reload keeps control after the 7-day window, without asking again', async ({ page }) => {
-    const spent = await signIn(page, operator, operatorSecret);
+    await signIn(page, operator, operatorSecret);
     const sessions = `/api/sites/${SITE_ID}/machines/${RELOAD_ID}/swoop/sessions`;
     const minted = (r: { url(): string; request(): { method(): string }; status(): number }) =>
       r.url().endsWith(sessions) && r.request().method() === 'POST' && r.status() === 201;
@@ -399,7 +378,7 @@ test.describe('the viewer page', () => {
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
     const first = page.waitForResponse(minted, { timeout: 45_000 });
-    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, operatorSecret, spent));
+    await dialog.getByPlaceholder('6-digit code').fill(await unspentTotp(page, operatorSecret));
     await dialog.getByRole('button', { name: /^confirm$/i }).click();
     expect(((await (await first).json()) as { data: { ctl: boolean } }).data.ctl).toBe(true);
     await expect(dialog).toBeHidden();
@@ -584,7 +563,7 @@ test.describe('the viewer page', () => {
 
 test.describe('swoop mode', () => {
   test('a member whose swoop mode is control takes control after the step-up', async ({ page }) => {
-    const spent = await signIn(page, modeOperator, modeOperatorSecret);
+    await signIn(page, modeOperator, modeOperatorSecret);
     const seen = recordSwoopResponses(page);
     await page.goto(`/swoop/${SITE_ID}/${MODE_CONTROL_ID}`);
 
@@ -598,7 +577,7 @@ test.describe('swoop mode', () => {
         r.status() === 201,
       { timeout: 45_000 },
     ).catch(() => null);
-    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, modeOperatorSecret, spent));
+    await dialog.getByPlaceholder('6-digit code').fill(await unspentTotp(page, modeOperatorSecret));
     await dialog.getByRole('button', { name: /^confirm$/i }).click();
     const mintResponse = await minted;
     expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();
@@ -1401,16 +1380,15 @@ test.describe('two viewers on one machine, over the api', () => {
     const operatorPage = page;
     const watcherContext = await browser.newContext({ storageState: { cookies: [], origins: [] } });
     const watcherPage = await watcherContext.newPage();
-    let spent = await signIn(operatorPage, operator, operatorSecret);
+    await signIn(operatorPage, operator, operatorSecret);
     await signIn(watcherPage, watcher);
 
     // the operator's mint carries the code as its proof; the watcher's needs none.
-    spent = await freshTotp(operatorPage, operatorSecret, spent);
     const controlRes = await apiCall(operatorPage, 'POST', SESSIONS, {
       control: true,
       fp: fingerprint(1),
       clientCaps: CLIENT_CAPS,
-      mfaProof: { code: spent },
+      mfaProof: { code: await unspentTotp(operatorPage, operatorSecret) },
     });
     expect(controlRes.status, JSON.stringify(controlRes.body)).toBe(201);
     const control = controlRes.body.data as {
@@ -1450,7 +1428,7 @@ test.describe('two viewers on one machine, over the api', () => {
       clientCaps: CLIENT_CAPS,
       // inside the step-up window a control mint needs no new code, but a
       // proof that is present is verified, so it is a fresh one.
-      mfaProof: { code: await freshTotp(operatorPage, operatorSecret, spent) },
+      mfaProof: { code: await unspentTotp(operatorPage, operatorSecret) },
     });
     expect(offline.status, JSON.stringify(offline.body)).toBe(409);
 
@@ -1709,7 +1687,7 @@ test.describe('machine scope', () => {
     browser,
   }) => {
     // the sign-in is dated back, so the step-up asks
-    const spent = await signIn(page, scopedAdmin, scopedAdminSecret);
+    await signIn(page, scopedAdmin, scopedAdminSecret);
     const seen = recordSwoopResponses(page);
     const minted = page.waitForResponse(
       (r) =>
@@ -1722,7 +1700,7 @@ test.describe('machine scope', () => {
 
     const dialog = page.getByRole('dialog');
     await expect(dialog).toContainText(/confirm it.s you/i, { timeout: 20_000 });
-    await dialog.getByPlaceholder('6-digit code').fill(await freshTotp(page, scopedAdminSecret, spent));
+    await dialog.getByPlaceholder('6-digit code').fill(await unspentTotp(page, scopedAdminSecret));
     await dialog.getByRole('button', { name: /^confirm$/i }).click();
     const mintResponse = await minted;
     expect(mintResponse, `swoop responses seen: ${seen.join(' | ')}`).not.toBeNull();

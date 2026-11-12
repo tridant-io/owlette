@@ -1769,6 +1769,7 @@ class TestRequestSeam:
     @pytest.fixture
     def seam(self, tmp_path, monkeypatch):
         import pwd
+        import secure_storage
 
         monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
         (tmp_path / 'ipc' / 'requests').mkdir(parents=True)
@@ -1777,6 +1778,11 @@ class TestRequestSeam:
                             lambda: pwd.getpwuid(os.getuid()).pw_name)
         # The in-flight pairing is module state that outlives one test.
         monkeypatch.setattr(configure_site, '_pairing_child', None)
+        # An unpaired machine until a test says otherwise: both are read at
+        # import or once per process, so neither follows the data root above.
+        monkeypatch.setattr(configure_site, 'CONFIG_PATH', tmp_path / 'config' / 'config.json')
+        monkeypatch.setattr(secure_storage, 'get_storage',
+                            lambda: SimpleNamespace(is_cleared=lambda: True))
         return tmp_path
 
     def _request(self, seam, verb, nonce, *, name='req', mode=0o600, **fields):
@@ -2294,12 +2300,15 @@ class TestRequestSeam:
         state.document = MagicMock()
         state.document.delete.side_effect = lambda: state.trail.append(
             ('deleted', state.tokens))
-        state.storage = SimpleNamespace(clear_tokens=clear_tokens)
+        state.storage = SimpleNamespace(clear_tokens=clear_tokens,
+                                        is_cleared=lambda: not state.tokens)
         state.detached = detached
         state.config = config
         monkeypatch.setattr(configure_site, '_machine_document', resolve)
         monkeypatch.setattr(secure_storage, 'get_storage', lambda: state.storage)
         monkeypatch.setattr(configure_site, '_service_control', control)
+        # An administrator's leave: the console user's is refused further down.
+        monkeypatch.setattr(configure_site, '_requester_is_admin', lambda uid: True)
         return state
 
     def _ran(self, seam, paired):
@@ -2435,6 +2444,60 @@ class TestRequestSeam:
         assert rows[0]['outcome'] == 'in_progress'
         assert 'pairing' in self._answer(seam)[-1]['value']
         assert json.loads(paired.config.read_text())['firebase']['enabled'] is True
+
+    def test_a_console_users_leave_is_refused_and_touches_nothing(
+            self, seam, paired, monkeypatch):
+        monkeypatch.setattr(configure_site, '_requester_is_admin', lambda uid: False)
+        self._request(seam, 'leave', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome'], row['uid']) for row in rows] == [
+            ('leave', 'refused', os.getuid())]
+        assert paired.trail == []
+        assert json.loads(paired.config.read_text())['firebase']['enabled'] is True
+        assert self._answer(seam)[-1]['event'] == 'error'
+        assert 'administrator' in self._answer(seam)[-1]['value']
+
+    def test_a_console_users_pair_on_a_paired_machine_spawns_nothing(
+            self, seam, paired, monkeypatch):
+        spawned = MagicMock()
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', spawned)
+        monkeypatch.setattr(configure_site, '_requester_is_admin', lambda uid: False)
+        self._request(seam, 'pair', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [(row['verb'], row['outcome']) for row in rows] == [('pair', 'refused')]
+        spawned.assert_not_called()
+        assert 'administrator' in self._answer(seam)[-1]['value']
+
+    def test_blanking_the_group_writable_config_does_not_make_a_machine_fresh(
+            self, seam, paired, monkeypatch):
+        # config.json is the console user's to edit; the token store is root's.
+        spawned = MagicMock()
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', spawned)
+        monkeypatch.setattr(configure_site, '_requester_is_admin', lambda uid: False)
+        paired.config.write_text(json.dumps({'firebase': {'enabled': False, 'site_id': ''}}))
+        self._request(seam, 'pair', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [row['outcome'] for row in rows] == ['refused']
+        spawned.assert_not_called()
+
+    def test_an_administrators_pair_on_a_paired_machine_runs(
+            self, seam, paired, monkeypatch):
+        spawned = MagicMock()
+        monkeypatch.setattr(shared_utils, 'get_python_exe_path',
+                            lambda: '/opt/owlette/python/bin/python3')
+        monkeypatch.setattr(configure_site.subprocess, 'Popen', spawned)
+        self._request(seam, 'pair', configure_site._request_nonce())
+
+        rows = configure_site.drain_privileged_requests(paired.detached)
+
+        assert [row['outcome'] for row in rows] == ['executed']
+        spawned.assert_called_once()
 
     def test_one_leave_per_nonce(self, seam, paired):
         nonce = configure_site._request_nonce()
@@ -2819,6 +2882,155 @@ class TestRequestSeam:
         rows = configure_site.drain_privileged_requests()
 
         assert rows[0]['outcome'] == 'rate_limited'
+
+
+class TestSiteChangeNeedsAnAdministrator:
+    """Who may move a paired machine, at the one function every request passes.
+
+    Holds on every OS: the seam's file checks are POSIX, this decision is not.
+    """
+
+    CONSOLE_UID = 501
+
+    @pytest.fixture
+    def gate(self, monkeypatch):
+        import secure_storage
+
+        state = SimpleNamespace(paired=True, cleared=False, admin=False, replies=[],
+                                started=[], left=[])
+
+        def storage():
+            if state.cleared is None:
+                raise RuntimeError('no key material')
+            return SimpleNamespace(is_cleared=lambda: state.cleared)
+
+        monkeypatch.setattr(configure_site, '_pairing_child', None)
+        monkeypatch.setattr(configure_site, '_is_paired', lambda: state.paired)
+        monkeypatch.setattr(secure_storage, 'get_storage', storage)
+        monkeypatch.setattr(configure_site, '_requester_is_admin',
+                            lambda uid: state.admin)
+        monkeypatch.setattr(configure_site, '_write_reply',
+                            lambda path, *events: state.replies.extend(events))
+        monkeypatch.setattr(configure_site, '_audit',
+                            lambda verb, outcome, detail, uid: {
+                                'verb': verb, 'outcome': outcome, 'uid': uid})
+        monkeypatch.setattr(configure_site, '_start_pairing',
+                            lambda reply, server: state.started.append(server))
+        monkeypatch.setattr(configure_site, '_leave_from_seam',
+                            lambda reply, detached: state.left.append(reply))
+        return state
+
+    def _run(self, verb, uid=CONSOLE_UID):
+        return configure_site._execute_request(
+            {'verb': verb, 'server': None, 'report': None}, 'reply', uid, None)
+
+    @pytest.mark.parametrize('verb', ['pair', 'leave'])
+    def test_a_console_user_is_refused_on_a_paired_machine(self, gate, verb):
+        row = self._run(verb)
+
+        assert row == {'verb': verb, 'outcome': 'refused', 'uid': self.CONSOLE_UID}
+        assert gate.started == [] and gate.left == []
+        assert [event for event, _ in gate.replies] == ['error']
+        assert 'administrator' in gate.replies[0][1]
+
+    @pytest.mark.parametrize('verb', ['pair', 'leave'])
+    def test_a_token_store_on_disk_is_a_paired_machine_whatever_the_config_says(
+            self, gate, verb):
+        gate.paired = False
+
+        assert self._run(verb)['outcome'] == 'refused'
+        assert gate.started == [] and gate.left == []
+
+    def test_a_store_that_cannot_be_checked_is_a_paired_machine(self, gate):
+        gate.paired = False
+        gate.cleared = None
+
+        assert self._run('pair')['outcome'] == 'refused'
+        assert gate.started == []
+
+    def test_a_config_that_says_paired_is_a_paired_machine_with_no_store(self, gate):
+        gate.cleared = True
+
+        assert self._run('pair')['outcome'] == 'refused'
+
+    def test_a_fresh_machine_pairs_for_the_console_user(self, gate):
+        gate.paired = False
+        gate.cleared = True
+
+        assert self._run('pair')['outcome'] == 'executed'
+        assert gate.started == [None]
+
+    def test_leaving_a_fresh_machine_reaches_the_answer_it_always_had(self, gate):
+        gate.paired = False
+        gate.cleared = True
+
+        self._run('leave')
+
+        assert gate.left == ['reply']
+
+    @pytest.mark.parametrize('verb, ran', [('pair', 'started'), ('leave', 'left')])
+    def test_an_administrator_may_on_a_paired_machine(self, gate, verb, ran):
+        gate.admin = True
+
+        assert self._run(verb)['outcome'] == 'executed'
+        assert getattr(gate, ran)
+
+    @pytest.mark.parametrize('verb', ['restart', 'dismiss_reboot', 'cancel_pair'])
+    def test_the_other_verbs_are_not_this_gates_business(self, gate, monkeypatch, verb):
+        monkeypatch.setattr(configure_site, '_service_control', lambda verb: True)
+        monkeypatch.setattr(configure_site, '_seconds_since_last', lambda verb: None)
+        monkeypatch.setattr(configure_site, '_spawn_into_reply', lambda *args: None)
+
+        assert self._run(verb)['outcome'] == 'executed'
+
+
+class TestRequesterIsAdmin:
+    """Root, or an account in the group that holds sudo on this OS family."""
+
+    ACCOUNTS = {501: ('kiosk', 20), 502: ('owner', 20)}
+    GROUPLISTS = {'kiosk': [20, 777], 'owner': [20, 80]}
+
+    @pytest.fixture
+    def accounts(self, monkeypatch):
+        def getpwuid(uid):
+            if uid not in self.ACCOUNTS:
+                raise KeyError(uid)
+            name, gid = self.ACCOUNTS[uid]
+            return SimpleNamespace(pw_name=name, pw_gid=gid)
+
+        def getgrnam(name):
+            if name not in accounts_groups:
+                raise KeyError(name)
+            return SimpleNamespace(gr_gid=accounts_groups[name])
+
+        accounts_groups = {'admin': 80, 'staff': 20}
+        monkeypatch.setitem(sys.modules, 'pwd', SimpleNamespace(getpwuid=getpwuid))
+        monkeypatch.setitem(sys.modules, 'grp', SimpleNamespace(getgrnam=getgrnam))
+        monkeypatch.setattr(os, 'getgrouplist',
+                            lambda name, gid: self.GROUPLISTS[name], raising=False)
+        return accounts_groups
+
+    def test_root_is(self):
+        assert configure_site._requester_is_admin(0) is True
+
+    def test_a_member_of_the_admin_group_is(self, accounts):
+        assert configure_site._requester_is_admin(502) is True
+
+    def test_the_sudo_group_counts_where_it_exists(self, accounts):
+        accounts.clear()
+        accounts.update({'sudo': 777})
+        assert configure_site._requester_is_admin(501) is True
+
+    def test_the_wheel_group_counts_where_it_exists(self, accounts):
+        accounts.clear()
+        accounts.update({'wheel': 777})
+        assert configure_site._requester_is_admin(501) is True
+
+    def test_a_console_user_in_neither_is_not(self, accounts):
+        assert configure_site._requester_is_admin(501) is False
+
+    def test_an_account_that_cannot_be_read_is_not(self, accounts):
+        assert configure_site._requester_is_admin(999) is False
 
 
 class TestRequestSeamVerbs:

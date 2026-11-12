@@ -14,7 +14,8 @@
  *   filters on `deletedAt`, so delivery stops next tick, and delivery history
  *   lives outside this doc and survives for the full 30-day audit window.
  *
- * Scope: site:<id>:read for GET, site:<id>:write for PATCH + DELETE.
+ * Scope: site:<id>:read for GET, site:<id>:write for PATCH + DELETE; all three
+ * need WEBHOOK_MANAGE.
  * signingSecret is NEVER returned — only create and rotate-secret surface it.
  */
 
@@ -75,6 +76,9 @@ export async function GET(
 
     const auth = await requireSiteAuthAndScope(request, site.siteId, 'read');
     if (!auth.ok) return auth.response;
+
+    const capabilityError = await requireWebhookManageCapability(auth.auth, site.siteId);
+    if (capabilityError) return capabilityError;
 
     const db = getAdminDb();
     const ref = db

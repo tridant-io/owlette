@@ -20,6 +20,8 @@ const mockValidateWebhookUrl = jest.fn();
 const mockRunHootOutput = jest.fn();
 const mockVerifyUserSiteAccess = jest.fn();
 const mockFetch = jest.fn();
+// the redirect case sends for real
+const realFetch = global.fetch;
 
 let correlationCounter = 0;
 
@@ -130,6 +132,7 @@ import { runTalon, describeTrigger, STALE_RUN_MS } from '@/lib/talons/engine.ser
 import type { StoredTalon } from '@/lib/talons/store.server';
 import type { TalonDoc, TalonRunDoc, TalonRunOutput } from '@/lib/talons/types';
 import { TalonVisualCheckError } from '@/lib/talons/visualCheck.server';
+import { startRedirectTrap } from '../../api/helpers/redirectTrap';
 
 const { SiteAccessError } = jest.requireMock('@/lib/hoot-utils.server') as {
   SiteAccessError: new (code: string, message: string) => Error;
@@ -710,6 +713,27 @@ describe('outputs', () => {
     });
     expect(mockFetch).not.toHaveBeenCalled();
     expect(summaries[0].status).toBe('failed');
+  });
+
+  it('does not follow a redirect from the webhook url, and fails the output', async () => {
+    const trap = await startRedirectTrap();
+    // the saved host passes the check; where it redirects to is never checked
+    mockValidateWebhookUrl.mockResolvedValue({ ok: true, url: trap.url, hostname: 'hooks.example.com' });
+    mockFetch.mockImplementation(realFetch);
+    const talon = seedTalon('t1', { outputs: [{ type: 'webhook', url: trap.url }] });
+    fake.docs.set(`sites/${SITE}/talon_secrets/t1`, { talonId: 't1', secret: 'whsec_x' });
+    try {
+      const summaries = await runTalon(db, talon, { siteId: SITE, now: NOW });
+
+      expect(outputByType(summaries[0].outputs, 'webhook')).toMatchObject({
+        status: 'failed',
+        detail: 'delivery_rejected',
+        httpStatus: 302,
+      });
+      expect(trap.hits()).toBe(0);
+    } finally {
+      await trap.close();
+    }
   });
 
   it('emails every unmuted recipient with their own unsubscribe link', async () => {

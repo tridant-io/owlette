@@ -8,6 +8,7 @@
  */
 
 import {
+  LAUNCH_APPROVAL_NOTE,
   allTools,
   withoutActiveHoursOverride,
   type McpToolDefinition,
@@ -79,13 +80,21 @@ function withMachineParam(def: McpToolDefinition): McpToolDefinition {
   };
 }
 
+/** nobody approves a sender's call: a launch change runs at once on a tier 3 grant and is refused below it. */
+function withSenderLaunchNote(def: McpToolDefinition): McpToolDefinition {
+  return {
+    ...def,
+    description: def.description.replace(LAUNCH_APPROVAL_NOTE, 'Changing what a machine launches needs a tier 3 grant.'),
+  };
+}
+
 const catalog: readonly McpToolDefinition[] = [
   ...serverTools.map((tool) => (tool.target === 'machine' ? withMachineParam(tool.definition) : tool.definition)),
   askHootTool,
   ...allTools
     .filter((def) => !SERVER_SIDE_TOOLS.has(def.name))
     .map((def) => withMachineParam(withoutActiveHoursOverride(def))),
-];
+].map(withSenderLaunchNote);
 
 export function fleetCatalog(maxTier: ToolTier): McpToolDefinition[] {
   return catalog.filter((def) => def.tier <= maxTier);

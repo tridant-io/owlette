@@ -19,9 +19,10 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Trash2,
+  Wrench,
 } from 'lucide-react';
 import { toast } from '@/lib/toast';
-import { EXPIRATION_WARNING_MS } from '@/lib/apiKeyTypes';
+import { EXPIRATION_WARNING_MS, TOOL_TIER_LABELS } from '@/lib/apiKeyTypes';
 import type { ApiKeyListItem, ApiKeyScope } from '@/lib/apiKeyTypes';
 
 export type { ApiKeyListItem } from '@/lib/apiKeyTypes';
@@ -340,6 +341,10 @@ export function KeyCard({ apiKey, onRotated, onRevoked, onEditScopes, editing, n
           <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
             <KeyRound className="mt-0.5 h-3 w-3 flex-shrink-0" />
             <span className="min-w-0 break-words">{summarizeScopes(apiKey.scopes)}</span>
+          </div>
+          <div className="flex items-start gap-1.5 text-xs text-muted-foreground">
+            <Wrench className="mt-0.5 h-3 w-3 flex-shrink-0" />
+            <span className="min-w-0 break-words">{TOOL_TIER_LABELS[apiKey.maxToolTier]}</span>
           </div>
           {/* Where the sm:-hidden date columns surface on a phone. */}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground sm:hidden">
