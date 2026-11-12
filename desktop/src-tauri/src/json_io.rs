@@ -838,6 +838,44 @@ mod tests {
     }
   }
 
+  /// `sddl` as Windows writes it back: a well-known account, such as the built-in
+  /// administrator a CI runner signs in as, comes back as its alias (`LA`), not its SID.
+  #[cfg(windows)]
+  fn canonical_sddl(sddl: &str) -> String {
+    use windows::core::HSTRING;
+    use windows::Win32::Security::Authorization::{
+      ConvertSecurityDescriptorToStringSecurityDescriptorW,
+      ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows::Win32::Security::{DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR};
+
+    // SAFETY: both buffers come from the OS and are released with LocalFree
+    // once the string has been copied out.
+    unsafe {
+      let mut descriptor = PSECURITY_DESCRIPTOR::default();
+      ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        &HSTRING::from(sddl),
+        SDDL_REVISION_1,
+        &mut descriptor,
+        None,
+      )
+      .expect("a security descriptor");
+      let mut text = PWSTR::null();
+      ConvertSecurityDescriptorToStringSecurityDescriptorW(
+        descriptor,
+        SDDL_REVISION_1,
+        DACL_SECURITY_INFORMATION,
+        &mut text,
+        None,
+      )
+      .expect("as sddl");
+      let canonical = String::from_utf16_lossy(text.as_wide());
+      let _ = LocalFree(Some(HLOCAL(text.0.cast())));
+      let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+      canonical
+    }
+  }
+
   /// The service resolves process identities from `app_states.json`'s rows, so
   /// the agent gives the file a protected dacl: writable by the console user,
   /// read-only to every other account. This app replaces the file on a kill, a
@@ -851,7 +889,7 @@ mod tests {
     let user = process_user_sid().expect("this process has a user");
     // SYSTEM and Administrators full, Users read, this user modify, and none of
     // the directory's.
-    let agents = format!("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{user})");
+    let agents = canonical_sddl(&format!("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FR;;;BU)(A;;0x1301bf;;;{user})"));
 
     for round in 0..2 {
       let temp = temp_path(&app_states);
