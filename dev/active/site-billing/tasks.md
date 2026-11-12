@@ -1,5 +1,5 @@
 # site billing — Tasks
-**Progress**: 0/25 complete
+**Progress**: 4/25 complete
 
 Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branch `feat/site-billing`, rebased on `origin/dev` 3634ad5a (2026-11-11). All paths are relative to it. `web/` and `functions/` have their own `node_modules` (`npm ci` done).
 
@@ -15,7 +15,7 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
 
 ## Wave 1: foundations
 
-- [ ] **Task 1.1: per-site entitlement read, a parser that accepts tridant's real types, and the key-expiry warning**
+- [x] **Task 1.1: per-site entitlement read, a parser that accepts tridant's real types, and the key-expiry warning**
   - Files: `web/lib/tridantEntitlements.server.ts`, `web/__tests__/lib/tridantEntitlements.server.test.ts`, `web/lib/tridant.server.ts`, `web/__tests__/lib/tridant.server.test.ts`
   - Do:
     - Parser. tridant sends flag features as JSON booleans, limits as numbers or the string `'unlimited'`, and `owlette.storage_bytes` as `null` (`coerceValue` in tridant-id `origin/staging:worker/src/routes/_entitlements.ts`). Normalise every `ent` value to the string form `web/lib/plan.server.ts` reads: `true`→`'1'`, `false`→`'0'`, finite number→`String(n)`, a string stays, `null`→ key omitted. Reject only a non-object `ent`, an unsupported value type, or wrong top-level types. The uid read uses the same parser (it is removed in 6.4).
@@ -25,7 +25,7 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
     - `tridant.server.ts`: when a response carries a `Sunset` header, `logger.error` once per process ("tridant id says this api key expires on {date}; rotate TRIDANT_… before then"), naming the env var only if the caller passes its name (add an optional `keyName` to the request; never log the key).
   - Done when: tests cover a live Pro answer with boolean flags, the Free default answer, `no_mapping_for_site`, `no_active_licenses`, a trialing site (no `billing`), a billed site, `'unlimited'`, `null` storage, a malformed answer, the cache and invalidation, the site seam, and the `Sunset` log firing once. The old test asserting that booleans are malformed is replaced.
 
-- [ ] **Task 1.2: tridant billing client with an e2e fake**
+- [x] **Task 1.2: tridant billing client with an e2e fake**
   - Files: `web/lib/tridantBilling.server.ts` (create), `web/lib/tridantBillingE2e.server.ts` (create), `web/__tests__/lib/tridantBilling.server.test.ts` (create)
   - Do: typed wrappers over `tridantFetch` (`web/lib/tridant.server.ts`; read `web/lib/tridantRelease.server.ts` for the pattern) using `process.env.TRIDANT_LICENSE_KEY`. Constants: `PRODUCT = {core:'prd_owlette_core', pro:'prd_owlette_pro'}`, `subjectFor(uid) = 'owlette:'+uid`, `siteRef(siteId) = 'owlette:'+siteId`. Every wrapper returns `{ok:true, …} | {ok:false, reason:'not_configured'|'unreachable'|'rejected'|'malformed_response', status?, code?, detail?}` where `code` is tridant's `error` string from the body.
     - `startCheckout({uid, email, name, siteId, siteName, tier, founders, successUrl, cancelUrl})` → `POST /v1/billing/checkout` → `{checkoutUrl, sessionId}`.
@@ -40,12 +40,12 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
     - E2E fake (`tridantBillingE2e.server.ts`), used by every wrapper when `OWLETTE_E2E==='1'`, state in Firestore so the Playwright rig can read it: `startCheckout` writes `e2e_billing/{sessionId}` (`sessionId='e2e_'+random`) and returns `checkoutUrl` = `successUrl` with `{CHECKOUT_SESSION_ID}` replaced; `confirmCheckout` reads it, writes `e2e_entitlements/site:{siteId}` (Pro or Core `ent` with boolean flags, `standing:'active'`, `billing` = this calendar month UTC, `orgId:'org_e2e_'+uid`) and answers `complete`; `addSite`/`switchTier` write the same doc; `stopSite` sets `billing.endsAt` to the month end; `startTrial` answers ok with `orgId:'org_e2e_'+uid` unless `e2e_billing_config/trial.linkRequired` lists the uid (then `code:'link_required'`); `pushSite`, `linkAccount`, `unlinkAccount`, `reportUsage` answer ok and append to `e2e_billing_calls`.
   - Done when: unit tests (mock `tridantFetch`) cover each wrapper's method, path and body, error-code mapping, usage chunking and statuses, the founders cache, and the fake.
 
-- [ ] **Task 1.3: owner-only billing capability**
+- [x] **Task 1.3: owner-only billing capability**
   - Files: `web/lib/capabilities.ts`, `web/lib/rateLimit.server.ts`, `web/lib/authorizedHandler.server.ts` (only `BYPASS_EXEMPT_CAPABILITIES` and its comment), `web/__tests__/lib/capabilities.test.ts`, `web/__tests__/lib/authorizedHandler.test.ts` (only the exempt-set assertion ~:444), `web/content/docs/dashboard/admin/index.mdx`, `web/content/docs/reference/authentication.mdx`, `web/content/docs/api/rate-limits.mdx`
   - Do: add `Capability.SITE_BILLING_MANAGE` following `SITE_DELETE`: in `SITE_OWNER_CAPABILITIES` only (not admin, not `MACHINE_CAPABILITIES`), in `SITE_SCOPED_CAPABILITIES`, user limit 10/min and system limit 50/min in the two `Record<Capability,…>` maps. Add it to `BYPASS_EXEMPT_CAPABILITIES` with one comment line saying why: with the switch off a member could otherwise put sites on the owner's card. Update the tests (owner row is `[...admin, SITE_DELETE, SITE_BILLING_MANAGE]`, the site-scoped list, the enum set, the exempt-set assertion) and the three docs tables.
   - Done when: capability, authorizedHandler and rate-limit tests pass; tsc clean.
 
-- [ ] **Task 1.4: server-only stores**
+- [x] **Task 1.4: server-only stores**
   - Files: `web/lib/planAccounts.server.ts` (create), `web/__tests__/lib/planAccounts.server.test.ts` (create), `web/__tests__/rules/planCollections.test.ts`
   - Do: collections denied to clients by the catch-all rule (no `firestore.rules` change).
     - `plan_accounts/{uid}`: `{trialStartedAt, trialEndsAt, orgId, linkRequired, trialError, claimedAt, updatedAt}`. Helpers: `getPlanAccount(uid)`; `claimTrialStart(uid)` (transaction; false when a trial or `linkRequired` is recorded, or a claim is younger than 60 s); `recordTrial(uid, {orgId, endsAtMs})`; `recordOrg(uid, orgId)` (a purchase or link with no trial); `markLinkRequired(uid)`; `clearLinkRequired(uid)`; `recordTrialError(uid, code)`.
@@ -95,7 +95,7 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
   - Do: model on `web/app/api/sites/[siteId]/fleet-settings/route.ts` or `swoop-settings/route.ts` (refuse api keys with 403 `api_key_not_permitted`, `readAndParseJsonBody`, `problemFromError`) and `transfer-ownership/route.ts` (`withIdempotency`, `emitMutation`). Billing routes carry `planExempt: true`.
     - `POST /api/sites/[siteId]/billing` (`authorizedSiteHandler`, `Capability.SITE_BILLING_MANAGE`): body `{tier:'core'|'pro', founders:boolean}`, validated by hand (`problemValidation`). 503 `billing_unavailable` unless `plansEnforced()`. 403 `email_unverified` unless the caller's Firebase record is verified. 409 `already_billed` when the pointer exists with no `endsAt`. Then `startCheckout` with `successUrl = trustedBaseUrl() + '/admin/sites/{siteId}?section=billing&session_id={CHECKOUT_SESSION_ID}'` and `cancelUrl = trustedBaseUrl() + '/admin/sites/{siteId}?section=billing'` (`trustedBaseUrl` is in `web/lib/resendClient.server.ts`); `recordCheckout`; answer `{checkoutUrl}`. On `code:'subscription_exists'`: `addSite`, write the pointer, `recordOrg` is not needed, `invalidateSiteEntitlements`, answer `{added:true}`. Map tridant codes to 409 problems with the same `code` and a lowercase `detail`: `link_required`, `site_billed_elsewhere`, `founders_sold_out`, `site_is_default`, `subscription_paused`. `unreachable` → 503 `billing_unavailable`; anything else → 502 `billing_upstream` (log the code, never the body).
     - `PATCH` (`{tier, founders?}`) → `switchTier`, update the pointer, invalidate. `DELETE` → `stopSite`, set `pointer.endsAt`, invalidate. 404 `not_billed` when there is no pointer or tridant answers `site_not_billed`.
-    - `GET /api/billing/checkout/[sessionId]`: session auth (`requireSessionOrIdToken(req, {rejectAgentTokens:true})` + `assertActiveUser`, the pattern in `web/app/api/account/plan/route.ts`), only the uid in `billing_checkouts/{sessionId}` (others 404); `confirmCheckout`; on `complete` write the pointer for the recorded site, `recordOrg(uid, orgId)`, invalidate; answer `{status, siteId, tier, error?}`.
+    - `GET /api/billing/checkout/[sessionId]`: session auth (`requireSessionOrIdToken(req, {rejectAgentTokens:true})` + `assertActiveUser`, the pattern in `web/app/api/account/plan/route.ts`), a `sessionId` that is empty, longer than 200 characters or not `[A-Za-z0-9_]+` is 404 before any read (it comes from the return URL and becomes a Firestore doc id); only the uid in `billing_checkouts/{sessionId}` (others 404); `confirmCheckout`; on `complete` write the pointer for the recorded site, `recordOrg(uid, orgId)`, invalidate; answer `{status, siteId, tier, error?}`.
     - `GET /api/sites/[siteId]/plan` (any member, machine-scoped members included: use the read capability the site document itself needs, and opt in to scoped callers the way a site-doc read does): `{enforced, reason?, tier, standing, paid, flags (the 8 PLAN_FLAGS as booleans), billing: {tier, founders, endsAt}|null, period: {start, end}|null, isOwner}`.
     - The pointer is `sites/{id}.billing = {tier, founders, payerUid, endsAt|null, updatedAt}`, written with the admin SDK in `siteBilling.server.ts`, which also exports `readBillingPointer(siteData)`.
   - Done when: tests cover owner-only (a site admin gets 403, also with `capability_enforcement` off), api-key refusal, every code mapping, `subscription_exists` → add, idempotency, the confirm route's uid check and pointer write, pending and failed confirms, the plan route for a member; `auditMutationCoverage` and the openapi validator (`npm run` script in `web/package.json`) pass.
@@ -120,7 +120,7 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
 
 - [ ] **Task 3.4: pairing check outside the transaction**
   - Files: `web/app/api/agent/auth/device-code/authorize/route.ts`, `web/__tests__/api/agent/device-code.test.ts`
-  - Do: `machineLimitRefusal` (~:114) runs inside `runTransaction` (opened ~:67) and can now make several tridant calls. Move the check before the transaction (read what it needs first), keeping the refusal semantics exactly: the device code is marked `refused` with `refusedReason`, the answer is 402 `{error}`. Poll and exchange already check outside a transaction; confirm and leave them.
+  - Do: `machineLimitRefusal` (~:114) runs inside `runTransaction` (opened ~:67) and can now make several tridant calls. Move the check before the transaction (read what it needs first), keeping the refusal semantics exactly: the device code is marked `refused` with `refusedReason`, the answer is 402 `{error}`. Poll and exchange already check outside a transaction; confirm and leave them. Keep the diff in this route as small as it can be (move the call, nothing else): another 4.2.0 branch rebases over this handler.
   - Done when: tests prove the refusal still lands, the code is still marked refused, and no tridant call happens inside the transaction.
   - Depends on: Task 2.1
 
@@ -211,3 +211,4 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
 ### 2026-11-11
 - Owner: review the plan; it goes in 4.2.0; "this is your repo, make any changes you need".
 - Reviewed against dev 3634ad5a (plan code unchanged since 9c929f97; capabilities, pairing, site settings and fleet changed around it) and tridant staging e370a01 (usage `as_of` and no grace, app-bound expiring keys, ID-token link consent, new checkout errors). Branch rebased. Plan, tasks and context rewritten; ADR 0018 and glossary entries added. Was 25 tasks in 8 waves, now 25 in 7: the separate return page went, the link flow came in.
+- Wave 1 done (1.1–1.4), reviewed by the standards and spec reviewers: no contract mismatch in the billing client. Orchestrator changes on top: an `ent` value of an unreadable type is left out instead of failing the whole answer; `clearLinkRequired` also drops the stale claim; the billing client names its key for the expiry warning. Known and accepted: the e2e fake never answers `subscription_exists`, and its `linkAccount` does not clear `linkRequired`.

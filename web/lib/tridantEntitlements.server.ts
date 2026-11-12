@@ -1,6 +1,7 @@
 /**
- * a payer's owlette entitlements from tridant id, subject `owlette:{uid}`
- * (plan.md decision 2). an unmapped subject still answers, as
+ * owlette entitlements from tridant id: a site's, ref `owlette:{siteId}`
+ * (adr 0018), and until the owner-pays code goes a payer's, subject
+ * `owlette:{uid}`. an unknown site or subject still answers, as
  * `resolved: false` with tridant's defaults. never throws: plan.server.ts
  * decides what each failure reason means.
  */
@@ -10,105 +11,189 @@ import logger from '@/lib/logger';
 import { tridantFetch, type TridantFailureReason } from '@/lib/tridant.server';
 
 const CACHE_TTL_MS = 60_000;
+const GOOD_STANDINGS = ['active', 'trialing', 'past_due'];
+
+/** epoch ms. */
+export type SiteBillingPeriod = {
+  periodStart: number | null;
+  periodEnd: number | null;
+  endsAt: number | null;
+  cancelAtPeriodEnd: boolean;
+};
 
 export type Entitlements = {
   ok: true;
   resolved: boolean;
   standing: string;
   inGoodStanding: boolean;
-  /** as tridant sends them: '0', '1', 'unlimited' or a count. */
+  /** epoch ms while past_due. */
+  graceUntil: number | null;
+  /** normalised to '0', '1', 'unlimited' or a count; a key tridant sends as null is left out. */
   ent: Record<string, string>;
   epoch: number | null;
+  orgId: string | null;
+  /** only a site billed per site has one; a site under a trial does not. */
+  billing: SiteBillingPeriod | null;
 };
 
 export type EntitlementsResult = Entitlements | { ok: false; reason: TridantFailureReason };
 
-// the promise is cached, so concurrent lookups for one uid share a single call.
-const cache = new Map<string, { expiresAt: number; result: Promise<EntitlementsResult> }>();
+type Cache = Map<string, { expiresAt: number; result: Promise<EntitlementsResult> }>;
+
+// the promise is cached, so concurrent lookups for one key share a single call.
+const uidCache: Cache = new Map();
+const siteCache: Cache = new Map();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' ? value : null;
+}
+
+/**
+ * tridant types a value by its feature's kind (boolean flag, numeric limit, null); plan.server.ts reads strings.
+ * a value of any other shape (a `config` feature is parsed json) is left out like a null: rejecting the
+ * whole answer over one key owlette never reads would turn every gate off.
+ */
+function normaliseEnt(ent: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(ent)) {
+    if (typeof value === 'boolean') out[key] = value ? '1' : '0';
+    else if (typeof value === 'number' && Number.isFinite(value)) out[key] = String(value);
+    else if (typeof value === 'string') out[key] = value;
+  }
+  return out;
+}
 
 function parseEntitlements(body: unknown): Entitlements | null {
-  if (typeof body !== 'object' || body === null) return null;
-  const { resolved, standing, in_good_standing, ent, ent_epoch } = body as Record<string, unknown>;
+  if (!isRecord(body)) return null;
+  const { resolved, standing, in_good_standing, grace_until, ent, ent_epoch, org_id, billing } = body;
   if (
     typeof resolved !== 'boolean' ||
     typeof standing !== 'string' ||
     typeof in_good_standing !== 'boolean' ||
-    typeof ent !== 'object' ||
-    ent === null ||
-    Array.isArray(ent)
+    !isRecord(ent)
   ) {
     return null;
   }
-  const entries = Object.entries(ent).map(([key, value]) => [
-    key,
-    typeof value === 'number' && Number.isFinite(value) ? String(value) : value,
-  ]);
-  if (entries.some(([, value]) => typeof value !== 'string')) return null;
   return {
     ok: true,
     resolved,
     standing,
     inGoodStanding: in_good_standing,
-    ent: Object.fromEntries(entries),
-    epoch: typeof ent_epoch === 'number' ? ent_epoch : null,
+    graceUntil: numberOrNull(grace_until),
+    ent: normaliseEnt(ent),
+    epoch: numberOrNull(ent_epoch),
+    orgId: typeof org_id === 'string' ? org_id : null,
+    billing: isRecord(billing)
+      ? {
+          periodStart: numberOrNull(billing.current_period_start),
+          periodEnd: numberOrNull(billing.current_period_end),
+          endsAt: numberOrNull(billing.ends_at),
+          cancelAtPeriodEnd: billing.cancel_at_period_end === true,
+        }
+      : null,
   };
 }
 
-async function fetchEntitlements(uid: string): Promise<EntitlementsResult> {
-  const response = await tridantFetch(
-    `/v1/licenses/owlette:${encodeURIComponent(uid)}/entitlements?app=owlette`,
-    { key: process.env.TRIDANT_LICENSE_KEY },
-  );
+async function fetchEntitlements(path: string, subject: Record<string, string>): Promise<EntitlementsResult> {
+  const response = await tridantFetch(path, {
+    key: process.env.TRIDANT_LICENSE_KEY,
+    keyName: 'TRIDANT_LICENSE_KEY',
+  });
   if (!response.ok) return { ok: false, reason: response.reason };
 
   const entitlements = parseEntitlements(response.json);
   if (!entitlements) {
     logger.warn('[tridant] entitlement answer has an unexpected shape', {
       context: 'tridant',
-      data: { uid },
+      data: subject,
     });
     return { ok: false, reason: 'malformed_response' };
   }
   return entitlements;
 }
 
-async function readE2eEntitlements(uid: string): Promise<EntitlementsResult> {
+function cached(cache: Cache, key: string, fetch: () => Promise<EntitlementsResult>): Promise<EntitlementsResult> {
+  const now = Date.now();
+  const hit = cache.get(key);
+  if (hit && hit.expiresAt > now) return hit.result;
+
+  // failures are cached too, so a tridant outage costs each key one timeout a minute, not one per request.
+  const result = fetch();
+  cache.delete(key);
+  cache.set(key, { expiresAt: now + CACHE_TTL_MS, result });
+  // a refresh re-inserts at the end, so the map stays in expiry order and the sweep stops at the first live entry.
+  for (const [entryKey, entry] of cache) {
+    if (entry.expiresAt > now) break;
+    cache.delete(entryKey);
+  }
+  return result;
+}
+
+async function readE2eSeed(
+  docId: string,
+  toAnswer: (seed: Record<string, unknown>) => unknown,
+): Promise<EntitlementsResult> {
   try {
-    const snap = await getAdminDb().collection('e2e_entitlements').doc(uid).get();
+    const snap = await getAdminDb().collection('e2e_entitlements').doc(docId).get();
     if (!snap.exists) return { ok: false, reason: 'not_configured' };
-    const seed = snap.data() ?? {};
-    // the seed is { resolved, standing, ent }, so the two fields it leaves out get stand-ins.
-    return (
-      parseEntitlements({ in_good_standing: seed.standing !== 'expired', ent_epoch: null, ...seed }) ?? {
-        ok: false,
-        reason: 'malformed_response',
-      }
-    );
+    return parseEntitlements(toAnswer(snap.data() ?? {})) ?? { ok: false, reason: 'malformed_response' };
   } catch {
     return { ok: false, reason: 'unreachable' };
   }
 }
 
+// a site seed is written in this module's names, so it goes back into tridant's before parsing.
+function siteSeedToAnswer(seed: Record<string, unknown>): unknown {
+  const { resolved, standing, inGoodStanding, ent, orgId, billing } = seed;
+  return {
+    resolved,
+    standing,
+    in_good_standing: inGoodStanding ?? (typeof standing === 'string' && GOOD_STANDINGS.includes(standing)),
+    ent,
+    org_id: orgId,
+    ...(isRecord(billing)
+      ? {
+          billing: {
+            current_period_start: billing.periodStart,
+            current_period_end: billing.periodEnd,
+            ends_at: billing.endsAt,
+            cancel_at_period_end: billing.cancelAtPeriodEnd,
+          },
+        }
+      : {}),
+  };
+}
+
+export function getSiteEntitlements(siteId: string): Promise<EntitlementsResult> {
+  // uncached, so a spec can change a site's plan between steps.
+  if (process.env.OWLETTE_E2E === '1') return readE2eSeed(`site:${siteId}`, siteSeedToAnswer);
+
+  return cached(siteCache, siteId, () =>
+    fetchEntitlements(`/v1/sites/owlette:${encodeURIComponent(siteId)}/entitlements?app=owlette`, { siteId }),
+  );
+}
+
+/** call after owlette changes a site's billing, so the next read asks tridant again. */
+export function invalidateSiteEntitlements(siteId: string): void {
+  siteCache.delete(siteId);
+}
+
 export function getEntitlements(uid: string): Promise<EntitlementsResult> {
-  // uncached, so a spec can change a payer's plan between steps.
-  if (process.env.OWLETTE_E2E === '1') return readE2eEntitlements(uid);
-
-  const now = Date.now();
-  const hit = cache.get(uid);
-  if (hit && hit.expiresAt > now) return hit.result;
-
-  // failures are cached too, so a tridant outage costs each uid one timeout a minute, not one per request.
-  const result = fetchEntitlements(uid);
-  cache.delete(uid);
-  cache.set(uid, { expiresAt: now + CACHE_TTL_MS, result });
-  // a refresh re-inserts at the end, so the map stays in expiry order and the sweep stops at the first live entry.
-  for (const [key, entry] of cache) {
-    if (entry.expiresAt > now) break;
-    cache.delete(key);
+  if (process.env.OWLETTE_E2E === '1') {
+    // the seed is { resolved, standing, ent }, so the two fields it leaves out get stand-ins.
+    return readE2eSeed(uid, (seed) => ({ in_good_standing: seed.standing !== 'expired', ent_epoch: null, ...seed }));
   }
-  return result;
+
+  return cached(uidCache, uid, () =>
+    fetchEntitlements(`/v1/licenses/owlette:${encodeURIComponent(uid)}/entitlements?app=owlette`, { uid }),
+  );
 }
 
 export function __resetForTests(): void {
-  cache.clear();
+  uidCache.clear();
+  siteCache.clear();
 }

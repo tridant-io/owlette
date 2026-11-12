@@ -46,6 +46,7 @@ const SITE_SCOPED: Capability[] = [
   Capability.MACHINE_ENROLL,
   Capability.ALERT_RULES_MANAGE,
   Capability.SITE_DELETE,
+  Capability.SITE_BILLING_MANAGE,
 ];
 
 const GLOBAL_CAPABILITIES: Capability[] = ALL_CAPABILITIES.filter(
@@ -98,6 +99,7 @@ describe('Capability enum', () => {
         'PRESET_MANAGE',
         'SITE_MEMBER_MANAGE',
         'SITE_DELETE',
+        'SITE_BILLING_MANAGE',
         'WEBHOOK_MANAGE',
         'SITE_LOGS_MANAGE',
         'TALON_MANAGE',
@@ -154,10 +156,11 @@ describe('SiteRoleCapabilityMatrix', () => {
     expect(SiteRoleCapabilityMatrix.admin).not.toContain(Capability.SITE_DELETE);
   });
 
-  it('owner is admin plus SITE_DELETE, and nothing else', () => {
+  it('owner is admin plus SITE_DELETE and SITE_BILLING_MANAGE, and nothing else', () => {
     expect([...SiteRoleCapabilityMatrix.owner].sort()).toEqual(
-      [...SiteRoleCapabilityMatrix.admin, Capability.SITE_DELETE].sort()
+      [...SiteRoleCapabilityMatrix.admin, Capability.SITE_DELETE, Capability.SITE_BILLING_MANAGE].sort()
     );
+    expect(SiteRoleCapabilityMatrix.admin).not.toContain(Capability.SITE_BILLING_MANAGE);
   });
 
   it('no per-site role reaches a platform capability', () => {

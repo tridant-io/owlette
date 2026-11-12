@@ -126,6 +126,9 @@ export type SiteIdSource = 'path' | 'query';
  * written in the window outlives it: once enforcement is back, the machine it
  * named still holds commands over the machines it names (ADR 0017) until a site
  * admin removes the grant. Time-boxed break-glass, permanent grant.
+ *
+ * SITE_BILLING_MANAGE: with the switch off a member could otherwise put sites on
+ * the owner's card, and that charge outlives the window too.
  */
 export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_REMOTE_CONTROL,
@@ -133,6 +136,8 @@ export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capab
   Capability.SWOOP_SETTINGS_MANAGE,
   // a grant written while the switch is off outlives the window (above)
   Capability.FLEET_SETTINGS_MANAGE,
+  // the owner's card (above)
+  Capability.SITE_BILLING_MANAGE,
 ]);
 
 /**

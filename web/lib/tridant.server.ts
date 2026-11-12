@@ -32,6 +32,8 @@ export type TridantResult = { ok: true; status: number; json: unknown } | Tridan
 export interface TridantRequest {
   /** blank means not configured. */
   key: string | undefined;
+  /** the env var `key` came from, so the expiry warning can say which one to rotate. */
+  keyName?: string;
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   body?: unknown;
 }
@@ -59,6 +61,22 @@ function failed(method: string, path: string, result: TridantFailure): TridantFa
   return result;
 }
 
+// one warning per key name: each job's key expires on its own date.
+const expiryWarned = new Set<string>();
+
+/** tridant sends `Sunset` (rfc 8594) on every answer in a key's last 30 days. */
+function warnOfExpiry(sunset: string | null | undefined, keyName: string | undefined): void {
+  const expiresAt = Date.parse(sunset ?? '');
+  const name = keyName ?? '';
+  if (Number.isNaN(expiresAt) || expiryWarned.has(name)) return;
+  expiryWarned.add(name);
+  // at error because an expired key is refused, and every plan check then fails open.
+  logger.error(
+    `[tridant] tridant id says this api key expires on ${new Date(expiresAt).toISOString().slice(0, 10)}; rotate ${keyName ?? 'it'} before then`,
+    { context: 'tridant' },
+  );
+}
+
 /**
  * `path` starts with `/`. a rejection carries tridant's parsed error body, so a
  * caller can read its error code.
@@ -84,6 +102,8 @@ export async function tridantFetch(path: string, request: TridantRequest): Promi
       signal: AbortSignal.timeout(TRIDANT_TIMEOUT_MS),
     });
     status = response.status;
+    // optional, because fetch doubles across the test suite answer without headers.
+    warnOfExpiry(response.headers?.get('Sunset'), request.keyName);
     text = await response.text();
   } catch {
     return failed(method, path, { ok: false, reason: 'unreachable' });
