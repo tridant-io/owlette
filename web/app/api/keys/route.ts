@@ -17,7 +17,6 @@ import {
   problemValidation,
   ProblemType,
 } from '@/lib/apiErrors';
-import { requireApiKeyMintPlan } from '@/app/api/_shared';
 import {
   assertScopesGrantable,
   MAX_NAME_LENGTH,
@@ -51,9 +50,6 @@ export const POST = withRateLimit(
     try {
       const userId = await requireSessionOrIdToken(request, { rejectAgentTokens: true });
       const activeUserData = await assertActiveUser(userId);
-
-      const planError = await requireApiKeyMintPlan(userId);
-      if (planError) return planError;
 
       let body: CreateKeyBody;
       try {

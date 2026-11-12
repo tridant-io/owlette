@@ -271,7 +271,7 @@ every route that an external scheduler must call, in one place. all are `GET` an
 | `/api/cron/display-alerts` | `*/3 * * * *` | `X-Cron-Secret` | drains `pending_display_alerts` into digest email |
 | `/api/cron/status-ping` | `* * * * *` | `X-Cron-Secret` | writes status pings and publishes them to Instatus |
 | `/api/cron/talons` | `* * * * *` | `X-Cron-Secret` | fires schedule-triggered and delayed talons, recovers stale runs, and fires due hoot follow-ups |
-| `/api/cron/plan-daily` | `0 3 * * *` | `X-Cron-Secret` | records each site owner's active machines for the previous day and the plan snapshot that scheduled rollouts check, and deletes usage older than 100 days. plans are not enforced during the beta; see [plans](/docs/plans) |
+| `/api/cron/plan-daily` | `30 23 * * *` (UTC) | `X-Cron-Secret` | records each site's active machines for the day and the plan snapshot that scheduled rollouts check, reports the billed sites' usage, and deletes usage older than 100 days. the last run of a month is the one that month is billed on. plans are not enforced during the beta, and nothing is reported until they are; see [plans](/docs/plans) |
 | `/api/cron/retention` | `0 4 * * *` | `X-Cron-Secret` | deletes metrics, logs and talon run history past 400 days |
 | `/api/cron/swoop-retention` | `30 4 * * *` | `X-Cron-Secret` | closes abandoned swoop session records and deletes those older than 30 days |
 | `/api/cron/api-key-expiry` | `0 8 * * *` | `X-Cron-Secret` | emails API key owners 14, 3 and 0 days before a key expires |

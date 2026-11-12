@@ -31,8 +31,7 @@ export default function WebhooksPage() {
     if (savedSite && sites.find((s) => s.id === savedSite)) return savedSite;
     return sites[0].id;
   }, [userSelectedSiteId, sites, lastSiteId]);
-  const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
-  const webhooksGated = usePlanGated('webhooks', siteOwner);
+  const webhooksGated = usePlanGated('webhooks', selectedSiteId);
 
   const handleSiteChange = (siteId: string) => {
     setUserSelectedSiteId(siteId);
@@ -64,7 +63,7 @@ export default function WebhooksPage() {
                   </Select>
                 )}
                 {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
-                <UpgradeGate flag="webhooks" siteOwner={siteOwner} variant="inline" />
+                <UpgradeGate flag="webhooks" siteId={selectedSiteId} variant="inline" />
               </>
             )
           }

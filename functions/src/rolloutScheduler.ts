@@ -24,11 +24,11 @@
  * no write-off) until the switch flips back. Fail-open on a read error, as the
  * web and agent mirrors do.
  *
- * plan gate (plan.md decision 13): a due rollout whose site owner's plan
+ * plan gate (docs/adr/0018): a due rollout whose site's plan
  * snapshot withholds roost or control is written off as `aborted`, with the
  * reason, instead of fired, but only when the snapshot is newer than the
  * rollout. one scheduled after it passed the web's live entitlement check,
- * which is fresher, so a payer who just upgraded is not refused on a day-old
+ * which is fresher, so a site just upgraded is not refused on a day-old
  * snapshot. unlike the kill switch it is not left `scheduled`: a lapse lasts far
  * past the grace window, and those rollouts would sit at the head of the
  * oldest-first due query and starve every other site's.
@@ -112,7 +112,7 @@ export interface ClaimArgs {
   data: RolloutDocData | null;
   nowMs: number;
   graceMs: number;
-  /** the site payer's plan snapshot, or null to proceed. */
+  /** the site's plan snapshot, or null to proceed. */
   planSnapshot: PlanSnapshot | null;
 }
 
@@ -227,7 +227,7 @@ export interface RolloutScheduleStore {
   listDue(nowMs: number, limit: number): Promise<ScheduledRolloutRef[]>;
   /** Raw `roostEnabled` field off `sites/{siteId}`; undefined when absent. */
   readRoostEnabled(siteId: string): Promise<unknown>;
-  /** the plan snapshot of the site's payer, or null to proceed. */
+  /** the site's plan snapshot, or null to proceed. */
   readPlanSnapshot(siteId: string): Promise<PlanSnapshot | null>;
   /** Transactionally re-read the rollout and apply `applyScheduledRolloutClaim`. */
   claim(
@@ -255,7 +255,7 @@ export interface ScheduledSweepCounts {
   skipped: number;
   /** Left alone because the site's roost kill switch is engaged. */
   disabled: number;
-  /** written off because the site owner's plan withholds the rollout. */
+  /** written off because the site's plan withholds the rollout. */
   planBlocked: number;
   failed: number;
 }

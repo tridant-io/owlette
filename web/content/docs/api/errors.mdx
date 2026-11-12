@@ -59,7 +59,7 @@ these can come from almost any route.
 |---|---:|---|---|
 | `unauthorized` | 401 | missing, malformed, unknown, or revoked credential | send a valid credential |
 | `token_expired` | 401 | the API key is past its `expiresAt` | rotate or create a key |
-| `plan_required` | 402 | the site owner's plan does not include the feature. not enforced during the beta | upgrade the plan named by `entitlement` |
+| `plan_required` | 402 | the site's plan does not include the feature. not enforced during the beta | have the site's owner upgrade it; `entitlement` names what is missing |
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
@@ -87,14 +87,14 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 
 ### plan_required
 
-`402`: the plan that pays for the site does not include what the request needs. plans apply after the beta and are not enforced yet, so no route returns this today. `entitlement` names the missing feature, and `upgradeUrl` is where the account's plan is managed, relative to the dashboard:
+`402`: the plan of the site the request acts on does not include what the request needs. plans apply after the beta and are not enforced yet, so no route returns this today. `entitlement` names the missing feature, and `upgradeUrl` is the caller's plan page, relative to the dashboard, which lists the sites they own with a link to each one's billing:
 
 ```json
 {
   "type": "https://owlette.app/problems/plan-required",
   "title": "plan required",
   "status": 402,
-  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "detail": "this site's plan doesn't include remote control. upgrade to continue.",
   "code": "plan_required",
   "entitlement": "owlette.control",
   "upgradeUrl": "/settings/plan",
@@ -105,8 +105,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 
 | `entitlement` | refused |
 |---|---|
-| `owlette.sites` | creating a site past the plan's site limit, or transferring one to an owner whose plan has no room |
-| `owlette.machines` | transferring a site whose machines the new owner's plan cannot hold |
+| `owlette.sites` | creating a site once the caller's free site is taken, without `onPlan: true` from a signed-in session (an API key's is ignored), or at all while a further site of theirs is unpaid; or transferring a site on owlette free to an owner whose free site is taken. a create refusal carries `siteCreation` with the site to upgrade, and a blocked one points `upgradeUrl` at that site's billing section; see [adding a site](/docs/plans#adding-a-site) |
 | `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
 | `owlette.deployments` | creating, retrying and uninstalling deployments |
 | `owlette.swoop` | starting and renewing swoop sessions |
@@ -114,9 +113,9 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 | `owlette.roost` | creating and editing roosts, uploading chunks, publishing and editing versions, deploying, resyncing and rolling back |
 | `owlette.talons` | creating, editing, testing and reassigning talons |
 | `owlette.webhooks` | creating a webhook subscription |
-| `owlette.api_keys` | creating or rotating a key, signing in the CLI, and every site request made with an API key, reads and deletes included |
+| `owlette.api_keys` | every site request made with an API key, reads and deletes included |
 
-the site owner's plan decides, except when creating a site, creating or rotating a key, or signing in the CLI, where the caller's own plan does, and on an ownership transfer, where the new owner's does. reads, deletes and cancellations are never refused on a session. a machine past the limit is refused at pairing, not here; see [plans](/docs/plans#adding-a-machine-past-the-limit). do not retry unchanged.
+the plan of the site the request acts on decides, whoever makes it. `owlette.sites` is the exception: owlette free is counted per account, so it goes by the sites the caller, or the new owner, already owns. creating or rotating a key and signing in the CLI are never refused by a plan; a key is checked on each request, against the site it acts on. reads, deletes and cancellations are never refused on a session. a machine past the limit is refused at pairing, not here; see [plans](/docs/plans#adding-a-machine-past-the-limit). do not retry unchanged.
 
 ### forbidden
 
@@ -317,7 +316,7 @@ see [swoop](/docs/dashboard/swoop).
 |---|---:|---|
 | <span id="site_already_exists" />`site_already_exists` | 409 | a live site already has that ID |
 | <span id="site_id_retired" />`site_id_retired` | 409 | the ID belonged to a deleted site; site IDs are never reused |
-| <span id="not_owner" />`not_owner` | 403 | only the site's owner, or a superadmin, may transfer ownership |
+| <span id="not_owner" />`not_owner` | 403 | only the site's owner, or a superadmin, may transfer ownership; only the site's owner may change its [billing](#billing-codes) |
 | <span id="site_has_no_owner" />`site_has_no_owner` | 409 | the site records no owner to transfer from |
 | <span id="successor_already_owner" />`successor_already_owner` | 409 | the successor already owns the site |
 | <span id="target_is_owner" />`target_is_owner` | 409 | adding the site's owner as a member |
@@ -326,6 +325,26 @@ see [swoop](/docs/dashboard/swoop).
 | <span id="cannot_modify_own_membership" />`cannot_modify_own_membership` | 403 | changing or removing your own membership; ask another admin |
 | <span id="site_member_manage_required" />`site_member_manage_required` | 403 | the caller may not manage this site's members |
 | <span id="talon_manage_required" />`talon_manage_required` | 403 | moving a departing member's talons needs the talon-manage capability |
+
+---
+
+## billing codes
+
+a site's billing is changed from the dashboard, in site settings → billing, by the site's owner. the requests behind it need a signed-in session: an API key gets `api_key_not_permitted`, and anyone but the owner `forbidden` or `not_owner`. [plans](/docs/plans#upgrading-a-site) apply after the beta; until then nothing is billed, an upgrade or a switch answers `billing_unavailable`, and only stopping a site that is still billed goes through.
+
+| code | status | meaning |
+|---|---:|---|
+| <span id="email_unverified" />`email_unverified` | 403 | upgrading a site before the owner's email address is verified |
+| <span id="already_billed" />`already_billed` | 409 | upgrading a site that is already billed; switch its plan instead |
+| <span id="not_billed" />`not_billed` | 404 | switching the plan of a site that is not billed, or stopping its billing. when the site was billed and its billing has since ended (a subscription cancelled after failed payments), the detail says so and the site can be upgraded again |
+| <span id="billed_by_previous_owner" />`billed_by_previous_owner` | 409 | upgrading a transferred site, or switching its plan, while it is still billed to its previous owner. it can be changed once that billing period has ended |
+| <span id="link_required" />`link_required` | 409 | the owner's email already has a tridant account, which has to be [linked](/docs/plans#if-your-email-already-has-a-tridant-account) first |
+| <span id="site_billed_elsewhere" />`site_billed_elsewhere` | 409 | the site is already billed under another tridant account |
+| <span id="site_is_default" />`site_is_default` | 409 | the site belongs to another tridant account and cannot move to the owner's |
+| <span id="founders_sold_out" />`founders_sold_out` | 409 | the founders places for the plan are taken; the request can be sent again at the list price |
+| <span id="subscription_paused" />`subscription_paused` | 409 | the owner's subscription is paused; resume it before adding a site |
+| <span id="billing_unavailable" />`billing_unavailable` | 503 | billing cannot be reached right now, or plans are not switched on. try again later |
+| <span id="billing_upstream" />`billing_upstream` | 502 | billing answered something unexpected. try again, or contact support with the `requestId` |
 
 ---
 

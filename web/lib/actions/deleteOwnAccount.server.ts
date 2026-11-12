@@ -5,6 +5,9 @@
  * Site handling: sole-owner sites are hard-deleted with their machines/deployments/logs;
  * member-only sites are left intact; owned-but-shared sites refuse with `needs_successor`
  * — ownership must be transferred first (mirrors the admin cascade's `orphan_sites` guard).
+ * Each deleted site's billing is stopped first, as `deleteSite` does, and once the user doc
+ * is gone the account is unlinked from its tridant organization, as the admin cascade does
+ * (ADR 0018).
  *
  * Also drained so a self-deleted user leaves no residue: users/{uid}/{passkeys,
  * trustedDevices,verified_networks,api_keys}, top-level api_keys lookups, mfa_pending/{uid},
@@ -25,6 +28,8 @@ import type { Auth } from 'firebase-admin/auth';
 import type { Storage } from 'firebase-admin/storage';
 import { getAdminAuth, getAdminDb, getAdminStorage } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
+import { unlinkTridantAccount } from '@/lib/userDeleteCascade.server';
 
 /** Hard cap per Firestore batch — well under the 500-write limit. */
 export const BATCH_SIZE = 100;
@@ -714,6 +719,8 @@ export async function deleteOwnAccount(
       continue;
     }
     const siteRef = db.collection('sites').doc(entry.siteId);
+    // before anything of the site is destroyed, as deleteSite does. best effort.
+    if (!dryRun) await stopBillingBeforeDelete(entry.siteId, (await siteRef.get()).data());
     for (const sub of SITE_SUBCOLLECTIONS) {
       const n = await drainSiteSubcollection(
         db,
@@ -769,6 +776,8 @@ export async function deleteOwnAccount(
   let usersDeleted = 0;
   if (!dryRun) {
     await userRef.delete();
+    // after the delete, so an account whose delete failed keeps its link.
+    await unlinkTridantAccount(input.userId);
   }
   deletedPaths.push(`users/${input.userId}`);
   usersDeleted = 1;

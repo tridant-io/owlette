@@ -2,10 +2,9 @@
 /**
  * @jest-environment jsdom
  *
- * ApiKeysManager under a plan: minting a key is a pro feature of the minting
- * account (plan.md decision 8), so on a plan without API keys the create
- * control becomes the upgrade note and the empty list offers no second one.
- * The list itself stays, since revoke is never gated.
+ * ApiKeysManager: creating a key is never gated by a plan here. A key belongs
+ * to an account, a plan to a site (adr 0018), and the server checks the key
+ * against the site it is used on with every request.
  *
  * Create opens a modal rather than an inline form; a successful create closes
  * it and the one-time reveal shows the raw key in the panel.
@@ -15,14 +14,48 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import type { PlanResponse } from '@/lib/plan.server';
 
-let mockPlan: PlanResponse | undefined;
+// the least any plan allows, on both stores a gate could read.
+const mockFlags = {
+  control: false,
+  deployments: false,
+  swoop: false,
+  hoot: false,
+  roost: false,
+  talons: false,
+  webhooks: false,
+  api_keys: false,
+};
 jest.mock('@/hooks/usePlan', () => ({
-  usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
+  usePlan: () => ({
+    plan: {
+      enforced: true,
+      emailVerified: true,
+      trial: { status: 'ended', endsAt: null },
+      sites: [],
+      free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+      siteCreation: { state: 'open', unpaidSite: null },
+      foundersRemaining: null,
+      linkAvailable: false,
+    },
+    loading: false,
+    error: null,
+    refresh: jest.fn(),
+  }),
 }));
-jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ user: { uid: 'owner-uid' } }),
+jest.mock('@/hooks/useSitePlan', () => ({
+  useSitePlan: () => ({
+    plan: {
+      enforced: true,
+      tier: 'free',
+      standing: 'expired',
+      inGoodStanding: false,
+      flags: mockFlags,
+      billing: null,
+      period: null,
+      isOwner: true,
+    },
+  }),
 }));
 const mockCreateKey = jest.fn();
 jest.mock('@/hooks/useApiKeys', () => ({
@@ -45,37 +78,8 @@ jest.mock('@/components/ApiKeyCreateForm', () => ({
 jest.mock('@/components/ApiKeyScopeEditor', () => ({ ApiKeyScopeEditor: () => null }));
 jest.mock('@/app/settings/api-keys/KeyCard', () => ({ KeyCard: () => null }));
 
-const FLAGS: PlanResponse['flags'] = {
-  control: true,
-  deployments: true,
-  swoop: true,
-  hoot: true,
-  roost: true,
-  talons: true,
-  webhooks: true,
-  api_keys: true,
-};
-const OFF: PlanResponse = {
-  enforced: false,
-  reason: 'enforcement_off',
-  plan: null,
-  standing: null,
-  limits: { machines: null, sites: null },
-  flags: FLAGS,
-  activeMachinesThisMonth: null,
-};
-const CORE: PlanResponse = {
-  enforced: true,
-  plan: 'core',
-  standing: 'active',
-  limits: { machines: null, sites: 1 },
-  flags: { ...FLAGS, api_keys: false },
-  activeMachinesThisMonth: 2,
-};
-
 describe('ApiKeysManager', () => {
-  it('offers both create controls with plans off', () => {
-    mockPlan = OFF;
+  it('offers both create controls whatever the plans say, with no upgrade note', () => {
     render(<ApiKeysManager />);
 
     expect(screen.getByRole('button', { name: 'create key' })).toBeInTheDocument();
@@ -83,18 +87,7 @@ describe('ApiKeysManager', () => {
     expect(screen.queryByTestId('upgrade-gate-inline')).not.toBeInTheDocument();
   });
 
-  it('puts one upgrade note in place of the create controls on a plan without API keys', () => {
-    mockPlan = CORE;
-    render(<ApiKeysManager />);
-
-    expect(screen.getByTestId('upgrade-gate-inline')).toHaveTextContent("your plan doesn't include API keys.");
-    expect(screen.queryByRole('button', { name: 'create key' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'create your first key' })).not.toBeInTheDocument();
-    expect(screen.getByText('no api keys yet')).toBeInTheDocument();
-  });
-
   it('opens the create form in a modal and closes it on cancel', async () => {
-    mockPlan = OFF;
     const user = userEvent.setup();
     render(<ApiKeysManager />);
 
@@ -107,7 +100,6 @@ describe('ApiKeysManager', () => {
   });
 
   it('closes the modal on a successful create and reveals the raw key once', async () => {
-    mockPlan = OFF;
     mockCreateKey.mockResolvedValueOnce({ key: 'owk_live_raw' });
     const user = userEvent.setup();
     // the reveal card's copy button needs the provider the app shell supplies
@@ -130,7 +122,6 @@ describe('ApiKeysManager', () => {
   });
 
   it('keeps the modal open when create fails', async () => {
-    mockPlan = OFF;
     mockCreateKey.mockRejectedValueOnce(new Error('nope'));
     const user = userEvent.setup();
     render(<ApiKeysManager />);

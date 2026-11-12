@@ -16,7 +16,7 @@ import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
-import { TrialBanner } from '@/components/plan/TrialBanner';
+import { TrialBanner, planBannerKind } from '@/components/plan/TrialBanner';
 import { usePlan } from '@/hooks/usePlan';
 import { createSite } from '@/hooks/useFirestore';
 
@@ -476,8 +476,11 @@ export function PageHeader({
         </div>
       </div>
     </header>
-    <VerifyEmailBanner />
-    <TrialBanner />
+    {/* the plan banner's unverified state is the same prompt with its reason, so it stands alone. once
+        dismissed, TrialBanner itself puts VerifyEmailBanner back. */}
+    {planBannerKind(plan) !== 'unverified' && <VerifyEmailBanner />}
+    {/* owlette free is a site's plan, so it shows only on a page about one site; the demo's site has none */}
+    <TrialBanner siteId={disableNav ? undefined : currentSiteId} />
 
     {/* Mobile nav drawer — carries the site + page switchers that the `md`
         bar shows inline. Plain fixed positioning rather

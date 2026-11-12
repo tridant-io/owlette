@@ -60,9 +60,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 function collectionPath(parts: string[]): string {
@@ -137,7 +137,6 @@ function docRef(parts: string[]) {
 import {
   enforcePlans,
   FREE_ENTITLEMENTS,
-  PRO_ENTITLEMENTS,
   stopEnforcingPlans,
 } from './helpers/planEnforcement';
 import { scopeMatches, type ApiKeyScope } from '@/lib/apiKeyTypes';
@@ -326,7 +325,7 @@ describe('/api/keys POST', () => {
   );
 });
 
-describe('/api/keys plan gate', () => {
+describe('/api/keys with plans enforced', () => {
   const siteKey = {
     name: 'Site key',
     scopes: [{ resource: 'site', id: 'site-1', permissions: ['read'] }],
@@ -335,45 +334,31 @@ describe('/api/keys plan gate', () => {
   beforeEach(enforcePlans);
   afterEach(stopEnforcingPlans);
 
-  it('402s plan_required on the minting user’s free plan, and mints nothing', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
-
-    const res = await makePost(siteKey);
-
-    expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({
-      code: 'plan_required',
-      entitlement: 'owlette.api_keys',
-    });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('user-member');
-    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
-    expect(mockEmitMutation).not.toHaveBeenCalled();
-  });
-
-  it('mints on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+  it('mints on the minting user’s free plan: the site’s plan gates each request, not the mint', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
 
     expect((await makePost(siteKey)).status).toBe(200);
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('keeps revoke open on free', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
     store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
     store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
 
     expect((await makeDelete('key-a')).status).toBe(200);
   });
 
-  it('402s a rotation on free, since a rotation mints a fresh key', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+  it('rotates on free: the site’s plan gates each request, not the mint', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
     store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
     store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
 
     const res = await makeRotate('key-a');
 
-    expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({ code: 'plan_required', entitlement: 'owlette.api_keys' });
-    expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 

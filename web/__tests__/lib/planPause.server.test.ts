@@ -13,9 +13,9 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 let mockSites: Record<string, Record<string, unknown>> = {};
@@ -34,53 +34,21 @@ jest.mock('@/lib/firebase-admin', () => ({
 import logger from '@/lib/logger';
 import { __resetForTests } from '@/lib/plan.server';
 import { createPlanMemo, pausedByPlan } from '@/lib/planPause.server';
+import { FREE_ENTITLEMENTS as FREE, PRO_ENTITLEMENTS as PRO } from '../api/helpers/planEnforcement';
 
 const FLAGS = { control: 'owlette.control', webhooks: 'owlette.webhooks', talons: 'owlette.talons' } as const;
 
-const FREE = {
-  ok: true,
-  resolved: false,
-  standing: 'expired',
-  inGoodStanding: false,
-  ent: {
-    'owlette.machines': '1',
-    'owlette.sites': '1',
-    'owlette.control': '0',
-    'owlette.roost': '0',
-    'owlette.talons': '0',
-    'owlette.webhooks': '0',
-    'owlette.api_keys': '0',
-  },
-  epoch: 0,
-};
-
-const PRO = {
-  ...FREE,
-  resolved: true,
-  standing: 'active',
-  inGoodStanding: true,
-  ent: {
-    'owlette.machines': 'unlimited',
-    'owlette.sites': 'unlimited',
-    'owlette.control': '1',
-    'owlette.roost': '1',
-    'owlette.talons': '1',
-    'owlette.webhooks': '1',
-    'owlette.api_keys': '1',
-  },
-};
-
 function expectNoReads() {
   expect(mockCollection).not.toHaveBeenCalled();
-  expect(mockGetEntitlements).not.toHaveBeenCalled();
+  expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
   __resetForTests();
-  mockSites = { a: { owner: 'payer' }, b: { owner: 'payer' }, orphan: {} };
-  mockUsers = { payer: { role: 'user' }, root: { role: 'superadmin' } };
-  mockGetEntitlements.mockResolvedValue(FREE);
+  mockSites = { a: { owner: 'owner' }, b: { owner: 'owner' }, orphan: {} };
+  mockUsers = { owner: { role: 'user' }, root: { role: 'superadmin' } };
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
   process.env.PLAN_ENFORCEMENT = 'on';
   process.env.OWLETTE_E2E = '1';
 });
@@ -106,34 +74,41 @@ describe('pausedByPlan', () => {
     expectNoReads();
   });
 
-  it.each(Object.values(FLAGS))('pauses a free payer (%s)', async (key) => {
+  it.each(Object.values(FLAGS))('pauses a free site (%s)', async (key) => {
     expect(await pausedByPlan('a', key)).toBe(true);
-    expect(mockGetEntitlements).toHaveBeenCalledWith('payer');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('a');
   });
 
-  it.each(Object.values(FLAGS))('proceeds for a pro payer (%s)', async (key) => {
-    mockGetEntitlements.mockResolvedValue(PRO);
+  it.each(Object.values(FLAGS))('proceeds for a pro site (%s)', async (key) => {
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
     expect(await pausedByPlan('a', key)).toBe(false);
   });
 
+  it('decides each site by its own plan, whoever owns both', async () => {
+    mockGetSiteEntitlements.mockImplementation(async (siteId: string) => (siteId === 'b' ? PRO : FREE));
+
+    expect(await pausedByPlan('a', 'owlette.control')).toBe(true);
+    expect(await pausedByPlan('b', 'owlette.control')).toBe(false);
+  });
+
   it('pauses on the one key a plan lacks, and only that one', async () => {
-    mockGetEntitlements.mockResolvedValue({ ...PRO, ent: { ...PRO.ent, 'owlette.webhooks': '0' } });
+    mockGetSiteEntitlements.mockResolvedValue({ ...PRO, ent: { ...PRO.ent, 'owlette.webhooks': '0' } });
 
     expect(await pausedByPlan('a', 'owlette.webhooks')).toBe(true);
     expect(await pausedByPlan('a', 'owlette.control')).toBe(false);
     expect(await pausedByPlan('a', 'owlette.talons')).toBe(false);
   });
 
-  it('proceeds for a site with no owner, and for a superadmin payer', async () => {
+  it('proceeds for a site with no owner, and for a superadmin owner', async () => {
     expect(await pausedByPlan('orphan', 'owlette.control')).toBe(false);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
 
     mockSites.a = { owner: 'root' };
     expect(await pausedByPlan('a', 'owlette.control')).toBe(false);
   });
 
   it('proceeds when tridant fails open', async () => {
-    mockGetEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+    mockGetSiteEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
     expect(await pausedByPlan('a', 'owlette.control')).toBe(false);
   });
 
@@ -148,7 +123,7 @@ describe('pausedByPlan', () => {
   });
 
   it('uses site data the caller already read instead of reading the site', async () => {
-    expect(await pausedByPlan('a', 'owlette.control', undefined, { owner: 'payer' })).toBe(true);
+    expect(await pausedByPlan('a', 'owlette.control', undefined, { owner: 'owner' })).toBe(true);
     expect(mockSiteGet).not.toHaveBeenCalled();
 
     // a missing site is null, not undefined, so it still skips the read.
@@ -156,7 +131,7 @@ describe('pausedByPlan', () => {
     expect(mockSiteGet).not.toHaveBeenCalled();
   });
 
-  it('resolves each site and each payer once across a batch, concurrent calls included', async () => {
+  it('resolves each site once across a batch, concurrent calls included', async () => {
     const memo = createPlanMemo();
 
     const answers = await Promise.all([
@@ -169,8 +144,7 @@ describe('pausedByPlan', () => {
 
     expect(answers).toEqual([true, true, true, true]);
     expect(mockSiteGet.mock.calls.map(([siteId]) => siteId)).toEqual(['a', 'b']);
-    expect(mockUserGet).toHaveBeenCalledTimes(1);
-    expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+    expect(mockGetSiteEntitlements.mock.calls.map(([siteId]) => siteId)).toEqual(['a', 'b']);
   });
 
   it('resolves again without a memo, and in a fresh batch', async () => {
@@ -179,6 +153,6 @@ describe('pausedByPlan', () => {
     await pausedByPlan('a', 'owlette.control', createPlanMemo());
 
     expect(mockSiteGet).toHaveBeenCalledTimes(3);
-    expect(mockGetEntitlements).toHaveBeenCalledTimes(3);
+    expect(mockGetSiteEntitlements).toHaveBeenCalledTimes(3);
   });
 });

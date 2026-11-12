@@ -53,8 +53,8 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
  */
 const DASHBOARD_ONLY_COMMAND_TYPES: ReadonlySet<string> = new Set<string>(['check_path']);
 
-// the types every plan may queue (plan.md decision 7): every plan keeps
-// updating, and anything already running can always be stopped.
+// the types every plan may queue: every plan keeps updating, and anything
+// already running can always be stopped.
 // dismissing a pending reboot also resets the relaunch counters crash-restart needs.
 const PLAN_FREE_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',

@@ -57,8 +57,8 @@ const USER_READ_CHUNK = 100;
 /**
  * Site recipients carrying userId + email, for per-user email personalization
  * (unsubscribe links). Optionally filtered by one alert preference. None when
- * the site's payer has no `owlette.control`; pass a batch's `planMemo` to
- * resolve each payer once.
+ * the site's plan has no `owlette.control`; pass a batch's `planMemo` to
+ * resolve each site's plan once.
  *
  * Recipients are the site's active member rows, plus the legacy `users.sites[]`
  * array during the transition, plus the owner. Each carries its member row's

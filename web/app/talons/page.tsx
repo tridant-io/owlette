@@ -45,12 +45,10 @@ export default function TalonsPage() {
     sites,
     sitesLoading,
     currentSiteId,
-    currentSite,
     limitedOnly,
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
-  const siteOwner = currentSite?.owner ?? null;
-  const talonsGated = usePlanGated('talons', siteOwner);
+  const talonsGated = usePlanGated('talons', currentSiteId);
 
   const { machines } = useMachines(currentSiteId);
   const { talons, loading: talonsLoading, error } = useTalons(currentSiteId);
@@ -181,7 +179,7 @@ export default function TalonsPage() {
             </p>
           </div>
 
-          <UpgradeGate flag="talons" siteOwner={siteOwner} variant="inline" className="flex-shrink-0">
+          <UpgradeGate flag="talons" siteId={currentSiteId} variant="inline" className="flex-shrink-0">
             <Button
               type="button"
               data-testid="talon-create"

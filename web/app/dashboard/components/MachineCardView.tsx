@@ -22,7 +22,7 @@ import {
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
-import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
+import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice, type PlanSite } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, ChevronUp, Pencil, Copy, Square, Plus, Clock, AlertTriangle, X, RotateCcw, Settings2, BellOff, Monitor, Cpu, MemoryStick, HardDrive, Gpu, type LucideIcon } from 'lucide-react';
@@ -94,8 +94,10 @@ interface MachineCardViewProps {
   /** the viewer's swoop mode here is none: the menu offers no swoop (MachineContextMenu). */
   noSwoop?: boolean;
   onSiteSettings?: () => void;
-  /** the viewer's plan on this site (`useSitePlan`); unset is unrestricted. */
+  /** the site's plan (`useSitePlan`); unset is unrestricted. */
   sitePlan?: SitePlan;
+  /** who may upgrade the site, for the lock rows (`useSitePlan`). */
+  planSite?: PlanSite;
 }
 
 /** The view's handlers, passed to each card as-is: they take the machineId, so
@@ -127,10 +129,12 @@ interface MachineCardProps extends MachineCardHandlers {
   cardPref: DeviceSelection;
   onSetCardPref: (machineId: string, kind: DeviceKind, id: string | null) => void;
   showLocalClock?: boolean;
-  /** set when the machine falls outside the viewer's plan: the machines it covers. */
+  /** set when the machine falls outside owlette free's limit: the machines it covers. */
   planLimit?: number | null;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  hootLocked?: boolean;
+  planSite?: PlanSite;
 }
 
 const NO_CARD_PREF: DeviceSelection = {};
@@ -209,6 +213,8 @@ const MachineCard = memo(function MachineCard({
   planLimit,
   controlLocked,
   swoopLocked,
+  hootLocked,
+  planSite,
 }: MachineCardProps) {
   const machineId = machine.machineId;
   const isDemo = !!useDemoContext();
@@ -338,7 +344,7 @@ const MachineCard = memo(function MachineCard({
             {/* Display icon — quick access to the display panel, mirrors the
                 list view's per-row Monitor button (drift/breaker dots included). */}
             {planLocked ? (
-              <MachinePlanLock />
+              <MachinePlanLock planSite={planSite} />
             ) : (
               <div className="relative flex-shrink-0">
                 <Tooltip>
@@ -477,6 +483,8 @@ const MachineCard = memo(function MachineCard({
                 planLocked={planLocked}
                 controlLocked={controlLocked}
                 swoopLocked={swoopLocked}
+                hootLocked={hootLocked}
+                planSite={planSite}
               />
             )}
           </div>
@@ -488,6 +496,7 @@ const MachineCard = memo(function MachineCard({
       {planLimit != null && (
         <MachinePlanNotice
           limit={planLimit}
+          planSite={planSite}
           className="flex-1 flex-col justify-center border-t border-border/50 px-4 py-4 text-center"
         />
       )}
@@ -1038,8 +1047,11 @@ const MachineCard = memo(function MachineCard({
                         {/* grow (not shrink-0): the cluster has to own the row's
                             spare width so the run controls can sit hard right,
                             including on the wrapped line where the name takes
-                            its own row */}
-                        <div className="flex grow items-center gap-2 md:gap-3 sm:ml-2 md:ml-4">
+                            its own row. flex-wrap: where they don't fit beside
+                            the configuration actions (a phone, or "part of core"
+                            on a narrow card), they drop to a line of their own
+                            instead of clipping or squeezing the mode control */}
+                        <div className="flex grow flex-wrap items-center gap-2 md:gap-3 sm:ml-2 md:ml-4">
                           {(() => {
                             const currentMode = effectiveLaunchMode(process);
                             const modeLabels = { off: 'off', always: 'always on', scheduled: 'scheduled' } as const;
@@ -1202,7 +1214,7 @@ const MachineCard = memo(function MachineCard({
                                   interrupts a live process */}
                               <div className="ml-auto flex items-center gap-2 md:gap-3">
                               {controlLocked ? (
-                                <ControlUpgradeLink label="restart and kill are part of core" />
+                                <ControlUpgradeLink label="restart and kill are part of core" planSite={planSite} />
                               ) : (
                                 <>
                                   <Tooltip>
@@ -1297,6 +1309,7 @@ export function MachineCardView({
   swoopOff,
   noSwoop,
   sitePlan,
+  planSite,
   ...handlers
 }: MachineCardViewProps) {
   const { userPreferences, isSiteAdmin, isMachineAdmin } = useAuth();
@@ -1341,6 +1354,8 @@ export function MachineCardView({
           planLimit={sitePlan?.machineLimitFor(machine.machineId)}
           controlLocked={sitePlan?.controlLocked}
           swoopLocked={sitePlan?.swoopLocked}
+          hootLocked={sitePlan?.hootLocked}
+          planSite={planSite}
         />
       ))}
     </div>

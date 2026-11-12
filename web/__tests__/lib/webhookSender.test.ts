@@ -32,9 +32,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 // Mock global fetch
@@ -311,7 +311,7 @@ describe('webhookSender', () => {
   });
 
   /**
-   * Plans (plan.md decision 8): delivery pauses when the site's payer has no
+   * Plans (adr 0018): delivery pauses when the site's plan has no
    * `owlette.webhooks`. Runs the real resolver; only tridant's answer is mocked.
    */
   describe('fireWebhooks — plan pause', () => {
@@ -338,18 +338,18 @@ describe('webhookSender', () => {
     });
 
     it('pauses without delivering, reading secrets or touching delivery state', async () => {
-      mockGetEntitlements.mockResolvedValue(ent('0'));
+      mockGetSiteEntitlements.mockResolvedValue(ent('0'));
 
       expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
-      expect(mockGetEntitlements).toHaveBeenCalledWith('payer');
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site1');
       expect(mockFetch).not.toHaveBeenCalled();
       expect(mockGetAll).not.toHaveBeenCalled();
       // a pause is not a failure: no failCount, so it never auto-disables.
       expect(mockUpdate).not.toHaveBeenCalled();
     });
 
-    it('delivers when the payer has webhooks', async () => {
-      mockGetEntitlements.mockResolvedValue(ent('1'));
+    it('delivers when the site has webhooks', async () => {
+      mockGetSiteEntitlements.mockResolvedValue(ent('1'));
 
       expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
       expect(mockFetch).toHaveBeenCalledTimes(1);
@@ -360,7 +360,7 @@ describe('webhookSender', () => {
 
       expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(0);
       expect(mockDocGet).not.toHaveBeenCalled();
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     });
 
     it('makes no plan read when enforcement is off', async () => {
@@ -368,11 +368,11 @@ describe('webhookSender', () => {
 
       expect(await fireWebhooks('site1', 'My Site', 'process.crashed', {})).toBe(1);
       expect(mockDocGet).not.toHaveBeenCalled();
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     });
 
-    it('resolves each site and payer once across a batch sharing a memo', async () => {
-      mockGetEntitlements.mockResolvedValue(ent('0'));
+    it('resolves each site once across a batch sharing a memo', async () => {
+      mockGetSiteEntitlements.mockResolvedValue(ent('0'));
       const memo = createPlanMemo();
 
       await Promise.all([
@@ -385,8 +385,9 @@ describe('webhookSender', () => {
         'sites/site1',
         'sites/site2',
         'users/payer',
+        'users/payer',
       ]);
-      expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+      expect(mockGetSiteEntitlements.mock.calls.map(([siteId]) => siteId).sort()).toEqual(['site1', 'site2']);
       expect(mockFetch).not.toHaveBeenCalled();
     });
   });

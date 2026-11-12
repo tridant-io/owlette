@@ -94,7 +94,7 @@ info:
     |------|---------|
     | 400  | Bad request - missing or invalid parameters (`validation_failed`) |
     | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`) |
-    | 402  | Plan required - the site owner's plan does not include the feature (`plan_required`). Not enforced during the beta |
+    | 402  | Plan required - the site's plan does not include the feature (`plan_required`). Not enforced during the beta |
     | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), or an operation that refuses API keys (`api_key_not_permitted`) |
     | 404  | Not found - including a site that exists but the caller cannot access |
     | 409  | Conflict - resource is in an incompatible state |
@@ -108,7 +108,7 @@ info:
 
     Once plans apply after the beta, API keys are a pro feature: a
     site-scoped request made with an API key answers `402 plan_required`
-    (`entitlement: owlette.api_keys`) when the site owner's plan does not
+    (`entitlement: owlette.api_keys`) when the site's plan does not
     include them, reads and deletes included. Sessions are not affected. See
     `/docs/plans`.
 
@@ -327,7 +327,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -373,27 +372,40 @@ paths:
     get:
       operationId: getAccountPlan
       tags: [Quotas]
-      summary: Get the signed-in user's plan
+      summary: Get the signed-in user's trial, sites and free usage
       description: |
-        The caller's own plan as the payer for the sites they own: tier,
-        standing, limits, feature flags, and the machines active this month.
-        No body; no query params. Agent credentials get `403`.
+        The caller's account as the owner who pays for their sites: the
+        trial, every site they own with its plan, how much of owlette free
+        they use, whether they can create a site (`siteCreation`), and the
+        founders places left. A plan belongs to a site, so
+        there is no account-wide tier. No body; no query params. Agent
+        credentials get `403`.
 
-        While plans are not enforced, `enforced` is `false`, `reason` says
-        why, every flag is `true`, every limit is `null` (unrestricted), and
-        `plan`, `standing` and `activeMachinesThisMonth` are `null`. When
-        enforced, `reason` is `keys_missing` only while the license server
-        sends no readable value for the keys in `missingKeys`, which are
-        treated as unrestricted.
+        While plans are not enforced, the answer is only `enforced: false`
+        and `reason`, and nothing is read. That is also the answer when none
+        of the caller's sites is held to a plan: the license server could not
+        be reached or refused the key, or the caller is a superadmin.
 
-        `activeMachinesThisMonth` counts distinct machines online on any UTC
-        day from the 1st of the current month; the daily count runs at 03:00
-        UTC and stamps the previous day.
+        The first read by an account with a verified email starts its 14-day
+        trial, so `trial.status` is `active` from that answer on. An
+        unverified account reads `unverified` and stays on owlette free until
+        the email is verified. `link_required` means the email already has a
+        tridant account, which the caller links before a trial or a purchase.
+
+        `sites[].activeMachinesThisPeriod` counts distinct machines online on
+        any UTC day since the site's billing period started, or since the 1st
+        of the current month for a site with no period. The daily count runs
+        at 23:30 UTC and stamps a machine on the UTC day of its last
+        heartbeat.
+
+        A failed trial start, founders read or usage count never fails the
+        request: `trial.status` stays `none`, `foundersRemaining` is `null`,
+        or that site's `activeMachinesThisPeriod` is `null`.
       security:
         - firebaseIdToken: []
       responses:
         '200':
-          description: The caller's plan.
+          description: The caller's trial, owned sites and free usage.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AccountPlanResponse' }
@@ -3657,7 +3669,6 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -3769,7 +3780,6 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyRotateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -4728,6 +4738,18 @@ paths:
         Returns 409 `site_already_exists` for a live id, or `site_id_retired`
         for one belonging to a deleted site (ids are not reusable).
 
+        Once plans are enforced, an account's first unpaid site (not billed,
+        and no trial covers it) is its free site. With that taken, a site is
+        created only with `onPlan: true` from a session or Firebase ID token,
+        and the dashboard then puts it on core or pro with
+        `POST /api/sites/{siteId}/billing`. That route refuses API keys, so
+        an API key's `onPlan` is ignored and its create answers 402: further
+        sites are added from the dashboard. A site created on a plan whose
+        checkout is never paid stays on owlette free, and while the account
+        has it, every create answers 402. During the account's trial any site
+        can be created. The 402's `siteCreation` says which case it is, and
+        `GET /api/account/plan` answers the same before the call.
+
         ### Authentication and scopes
 
         Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
@@ -4766,6 +4788,17 @@ paths:
                     each machine's own clock. Omit the field to leave the site
                     undecided — omission is not the same as `false`, which
                     records an explicit decision to keep machine clocks.
+                onPlan:
+                  type: boolean
+                  description: |
+                    The caller puts the new site on core or pro right after
+                    creating it, with `POST /api/sites/{siteId}/billing`. Needed
+                    once the account's free site is taken
+                    (`siteCreation.state: choose_plan`). Honoured only from a
+                    session or Firebase ID token, since the billing route
+                    refuses API keys: from an API key, and as anything but
+                    `true`, it counts as not sent. Nothing of it is stored on
+                    the site.
       responses:
         '201':
           description: Site created.
@@ -6989,7 +7022,7 @@ paths:
 
         Once plans apply after the beta, every type except `update_owlette`,
         `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
-        `cancel_mcp_tool` needs the site owner's plan to include remote
+        `cancel_mcp_tool` needs the site's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
         `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
 
@@ -7502,7 +7535,6 @@ paths:
                   keyPrefix: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: Forbidden - superadmin required for `user` or `installer` scopes.
           content:
@@ -8711,8 +8743,8 @@ paths:
         Site owner or admin with the whole site, or a superadmin, whatever
         their own swoop mode: the swoop-settings capability, as for a kill, so
         a caller with a machine scope gets `403`. Anyone but yourself, with
-        no order among them. Not gated on the site's swoop settings or the
-        payer's plan.
+        no order among them. Not gated on the site's swoop settings or its
+        plan.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -11504,12 +11536,16 @@ components:
           schema: { $ref: '#/components/schemas/ProblemDetails' }
     PlanRequired:
       description: |
-        Plan required (`code: plan_required`): the plan of the site's owner
-        does not include what the request needs, and `entitlement` names it.
-        On `POST /api/sites`, the API-key mint routes and the CLI sign-in the
-        caller's own plan decides; on an ownership transfer, the new owner's.
-        Plans are not enforced during the beta, so no route answers this yet.
-        See `/docs/plans`.
+        Plan required (`code: plan_required`): the site's plan does not
+        include what the request needs, and `entitlement` names it. On
+        `POST /api/sites` (`entitlement: owlette.sites`) the account's free
+        site is taken: `siteCreation` says whether the site can still be
+        created with `onPlan: true` from a session (`choose_plan`) or not at
+        all until `siteCreation.unpaidSite` is upgraded or deleted
+        (`blocked`, with `upgradeUrl` at that site's billing section). On an
+        ownership transfer it is the new owner's free site. Plans are not
+        enforced during the beta, so no route answers this yet. See
+        `/docs/plans`.
       content:
         application/problem+json:
           schema:
@@ -11524,12 +11560,17 @@ components:
                     description: The plan entitlement the request needs.
                   upgradeUrl:
                     type: string
-                    description: Where the account's plan is managed, relative to the dashboard origin.
+                    description: |
+                      Where to act on it, relative to the dashboard origin: the
+                      account's plan page, or, for a blocked site create, the
+                      billing section of the site it names.
+                  siteCreation:
+                    $ref: '#/components/schemas/SiteCreation'
           example:
             type: https://owlette.app/problems/plan-required
             title: plan required
             status: 402
-            detail: your plan doesn't include remote control. upgrade to continue.
+            detail: this site's plan doesn't include remote control. upgrade to continue.
             entitlement: owlette.control
             upgradeUrl: /settings/plan
             code: plan_required
@@ -14394,81 +14435,239 @@ components:
           minimum: 0
     AccountPlanResponse:
       type: object
-      required: [enforced, plan, standing, limits, flags, activeMachinesThisMonth]
+      required: [enforced]
+      description: |
+        With `enforced: false`, only `enforced` and `reason` are sent. With
+        `enforced: true`, `reason` is absent and `emailVerified`, `trial`,
+        `sites`, `free`, `siteCreation`, `foundersRemaining`, `foundersHeld`,
+        `linkAvailable` and `portalUrl` are always sent.
       example:
         enforced: true
-        plan: free
-        standing: expired
-        limits: { machines: 1, sites: 1 }
-        flags: { control: false, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false }
-        activeMachinesThisMonth: 1
-        ownsSites: true
-        liveMachines: [{ siteId: my-site, machineId: KIOSK-01 }]
+        emailVerified: true
+        trial: { status: ended, endsAt: 1793491200000 }
+        sites:
+          - siteId: my-site
+            name: lobby
+            tier: pro
+            standing: active
+            inGoodStanding: true
+            billing: { tier: pro, founders: true, endsAt: null }
+            period: { start: 1793491200000, end: 1796083200000 }
+            activeMachinesThisPeriod: 4
+          - siteId: my-other-site
+            name: annex
+            tier: free
+            standing: expired
+            inGoodStanding: false
+            billing: null
+            period: null
+            activeMachinesThisPeriod: 1
+        free:
+          sitesUsed: 1
+          sitesLimit: 1
+          machinesUsed: 1
+          machinesLimit: 1
+          liveMachines: [{ siteId: my-other-site, machineId: KIOSK-01 }]
+        siteCreation: { state: choose_plan, unpaidSite: { siteId: my-other-site, name: annex } }
+        foundersRemaining: { core: 42, pro: 17 }
+        foundersHeld: { core: false, pro: true }
+        linkAvailable: true
+        portalUrl: https://id.tridant.io
       properties:
         enforced:
           type: boolean
-          description: Whether plan limits apply to this account.
+          description: Whether plans are enforced for this account.
         reason:
           type: string
-          enum: [enforcement_off, not_configured, unreachable, rejected, malformed_response, superadmin, no_payer, keys_missing]
+          enum: [enforcement_off, not_configured, unreachable, rejected, malformed_response, superadmin, no_payer]
+          description: "Why plans are not enforced. Sent only with `enforced: false`."
+        emailVerified:
+          type: boolean
+          description: Whether the caller's email is verified. The trial and a purchase both need it.
+        trial:
+          type: object
+          required: [status, endsAt]
+          properties:
+            status:
+              type: string
+              enum: [none, unverified, active, ended, link_required]
+              description: |
+                `none`: no trial started yet. `unverified`: verify the email
+                and the next read starts it. `active`: running until `endsAt`.
+                `ended`: over, or the account paid before it ever had one.
+                `link_required`: the email already has a tridant account,
+                which must be linked first.
+            endsAt:
+              type: integer
+              format: int64
+              nullable: true
+              description: Unix ms. `null` unless a trial was started.
+        sites:
+          type: array
+          description: The sites the caller owns, each with its plan.
+          items:
+            type: object
+            required: [siteId, name, tier, standing, inGoodStanding, billing, period, activeMachinesThisPeriod]
+            properties:
+              siteId: { type: string }
+              name: { type: string }
+              tier:
+                type: string
+                enum: [free, trial, core, pro]
+                nullable: true
+                description: |
+                  The site's plan. `null` when this site's plan is not
+                  enforced: it is unrestricted, and `reason` says why.
+              standing:
+                type: string
+                nullable: true
+                description: Subscription standing, e.g. `active`, `trialing`, `past_due`, `expired`, `canceled`. `null` with a `null` tier.
+              inGoodStanding:
+                type: boolean
+                description: "`false` is a site on owlette free."
+              reason:
+                type: string
+                enum: [enforcement_off, not_configured, unreachable, rejected, malformed_response, superadmin, no_payer]
+                description: Why this site's plan is not enforced. Sent only with a `null` tier.
+              billing:
+                type: object
+                nullable: true
+                required: [tier, founders, endsAt]
+                description: What the site is billed as. `null` for a site that was never billed.
+                properties:
+                  tier: { type: string, enum: [core, pro] }
+                  founders:
+                    type: boolean
+                    description: Whether the site holds founders pricing.
+                  endsAt:
+                    type: integer
+                    format: int64
+                    nullable: true
+                    description: Unix ms the billing stops at, once the owner stopped it or transferred the site.
+              period:
+                type: object
+                nullable: true
+                required: [start, end]
+                description: The site's billing period in Unix ms. `null` for a site that is not billed.
+                properties:
+                  start: { type: integer, format: int64 }
+                  end: { type: integer, format: int64 }
+              activeMachinesThisPeriod:
+                type: integer
+                minimum: 0
+                nullable: true
+                description: |
+                  Distinct machines online since `period.start`, or since the
+                  caller's trial ended when that is later (nothing in the
+                  trial is billed), or since the 1st of the current month
+                  (UTC) with no period. `null` when the count could not be
+                  read or the tier is `null`.
+        free:
+          type: object
+          required: [sitesUsed, sitesLimit, machinesUsed, machinesLimit, liveMachines]
           description: |
-            Why plans are not enforced. With `enforced: true`, only
-            `keys_missing`, alongside `missingKeys`.
+            owlette free is per account: counted across the caller's sites on
+            owlette free. A site in a trial, or billed in good standing, never
+            counts.
+          properties:
+            sitesUsed:
+              type: integer
+              minimum: 0
+              description: |
+                The caller's unpaid sites: not billed, and no trial covers
+                them. Whether a site is billed is the license server's
+                answer, not the site's `billing` record: a billed site whose
+                payment failed is never one, even once it reads owlette free,
+                and a site whose subscription was cancelled is one, whatever
+                its record says.
+            sitesLimit:
+              type: integer
+              minimum: 1
+              description: "One: every further site is created on core or pro."
+            machinesUsed:
+              type: integer
+              minimum: 0
+              description: Distinct machine IDs on the caller's free sites.
+            machinesLimit:
+              type: integer
+              minimum: 0
+              nullable: true
+              description: "`null` is unlimited."
+            liveMachines:
+              type: array
+              description: |
+                The machines the machine limit keeps live: the first
+                `machinesLimit` on the caller's free sites, earliest paired
+                first, then by machine ID. The dashboard shows the rest of
+                those sites' machines behind an upgrade notice, the same to
+                everyone on the site.
+              items:
+                type: object
+                required: [siteId, machineId]
+                properties:
+                  siteId: { type: string }
+                  machineId: { type: string }
+        foundersRemaining:
+          type: object
+          nullable: true
+          required: [core, pro]
+          description: Founders places left per plan; a `null` count is no cap. `null` as a whole when it could not be read.
+          properties:
+            core: { type: integer, minimum: 0, nullable: true }
+            pro: { type: integer, minimum: 0, nullable: true }
+        foundersHeld:
+          type: object
+          required: [core, pro]
+          description: |
+            Per plan, whether a site the caller owns is billed at that plan's
+            founders rate, or was. tridant id keeps the founders rate for an
+            account that already has a founders site of the plan, so the rate
+            is offered on that plan even once `foundersRemaining` reaches 0.
+            Read from the billing records on the sites the caller still owns.
+          properties:
+            core: { type: boolean }
+            pro: { type: boolean }
+        siteCreation:
+          $ref: '#/components/schemas/SiteCreation'
+        linkAvailable:
+          type: boolean
+          description: Whether linking an existing tridant account is set up on this server.
+        portalUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            The origin of the tridant portal, with no trailing slash. The
+            card and invoices are at `{portalUrl}/billing`. `null` when this
+            server does not know it.
         missingKeys:
           type: array
           items: { type: string }
-          description: Entitlement keys treated as unrestricted because no readable value was sent.
-        ownsSites:
-          type: boolean
-          description: Whether the caller owns at least one site, and so pays for one. Sent only while plans are enforced.
-        plan:
+          description: Entitlement keys a site's answer left out, which read as unrestricted. Sent only when there are any.
+    SiteCreation:
+      type: object
+      required: [state, unpaidSite]
+      description: |
+        Whether the caller can create a site, and how (`POST /api/sites`).
+        `open`: a plain create, which is the account's free site, or any site
+        during the trial. `choose_plan`: the free site is taken by
+        `unpaidSite`, so a site is created with `onPlan: true` from a session
+        and then put on core or pro. `blocked`: `unpaidSite` is a further
+        unpaid site, and no site is created until it is upgraded or deleted;
+        the newest such site is named. A site is unpaid when it is not billed
+        and no trial covers it.
+      properties:
+        state:
           type: string
-          enum: [trial, free, core, pro]
-          nullable: true
-          description: "`null` while plans are not enforced."
-        standing:
-          type: string
-          nullable: true
-          description: Subscription standing, e.g. `active`, `trialing`, `past_due`, `expired`, `canceled`.
-        limits:
+          enum: [open, choose_plan, blocked]
+        unpaidSite:
           type: object
-          required: [machines, sites]
-          description: "`null` is unrestricted."
-          properties:
-            machines: { type: integer, minimum: 0, nullable: true }
-            sites: { type: integer, minimum: 0, nullable: true }
-        flags:
-          type: object
-          required: [control, deployments, swoop, hoot, roost, talons, webhooks, api_keys]
-          properties:
-            control:
-              type: boolean
-              description: Remote commands, process control, display layouts, screenshots and email alerts.
-            deployments: { type: boolean }
-            swoop: { type: boolean }
-            hoot: { type: boolean }
-            roost: { type: boolean }
-            talons: { type: boolean }
-            webhooks: { type: boolean }
-            api_keys: { type: boolean }
-        activeMachinesThisMonth:
-          type: integer
-          minimum: 0
           nullable: true
-          description: Distinct machines online on any UTC day this month. `null` while plans are not enforced.
-        liveMachines:
-          type: array
-          description: |
-            The machines the machine limit keeps live: the first `limits.machines`
-            across every site the caller owns, earliest paired first, then by
-            machine ID. The dashboard shows the rest behind an upgrade notice.
-            Sent only while plans are enforced with a machine limit.
-          items:
-            type: object
-            required: [siteId, machineId]
-            properties:
-              siteId: { type: string }
-              machineId: { type: string }
+          required: [siteId, name]
+          description: "An unpaid site the caller owns: not billed, and no trial covers it. `null` with `open`."
+          properties:
+            siteId: { type: string }
+            name: { type: string }
 
     # operational logs
     SiteLogEntry:

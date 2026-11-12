@@ -12,7 +12,7 @@ const mockDocs = new Map<string, Record<string, unknown>>();
 const mockReads: string[] = [];
 const mockWrites: Array<{ path: string; data: Record<string, unknown> }> = [];
 const mockReadMfaFactors = jest.fn();
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 
 jest.mock('@/lib/firebase-admin', () => {
   const doc = (path: string) => ({
@@ -40,7 +40,7 @@ jest.mock('@/lib/mfaFactors.server', () => ({
 }));
 
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import { siteStanding, type Actor, type SiteRole } from '@/lib/capabilities';
@@ -119,7 +119,7 @@ describe('parseSwoopSettings', () => {
   });
 });
 
-describe('loadSwoopSettings and the payer plan', () => {
+describe("loadSwoopSettings and the site's plan", () => {
   const SETTINGS_PATH = `sites/${SITE}/settings/swoop`;
   const PLAN_ENV = {
     PLAN_ENFORCEMENT: 'on',
@@ -127,9 +127,9 @@ describe('loadSwoopSettings and the payer plan', () => {
     TRIDANT_LICENSE_KEY: 'test-license-key',
   };
 
-  /** a core payer has control but not swoop; pro has both. */
-  function payerSwoop(value: '0' | '1') {
-    mockGetEntitlements.mockResolvedValue({
+  /** a core site has control but not swoop; pro has both. */
+  function siteSwoop(value: '0' | '1') {
+    mockGetSiteEntitlements.mockResolvedValue({
       ok: true,
       resolved: true,
       standing: 'active',
@@ -149,8 +149,8 @@ describe('loadSwoopSettings and the payer plan', () => {
     for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
   });
 
-  it('reports swoop off for a core payer, and keeps the stored switch', async () => {
-    payerSwoop('0');
+  it('reports swoop off for a core site, and keeps the stored switch', async () => {
+    siteSwoop('0');
 
     expect(await loadSwoopSettings(SITE)).toEqual({
       enabled: false,
@@ -158,13 +158,13 @@ describe('loadSwoopSettings and the payer plan', () => {
       membersMayWatch: true,
       indicator: 'tray',
     });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     expect(mockWrites).toEqual([]);
     expect(mockDocs.get(SETTINGS_PATH)).toMatchObject({ enabled: true });
   });
 
-  it('leaves swoop on for a pro payer', async () => {
-    payerSwoop('1');
+  it('leaves swoop on for a pro site', async () => {
+    siteSwoop('1');
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
   });
 
@@ -172,7 +172,7 @@ describe('loadSwoopSettings and the payer plan', () => {
     mockDocs.set(SETTINGS_PATH, { enabled: false });
 
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: false });
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockReads).toEqual([SETTINGS_PATH]);
   });
 
@@ -180,7 +180,7 @@ describe('loadSwoopSettings and the payer plan', () => {
     delete process.env.PLAN_ENFORCEMENT;
 
     expect(await loadSwoopSettings(SITE)).toMatchObject({ enabled: true });
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockReads).toEqual([SETTINGS_PATH]);
   });
 });

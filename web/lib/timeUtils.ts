@@ -35,6 +35,22 @@ export function formatRelativeTime(timestampSeconds: number): string {
   }
 }
 
+/**
+ * epoch ms → "nov 1, 2026" (or "nov 1"), the same in every browser language.
+ * `utc` for the days of a billing period, which are UTC calendar days whatever
+ * the viewer's zone; otherwise the day is the viewer's own.
+ */
+export function formatDay(ms: number, { year = true, utc = false }: { year?: boolean; utc?: boolean } = {}): string {
+  return new Date(ms)
+    .toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: year ? 'numeric' : undefined,
+      timeZone: utc ? 'UTC' : undefined,
+    })
+    .toLowerCase();
+}
+
 /** Unix seconds → clock time in an IANA `timezone`, lowercased. */
 export function formatTimeOnly(
   timestampSeconds: number,

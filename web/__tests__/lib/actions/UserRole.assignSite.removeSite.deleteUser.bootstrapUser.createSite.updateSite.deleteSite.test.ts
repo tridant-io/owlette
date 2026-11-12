@@ -23,10 +23,32 @@ jest.mock('@/lib/logger', () => ({
 }));
 
 // the resolver has its own suite; here it only matters what createSite does with the answer.
-const mockSiteSlotAvailable = jest.fn();
+const mockSiteCreation = jest.fn();
+const mockPlansEnforced = jest.fn();
+const mockTridantConfigured = jest.fn();
 jest.mock('@/lib/plan.server', () => ({
   ...jest.requireActual('@/lib/plan.server'),
-  siteSlotAvailable: (uid: string) => mockSiteSlotAvailable(uid),
+  siteCreation: (uid: string) => mockSiteCreation(uid),
+  plansEnforced: () => mockPlansEnforced(),
+  tridantConfigured: () => mockTridantConfigured(),
+}));
+
+// the billing hooks of createSite and deleteSite; tridant's side has its own suites.
+const mockRegisterSite = jest.fn();
+jest.mock('@/lib/planTrial.server', () => ({
+  registerSite: (...args: unknown[]) => mockRegisterSite(...args),
+}));
+
+const mockStopSite = jest.fn();
+jest.mock('@/lib/tridantBilling.server', () => ({
+  stopSite: (siteId: string) => mockStopSite(siteId),
+}));
+
+// what tridant bills for a site with no billing pointer: none, unless a test says so.
+const mockGetSiteEntitlements = jest.fn(async (_siteId: string): Promise<unknown> => ({ ok: true, billing: null }));
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+  invalidateSiteEntitlements: jest.fn(),
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
@@ -40,6 +62,7 @@ jest.mock('firebase-admin/firestore', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
+import logger from '@/lib/logger';
 import { setUserRole } from '@/lib/actions/setUserRole.server';
 import { assignSiteToUser } from '@/lib/actions/assignSiteToUser.server';
 import { removeSiteFromUser } from '@/lib/actions/removeSiteFromUser.server';
@@ -685,20 +708,30 @@ describe('bootstrapUser', () => {
   });
 });
 
+const OPEN = { state: 'open', unpaidSite: null };
+const LOBBY = { siteId: 'lobby', name: 'Lobby' };
+const CHOOSE_PLAN = { state: 'choose_plan', unpaidSite: LOBBY };
+const BLOCKED = { state: 'blocked', unpaidSite: LOBBY };
+
 describe('site CRUD actions', () => {
   const CREATE_NOW = new Date('2026-02-03T04:05:06.000Z');
 
   beforeEach(() => {
-    mockSiteSlotAvailable.mockResolvedValue(true);
+    mockSiteCreation.mockResolvedValue(OPEN);
+    mockPlansEnforced.mockReturnValue(false);
+    mockTridantConfigured.mockReturnValue(false);
+    mockRegisterSite.mockResolvedValue(null);
+    mockStopSite.mockResolvedValue({ ok: true, endsAt: 1793600000000 });
   });
 
   /** Run createSite against `db` with the fixed clock and stable inputs. */
-  function runCreateSite(db: FakeDb, siteId = 'site-a') {
+  function runCreateSite(db: FakeDb, siteId = 'site-a', onPlan?: boolean) {
     return createSite(ctx, {
       siteId,
       name: '  Main Gallery  ',
       ownerUid: 'owner-1',
       timezone: 'Not/AZone',
+      onPlan,
       db: db.asFirestore(),
       now: () => CREATE_NOW,
     });
@@ -738,33 +771,99 @@ describe('site CRUD actions', () => {
       role: 'owner',
       status: 'active',
     });
-    // the owner is the payer, so the slot asked about is theirs.
-    expect(mockSiteSlotAvailable).toHaveBeenCalledWith('owner-1');
+    // the owner pays, so the account asked about is theirs.
+    expect(mockSiteCreation).toHaveBeenCalledWith('owner-1');
   });
 
-  it('createSite refuses an owner with no site slot left, and writes nothing', async () => {
+  it.each([
+    ['taken without onPlan', CHOOSE_PLAN, undefined],
+    ['beside a further unpaid site, onPlan or not', BLOCKED, true],
+  ] as const)('createSite refuses an owner whose free site is %s, and writes nothing', async (_case, creation, onPlan) => {
     const db = new FakeDb();
     db.seed('users/owner-1', { sites: ['existing-site'] });
-    mockSiteSlotAvailable.mockResolvedValue(false);
+    mockSiteCreation.mockResolvedValue(creation);
 
-    const result = await runCreateSite(db);
+    const result = await runCreateSite(db, 'site-a', onPlan);
 
-    expect(result).toEqual({ kind: 'plan_limit' });
+    expect(result).toEqual({ kind: 'plan_limit', siteCreation: creation });
     expect(db.docs.get('sites/site-a')).toBeUndefined();
     expect(db.docs.get('sites/site-a/members/owner-1')).toBeUndefined();
     expect(db.docs.get('users/owner-1')?.sites).toEqual(['existing-site']);
     expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 
+  it('createSite creates a site on its way to a plan once the free site is taken', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: ['lobby'] });
+    mockSiteCreation.mockResolvedValue(CHOOSE_PLAN);
+
+    expect(await runCreateSite(db, 'site-a', true)).toMatchObject({ kind: 'created', siteId: 'site-a' });
+    // the intent is the request's, not the site's: nothing of it is stored.
+    expect(db.docs.get('sites/site-a')).not.toHaveProperty('onPlan');
+  });
+
   it('createSite answers a taken or invalid id before asking about the plan', async () => {
     const db = new FakeDb();
     db.seed('users/owner-1', { sites: [] });
     db.seed('sites/site-a', { name: 'taken', owner: 'someone-else' });
-    mockSiteSlotAvailable.mockResolvedValue(false);
+    mockSiteCreation.mockResolvedValue(BLOCKED);
 
     expect(await runCreateSite(db)).toEqual({ kind: 'already_exists' });
     expect(await runCreateSite(db, 'Not A Valid Id!')).toMatchObject({ kind: 'invalid_site_id' });
-    expect(mockSiteSlotAvailable).not.toHaveBeenCalled();
+    expect(mockSiteCreation).not.toHaveBeenCalled();
+  });
+
+  it('createSite registers the new site with tridant once it exists, when tridant id is configured', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
+    let committedAtRegistration = false;
+    mockRegisterSite.mockImplementation(async () => {
+      committedAtRegistration = Boolean(db.docs.get('sites/site-a'));
+      return { ok: true, created: true, moved: false };
+    });
+
+    await runCreateSite(db);
+
+    expect(mockRegisterSite).toHaveBeenCalledTimes(1);
+    expect(mockRegisterSite).toHaveBeenCalledWith('owner-1', 'site-a', 'Main Gallery');
+    expect(committedAtRegistration).toBe(true);
+  });
+
+  it('createSite still creates the site when tridant refuses the registration', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
+    mockRegisterSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    expect(await runCreateSite(db)).toMatchObject({ kind: 'created', siteId: 'site-a' });
+    expect(db.docs.get('sites/site-a')).toMatchObject({ owner: 'owner-1' });
+  });
+
+  it('createSite registers the new site while plans are still switched off, once tridant id is configured', async () => {
+    // between the bulk trial start and the switch: the site must be under its owner's trial when plans go on.
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockTridantConfigured.mockReturnValue(true);
+
+    await runCreateSite(db);
+
+    expect(mockRegisterSite).toHaveBeenCalledWith('owner-1', 'site-a', 'Main Gallery');
+  });
+
+  it('createSite registers nothing while tridant id is not configured, or when the site is refused', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+
+    await runCreateSite(db);
+
+    mockTridantConfigured.mockReturnValue(true);
+    mockSiteCreation.mockResolvedValue(BLOCKED);
+    expect(await runCreateSite(db, 'site-b')).toEqual({ kind: 'plan_limit', siteCreation: BLOCKED });
+
+    expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 
   it('createSite preserves memberships the creator already had', async () => {
@@ -817,6 +916,60 @@ describe('site CRUD actions', () => {
       timezone: 'Not/AZone',
       timeFormat: '24h',
       schedulesFollowSiteTime: true,
+    });
+  });
+
+  describe('updateSite registers a renamed site with tridant id', () => {
+    const rename = (db: FakeDb, name: string) =>
+      updateSite(ctx, { siteId: 'site-a', name, db: db.asFirestore() });
+
+    it('again under its new name, once the rename is written, so invoice lines carry it', async () => {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'old', owner: 'owner-1' });
+      mockTridantConfigured.mockReturnValue(true);
+      let writtenFirst = false;
+      mockRegisterSite.mockImplementation(async () => {
+        writtenFirst = db.docs.get('sites/site-a')?.name === 'new name';
+        return { ok: true, created: false, moved: false };
+      });
+
+      expect(await rename(db, '  new name  ')).toMatchObject({ kind: 'updated' });
+
+      expect(mockRegisterSite).toHaveBeenCalledTimes(1);
+      expect(mockRegisterSite).toHaveBeenCalledWith('owner-1', 'site-a', 'new name');
+      expect(writtenFirst).toBe(true);
+    });
+
+    it('still renames when tridant refuses the registration', async () => {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'old', owner: 'owner-1' });
+      mockTridantConfigured.mockReturnValue(true);
+      mockRegisterSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+      expect(await rename(db, 'new name')).toMatchObject({ kind: 'updated' });
+      expect(db.docs.get('sites/site-a')).toMatchObject({ name: 'new name' });
+    });
+
+    it('not while tridant id is not configured, for an unchanged name, or for other fields', async () => {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'old', owner: 'owner-1', timezone: 'UTC' });
+
+      await rename(db, 'new name');
+      mockTridantConfigured.mockReturnValue(true);
+      await rename(db, 'new name');
+      await updateSite(ctx, { siteId: 'site-a', timezone: 'Europe/Berlin', db: db.asFirestore() });
+
+      expect(mockRegisterSite).not.toHaveBeenCalled();
+    });
+
+    it('not for an ownerless site', async () => {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'old' });
+      mockTridantConfigured.mockReturnValue(true);
+
+      await rename(db, 'new name');
+
+      expect(mockRegisterSite).not.toHaveBeenCalled();
     });
   });
 
@@ -1138,5 +1291,93 @@ describe('site CRUD actions', () => {
     // site-first would leave config behind with no site left to delete it through
     expect(db.docs.get('config/site-a/machines/machine-1')).toBeNull();
     expect(db.docs.get('sites/site-a')).toEqual({ name: 'a' });
+  });
+
+  describe('deleteSite billing', () => {
+    const POINTER = { tier: 'pro', founders: false, payerUid: 'alice', endsAt: null, updatedAt: 1 };
+
+    function billedSite(): FakeDb {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'a', owner: 'alice', billing: POINTER });
+      db.seed('agent_refresh_tokens/tok-1', { siteId: 'site-a' });
+      return db;
+    }
+
+    beforeEach(() => {
+      mockPlansEnforced.mockReturnValue(true);
+    });
+
+    it('stops billing before anything is destroyed', async () => {
+      const db = billedSite();
+      let intactAtStop = false;
+      mockStopSite.mockImplementation(async () => {
+        intactAtStop = Boolean(db.docs.get('agent_refresh_tokens/tok-1')) && Boolean(db.docs.get('sites/site-a'));
+        return { ok: true, endsAt: 1793600000000 };
+      });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(mockStopSite).toHaveBeenCalledTimes(1);
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
+      expect(intactAtStop).toBe(true);
+    });
+
+    it('deletes the site when tridant cannot be reached, and logs the stop that did not land', async () => {
+      const db = billedSite();
+      mockStopSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(db.docs.get('sites/site-a')).toBeNull();
+      expect(db.docs.get('agent_refresh_tokens/tok-1')).toBeNull();
+      expect(logger.error).toHaveBeenCalledWith(
+        '[plan] billing not stopped for a deleted site',
+        expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', reason: 'unreachable' }) }),
+      );
+    });
+
+    it('ignores a site tridant does not bill', async () => {
+      const db = billedSite();
+      mockStopSite.mockResolvedValue({ ok: false, reason: 'rejected', status: 404, code: 'site_not_billed' });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('stops nothing for a site with no billing pointer that tridant does not bill', async () => {
+      const unbilled = new FakeDb();
+      unbilled.seed('sites/site-a', { name: 'a', owner: 'alice' });
+      await deleteSite(ctx, { siteId: 'site-a', db: unbilled.asFirestore() });
+
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
+      expect(mockStopSite).not.toHaveBeenCalled();
+    });
+
+    // a paid checkout whose return never loaded leaves a billed site with no pointer.
+    it('stops a site with no billing pointer that tridant bills', async () => {
+      const unrecorded = new FakeDb();
+      unrecorded.seed('sites/site-a', { name: 'a', owner: 'alice' });
+      mockGetSiteEntitlements.mockResolvedValue({
+        ok: true,
+        billing: { periodStart: 1, periodEnd: 2, endsAt: null, cancelAtPeriodEnd: false },
+      });
+      mockStopSite.mockResolvedValue({ ok: true, endsAt: 2 });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: unrecorded.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
+    });
+
+    it('stops a billed site even while plans are not enforced', async () => {
+      mockPlansEnforced.mockReturnValue(false);
+      await deleteSite(ctx, { siteId: 'site-a', db: billedSite().asFirestore() });
+
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
+    });
   });
 });

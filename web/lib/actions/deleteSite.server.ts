@@ -10,7 +10,10 @@
  *   1. audit to the PLATFORM sink, blocking and fail-closed. The site's own
  *      audit_log is a subcollection of the doc below, so a row written there dies
  *      with the evidence of who destroyed it.
- *   2. tombstone the id, so the slug cannot be re-registered mid-cascade.
+ *   2. tombstone the id, so the slug cannot be re-registered mid-cascade. then
+ *      stop the site's billing with tridant id (adr 0018), whenever owlette has a
+ *      record of it or tridant id bills the site, best effort: the delete goes
+ *      on when tridant id cannot be reached.
  *   3. revoke `agent_refresh_tokens` for the site. FIRST among the destructive
  *      steps: a refresh token outlives the site document, so revoking last leaves
  *      a window where the site is gone and an agent can still mint access tokens
@@ -49,6 +52,7 @@ import {
 } from '@/lib/auditLog.server';
 import { deleteFleetCalls } from '@/lib/fleet/calls.server';
 import { revokeFleetSessions } from '@/lib/fleet/session.server';
+import { stopBillingBeforeDelete } from '@/lib/siteBilling.server';
 
 export interface DeleteSiteInput {
   siteId: string;
@@ -139,6 +143,9 @@ export async function deleteSite(
   await db.collection('site_ids').doc(input.siteId).set({
     deletedAt: FieldValue.serverTimestamp(),
   });
+
+  // stop billing before anything is destroyed, best effort.
+  await stopBillingBeforeDelete(input.siteId, existing.data());
 
   // 3. Agent credentials first — see the ordering note above.
   const tokenSnap = await db

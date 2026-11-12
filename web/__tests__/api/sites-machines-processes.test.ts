@@ -870,7 +870,7 @@ describe.each([
       new FakeExecuteMachineCommandError(
         402,
         'plan_required',
-        "your plan doesn't include remote control. upgrade to continue.",
+        "this site's plan doesn't include remote control. upgrade to continue.",
         'owlette.control',
       ),
     );

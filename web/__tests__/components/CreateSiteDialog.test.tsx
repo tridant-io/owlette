@@ -59,6 +59,13 @@ jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
 }));
 
+jest.mock('next/navigation', () => ({ useRouter: () => ({ push: jest.fn() }) }));
+
+// plans are covered in CreateSiteDialog.plan.test.tsx; here the account plan never loads.
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => ({ plan: undefined, refresh: jest.fn() }),
+}));
+
 async function openDialog() {
   const user = userEvent.setup();
   const onCreateSite = jest.fn().mockResolvedValue('new-site');
@@ -120,6 +127,8 @@ describe('what the create writes', () => {
         'NYC Office',
         'America/New_York',
         true,
+        // a plain create: the account plan is not loaded here, so no plan step ran
+        undefined,
       ),
     );
   });
@@ -144,6 +153,7 @@ describe('what the create writes', () => {
         'NYC Office',
         'Europe/Berlin',
         true,
+        undefined,
       ),
     );
   });

@@ -374,14 +374,12 @@ export default function DeploymentsPage() {
     sites,
     sitesLoading,
     currentSiteId,
-    currentSite,
     siteTimezone,
     hasNoSites,
     limitedOnly,
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
-  const siteOwner = currentSite?.owner ?? null;
-  const deploymentsGated = usePlanGated('deployments', siteOwner);
+  const deploymentsGated = usePlanGated('deployments', currentSiteId);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
   const [uninstallDialogOpen, setUninstallDialogOpen] = useState(false);
   const [initialSoftwareName, setInitialSoftwareName] = useState<string | undefined>(undefined);
@@ -689,7 +687,7 @@ export default function DeploymentsPage() {
               beside `new deployment` and the pair is wider than a phone. */}
           <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
             <UpdateOwletteButton siteId={currentSiteId} machines={machines} />
-            <UpgradeGate flag="deployments" siteOwner={siteOwner} variant="inline">
+            <UpgradeGate flag="deployments" siteId={currentSiteId} variant="inline">
               <Button
                 onClick={() => setDeployDialogOpen(true)}
                 className="cursor-pointer"

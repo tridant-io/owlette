@@ -4,7 +4,7 @@
  * viewer. swoop's switch has its own page in the admin panel's swoop section.
  */
 
-export const SITE_SECTIONS = ['general', 'members', 'machines', 'danger'] as const;
+export const SITE_SECTIONS = ['general', 'members', 'machines', 'billing', 'danger'] as const;
 
 export type SiteSection = (typeof SITE_SECTIONS)[number];
 
@@ -12,6 +12,7 @@ export const SITE_SECTION_LABELS: Record<SiteSection, string> = {
   general: 'general',
   members: 'members',
   machines: 'machines',
+  billing: 'billing',
   danger: 'danger zone',
 };
 

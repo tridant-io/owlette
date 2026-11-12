@@ -4,11 +4,14 @@ import { useState } from 'react';
 import { SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites, type Site } from '@/hooks/useFirestore';
+import { usePlan } from '@/hooks/usePlan';
+import { useSitePlan } from '@/hooks/useSitePlan';
 import { SITE_SECTIONS, SITE_SECTION_LABELS, type SiteSection } from '@/lib/siteSettingsPath';
 import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
 import { Panel } from '@/components/admin/Panel';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { CopySiteIdButton } from '@/components/admin/sites/CopySiteIdButton';
+import { SiteBillingSection } from '@/components/admin/sites/SiteBillingSection';
 import { SiteDangerZone } from '@/components/admin/sites/SiteDangerZone';
 import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
@@ -33,6 +36,10 @@ export function SiteSettings({
 }) {
   const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope } = useAuth();
   const { sites, loading, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
+  const { plan, loading: planLoading } = usePlan();
+  // only an owner is billed for a site, so nobody else's view asks for its plan
+  const { plan: sitePlan, loading: sitePlanLoading } = useSitePlan(isSiteOwner(siteId) ? siteId : null);
+  const [now] = useState(() => Date.now());
   // a delete's cascade drops the site from `sites`, and the caller's row on it,
   // before the request answers: the site is held till then, so its confirm dialog stays up
   const [deleting, setDeleting] = useState<Site | null>(null);
@@ -82,7 +89,13 @@ export function SiteSettings({
 
   // only an owner reaches the delete that holds a site, and a superadmin's isSiteOwner is true everywhere
   const owner = held !== null || isSiteOwner(site.id);
-  const visible = SITE_SECTIONS.filter((s) => s !== 'danger' || owner);
+  // billing is the owner's too, and only where plans are enforced or the site is billed: tridant id
+  // bills it whatever the switch says, so with plans off the owner can still stop it. the plans load
+  // after the page, so a link to billing (the return from checkout) waits for them instead of opening general
+  const pointer = sitePlan?.isOwner ? sitePlan.billing : null;
+  const billed = !!pointer && (pointer.endsAt === null || pointer.endsAt > now);
+  const billing = owner && (plan?.enforced || billed || ((planLoading || sitePlanLoading) && section === 'billing'));
+  const visible = SITE_SECTIONS.filter((s) => (s !== 'danger' || owner) && (s !== 'billing' || billing));
   const effective = visible.includes(section) ? section : 'general';
 
   return (
@@ -95,7 +108,8 @@ export function SiteSettings({
         </div>
       </header>
 
-      {/* flex, so the control is as wide as its buttons and still wraps on a phone */}
+      {/* flex, so the control is as wide as its buttons. its five sections fit one row at 390px
+          (button.tsx's xs size); narrower than that they wrap rather than clip */}
       <div className="mb-4 flex">
         <SegmentedControl
           label="site settings sections"
@@ -118,6 +132,7 @@ export function SiteSettings({
           </div>
         </Panel>
       )}
+      {effective === 'billing' && <SiteBillingSection key={site.id} site={site} />}
       {effective === 'danger' && (
         <SiteDangerZone
           key={site.id}

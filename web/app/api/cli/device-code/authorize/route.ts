@@ -22,7 +22,6 @@ import {
   assertUserHasSiteAccess,
   requireSessionOrIdToken,
 } from '@/lib/apiAuth.server';
-import { requireApiKeyMintPlan } from '@/app/api/_shared';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
   DEVICE_CODE_WRAP_VERSION,
@@ -113,9 +112,6 @@ export const POST = withRateLimit(
     try {
       const userId = await requireSessionOrIdToken(request);
       const activeUserData = await assertActiveUser(userId);
-
-      const planError = await requireApiKeyMintPlan(userId);
-      if (planError) return planError;
 
       const body = (await request.json().catch(() => ({}))) as AuthorizeBody;
 

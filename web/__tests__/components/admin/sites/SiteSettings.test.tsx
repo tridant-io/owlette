@@ -4,10 +4,10 @@
  *
  * admin panel → sites → a site: its loading, not-found and member-only states,
  * the header with the site ID and the caller's role, one section at a time
- * (danger zone for owners and superadmins only), and where a delete sends the
- * caller. the four sections and the keep screens awake switch are stubs; each
- * has its own test. swoop's switch lives on /admin/swoop, and its old
- * section link goes there.
+ * (danger zone for owners and superadmins only, billing for owners where plans
+ * are enforced or the site is billed), and where a delete sends the caller. the
+ * five sections and the keep screens awake switch are stubs; each has its own
+ * test. swoop's switch lives on /admin/swoop, and its old section link goes there.
  */
 
 import React from 'react';
@@ -58,6 +58,24 @@ jest.mock('@/hooks/useFirestore', () => ({
   },
 }));
 
+let mockPlan: { plan: { enforced: boolean } | undefined; loading: boolean };
+jest.mock('@/hooks/usePlan', () => ({
+  usePlan: () => mockPlan,
+}));
+
+interface MockSitePlan {
+  isOwner: boolean;
+  billing: { tier: 'core' | 'pro'; founders: boolean; endsAt: number | null } | null;
+}
+let mockSitePlan: { plan: MockSitePlan | undefined; loading: boolean };
+const mockUseSitePlan = jest.fn();
+jest.mock('@/hooks/useSitePlan', () => ({
+  useSitePlan: (siteId: string | null) => {
+    mockUseSitePlan(siteId);
+    return mockSitePlan;
+  },
+}));
+
 interface GeneralProps {
   site: Site;
   onSave: unknown;
@@ -83,6 +101,9 @@ jest.mock('@/components/SiteMachinesList', () => ({
 }));
 jest.mock('@/components/admin/sites/SiteSwitches', () => ({
   KeepScreensAwakeSwitch: ({ siteId }: { siteId: string }) => <div data-testid="keep-awake-switch" data-site={siteId} />,
+}));
+jest.mock('@/components/admin/sites/SiteBillingSection', () => ({
+  SiteBillingSection: ({ site }: { site: Site }) => <div data-testid="billing-section" data-site={site.id} />,
 }));
 jest.mock('@/components/admin/sites/SiteDangerZone', () => ({
   SiteDangerZone: (props: DangerProps) => {
@@ -110,6 +131,9 @@ beforeEach(() => {
   // admin of site-a, a member of site-b, the owner of site-c
   mockAuth = { isSuperadmin: false, adminOf: ['site-a'], ownerOf: ['site-c'] };
   mockSites = { sites: [ALPHA, BRAVO, CHARLIE], loading: false };
+  // plans off, as on every deployment until PLAN_ENFORCEMENT is on, and no site billed
+  mockPlan = { plan: { enforced: false }, loading: false };
+  mockSitePlan = { plan: { isOwner: true, billing: null }, loading: false };
   mockDeleteSite.mockResolvedValue(undefined);
   mockSearch = '';
   mockGeneral = undefined;
@@ -124,7 +148,14 @@ function renderSettings(siteId: string, section: SiteSection = 'general') {
     <SiteSettings siteId={siteId} section={section} onSectionChange={onSectionChange} onDeleted={onDeleted} />
   );
   const view = render(element());
-  return { user, container: view.container, rerender: () => view.rerender(element()), onSectionChange, onDeleted };
+  return {
+    user,
+    container: view.container,
+    rerender: () => view.rerender(element()),
+    unmount: view.unmount,
+    onSectionChange,
+    onDeleted,
+  };
 }
 
 async function openPage(siteId: string) {
@@ -283,6 +314,127 @@ describe('sections', () => {
     expect(screen.getAllByTestId(/-section$/)).toHaveLength(1);
   });
 
+  describe('billing', () => {
+    const WITH_BILLING = ['general', 'members', 'machines', 'billing', 'danger zone'];
+
+    it('gives an owner billing, just before the danger zone, where plans are enforced', () => {
+      mockPlan = { plan: { enforced: true }, loading: false };
+      renderSettings('site-c');
+
+      expect(sectionNames()).toEqual(WITH_BILLING);
+    });
+
+    it('renders it for the site, and only it', () => {
+      mockPlan = { plan: { enforced: true }, loading: false };
+      renderSettings('site-c', 'billing');
+
+      expect(within(sectionGroup()).getByRole('button', { name: 'billing', pressed: true })).toBeInTheDocument();
+      expect(screen.getByTestId('billing-section')).toHaveAttribute('data-site', 'site-c');
+      expect(screen.getAllByTestId(/-section$/)).toHaveLength(1);
+    });
+
+    it('renders general for an admin who asks for it, with no billing section to pick', () => {
+      mockPlan = { plan: { enforced: true }, loading: false };
+      renderSettings('site-a', 'billing');
+
+      expect(sectionNames()).toEqual(['general', 'members', 'machines']);
+      expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-a');
+      expect(screen.queryByTestId('billing-section')).toBeNull();
+    });
+
+    it.each([
+      ['plans are not enforced', { plan: { enforced: false }, loading: false }],
+      ['the account plan could not be read', { plan: undefined, loading: false }],
+    ])('renders general for an owner who asks for it when %s', (_, plan) => {
+      mockPlan = plan;
+      renderSettings('site-c', 'billing');
+
+      expect(sectionNames()).toEqual(['general', 'members', 'machines', 'danger zone']);
+      expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-c');
+      expect(screen.queryByTestId('billing-section')).toBeNull();
+    });
+
+    it('holds billing open for an owner who asks for it while the account plan loads', () => {
+      mockPlan = { plan: undefined, loading: true };
+      renderSettings('site-c', 'billing');
+
+      expect(sectionNames()).toEqual(WITH_BILLING);
+      expect(screen.getByTestId('billing-section')).toHaveAttribute('data-site', 'site-c');
+      expect(screen.queryByTestId('general-section')).toBeNull();
+    });
+
+    it('lists no billing while the account plan loads for an owner on another section, or for an admin', () => {
+      mockPlan = { plan: undefined, loading: true };
+      const owner = renderSettings('site-c', 'members');
+      expect(sectionNames()).not.toContain('billing');
+      owner.unmount();
+
+      renderSettings('site-a', 'billing');
+      expect(sectionNames()).not.toContain('billing');
+      expect(screen.getByTestId('general-section')).toBeInTheDocument();
+    });
+
+    it('gives a superadmin none: their account plan is never enforced', () => {
+      mockAuth = { isSuperadmin: true, adminOf: [], ownerOf: [] };
+      renderSettings('site-b', 'billing');
+
+      expect(sectionNames()).not.toContain('billing');
+      expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-b');
+    });
+
+    describe('while plans are off', () => {
+      const billed = (endsAt: number | null) => ({
+        plan: { isOwner: true, billing: { tier: 'pro' as const, founders: false, endsAt } },
+        loading: false,
+      });
+
+      it.each([
+        ['billed', null],
+        ['stopping', Date.UTC(2099, 0, 1)],
+      ])('gives an owner billing for a %s site, so they can stop what tridant id still bills', (_, endsAt) => {
+        mockSitePlan = billed(endsAt);
+        renderSettings('site-c', 'billing');
+
+        expect(mockUseSitePlan).toHaveBeenCalledWith('site-c');
+        expect(sectionNames()).toEqual(WITH_BILLING);
+        expect(screen.getByTestId('billing-section')).toHaveAttribute('data-site', 'site-c');
+      });
+
+      it.each([
+        ['is not billed', { plan: { isOwner: true, billing: null }, loading: false }],
+        ['was billed until a day now past', billed(1_000)],
+        ['could not be read', { plan: undefined, loading: false }],
+      ])('gives an owner none for a site that %s', (_, sitePlan) => {
+        mockSitePlan = sitePlan;
+        renderSettings('site-c', 'billing');
+
+        expect(sectionNames()).not.toContain('billing');
+        expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-c');
+      });
+
+      it('holds billing open for an owner who asks for it while the site plan loads', () => {
+        mockSitePlan = { plan: undefined, loading: true };
+        renderSettings('site-c', 'billing');
+
+        expect(screen.getByTestId('billing-section')).toHaveAttribute('data-site', 'site-c');
+      });
+
+      it('asks for no site plan for an admin, and gives a superadmin none for a site someone else pays for', () => {
+        mockSitePlan = billed(null);
+        const admin = renderSettings('site-a', 'billing');
+        expect(mockUseSitePlan).toHaveBeenCalledWith(null);
+        expect(mockUseSitePlan).not.toHaveBeenCalledWith('site-a');
+        expect(sectionNames()).not.toContain('billing');
+        admin.unmount();
+
+        mockAuth = { isSuperadmin: true, adminOf: [], ownerOf: [] };
+        mockSitePlan = { ...billed(null), plan: { ...billed(null).plan, isOwner: false } };
+        renderSettings('site-b', 'billing');
+        expect(sectionNames()).not.toContain('billing');
+      });
+    });
+  });
+
   it("hands general the site and useSites' updateSite", () => {
     renderSettings('site-a');
 
@@ -414,8 +566,19 @@ describe('/admin/sites/[siteId]', () => {
     expect(screen.getByTestId('members-section')).toHaveAttribute('data-site', 'site-a');
   });
 
+  it('opens billing from the return from checkout for the owner, and links back to it', async () => {
+    mockPlan = { plan: { enforced: true }, loading: false };
+    mockSearch = 'section=billing&session_id=cs_test_1';
+    const user = await openPage('site-c');
+
+    expect(screen.getByTestId('billing-section')).toHaveAttribute('data-site', 'site-c');
+
+    await user.click(screen.getByRole('button', { name: 'billing' }));
+    expect(mockReplace).toHaveBeenLastCalledWith('/admin/sites/site-c?section=billing', { scroll: false });
+  });
+
   it('opens general for a section it does not know', async () => {
-    mockSearch = 'section=billing';
+    mockSearch = 'section=plan';
     await openPage('site-a');
 
     expect(screen.getByTestId('general-section')).toHaveAttribute('data-site', 'site-a');

@@ -12,7 +12,7 @@
  *      not a reason to give up on killing, and `requestSwoopSession` queues this
  *      one type even for an offline machine (plan.md D11).
  *
- * Deliberately NOT gated on the site's swoop settings or the payer's plan:
+ * Deliberately NOT gated on the site's swoop settings or the site's plan:
  * stopping a stream has to work after the feature has been switched off, which
  * is exactly when an operator wants it most. The capability check is the whole gate.
  *

@@ -182,4 +182,51 @@ describe('tridantFetch', () => {
       tridantFetch('/v1/x', { key: KEY, method: 'POST', body: circular }),
     ).resolves.toEqual({ ok: false, reason: 'unreachable' });
   });
+
+  // the warned names live as long as the process, so each test below warns under its own.
+  describe('key expiry', () => {
+    function expiring(status: number, body: unknown, sunset = 'Sat, 12 Dec 2026 00:00:00 GMT') {
+      return { ...reply(status, body), headers: new Headers({ Sunset: sunset }) } as unknown as Response;
+    }
+
+    it('says nothing when no Sunset header comes back, or one that is not a date', async () => {
+      mockFetch.mockResolvedValueOnce({ ...reply(200, {}), headers: new Headers() } as unknown as Response);
+      expect(await tridantFetch('/v1/x', { key: KEY })).toEqual({ ok: true, status: 200, json: {} });
+
+      mockFetch.mockResolvedValueOnce(expiring(200, {}, 'soon'));
+      expect(await tridantFetch('/v1/x', { key: KEY })).toEqual({ ok: true, status: 200, json: {} });
+
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('logs the date at error once per process, without the key', async () => {
+      mockFetch.mockResolvedValue(expiring(200, { hello: 'world' }));
+
+      expect(await tridantFetch('/v1/x', { key: KEY })).toEqual({ ok: true, status: 200, json: { hello: 'world' } });
+      await tridantFetch('/v1/y', { key: KEY });
+
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error).toHaveBeenCalledWith(
+        '[tridant] tridant id says this api key expires on 2026-12-12; rotate it before then',
+        { context: 'tridant' },
+      );
+      expect(JSON.stringify((logger.error as jest.Mock).mock.calls)).not.toContain(KEY);
+    });
+
+    it('names the env var the caller passes, once per name, also on a refused answer', async () => {
+      mockFetch.mockResolvedValue(expiring(401, { error: 'api_key_unbound' }));
+
+      const request = { key: KEY, keyName: 'TRIDANT_LICENSE_KEY' };
+      expect(await tridantFetch('/v1/x', request)).toMatchObject({ ok: false, reason: 'rejected', status: 401 });
+      await tridantFetch('/v1/x', request);
+      await tridantFetch('/v1/x', { key: 'release-key', keyName: 'TRIDANT_RELEASE_KEY' });
+
+      const messages = (logger.error as jest.Mock).mock.calls.map(([message]) => message);
+      expect(messages).toEqual([
+        '[tridant] tridant id says this api key expires on 2026-12-12; rotate TRIDANT_LICENSE_KEY before then',
+        '[tridant] tridant id says this api key expires on 2026-12-12; rotate TRIDANT_RELEASE_KEY before then',
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(KEY);
+    });
+  });
 });

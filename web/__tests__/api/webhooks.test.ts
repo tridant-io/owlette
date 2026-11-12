@@ -38,9 +38,9 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 // Stub ssrf + dns resolution so url validation is deterministic.
@@ -1111,7 +1111,7 @@ describe('WEBHOOK_MANAGE enforcement', () => {
   });
 });
 
-// plan gate — creating needs the payer's owlette.webhooks; the rest stay open (plan.md decision 8)
+// plan gate — creating needs the site's owlette.webhooks; the rest stay open
 
 describe('owlette.webhooks plan gate', () => {
   const create = () =>
@@ -1124,11 +1124,11 @@ describe('owlette.webhooks plan gate', () => {
 
   beforeEach(() => {
     enforcePlans();
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
   });
   afterEach(stopEnforcingPlans);
 
-  it('402s a create on the site payer’s free plan, and writes nothing', async () => {
+  it('402s a create on a free site, and writes nothing', async () => {
     const res = await create();
 
     expect(res.status).toBe(402);
@@ -1136,12 +1136,12 @@ describe('owlette.webhooks plan gate', () => {
       code: 'plan_required',
       entitlement: 'owlette.webhooks',
     });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('user-1');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     expect(mocks.set).not.toHaveBeenCalled();
   });
 
   it('creates on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
 
     expect((await create()).status).toBe(201);
   });
@@ -1159,6 +1159,6 @@ describe('owlette.webhooks plan gate', () => {
     );
 
     expect(res.status).toBe(200);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });

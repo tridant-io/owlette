@@ -55,6 +55,9 @@ export const Capability = {
   // plain matrix entry on the owner row — the ownership short-circuits that used
   // to stand in for it are gone.
   SITE_DELETE: 'SITE_DELETE',
+  // Putting a site on the owner's card: checkout, plan changes, the billing portal.
+  // Owner row only, like SITE_DELETE: an admin must not spend the owner's money.
+  SITE_BILLING_MANAGE: 'SITE_BILLING_MANAGE',
   WEBHOOK_MANAGE: 'WEBHOOK_MANAGE',
   SITE_LOGS_MANAGE: 'SITE_LOGS_MANAGE',
   TALON_MANAGE: 'TALON_MANAGE',
@@ -262,10 +265,11 @@ const SITE_ADMIN_CAPABILITIES: readonly Capability[] = [
   // on the owner row below, and on nothing else but superadmin.
 ];
 
-/** Per-site `owner`: everything an admin holds, plus destroying the site. */
+/** Per-site `owner`: everything an admin holds, plus destroying the site and paying for it. */
 const SITE_OWNER_CAPABILITIES: readonly Capability[] = [
   ...SITE_ADMIN_CAPABILITIES,
   Capability.SITE_DELETE,
+  Capability.SITE_BILLING_MANAGE,
 ];
 
 const SITE_SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
@@ -289,6 +293,7 @@ const SITE_SCOPED_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_ENROLL,
   Capability.ALERT_RULES_MANAGE,
   Capability.SITE_DELETE,
+  Capability.SITE_BILLING_MANAGE,
 ]);
 
 /**

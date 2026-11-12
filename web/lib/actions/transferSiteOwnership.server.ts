@@ -21,8 +21,12 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import logger from '@/lib/logger';
 import type { MemberDoc } from '@/lib/membership.server';
-import { planLimit, resolvePlan } from '@/lib/plan.server';
+import { resolveSitePlan, siteCreation, tridantConfigured } from '@/lib/plan.server';
+import { registerSite } from '@/lib/planTrial.server';
+import { stopSite } from '@/lib/tridantBilling.server';
+import { invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
 
 export type TransferFailure =
   | { kind: 'site_not_found' }
@@ -31,7 +35,7 @@ export type TransferFailure =
   | { kind: 'successor_inactive' }
   | { kind: 'successor_already_owner' }
   | { kind: 'site_has_no_owner' }
-  | { kind: 'plan_limit'; entitlement: 'owlette.sites' | 'owlette.machines' };
+  | { kind: 'plan_limit'; entitlement: 'owlette.sites' };
 
 export type TransferResult =
   | { ok: true; previousOwnerUid: string; newOwnerUid: string }
@@ -44,7 +48,7 @@ export interface TransferInput {
   /** True when the actor holds the global superadmin role. */
   actorIsSuperadmin: boolean;
   /**
-   * account deletion hands every site over even past the successor's plan: a
+   * account deletion hands every site over even past the successor's free limit: a
    * departing owner can't be held hostage to someone else's limits, and the
    * successor's gates still refuse anything new.
    */
@@ -65,6 +69,9 @@ export interface TransferInput {
  *
  * The outgoing owner is demoted to `admin` and KEEPS their `sites[]` entry; callers
  * wanting them gone must remove them afterwards, through `membership.server.ts`.
+ *
+ * the site's billing follows the transfer, best effort (adr 0018): it stops at the
+ * period end, and the new owner upgrades again.
  */
 export async function transferSiteOwnership(input: TransferInput): Promise<TransferResult> {
   const db = input.db ?? getAdminDb();
@@ -78,9 +85,11 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
   // transaction's reads would hold their locks for all of it.
   const planRefusal = input.skipPlanCheck
     ? null
-    : await successorPlanRefusal(db, input.successorUid, input.siteId);
+    : await successorPlanRefusal(input.siteId, input.successorUid);
 
-  return db.runTransaction(async (tx) => {
+  // the site as the transaction read it, for the billing hand-over after it.
+  let site: Record<string, unknown> = {};
+  const result = await (db.runTransaction(async (tx) => {
     // All reads first: Firestore forbids a read after a write in one transaction,
     // and these are the documents whose concurrent modification must abort this.
     const [siteSnap, successorSnap] = await Promise.all([
@@ -90,8 +99,8 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
 
     if (!siteSnap.exists) return { ok: false, failure: { kind: 'site_not_found' } };
 
-    const siteData = (siteSnap.data() ?? {}) as { owner?: unknown };
-    const currentOwnerUid = typeof siteData.owner === 'string' ? siteData.owner : null;
+    site = siteSnap.data() ?? {};
+    const currentOwnerUid = typeof site.owner === 'string' ? site.owner : null;
     if (!currentOwnerUid) {
       // An ownerless site is a repair job — never invent an owner from the caller.
       return { ok: false, failure: { kind: 'site_has_no_owner' } };
@@ -149,37 +158,58 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
     tx.update(successorUserRef, { sites: FieldValue.arrayUnion(input.siteId) });
 
     return { ok: true, previousOwnerUid: currentOwnerUid, newOwnerUid: input.successorUid };
-  }) as Promise<TransferResult>;
+  }) as Promise<TransferResult>);
+
+  if (result.ok) await handOverBilling(siteRef, input.siteId, site, input.successorUid);
+  return result;
 }
 
 /**
- * the plan limit the successor would break by taking the site, or null. the
- * owner is the payer (plan decision 1), so the site counts against the
- * successor's sites and its machines join theirs.
+ * the refusal when the successor has no room for the site, or null. a billed or
+ * trialing site never counts toward owlette free (adr 0018), so only a free site
+ * needs room on the successor's account: their free site not taken, or their trial running.
  */
-async function successorPlanRefusal(
-  db: FirebaseFirestore.Firestore,
-  successorUid: string,
+async function successorPlanRefusal(siteId: string, successorUid: string): Promise<TransferFailure | null> {
+  const plan = await resolveSitePlan(siteId);
+  if (!plan.enforced || plan.inGoodStanding) return null;
+  return (await siteCreation(successorUid)).state === 'open' ? null : { kind: 'plan_limit', entitlement: 'owlette.sites' };
+}
+
+/**
+ * the outgoing owner pays to the end of the period, and the site is offered to
+ * the successor's organization. never throws: the transfer has landed, and the
+ * daily job moves the site once nothing runs on it under the old organization.
+ */
+async function handOverBilling(
+  siteRef: FirebaseFirestore.DocumentReference,
   siteId: string,
-): Promise<TransferFailure | null> {
-  const plan = await resolvePlan(successorUid);
-  const siteLimit = planLimit(plan, 'owlette.sites');
-  const machineLimit = planLimit(plan, 'owlette.machines');
-  if (siteLimit === Infinity && machineLimit === Infinity) return null;
-
-  const owned = await db.collection('sites').where('owner', '==', successorUid).select().get();
-  if (owned.docs.length >= siteLimit) return { kind: 'plan_limit', entitlement: 'owlette.sites' };
-  if (machineLimit === Infinity) return null;
-
-  const machinesOf = async (id: string) =>
-    (await db.collection('sites').doc(id).collection('machines').select().get()).docs.map((doc) => doc.id);
-  const [incoming, ...ownedMachines] = await Promise.all(
-    [siteId, ...owned.docs.map((site) => site.id)].map(machinesOf),
-  );
-  const theirs = new Set(ownedMachines.flat());
-  const combined = new Set([...theirs, ...incoming]);
-  // a site whose machines are all already theirs adds nothing, as a re-pair is exempt at mint.
-  return combined.size > theirs.size && combined.size > machineLimit
-    ? { kind: 'plan_limit', entitlement: 'owlette.machines' }
-    : null;
+  site: Record<string, unknown>,
+  successorUid: string,
+): Promise<void> {
+  try {
+    // read here, not through siteBilling.server.ts: any pointer at all, whatever its shape, is worth a stop.
+    const billing = site.billing;
+    const running =
+      typeof billing === 'object' && billing !== null && typeof (billing as { endsAt?: unknown }).endsAt !== 'number';
+    if (running) {
+      const stopped = await stopSite(siteId);
+      if (stopped.ok) {
+        await siteRef.update({ 'billing.endsAt': stopped.endsAt, 'billing.updatedAt': FieldValue.serverTimestamp() });
+        invalidateSiteEntitlements(siteId);
+      } else if (stopped.code !== 'site_not_billed') {
+        // the daily job stops it on its next run (stopStrandedBilling).
+        logger.error('[plan] billing not stopped for a transferred site', {
+          context: 'plan',
+          data: { siteId, reason: stopped.reason, status: stopped.status, code: stopped.code },
+        });
+      }
+    }
+    // refused with `site_running` while the old period runs; the daily job asks again.
+    if (tridantConfigured()) await registerSite(successorUid, siteId, typeof site.name === 'string' && site.name ? site.name : siteId);
+  } catch (error) {
+    logger.error('[plan] billing hand-over failed for a transferred site', {
+      context: 'plan',
+      data: { siteId, error: error instanceof Error ? error.message : String(error) },
+    });
+  }
 }

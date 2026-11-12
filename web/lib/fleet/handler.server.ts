@@ -12,7 +12,7 @@
  *      proves only "a granted machine of this site": dispatch decides the
  *      machine a call acts on
  *   5. rate limit, in the machine's own bucket
- *   6. the payer's `owlette.hoot` (402)
+ *   6. `owlette.hoot` on the site's plan (402)
  *   7. handler(`FleetContext`)
  *
  * the wrapper audits only its own refusals. a tool call is audited where it is

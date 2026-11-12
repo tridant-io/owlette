@@ -3,12 +3,13 @@ import { apiError } from '@/lib/apiErrorResponse';
 import { runPlanDaily } from '@/lib/planUsage.server';
 
 /**
- * GET /api/cron/plan-daily — stamps each payer's active machines for the day
- * and refreshes their plan snapshot (plan.md decision 10; the work is in
- * `@/lib/planUsage.server`). auth: X-Cron-Secret must equal CRON_SECRET.
+ * GET /api/cron/plan-daily — stamps each site's active machines, refreshes its
+ * plan snapshot and reports the billed sites to tridant id (adr 0018; the work
+ * is in `@/lib/planUsage.server`). answers the run's counts. auth:
+ * X-Cron-Secret must equal CRON_SECRET.
  *
- * runs on cron-job.org, not railway — register once per environment:
- *   0 3 * * *  GET https://<app>/api/cron/plan-daily
+ * runs on cron-job.org, not railway — register once per environment, in UTC:
+ *   30 23 * * *  GET https://<app>/api/cron/plan-daily
  *   header: X-Cron-Secret: <that environment's CRON_SECRET>
  */
 export async function GET(request: NextRequest) {

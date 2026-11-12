@@ -166,11 +166,13 @@ async function apiJson<T>(
   return body as T;
 }
 
+/** `onPlan`: the caller upgrades the site to core or pro next, which an account whose free site is taken needs. */
 export async function createSite(
   siteId: string,
   name: string,
   timezone?: string,
   schedulesFollowSiteTime?: boolean,
+  onPlan?: boolean,
 ): Promise<string> {
   if (!db) throw new Error('Firebase not configured');
 
@@ -195,6 +197,7 @@ export async function createSite(
         // would spend that state at creation and permanently suppress the
         // opt-in banner for a site nobody ever asked.
         ...(schedulesFollowSiteTime !== undefined ? { schedulesFollowSiteTime } : {}),
+        ...(onPlan ? { onPlan } : {}),
       }),
     });
   } catch (err: unknown) {

@@ -52,14 +52,12 @@ export default function RoostsPageClient() {
     sites,
     sitesLoading,
     currentSiteId,
-    currentSite,
     siteTimezone,
     hasNoSites,
     limitedOnly,
     selectSite,
   } = useCurrentSite({ wholeSiteOnly: true });
-  const siteOwner = currentSite?.owner ?? null;
-  const roostGated = usePlanGated('roost', siteOwner);
+  const roostGated = usePlanGated('roost', currentSiteId);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
@@ -337,7 +335,7 @@ export default function RoostsPageClient() {
           </div>
 
           <div className="flex items-center gap-2 flex-shrink-0">
-            <UpgradeGate flag="roost" siteOwner={siteOwner} variant="inline">
+            <UpgradeGate flag="roost" siteId={currentSiteId} variant="inline">
               <Button
                 onClick={() => {
                   setNewVersionContext(null);

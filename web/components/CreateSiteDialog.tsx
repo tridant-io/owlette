@@ -1,14 +1,41 @@
 'use client';
 
+/**
+ * create a site. with plans on, the account plan's `siteCreation` decides the
+ * step (adr 0018): the account's free site, or any site during the trial, is a
+ * plain create; once the free site is taken, the new site is created on its way
+ * to core or pro and goes straight into the upgrade; and with one more site not
+ * billed, nothing is created until that one is upgraded or deleted.
+ */
+
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { InlineNotice } from '@/components/ui/inline-notice';
+import { foundersRate, PlanTierPicker } from '@/components/plan/PlanTierPicker';
+import { LINK_TRIDANT_HREF } from '@/components/plan/TrialBanner';
+import { EmailUnverifiedNotice, LinkRequiredNotice } from '@/components/plan/UpgradeNotices';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePlan } from '@/hooks/usePlan';
+import { requestSiteUpgrade, type BillingTier } from '@/hooks/useSiteBilling';
+import { notBilledDetail } from '@/lib/planResponse';
 import { validateSiteId, generateRandomSiteId } from '@/lib/validators';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { cn } from '@/lib/utils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -24,6 +51,7 @@ interface CreateSiteDialogProps {
     siteName: string,
     timezone?: string,
     schedulesFollowSiteTime?: boolean,
+    onPlan?: boolean,
   ) => Promise<string>;
   onSiteCreated?: (siteId: string) => void;
 }
@@ -37,6 +65,7 @@ export function CreateSiteDialog({
   onSiteCreated,
 }: CreateSiteDialogProps) {
   const { user } = useAuth();
+  const router = useRouter();
   const [newSiteName, setNewSiteName] = useState('');
   const [newSiteId, setNewSiteId] = useState('');
   const [customIdOpen, setCustomIdOpen] = useState(false);
@@ -46,6 +75,24 @@ export function CreateSiteDialog({
   const [isCreating, setIsCreating] = useState(false);
   const [availabilityStatus, setAvailabilityStatus] = useState<AvailabilityStatus>('idle');
   const [validationError, setValidationError] = useState<string>('');
+  const { plan, refresh: refreshPlan } = usePlan();
+  const [tier, setTier] = useState<BillingTier>('pro');
+
+  const account = plan?.enforced ? plan : null;
+  const creation = account?.siteCreation;
+  // the account's free site is taken, so this site is created on core or pro
+  const freeSite = creation?.state === 'choose_plan' ? creation.unpaidSite : null;
+  const blockedBy = creation?.state === 'blocked' ? creation.unpaidSite : null;
+  // an upgrade the server would refuse, which would leave the new site on owlette free
+  const upgradeBlocker =
+    !freeSite || !account
+      ? null
+      : !account.emailVerified
+        ? 'email_unverified'
+        : account.trial.status === 'link_required'
+          ? 'link_required'
+          : null;
+  const founders = (picked: BillingTier) => foundersRate(account, picked);
 
   // Generate a random ID when the dialog opens
   useEffect(() => {
@@ -53,6 +100,7 @@ export function CreateSiteDialog({
       setNewSiteId(generateRandomSiteId());
       setNewSiteName('');
       setCustomIdOpen(false);
+      setTier('pro');
       // Detected here rather than in a useState initializer so a dialog kept
       // mounted across a timezone change (laptop moved, OS setting edited)
       // re-reads it on the next open instead of serving a stale zone. Kept
@@ -180,8 +228,22 @@ export function CreateSiteDialog({
         newSiteName,
         resolvedTimezone || undefined,
         resolvedTimezone ? true : undefined,
+        freeSite ? true : undefined,
       );
-      toast.success('site created', { description: `${newSiteName} is ready for its first machine.` });
+      // the site exists from here on: a refused or abandoned upgrade leaves it on owlette free.
+      const upgrade = freeSite ? await requestSiteUpgrade(createdSiteId, tier, founders(tier)) : null;
+      // the account plan counts the new site, which changes what the next create needs.
+      if (account) void refreshPlan();
+      if (!upgrade) {
+        toast.success('site created', { description: `${newSiteName} is ready for its first machine.` });
+      } else if (!upgrade.ok) {
+        toast.error(`${newSiteName} is created, but not on ${tier}`, {
+          description: `${upgrade.detail} it stays on owlette free until you upgrade it in its billing section.`,
+          action: { label: 'go to its billing', onClick: () => router.push(siteSettingsPath(createdSiteId, 'billing')) },
+        });
+      } else if ('added' in upgrade) {
+        toast.success('site created', { description: `${newSiteName} is on ${tier}, billed to the card on file.` });
+      }
       setNewSiteId('');
       setNewSiteName('');
       setAvailabilityStatus('idle');
@@ -191,8 +253,11 @@ export function CreateSiteDialog({
       if (onSiteCreated) {
         onSiteCreated(createdSiteId);
       }
+      if (upgrade?.ok && 'checkoutUrl' in upgrade) window.location.assign(upgrade.checkoutUrl);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+      // a plan refusal means the account plan this dialog read is behind the server's
+      if ((error as { status?: unknown } | null)?.status === 402) void refreshPlan();
       toast.error('could not create the site', { description: message || 'try again in a moment.' });
     } finally {
       setIsCreating(false);
@@ -221,148 +286,205 @@ export function CreateSiteDialog({
     }
   };
 
+  const header = (
+    <DialogHeader>
+      <DialogTitle className="text-foreground">create new site</DialogTitle>
+      <DialogDescription className="text-muted-foreground">
+        sites organize your machines by location, purpose, or project. for example, create separate sites for different offices, studios, or installations.
+      </DialogDescription>
+    </DialogHeader>
+  );
+  const cancel = (
+    <Button variant="outline" onClick={() => onOpenChange(false)}>
+      cancel
+    </Button>
+  );
+
+  if (blockedBy) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="border-border text-foreground">
+          {header}
+          <div className="py-4">
+            <InlineNotice data-testid="create-site-blocked">
+              <p className="text-sm text-foreground wrap-anywhere">{notBilledDetail(blockedBy.name)}</p>
+            </InlineNotice>
+          </div>
+          <DialogFooter>
+            {cancel}
+            <Button asChild>
+              <Link href={siteSettingsPath(blockedBy.siteId, 'billing')} onClick={() => onOpenChange(false)}>
+                go to its billing
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border text-foreground">
-        <DialogHeader>
-          <DialogTitle className="text-foreground">create new site</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            sites organize your machines by location, purpose, or project. for example, create separate sites for different offices, studios, or installations.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4 py-4">
-          {/* Site Name Input */}
-          <div className="space-y-2">
-            <Label htmlFor="site-name" className="text-foreground">site name</Label>
-            <Input
-              id="site-name"
-              placeholder="e.g., NYC Office"
-              value={newSiteName}
-              onChange={(e) => setNewSiteName(e.target.value)}
-              className="border-border bg-background text-foreground"
-              autoFocus
-            />
-          </div>
-
-          {/* Auto-generated Site ID preview */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>site ID:</span>
-              <span className="font-mono text-accent-cyan">{newSiteId}</span>
-              {getAvailabilityIcon()}
-              <span role="status" className="sr-only">{availabilityText}</span>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleRegenerate}
-                    aria-label="generate new site ID"
-                    className="text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
-                  >
-                    <RefreshCw className="h-3 w-3" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>generate new ID</p>
-                </TooltipContent>
-              </Tooltip>
+      {/* the form scrolls under the actions, which stay in view however tall the plan step is */}
+      <DialogContent
+        className={cn(
+          'flex max-h-[calc(100dvh-2rem)] flex-col border-border text-foreground',
+          freeSite && 'p-4 sm:max-w-2xl sm:p-6',
+        )}
+      >
+        <DialogBody>
+          {header}
+          <div className="space-y-4 py-4">
+            {/* Site Name Input */}
+            <div className="space-y-2">
+              <Label htmlFor="site-name" className="text-foreground">site name</Label>
+              <Input
+                id="site-name"
+                placeholder="e.g., NYC Office"
+                value={newSiteName}
+                onChange={(e) => setNewSiteName(e.target.value)}
+                className="border-border bg-background text-foreground"
+                autoFocus
+              />
             </div>
 
-            <FormError message={validationError} id="site-id-error" />
+            {/* Auto-generated Site ID preview */}
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>site ID:</span>
+                <span className="font-mono text-accent-cyan">{newSiteId}</span>
+                {getAvailabilityIcon()}
+                <span role="status" className="sr-only">{availabilityText}</span>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      onClick={handleRegenerate}
+                      aria-label="generate new site ID"
+                      className="text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>generate new ID</p>
+                  </TooltipContent>
+                </Tooltip>
+              </div>
 
-            {/* Expandable custom ID section */}
-            <button
-              type="button"
-              aria-expanded={customIdOpen}
-              onClick={() => setCustomIdOpen(!customIdOpen)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
-            >
-              {customIdOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              customize site ID
-            </button>
+              <FormError message={validationError} id="site-id-error" />
 
-            {customIdOpen && (
-              <div className="relative">
-                <Label htmlFor="site-id" className="sr-only">site ID</Label>
-                <Input
-                  id="site-id"
-                  placeholder="e.g., nyc-office"
-                  value={newSiteId}
-                  onChange={(e) => handleSiteIdChange(e.target.value)}
-                  aria-invalid={hasIdError || undefined}
-                  aria-describedby={validationError ? 'site-id-error' : undefined}
-                  className={`border-border bg-background text-foreground pr-10 ${
-                    availabilityStatus === 'available' ? 'border-success/50 focus-visible:ring-success' : ''
-                  }`}
-                />
-                <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                  {getAvailabilityIcon()}
+              {/* Expandable custom ID section */}
+              <button
+                type="button"
+                aria-expanded={customIdOpen}
+                onClick={() => setCustomIdOpen(!customIdOpen)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
+              >
+                {customIdOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                customize site ID
+              </button>
+
+              {customIdOpen && (
+                <div className="relative">
+                  <Label htmlFor="site-id" className="sr-only">site ID</Label>
+                  <Input
+                    id="site-id"
+                    placeholder="e.g., nyc-office"
+                    value={newSiteId}
+                    onChange={(e) => handleSiteIdChange(e.target.value)}
+                    aria-invalid={hasIdError || undefined}
+                    aria-describedby={validationError ? 'site-id-error' : undefined}
+                    className={`border-border bg-background text-foreground pr-10 ${
+                      availabilityStatus === 'available' ? 'border-success/50 focus-visible:ring-success' : ''
+                    }`}
+                  />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    {getAvailabilityIcon()}
+                  </div>
                 </div>
+              )}
+            </div>
+
+            {/* Detected timezone, shown read-only behind the same disclosure
+                idiom as the site ID: it is a decision the browser can make for
+                the operator, not one worth a required field. Editing it here is
+                the only chance to get it right before the first schedule is
+                written, since the site is created opted into site time. */}
+            <div className="space-y-2">
+              {/* flex-wrap, unlike the site ID row above: an IANA name plus its
+                  provenance is long enough to overflow a 390px dialog. */}
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>site timezone:</span>
+                <span data-testid="create-site-timezone" className="font-mono text-accent-cyan">
+                  {timezone || 'not detected'}
+                </span>
+                {timezone && timezone === detectedTimezone && <span>(from your browser)</span>}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                {timezone
+                  ? 'scheduled processes at this site run on this clock, on every machine.'
+                  : 'we could not read a timezone from your browser — pick one below to run this site’s schedules on one clock, or leave it and each machine keeps its own.'}
+              </p>
+
+              <button
+                type="button"
+                aria-expanded={timezoneOpen}
+                onClick={() => setTimezoneOpen(!timezoneOpen)}
+                className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
+              >
+                {timezoneOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+                change timezone
+              </button>
+
+              {timezoneOpen && (
+                <>
+                  {/* The read-only row above is the visible label; the select
+                      still needs one of its own to have an accessible name. */}
+                  <Label htmlFor="site-timezone" className="sr-only">site timezone</Label>
+                  <TimezoneSelect
+                    id="site-timezone"
+                    value={timezone}
+                    onValueChange={setTimezone}
+                    className="border-border bg-background text-foreground"
+                  />
+                </>
+              )}
+            </div>
+
+            {freeSite && (
+              <div data-testid="create-site-plan" className="space-y-3">
+                <p className="text-sm text-foreground wrap-anywhere">
+                  owlette free covers one site, and {freeSite.name} is on it. pick a plan for this one.
+                </p>
+                <PlanTierPicker selected={tier} onSelect={setTier} foundersRate={founders} />
+                <p className="text-xs text-muted-foreground">
+                  then checkout opens, or, if you already have a subscription, this site goes straight on the card on
+                  file.
+                </p>
+                {upgradeBlocker === 'email_unverified' && (
+                  <EmailUnverifiedNotice testId="create-site-email-unverified" doing="adding a site on core or pro" />
+                )}
+                {upgradeBlocker === 'link_required' && (
+                  <LinkRequiredNotice
+                    testId="create-site-link-required"
+                    doing="adding a site on core or pro"
+                    linkHref={account?.linkAvailable ? LINK_TRIDANT_HREF : null}
+                  />
+                )}
               </div>
             )}
           </div>
-
-          {/* Detected timezone, shown read-only behind the same disclosure
-              idiom as the site ID: it is a decision the browser can make for
-              the operator, not one worth a required field. Editing it here is
-              the only chance to get it right before the first schedule is
-              written, since the site is created opted into site time. */}
-          <div className="space-y-2">
-            {/* flex-wrap, unlike the site ID row above: an IANA name plus its
-                provenance is long enough to overflow a 390px dialog. */}
-            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <span>site timezone:</span>
-              <span data-testid="create-site-timezone" className="font-mono text-accent-cyan">
-                {timezone || 'not detected'}
-              </span>
-              {timezone && timezone === detectedTimezone && <span>(from your browser)</span>}
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              {timezone
-                ? 'scheduled processes at this site run on this clock, on every machine.'
-                : 'we could not read a timezone from your browser — pick one below to run this site’s schedules on one clock, or leave it and each machine keeps its own.'}
-            </p>
-
-            <button
-              type="button"
-              aria-expanded={timezoneOpen}
-              onClick={() => setTimezoneOpen(!timezoneOpen)}
-              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-accent-cyan transition-colors cursor-pointer"
-            >
-              {timezoneOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-              change timezone
-            </button>
-
-            {timezoneOpen && (
-              <>
-                {/* The read-only row above is the visible label; the select
-                    still needs one of its own to have an accessible name. */}
-                <Label htmlFor="site-timezone" className="sr-only">site timezone</Label>
-                <TimezoneSelect
-                  id="site-timezone"
-                  value={timezone}
-                  onValueChange={setTimezone}
-                  className="border-border bg-background text-foreground"
-                />
-              </>
-            )}
-          </div>
-        </div>
+        </DialogBody>
         <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            className="bg-secondary border border-border cursor-pointer"
-          >
-            cancel
-          </Button>
+          {cancel}
           <Button
             onClick={handleCreateSite}
-            disabled={isCreating || availabilityStatus !== 'available'}
+            disabled={isCreating || availabilityStatus !== 'available' || upgradeBlocker !== null}
             className="cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isCreating ? 'creating...' : 'create site'}
+            {isCreating ? 'creating...' : freeSite ? `create on ${tier}` : 'create site'}
           </Button>
         </DialogFooter>
       </DialogContent>

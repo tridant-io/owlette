@@ -1,7 +1,7 @@
 ---
 title: "plans"
-description: "owlette free, the 14-day pro trial, and core and pro billed per active machine: what each plan covers once the beta ends, what happens when a subscription lapses, and the plan_required error. none of it applies during the beta."
-keywords: ["pricing", "billing", "free plan", "free tier", "subscription", "trial", "upgrade", "downgrade", "lapse", "expired", "active machines", "machine limit", "site limit", "plan_required", "402", "cost"]
+description: "owlette free, the 14-day pro trial, and core and pro billed per site and per active machine: what each plan covers once the beta ends, why every site after your free one is created on core or pro, how a site's owner upgrades it and what they are billed, what happens when a site's billing ends, and the plan_required error. none of it applies during the beta."
+keywords: ["pricing", "billing", "free plan", "free tier", "subscription", "trial", "upgrade", "downgrade", "lapse", "expired", "active machines", "machine limit", "site limit", "plan_required", "402", "cost", "per site", "site billing", "billing period", "checkout", "card", "invoice", "tridant account", "link account", "stop billing", "transfer ownership", "past due", "new site", "second site", "create site", "free site", "siteCreation", "onPlan"]
 ---
 
 <Callout type="info" title={"plans are not active during the beta"}>
@@ -14,10 +14,12 @@ owlette is in beta, and every feature is free while it lasts. nothing on this pa
 
 ## the plans
 
-after the beta there are three plans:
+after the beta, a plan belongs to a **site**, and each site is on one of three:
 
-- **owlette free** covers 1 machine and 1 site, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included.
-- **core** and **pro** are the paid plans, both billed per active machine per month, with unlimited machines. core adds remote control: commands, process control, display layouts, screenshots and email alerts, on 1 site. pro adds deployments, swoop, hoot, talons, roost, webhooks, API keys and unlimited sites, bills at least 3 machines and includes 1 TB of project storage per site. the full lists and the prices are on the [pricing page](/#pricing).
+- **owlette free** is the plan of a site nobody pays for, with live status, metrics, crash-restart and updates. remote control, deployments, swoop, hoot, alerts and the pro features are not included. it is counted per account: one free site, with 1 machine. every further site you create is on core or pro, as you [add it](#adding-a-site).
+- **core** and **pro** are the paid plans. a site on either is billed on its own, per active machine per month, with unlimited machines. core adds remote control: commands, process control, display layouts, screenshots and email alerts. pro adds deployments, swoop, hoot, talons, roost, webhooks and API keys, bills at least 3 machines per site and includes 1 TB of project storage per site. an account can own any number of sites on core and on pro, mixed: the two differ by features and by pro's minimum, never by how many sites they allow. the full lists and the prices are on the [pricing page](/#pricing).
+
+the site's plan decides what can be done on it, whoever does it. the site's owner pays for it, and only the owner can change it: see [upgrading a site](#upgrading-a-site). one account can own sites on different plans.
 
 every new account starts with a [14-day pro trial](#the-trial).
 
@@ -41,8 +43,8 @@ each of these maps to one entitlement, which is what a refusal names in its `ent
 
 | feature | entitlement | plan |
 |---|---|---|
-| a second machine, counted across every site you own | `owlette.machines` | core |
-| a second site | `owlette.sites` | pro |
+| a second machine, counted across the free sites you own | `owlette.machines` | core |
+| another site once your free site is taken: it is created on core or pro | `owlette.sites` | core |
 | remote commands: reboot, shut down, process start, stop, restart and kill, screenshots, live view, display changes | `owlette.control` | core |
 | alert rules, and every alert email | `owlette.control` | core |
 | software deployments | `owlette.deployments` | pro |
@@ -51,15 +53,73 @@ each of these maps to one entitlement, which is what a refusal names in its `ent
 | [roost](/docs/dashboard/roost): creating roosts, uploading, publishing, deploying and rolling back | `owlette.roost` | pro |
 | [talons](/docs/dashboard/talons): creating, editing and testing them; scheduled and event talons pause | `owlette.talons` | pro |
 | [webhooks](/docs/api/webhooks): creating subscriptions; deliveries pause | `owlette.webhooks` | pro |
-| [API keys](/docs/api/authentication): creating and rotating keys, signing in the CLI, and every site request made with a key | `owlette.api_keys` | pro |
+| [API keys](/docs/api/authentication): every request a key makes on the site | `owlette.api_keys` | pro |
+
+the two limits are per account, and only your sites on owlette free count toward them. a site on core or pro, or in a trial, never does: upgrade your free site and the next site you create is free again. the site limit counts only unpaid sites, those not billed and not covered by a trial: a billed site whose payment failed shares the free machine once it is on owlette free, but never counts as an unpaid site.
 
 ---
 
 ## the trial
 
-after the beta, every account starts with a 14-day pro trial, no card. an email-and-password account starts it once its email address is verified; the dashboard shows a banner with **send verification email** until it is. a Google sign-in is verified already. accounts that already exist when plans start get the same trial then.
+after the beta, every account gets a 14-day pro trial, no card. it starts the first time you open owlette with a verified email address. an email-and-password account is on owlette free until its address is verified, and the dashboard shows a banner with **send verification email** until then. a Google sign-in is verified already. accounts that already exist when plans start get the same trial then.
 
-when the trial ends, the account falls back to owlette free unless you pick core or pro.
+the trial covers every site you own, including one you create while it runs. it does not cover a site you are only a member of: that site has its owner's trial, or its own plan.
+
+when the trial ends, each site you haven't upgraded goes to owlette free. you can upgrade a site during the trial: its billing starts when the trial ends, and nothing in the trial is billed.
+
+there is one trial per tridant account, ever.
+
+### if your email already has a tridant account
+
+tridant makes owlette, and your tridant account is where the card and the invoices for your sites are kept. owlette makes one for you when your trial starts or when you first upgrade a site.
+
+if the email you use for owlette already has a tridant account, owlette does not join the two by email. the plan page and the dashboard banner say **this email already has a tridant account**, with **link it**. you sign in to tridant to confirm the account is yours, and come back to owlette with the two linked. the trial then starts, unless that tridant account has already had one.
+
+- if you own more than one tridant account, owlette asks which to link.
+- the sign-in has to be fresh. one more than 10 minutes old is refused, and linking again asks you to sign in.
+- until it is linked, the account has no trial and cannot upgrade a site.
+
+---
+
+## adding a site
+
+once plans apply, the first unpaid site you own, not billed and not covered by a trial, is your **free site**. after that:
+
+- **every further site is created on core or pro.** **create new site** asks you to pick one, with its price, creates the site and goes straight to its upgrade: a checkout the first time you pay for a site, or, once you have a subscription, the card on file with no checkout.
+- **a checkout you leave unpaid** leaves the new site on owlette free. it shares your one free machine with the free site, so while the free site holds that machine nothing can be paired to the new one. upgrade it in its billing section whenever you like.
+- **while such a site is not billed, no other site can be created.** **create new site** names it and links its billing section: upgrade it, or delete it.
+- **during the trial** you can create as many sites as you like. when the trial ends, nothing is deleted or disconnected: sites you haven't upgraded go to owlette free, and new sites wait until no more than one of them is left.
+
+a site past your free site is added from the dashboard. `POST /api/sites` takes `onPlan: true` only from a signed-in session, because the upgrade that follows cannot be made with an API key: with your free site taken, an API key's create answers `402`, `onPlan` or not. `GET /api/account/plan` says which of the three cases applies in `siteCreation`: `open`, `choose_plan` or `blocked`.
+
+---
+
+## upgrading a site
+
+each site is upgraded, switched and stopped on its own, in **site settings → billing** (`/admin/sites/{siteId}?section=billing`). only the site's owner sees that section, and only the owner can change a site's billing: an admin or a member who meets a feature the site's plan leaves out is told to ask the owner. an API key cannot change a site's billing.
+
+- **upgrade** puts a site on core or pro. the first site you pay for goes through a checkout, where you enter a card, and you come back to the billing section once it is paid. you need a verified email.
+- **later sites** need no checkout. the checkout starts your subscription, which keeps running, at no charge, even once every site on it has stopped, so every later upgrade puts the site on the same card. while one of your sites is billed, the dialog says there is no checkout; once none is, it says either may follow, since a subscription can also have been cancelled after failed payments.
+- **switch plan** moves a billed site between core and pro at once. the whole billing period is billed at the plan the site is on when the period ends.
+- **stop billing** ends the site's billing at the end of the billing period. the site keeps its plan until then, that period is still billed, and after it the site goes to owlette free. until then, **resume billing** undoes the stop.
+
+your card and invoices are in your tridant account, which the plan page links to.
+
+### billing periods
+
+a billing period is a calendar month, from the 1st at 00:00 UTC. the first month you are billed is charged by the day, from your first upgrade, or from the end of your trial if you upgrade during it. a site added later is charged for the whole month it is added in, and a site switched or stopped mid-month pays for the whole month too.
+
+### when a payment fails
+
+the site reads **past due** in its billing section and on the plan page. it keeps its plan for a short grace period, then goes to owlette free. update the card in your tridant account. its billing still runs, so it never counts as an unpaid site and never stops you creating one.
+
+if the payments keep failing and the subscription is cancelled, its sites' billing ends with it. each one is then on owlette free like any site that isn't billed, and upgrading it again starts a new checkout.
+
+### transferring or deleting a billed site
+
+- **transferring ownership** stops the site's billing. the previous owner pays to the end of the billing period, and the site keeps its plan until then. the new owner can stop that billing, but cannot upgrade the site or switch its plan until the period has ended; after that they upgrade it on their own card.
+- **a site on owlette free** can only be transferred to someone whose free site isn't taken, or who is in their trial.
+- **deleting a site** stops its billing. so does deleting your account, for each site it deletes with it.
 
 ---
 
@@ -67,23 +127,25 @@ when the trial ends, the account falls back to owlette free unless you pick core
 
 core and pro are billed per active machine per month. **a machine counts if it was online at any point in the billing period.** a machine that stays off for a whole period is not billed for it; one that comes online for a minute is.
 
-the site's owner pays for the site's machines. the machines of every site you own count together, and a site you are only a member of costs you nothing.
+each site is billed for its own machines, and a pro site for at least 3. a site you are only a member of costs you nothing.
 
-owlette counts once a day, at 03:00 UTC: every machine that sent a heartbeat in the previous 26 hours is recorded against the day before. a billing period's active machines are the distinct machines across its days. the two hours of overlap mean a late count misses nothing, and also that a machine online only on the day one billing period ends and the next begins can count in both.
+owlette counts once a day, at 23:30 UTC: every machine that sent a heartbeat in the previous 26 hours is recorded on the UTC day of that heartbeat. a billing period's active machines are the distinct machines across its days, and the count that stands when the month ends is the one billed.
 
-once plans apply, the plan page at `/settings/plan` shows your plan, its limits and this month's active machines; `GET /api/account/plan` answers the same as JSON.
+once plans apply, the plan page at `/settings/plan` shows your trial, how much of owlette free your account uses, and every site you own with its plan and its active machines this period; `GET /api/account/plan` answers the same as JSON. a site's billing section shows its billing period, its active machines and its price.
 
 ---
 
-## when a subscription ends
+## when a site's plan ends
 
-when a paid plan or the trial ends, the account falls back to owlette free. nothing is deleted and nothing is unpaired.
+when the trial ends, or a site's billing does, the site goes to owlette free. nothing is deleted and nothing is unpaired.
 
 - **every agent keeps running.** it supervises its processes, restarts crashes, reports metrics and heartbeats as before. a plan never touches an agent's credentials, and every machine can still be updated.
-- **one machine stays live in the dashboard:** the one paired first across all your sites, with ties going to the lowest machine ID. the others show an upgrade notice in place of their metrics, while they keep running on site.
-- **extra sites stay visible**, read-only.
+- **one machine stays live:** the one paired first across the free sites the owner owns, with ties going to the lowest machine ID. everyone on the site sees a notice in place of the others' metrics, while they keep running on site: the owner's leads to the site's billing, and anyone else's says to ask the owner.
+- **every site stays.** nothing is removed from an account left with more than one site on owlette free. it cannot pair another machine to a free site, and it cannot create a site until no more than one of them is left without a plan.
 - **paid features refuse new work**, as listed [above](#what-it-leaves-out), and talons stop firing. a roost rollout scheduled before the lapse is cancelled when it comes due, with the reason on the rollout; scheduled rollouts check plans once a day. alerts and webhook events raised meanwhile are not sent later.
-- **upgrading turns it all back on** as you left it: swoop settings, talons, webhooks and alert rules are kept.
+- **upgrading the site turns it all back on** as you left it: swoop settings, talons, webhooks and alert rules are kept.
+
+when owlette cannot read a site's plan, nothing on that site is limited.
 
 ---
 
@@ -91,13 +153,13 @@ when a paid plan or the trial ends, the account falls back to owlette free. noth
 
 ### adding a machine past the limit
 
-the machine limit holds where a machine pairs. a pairing the plan has no room for is refused with:
+the machine limit holds where a machine pairs, and only on a site on owlette free: a site on core or pro, or in a trial, always has room. a pairing the owner's free allowance has no room for is refused with:
 
 > owlette free covers one machine. upgrade to add more, or remove a machine first.
 
 - on the pairing page the message shows as you authorize, and the owlette window on the machine shows **pairing failed** with the same text — on a console pairing, `Device code poll failed: owlette free covers one machine. ...`. that phrase is spent: start a new pairing once there is room.
 - an unattended install — `/ADD=` on Windows, a [pairing preseed](/docs/agent/installation#the-pairing-preseed-macos-and-linux) on macOS and Linux — stays unpaired with the same message in its output, `logs/pairing.log` for a preseed. the phrase is not spent, so once a machine is removed the same phrase pairs on a second try, within its 10 minutes.
-- re-pairing a machine already in one of your sites always works, so a reinstall never takes a slot.
+- re-pairing a machine onto the site it is already on always works, and so does moving it between the owner's free sites, so a reinstall never uses up the free machine. a machine moved onto a free site from a site on core or pro, or in a trial, counts as a new one.
 
 ### plan_required
 
@@ -108,7 +170,7 @@ every other refusal is a `402` with `code: plan_required`. the dashboard shows t
   "type": "https://owlette.app/problems/plan-required",
   "title": "plan required",
   "status": 402,
-  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "detail": "this site's plan doesn't include remote control. upgrade to continue.",
   "code": "plan_required",
   "entitlement": "owlette.control",
   "upgradeUrl": "/settings/plan",
@@ -117,9 +179,11 @@ every other refusal is a `402` with `code: plan_required`. the dashboard shows t
 }
 ```
 
-the site owner's plan decides, whoever makes the request. creating a site, creating or rotating an API key and signing in the CLI go by the caller's own plan instead, and an ownership transfer by the new owner's, which must cover the site and its machines.
+the plan of the site the request acts on decides, whoever makes the request and whatever their own sites are on. two refusals go by an account instead, because owlette free is counted per account: creating a site once your free site is taken, unless it is created on its way to core or pro, and never while a further site of yours is not billed; and transferring a free site to an owner whose free site is taken. the create refusal names the site in its `siteCreation` field, and a blocked one points `upgradeUrl` at that site's billing section; see [adding a site](#adding-a-site).
 
-background work does not refuse; it skips and logs. alert emails, webhook deliveries, talon runs and autonomous hoot stop for a site whose owner's plan lacks them, and swoop reads as switched off, so the machine itself turns sessions away. pairing is the only agent route a plan can refuse: heartbeats, token refreshes, alert reports, screenshot uploads and roost pulls never are.
+API keys are checked on every request, against the site the request acts on: a key answers `402` on a site whose plan does not include API keys. creating or rotating a key, and signing in the CLI, are never refused by a plan.
+
+background work does not refuse; it skips and logs. alert emails, webhook deliveries, talon runs and autonomous hoot stop for a site whose plan lacks them, and swoop reads as switched off, so the machine itself turns sessions away. pairing is the only agent route a plan can refuse: heartbeats, token refreshes, alert reports, screenshot uploads and roost pulls never are.
 
 ---
 
@@ -129,22 +193,42 @@ background work does not refuse; it skips and logs. alert emails, webhook delive
 
 no. plans are not enforced during the beta and nothing is billed. owlette free stays free after it.
 
-### what happens to my machines if I don't pick a plan after the trial?
+### what happens to my machines if I don't upgrade a site after the trial?
 
-they keep running and supervising their processes, and you can keep updating them. one stays live in the dashboard; see [when a subscription ends](#when-a-subscription-ends).
+they keep running and supervising their processes, and you can keep updating them. one stays live in your dashboard; see [when a site's plan ends](#when-a-sites-plan-ends).
+
+### can I have one site on pro and another on core, or free?
+
+yes. each site has its own plan and is billed on its own, and you can own any number of core and pro sites. only your sites on owlette free share an allowance: one free site, with one machine.
+
+### why does new site ask me to pick a plan?
+
+your free site is taken, so every further site is created on core or pro. see [adding a site](#adding-a-site).
+
+### why can't I create a site?
+
+another of your sites was created on its way to a plan and isn't billed. upgrade it in its billing section, or delete it.
+
+### who can upgrade a site?
+
+its owner, in site settings → billing. everyone else is told to ask the owner.
+
+### I took over a site. why can't I upgrade it?
+
+it is still billed to its previous owner until the end of the billing period. you can upgrade it after that.
 
 ### does reinstalling the agent use up my machine?
 
-no. re-pairing a machine that is already in one of your sites is always allowed.
+no. re-pairing a machine onto the site it is already on is always allowed. a machine moved onto a free site from a site on core or pro, or in a trial, counts as a new one.
 
 ### does a machine that was switched off all month cost anything?
 
-not for a month it never came online.
+not for a month it never came online. a pro site is billed for at least 3 machines whatever was online.
 
 ### why do my scripts get a 402?
 
-API keys need pro. a request made with a key answers `402 plan_required` (`entitlement: owlette.api_keys`) when the site owner's plan does not include them, and creating or rotating a key needs your own plan to. dashboard sessions are not affected. signing in the CLI needs it too: the browser says why, and the CLI reports the phrase as expired.
+API keys need pro on the site they act on. a request made with a key answers `402 plan_required` (`entitlement: owlette.api_keys`) when that site's plan does not include them. dashboard sessions are not affected. creating a key and signing in the CLI are never refused by a plan, so a key can exist and still answer `402` on a site that is not on pro.
 
 ### whose plan covers a site I'm a member of?
 
-its owner's. that site runs on its owner's plan, and you pay nothing for it. your own plan decides the sites you create and own, and the API keys you create.
+the site's own. its owner pays for it, and you pay nothing. what you can do there follows that site's plan, whatever your own sites are on.

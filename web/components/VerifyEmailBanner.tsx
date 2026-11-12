@@ -8,17 +8,17 @@
  * (Google) accounts, which arrive verified, and verified accounts.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Mail } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
-import { auth } from '@/lib/firebase';
+import { useEmailVerifiedOnReturn } from '@/hooks/useEmailVerifiedOnReturn';
+import { useSendVerification } from '@/hooks/useSendVerification';
 import { Button } from '@/components/ui/button';
-import { toast } from '@/lib/toast';
 
 export function VerifyEmailBanner() {
   const { user } = useAuth();
   const [verified, setVerified] = useState(false);
-  const [sending, setSending] = useState(false);
+  const { send, sending } = useSendVerification();
 
   const pending =
     !!user &&
@@ -26,48 +26,12 @@ export function VerifyEmailBanner() {
     !verified &&
     (user.providerData ?? []).some((provider) => provider.providerId === 'password');
 
-  // the link usually opens in another tab, so recheck whenever this one comes back
-  useEffect(() => {
-    if (!pending) return;
-    const recheck = () => {
-      const current = auth?.currentUser;
-      if (!current || document.visibilityState !== 'visible') return;
-      current.reload().then(
-        () => {
-          if (current.emailVerified) setVerified(true);
-        },
-        // offline or signed out mid-flight; the next focus tries again
-        () => undefined,
-      );
-    };
-    window.addEventListener('focus', recheck);
-    document.addEventListener('visibilitychange', recheck);
-    return () => {
-      window.removeEventListener('focus', recheck);
-      document.removeEventListener('visibilitychange', recheck);
-    };
-  }, [pending]);
+  useEmailVerifiedOnReturn(
+    pending,
+    useCallback(() => setVerified(true), []),
+  );
 
   if (!pending) return null;
-
-  const resend = async () => {
-    setSending(true);
-    try {
-      const res = await fetch('/api/auth/verify-email', { method: 'POST' });
-      if (res.ok) {
-        toast.success('verification email sent', { description: `check ${user.email}` });
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      toast.error('could not send the email', {
-        description: typeof data.detail === 'string' ? data.detail : 'please try again later.',
-      });
-    } catch {
-      toast.error('could not send the email', { description: 'please try again later.' });
-    } finally {
-      setSending(false);
-    }
-  };
 
   return (
     <div
@@ -85,7 +49,7 @@ export function VerifyEmailBanner() {
           type="button"
           variant="link"
           size="sm"
-          onClick={resend}
+          onClick={send}
           disabled={sending}
           aria-label="send verification email"
         >

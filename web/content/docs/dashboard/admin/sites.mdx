@@ -1,6 +1,6 @@
 ---
 title: "sites"
-description: "every site you belong to, with a gear on each one you own or administer. a site's settings page holds its name and timezone, its members, its machines with the keep screens awake switch, and deleting it."
+description: "every site you belong to, with a gear on each one you own or administer. a site's settings page holds its name and timezone, its members, its machines with the keep screens awake switch, its billing, and deleting it."
 keywords: ["site settings", "manage sites", "new site", "rename site", "delete site", "site timezone", "swoop settings", "keep screens awake", "site members", "site machines"]
 ---
 
@@ -44,13 +44,15 @@ three places make a site:
 
 each one opens **create new site**: enter a **site name**, keep the generated site ID or set one under **customize site ID**, check the **site timezone** (read from your browser; **change timezone** picks another), and click **create site**. you own the new site. its ID is permanent and appears in URLs.
 
+once [plans](/docs/plans#adding-a-site) apply and your free site is taken, the dialog also asks for **core** or **pro**, with each one's price, and its button reads **create on core** or **create on pro**: the site is created and goes straight to its upgrade. while another of your sites was created that way and isn't billed, the dialog names that site and offers **go to its billing** instead.
+
 ---
 
 ## site settings
 
-`/admin/sites/{siteId}` holds one site's settings. open it from the site's gear, or from the site switcher's **site settings** for the site you are on. it shows the site's name, its ID (click it to copy) and your role, then one section at a time: **general**, **members**, **machines** and, for the site's owner, **danger zone**.
+`/admin/sites/{siteId}` holds one site's settings. open it from the site's gear, or from the site switcher's **site settings** for the site you are on. it shows the site's name, its ID (click it to copy) and your role, then one section at a time: **general**, **members**, **machines** and, for the site's owner, **billing** (once [plans](/docs/plans) apply) and **danger zone**.
 
-the section is part of the URL, `?section=members`, `machines` or `danger` (general needs none), so a link can open one and a reload keeps it. an unknown section, or one you can't see, opens **general**. a site you can't reach reads **site not found**. an older link to `?section=swoop` opens swoop settings.
+the section is part of the URL, `?section=members`, `machines`, `billing` or `danger` (general needs none), so a link can open one and a reload keeps it. an unknown section, or one you can't see, opens **general**. a site you can't reach reads **site not found**. an older link to `?section=swoop` opens swoop settings.
 
 ### general
 
@@ -70,6 +72,16 @@ then each of the site's machines, with whether it is online or when it was last 
 - **remove** takes the machine off the site for good, after a confirm that lists what goes with it
 
 add a machine from the dashboard's **+** button.
+
+### billing
+
+only the site's owner sees it: once [plans](/docs/plans) apply, and while plans are off for a site that is still billed. during the beta a site that was never billed has no billing section. it shows the site's plan and, for a billed site, its billing period, its active machines this period and its price.
+
+- **upgrade** opens the plan picker, on a site that is on owlette free or in the trial. the first site you pay for goes through a checkout and comes back here; after that, a site goes on the same card with no checkout while your subscription runs, which it does even once every site on it has stopped
+- **switch plan** moves a billed site between core and pro at once
+- **stop billing** asks you to confirm. the site keeps its plan to the end of the billing period, which is still billed, then goes to owlette free. the section reads **ends** with the date, and **resume billing** undoes the stop until then
+
+only the owner can change a site's billing; an admin who meets a feature the site's plan leaves out is told to ask the owner. a site you took over by transfer reads **this site is billed to its previous owner** until that billing period ends, and can be upgraded after it. see [upgrading a site](/docs/plans#upgrading-a-site).
 
 ### danger zone
 

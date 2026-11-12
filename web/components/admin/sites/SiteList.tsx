@@ -63,7 +63,7 @@ function SiteRow({
         </span>
         {/* ink by day: cyan glyphs on a cyan tint miss aa, as with the match highlight */}
         {current && (
-          <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground dark:text-accent-cyan">
+          <span className="shrink-0 rounded bg-accent-cyan/15 px-1.5 py-0.5 text-[10px] font-medium text-foreground dark:text-accent-cyan">
             current
           </span>
         )}

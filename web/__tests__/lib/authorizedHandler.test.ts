@@ -192,9 +192,9 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 const warnSpy = jest.fn();
@@ -253,7 +253,7 @@ beforeEach(() => {
   userDoc = { exists: true, data: () => ({ role: 'admin', sites: ['site-a'] }) };
   siteDoc = { exists: true, data: () => ({ owner: 'uid_alice' }) };
   siteDocReads = 0;
-  mockGetEntitlements.mockReset();
+  mockGetSiteEntitlements.mockReset();
   // Ownership is a member row now; the `owner` field above grants nothing.
   setMember('admin');
   customerDoc = { exists: false, data: () => undefined };
@@ -438,14 +438,15 @@ describe('authorizedSiteHandler — kill switches', () => {
 });
 
 describe('authorizedSiteHandler — swoop capabilities are exempt from the capability kill switch', () => {
-  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities and the fleet grant', () => {
+  it('BYPASS_EXEMPT_CAPABILITIES holds exactly the three swoop capabilities, the fleet grant and site billing', () => {
     // SWOOP_SETTINGS_MANAGE belongs here because it is the switch in front of
     // the other two: a bypassable enablement route lets a member turn swoop on
     // and then pass the exempt watch check on merit. FLEET_SETTINGS_MANAGE is
     // the same kind of switch: bypassable, a member could grant a machine
-    // commands over the whole site.
+    // commands over the whole site. SITE_BILLING_MANAGE: a member could put
+    // sites on the owner's card.
     expect([...BYPASS_EXEMPT_CAPABILITIES].sort()).toEqual(
-      ['FLEET_SETTINGS_MANAGE', 'MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SWOOP_SETTINGS_MANAGE'].sort()
+      ['FLEET_SETTINGS_MANAGE', 'MACHINE_REMOTE_CONTROL', 'MACHINE_REMOTE_VIEW', 'SITE_BILLING_MANAGE', 'SWOOP_SETTINGS_MANAGE'].sort()
     );
   });
 
@@ -1005,7 +1006,7 @@ describe('authorizedSiteHandler — handler error path', () => {
   });
 });
 
-describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
+describe('authorizedSiteHandler — plan lockout', () => {
   const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
   const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
   const FREE = {
@@ -1029,7 +1030,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     process.env.PLAN_ENFORCEMENT = 'on';
     process.env.TRIDANT_API_URL = 'https://tridant.test';
     process.env.TRIDANT_LICENSE_KEY = 'test-key';
-    mockGetEntitlements.mockResolvedValue(FREE);
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
   });
 
   afterEach(() => {
@@ -1067,7 +1068,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       upgradeUrl: '/settings/plan',
     });
     expect(handler).not.toHaveBeenCalled();
-    expect(mockGetEntitlements).toHaveBeenCalledWith('uid_alice');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
     const deny = rows('deny');
     expect(deny).toHaveLength(1);
     expect(deny[0].payload.denyReason).toBe('plan_locked');
@@ -1095,7 +1096,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     expect((await wrapped(makeRequest(undefined, 'DELETE'), pathParamsFor('site-a'))).status).toBe(200);
     expect((await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'))).status).toBe(200);
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('free: a write under an ungated capability goes through', async () => {
@@ -1105,7 +1106,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
     expect(res.status).toBe(200);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('free: a planExempt route goes through', async () => {
@@ -1119,7 +1120,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
     expect(res.status).toBe(200);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('the capability kill switch does not bypass it', async () => {
@@ -1142,11 +1143,11 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
     expect(res.status).toBe(429);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('core: an alert rules write goes through on owlette.control', async () => {
-    mockGetEntitlements.mockResolvedValue(CORE);
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
     const wrapped = authorizedSiteHandler({ capability: 'ALERT_RULES_MANAGE', siteIdParam: 'path' })(handler);
 
@@ -1161,7 +1162,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     ['MACHINE_REMOTE_CONTROL', 'owlette.swoop'],
     ['MACHINE_REMOTE_VIEW', 'owlette.swoop'],
   ] as const)('core: refuses a %s write on the pro key %s', async (capability, entitlement) => {
-    mockGetEntitlements.mockResolvedValue(CORE);
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
     const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
     const wrapped = authorizedSiteHandler({ capability, siteIdParam: 'path' })(handler);
 
@@ -1173,7 +1174,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
   });
 
   it('pro: a deployment and a swoop write go through', async () => {
-    mockGetEntitlements.mockResolvedValue({
+    mockGetSiteEntitlements.mockResolvedValue({
       ...CORE,
       ent: { ...CORE.ent, 'owlette.deployments': '1', 'owlette.swoop': '1' },
     });
@@ -1193,11 +1194,11 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
     expect(res.status).toBe(200);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(siteDocReads).toBe(1);
   });
 
-  describe('api keys need owlette.api_keys on every request (plan.md decision 8)', () => {
+  describe('api keys need owlette.api_keys on every request', () => {
     beforeEach(() => {
       resolveAuthResult = { userId: 'uid_alice', keyContext: { keyId: 'key-a' } };
     });
@@ -1245,11 +1246,11 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       const res = await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'));
 
       expect(res.status).toBe(200);
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     });
 
     it('pro: a key goes through, a gated write included, on one plan lookup', async () => {
-      mockGetEntitlements.mockResolvedValue({
+      mockGetSiteEntitlements.mockResolvedValue({
         ...FREE,
         resolved: true,
         standing: 'active',
@@ -1261,11 +1262,11 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       const res = await wrapped(makeRequest(), pathParamsFor('site-a'));
 
       expect(res.status).toBe(200);
-      expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+      expect(mockGetSiteEntitlements).toHaveBeenCalledTimes(1);
     });
 
     it('a key on a plan with api keys but not deployments is refused the gated write on owlette.deployments', async () => {
-      mockGetEntitlements.mockResolvedValue({ ...FREE, ent: { ...FREE.ent, 'owlette.api_keys': '1' } });
+      mockGetSiteEntitlements.mockResolvedValue({ ...FREE, ent: { ...FREE.ent, 'owlette.api_keys': '1' } });
       const handler = makeSiteHandler(async () => NextResponse.json({ ok: true }));
       const wrapped = authorizedSiteHandler({ capability: 'DEPLOYMENT_MANAGE', siteIdParam: 'path' })(handler);
 
@@ -1283,7 +1284,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
       const res = await wrapped(makeRequest(undefined, 'GET'), pathParamsFor('site-a'));
 
       expect(res.status).toBe(200);
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
       expect(siteDocReads).toBe(1);
     });
   });

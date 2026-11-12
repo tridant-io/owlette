@@ -106,16 +106,19 @@ it('tells a member who can turn it on, with no settings link', async () => {
   expect(within(notice).queryByRole('link', { name: 'open swoop settings' })).toBeNull();
 });
 
-it('a plan without swoop says so and links the owner to the plan, not the switch, and does not retry', async () => {
+it("a plan without swoop says so and links the owner to the site's billing, not the switch, and does not retry", async () => {
   siteAdmin = true;
   siteOwner = true;
   reply = {
     status: 402,
-    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
   expect(notice).toHaveTextContent('swoop is part of pro.');
-  expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+  expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute(
+    'href',
+    '/admin/sites/site%201?section=billing',
+  );
   expect(notice).not.toHaveTextContent(/turn it on|reconnecting in/);
   expect(within(notice).queryByRole('link', { name: 'open swoop settings' })).toBeNull();
 });
@@ -124,7 +127,7 @@ it('a member on a site whose plan leaves swoop out is told to ask the owner, wit
   siteAdmin = true;
   reply = {
     status: 402,
-    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
   expect(notice).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');

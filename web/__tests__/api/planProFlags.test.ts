@@ -1,9 +1,9 @@
 /**
  * @jest-environment node
  *
- * plan.md decision 8 in the `_shared` resolvers: creating roosts and webhooks
- * needs the payer's flag, an api-key request needs the site payer's
- * `owlette.api_keys`, minting a key needs the minter's own, and agent tokens are
+ * the pro flags in the `_shared` resolvers: creating roosts and webhooks
+ * needs the site's flag, an api-key request needs the site's
+ * `owlette.api_keys` (minting one is not gated), and agent tokens are
  * never plan-gated. the real plan resolver runs; only tridant and firestore are faked.
  */
 import { NextRequest } from 'next/server';
@@ -17,15 +17,14 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
-let mockUsers: Record<string, Record<string, unknown>> = {};
 const mockCollection = jest.fn((name: string) => {
   if (name !== 'users') throw new Error(`unexpected collection ${name}`);
-  return { doc: (uid: string) => ({ get: async () => ({ data: () => mockUsers[uid] }) }) };
+  return { doc: () => ({ get: async () => ({ data: () => undefined }) }) };
 });
 const mockVerifyIdToken = jest.fn();
 jest.mock('@/lib/firebase-admin', () => ({
@@ -55,7 +54,6 @@ jest.mock('@/lib/sitePolicy.server', () => ({
 
 import {
   requireAgentOrSiteAuthAndScope,
-  requireApiKeyMintPlan,
   requireChatAuthAndScope,
   requireDistributionManageCapability,
   requireMachineAuthAndScope,
@@ -116,15 +114,14 @@ async function expectPlanRequired(response: Response | null, entitlement: string
 }
 
 function expectNoPlanLookup() {
-  expect(mockGetEntitlements).not.toHaveBeenCalled();
+  expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   expect(mockCollection).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
   enforcePlans();
-  mockUsers = {};
-  mockGetEntitlements.mockResolvedValue(FREE);
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
   mockResolveAuth.mockResolvedValue(SESSION);
   mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA, machineIds: null });
   mockResolveSiteAccess.mockResolvedValue({
@@ -136,7 +133,7 @@ beforeEach(() => {
 
 afterAll(stopEnforcingPlans);
 
-describe('api-key requests need the site payer’s owlette.api_keys', () => {
+describe('api-key requests need the site’s owlette.api_keys', () => {
   const resolvers = {
     site: () => requireSiteAuthAndScope(request(), SITE, 'write'),
     machine: () => requireMachineAuthAndScope(request(), SITE, MACHINE, 'write'),
@@ -145,17 +142,17 @@ describe('api-key requests need the site payer’s owlette.api_keys', () => {
     'agent-or-site (operator)': () => requireAgentOrSiteAuthAndScope(request(), SITE, 'read'),
   };
 
-  it.each(Object.entries(resolvers))('%s: refuses a key on free, asking the payer, not the key holder', async (_, run) => {
+  it.each(Object.entries(resolvers))('%s: refuses a key on free, asking about the site, not the key holder', async (_, run) => {
     mockResolveAuth.mockResolvedValue(API_KEY);
 
     await expectPlanRequired(refusalOf(await run()), 'owlette.api_keys');
-    expect(mockGetEntitlements).toHaveBeenCalledWith(PAYER);
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     expect(mockEmitApiKeyUsed).not.toHaveBeenCalled();
   });
 
   it.each(Object.entries(resolvers))('%s: lets a key through on pro', async (_, run) => {
     mockResolveAuth.mockResolvedValue(API_KEY);
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
 
     expect((await run()).ok).toBe(true);
   });
@@ -223,7 +220,7 @@ describe('roost writes need owlette.roost', () => {
   });
 
   it('allows a deploy on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
     expect((await requireRoostAuthAndScope(request(), SITE, ROOST, 'deploy')).ok).toBe(true);
   });
 
@@ -248,11 +245,11 @@ describe('roost writes need owlette.roost', () => {
   describe('requireDistributionManageCapability (roost create, chunk upload and mount)', () => {
     it('refuses on free', async () => {
       await expectPlanRequired(await requireDistributionManageCapability(SESSION, SITE), 'owlette.roost');
-      expect(mockGetEntitlements).toHaveBeenCalledWith(PAYER);
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     });
 
     it('allows on pro', async () => {
-      mockGetEntitlements.mockResolvedValue(PRO);
+      mockGetSiteEntitlements.mockResolvedValue(PRO);
       expect(await requireDistributionManageCapability(SESSION, SITE)).toBeNull();
     });
 
@@ -278,36 +275,13 @@ describe('webhook create needs owlette.webhooks', () => {
   });
 
   it('allows a create on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
     expect(await requireWebhookManageCapability(SESSION, SITE, { create: true })).toBeNull();
   });
 
   it('allows a create with enforcement off, before any read', async () => {
     delete process.env.PLAN_ENFORCEMENT;
     expect(await requireWebhookManageCapability(SESSION, SITE, { create: true })).toBeNull();
-    expectNoPlanLookup();
-  });
-});
-
-describe('requireApiKeyMintPlan', () => {
-  it('refuses on the minting user’s own free plan', async () => {
-    await expectPlanRequired(await requireApiKeyMintPlan(CALLER), 'owlette.api_keys');
-    expect(mockGetEntitlements).toHaveBeenCalledWith(CALLER);
-  });
-
-  it('allows on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
-  });
-
-  it('allows a superadmin on free', async () => {
-    mockUsers = { [CALLER]: { role: 'superadmin' } };
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
-  });
-
-  it('allows with enforcement off, before any read', async () => {
-    delete process.env.PLAN_ENFORCEMENT;
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
     expectNoPlanLookup();
   });
 });

@@ -10,11 +10,11 @@ the admin panel holds two kinds of page: site-scoped pages, for the people who r
 
 ## site-scoped pages
 
-these open for anyone who is an **owner** or **admin** of the whole site on at least one site. the sidebar groups them: **fleet** holds sites and agent tokens, **swoop** holds live sessions and settings, and **configuration** holds schedules, alerts and webhooks.
+these open for anyone who is an **owner** or **admin** of the whole site on at least one site. the sidebar groups them: **fleet** holds sites, agent tokens, swoop and hoot, and **configuration** holds alerts, schedules and webhooks.
 
 | page | URL | what it does |
 |------|-----|--------------|
-| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
+| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, its billing, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
 | agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
 | swoop | `/admin/swoop` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for each site, see everyone in a swoop session right now, and end a session |
 | hoot | `/admin/hoot` | a site's [hoot](/docs/dashboard/hoot) approval setting and the machines that may act on others through [hoot mcp](/docs/agent/hoot-mcp) |
@@ -22,7 +22,7 @@ these open for anyone who is an **owner** or **admin** of the whole site on at l
 | alerts | `/admin/alerts` | manage a site's threshold alert rules. see [email alerts](/docs/dashboard/admin/email-alerts) |
 | webhooks | `/admin/webhooks` | manage a site's outbound [webhook](/docs/dashboard/admin/webhooks) subscriptions |
 
-**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop pages leave those sites out: neither live sessions nor settings lists them.
+**sites** lists every site you belong to, with a gear on each one you own or administer with whole-site access; a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) reads, for example, **admin · 2 machines**, with no gear. the other pages act on one site at a time: their site selector offers the sites you belong to, and a change goes through only on a site where you are owner or admin of the whole site; on a site where you are a plain member, or limited to some machines, the server refuses it. the swoop page leaves those sites out: neither its switches nor its live sessions list them.
 
 ---
 
@@ -40,7 +40,7 @@ your role is set **per site**: the same person can own one site, administer a se
 |------|-------------|-------------|
 | **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the seven site-scoped pages above, with whole-site access |
-| **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one | the seven site-scoped pages above |
+| **owner** | everything an admin can, plus deleting the site, transferring ownership and, once [plans](/docs/plans) apply, changing the site's billing. every site has exactly one | the seven site-scoped pages above |
 
 a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) on a site can change what they get from swoop there, and nothing else.
 
@@ -92,6 +92,7 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | `TALON_MANAGE` | no | yes | yes | site |
 | `ALERT_RULES_MANAGE` | no | yes | yes | site |
 | `SITE_DELETE` | no | no | yes | site |
+| `SITE_BILLING_MANAGE` (put the site on your card) | no | no | yes | site |
 | `USER_SELF_PREFS` | yes | yes | yes | your own account |
 | `USER_SELF_DELETE` | yes | yes | yes | your own account |
 | `USER_ROLE_MANAGE` | no | no | no | platform |
@@ -101,7 +102,7 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | `ISSUE_MANAGE` (issue triage status) | no | no | no | platform |
 | `GLOBAL_SETTINGS_WRITE` | no | no | no | platform |
 
-the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site.
+the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site. `SITE_BILLING_MANAGE` still stops at the owner: a site is billed to its owner, so nobody else can change its billing, a superadmin included.
 
 **your machines**: someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site holds the five capabilities marked so only on those machines, at their role, and holds no other capability of that site, whatever their role. a machine outside their access answers `404`, the same answer whether it exists or not; anything that spans the site answers `403`. everyone else holds them on the whole site.
 

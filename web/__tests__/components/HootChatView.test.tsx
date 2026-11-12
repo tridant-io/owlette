@@ -31,7 +31,7 @@ import { TooltipProvider } from '@/components/ui/tooltip';
 import { HootChatView } from '@/app/hoot/components/HootChatView';
 import type { ChatConversation, ChatLoadedTarget } from '@/hooks/useHoot';
 import type { HootTarget, ChatTargetType } from '@/lib/hoot/target';
-import type { PlanResponse } from '@/lib/plan.server';
+import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 
 // jsdom ships no ResizeObserver; Radix's menu and popover positioning build one.
 global.ResizeObserver = class {
@@ -149,9 +149,10 @@ jest.mock('@/contexts/AuthContext', () => ({
   }),
 }));
 
-let mockPlan: PlanResponse | undefined;
-jest.mock('@/hooks/usePlan', () => ({
-  usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
+// keyed by site id, as the real store is; a site with no entry is loading.
+let mockSitePlans: Record<string, SitePlanResponse | undefined> = {};
+jest.mock('@/hooks/useSitePlan', () => ({
+  useSitePlan: (siteId: string | null | undefined) => ({ plan: siteId ? mockSitePlans[siteId] : undefined }),
 }));
 
 jest.mock('@/hooks/useFirestore', () => ({
@@ -321,7 +322,7 @@ beforeEach(() => {
   mockChatOptions = null;
   mockCollapsedGroups = new Set<string>();
   mockPrefsHydrated = true;
-  mockPlan = undefined;
+  mockSitePlans = {};
   mockChat.error = null;
 });
 
@@ -680,7 +681,7 @@ describe('HootChatView labels', () => {
   });
 });
 
-const ALL_FLAGS: PlanResponse['flags'] = {
+const ALL_FLAGS: SitePlanResponse['flags'] = {
   control: true,
   deployments: true,
   swoop: true,
@@ -690,13 +691,16 @@ const ALL_FLAGS: PlanResponse['flags'] = {
   webhooks: true,
   api_keys: true,
 };
-const CORE_PLAN: PlanResponse = {
+const CORE_PLAN: SitePlanResponse = {
   enforced: true,
-  plan: 'core',
+  tier: 'core',
   standing: 'active',
-  limits: { machines: null, sites: 1 },
+  inGoodStanding: true,
   flags: { ...ALL_FLAGS, deployments: false, swoop: false, hoot: false, roost: false, talons: false, webhooks: false, api_keys: false },
-  activeMachinesThisMonth: 3,
+  billing: { tier: 'core', founders: false, endsAt: null },
+  period: null,
+  isOwner: false,
+  billedByPreviousOwner: false,
 };
 
 describe('HootChatView plan', () => {
@@ -706,32 +710,32 @@ describe('HootChatView plan', () => {
         type: 'https://owlette.app/docs/api/errors#plan_required',
         title: 'Payment Required',
         status: 402,
-        detail: "your plan doesn't include hoot. upgrade to continue.",
+        detail: "this site's plan doesn't include hoot. upgrade to continue.",
         code: 'plan_required',
       }),
     );
     renderView();
 
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent("your plan doesn't include hoot. upgrade to continue.");
+    expect(alert).toHaveTextContent("this site's plan doesn't include hoot. upgrade to continue.");
     expect(alert).not.toHaveTextContent('plan_required');
   });
 
-  it("puts the upgrade note where the composer was on the viewer's own site", () => {
-    mockPlan = CORE_PLAN;
-    mockSites = [{ ...SITE_A, owner: 'user-1' }, SITE_B];
+  it("puts the upgrade note where the composer was on a site whose plan leaves hoot out", () => {
+    mockSitePlans = { 'site-a': CORE_PLAN };
     renderView();
 
-    expect(screen.getByTestId('upgrade-gate-inline')).toHaveTextContent("your plan doesn't include hoot.");
+    expect(screen.getByTestId('upgrade-gate-inline')).toHaveTextContent(
+      "this site's plan doesn't include hoot. ask the site owner to upgrade this site.",
+    );
     expect(document.querySelector('[data-chat-input]')).toBeNull();
     const transcript = screen.getByTestId('chat-window');
     expect(transcript).toHaveAttribute('data-hide-suggestions', 'true');
     expect(transcript).toHaveAttribute('data-can-edit', 'false');
   });
 
-  it('keeps the composer on a site another account pays for', () => {
-    mockPlan = CORE_PLAN;
-    mockSites = [{ ...SITE_A, owner: 'someone-else' }, SITE_B];
+  it("keeps the composer when it is another site's plan that leaves hoot out", () => {
+    mockSitePlans = { 'site-a': { ...CORE_PLAN, tier: 'pro', flags: ALL_FLAGS }, 'site-b': CORE_PLAN };
     renderView();
 
     expect(screen.queryByTestId('upgrade-gate-inline')).not.toBeInTheDocument();

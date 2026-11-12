@@ -18,11 +18,11 @@ const faqs: { q: string; a: React.ReactNode }[] = [
     q: "is it actually free?",
     a: `during beta, yes — every tier, no credit card, no trial clock. ${AFTER_BETA} owlette free covers ${FREE_COVERS}. core is ${perMachineMonth(
       PRICING_FACTS.core.list,
-    )} for monitoring, process control, displays, and alerts on a single site. pro is ${perMachineMonth(
+    )} for monitoring, process control, displays, and alerts. pro is ${perMachineMonth(
       PRICING_FACTS.pro.list,
     )} (${
       PRICING_FACTS.pro.minMachines
-    }-machine minimum) and adds deployment, hoot, talons, swoop, the public API, CLI, SDK, webhooks, unlimited sites, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. the first ${
+    }-machine minimum) and adds deployment, hoot, talons, swoop, the public API, CLI, SDK, webhooks, and roost — incremental project sync with ${INCLUDED_STORAGE} included storage per site. each site has its own plan and is billed on its own. the first ${
       PRICING_FACTS.foundersCohort
     } customers keep a founders rate of ${usd(PRICING_FACTS.core.founders)} core / ${usd(
       PRICING_FACTS.pro.founders,

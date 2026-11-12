@@ -16,6 +16,7 @@ describe('siteSettingsPath', () => {
   it('names every other section in the query', () => {
     expect(siteSettingsPath('elm-gate', 'members')).toBe('/admin/sites/elm-gate?section=members');
     expect(siteSettingsPath('elm-gate', 'machines')).toBe('/admin/sites/elm-gate?section=machines');
+    expect(siteSettingsPath('elm-gate', 'billing')).toBe('/admin/sites/elm-gate?section=billing');
     expect(siteSettingsPath('elm-gate', 'danger')).toBe('/admin/sites/elm-gate?section=danger');
   });
 
@@ -33,7 +34,7 @@ describe('parseSiteSection', () => {
   });
 
   it('falls back to general for a missing or unknown section', () => {
-    for (const raw of [null, '', 'billing', 'SWOOP', 'constructor']) {
+    for (const raw of [null, '', 'plan', 'SWOOP', 'constructor']) {
       expect(parseSiteSection(raw)).toBe('general');
     }
   });
@@ -45,7 +46,7 @@ describe('movedSiteSectionPath', () => {
   });
 
   it('leaves every section still on the page, and anything unknown, where it is', () => {
-    for (const raw of [null, '', ...SITE_SECTIONS, 'SWOOP', 'billing']) {
+    for (const raw of [null, '', ...SITE_SECTIONS, 'SWOOP', 'plan']) {
       expect(movedSiteSectionPath(raw)).toBeNull();
     }
   });

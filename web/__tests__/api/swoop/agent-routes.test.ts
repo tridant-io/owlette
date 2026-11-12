@@ -67,9 +67,9 @@ jest.mock('@/lib/swoop/turn.server', () => ({
   ...jest.requireActual('@/lib/swoop/turn.server'),
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import { POST as bundlePOST } from '@/app/api/agent/swoop/bundle/route';
@@ -210,10 +210,10 @@ describe('POST /api/agent/swoop/doorbell-token', () => {
     expect((await response.json()).code).toBe('machine_excluded');
   });
 
-  it('answers a core payer, whose plan has no swoop, with the same designed 403 swoop_disabled', async () => {
+  it('answers a core site, whose plan has no swoop, with the same designed 403 swoop_disabled', async () => {
     agentToken();
     docs.set(`sites/${SITE}`, { owner: 'payer-1' });
-    mockGetEntitlements.mockResolvedValue({
+    mockGetSiteEntitlements.mockResolvedValue({
       ok: true,
       resolved: true,
       standing: 'active',
@@ -235,7 +235,7 @@ describe('POST /api/agent/swoop/doorbell-token', () => {
       );
       expect(response.status).toBe(403);
       expect((await response.json()).code).toBe('swoop_disabled');
-      expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
       expect(docs.get(settingsPath(SITE))).toMatchObject({ enabled: true });
     } finally {
       delete process.env.PLAN_ENFORCEMENT;

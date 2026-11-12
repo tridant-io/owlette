@@ -13,7 +13,7 @@
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 
 // only the plan resolver reads through getAdminDb (the action core takes an
-// injected db): the site, for its payer, and the payer's user doc.
+// injected db): the site, for its owner, and the owner's user doc.
 const mockAdminCollection = jest.fn((name: string) => ({
   doc: () => ({
     get: async () => ({ data: () => (name === 'sites' ? { owner: 'payer_1' } : { role: 'member' }) }),
@@ -25,9 +25,9 @@ jest.mock('@/lib/firebase-admin', () => ({
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: jest.fn(),
 }));
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import {
@@ -880,7 +880,7 @@ describe('resolveActiveHoursOverride', () => {
   });
 });
 
-// plan gate (plan.md decision 7)
+// plan gate: remote commands need the site's owlette.control
 
 describe('executeMachineCommand — plan gate', () => {
   const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
@@ -907,7 +907,7 @@ describe('executeMachineCommand — plan gate', () => {
       savedEnv[key] = process.env[key];
       delete process.env[key];
     }
-    mockGetEntitlements.mockResolvedValue(FREE);
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
   });
 
   afterEach(() => {
@@ -921,7 +921,7 @@ describe('executeMachineCommand — plan gate', () => {
     const fake = buildFakeDb();
     await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockAdminCollection).not.toHaveBeenCalled();
   });
 
@@ -940,7 +940,7 @@ describe('executeMachineCommand — plan gate', () => {
         detail: PLAN_REQUIRED_DETAIL[entitlement],
         entitlement,
       });
-      expect(mockGetEntitlements).toHaveBeenCalledWith('payer_1');
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
       expect(fake.setCalls).toHaveLength(0);
       expect(mockedEmit).not.toHaveBeenCalled();
     });
@@ -953,13 +953,13 @@ describe('executeMachineCommand — plan gate', () => {
       const result = await executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db });
       expect(result.commandId).toMatch(/^cmd_/);
       expect(fake.setCalls).toHaveLength(1);
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     });
   }
 
   it('core: queues a control type', async () => {
     enforce();
-    mockGetEntitlements.mockResolvedValue(CORE);
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
     const fake = buildFakeDb();
     await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
@@ -967,7 +967,7 @@ describe('executeMachineCommand — plan gate', () => {
 
   it('core: refuses a hoot tool call on owlette.hoot', async () => {
     enforce();
-    mockGetEntitlements.mockResolvedValue(CORE);
+    mockGetSiteEntitlements.mockResolvedValue(CORE);
     const fake = buildFakeDb();
     await expect(
       executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db }),
@@ -977,7 +977,7 @@ describe('executeMachineCommand — plan gate', () => {
 
   it('pro: queues a hoot tool call', async () => {
     enforce();
-    mockGetEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.hoot': '1' } });
+    mockGetSiteEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.hoot': '1' } });
     const fake = buildFakeDb();
     await executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
@@ -985,7 +985,7 @@ describe('executeMachineCommand — plan gate', () => {
 
   it('fails open when tridant is unreachable', async () => {
     enforce();
-    mockGetEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+    mockGetSiteEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
     const fake = buildFakeDb();
     await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
@@ -997,6 +997,6 @@ describe('executeMachineCommand — plan gate', () => {
     await expect(
       executeMachineCommand(ctxFor(), { type: 'format_drive', payload: {} }, { db: fake.db }),
     ).rejects.toMatchObject({ status: 400, code: 'unsupported_command_type' });
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
