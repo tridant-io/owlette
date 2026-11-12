@@ -288,6 +288,30 @@ describe('ChatWindow — the tier-3 approval gate (OWL-47)', () => {
     expect(screen.queryByText(/approve to continue/)).toBeNull();
     expect(screen.getByRole('button', { name: /run_powershell/ })).toBeInTheDocument();
   });
+
+  it('does not arm them on an approval a later message has left behind', () => {
+    // the server binds an approval to the turn that asked, and refuses it once a
+    // later turn has run (409 approval_stale). offering the buttons there only
+    // invites a click that cannot succeed.
+    const later = [
+      ...waiting,
+      msg('u2', 'user', [{ type: 'text', text: 'never mind, what is its uptime?' }]),
+      msg('a2', 'assistant', [{ type: 'text', text: 'nine days.' }]),
+    ];
+    renderChat({ onToolApproval: jest.fn(), messages: later });
+
+    expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'deny' })).toBeNull();
+    expect(screen.getByRole('button', { name: /run_powershell/ })).toHaveTextContent('approval expired');
+    expect(screen.getByText(/this approval expired/)).toBeInTheDocument();
+  });
+
+  it('still arms them when the approval is the last thing in the chat', () => {
+    renderChat({ onToolApproval: jest.fn(), messages: waiting });
+
+    expect(screen.getByRole('button', { name: 'approve' })).toBeEnabled();
+    expect(screen.queryByText(/this approval expired/)).toBeNull();
+  });
 });
 
 describe('ChatWindow — per-turn target labels', () => {

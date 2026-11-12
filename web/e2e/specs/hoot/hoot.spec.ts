@@ -340,6 +340,96 @@ test.describe('hoot conversations and controls', () => {
     }
   });
 
+  /** A chat of its own whose reply holds one tier-3 call awaiting approval, then `after`. */
+  async function seedPendingApproval(id: string, after: object[] = []) {
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-${id}-${TEST_USERS.admin.uid}`);
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'Restart the node',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [
+        { id: `m-${id}-user-1`, role: 'user', parts: [{ type: 'text', text: 'reboot it' }] },
+        {
+          id: `m-${id}-assistant-1`,
+          role: 'assistant',
+          metadata: {
+            hoot: {
+              turnId: `e2e-cortex-${id}-turn-1`,
+              machineIds: [HOOT_FIXTURE_MACHINE_ID],
+              via: 'chat',
+              skipped: { offline: [], disabled: [] },
+            },
+          },
+          parts: [
+            {
+              type: 'tool-reboot_machine',
+              toolCallId: `tool-${id}-1`,
+              state: 'approval-requested',
+              approval: { id: `approval-${id}-1` },
+              input: {},
+            },
+          ],
+        },
+        ...after,
+      ],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    return chat;
+  }
+
+  test('an approval the server refuses hands its buttons back instead of spinning', async ({ page }) => {
+    // The server answers a resume whose turn is no longer the chat's latest
+    // with 409 approval_stale. The card used to keep its spinner and both
+    // buttons dead after that, for as long as the page stayed open.
+    const chat = await seedPendingApproval('stale');
+    await page.route('**/api/hoot', async (route) => {
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: 'that approval expired — another turn ran in this chat.',
+          code: 'approval_stale',
+        }),
+      });
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+      const approve = page.getByRole('button', { name: /^approve$/i });
+      await approve.click();
+
+      await expect(page.getByText(/that approval expired/i).first()).toBeVisible();
+      await expect(approve).toBeEnabled();
+      await expect(page.getByRole('button', { name: /^deny$/i })).toBeEnabled();
+    } finally {
+      await chat.delete();
+    }
+  });
+
+  test('an approval a later message left behind offers nothing to press', async ({ page }) => {
+    const chat = await seedPendingApproval('expired', [
+      { id: 'm-expired-user-2', role: 'user', parts: [{ type: 'text', text: 'never mind. how long has it been up?' }] },
+      { id: 'm-expired-assistant-2', role: 'assistant', parts: [{ type: 'text', text: 'nine days.' }] },
+    ]);
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+
+      await expect(page.getByText(/this approval expired: a later message was sent in this chat/)).toBeVisible();
+      await expect(page.getByRole('button', { name: /reboot_machine/ })).toContainText('approval expired');
+      await expect(page.getByRole('button', { name: /^approve$/i })).toHaveCount(0);
+      await expect(page.getByRole('button', { name: /^deny$/i })).toHaveCount(0);
+    } finally {
+      await chat.delete();
+    }
+  });
+
   test('the line beside a reply in flight flows, and goes solid once the turn ends', async ({ page }) => {
     // a turn the runner is still writing, as a reload finds it: the stream doc
     // says running and carries the reply so far.
