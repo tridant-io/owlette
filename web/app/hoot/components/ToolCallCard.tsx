@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { ChevronRight, Wrench, CheckCircle2, AlertCircle, Loader2, ShieldAlert, Ban, Check } from 'lucide-react';
-import { getToolByName } from '@/lib/mcp-tools';
+import { getToolByName, namedCallMachines } from '@/lib/mcp-tools';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { CopyButton } from './CopyButton';
@@ -108,11 +108,20 @@ export function ToolCallCard({
   // approval again, so the lock is dropped as soon as the card stops awaiting:
   // it used to outlive the refusal and spin with both buttons dead.
   if (submitting && !awaitingApproval) setSubmitting(false);
+  // in a turn on several machines a call names its own, and approving runs it on
+  // those alone. a list is believed only where the server honours one: in such a
+  // turn, and wholly inside it.
+  const named = namedCallMachines(args);
+  const turnMachineIds = approvalTargetMachineIds ?? [];
+  const callMachineIds =
+    named && turnMachineIds.length > 1 && named.every((id) => turnMachineIds.includes(id)) ? named : null;
   // An empty list falls back rather than erasing the target: a prompt that names
   // no machine at all is worse than one naming the selector's.
-  const approvalTarget = approvalTargetMachineIds?.length
-    ? formatApprovalTargets(approvalTargetMachineIds, approvalTargetDynamic)
-    : approvalTargetLabel;
+  const approvalTarget = callMachineIds
+    ? formatApprovalTargets(callMachineIds)
+    : turnMachineIds.length
+      ? formatApprovalTargets(turnMachineIds, approvalTargetDynamic)
+      : approvalTargetLabel;
   // Approving this lets the call act inside the machine's active hours, so the
   // banner says so up front rather than leaving it in the collapsed input.
   const overrideReason = args.override_active_hours === true

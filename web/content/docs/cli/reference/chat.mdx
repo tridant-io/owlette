@@ -18,7 +18,7 @@ every mutation sends an `Idempotency-Key` (default `cli-chat-<verb>-<uuid>`). if
 
 ## new
 
-starts a conversation. without `--machine` it is site-wide — hoot's tools fan out across every online machine on the site; with `--machine`, every turn is pinned to that machine.
+starts a conversation. without `--machine` it is site-wide — hoot can reach every online machine on the site, and each tool call runs on the machines it names, so a question about one machine reaches that one alone; with `--machine`, every turn is pinned to that machine.
 
 ```bash
 owlette chat new --site <siteId> [--machine <machineId>] [--title <title>] [--idempotency-key <key>]

@@ -340,8 +340,16 @@ test.describe('hoot conversations and controls', () => {
     }
   });
 
-  /** A chat of its own whose reply holds one tier-3 call awaiting approval, then `after`. */
-  async function seedPendingApproval(id: string, after: object[] = []) {
+  /**
+   * A chat of its own whose reply holds one tier-3 call awaiting approval, then
+   * `after`. `machineIds` are the turn's machines and `input` the call's.
+   */
+  async function seedPendingApproval(
+    id: string,
+    after: object[] = [],
+    machineIds: string[] = [HOOT_FIXTURE_MACHINE_ID],
+    input: object = {},
+  ) {
     const chat = getAdminDb().collection('chats').doc(`e2e-cortex-${id}-${TEST_USERS.admin.uid}`);
     await chat.set({
       userId: TEST_USERS.admin.uid,
@@ -360,7 +368,7 @@ test.describe('hoot conversations and controls', () => {
           metadata: {
             hoot: {
               turnId: `e2e-cortex-${id}-turn-1`,
-              machineIds: [HOOT_FIXTURE_MACHINE_ID],
+              machineIds,
               via: 'chat',
               skipped: { offline: [], disabled: [] },
             },
@@ -371,7 +379,7 @@ test.describe('hoot conversations and controls', () => {
               toolCallId: `tool-${id}-1`,
               state: 'approval-requested',
               approval: { id: `approval-${id}-1` },
-              input: {},
+              input,
             },
           ],
         },
@@ -382,6 +390,30 @@ test.describe('hoot conversations and controls', () => {
     });
     return chat;
   }
+
+  test('an approval card in a chat on several machines names the machines its call is for', async ({ page }) => {
+    // The turn reached both machines and the call names one of them: approving
+    // runs it there alone. The card used to name the whole turn.
+    const chat = await seedPendingApproval(
+      'call-machines',
+      [],
+      [HOOT_FIXTURE_MACHINE_ID, HOOT_FIXTURE_OFFLINE_MACHINE_ID],
+      { machines: [HOOT_FIXTURE_MACHINE_ID] },
+    );
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+
+      const approvalCard = page
+        .locator('div.rounded-lg.border.overflow-hidden')
+        .filter({ hasText: 'hoot wants to run the privileged' })
+        .first();
+      await expect(approvalCard).toContainText(`on ${HOOT_FIXTURE_MACHINE_ID}.`);
+      await expect(approvalCard).not.toContainText(HOOT_FIXTURE_OFFLINE_MACHINE_ID);
+    } finally {
+      await chat.delete();
+    }
+  });
 
   test('an approval the server refuses hands its buttons back instead of spinning', async ({ page }) => {
     // The server answers a resume whose turn is no longer the chat's latest

@@ -9,9 +9,12 @@ import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
+  CALL_MACHINES_PARAM,
+  EVERY_TURN_MACHINE,
   EXISTING_COMMAND_MAPPINGS,
   declaredParams,
   takesActiveHoursOverride,
+  withCallMachines,
   withoutActiveHoursOverride,
   type McpToolDefinition,
   type ToolTier,
@@ -90,6 +93,18 @@ export const SITE_WIDE_SERVER_TOOLS: ReadonlySet<string> = new Set([
   'create_talon',
   'list_talons',
   'set_talon_enabled',
+]);
+
+/**
+ * server-side tools that still act once per machine of the turn, so in a turn
+ * on several machines a call names its machines like any agent tool. the
+ * others work on the site or on the chat.
+ */
+const PER_MACHINE_SERVER_TOOLS: ReadonlySet<string> = new Set([
+  'deploy_software',
+  'update_process',
+  'add_process',
+  'delete_process',
 ]);
 
 /**
@@ -2129,6 +2144,60 @@ function toolRefusal(error: string, detail: string, status: number): ProcessTool
   return { ok: false, error, detail, status };
 }
 
+/** The machines one call runs on and its input without the list that named them, or why it is refused. */
+type CallTargets =
+  | { ok: true; input: unknown; targets: string[] }
+  | { ok: false; result: ProcessToolResult };
+
+/** How many of a turn's machines a refusal lists back to the model. */
+const REFUSAL_MACHINES_SHOWN = 12;
+
+/**
+ * The machines one call of a tool runs on, in a turn on several. Every call
+ * used to go to all of them, so a request about one machine acted on the lot.
+ * The call's `machines` names them: all must be the turn's, a tool above
+ * read-only (`mustName`) is refused without the list, and a read that names
+ * none runs on every one. `input` comes back without the list, so no check
+ * below and no agent ever sees it.
+ *
+ * `resumed` is a call a person approved: it runs on the machines it named that
+ * are still in its turn, since one can go offline while the card waits. the
+ * list only ever shrinks that way.
+ */
+function callTargets(raw: unknown, turnMachines: string[], mustName: boolean, resumed: boolean): CallTargets {
+  const all = `["${EVERY_TURN_MACHINE}"]`;
+  const listed = (ids: string[]): string => {
+    const shown = ids.slice(0, REFUSAL_MACHINES_SHOWN).join(', ');
+    return ids.length > REFUSAL_MACHINES_SHOWN ? `${shown} (+${ids.length - REFUSAL_MACHINES_SHOWN} more)` : shown;
+  };
+  const refused = (error: string, detail: string): CallTargets => ({
+    ok: false,
+    result: toolRefusal(error, `${detail} This turn's machines: ${listed(turnMachines)}. Nothing was sent.`, 400),
+  });
+
+  const { [CALL_MACHINES_PARAM]: named = null, ...input } = isRecord(raw) ? raw : {};
+  if (named === null) {
+    return mustName
+      ? refused(
+          'machines_not_named',
+          `This call must say which machines it runs on: set "${CALL_MACHINES_PARAM}" to the ids the operator's request is about, or to ${all} only if they asked for every machine.`,
+        )
+      : { ok: true, input: isRecord(raw) ? input : raw, targets: turnMachines };
+  }
+  const ids = Array.isArray(named) ? [...new Set(named)] : [];
+  const everyMachine = ids.length === 1 && ids[0] === EVERY_TURN_MACHINE;
+  if (ids.length === 0 || !(everyMachine || ids.every(isValidMachineId))) {
+    return refused('machines_invalid', `"${CALL_MACHINES_PARAM}" is a list of machine ids, or ${all} alone.`);
+  }
+  if (everyMachine) return { ok: true, input, targets: turnMachines };
+  const inside = (ids as string[]).filter((id) => turnMachines.includes(id));
+  if (inside.length < ids.length && !(resumed && inside.length > 0)) {
+    const outside = (ids as string[]).filter((id) => !turnMachines.includes(id));
+    return refused('machines_not_in_turn', `Not part of this turn: ${listed(outside)}.`);
+  }
+  return { ok: true, input, targets: inside };
+}
+
 /** A person drives this turn from a dashboard chat, so an override can go to their approval card. */
 function personCanApproveOverride(options: BuildExecutableToolsOptions): boolean {
   return (
@@ -2247,7 +2316,7 @@ async function grantActiveHoursOverride(
 
 /**
  * Build AI SDK tools whose execute relays to agents. Site mode fans each call
- * out to all online machines and aggregates the results.
+ * out to the machines it names (`callTargets`) and aggregates the results.
  */
 export function buildExecutableTools(
   db: FirebaseFirestore.Firestore,
@@ -2277,7 +2346,7 @@ export function buildExecutableTools(
   const offerOverride = personCanApproveOverride(options);
 
   const guarded = new Set(options.activeHoursGuardIds ?? []);
-  const targets = siteMode ? onlineMachines : [machineId];
+  const turnMachines = siteMode ? onlineMachines : [machineId];
   // anything but null is a scope, so a missing one hides the site-wide tools too
   const scoped = options.machineScope !== null;
 
@@ -2290,7 +2359,15 @@ export function buildExecutableTools(
     if (options.machineActor && PERSON_ONLY_TOOLS.has(toolName)) continue;
     const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
     const takesOverride = takesActiveHoursOverride(def);
-    const offered = offerOverride ? def : withoutActiveHoursOverride(def);
+    // in a turn on several machines, a tool that runs on machines says which
+    const namesMachines = siteMode && (!SERVER_SIDE_TOOLS.has(toolName) || PER_MACHINE_SERVER_TOOLS.has(toolName));
+    const mustNameMachines = namesMachines && def.tier >= 2 && turnMachines.length > 1;
+    const withOverride = offerOverride ? def : withoutActiveHoursOverride(def);
+    const offered = namesMachines ? withCallMachines(withOverride, mustNameMachines) : withOverride;
+    const targetsOf = (raw: unknown, toolCallId: string | undefined): CallTargets =>
+      namesMachines
+        ? callTargets(raw, turnMachines, mustNameMachines, !!toolCallId && resumedToolCallIds.has(toolCallId))
+        : { ok: true, input: raw, targets: turnMachines };
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const toolConfig: any = {
@@ -2301,7 +2378,11 @@ export function buildExecutableTools(
       // autonomous Hoot uses buildAutonomousTools (no human to approve).
       // An override asks a person whatever the tier or the site toggle, and is
       // recorded as asked so the resumed turn can check it.
-      needsApproval: async (input: unknown, approvalOptions?: { toolCallId?: string }) => {
+      needsApproval: async (rawInput: unknown, approvalOptions?: { toolCallId?: string }) => {
+        const call = targetsOf(rawInput, approvalOptions?.toolCallId);
+        // a call execute refuses for its machine list has nothing to approve either.
+        if (!call.ok) return false;
+        const { input, targets } = call;
         // nothing would be sent, so there is nothing to approve: execute refuses at once.
         if (
           targets.length > 0 &&
@@ -2330,7 +2411,10 @@ export function buildExecutableTools(
           return false;
         }
       },
-      execute: async (params: unknown, execOptions?: { toolCallId?: string }) => {
+      execute: async (rawParams: unknown, execOptions?: { toolCallId?: string }) => {
+        const call = targetsOf(rawParams, execOptions?.toolCallId);
+        if (!call.ok) return call.result;
+        const { input: params, targets } = call;
         // Bridge per-turn toolCallbacks into per-dispatch hooks: the SDK passes
         // { toolCallId } as execute's 2nd arg; pair it with commandId + machineId.
         const toolCallbacks = options.toolCallbacks;
@@ -2367,11 +2451,10 @@ export function buildExecutableTools(
 
         // Run on the web server: no agent relay, so toolCallbacks never fire.
         if (SERVER_SIDE_TOOLS.has(toolName)) {
-          const targetMachineIds = siteMode ? onlineMachines : [machineId];
           return executeServerSideTool(
             db,
             siteId,
-            targetMachineIds,
+            targets,
             toolName,
             toolParams,
             serverSideOptions,
@@ -2381,7 +2464,7 @@ export function buildExecutableTools(
 
         if (siteMode) {
           const results = await Promise.all(
-            onlineMachines.map(async (mid) => {
+            targets.map(async (mid) => {
               const refusal = heldRestartRefusal(toolName, toolParams, guarded.has(mid));
               if (refusal) return { machine: mid, ...refusal };
               try {

@@ -8,6 +8,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { type LanguageModel } from 'ai';
 import { resolveModelId, type LlmProvider } from '@/lib/llmModels';
 import { isValidMachineId, type ResolvedTargets } from '@/lib/hoot/target';
+import { CALL_MACHINES_PARAM, EVERY_TURN_MACHINE } from '@/lib/mcp-tools';
 import { isValidTimezone } from '@/lib/timeUtils';
 
 export type { LlmProvider };
@@ -185,6 +186,14 @@ const FAN_OUT_RESULT_RULES = `Each tool call result will contain a "machines" ar
 
 If a tool returns an error for specific machines, report which machines succeeded and which failed.`;
 
+/**
+ * How a call says which of a fan-out turn's machines it runs on. Without it a
+ * request about one machine went to every machine of the turn.
+ */
+const FAN_OUT_CALL_RULES = `MACHINES PER CALL: Every tool that runs on machines takes a "${CALL_MACHINES_PARAM}" parameter — the ids of the machines that one call runs on. When the operator's request is about one machine, or a few, name exactly those: a call never reaches a machine it does not name. A tool that changes anything is refused without "${CALL_MACHINES_PARAM}". Pass ["${EVERY_TURN_MACHINE}"] for every machine in this turn, and only when the operator asked for all of them. A read-only tool called without "${CALL_MACHINES_PARAM}" runs on every machine in this turn.`;
+
+const SITE_WIDE_OPENING = 'You operate in site-wide mode — this turn can reach ALL online machines in the site. Each tool call runs on the machines it names, simultaneously, and results are aggregated.';
+
 /** `machineRef` is what the model should call the target: a quoted id, or "a machine's name". */
 function languageRule(machineRef: string): string {
   return `LANGUAGE: You manage remote machines, not the operator's personal computer. Always refer to "the machine", "the computer", or ${machineRef} — never say "your screen", "your desktop", or "your files".`;
@@ -212,9 +221,11 @@ export function buildSystemPrompt(
   const guardLine = `\n\n${activeHoursGuardLine(activeHoursGuard)}`;
 
   if (siteMode) {
-    return `${HOOT_IDENTITY} You operate in site-wide mode — your tool calls will be sent to ALL online machines in the site simultaneously and results will be aggregated.
+    return `${HOOT_IDENTITY} ${SITE_WIDE_OPENING}
 
 ${coreRules}
+
+${FAN_OUT_CALL_RULES}
 
 ${FAN_OUT_RESULT_RULES}${guardLine}
 
@@ -295,8 +306,11 @@ function buildTargetsBlock(options: HootSystemPromptOptions, ids: string[]): str
   const lines: string[] = [];
 
   if (ids.length > 0) {
-    const noun = ids.length === 1 ? 'machine' : 'machines';
-    lines.push(`Tool calls in this turn go to ${ids.length} ${noun}: ${formatPromptIds(ids)}.`);
+    lines.push(
+      options.mode !== 'single' && ids.length > 1
+        ? `Tool calls in this turn can reach ${ids.length} machines: ${formatPromptIds(ids)}. Each call runs on the ones it names.`
+        : `Tool calls in this turn go to 1 machine: ${ids[0]}.`,
+    );
     lines.push(activeHoursGuardLine({ machineIds: ids, guardedIds: options.activeHoursGuardIds ?? [] }));
   }
 
@@ -367,12 +381,13 @@ export function buildHootSystemPrompt(options: HootSystemPromptOptions): string 
 
   const opening =
     options.mode === 'site'
-      ? 'You operate in site-wide mode — your tool calls will be sent to ALL online machines in the site simultaneously and results will be aggregated.'
-      : 'You operate in multi-machine mode — your tool calls will be sent simultaneously to the chosen set of machines named at the end of these instructions, and results will be aggregated. They do NOT reach every machine in the site.';
+      ? SITE_WIDE_OPENING
+      : 'You operate in multi-machine mode — this turn can reach the chosen set of machines named at the end of these instructions. Each tool call runs on the machines it names from that set, simultaneously, and results are aggregated. Tool calls do NOT reach every machine in the site.';
 
   return joinSections([
     `${HOOT_IDENTITY} ${opening}`,
     coreRules,
+    FAN_OUT_CALL_RULES,
     FAN_OUT_RESULT_RULES,
     targets,
     languageRule("a machine's name"),

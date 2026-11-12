@@ -59,6 +59,44 @@ export function withoutActiveHoursOverride(def: McpToolDefinition): McpToolDefin
 }
 
 /**
+ * In a turn on several machines, the parameter a call names its machines with
+ * (hoot-utils.server.ts). It exists only on the copy of a definition such a
+ * turn offers: the definitions below never carry it, and no agent is sent it.
+ */
+export const CALL_MACHINES_PARAM = 'machines';
+
+/** The one entry that stands for every machine of the turn. */
+export const EVERY_TURN_MACHINE = '*';
+
+/** The definition as a turn on several machines offers it. `required` is for a tool above read-only. */
+export function withCallMachines(def: McpToolDefinition, required: boolean): McpToolDefinition {
+  const all = `["${EVERY_TURN_MACHINE}"]`;
+  const description = required
+    ? `Required. The machines this call runs on: ids from this turn's machines. Name only the machines the operator's request is about; nothing else is touched. ${all} is every machine in this turn: use it only when the operator asked for all of them.`
+    : `The machines this call runs on: ids from this turn's machines. Name only the machines the operator's request is about. Leave it out, or pass ${all}, to run on every machine in this turn.`;
+  return {
+    ...def,
+    parameters: {
+      ...def.parameters,
+      properties: {
+        ...def.parameters.properties,
+        [CALL_MACHINES_PARAM]: { type: 'array', items: { type: 'string' }, description },
+      },
+      ...(required ? { required: [...(def.parameters.required ?? []), CALL_MACHINES_PARAM] } : {}),
+    },
+  };
+}
+
+/** The machine ids a call's input names, or null when it names none or every machine of its turn. */
+export function namedCallMachines(input: unknown): string[] | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const named = (input as Record<string, unknown>)[CALL_MACHINES_PARAM];
+  if (!Array.isArray(named) || named.length === 0) return null;
+  if (!named.every((id): id is string => typeof id === 'string' && id !== EVERY_TURN_MACHINE)) return null;
+  return [...new Set(named)];
+}
+
+/**
  * A tool's input cut down to the parameters `def` declares. A granted machine's
  * call, and a turn it started, hand a tool nothing else (ADR 0017).
  */
