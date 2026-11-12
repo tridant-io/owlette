@@ -94,7 +94,7 @@ info:
     |------|---------|
     | 400  | Bad request - missing or invalid parameters (`validation_failed`) |
     | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`) |
-    | 402  | Plan required - the site owner's plan does not include the feature (`plan_required`). Not enforced during the beta |
+    | 402  | Plan required - the site's plan does not include the feature (`plan_required`). Not enforced during the beta |
     | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), or an operation that refuses API keys (`api_key_not_permitted`) |
     | 404  | Not found - including a site that exists but the caller cannot access |
     | 409  | Conflict - resource is in an incompatible state |
@@ -108,7 +108,7 @@ info:
 
     Once plans apply after the beta, API keys are a pro feature: a
     site-scoped request made with an API key answers `402 plan_required`
-    (`entitlement: owlette.api_keys`) when the site owner's plan does not
+    (`entitlement: owlette.api_keys`) when the site's plan does not
     include them, reads and deletes included. Sessions are not affected. See
     `/docs/plans`.
 
@@ -327,7 +327,6 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -3669,7 +3668,6 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyCreateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
@@ -3781,7 +3779,6 @@ paths:
               schema: { $ref: '#/components/schemas/ApiKeyRotateResponse' }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409': { $ref: '#/components/responses/Problem409' }
@@ -7001,7 +6998,7 @@ paths:
 
         Once plans apply after the beta, every type except `update_owlette`,
         `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view` and
-        `cancel_mcp_tool` needs the site owner's plan to include remote
+        `cancel_mcp_tool` needs the site's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
         `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
 
@@ -7514,7 +7511,6 @@ paths:
                   keyPrefix: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: Forbidden - superadmin required for `user` or `installer` scopes.
           content:
@@ -8723,8 +8719,8 @@ paths:
         Site owner or admin with the whole site, or a superadmin, whatever
         their own swoop mode: the swoop-settings capability, as for a kill, so
         a caller with a machine scope gets `403`. Anyone but yourself, with
-        no order among them. Not gated on the site's swoop settings or the
-        payer's plan.
+        no order among them. Not gated on the site's swoop settings or its
+        plan.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -11516,10 +11512,10 @@ components:
           schema: { $ref: '#/components/schemas/ProblemDetails' }
     PlanRequired:
       description: |
-        Plan required (`code: plan_required`): the plan of the site's owner
-        does not include what the request needs, and `entitlement` names it.
-        On `POST /api/sites`, the API-key mint routes and the CLI sign-in the
-        caller's own plan decides; on an ownership transfer, the new owner's.
+        Plan required (`code: plan_required`): the site's plan does not
+        include what the request needs, and `entitlement` names it. On
+        `POST /api/sites` it is the caller's owlette free site limit, which
+        is counted per account; on an ownership transfer, the new owner's.
         Plans are not enforced during the beta, so no route answers this yet.
         See `/docs/plans`.
       content:

@@ -26,7 +26,7 @@ const coreFeatures: TierFeature[] = [
   { label: 'process monitoring & auto-recovery' },
   { label: 'process control — start, stop, restart, kill' },
   { label: 'display layouts' },
-  { label: '1 site with role-based access' },
+  { label: 'sites with role-based access, each on its own plan' },
   { label: 'unlimited machines & members' },
   { label: 'email alerts' },
   { label: 'email support' },
@@ -44,7 +44,6 @@ const proFeatures: TierFeature[] = [
   { label: 'REST API' },
   { label: 'webhooks' },
   { label: 'CLI + TypeScript SDK' },
-  { label: 'unlimited sites' },
   { label: 'priority support' },
 ];
 

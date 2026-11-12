@@ -39,10 +39,8 @@ jest.mock('@/lib/securityConfig.server', () => ({
 
 // site creation and transfer count an account's free sites by each site's plan.
 const mockGetSiteEntitlements = jest.fn();
-const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
 jest.mock('firebase-admin/firestore', () => {
@@ -718,7 +716,6 @@ describe('plan limits on sites', () => {
     process.env.TRIDANT_API_URL = 'https://tridant.test';
     process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
     mockGetSiteEntitlements.mockResolvedValue(FREE);
-    mockGetEntitlements.mockResolvedValue(FREE);
   });
 
   afterEach(() => {
@@ -785,7 +782,6 @@ describe('plan limits on sites', () => {
 
     expect(res.status).toBe(201);
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 
   it('refuses a transfer to a free payer who already owns a site', async () => {

@@ -53,7 +53,7 @@ const THIRD_PARTY_CREDENTIALS = [
   // reach cloudflare (TURN credential minting) and the R2 object store.
   'CLOUDFLARE_TURN_KEY_API_TOKEN',
   'R2_S3_SECRET_ACCESS_KEY',
-  // reaches tridant id; under OWLETTE_E2E entitlements come from e2e_entitlements/{uid} instead.
+  // reaches tridant id; under OWLETTE_E2E entitlements come from e2e_entitlements/site:{siteId} instead.
   'TRIDANT_LICENSE_KEY',
   // local tooling (terraform, wrangler, `vercel env pull`), never read by web/;
   // blanked so a developer's .env.local still starts the suite.
@@ -200,9 +200,9 @@ const webServer = {
     // any spec that runs POST /versions through the real finalize handler.
     OWLETTE_E2E: '1',
     // on for the whole run. safe because plans come through the OWLETTE_E2E
-    // seam: only a payer with an `e2e_entitlements/{uid}` doc has a plan, and
+    // seam: only a site with an `e2e_entitlements/site:{siteId}` doc has a plan, and
     // without one the seam answers not_configured, which fails open.
-    // specs/plans seeds its own payer; no shared fixture user ever gets a doc.
+    // specs/plans seeds its own sites; no shared fixture site ever gets a doc.
     PLAN_ENFORCEMENT: 'on',
     // RP override honored by webauthn.server.ts only when OWLETTE_E2E==='1':
     // the production build would otherwise use RP 'owlette.app' + https origins

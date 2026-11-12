@@ -63,7 +63,6 @@ jest.mock('@/lib/planAccounts.server', () => ({
 const mockInvalidate = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: jest.fn(),
-  getEntitlements: jest.fn(),
   invalidateSiteEntitlements: (siteId: string) => mockInvalidate(siteId),
 }));
 

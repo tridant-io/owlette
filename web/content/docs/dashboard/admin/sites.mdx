@@ -48,9 +48,9 @@ each one opens **create new site**: enter a **site name**, keep the generated si
 
 ## site settings
 
-`/admin/sites/{siteId}` holds one site's settings. open it from the site's gear, or from the site switcher's **site settings** for the site you are on. it shows the site's name, its ID (click it to copy) and your role, then one section at a time: **general**, **members**, **machines**, **swoop & screens** and, for the site's owner, **danger zone**.
+`/admin/sites/{siteId}` holds one site's settings. open it from the site's gear, or from the site switcher's **site settings** for the site you are on. it shows the site's name, its ID (click it to copy) and your role, then one section at a time: **general**, **members**, **machines**, **swoop & screens** and, for the site's owner, **billing** (once [plans](/docs/plans) apply) and **danger zone**.
 
-the section is part of the URL, `?section=members`, `machines`, `swoop` or `danger` (general needs none), so a link can open one and a reload keeps it. an unknown section, or one you can't see, opens **general**. a site you can't reach reads **site not found**.
+the section is part of the URL, `?section=members`, `machines`, `swoop`, `billing` or `danger` (general needs none), so a link can open one and a reload keeps it. an unknown section, or one you can't see, opens **general**. a site you can't reach reads **site not found**.
 
 ### general
 
@@ -79,6 +79,16 @@ two switches, which act the moment they move. there is no save.
 | **keep screens awake** | on | machines on this site never sleep, blank or lock. see [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) |
 
 **turn on swoop…** in a machine's menu, and **open site settings** in the swoop picker and the viewer, open this section.
+
+### billing
+
+only the site's owner sees it, and only once [plans](/docs/plans) apply: during the beta there is no billing section. it shows the site's plan and, for a billed site, its billing period, its active machines this period and its price.
+
+- **upgrade** opens the plan picker, on a site that is on owlette free or in the trial. your first billed site goes through a checkout and comes back here; while another of your sites is billed, the site goes on the same card with no checkout
+- **switch plan** moves a billed site between core and pro at once
+- **stop billing** asks you to confirm. the site keeps its plan to the end of the billing period, which is still billed, then goes to owlette free. the section reads **ends** with the date, and **resume billing** undoes the stop until then
+
+only the owner can change a site's billing; an admin who meets a feature the site's plan leaves out is told to ask the owner. a site you took over by transfer reads **this site is billed to its previous owner** until that billing period ends, and can be upgraded after it. see [upgrading a site](/docs/plans#upgrading-a-site).
 
 ### danger zone
 

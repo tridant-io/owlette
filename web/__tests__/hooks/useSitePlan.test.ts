@@ -3,7 +3,8 @@
  *
  * `useSitePlan` — a site's plan from `/api/sites/{siteId}/plan`, and what it
  * does to the site's machines. pins one fetch per site per sign-in shared by
- * every caller, nothing fetched before auth settles, nothing locked while the
+ * every caller, nothing fetched before auth and the account plan settle (the
+ * account read is what starts the trial), nothing locked while the
  * plan loads, after a failure or with plans off, control and swoop by the
  * site's flags for every viewer, the machine lock on a free site for its owner
  * alone (from the account plan's live machines), and a fresh account plan when
@@ -20,9 +21,10 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 
 let mockAccount: AccountPlanResponse | undefined;
+let mockAccountLoading = false;
 const mockRefreshAccount = jest.fn();
 jest.mock('@/hooks/usePlan', () => ({
-  usePlan: () => ({ plan: mockAccount, loading: false, error: null, refresh: mockRefreshAccount }),
+  usePlan: () => ({ plan: mockAccount, loading: mockAccountLoading, error: null, refresh: mockRefreshAccount }),
 }));
 
 import { __resetSitePlansForTests, sitePlan, useSitePlan } from '@/hooks/useSitePlan';
@@ -189,6 +191,7 @@ describe('useSitePlan', () => {
     __resetSitePlansForTests();
     mockAuth = { user: { uid: 'u1' }, loading: false };
     mockAccount = ACCOUNT;
+    mockAccountLoading = false;
     mockRefreshAccount.mockClear();
     originalFetch = global.fetch;
     fetchMock.mockReset();
@@ -216,6 +219,41 @@ describe('useSitePlan', () => {
     rerender({ siteId: null });
     expect(result.current).toMatchObject({ plan: undefined, loading: false, controlLocked: false });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('asks for no site until the account plan has loaded, locking nothing meanwhile, then asks once', async () => {
+    // the account read starts the trial: a site read ahead of it would keep owlette free all session.
+    mockAccountLoading = true;
+    mockAccount = undefined;
+    const { result, rerender } = renderHook(() => useSitePlan('site-a'));
+    expect(result.current).toMatchObject({ plan: undefined, loading: true, controlLocked: false, swoopLocked: false });
+    expect(result.current.machineLimitFor('kiosk-2')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    mockAccountLoading = false;
+    mockAccount = ACCOUNT;
+    rerender();
+    await waitFor(() => expect(result.current.plan).toEqual(FREE));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // an account refresh later does not ask for the site again.
+    mockAccountLoading = true;
+    rerender();
+    mockAccountLoading = false;
+    rerender();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks for the site once the account plan read has failed', async () => {
+    mockAccountLoading = true;
+    mockAccount = undefined;
+    const { result, rerender } = renderHook(() => useSitePlan('site-a'));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    mockAccountLoading = false;
+    rerender();
+    await waitFor(() => expect(result.current.plan).toEqual(FREE));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('fetches a site once for every caller, and locks nothing until the plan is in', async () => {

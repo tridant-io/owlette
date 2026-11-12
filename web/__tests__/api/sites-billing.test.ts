@@ -114,7 +114,6 @@ const mockSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   // an api key's own plan check, in the wrapper, and what tridant bills for a site with no pointer.
   getSiteEntitlements: (siteId: string) => mockSiteEntitlements(siteId),
-  getEntitlements: jest.fn(),
   invalidateSiteEntitlements: (siteId: string) => mockInvalidate(siteId),
 }));
 

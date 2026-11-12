@@ -60,9 +60,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 function collectionPath(parts: string[]): string {
@@ -335,15 +335,15 @@ describe('/api/keys with plans enforced', () => {
   afterEach(stopEnforcingPlans);
 
   it('mints on the minting user’s free plan: the site’s plan gates each request, not the mint', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
 
     expect((await makePost(siteKey)).status).toBe(200);
     expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('keeps revoke open on free', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
     store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
     store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
 
@@ -351,14 +351,14 @@ describe('/api/keys with plans enforced', () => {
   });
 
   it('rotates on free: the site’s plan gates each request, not the mint', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
     store.set('users/user-member/api_keys/key-a', { keyHash: 'hash-a', keyPrefix: 'owk_live_a' });
     store.set('api_keys/hash-a', { userId: 'user-member', keyId: 'key-a' });
 
     const res = await makeRotate('key-a');
 
     expect(res.status).toBe(200);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 

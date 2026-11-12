@@ -79,6 +79,10 @@ function billedAs(plan: SitePlanResponse, now: number): SiteBilling | null {
   return tier === 'core' || tier === 'pro' ? { tier, founders: false, endsAt: null } : null;
 }
 
+/** plans switched off on this deployment, as opposed to tridant id failing to answer for the site. */
+const switchedOff = (plan: SitePlanResponse) =>
+  !plan.enforced && (plan.reason === 'enforcement_off' || plan.reason === 'not_configured');
+
 export function SiteBillingSection({ site }: { site: { id: string; name: string } }) {
   const router = useRouter();
   const sessionId = useSearchParams().get('session_id');
@@ -86,6 +90,9 @@ export function SiteBillingSection({ site }: { site: { id: string; name: string 
   const { plan: account } = usePlan();
   const { confirmCheckout } = useSiteBilling(site.id);
   const [checkout, setCheckout] = useState<Checkout | null>(null);
+  const [now] = useState(() => Date.now());
+  // tridant id bills a billed site whatever the switch says, so with plans off its owner can still stop it
+  const billedWhileOff = !!plan && switchedOff(plan) && billedAs(plan, now) !== null;
 
   useEffect(() => {
     if (!sessionId) return;
@@ -150,8 +157,8 @@ export function SiteBillingSection({ site }: { site: { id: string; name: string 
           </Notice>
         )}
 
-        {plan?.enforced ? (
-          <BillingDetails site={site} plan={plan} account={account?.enforced ? account : null} />
+        {plan && (plan.enforced || billedWhileOff) ? (
+          <BillingDetails site={site} plan={plan} account={account?.enforced ? account : null} now={now} />
         ) : loading ? (
           <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
@@ -192,13 +199,14 @@ function BillingDetails({
   site,
   plan,
   account,
+  now,
 }: {
   site: { id: string; name: string };
   plan: SitePlanResponse;
   account: AccountPlanOn | null;
+  now: number;
 }) {
   const { upgrade, stop } = useSiteBilling(site.id);
-  const [now] = useState(() => Date.now());
   const [picking, setPicking] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -211,7 +219,8 @@ function BillingDetails({
   const trialEnds = onTrial ? (account?.trial.endsAt ?? null) : null;
   const machines = account?.sites.find((s) => s.siteId === site.id)?.activeMachinesThisPeriod ?? null;
   const previousOwner = plan.isOwner && (plan.billedByPreviousOwner || refusedAsNewOwner);
-  const canChange = plan.isOwner && !previousOwner;
+  // with plans off the server starts no checkout, so a billed site can only be stopped
+  const canChange = plan.enforced && plan.isOwner && !previousOwner;
   // the new owner may stop what the previous owner still pays for, and nothing else
   const canStop = plan.isOwner && billing !== null && endsAt === null;
   const minMachines = billing?.tier === 'pro' ? PRICING_FACTS.pro.minMachines : 0;
@@ -273,6 +282,11 @@ function BillingDetails({
         {endsAt !== null && <Badge variant="outline">ends {lastDay(endsAt)}</Badge>}
       </div>
 
+      {!plan.enforced && (
+        <Notice tone="info" testId="billing-plans-off">
+          {`plans are switched off right now, so nothing on this site is limited${canStop ? ', and its billing can be stopped here' : ''}.`}
+        </Notice>
+      )}
       {plan.standing === 'past_due' && (
         <Notice tone="warning" testId="billing-past-due">
           {/* one child: the notice is a flex row, which would set the link apart from its sentence */}
@@ -337,7 +351,8 @@ function BillingDetails({
           )}
           {endsAt !== null && (
             <p className="text-sm text-muted-foreground">
-              billed until {lastDay(endsAt)}. this site stays on {billing.tier} until then, then goes to owlette free.
+              billed until {lastDay(endsAt)}.
+              {plan.enforced && ` this site stays on ${billing.tier} until then, then goes to owlette free.`}
             </p>
           )}
         </>

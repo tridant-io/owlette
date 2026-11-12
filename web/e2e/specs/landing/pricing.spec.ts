@@ -70,7 +70,6 @@ test.describe('landing — pricing', () => {
     await expect(proCard).toContainText('REST API');
     await expect(proCard).toContainText('CLI + TypeScript SDK');
     await expect(proCard).toContainText('webhooks');
-    await expect(proCard).toContainText('unlimited sites');
     await expect(proCard).toContainText('swoop — live remote desktop in the browser');
     await expect(coreCard).not.toContainText('swoop');
     await expect(coreCard).not.toContainText('REST API');
@@ -85,8 +84,10 @@ test.describe('landing — pricing', () => {
     await expect(coreCard).not.toContainText('hoot');
     await expect(coreCard).not.toContainText('talons');
 
-    // Core scope constraint — single-site only.
-    await expect(coreCard).toContainText('1 site with role-based access');
+    // A plan belongs to a site: core has no site cap, and pro no "unlimited sites" to add.
+    await expect(coreCard).toContainText('sites with role-based access, each on its own plan');
+    await expect(coreCard).not.toContainText('1 site');
+    await expect(proCard).not.toContainText('unlimited sites');
 
     // Pro card visual marker — the `new` chip is rendered inside the card,
     // and the card container carries the accent-cyan border class.
@@ -102,10 +103,15 @@ test.describe('landing — pricing', () => {
     await expect(coreCard.getByRole('link', { name: 'get started', exact: true })).toHaveAttribute('href', '/register');
     await expect(proCard.getByRole('link', { name: 'get started', exact: true })).toHaveAttribute('href', '/register');
 
-    // The after-beta model — trial, fallback to free, per-active-machine billing.
-    await expect(pricing).toContainText('after beta, every account starts with a 14-day pro trial, no card.');
-    await expect(pricing).toContainText('falls back to owlette free');
-    await expect(pricing).toContainText('billed per active machine per month.');
+    // The after-beta model — trial, fallback to free, per-site and per-active-machine billing.
+    await expect(pricing).toContainText(
+      'after beta, every account starts with a 14-day pro trial, no card, once its email is verified.',
+    );
+    await expect(pricing).toContainText('a site falls back to owlette free');
+    await expect(pricing).toContainText('each site has its own plan, billed per active machine per month.');
     await expect(pricing).toContainText('a machine counts if it was online at any point in the billing period.');
+    await expect(pricing).toContainText(
+      "a billing period is a calendar month from the 1st (UTC), and a site's first part month is charged by the day.",
+    );
   });
 });

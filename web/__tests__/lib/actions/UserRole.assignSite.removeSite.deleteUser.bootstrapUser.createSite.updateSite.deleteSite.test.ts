@@ -25,10 +25,12 @@ jest.mock('@/lib/logger', () => ({
 // the resolver has its own suite; here it only matters what createSite does with the answer.
 const mockSiteSlotAvailable = jest.fn();
 const mockPlansEnforced = jest.fn();
+const mockTridantConfigured = jest.fn();
 jest.mock('@/lib/plan.server', () => ({
   ...jest.requireActual('@/lib/plan.server'),
   siteSlotAvailable: (uid: string) => mockSiteSlotAvailable(uid),
   plansEnforced: () => mockPlansEnforced(),
+  tridantConfigured: () => mockTridantConfigured(),
 }));
 
 // the billing hooks of createSite and deleteSite; tridant's side has its own suites.
@@ -705,6 +707,7 @@ describe('site CRUD actions', () => {
   beforeEach(() => {
     mockSiteSlotAvailable.mockResolvedValue(true);
     mockPlansEnforced.mockReturnValue(false);
+    mockTridantConfigured.mockReturnValue(false);
     mockRegisterSite.mockResolvedValue(null);
     mockStopSite.mockResolvedValue({ ok: true, endsAt: 1793600000000 });
   });
@@ -784,10 +787,11 @@ describe('site CRUD actions', () => {
     expect(mockSiteSlotAvailable).not.toHaveBeenCalled();
   });
 
-  it('createSite registers the new site with tridant once it exists, when plans are enforced', async () => {
+  it('createSite registers the new site with tridant once it exists, when tridant id is configured', async () => {
     const db = new FakeDb();
     db.seed('users/owner-1', { sites: [] });
     mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
     let committedAtRegistration = false;
     mockRegisterSite.mockImplementation(async () => {
       committedAtRegistration = Boolean(db.docs.get('sites/site-a'));
@@ -805,19 +809,31 @@ describe('site CRUD actions', () => {
     const db = new FakeDb();
     db.seed('users/owner-1', { sites: [] });
     mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
     mockRegisterSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
 
     expect(await runCreateSite(db)).toMatchObject({ kind: 'created', siteId: 'site-a' });
     expect(db.docs.get('sites/site-a')).toMatchObject({ owner: 'owner-1' });
   });
 
-  it('createSite registers nothing while plans are not enforced, or when the site is refused', async () => {
+  it('createSite registers the new site while plans are still switched off, once tridant id is configured', async () => {
+    // between the bulk trial start and the switch: the site must be under its owner's trial when plans go on.
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockTridantConfigured.mockReturnValue(true);
+
+    await runCreateSite(db);
+
+    expect(mockRegisterSite).toHaveBeenCalledWith('owner-1', 'site-a', 'Main Gallery');
+  });
+
+  it('createSite registers nothing while tridant id is not configured, or when the site is refused', async () => {
     const db = new FakeDb();
     db.seed('users/owner-1', { sites: [] });
 
     await runCreateSite(db);
 
-    mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
     mockSiteSlotAvailable.mockResolvedValue(false);
     expect(await runCreateSite(db, 'site-b')).toEqual({ kind: 'plan_limit' });
 

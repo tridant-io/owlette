@@ -17,7 +17,6 @@ jest.mock('@/lib/firebase-admin', () => ({
 import logger from '@/lib/logger';
 import {
   __resetForTests,
-  getEntitlements,
   getSiteEntitlements,
   invalidateSiteEntitlements,
 } from '@/lib/tridantEntitlements.server';
@@ -112,32 +111,6 @@ const LAPSED_SITE = {
   ent_epoch: 47,
   license_keys: [],
   resolved_at: '2026-11-11T00:00:00Z',
-};
-
-const PRO_PAYER = {
-  subject: 'owlette:u1',
-  resolved: true,
-  org_id: 'org_1',
-  standing: 'active',
-  in_good_standing: true,
-  grace_until: null,
-  ent: { 'owlette.control': true, 'owlette.machines': 25, 'owlette.sites': 'unlimited' },
-  ent_epoch: 7,
-  sites: [],
-  resolved_at: '2026-10-08T00:00:00Z',
-};
-
-const UNMAPPED_PAYER = {
-  subject: 'owlette:u2',
-  resolved: false,
-  note: 'no_mapping_for_external_id',
-  standing: 'expired',
-  in_good_standing: false,
-  grace_until: null,
-  ent: { 'owlette.control': false, 'owlette.machines': 1 },
-  ent_epoch: 0,
-  sites: [],
-  resolved_at: '2026-10-08T00:00:00Z',
 };
 
 function reply(status: number, body: unknown, headers?: Record<string, string>) {
@@ -373,12 +346,12 @@ describe('getSiteEntitlements', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
-    it('keys by site id, apart from the uid cache', async () => {
+    it('keys by site id', async () => {
       mockFetch.mockResolvedValue(reply(200, PRO_SITE));
       await getSiteEntitlements('x');
       await getSiteEntitlements('y');
-      await getEntitlements('x');
-      expect(mockFetch).toHaveBeenCalledTimes(3);
+      await getSiteEntitlements('x');
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it('shares one call between concurrent lookups', async () => {
@@ -510,201 +483,6 @@ describe('getSiteEntitlements', () => {
 
       mockSeedGet.mockRejectedValueOnce(new Error('emulator down'));
       expect(await getSiteEntitlements('site-1')).toEqual({ ok: false, reason: 'unreachable' });
-    });
-  });
-});
-
-describe('getEntitlements', () => {
-  it('asks tridant for owlette:{uid} with the license key, and reads boolean flags', async () => {
-    mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-
-    expect(await getEntitlements('u1')).toEqual({
-      ok: true,
-      resolved: true,
-      standing: 'active',
-      inGoodStanding: true,
-      graceUntil: null,
-      ent: { 'owlette.control': '1', 'owlette.machines': '25', 'owlette.sites': 'unlimited' },
-      epoch: 7,
-      orgId: 'org_1',
-      billing: null,
-    });
-    const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toBe(
-      'https://api-staging.tridant.io/v1/licenses/owlette:u1/entitlements?app=owlette',
-    );
-    expect(init.method).toBe('GET');
-    expect(init.headers.Authorization).toBe(`Bearer ${LICENSE_KEY}`);
-  });
-
-  it('passes an unmapped subject through as resolved:false with the defaults', async () => {
-    mockFetch.mockResolvedValue(reply(200, UNMAPPED_PAYER));
-
-    expect(await getEntitlements('u2')).toEqual({
-      ok: true,
-      resolved: false,
-      standing: 'expired',
-      inGoodStanding: false,
-      graceUntil: null,
-      ent: { 'owlette.control': '0', 'owlette.machines': '1' },
-      epoch: 0,
-      orgId: null,
-      billing: null,
-    });
-  });
-
-  it('encodes the uid into the path', async () => {
-    mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-    await getEntitlements('a/b?c');
-    expect(mockFetch.mock.calls[0][0]).toBe(
-      'https://api-staging.tridant.io/v1/licenses/owlette:a%2Fb%3Fc/entitlements?app=owlette',
-    );
-  });
-
-  it('reports not_configured without calling out when the url or the key is missing', async () => {
-    delete process.env.TRIDANT_API_URL;
-    expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'not_configured' });
-
-    __resetForTests();
-    process.env.TRIDANT_API_URL = 'https://api-staging.tridant.io';
-    delete process.env.TRIDANT_LICENSE_KEY;
-    expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'not_configured' });
-
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it('reports unreachable on a timeout', async () => {
-    mockFetch.mockRejectedValue(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
-    expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'unreachable' });
-  });
-
-  it('reports rejected on a refused key', async () => {
-    mockFetch.mockResolvedValue(reply(401, { error: 'invalid_api_key' }));
-    expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'rejected' });
-  });
-
-  it.each([
-    ['a non-object body', [1, 2]],
-    ['no ent', { ...PRO_PAYER, ent: undefined }],
-    ['an ent array', { ...PRO_PAYER, ent: ['owlette.control'] }],
-    ['no standing', { ...PRO_PAYER, standing: undefined }],
-    ['a string resolved', { ...PRO_PAYER, resolved: 'true' }],
-    ['no in_good_standing', { ...PRO_PAYER, in_good_standing: undefined }],
-  ])('reports malformed_response for %s', async (_label, body) => {
-    mockFetch.mockResolvedValue(reply(200, body));
-    expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'malformed_response' });
-  });
-
-  it('reads a missing ent_epoch as null', async () => {
-    mockFetch.mockResolvedValue(reply(200, { ...PRO_PAYER, ent_epoch: undefined }));
-    expect(await getEntitlements('u1')).toMatchObject({ ok: true, epoch: null });
-  });
-
-  describe('cache', () => {
-    it('serves a repeat lookup within 60 s from memory, and asks again after', async () => {
-      mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-
-      await getEntitlements('u1');
-      now += 59_999;
-      expect(await getEntitlements('u1')).toMatchObject({ ok: true, standing: 'active' });
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-
-      now += 1;
-      mockFetch.mockResolvedValue(reply(200, UNMAPPED_PAYER));
-      expect(await getEntitlements('u1')).toMatchObject({ ok: true, standing: 'expired' });
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('keys by uid', async () => {
-      mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-      await getEntitlements('u1');
-      await getEntitlements('u2');
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-
-    it('shares one call between concurrent lookups', async () => {
-      mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-      const [a, b] = await Promise.all([getEntitlements('u1'), getEntitlements('u1')]);
-      expect(a).toEqual(b);
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('caches a failure for the same 60 s, so an outage is not retried on every request', async () => {
-      mockFetch.mockRejectedValue(new TypeError('fetch failed'));
-      await getEntitlements('u1');
-      now += 30_000;
-      expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'unreachable' });
-      expect(mockFetch).toHaveBeenCalledTimes(1);
-    });
-
-    it('is emptied by __resetForTests', async () => {
-      mockFetch.mockResolvedValue(reply(200, PRO_PAYER));
-      await getEntitlements('u1');
-      __resetForTests();
-      await getEntitlements('u1');
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-  });
-
-  describe('e2e seam', () => {
-    beforeEach(() => {
-      process.env.OWLETTE_E2E = '1';
-    });
-
-    it('reads e2e_entitlements/{uid} instead of calling tridant', async () => {
-      mockSeedGet.mockResolvedValue(
-        seed({ resolved: false, standing: 'expired', ent: { 'owlette.control': '0' } }),
-      );
-
-      expect(await getEntitlements('u1')).toEqual({
-        ok: true,
-        resolved: false,
-        standing: 'expired',
-        inGoodStanding: false,
-        graceUntil: null,
-        ent: { 'owlette.control': '0' },
-        epoch: null,
-        orgId: null,
-        billing: null,
-      });
-      expect(mockCollection).toHaveBeenCalledWith('e2e_entitlements');
-      expect(mockDoc).toHaveBeenCalledWith('u1');
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it('works without tridant configured', async () => {
-      delete process.env.TRIDANT_API_URL;
-      delete process.env.TRIDANT_LICENSE_KEY;
-      mockSeedGet.mockResolvedValue(
-        seed({ resolved: true, standing: 'trialing', ent: { 'owlette.control': '1' } }),
-      );
-      expect(await getEntitlements('u1')).toMatchObject({
-        ok: true,
-        standing: 'trialing',
-        inGoodStanding: true,
-      });
-    });
-
-    it('reports not_configured when no doc is seeded', async () => {
-      mockSeedGet.mockResolvedValue(seed(undefined));
-      expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'not_configured' });
-    });
-
-    it('reads the doc on every call, so a spec can change the plan mid-run', async () => {
-      mockSeedGet
-        .mockResolvedValueOnce(seed({ resolved: true, standing: 'active', ent: { 'owlette.control': '1' } }))
-        .mockResolvedValueOnce(seed({ resolved: false, standing: 'expired', ent: { 'owlette.control': '0' } }));
-
-      expect(await getEntitlements('u1')).toMatchObject({ ent: { 'owlette.control': '1' } });
-      expect(await getEntitlements('u1')).toMatchObject({ ent: { 'owlette.control': '0' } });
-    });
-
-    it('reports malformed_response for a bad seed and unreachable when firestore throws', async () => {
-      mockSeedGet.mockResolvedValueOnce(seed({ standing: 'active' }));
-      expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'malformed_response' });
-
-      mockSeedGet.mockRejectedValueOnce(new Error('emulator down'));
-      expect(await getEntitlements('u1')).toEqual({ ok: false, reason: 'unreachable' });
     });
   });
 });

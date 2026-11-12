@@ -19,7 +19,11 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 const mockEnforced = jest.fn();
-jest.mock('@/lib/plan.server', () => ({ plansEnforced: () => mockEnforced() }));
+const mockConfigured = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  plansEnforced: () => mockEnforced(),
+  tridantConfigured: () => mockConfigured(),
+}));
 
 const mockGetAccount = jest.fn();
 const mockClaim = jest.fn();
@@ -63,8 +67,10 @@ const account = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockInvalidate.mockReset();
   mockSites = [];
   mockEnforced.mockReturnValue(true);
+  mockConfigured.mockReturnValue(true);
   mockGetAccount.mockResolvedValue(null);
   mockClaim.mockResolvedValue(true);
   mockGetUser.mockResolvedValue({ emailVerified: true, email: 'ann@example.com', displayName: 'Ann' });
@@ -73,10 +79,29 @@ beforeEach(() => {
 });
 
 describe('ensureTrial', () => {
-  it('does nothing while plans are not enforced', async () => {
+  it('does nothing while plans are not enforced, though tridant id is configured', async () => {
     mockEnforced.mockReturnValue(false);
     expect(await ensureTrial('u1')).toEqual({ status: 'off' });
     expect(mockGetAccount).not.toHaveBeenCalled();
+  });
+
+  it('starts the trial and registers the owned sites before enforcement, for the bulk start', async () => {
+    mockEnforced.mockReturnValue(false);
+    mockSites = [{ id: 's1', data: { name: 'lobby' } }];
+
+    expect(await ensureTrial('u1', { beforeEnforcement: true })).toEqual({ status: 'started' });
+    expect(mockStartTrial).toHaveBeenCalledWith({ uid: 'u1', email: 'ann@example.com', name: 'Ann' });
+    expect(mockRecordTrial).toHaveBeenCalledWith('u1', { orgId: 'org_1', endsAtMs: 5000 });
+    expect(mockPushSite).toHaveBeenCalledWith({ uid: 'u1', siteId: 's1', name: 'lobby' });
+    expect(mockInvalidate).toHaveBeenCalledWith('s1');
+  });
+
+  it('does nothing before enforcement while tridant id is not configured', async () => {
+    mockEnforced.mockReturnValue(false);
+    mockConfigured.mockReturnValue(false);
+    expect(await ensureTrial('u1', { beforeEnforcement: true })).toEqual({ status: 'off' });
+    expect(mockGetAccount).not.toHaveBeenCalled();
+    expect(mockStartTrial).not.toHaveBeenCalled();
   });
 
   it('returns unverified without claiming', async () => {
@@ -100,6 +125,26 @@ describe('ensureTrial', () => {
     expect(mockStartTrial).toHaveBeenCalledWith({ uid: 'u1', email: 'ann@example.com', name: 'Ann' });
     expect(mockRecordTrial).toHaveBeenCalledWith('u1', { orgId: 'org_1', endsAtMs: 5000 });
     expect(mockPushSite).toHaveBeenCalledWith({ uid: 'u1', siteId: 's1', name: 'lobby' });
+  });
+
+  it("drops each owned site's cached plan once tridant id has registered it, so no read keeps the free answer", async () => {
+    mockSites = [
+      { id: 's1', data: { name: 'one' } },
+      { id: 's2', data: { name: 'two' } },
+    ];
+    const registered = new Set<string>();
+    mockPushSite.mockImplementation(async ({ siteId }: { siteId: string }) => {
+      await Promise.resolve();
+      registered.add(siteId);
+      return { ok: true, created: true, moved: false };
+    });
+    const droppedAfterRegistration: boolean[] = [];
+    mockInvalidate.mockImplementation((siteId: string) => droppedAfterRegistration.push(registered.has(siteId)));
+
+    await ensureTrial('u1');
+
+    expect(mockInvalidate.mock.calls.map(([id]) => id).sort()).toEqual(['s1', 's2']);
+    expect(droppedAfterRegistration).toEqual([true, true]);
   });
 
   it('names the payer after the email local part without a display name', async () => {

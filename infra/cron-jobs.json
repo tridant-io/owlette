@@ -246,6 +246,28 @@
       "note": "Set the job's timezone to UTC on cron-job.org. Rerun-safe, and safe to trigger by hand after a missed run: the day stamp is an array union, the snapshot an overwrite, and tridant id keeps the report with the newest as_of, so a retry or a double registration changes nothing. Keep the 23:30 UTC slot: it is the last run before a month ends, and the half hour is the margin for the report to reach tridant id before the 1st. The 26-hour window overlaps the previous run by two hours, so a run up to two hours late still misses nothing. Runtime scales with the fleet: one machines read per site, and with enforcement on one tridant id lookup per site, ten at a time, each bounded by the 5-second tridant id timeout."
     },
     {
+      "id": "cron-plan-trials",
+      "path": "/api/cron/plan-trials",
+      "method": "GET",
+      "authHeader": "X-Cron-Secret",
+      "authScheme": "raw",
+      "authEnvVar": "CRON_SECRET",
+      "schedule": "manual",
+      "cadenceLabel": "by hand, not scheduled",
+      "minTimeoutSeconds": 300,
+      "environments": [],
+      "environmentsJustification": "run by hand once per environment, just before plans are switched on; never scheduled on cron-job.org",
+      "urls": {},
+      "purpose": "Starts the free trial for existing accounts, one page of 250 Firebase Auth users per call. A dry run counting the eligible accounts unless called with ?apply=1; ?pageToken= continues from the previous answer's nextPageToken until it is null. Runs with PLAN_ENFORCEMENT still off, and answers 503 while tridant id is not configured.",
+      "failureMode": {
+        "silent": false,
+        "description": "Nothing runs it on a timer, so existing accounts get a trial only when they next open the plan page or are started by hand. A call that fails answers 401, 503 or 500."
+      },
+      "detectedBy": "not applicable: nothing schedules it. Read the response body: apply, scanned, eligible and the per-status counts.",
+      "sourceFile": "web/app/api/cron/plan-trials/route.ts",
+      "note": "Not registered on cron-job.org. Call it by hand with the X-Cron-Secret header, repeating with the returned nextPageToken until it is null."
+    },
+    {
       "id": "hoot-escalation",
       "path": "/api/hoot/escalation",
       "method": "GET",

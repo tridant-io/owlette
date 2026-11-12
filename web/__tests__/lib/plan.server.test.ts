@@ -7,10 +7,8 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const mockGetEntitlements = jest.fn();
 const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
@@ -65,13 +63,12 @@ import {
   entitled,
   machineSlotAvailable,
   missingPlanKeys,
-  payerForSite,
   planLimit,
   planTier,
   requireEntitlement,
-  resolvePlan,
   resolveSitePlan,
   siteSlotAvailable,
+  tridantConfigured,
   type Plan,
 } from '@/lib/plan.server';
 import {
@@ -116,7 +113,6 @@ beforeEach(() => {
   mockUsers = { u1: { role: 'user' }, root: { role: 'superadmin' } };
   mockSites = {};
   mockAnswers = {};
-  mockGetEntitlements.mockResolvedValue(FREE);
   mockGetSiteEntitlements.mockImplementation(async (siteId: string) => mockAnswers[siteId] ?? FREE);
   process.env.PLAN_ENFORCEMENT = 'on';
   process.env.TRIDANT_API_URL = 'https://api-staging.tridant.io';
@@ -132,9 +128,28 @@ afterAll(() => {
 
 function expectNoReads() {
   expect(mockCollection).not.toHaveBeenCalled();
-  expect(mockGetEntitlements).not.toHaveBeenCalled();
   expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
 }
+
+describe('tridantConfigured', () => {
+  it('is true with the url and key set, whatever PLAN_ENFORCEMENT says', () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    expect(tridantConfigured()).toBe(true);
+  });
+
+  it('is false with the url or the key blank, and true under the e2e seam without either', () => {
+    process.env.TRIDANT_LICENSE_KEY = '  ';
+    expect(tridantConfigured()).toBe(false);
+    process.env.TRIDANT_LICENSE_KEY = 'tid_license_read_key';
+    delete process.env.TRIDANT_API_URL;
+    expect(tridantConfigured()).toBe(false);
+
+    delete process.env.TRIDANT_LICENSE_KEY;
+    process.env.OWLETTE_E2E = '1';
+    expect(tridantConfigured()).toBe(true);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
 
 describe('resolveSitePlan', () => {
   beforeEach(() => {
@@ -173,8 +188,7 @@ describe('resolveSitePlan', () => {
     await resolveSitePlan('s1');
 
     expect(mockGetSiteEntitlements).toHaveBeenCalledWith('s1');
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
-  });
+    });
 
   it('reports no_payer for a missing site, a missing owner or a blank one, without asking tridant', async () => {
     mockSites.s2 = { data: {}, machines: [] };
@@ -287,35 +301,6 @@ describe('resolveSitePlan', () => {
   });
 });
 
-// the owner-pays read, kept until its last callers move.
-describe('resolvePlan', () => {
-  it('is off before any read while enforcement is off', async () => {
-    delete process.env.PLAN_ENFORCEMENT;
-    expect(await resolvePlan('u1')).toEqual({ enforced: false, reason: 'enforcement_off' });
-    expectNoReads();
-  });
-
-  it('reports no_payer without a read', async () => {
-    expect(await resolvePlan(null)).toEqual({ enforced: false, reason: 'no_payer' });
-    expectNoReads();
-  });
-
-  it('asks tridant about the account', async () => {
-    const plan = await resolvePlan('u1');
-
-    expect(plan).toMatchObject({ enforced: true, resolved: false, inGoodStanding: false, ent: FREE.ent });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('u1');
-    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
-  });
-
-  it('fails open, and leaves a superadmin unrestricted', async () => {
-    expect(await resolvePlan('root')).toEqual({ enforced: false, reason: 'superadmin' });
-
-    mockGetEntitlements.mockResolvedValue(UNREACHABLE);
-    expect(await resolvePlan('u1')).toEqual({ enforced: false, reason: 'unreachable' });
-  });
-});
-
 describe('planLimit and entitled', () => {
   it('leave an unenforced plan unrestricted', () => {
     const plan: Plan = { enforced: false, reason: 'unreachable' };
@@ -409,27 +394,6 @@ describe('planTier', () => {
 
   it('reads a site in good standing whose keys are missing as pro, since missing is unrestricted', () => {
     expect(planTier(enforced({}))).toBe('pro');
-  });
-});
-
-describe('payerForSite', () => {
-  it('reads the site owner', async () => {
-    mockSites.s1 = site('u1');
-    expect(await payerForSite('s1')).toBe('u1');
-  });
-
-  it('uses site data already read instead of reading again', async () => {
-    expect(await payerForSite('s1', { owner: 'u9' })).toBe('u9');
-    expect(await payerForSite('s1', null)).toBeNull();
-    expect(mockCollection).not.toHaveBeenCalled();
-  });
-
-  it('is null for a missing site, a missing owner or a blank one', async () => {
-    mockSites.s2 = { data: {}, machines: [] };
-    mockSites.s3 = { data: { owner: '' }, machines: [] };
-    expect(await payerForSite('nope')).toBeNull();
-    expect(await payerForSite('s2')).toBeNull();
-    expect(await payerForSite('s3')).toBeNull();
   });
 });
 

@@ -48,9 +48,7 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
-jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: jest.fn(),
-}));
+jest.mock('@/lib/tridantEntitlements.server', () => ({}));
 
 const mockResolveAuth = jest.fn();
 

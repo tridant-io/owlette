@@ -1,7 +1,7 @@
 ---
 title: "Firestore data model"
 description: "every Firestore collection owlette reads or writes: what each document holds, who writes it, and what the security rules let a browser or an agent touch directly."
-keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride", "machineIds", "machine scope"]
+keywords: ["database schema", "collections", "documents", "firestore paths", "security rules", "machine document", "osFamily", "devicePrefs", "swoop_sessions", "billing_usage", "plan_snapshot", "plan_accounts", "billing_checkouts", "pairedAt", "activeHours", "rebootDeferredUntil", "activeHoursOverride", "machineIds", "machine scope"]
 ---
 
 each section below lists a path, its fields, and its **access**: what `firestore.rules` lets a signed-in browser or a paired agent do directly. *server only* means the rules deny the path, or it falls through to the deny-all rule at the bottom, and only route handlers, Cloud Functions and workers reach it through the Admin SDK. the Admin SDK bypasses the rules, so every server write enforces its own checks.
@@ -84,8 +84,10 @@ firestore/
 |-- device_codes/{phrase}                          rules
 |-- fleet_sessions/{tokenHash}
 |-- fleet_calls/{callId}
-|-- billing_usage/{payerUid}/days/{YYYY-MM-DD}
-|-- plan_snapshot/{payerUid}
+|-- billing_usage/{siteId}/days/{YYYY-MM-DD}
+|-- plan_snapshot/{siteId}
+|-- plan_accounts/{uid}
+|-- billing_checkouts/{sessionId}
 `-- app_links, cli_device_codes, idempotency_cache, pending_*_alerts, ... (see platform)
 ```
 
@@ -100,7 +102,8 @@ the site. **access**: site members read; writes are server only.
 | field | type | notes |
 | --- | --- | --- |
 | `name` | string | site display name. |
-| `owner` | string | uid of the site's owner: the creator, moved by an ownership transfer. no rule consults it — access comes from `members` — but it names the site's payer, whose plan applies to the site once [plans](/docs/plans) are enforced. |
+| `owner` | string | uid of the site's owner: the creator, moved by an ownership transfer. no rule consults it — access comes from `members` — but once [plans](/docs/plans) are enforced it names who pays for the site, and the only person who can change its billing. |
+| `billing` | map | present once the site has been billed: `{ tier, founders, payerUid, endsAt, updatedAt }`. `tier` is `core` or `pro`, `founders` whether it is billed at the founders rate, `payerUid` the owner who is billed, and `endsAt` the Unix ms the billing stops at, `null` while it runs. written by the server when the owner upgrades the site, switches its plan or stops its billing, and when ownership is transferred, and repaired by the daily job when it has fallen out of step with what is billed. it records what is billed for the dashboard to show; the site's plan itself comes from the plan service, not from this field. |
 | `createdAt` | timestamp | creation time. |
 | `timezone` | string | IANA timezone for site-scoped scheduling. |
 | `timeFormat` | string | `12h` or `24h`, the site's clock format. |
@@ -214,7 +217,7 @@ presence, status, metrics, process state, reboot state and capability flags all 
 | `siteId` | string | owning site. |
 | `online` | boolean | agent-reported online flag. the dashboard also checks heartbeat age. |
 | `lastHeartbeat` | timestamp | updated with each heartbeat. |
-| `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. after a plan lapses, the machine with the earliest one stays live in the dashboard. missing on machines paired before it existed. |
+| `pairedAt` | timestamp | written by the server when the machine first receives credentials, and kept on a re-pair. on owlette free, the machine with the earliest one across the owner's free sites stays live in the owner's dashboard. missing on machines paired before it existed. |
 | `agent_version` | string | agent build version. |
 | `osFamily` | string | `windows`, `macos` or `linux`, written on every heartbeat. an unrecognized platform is reported verbatim; the dashboard treats that, and an absent field (agents before 4.0.0), as `windows`. |
 | `arch` | string | `x64` or `arm64` (an unrecognized value verbatim). with `osFamily`, it picks the installer a fleet update sends. |
@@ -724,12 +727,14 @@ these are server only unless noted.
 
 ### plans
 
-two server-only collections, written by the daily `/api/cron/plan-daily` job at 03:00 UTC and keyed by the payer, the uid in a site's `owner`. both fall through to the deny-all rule. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
+four server-only collections, all of which fall through to the deny-all rule. a plan belongs to a site, so the first two are keyed by site and written by the daily `/api/cron/plan-daily` job at 23:30 UTC; the other two are keyed by account and by checkout. nothing is billed or withheld from them until [plans](/docs/plans) are enforced; until then every snapshot reads `enforced: false`.
 
 | path | holds |
 | --- | --- |
-| `billing_usage/{payerUid}/days/{YYYY-MM-DD}` | `{ machineIds, updatedAt }`: the machines across the payer's sites whose `lastHeartbeat` fell in the 26 hours before the run, recorded against the previous UTC day as an array union, so a rerun adds nothing. a billing period's active machines are the distinct IDs across its days. documents older than 100 days are deleted. |
-| `plan_snapshot/{payerUid}` | `{ enforced, control, roost, resolvedAt }`: the payer's plan as last resolved, overwritten each run. Cloud Functions cannot ask the plan service, so the scheduled-rollout function reads this instead: a due rollout scheduled before `resolvedAt` is aborted, with the reason, when `enforced` is `true` and `control` or `roost` is `false`. no snapshot means allow. |
+| `billing_usage/{siteId}/days/{YYYY-MM-DD}` | `{ machineIds, updatedAt }`: the site's machines whose `lastHeartbeat` fell in the 26 hours before the run, each recorded on the UTC day of its heartbeat as an array union, so a rerun adds nothing. a billing period's active machines are the distinct IDs across its days. documents older than 100 days are deleted. |
+| `plan_snapshot/{siteId}` | `{ enforced, control, roost, resolvedAt }`: the site's plan as last resolved, overwritten each run. Cloud Functions cannot ask the plan service, so the scheduled-rollout function reads this instead: a due rollout scheduled before `resolvedAt` is aborted, with the reason, when `enforced` is `true` and `control` or `roost` is `false`. no snapshot means allow. |
+| `plan_accounts/{uid}` | an account's trial and its link to a tridant account: `trialStartedAt` and `trialEndsAt` (Unix ms), `orgId` (the tridant account it is linked to), `linkRequired` (the email already has a tridant account, which has to be linked before a trial or an upgrade), `trialError` (why the last trial start failed), `claimedAt` (Unix ms, which keeps two requests from starting one trial twice) and `updatedAt`. written when the account first reads its plan, when it links a tridant account and when a checkout is confirmed. |
+| `billing_checkouts/{sessionId}` | what a checkout was started for, so the return from it is matched to the right site and only the account that started it can confirm it: `uid`, `siteId`, `tier`, `founders`, `createdAt`. |
 
 ---
 

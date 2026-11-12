@@ -4,7 +4,8 @@
  *
  * site settings → billing: each state of a site's plan (loading, unreadable,
  * unrestricted, owlette free, trial, billed, stopping, past due, billed to the
- * previous owner, which the plan says and a refusal can too), the owner's
+ * previous owner, which the plan says and a refusal can too, and billed while
+ * plans are switched off, which can only be stopped), the owner's
  * actions on it (upgrade, switch plan, stop, resume), the link to the tridant
  * portal, and the return from checkout, which is confirmed every 2 s for up to
  * 30 s and then dropped from the url. the plan picker is a stub with its own
@@ -519,6 +520,63 @@ describe('a site billed to its previous owner', () => {
     );
     expect(buttons()).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('a billed site while plans are switched off', () => {
+  // after a rollback: tridant id still bills the site, and owlette knows it only from the pointer
+  const OFF_BILLED: SitePlanResponse = {
+    ...OFF,
+    reason: 'enforcement_off',
+    billing: { tier: 'pro', founders: true, endsAt: null },
+  };
+
+  it('shows what it is billed as, says nothing on it is limited, and offers only to stop it', async () => {
+    mockStop.mockResolvedValue({ ok: true, billing: { tier: 'pro', founders: true, endsAt: DEC_1 } });
+    mockAccount = { enforced: false, reason: 'enforcement_off' };
+    const user = show(OFF_BILLED);
+
+    expect(within(panel()).getByText('pro')).toBeInTheDocument();
+    expect(within(panel()).getByText('founders rate')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-plans-off')).toHaveTextContent(
+      /^plans are switched off right now, so nothing on this site is limited, and its billing can be stopped here\.$/,
+    );
+    expect(screen.queryByTestId('billing-unrestricted')).toBeNull();
+    expect(buttons()).toEqual(['stop billing']);
+
+    await user.click(screen.getByRole('button', { name: 'stop billing' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'stop billing' }));
+
+    expect(mockStop).toHaveBeenCalledTimes(1);
+    expect(toast.success).toHaveBeenCalledWith('billing stopped', { description: `Alpha is billed until ${NOV_30}.` });
+  });
+
+  it('says until when a stopping site is billed, with nothing to resume', () => {
+    show({ ...OFF_BILLED, reason: 'not_configured', billing: { tier: 'core', founders: false, endsAt: FAR } });
+
+    expect(within(panel()).getByText('core')).toBeInTheDocument();
+    expect(within(panel()).getByText(`ends ${FAR_LAST_DAY}`)).toBeInTheDocument();
+    expect(panel()).toHaveTextContent(`billed until ${FAR_LAST_DAY}.`);
+    expect(panel()).not.toHaveTextContent('goes to owlette free');
+    expect(screen.getByTestId('billing-plans-off')).toHaveTextContent(
+      /^plans are switched off right now, so nothing on this site is limited\.$/,
+    );
+    expect(buttons()).toEqual([]);
+  });
+
+  it('keeps the unreadable notice for a billed site tridant id did not answer for', () => {
+    show({ ...OFF_BILLED, reason: 'unreachable' });
+
+    expect(screen.getByTestId('billing-unrestricted')).toBeInTheDocument();
+    expect(screen.queryByTestId('billing-plans-off')).toBeNull();
+    expect(buttons()).toEqual(['try again']);
+  });
+
+  it('offers no stop once that billing has run out', () => {
+    show({ ...OFF_BILLED, billing: { tier: 'pro', founders: false, endsAt: 1_000 } });
+
+    expect(screen.queryByTestId('billing-plans-off')).toBeNull();
+    expect(buttons()).not.toContain('stop billing');
   });
 });
 

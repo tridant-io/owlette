@@ -49,6 +49,8 @@ export const PRICING_FACTS = {
   trialDays: 14,
   billingUnit: "per active machine per month",
   activeMachine: "a machine counts if it was online at any point in the billing period",
+  billingPeriod:
+    "a billing period is a calendar month from the 1st (UTC), and a site's first part month is charged by the day",
 } as const;
 
 /** `20` -> `"$20"`, `0.05` -> `"$0.05"`: no trailing `.00` on whole dollars. */
@@ -93,7 +95,7 @@ export const PRICE_LINE = `free during beta, then free for ${count(
 )}`;
 
 /** The model once beta ends. Nothing here is billed today. */
-export const AFTER_BETA = `after beta, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card. when it ends, the account falls back to owlette free unless you pick core or pro, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}.`;
+export const AFTER_BETA = `after beta, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card, once its email is verified. when it ends, a site falls back to owlette free unless you upgrade it to core or pro. each site has its own plan, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}. ${PRICING_FACTS.billingPeriod}.`;
 
 export interface Tier {
   name: string;
@@ -112,12 +114,12 @@ export const PRICING: Tier[] = [
     price: "free during beta",
     detail: `${perMachineMonth(
       PRICING_FACTS.core.list,
-    )} after beta, billed per active machine; ${foundersRate(PRICING_FACTS.core.founders)}`,
+    )} after beta, per site, billed per active machine; ${foundersRate(PRICING_FACTS.core.founders)}`,
   },
   {
     name: "pro",
     price: "free during beta",
-    detail: `${perMachineMonth(PRICING_FACTS.pro.list)} after beta, billed per active machine (${
+    detail: `${perMachineMonth(PRICING_FACTS.pro.list)} after beta, per site, billed per active machine (${
       PRICING_FACTS.pro.minMachines
     }-machine minimum); ${foundersRate(
       PRICING_FACTS.pro.founders,
@@ -169,7 +171,7 @@ const OFFERS = [
     priceCurrency: "USD",
     description: `free during beta. ${perMachineMonth(
       PRICING_FACTS.core.list,
-    )} after, billed per active machine.`,
+    )} after, per site, billed per active machine.`,
   },
   {
     "@type": "Offer",
@@ -178,7 +180,7 @@ const OFFERS = [
     priceCurrency: "USD",
     description: `free during beta. ${perMachineMonth(
       PRICING_FACTS.pro.list,
-    )} after, billed per active machine (${
+    )} after, per site, billed per active machine (${
       PRICING_FACTS.pro.minMachines
     }-machine minimum), includes ${INCLUDED_STORAGE} project storage per site.`,
   },

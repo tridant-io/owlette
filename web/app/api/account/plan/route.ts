@@ -18,7 +18,7 @@ import logger from '@/lib/logger';
 import {
   missingPlanKeys,
   planLimit,
-  plansEnforced,
+  planOffReason,
   planTier,
   resolveSitePlan,
   type Plan,
@@ -153,10 +153,9 @@ export const GET = withRateLimit(
   async (request: NextRequest) => {
     try {
       const uid = await requireSessionOrIdToken(request, { rejectAgentTokens: true });
-      if (!plansEnforced()) {
-        // plan.server.ts keeps its reason to itself: off is the switch, or tridant id not configured behind it.
-        const reason = process.env.PLAN_ENFORCEMENT === 'on' ? 'not_configured' : 'enforcement_off';
-        return NextResponse.json({ enforced: false, reason } satisfies AccountPlanResponse);
+      const offReason = planOffReason();
+      if (offReason) {
+        return NextResponse.json({ enforced: false, reason: offReason } satisfies AccountPlanResponse);
       }
 
       const [trialStart, user, founders] = await Promise.all([

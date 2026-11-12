@@ -16,9 +16,9 @@ import type { NextResponse } from 'next/server';
 import { problemPlanRequired } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
+import type { PlanOffReason, SiteTier } from '@/lib/planResponse';
 import { tridantApiUrl } from '@/lib/tridant.server';
 import {
-  getEntitlements,
   getSiteEntitlements,
   type EntitlementsResult,
   type SiteBillingPeriod,
@@ -40,20 +40,6 @@ export type PlanLimit = (typeof PLAN_LIMITS)[number];
 export type PlanFlag = (typeof PLAN_FLAGS)[number];
 export type PlanKey = PlanLimit | PlanFlag;
 
-/**
- * why a site is unrestricted. `not_configured`, `unreachable`, `rejected` and
- * `malformed_response` are tridant failing, and fail open: a refused key is a
- * misconfiguration on our side, and must not lock every customer out.
- */
-export type PlanOffReason =
-  | 'enforcement_off'
-  | 'not_configured'
-  | 'unreachable'
-  | 'rejected'
-  | 'malformed_response'
-  | 'superadmin'
-  | 'no_payer';
-
 export type Plan =
   | { enforced: false; reason: PlanOffReason }
   | {
@@ -67,37 +53,7 @@ export type Plan =
       orgId: string | null;
     };
 
-export type PlanTier = 'trial' | 'free' | 'core' | 'pro';
-
-/** `GET /api/account/plan`: the signed-in user's plan as a payer. */
-export interface PlanResponse {
-  enforced: boolean;
-  /** why plans are off; when enforced, `keys_missing` while tridant sends no readable value for `missingKeys`. */
-  reason?: PlanOffReason | 'keys_missing';
-  missingKeys?: PlanKey[];
-  /** whether the user owns a site, so pays for one; sent only when enforced. */
-  ownsSites?: boolean;
-  plan: PlanTier | null;
-  standing: string | null;
-  /** null is unrestricted. */
-  limits: { machines: number | null; sites: number | null };
-  flags: {
-    control: boolean;
-    deployments: boolean;
-    swoop: boolean;
-    hoot: boolean;
-    roost: boolean;
-    talons: boolean;
-    webhooks: boolean;
-    api_keys: boolean;
-  };
-  activeMachinesThisMonth: number | null;
-  /**
-   * the machines a counted machine limit keeps live (decision 9); the dashboard
-   * overlays the rest. sent only when enforced with a machine limit.
-   */
-  liveMachines?: Array<{ siteId: string; machineId: string }>;
-}
+export type PlanTier = SiteTier;
 
 export const PLAN_REQUIRED_DETAIL: Record<PlanFlag, string> = {
   'owlette.control': "your plan doesn't include remote control. upgrade to continue.",
@@ -119,12 +75,17 @@ function onceOnly(key: string): boolean {
   return true;
 }
 
-/** the reason plans are off that needs no read, or null when they are enforced. */
-function offBeforeReads(): 'enforcement_off' | 'not_configured' | null {
-  if (process.env.PLAN_ENFORCEMENT !== 'on') return 'enforcement_off';
+/** whether owlette can ask tridant id anything, whatever the enforcement switch says. */
+export function tridantConfigured(): boolean {
   // the e2e seam stands in for tridant; otherwise this is tridantFetch's own check.
-  if (process.env.OWLETTE_E2E === '1') return null;
-  if (tridantApiUrl() && process.env.TRIDANT_LICENSE_KEY?.trim()) return null;
+  if (process.env.OWLETTE_E2E === '1') return true;
+  return !!(tridantApiUrl() && process.env.TRIDANT_LICENSE_KEY?.trim());
+}
+
+/** the reason plans are off that needs no read, or null when they are enforced. */
+export function planOffReason(): 'enforcement_off' | 'not_configured' | null {
+  if (process.env.PLAN_ENFORCEMENT !== 'on') return 'enforcement_off';
+  if (tridantConfigured()) return null;
   if (onceOnly('not_configured')) {
     logger.warn('[plan] PLAN_ENFORCEMENT is on but tridant id is not configured; plans are not enforced', {
       context: 'plan',
@@ -138,7 +99,7 @@ function offBeforeReads(): 'enforcement_off' | 'not_configured' | null {
  * would otherwise read a site first check this.
  */
 export function plansEnforced(): boolean {
-  return offBeforeReads() === null;
+  return planOffReason() === null;
 }
 
 /** a site document's data; null is a site that does not exist. */
@@ -163,11 +124,6 @@ async function isSuperadmin(uid: string): Promise<boolean> {
   }
 }
 
-/** the site's owner, who pays for it. pass site data already read to skip the read. task 6.4 removes it. */
-export async function payerForSite(siteId: string, siteData?: SiteData): Promise<string | null> {
-  return ownerOf(await readSite(siteId, siteData));
-}
-
 /** tridant's answer as a plan. a failed read fails open. */
 function planFromAnswer(answer: EntitlementsResult): Plan {
   if (!answer.ok) {
@@ -178,7 +134,7 @@ function planFromAnswer(answer: EntitlementsResult): Plan {
     }
     return { enforced: false, reason: answer.reason };
   }
-  // a site or payer tridant does not know answers resolved:false with its defaults, which are owlette free.
+  // a site tridant does not know answers resolved:false with its defaults, which are owlette free.
   return {
     enforced: true,
     resolved: answer.resolved,
@@ -192,22 +148,12 @@ function planFromAnswer(answer: EntitlementsResult): Plan {
 
 /** the site's plan. pass site data already read to skip the read. */
 export async function resolveSitePlan(siteId: string, siteData?: SiteData): Promise<Plan> {
-  const off = offBeforeReads();
+  const off = planOffReason();
   if (off) return { enforced: false, reason: off };
   const owner = ownerOf(await readSite(siteId, siteData));
   if (!owner) return { enforced: false, reason: 'no_payer' };
 
   const [answer, superadmin] = await Promise.all([getSiteEntitlements(siteId), isSuperadmin(owner)]);
-  return superadmin ? { enforced: false, reason: 'superadmin' } : planFromAnswer(answer);
-}
-
-/** the owner-pays read: one plan per account, merged across its sites. task 6.4 removes it. */
-export async function resolvePlan(payerUid: string | null): Promise<Plan> {
-  const off = offBeforeReads();
-  if (off) return { enforced: false, reason: off };
-  if (!payerUid) return { enforced: false, reason: 'no_payer' };
-
-  const [answer, superadmin] = await Promise.all([getEntitlements(payerUid), isSuperadmin(payerUid)]);
   return superadmin ? { enforced: false, reason: 'superadmin' } : planFromAnswer(answer);
 }
 
@@ -224,7 +170,7 @@ export function planLimit(plan: Plan, key: PlanKey): number {
   const value = plan.ent[key];
   const limit = readLimit(value);
   if (limit !== null) return limit;
-  // until tridant-id#76 defines the owlette keys, a missing key must not lock anyone out. task 6.4 flips it.
+  // until tridant-id#76 defines the owlette keys, a missing key must not lock anyone out.
   if (onceOnly(`unrestricted:${key}`)) {
     logger.warn(`[plan] tridant sent ${value === undefined ? 'no value' : 'an unreadable value'} for ${key}; treating it as unrestricted`, {
       context: 'plan',
@@ -297,7 +243,7 @@ export async function machineSlotAvailable(
   machineId: string,
   siteData?: SiteData,
 ): Promise<boolean> {
-  if (offBeforeReads()) return true;
+  if (planOffReason()) return true;
   const data = await readSite(siteId, siteData);
   const owner = ownerOf(data);
   const plan = await resolveSitePlan(siteId, data);
@@ -318,7 +264,7 @@ export async function machineSlotAvailable(
 
 /** whether `ownerUid` may own one more free site. billed and trialing sites never count. */
 export async function siteSlotAvailable(ownerUid: string): Promise<boolean> {
-  if (offBeforeReads() || (await isSuperadmin(ownerUid))) return true;
+  if (planOffReason() || (await isSuperadmin(ownerUid))) return true;
   const free = (await ownedSitePlans(ownerUid)).filter(({ plan }) => isFree(plan));
   return free.length === 0 || free.length < freeLimit(free[0].plan, 'owlette.sites');
 }

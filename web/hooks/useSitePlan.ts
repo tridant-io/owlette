@@ -143,12 +143,14 @@ export function useSitePlan(siteId: string | null | undefined, machineIdsKey: st
   const uid = !authLoading && user ? user.uid : null;
   const getSnapshot = useCallback(() => (siteId ? cache.get(siteId) : undefined), [siteId]);
   const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const { plan: account, refresh: refreshAccount } = usePlan();
+  const { plan: account, loading: accountLoading, refresh: refreshAccount } = usePlan();
 
   useEffect(() => {
     claim(uid);
-    if (uid && siteId && !cache.has(siteId)) void load(uid, siteId);
-  }, [uid, siteId]);
+    // the account read starts the trial and registers the account's sites with tridant id. a site
+    // read that beat it would keep the unregistered site's answer, owlette free, for the whole sign-in.
+    if (uid && siteId && !accountLoading && !cache.has(siteId)) void load(uid, siteId);
+  }, [uid, siteId, accountLoading]);
 
   const refresh = useCallback(async () => {
     if (uid && siteId) await load(uid, siteId);

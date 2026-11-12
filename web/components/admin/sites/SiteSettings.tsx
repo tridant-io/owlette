@@ -5,6 +5,7 @@ import { SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites, type Site } from '@/hooks/useFirestore';
 import { usePlan } from '@/hooks/usePlan';
+import { useSitePlan } from '@/hooks/useSitePlan';
 import { SITE_SECTIONS, SITE_SECTION_LABELS, type SiteSection } from '@/lib/siteSettingsPath';
 import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
 import { Panel } from '@/components/admin/Panel';
@@ -36,6 +37,9 @@ export function SiteSettings({
   const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope } = useAuth();
   const { sites, loading, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
   const { plan, loading: planLoading } = usePlan();
+  // only an owner is billed for a site, so nobody else's view asks for its plan
+  const { plan: sitePlan, loading: sitePlanLoading } = useSitePlan(isSiteOwner(siteId) ? siteId : null);
+  const [now] = useState(() => Date.now());
   // a delete's cascade drops the site from `sites`, and the caller's row on it,
   // before the request answers: the site is held till then, so its confirm dialog stays up
   const [deleting, setDeleting] = useState<Site | null>(null);
@@ -85,9 +89,12 @@ export function SiteSettings({
 
   // only an owner reaches the delete that holds a site, and a superadmin's isSiteOwner is true everywhere
   const owner = held !== null || isSiteOwner(site.id);
-  // billing is the owner's too, and only where plans are enforced. the account plan loads after the
-  // page, so a link to billing (the return from checkout) waits for it instead of opening general
-  const billing = owner && (plan?.enforced || (planLoading && section === 'billing'));
+  // billing is the owner's too, and only where plans are enforced or the site is billed: tridant id
+  // bills it whatever the switch says, so with plans off the owner can still stop it. the plans load
+  // after the page, so a link to billing (the return from checkout) waits for them instead of opening general
+  const pointer = sitePlan?.isOwner ? sitePlan.billing : null;
+  const billed = !!pointer && (pointer.endsAt === null || pointer.endsAt > now);
+  const billing = owner && (plan?.enforced || billed || ((planLoading || sitePlanLoading) && section === 'billing'));
   const visible = SITE_SECTIONS.filter((s) => (s !== 'danger' || owner) && (s !== 'billing' || billing));
   const effective = visible.includes(section) ? section : 'general';
 

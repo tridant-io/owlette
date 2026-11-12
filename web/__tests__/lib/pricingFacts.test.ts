@@ -104,8 +104,19 @@ describe('pricing is single-sourced from PRICING_FACTS', () => {
     expect(AFTER_BETA).toContain(`${PRICING_FACTS.trialDays}-day pro trial`);
     expect(AFTER_BETA).toContain(PRICING_FACTS.billingUnit);
     expect(AFTER_BETA).toContain(PRICING_FACTS.activeMachine);
+    expect(AFTER_BETA).toContain(PRICING_FACTS.billingPeriod);
+    expect(AFTER_BETA).toContain('once its email is verified');
     // assistants read the guardrails, not the landing page.
     expect(GUARDRAILS.join(' ')).toContain(AFTER_BETA);
+  });
+
+  it('quotes core and pro per site', () => {
+    // a plan belongs to a site (adr 0018), so core has no site cap to state.
+    expect(AFTER_BETA).toContain('each site has its own plan');
+    for (const name of ['core', 'pro']) {
+      expect(PRICING.find((t) => t.name === name)?.detail).toContain('per site');
+      expect(PRODUCT_JSONLD.offers.offers.find((o) => o.name === name)?.description).toContain('per site');
+    }
   });
 
   it('hardcodes no price in the landing components', () => {

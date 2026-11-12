@@ -45,9 +45,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => mockDb(),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 function collectionPath(parts: string[]): string {
@@ -333,7 +333,7 @@ describe('/api/account/api-keys plan gate', () => {
 
   beforeEach(() => {
     enforcePlans();
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
   });
   afterEach(stopEnforcingPlans);
 
@@ -342,7 +342,7 @@ describe('/api/account/api-keys plan gate', () => {
 
     expect((await create()).status).toBe(200);
     expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 

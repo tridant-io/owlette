@@ -9,7 +9,7 @@
 import 'server-only';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
-import { plansEnforced, type Plan } from '@/lib/plan.server';
+import { plansEnforced, tridantConfigured, type Plan } from '@/lib/plan.server';
 import {
   claimTrialStart,
   getPlanAccount,
@@ -127,10 +127,17 @@ export async function reconcileSiteRegistration(
   }
 }
 
-/** starts the trial once per account; a failure is recorded and the next plan read retries after the claim window. */
-export async function ensureTrial(uid: string): Promise<{ status: TrialStatus }> {
+/**
+ * starts the trial once per account; a failure is recorded and the next plan read retries after the claim window.
+ * `beforeEnforcement` is the bulk start's: it runs before the switch, so no site reads free when the gates go on.
+ * a plan read never passes it, so ordinary traffic starts no trial while plans are off.
+ */
+export async function ensureTrial(
+  uid: string,
+  options?: { beforeEnforcement?: boolean },
+): Promise<{ status: TrialStatus }> {
   try {
-    if (!plansEnforced()) return { status: 'off' };
+    if (!(options?.beforeEnforcement ? tridantConfigured() : plansEnforced())) return { status: 'off' };
 
     const account = await getPlanAccount(uid);
     if (account?.trialStartedAt) return { status: 'already_started' };

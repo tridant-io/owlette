@@ -84,9 +84,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import {
@@ -341,10 +341,10 @@ describe('POST /api/cli/device-code/authorize plan gate', () => {
   afterEach(stopEnforcingPlans);
 
   it('authorizes on the authorizing user’s free plan: the site’s plan gates each request, not the mint', async () => {
-    mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
 
     expect((await authorize()).status).toBe(200);
     expect(mockTxSet).toHaveBeenCalledTimes(2);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });

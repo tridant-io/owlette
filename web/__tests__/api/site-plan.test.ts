@@ -53,7 +53,6 @@ jest.mock('@/lib/apiAuth.server', () => {
 const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
-  getEntitlements: jest.fn(),
   invalidateSiteEntitlements: jest.fn(),
 }));
 

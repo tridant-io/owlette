@@ -14,7 +14,7 @@ these open for anyone who is an **owner** or **admin** of the whole site on at l
 
 | page | URL | what it does |
 |------|-----|--------------|
-| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines, its switches, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
+| sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines, its switches, its billing, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
 | agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
 | swoop | `/admin/swoop` | see everyone in a [swoop](/docs/dashboard/swoop) session right now, and end a session |
 | schedules | `/admin/schedules` | manage [schedule presets](/docs/dashboard/admin/schedule-presets) |
@@ -39,7 +39,7 @@ your role is set **per site**: the same person can own one site, administer a se
 |------|-------------|-------------|
 | **member** | read-only: view machines, capture screenshots, open live view, and watch a [swoop](/docs/dashboard/swoop) session when the site lets members watch | none from this site |
 | **admin** | everything a member can, plus machine commands and configuration, swoop control and swoop settings, deployments, roosts, talons, webhooks, logs, alert rules, enrolling machines, revoking their tokens and managing members | the six site-scoped pages above, with whole-site access |
-| **owner** | everything an admin can, plus deleting the site and transferring ownership. every site has exactly one | the six site-scoped pages above |
+| **owner** | everything an admin can, plus deleting the site, transferring ownership and, once [plans](/docs/plans) apply, changing the site's billing. every site has exactly one | the six site-scoped pages above |
 
 a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) on a site can change what they get from swoop there, and nothing else.
 
@@ -101,7 +101,7 @@ every permission check in the web app asks for one capability. a site-scoped cap
 | `ISSUE_MANAGE` (issue triage status) | no | no | no | platform |
 | `GLOBAL_SETTINGS_WRITE` | no | no | no | platform |
 
-the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site.
+the six platform capabilities back the internal pages, and no site role holds them. a superadmin holds every capability on every site. `SITE_BILLING_MANAGE` still stops at the owner: a site is billed to its owner, so nobody else can change its billing, a superadmin included.
 
 **your machines**: someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site holds the five capabilities marked so only on those machines, at their role, and holds no other capability of that site, whatever their role. a machine outside their access answers `404`, the same answer whether it exists or not; anything that spans the site answers `403`. everyone else holds them on the whole site.
 

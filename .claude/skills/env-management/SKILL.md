@@ -1,6 +1,6 @@
 ---
 name: env-management
-description: "Owlette web env vars across Railway dev, Railway prod and the Vercel failover origin: scripts/env-manifest.json plus scripts/sync-env.mjs (status, check, diff, sync), the eleven must-match vars, and the Vercel read-back limit. Use for env vars, secrets, adding, moving or rotating a key, Railway or Vercel variables, env drift, or prod/failover parity."
+description: "Owlette web env vars across Railway dev, Railway prod and the Vercel failover origin: scripts/env-manifest.json plus scripts/sync-env.mjs (status, check, diff, sync), the fourteen must-match vars, and the Vercel read-back limit. Use for env vars, secrets, adding, moving or rotating a key, Railway or Vercel variables, env drift, or prod/failover parity."
 ---
 
 # Env Var Management Guidelines
@@ -57,7 +57,7 @@ node scripts/sync-env.mjs sync vercel-prod --apply        # push railway-prod �
 | `must-match` | silently catastrophic if it differs across the mirror (synced sensitive even when not secret) | `--sensitive` |
 | `build` | build-time-only credential (Sentry source maps) | `--sensitive` |
 
-The eleven **`must-match`** vars are the ones to never get wrong:
+The fourteen **`must-match`** vars are the ones to never get wrong:
 - `SESSION_SECRET` — mismatch logs every user out on failover
 - `MFA_ENCRYPTION_KEY` — mismatch locks out every 2FA user
 - `LLM_ENCRYPTION_KEY` — mismatch breaks decryption of stored hoot/LLM keys
@@ -67,6 +67,7 @@ The eleven **`must-match`** vars are the ones to never get wrong:
 - `SWOOP_SIGNAL_RING_SECRET` — mismatch makes the relay refuse the api's rings and kill broadcasts
 - `EDGE_SHARED_SECRET` — the `X-Owlette-Edge` value Cloudflare adds (`infra/cloudflare`); one value on all three targets, and a mismatch makes every request look like it came around the edge, so the origin treats every client as one of unknown network (never a lockout)
 - `PLAN_ENFORCEMENT`, `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY` — mismatch means a failover to vercel silently drops (or adds) plan enforcement
+- `TRIDANT_OIDC_ISSUER`, `TRIDANT_OIDC_CLIENT_ID`, `TRIDANT_OIDC_CLIENT_SECRET` — mismatch means linking an existing tridant account fails on the failover origin (`invalid_client`, or 503 when one is blank)
 
 ---
 

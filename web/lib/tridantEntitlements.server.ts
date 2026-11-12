@@ -1,8 +1,7 @@
 /**
  * owlette entitlements from tridant id: a site's, ref `owlette:{siteId}`
- * (adr 0018), and until the owner-pays code goes a payer's, subject
- * `owlette:{uid}`. an unknown site or subject still answers, as
- * `resolved: false` with tridant's defaults. never throws: plan.server.ts
+ * (adr 0018). an unknown site still answers, as `resolved: false` with
+ * tridant's defaults. never throws: plan.server.ts
  * decides what each failure reason means.
  */
 
@@ -41,7 +40,6 @@ export type EntitlementsResult = Entitlements | { ok: false; reason: TridantFail
 type Cache = Map<string, { expiresAt: number; result: Promise<EntitlementsResult> }>;
 
 // the promise is cached, so concurrent lookups for one key share a single call.
-const uidCache: Cache = new Map();
 const siteCache: Cache = new Map();
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,18 +180,6 @@ export function invalidateSiteEntitlements(siteId: string): void {
   siteCache.delete(siteId);
 }
 
-export function getEntitlements(uid: string): Promise<EntitlementsResult> {
-  if (process.env.OWLETTE_E2E === '1') {
-    // the seed is { resolved, standing, ent }, so the two fields it leaves out get stand-ins.
-    return readE2eSeed(uid, (seed) => ({ in_good_standing: seed.standing !== 'expired', ent_epoch: null, ...seed }));
-  }
-
-  return cached(uidCache, uid, () =>
-    fetchEntitlements(`/v1/licenses/owlette:${encodeURIComponent(uid)}/entitlements?app=owlette`, { uid }),
-  );
-}
-
 export function __resetForTests(): void {
-  uidCache.clear();
   siteCache.clear();
 }
