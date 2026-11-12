@@ -49,8 +49,12 @@ interface ToolCallCardProps {
   args: Record<string, unknown>;
   result?: unknown;
   isLoading?: boolean;
-  /** Tier-3 human-in-the-loop gate; absent for tier-1/2 and executed calls. */
-  approvalState?: 'requested' | 'denied';
+  /**
+   * Tier-3 human-in-the-loop gate; absent for tier-1/2 and executed calls.
+   * 'expired' is an approval a later message left behind: the server would
+   * refuse it, so nothing is offered to press.
+   */
+  approvalState?: 'requested' | 'denied' | 'expired';
   /**
    * FALLBACK for where the tool will run, e.g. a machine name or "all machines" —
    * used only for turns with no per-turn metadata (chats written before hoot
@@ -98,6 +102,12 @@ export function ToolCallCard({
   const tierLabel = toolDef ? `tier ${toolDef.tier}` : '';
   const awaitingApproval = approvalState === 'requested';
   const denied = approvalState === 'denied';
+  const expired = approvalState === 'expired';
+  // the lock a click takes belongs to that offer of the approval. a refused
+  // answer reloads the chat's saved history, where the same card is awaiting
+  // approval again, so the lock is dropped as soon as the card stops awaiting:
+  // it used to outlive the refusal and spin with both buttons dead.
+  if (submitting && !awaitingApproval) setSubmitting(false);
   // An empty list falls back rather than erasing the target: a prompt that names
   // no machine at all is worse than one naming the selector's.
   const approvalTarget = approvalTargetMachineIds?.length
@@ -124,7 +134,7 @@ export function ToolCallCard({
     <ShieldAlert className="h-4 w-4 text-warning" />
   ) : isLoading ? (
     <Loader2 className="h-4 w-4 text-accent-cyan animate-spin" />
-  ) : denied ? (
+  ) : denied || expired ? (
     <Ban className="h-4 w-4 text-muted-foreground" />
   ) : hasError ? (
     <AlertCircle className="h-4 w-4 text-danger" />
@@ -170,6 +180,7 @@ export function ToolCallCard({
             <span className="ml-auto flex items-center gap-1 text-muted-foreground flex-shrink-0">
               {awaitingApproval && <span className="text-xs text-warning">awaiting approval</span>}
               {denied && <span className="text-xs">denied</span>}
+              {expired && <span className="text-xs">approval expired</span>}
               {isLoading && !awaitingApproval && <span className="text-xs">executing...</span>}
               <ChevronRight className={`h-3.5 w-3.5 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
             </span>
@@ -231,6 +242,14 @@ export function ToolCallCard({
               deny
             </Button>
           </div>
+        </div>
+      )}
+
+      {expired && (
+        <div className="border-t border-border px-3 py-2.5">
+          <p className="text-xs text-muted-foreground">
+            this approval expired: a later message was sent in this chat. ask hoot again to run it.
+          </p>
         </div>
       )}
 

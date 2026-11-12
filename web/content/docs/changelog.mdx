@@ -251,6 +251,14 @@ could report a healthy process as down. The tool now reads the record the
 dashboard reads, and a launch that failed outright can no longer make the tool
 fail. Takes an agent update.
 
+### fixed — hoot's approve and deny buttons no longer spin forever
+
+When hoot asked for approval and a later message had already been sent in the
+chat, the server refused the answer, and the card kept its spinner with both
+buttons dead until the page was reloaded. A refused answer now hands both
+buttons back, and an approval that a later message has left behind reads
+**approval expired** with nothing to press: ask hoot again to run it.
+
 ### fixed — hoot's deployments install instead of closing the show and failing
 
 A deployment hoot started carried no installer checksum, so every machine closed

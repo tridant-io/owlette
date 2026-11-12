@@ -540,11 +540,16 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                 // With a live turn, an `approval-requested` part is stale UI state
                 // (the resume is already executing server-side) — render it as
                 // running instead of re-arming approve/deny.
-                const awaitingApproval = state === 'approval-requested' && !turnRunning;
+                // An approval binds to the turn that asked for it, and the server
+                // refuses it once a later turn has run (409 `approval_stale`). A
+                // later message in the chat is that turn, so the buttons are not
+                // offered there: the click could only fail.
+                const expired = state === 'approval-requested' && index < messages.length - 1;
+                const awaitingApproval = state === 'approval-requested' && !turnRunning && !expired;
                 const denied = state === 'output-denied'
                   || (state === 'approval-responded' && toolPart.approval?.approved === false);
                 const approvalId = toolPart.approval?.id;
-                const running = !hasResult && !awaitingApproval && !denied;
+                const running = !hasResult && !awaitingApproval && !expired && !denied;
 
                 // hoot consulting a stronger model mid-answer. The advice is
                 // encrypted and nothing ran on a machine, so a note, not a card. A
@@ -580,7 +585,7 @@ export function ChatWindow({ messages, isLoading, onToolApproval, onEditMessage,
                     args={args}
                     result={hasResult ? result : undefined}
                     isLoading={running}
-                    approvalState={awaitingApproval ? 'requested' : denied ? 'denied' : undefined}
+                    approvalState={awaitingApproval ? 'requested' : expired ? 'expired' : denied ? 'denied' : undefined}
                     approvalTargetLabel={turnTargetLabel}
                     approvalTargetMachineIds={turnMeta?.machineIds}
                     approvalTargetDynamic={turnMeta?.dynamic}

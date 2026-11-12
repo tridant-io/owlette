@@ -205,6 +205,58 @@ describe('ToolCallCard', () => {
       expect(screen.getByRole('button', { name: 'approve' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'deny' })).toBeDisabled();
     });
+
+    it('offers both buttons again when the answer was refused and the approval comes back', async () => {
+      // the server refused the resume (a 409, or the request never arrived): the
+      // chat reloads its saved history, where the call is awaiting approval again.
+      // the card is the same instance, so a lock it took on the click must not
+      // outlive that: it used to spin with both buttons dead for good.
+      const { user, onApprove, onDeny, rerender } = renderAwaiting();
+      const awaiting: CardProps = {
+        toolName: 'run_powershell',
+        args: { command: 'hostname' },
+        approvalState: 'requested',
+        approvalTargetLabel: 'STUDIO-01',
+        onApprove,
+        onDeny,
+      };
+      const show = (props: CardProps) =>
+        rerender(
+          <TooltipProvider>
+            <ToolCallCard {...props} />
+          </TooltipProvider>,
+        );
+
+      await user.click(screen.getByRole('button', { name: 'approve' }));
+      // answered: the call reads as running while the resume is in flight
+      show({ toolName: 'run_powershell', args: { command: 'hostname' }, isLoading: true });
+      expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+      // refused: the saved history says it is awaiting approval again
+      show(awaiting);
+
+      expect(screen.getByRole('button', { name: 'approve' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'deny' })).toBeEnabled();
+      await user.click(screen.getByRole('button', { name: 'approve' }));
+      expect(onApprove).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('an approval that expired', () => {
+    it('says so and offers nothing to press', () => {
+      renderCard({
+        toolName: 'run_powershell',
+        args: { command: 'hostname' },
+        approvalState: 'expired',
+        approvalTargetLabel: 'STUDIO-01',
+      });
+
+      expect(toggleFor('run_powershell')).toHaveTextContent('approval expired');
+      expect(screen.getByText(/this approval expired/)).toHaveTextContent(
+        'this approval expired: a later message was sent in this chat. ask hoot again to run it.',
+      );
+      expect(screen.queryByRole('button', { name: 'approve' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'deny' })).toBeNull();
+    });
   });
 
   describe('an approval that overrides active hours', () => {
