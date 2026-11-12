@@ -175,6 +175,24 @@ describe('issue list', () => {
     expect(rows[2]).toHaveTextContent('triaged');
   });
 
+  it('shows the description beside the title, on one line, less a title taken from it', async () => {
+    const titled = webIssue({
+      id: 'doc_3',
+      number: 3,
+      title: 'it froze',
+      description: { text: 'it froze\nagain today', systemInfo: '', logTail: '', notes: [] },
+    });
+    const bare = webIssue({ id: 'doc_4', number: 4, description: { text: '', systemInfo: '', logTail: '', notes: [] } });
+    answer(() => ({ status: 200, body: { issues: [agentIssue(), titled, bare], next_page_token: '' } }));
+    renderWithTooltips(<ListHarness />);
+
+    const rows = within(await screen.findByRole('list', { name: 'new issues' })).getAllByRole('link');
+    expect(rows[0]).toHaveTextContent('touchdesigner restarts every few minutes — the show restarts on its own. it started after the update.');
+    expect(rows[1]).toHaveTextContent('it froze — again today');
+    expect(rows[2]).toHaveTextContent('dark mode for the docs');
+    expect(rows[2]).not.toHaveTextContent('—');
+  });
+
   it('asks for new issues first, then whichever status the filter picks, and all without one', async () => {
     answer(() => ({ status: 200, body: { issues: [], next_page_token: '' } }));
     const user = userEvent.setup();
@@ -503,9 +521,32 @@ describe('issue detail', () => {
     );
   });
 
-  it('saves a status and a note, and shows what the route returned', async () => {
+  it('marks a new issue triaged when it is opened, once, with no toast', async () => {
     const patches: { status: string; note?: string }[] = [];
     serve(agentIssue(), (body) => {
+      patches.push(body);
+      return { status: 200, body: agentIssue({ status: 'triaged', statusUpdatedAt: new Date().toISOString() }) };
+    });
+    renderWithTooltips(<IssueDetail idOrNumber="42" />);
+
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'status' })).toHaveTextContent('triaged'));
+    expect(patches).toEqual([{ status: 'triaged' }]);
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it.each(['triaged', 'fixed', 'wontfix'] as const)('leaves a %s issue as it is when it is opened', async (status) => {
+    serve(agentIssue({ status }), () => {
+      throw new Error('no write expected');
+    });
+    renderWithTooltips(<IssueDetail idOrNumber="42" />);
+
+    await screen.findByRole('combobox', { name: 'status' });
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(false);
+  });
+
+  it('saves a status and a note, and shows what the route returned', async () => {
+    const patches: { status: string; note?: string }[] = [];
+    serve(agentIssue({ status: 'triaged' }), (body) => {
       patches.push(body);
       return {
         status: 200,
@@ -541,19 +582,19 @@ describe('issue detail', () => {
 
   it('leaves an untouched note out of a status change', async () => {
     const patches: { status: string; note?: string }[] = [];
-    serve(agentIssue({ triageNote: 'looking into it' }), (body) => {
+    serve(agentIssue({ status: 'triaged', triageNote: 'looking into it' }), (body) => {
       patches.push(body);
-      return { status: 200, body: agentIssue({ status: 'triaged', triageNote: 'looking into it', statusUpdatedAt: new Date().toISOString() }) };
+      return { status: 200, body: agentIssue({ status: 'fixed', triageNote: 'looking into it', statusUpdatedAt: new Date().toISOString() }) };
     });
     const user = userEvent.setup();
     renderWithTooltips(<IssueDetail idOrNumber="42" />);
 
     await user.click(await screen.findByRole('combobox', { name: 'status' }));
-    await user.click(await screen.findByRole('option', { name: 'triaged' }));
+    await user.click(await screen.findByRole('option', { name: 'fixed' }));
     await user.click(screen.getByRole('button', { name: 'save' }));
 
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('issue #42 marked triaged'));
-    expect(patches).toEqual([{ status: 'triaged' }]);
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('issue #42 marked fixed'));
+    expect(patches).toEqual([{ status: 'fixed' }]);
   });
 
   it('keeps the edit and says why when a save fails', async () => {
