@@ -1024,7 +1024,8 @@ describe('tier-3 approval round-trip through the runner', () => {
   it(
     'a resume records the machines it reached, not the wider set it inherited',
     async () => {
-      // Turn 1: both machines ticked, one tier-3 call, parked on approval.
+      // Turn 1: both machines ticked, one tier-3 call that names both, parked on approval.
+      const both = [MACHINE_APPR, MACHINE_ID];
       currentModel = new MockLanguageModelV3({
         doStream: async () => ({
           stream: simulateReadableStream({
@@ -1033,14 +1034,13 @@ describe('tier-3 approval round-trip through the runner', () => {
                 type: 'tool-call' as const,
                 toolCallId: 'toolu_appr_1',
                 toolName: 'execute_script',
-                input: JSON.stringify({ script: 'sfc /scannow', timeout_seconds: 5 }),
+                input: JSON.stringify({ script: 'sfc /scannow', timeout_seconds: 5, machines: both }),
               },
               { ...finishChunk, finishReason: { unified: 'tool-calls' as const, raw: undefined } },
             ],
           }),
         }),
       });
-      const both = [MACHINE_APPR, MACHINE_ID];
       await collectChunks(
         await beginTurn(
           baseParams({
@@ -1098,6 +1098,9 @@ describe('tier-3 approval round-trip through the runner', () => {
         'pending write (narrowed resume)',
       );
       const commandId = Object.keys(store[pendingPath(MACHINE_APPR)])[0];
+      // the approved call named both machines; it still runs on the one that is
+      // left, and the list that named them never reaches an agent.
+      expect(store[pendingPath(MACHINE_APPR)][commandId].tool_params).not.toHaveProperty('machines');
       store[completedPath(MACHINE_APPR)] = {
         [commandId]: { status: 'completed', result: JSON.stringify({ exit_code: 0 }) },
       };

@@ -206,6 +206,18 @@ could report a healthy process as down. The tool now reads the record the
 dashboard reads, and a launch that failed outright can no longer make the tool
 fail. Takes an agent update.
 
+### fixed — hoot acts on the machine you name in a chat on several
+
+In a hoot chat aimed at several machines, or at all machines, every tool call
+went to all of them, so "restart TouchDesigner on kiosk-02" restarted it on
+every machine in the chat. Each tool call now names the machines it runs on,
+out of the chat's machines, and it is sent nowhere else. A tool that changes
+something is refused unless its call names its machines, and hoot names all of
+them only when you ask for all of them; a read that names none still runs on
+every machine in the chat. The approval card names the machines that one call
+is for. Site-wide conversations in the API and the CLI work the same way.
+Nothing to update on the machines.
+
 ### fixed — hoot's approve and deny buttons no longer spin forever
 
 When hoot asked for approval and a later message had already been sent in the

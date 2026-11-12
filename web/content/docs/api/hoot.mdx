@@ -83,7 +83,7 @@ curl -fsS -X POST "$OWLETTE_API_URL/api/hoot/conversations" \
 | field | required | meaning |
 |---|---|---|
 | `siteId` | yes | the site the conversation belongs to |
-| `machineId` | no | pin every turn to this machine. omit it for a site-wide conversation, whose tools fan out across the site's online machines that have hoot switched on |
+| `machineId` | no | pin every turn to this machine. omit it for a site-wide conversation, which can reach the site's online machines that have hoot switched on. each tool call there names the machines it runs on: a tool above read-only is refused without them, and a read with none named runs on all of them |
 | `title` | no | trimmed and cut to 100 characters. defaults to `untitled chat` |
 | `initial_message` | no | `{ "role": "user", "content": "..." }`. stored as the first message; it does not trigger a reply. `role` must be `user` |
 

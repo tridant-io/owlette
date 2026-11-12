@@ -377,6 +377,38 @@ describe('ToolCallCard', () => {
     it('names no target at all when neither is given', () => {
       expect(banner({})).toHaveTextContent('hoot wants to run the privileged run_powershell tool.');
     });
+
+    describe('for a call that names its own machines, in a turn on several', () => {
+      const TURN = ['kiosk-01', 'kiosk-02', 'kiosk-03'];
+
+      it('names those machines, not the whole turn', () => {
+        const line = banner({
+          args: { command: 'hostname', machines: ['kiosk-02'] },
+          approvalTargetMachineIds: TURN,
+          approvalTargetDynamic: true,
+        });
+        expect(line).toHaveTextContent('on kiosk-02.');
+        expect(line).not.toHaveTextContent('every machine in this site');
+      });
+
+      it('names the whole turn for a call that asks for every machine', () => {
+        const line = banner({
+          args: { command: 'hostname', machines: ['*'] },
+          approvalTargetMachineIds: TURN,
+          approvalTargetDynamic: true,
+        });
+        expect(line).toHaveTextContent('on every machine in this site (3 reachable).');
+      });
+
+      it.each([
+        ['a turn on one machine, where the call runs on that machine whatever it carries', ['kiosk-01'], ['kiosk-02'], 'on kiosk-01.'],
+        ['a list that reaches outside the turn, which the server refuses', TURN, ['kiosk-02', 'kiosk-09'], 'on 3 machines: kiosk-01, kiosk-02, kiosk-03.'],
+      ])('keeps to the turn for %s', (_label, turn, machines, expected) => {
+        expect(
+          banner({ args: { command: 'hostname', machines }, approvalTargetMachineIds: turn }),
+        ).toHaveTextContent(expected);
+      });
+    });
   });
 
   describe('the cancel button on a running call', () => {

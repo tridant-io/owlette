@@ -76,7 +76,7 @@ a talon's creator is re-checked on every run, not trusted from the day it was wr
 2. tick the machines the conversation should talk to in the target picker at the top of the chat.
 3. type a request in plain language.
 
-a chat talks to a *set* of machines. with one machine ticked, hoot reports and acts on that machine. with several, tool calls fan out to each of them and hoot aggregates the per-machine results, tagged by machine.
+a chat talks to a *set* of machines. with one machine ticked, hoot reports and acts on that machine. with several, each tool call names the machines it runs on out of that set, and hoot aggregates the per-machine results, tagged by machine. ask about one machine by name and the call reaches that machine alone; ask for all of them and it names them all. a tool that changes something is refused unless its call says which machines it is for, so no change reaches every machine by default.
 
 ### choosing machines
 
@@ -200,6 +200,8 @@ an approval card says what **that turn** resolved to, and approving runs the cal
 
 a turn aimed at chosen machines names them (*on kiosk-01 and kiosk-02*, or *on 7 machines: …* past a handful). a turn aimed at **all machines** says so instead — *on every machine in this site (7 reachable)* — because a chosen seven and a whole site otherwise read the same on the one prompt where the difference matters. the count is the machines the turn can actually reach: offline machines and machines with hoot off are already excluded.
 
+in a turn on several machines the card names the machines **that call** is for, which can be fewer than the turn's: *on kiosk-02* when you asked about kiosk-02 in a chat aimed at **all machines**. approving runs it on those and no others.
+
 if another turn has run in the conversation since the approval was requested — a scheduled follow-up firing, or a message sent from another device — the approval no longer matches the turn it belongs to, and it is refused: *that approval expired — another turn ran in this chat. ask again.* nothing is queued on any machine and the approval is not spent; the conversation reloads and the request can be made again.
 
 the bound machines are re-checked when you answer. one that went offline, or had hoot switched off while the card waited, is dropped from the call. if none of them is reachable, the approval is left unanswered rather than consumed, so it can still be approved once a machine comes back.
@@ -291,7 +293,7 @@ members always use this path, capped at read-only tools.
 
 ### several machines (fan-out)
 
-when more than one machine survives resolution, the web server fans tool calls out to each of them and aggregates the per-machine results:
+when more than one machine survives resolution, each tool call carries a `machines` list, and the web server sends it to those machines and aggregates the per-machine results:
 
 ```text
 dashboard chat
@@ -299,9 +301,19 @@ dashboard chat
   -> web server resolves the set: in this site, online, hoot on
   -> the model is told which machines this turn targets, and which were skipped
   -> web server calls the LLM provider
-  -> tools either run server-side or fan out through Firestore commands
+  -> each tool call names its machines; the web server checks them against the set
+  -> tools either run server-side or fan out through Firestore commands, to those machines
   -> per-machine results are aggregated for hoot
 ```
+
+the list is checked before anything is sent:
+
+- every machine it names has to be one of the turn's. a call that names any other machine is refused whole.
+- a tier 2 or tier 3 tool is refused without the list. to act on every machine of the turn the call has to say so (`["*"]`), which hoot does only when you asked for all of them.
+- a read-only tool with no list runs on every machine of the turn.
+- the list is the web server's alone: it is removed before a command is queued, so no agent sees it.
+
+a turn that reaches one machine needs no list: every call runs on that machine. a site-wide conversation in the [public conversations API](/docs/api/hoot) follows the same rules.
 
 server-side tools such as site logs, system presets, deployment orchestration and process config changes run in the web server instead of going through an agent. the process create, update and delete tools call the same validated process actions as the dashboard; the agent applies the resulting config through its normal Firestore listener.
 

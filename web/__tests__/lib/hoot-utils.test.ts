@@ -212,6 +212,7 @@ import {
   MAX_TOOL_TIMEOUT_SECONDS,
   MAX_FOLLOWUP_DELAY_MINUTES,
   MAX_FOLLOWUP_NOTE_LENGTH,
+  SERVER_SIDE_TOOLS,
   SITE_WIDE_SERVER_TOOLS,
   PERSON_ONLY_TOOLS,
   type BuildExecutableToolsOptions,
@@ -1536,7 +1537,9 @@ describe('buildExecutableTools', () => {
       { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'] },
     );
 
-    await tools.add_process.execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machineId: 'm2' });
+    await tools.add_process.execute({
+      name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machineId: 'm2', machines: ['*'],
+    });
 
     expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId).sort()).toEqual(['m1', 'm3']);
   });
@@ -1620,6 +1623,248 @@ describe('buildExecutableTools', () => {
   }, 15000);
 });
 
+const PENDING_M1 = 'sites/s1/machines/m1/commands/pending';
+
+/** Path-keyed docs; every queued command completes on its first poll. */
+function createStoreDb() {
+  const docs = new Map<string, Record<string, unknown>>();
+  const doc = (path: string): unknown => ({
+    get: async () => {
+      if (path.endsWith('/commands/completed')) {
+        const pending = docs.get(path.replace(/completed$/, 'pending')) ?? {};
+        const done = Object.fromEntries(
+          Object.keys(pending).map((id) => [id, { status: 'completed', result: 'ok' }]),
+        );
+        return { exists: true, data: () => done };
+      }
+      return { exists: docs.has(path), data: () => docs.get(path) };
+    },
+    set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+      docs.set(path, opts?.merge ? { ...(docs.get(path) ?? {}), ...data } : data);
+    },
+    update: async () => {},
+    collection: (name: string) => col(`${path}/${name}`),
+  });
+  const col = (path: string): unknown => ({
+    doc: (id: string) => doc(`${path}/${id}`),
+    get: async () => ({ docs: [] }),
+  });
+  return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, docs };
+}
+
+/** Every command queued at `path`, in write order. */
+function queuedAt(docs: Map<string, Record<string, unknown>>, path = PENDING_M1): Record<string, unknown>[] {
+  return Object.values(docs.get(path) ?? {}) as Record<string, unknown>[];
+}
+
+// a call's own machines, in a turn on several
+
+/**
+ * A turn on several machines used to send every tool call to all of them, so
+ * "restart it on m1" restarted it on m2 and m3 as well. Each tool that runs on
+ * machines now takes `machines`: the call runs there and nowhere else, a tool
+ * above read-only is refused without it, and the list never reaches an agent.
+ */
+describe('a call names its machines in a turn on several', () => {
+  const TURN = ['m1', 'm2', 'm3'];
+  const RESTART = { process_name: 'TouchDesigner' };
+
+  function toolFor(
+    db: FirebaseFirestore.Firestore,
+    toolName: string,
+    machines: string[] = TURN,
+    options: BuildExecutableToolsOptions & { machineScope: readonly string[] | null } = { machineScope: null },
+  ) {
+    const def = allTools.find((t) => t.name === toolName)!;
+    return buildExecutableTools(db, 's1', '__site__', 'c1', [def], true, machines, options)[toolName];
+  }
+
+  /** The machines a command was queued for. */
+  function queuedMachines(docs: Map<string, Record<string, unknown>>): string[] {
+    return TURN.filter((mid) => queuedAt(docs, `sites/s1/machines/${mid}/commands/pending`).length > 0);
+  }
+
+  it('offers the list on every tool that runs on machines, and requires it above read-only', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+    );
+
+    for (const def of allTools) {
+      const { properties, required = [] } = tools[def.name].inputSchema;
+      const perMachine = !SERVER_SIDE_TOOLS.has(def.name)
+        || ['deploy_software', 'update_process', 'add_process', 'delete_process'].includes(def.name);
+      expect([def.name, 'machines' in properties]).toEqual([def.name, perMachine]);
+      expect([def.name, required.includes('machines')]).toEqual([def.name, perMachine && def.tier >= 2]);
+    }
+    // the definitions themselves are untouched: only the offered copy gains it
+    for (const def of allTools) expect(def.parameters.properties).not.toHaveProperty('machines');
+  });
+
+  it('offers no list in a turn on one machine', () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], { machineScope: null },
+    );
+
+    for (const def of allTools) expect(tools[def.name].inputSchema.properties).not.toHaveProperty('machines');
+  });
+
+  it('runs a change on the machine the call names and on no other', async () => {
+    const { db, docs } = createStoreDb();
+
+    const result = (await toolFor(db, 'restart_process').execute(
+      { ...RESTART, machines: ['m2'] }, { toolCallId: 'call_1' },
+    )) as { machines: Record<string, unknown>[] };
+
+    expect(queuedMachines(docs)).toEqual(['m2']);
+    expect(result.machines.map((entry) => entry.machine)).toEqual(['m2']);
+  }, 15000);
+
+  it('keeps the list out of what the agent is sent', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'run_command').execute({ command: 'hostname', machines: ['m2'] }, { toolCallId: 'call_1' });
+
+    const [command] = queuedAt(docs, 'sites/s1/machines/m2/commands/pending');
+    expect(command.tool_params).toEqual({ command: 'hostname' });
+  }, 15000);
+
+  it('refuses a change that names no machine, and sends nothing', async () => {
+    const { db, docs } = createStoreDb();
+
+    const result = await toolFor(db, 'restart_process').execute(RESTART, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error: 'machines_not_named' });
+    expect(docs.size).toBe(0);
+  });
+
+  it.each([
+    ['a machine outside the turn', ['m2', 'm9'], 'machines_not_in_turn'],
+    ['an empty list', [], 'machines_invalid'],
+    ['something that is not a list', 'm2', 'machines_invalid'],
+    ['an entry that is not an id', ['m2', 7], 'machines_invalid'],
+    ['every machine mixed with one', ['*', 'm2'], 'machines_invalid'],
+  ])('refuses %s whole, and sends nothing', async (_label, machines, error) => {
+    const { db, docs } = createStoreDb();
+
+    const result = await toolFor(db, 'restart_process').execute({ ...RESTART, machines }, { toolCallId: 'call_1' });
+
+    expect(result).toMatchObject({ ok: false, error });
+    expect(docs.size).toBe(0);
+  });
+
+  it('names the machines outside the turn, and nothing about them', async () => {
+    const { db } = createStoreDb();
+
+    const result = (await toolFor(db, 'restart_process').execute(
+      { ...RESTART, machines: ['m9', 'm2'] }, { toolCallId: 'call_1' },
+    )) as { detail: string };
+
+    expect(result.detail).toContain('m9');
+    expect(result.detail).toContain('m1, m2, m3');
+  });
+
+  it('runs on every machine of the turn when the call says so', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process').execute({ ...RESTART, machines: ['*'] }, { toolCallId: 'call_1' });
+
+    expect(queuedMachines(docs)).toEqual(TURN);
+  }, 15000);
+
+  it('runs a named machine once, however often it is named', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process').execute({ ...RESTART, machines: ['m2', 'm2'] }, { toolCallId: 'call_1' });
+
+    expect(queuedAt(docs, 'sites/s1/machines/m2/commands/pending')).toHaveLength(1);
+  }, 15000);
+
+  it('runs a read with no list on every machine of the turn, and a read with one on those', async () => {
+    const all = createStoreDb();
+    await toolFor(all.db, 'get_system_info').execute({}, { toolCallId: 'call_1' });
+    expect(queuedMachines(all.docs)).toEqual(TURN);
+
+    const some = createStoreDb();
+    await toolFor(some.db, 'get_system_info').execute({ machines: ['m1', 'm3'] }, { toolCallId: 'call_2' });
+    expect(queuedMachines(some.docs)).toEqual(['m1', 'm3']);
+  }, 15000);
+
+  it('runs a change with no list where the turn has one machine', async () => {
+    const { db, docs } = createStoreDb();
+
+    await toolFor(db, 'restart_process', ['m1']).execute(RESTART, { toolCallId: 'call_1' });
+
+    expect(queuedMachines(docs)).toEqual(['m1']);
+    expect(toolFor(db, 'restart_process', ['m1']).inputSchema.required ?? []).not.toContain('machines');
+  }, 15000);
+
+  it('asks for approval on the machines a privileged call names, and asks nobody for a call it will refuse', async () => {
+    const { db, docs } = createStoreDb();
+    const tool = toolFor(db, 'reboot_machine');
+
+    expect(await tool.needsApproval({ machines: ['m2'] }, { toolCallId: 'call_1', messages: [] })).toBe(true);
+    // no list: execute refuses at once, so there is no card to show
+    expect(await tool.needsApproval({}, { toolCallId: 'call_2', messages: [] })).toBe(false);
+    expect(await tool.execute({}, { toolCallId: 'call_2' })).toMatchObject({ ok: false, error: 'machines_not_named' });
+    expect(docs.size).toBe(0);
+  });
+
+  describe('an approved call, resumed after a machine it named left the turn', () => {
+    const RESUMED = { machineScope: null, resumedToolCallIds: ['call_1'] };
+    const input = { machines: ['m1', 'm2'] };
+
+    it('runs on the machines it named that are still there, and on no other', async () => {
+      const { db, docs } = createStoreDb();
+      // m2 went offline while the card waited; m3 was never named
+      const tool = toolFor(db, 'reboot_machine', ['m1', 'm3'], RESUMED);
+
+      expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await tool.execute(input, { toolCallId: 'call_1' });
+
+      expect(queuedMachines(docs)).toEqual(['m1']);
+    }, 15000);
+
+    it('is refused when none of them is left', async () => {
+      const { db, docs } = createStoreDb();
+      const tool = toolFor(db, 'reboot_machine', ['m3'], RESUMED);
+
+      expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+        ok: false, error: 'machines_not_in_turn',
+      });
+      expect(docs.size).toBe(0);
+    });
+  });
+
+  it('weighs a held restart against the machines the call names, not the whole turn', async () => {
+    const { db } = createStoreDb();
+    // only m1's agent can hold a restart until active hours end
+    const tool = toolFor(db, 'reboot_machine', TURN, { machineScope: null, activeHoursGuardIds: ['m1'] });
+    const held = { when: 'after_active_hours' };
+
+    expect(await tool.needsApproval({ ...held, machines: ['m1'] }, { toolCallId: 'call_1', messages: [] })).toBe(true);
+    expect(await tool.needsApproval({ ...held, machines: ['m2', 'm3'] }, { toolCallId: 'call_2', messages: [] })).toBe(false);
+  });
+
+  it('adds a process to the machines the call names and to no other', async () => {
+    mockCreateProcess.mockClear();
+    mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+
+    await toolFor({} as unknown as FirebaseFirestore.Firestore, 'add_process', TURN, {
+      userId: 'uid_alice', userRole: 'admin', machineScope: null,
+    }).execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machines: ['m3'] });
+
+    expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId)).toEqual(['m3']);
+  });
+
+  it('leaves a tool that works on the site, not on machines, as it was', async () => {
+    const tools = buildExecutableTools(
+      {} as unknown as FirebaseFirestore.Firestore, 's1', '__site__', 'c1', allTools, true, TURN, { machineScope: null },
+    );
+
+    expect(tools.list_talons.inputSchema).toEqual(allTools.find((t) => t.name === 'list_talons')!.parameters);
+  });
+});
+
 // active-hours override
 
 /**
@@ -1638,39 +1883,6 @@ describe('active-hours override', () => {
     allowActiveHoursOverride: true,
   };
   const REBOOT_NOW = { override_active_hours: true, reason: 'the show ended early' };
-  const PENDING_M1 = 'sites/s1/machines/m1/commands/pending';
-
-  /** Path-keyed docs; every queued command completes on its first poll. */
-  function createStoreDb() {
-    const docs = new Map<string, Record<string, unknown>>();
-    const doc = (path: string): unknown => ({
-      get: async () => {
-        if (path.endsWith('/commands/completed')) {
-          const pending = docs.get(path.replace(/completed$/, 'pending')) ?? {};
-          const done = Object.fromEntries(
-            Object.keys(pending).map((id) => [id, { status: 'completed', result: 'ok' }]),
-          );
-          return { exists: true, data: () => done };
-        }
-        return { exists: docs.has(path), data: () => docs.get(path) };
-      },
-      set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
-        docs.set(path, opts?.merge ? { ...(docs.get(path) ?? {}), ...data } : data);
-      },
-      update: async () => {},
-      collection: (name: string) => col(`${path}/${name}`),
-    });
-    const col = (path: string): unknown => ({
-      doc: (id: string) => doc(`${path}/${id}`),
-      get: async () => ({ docs: [] }),
-    });
-    return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, docs };
-  }
-
-  /** Every command queued at `path`, in write order. */
-  function queuedAt(docs: Map<string, Record<string, unknown>>, path = PENDING_M1): Record<string, unknown>[] {
-    return Object.values(docs.get(path) ?? {}) as Record<string, unknown>[];
-  }
 
   function toolFor(
     db: FirebaseFirestore.Firestore,
@@ -1846,9 +2058,11 @@ describe('active-hours override', () => {
   it('a fan-out turn is refused: overrides go one machine at a time', async () => {
     const { db, docs } = createStoreDb();
     const tool = toolFor(db, 'reboot_machine', PERSON, true);
+    // naming one machine of the fan-out does not make it a single-machine turn
+    const input = { ...REBOOT_NOW, machines: ['m1'] };
 
-    expect(await tool.needsApproval(REBOOT_NOW, { toolCallId: 'call_1', messages: [] })).toBe(false);
-    const result = await tool.execute(REBOOT_NOW, { toolCallId: 'call_1' });
+    expect(await tool.needsApproval(input, { toolCallId: 'call_1', messages: [] })).toBe(false);
+    const result = await tool.execute(input, { toolCallId: 'call_1' });
 
     expect(result).toMatchObject({ ok: false, error: 'active_hours_override_needs_single_machine' });
     expect(docs.size).toBe(0);
@@ -1953,6 +2167,7 @@ describe('active-hours override', () => {
    */
   describe('a restart held until active hours end', () => {
     const HELD = { when: 'after_active_hours' };
+    const HELD_EVERYWHERE = { ...HELD, machines: ['*'] };
     const PENDING_M2 = 'sites/s1/machines/m2/commands/pending';
 
     it('is refused on a machine whose agent cannot hold it, before anything is asked or queued', async () => {
@@ -2012,8 +2227,8 @@ describe('active-hours override', () => {
       const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] }, true);
 
       // m1 can hold it, so the card still asks.
-      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(true);
-      const result = (await tool.execute(HELD, { toolCallId: 'call_1' })) as {
+      expect(await tool.needsApproval(HELD_EVERYWHERE, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      const result = (await tool.execute(HELD_EVERYWHERE, { toolCallId: 'call_1' })) as {
         machines: Record<string, unknown>[];
       };
 
@@ -2031,8 +2246,8 @@ describe('active-hours override', () => {
       const { db, docs } = createStoreDb();
       const tool = toolFor(db, 'reboot_machine', PERSON, true);
 
-      expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(false);
-      const result = (await tool.execute(HELD, { toolCallId: 'call_1' })) as {
+      expect(await tool.needsApproval(HELD_EVERYWHERE, { toolCallId: 'call_1', messages: [] })).toBe(false);
+      const result = (await tool.execute(HELD_EVERYWHERE, { toolCallId: 'call_1' })) as {
         machines: Record<string, unknown>[];
       };
 

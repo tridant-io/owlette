@@ -117,7 +117,7 @@ const site = (options: Partial<HootSystemPromptOptions> = {}) =>
 
 /** The one line that names the turn's machines, isolated so an injected newline shows up. */
 const targetsLine = (prompt: string) =>
-  prompt.split('\n').find((line) => line.startsWith('Tool calls in this turn go to')) ?? '';
+  prompt.split('\n').find((line) => line.startsWith('Tool calls in this turn')) ?? '';
 
 const ALL_MODES: Array<[string, (o?: Partial<HootSystemPromptOptions>) => string]> = [
   ['single', single],
@@ -192,11 +192,26 @@ describe('buildHootSystemPrompt — subset mode', () => {
     expect(prompt).toContain('multi-machine mode');
     expect(prompt).toContain('do NOT reach every machine in the site');
     expect(prompt).not.toContain('site-wide mode');
-    expect(targetsLine(prompt)).toBe('Tool calls in this turn go to 2 machines: kiosk-01, kiosk-02.');
+    expect(targetsLine(prompt)).toBe('Tool calls in this turn can reach 2 machines: kiosk-01, kiosk-02. Each call runs on the ones it names.');
   });
 
   it('keeps the per-machine aggregation rules', () => {
     expect(subset()).toContain('"machines" array');
+  });
+
+  it.each([
+    ['a chosen set', subset],
+    ['the whole site', site],
+  ])('tells a turn on %s that each call names its machines, and a change is refused without them', (_label, build) => {
+    const prompt = build();
+    expect(prompt).toContain('MACHINES PER CALL');
+    expect(prompt).toContain('a call never reaches a machine it does not name');
+    expect(prompt).toContain('A tool that changes anything is refused without "machines"');
+    expect(prompt).toContain('["*"]');
+  });
+
+  it('says nothing of it on a turn on one machine, where no tool takes the list', () => {
+    expect(single()).not.toContain('MACHINES PER CALL');
   });
 
   it('drops process context — a fan-out has no single machine config', () => {
@@ -211,7 +226,7 @@ describe('buildHootSystemPrompt — site mode', () => {
     expect(prompt).toContain('ALL online machines in the site');
     expect(prompt).toContain('"machines" array');
     expect(targetsLine(prompt)).toBe(
-      'Tool calls in this turn go to 3 machines: kiosk-01, kiosk-02, kiosk-03.',
+      'Tool calls in this turn can reach 3 machines: kiosk-01, kiosk-02, kiosk-03. Each call runs on the ones it names.',
     );
   });
 
@@ -226,7 +241,7 @@ describe('buildHootSystemPrompt — the target block', () => {
   it('caps the listed ids and counts the rest', () => {
     const prompt = site({ machineIds: many });
     const line = targetsLine(prompt);
-    expect(line).toContain(`go to ${many.length} machines`);
+    expect(line).toContain(`can reach ${many.length} machines`);
     expect(line).toContain(many[PROMPT_TARGET_IDS_SHOWN - 1]);
     expect(line).toContain('(+18 more)');
     expect(line).not.toContain(many[PROMPT_TARGET_IDS_SHOWN]);
@@ -252,7 +267,7 @@ describe('buildHootSystemPrompt — the target block', () => {
 
   it('dedupes ids', () => {
     expect(targetsLine(subset({ machineIds: ['kiosk-01', 'kiosk-01', 'kiosk-02'] }))).toBe(
-      'Tool calls in this turn go to 2 machines: kiosk-01, kiosk-02.',
+      'Tool calls in this turn can reach 2 machines: kiosk-01, kiosk-02. Each call runs on the ones it names.',
     );
   });
 });
