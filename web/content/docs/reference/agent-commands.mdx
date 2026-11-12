@@ -257,7 +257,7 @@ the roost fan-out queues `sync_pull` under `roost_sync_{roostId}_{versionId}`. a
 | `swoop_session_requested` | `sid`, required | starts the swoop streamer for the session, or attaches it to the one running | macOS: the agent asks the owlette app to start the streamer. Linux: never queued, since the machine reports `capabilities.swoop: 0` |
 | `swoop_kill` | `sid`, optional | stops the streamer serving `sid`, or whatever is running when there is none. queued even to an offline machine, so a streamer left over from before a drop stops when it reconnects | same |
 | `swoop_refresh` | none | the site turned swoop on or off; the agent refreshes its standing connection to the signalling room | same |
-| `site_settings_refresh` | none | re-reads `GET /api/agent/site` on a thread of its own, one fetch at a time; requests that land during a fetch buy one more pass. queued on a site's online machines when [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) changes | same |
+| `site_settings_refresh` | none | re-reads `GET /api/agent/site` on a thread of its own, one fetch at a time; requests that land during a fetch buy one more pass. queued on a site's online machines when [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) changes, and to a machine that [hoot mcp](/docs/agent/hoot-mcp)'s settings just let act on others or cut off, which then asks at once whether it still may | same |
 
 a swoop command carries the envelope and, where its type takes one, a `sid`. any other field is refused with `Error:`. only `requestSwoopSession` writes them, for the session, kill and session-end routes, viewer revocation and the swoop settings route; `swoop_session_requested` and `swoop_refresh` to an offline machine are refused with `409 machine_offline`. the agent reports `capabilities.swoop: 1` only when the streamer is installed and the machine can stream: every Windows machine, a Mac whose owlette app reported Screen Recording granted within the last 5 minutes, and no Linux machine. see [swoop](/docs/dashboard/swoop).
 
@@ -275,7 +275,7 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 | `POST /api/hoot/provision-key` | `provision_cortex_key` |
 | the roost fan-out and rollout functions, and the rollback route | `sync_pull` |
 | `requestSwoopSession` | `swoop_session_requested`, `swoop_kill`, `swoop_refresh` |
-| `PATCH /api/sites/{siteId}/display-settings` | `site_settings_refresh` |
+| `PATCH /api/sites/{siteId}/display-settings`, and `PATCH /api/sites/{siteId}/fleet-settings` for the machines it turns on or cuts | `site_settings_refresh` |
 | `POST /api/sites/{siteId}/machines/{machineId}/path-check`, session only: it refuses API keys, and the type is not in [the public list](#queuing-through-the-api) | `check_path` |
 | nothing | `update_config`, `toggle_autolaunch`, `refresh_software_inventory`, `cancel_sync`, `rollback_to_version`. the agent still accepts them |
 
