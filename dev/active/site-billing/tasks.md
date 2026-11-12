@@ -185,3 +185,6 @@ Worktree: `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branc
 ## Log
 ### 2026-10-13
 - Plan created from three research passes (owlette plan code, purchase-flow patterns, tridant contract and dependencies). Owner approved the plan and decisions 1–6. #317 merged into dev as 9c929f97 the same day.
+
+## heads-up from the admin-sites release (2026-11-04)
+- `web/components/ManageSitesDialog.tsx` is DELETED on `feat/admin-sites` (release 4.1.27). Site settings is now a page: `/admin/sites/[siteId]` with sections general, members, machines, swoop & screens, danger zone (`web/components/admin/sites/SiteSettings.tsx`). The owner-only billing row this plan puts in the dialog (tasks ~136-139) belongs in that page: the general section, or a `billing` section of its own, owner-only like the danger zone. Rebase after 4.1.27 merges.
