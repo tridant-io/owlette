@@ -16,6 +16,11 @@ jest.mock('@/lib/resolveVersion', () => ({
   ...jest.requireActual('@/lib/resolveVersion'),
   resolveVersion: jest.fn(),
 }));
+const mockRequireEntitlement = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  requireEntitlement: (...args: unknown[]) => mockRequireEntitlement(...args),
+}));
 
 import { deployRoost, RoostProblem } from '@/lib/actions/deployRoost.server';
 import { rollbackRoost } from '@/lib/actions/rollbackRoost.server';
@@ -122,6 +127,8 @@ beforeEach(() => {
   mockDeploy.mockReset();
   mockRollback.mockReset();
   mockResolve.mockReset();
+  mockRequireEntitlement.mockReset();
+  mockRequireEntitlement.mockResolvedValue(null);
   seed(R1, { targets: [M1], createdAt: 3, currentVersionId: V1, currentVersionNumber: 2 });
   seed(R2, { targets: [M1, M2], createdAt: 2 });
   seed(R3, { targets: [M3], createdAt: 1, deletedAt: 5 });
@@ -248,7 +255,7 @@ describe('deploy_roost_version', () => {
   it('run() reaches the core as the machine, with exactly the approved machines', async () => {
     mockDeploy.mockResolvedValue({ outcome: 'queued', status: 202, body: { stage: 'canary', canary: [M1] } });
     const answer = await tool().run(whole, [M1, M2], { roost_id: R1, version_id: V2 });
-    expect(textOf(answer)).toEqual({ stage: 'canary', canary: [M1] });
+    expect(textOf(answer)).toEqual({ stage: 'canary', canary: [M1], fleet: [] });
     expect(mockDeploy).toHaveBeenCalledWith(
       { siteId: SITE, auditActor: `machine:${SENDER}` },
       expect.objectContaining({
@@ -283,6 +290,40 @@ describe('deploy_roost_version', () => {
     const answer = await tool().run(whole, [M1], { roost_id: R1 });
     expect(answer.status).toBe('failed');
     expect(mockDeploy).not.toHaveBeenCalled();
+  });
+
+  it('run() does not reach the core on a site whose plan has no roost, as the route refuses it', async () => {
+    mockRequireEntitlement.mockResolvedValue({ status: 402 });
+    expect(await tool().run(whole, [M1], { roost_id: R1 })).toEqual({
+      status: 'failed',
+      error: "your plan doesn't include roost. upgrade to continue.",
+    });
+    expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.roost');
+    expect(mockDeploy).not.toHaveBeenCalled();
+  });
+
+  it('machines() answers a roost with a machine outside the grant as an unknown roost, even narrowed to one inside', async () => {
+    const unknown = await tool().machines(oneMachine, { roost_id: 'rst_missing0001' });
+    expect(await tool().machines(oneMachine, { roost_id: R1 })).toEqual({ error: `roost ${R1} not found on site site-a` });
+    expect(await tool().machines(oneMachine, { roost_id: R1, machines: [M1] })).toEqual({
+      error: `roost ${R1} not found on site site-a`,
+    });
+    expect(unknown).toEqual({ error: 'roost rst_missing0001 not found on site site-a' });
+  });
+
+  it('machines() lets a grant that names its machines deploy a roost wholly inside it', async () => {
+    seed(R1, { targets: [M1], createdAt: 3, currentVersionId: V1, versionUrl: 'https://r2/v1' });
+    expect(await tool().machines(oneMachine, { roost_id: R1 })).toEqual({ machines: [M1] });
+  });
+
+  it('run() answers a rollout already running without its manifest url or machines the call was not checked for', async () => {
+    mockDeploy.mockResolvedValue({
+      outcome: 'already_running',
+      status: 200,
+      body: { stage: 'canary', canary: [M3], fleet: [M1, M2], versionUrl: 'https://r2/v1', alreadyRunning: true },
+    });
+    const answer = await tool().run(whole, [M1], { roost_id: R1 });
+    expect(textOf(answer)).toEqual({ stage: 'canary', canary: [], fleet: [M1], alreadyRunning: true });
   });
 });
 
@@ -346,5 +387,18 @@ describe('rollback_roost', () => {
     docs.set(`sites/${SITE}`, { roostEnabled: false });
     expect((await tool().run(whole, [M1], { roost_id: R1 })).status).toBe('failed');
     expect(mockRollback).not.toHaveBeenCalled();
+  });
+
+  it('run() does not reach the core on a site whose plan has no roost', async () => {
+    mockRequireEntitlement.mockResolvedValue({ status: 402 });
+    expect(await tool().run(whole, [M1], { roost_id: R1 })).toEqual({
+      status: 'failed',
+      error: "your plan doesn't include roost. upgrade to continue.",
+    });
+    expect(mockRollback).not.toHaveBeenCalled();
+  });
+
+  it('machines() answers a roost with a machine outside the grant as an unknown roost', async () => {
+    expect(await tool().machines(oneMachine, { roost_id: R1 })).toEqual({ error: `roost ${R1} not found on site site-a` });
   });
 });

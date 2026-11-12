@@ -332,7 +332,7 @@ describe('cancel_deployment', () => {
 
   it('names every machine whose install has not started, once', async () => {
     deployment('d1', 1, [M1, M2, M1]);
-    expect(await cancel.machines(oneMachine, { deployment_id: 'd1' })).toEqual({ machines: [M1, M2] });
+    expect(await cancel.machines(wholeSite, { deployment_id: 'd1' })).toEqual({ machines: [M1, M2] });
   });
 
   it('leaves out a machine that is installing or finished, which a cancel does not act on', async () => {
@@ -343,7 +343,7 @@ describe('cancel_deployment', () => {
         { machineId: 'kiosk-gone', status: 'completed' },
       ],
     });
-    expect(await cancel.machines(oneMachine, { deployment_id: 'd2' })).toEqual({ machines: [M1] });
+    expect(await cancel.machines(wholeSite, { deployment_id: 'd2' })).toEqual({ machines: [M1] });
   });
 
   it('cannot tell the machines of a deployment with no install left to cancel', async () => {
@@ -355,6 +355,11 @@ describe('cancel_deployment', () => {
 
   it('cannot tell the machines of an unknown deployment', async () => {
     expect(await cancel.machines(wholeSite, { deployment_id: 'nope' })).toEqual({ error: 'deployment nope not found' });
+  });
+
+  it('answers a deployment that names a machine outside the grant as an unknown one', async () => {
+    deployment('d4', 1, [M1, 'kiosk-9']);
+    expect(await cancel.machines(oneMachine, { deployment_id: 'd4' })).toEqual({ error: 'deployment d4 not found' });
   });
 
   it('cannot tell the machines of a deployment that targets none, or of a bad id', async () => {

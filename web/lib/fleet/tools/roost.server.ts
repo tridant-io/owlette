@@ -13,6 +13,7 @@ import {
 } from '@/lib/actions/deployRoost.server';
 import { readRollbackMachines, resolveRollbackTarget, rollbackRoost } from '@/lib/actions/rollbackRoost.server';
 import { timestampToIso } from '@/lib/firestoreTime.server';
+import { PLAN_REQUIRED_DETAIL, requireEntitlement } from '@/lib/plan.server';
 import { gateOrProceed } from '@/lib/roostKillSwitch';
 import { grantCovers } from '@/lib/fleet/policy.server';
 import type { FleetAnswer, FleetContext, FleetServerTool } from '@/lib/fleet/context';
@@ -49,11 +50,24 @@ function targetsOf(data: Record<string, unknown>): string[] {
     : [];
 }
 
+/** every one of `ids` is inside the grant, and a grant that names its machines needs at least one. */
+function allInsideGrant(ctx: FleetContext, ids: readonly string[]): boolean {
+  if (ctx.grant.machineIds === null) return true;
+  return ids.length > 0 && ids.every((id) => grantCovers(ctx.grant, id));
+}
+
 /** a roost names its machines, so it is visible only when every one is inside the grant. */
 function visibleToGrant(ctx: FleetContext, data: Record<string, unknown>): boolean {
-  if (ctx.grant.machineIds === null) return true;
-  const ids = targetsOf(data);
-  return ids.length > 0 && ids.every((id) => grantCovers(ctx.grant, id));
+  return allInsideGrant(ctx, targetsOf(data));
+}
+
+/**
+ * a roost the grant cannot see answers a write as an unknown roost does, in
+ * the cores' own words, so a call learns neither that it exists nor which
+ * machines it names.
+ */
+function roostNotFound(ctx: FleetContext, roostId: string): { error: string } {
+  return { error: `roost ${roostId} not found on site ${ctx.siteId}` };
 }
 
 function noMachinesInGrant(ctx: FleetContext): boolean {
@@ -69,6 +83,16 @@ async function roostDisabled(ctx: FleetContext): Promise<string | null> {
   if (!gated) return null;
   const body = (await gated.json()) as { detail?: string };
   return body.detail ?? 'roost is disabled for this site';
+}
+
+/**
+ * what the roost routes check before a write and the cores do not: the plan
+ * (`requireRoostAuthAndScope`) and then the kill switch. a machine's call
+ * meets both here, in the routes' order.
+ */
+async function writeRefused(ctx: FleetContext): Promise<string | null> {
+  if (await requireEntitlement(ctx.siteId, 'owlette.roost')) return PLAN_REQUIRED_DETAIL['owlette.roost'];
+  return roostDisabled(ctx);
 }
 
 function actionContext(ctx: FleetContext) {
@@ -175,7 +199,7 @@ const deployTool: FleetServerTool = {
   target: 'machines',
   definition: {
     name: DEPLOY_TOOL,
-    description: "Deploy a published version of a roost to machines: owlette tells the first wave of them (about a tenth, at least 1 and at most 50, in id order) to download the version's files into the roost's folder, and the rest follow once enough of that wave has succeeded. A deploy of a version that is still rolling out changes nothing and says so. It acts on every machine the roost deploys to unless you narrow it with `machines`, and each machine it would act on must be one you may act on, or the whole call is refused.",
+    description: "Deploy a published version of a roost to machines: owlette tells the first wave of them (about a tenth, at least 1 and at most 50, in id order) to download the version's files into the roost's folder, and the rest follow once enough of that wave has succeeded. A deploy of a version that is still rolling out changes nothing and says so. It acts on every machine the roost deploys to unless you narrow it with `machines`. You can deploy only a roost that list_roosts shows you, one whose machines are all machines you may act on; any other answers as not found.",
     tier: 3,
     parameters: {
       type: 'object',
@@ -196,6 +220,8 @@ const deployTool: FleetServerTool = {
     if ('error' in input) return input;
     try {
       const { roost } = await loadDeployableRoost(ctx.db, ctx.siteId, input.roostId, input.versionId);
+      // even a deploy narrowed to machines inside the grant: the roost itself must be one this machine may see
+      if (!visibleToGrant(ctx, roost)) return roostNotFound(ctx, input.roostId);
       const machines = deployMachineSet(roost, input.machines);
       if (machines.length === 0) return { error: 'this roost deploys to no machines, and the call named none' };
       return { machines };
@@ -207,8 +233,8 @@ const deployTool: FleetServerTool = {
   async run(ctx, machines, params) {
     const input = deployInput(params);
     if ('error' in input) return failed(input.error);
-    const disabled = await roostDisabled(ctx);
-    if (disabled) return failed(disabled);
+    const refused = await writeRefused(ctx);
+    if (refused) return failed(refused);
     try {
       const result = await deployRoost(actionContext(ctx), {
         roostId: input.roostId,
@@ -219,7 +245,13 @@ const deployTool: FleetServerTool = {
         method: 'POST',
         approvedMachines: machines,
       });
-      return completed(result.body);
+      // a rollout that is already running was started by another call, and its
+      // waves may name machines this call was not checked for; the manifest's
+      // url is for the machines that download it
+      const { versionUrl: _versionUrl, canary, fleet, ...body } = result.body;
+      const approved = (wave: unknown) =>
+        Array.isArray(wave) ? wave.filter((id) => typeof id === 'string' && machines.includes(id)) : [];
+      return completed({ ...body, canary: approved(canary), fleet: approved(fleet) });
     } catch (error) {
       if (error instanceof RoostProblem) return failed(error.details.detail ?? error.details.title);
       throw error;
@@ -231,7 +263,7 @@ const rollbackTool: FleetServerTool = {
   target: 'machines',
   definition: {
     name: ROLLBACK_TOOL,
-    description: 'Roll a roost back to a version it already published: the roost points at that version again, and every machine the roost deploys to is told at once to download it, with no first wave. It always acts on every machine the roost deploys to, and each must be one you may act on, or the whole call is refused. Nothing is published and the version you leave stays available.',
+    description: 'Roll a roost back to a version it already published: the roost points at that version again, and every machine the roost deploys to is told at once to download it, with no first wave. It always acts on every machine the roost deploys to. You can roll back only a roost that list_roosts shows you, one whose machines are all machines you may act on; any other answers as not found. Nothing is published and the version you leave stays available.',
     tier: 3,
     parameters: {
       type: 'object',
@@ -250,8 +282,9 @@ const rollbackTool: FleetServerTool = {
     if ('error' in input) return input;
     try {
       const machines = await readRollbackMachines(ctx.db, ctx.siteId, input.roostId);
+      if (machines.length === 0 && ctx.grant.machineIds === null) return { error: 'this roost deploys to no machines' };
+      if (!allInsideGrant(ctx, machines)) return roostNotFound(ctx, input.roostId);
       await resolveRollbackTarget(ctx.siteId, input.roostId, input.targetVersion);
-      if (machines.length === 0) return { error: 'this roost deploys to no machines' };
       return { machines };
     } catch (error) {
       if (error instanceof RoostProblem) return { error: error.details.detail ?? error.details.title };
@@ -261,8 +294,8 @@ const rollbackTool: FleetServerTool = {
   async run(ctx, machines, params) {
     const input = rollbackInput(params);
     if ('error' in input) return failed(input.error);
-    const disabled = await roostDisabled(ctx);
-    if (disabled) return failed(disabled);
+    const refused = await writeRefused(ctx);
+    if (refused) return failed(refused);
     try {
       const result = await rollbackRoost(actionContext(ctx), {
         roostId: input.roostId,

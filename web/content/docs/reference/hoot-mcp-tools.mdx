@@ -99,7 +99,7 @@ read the current schedule with `get_reboot_schedule` before `set_reboot_schedule
 | `cancel_deployment` | 2 | several machines | cancels the installs that have not started on a deployment. an install already running or finished is left alone |
 | `update_owlette_agent` | 3 | one machine | sends the machine the latest agent installer for its platform. the machine must be online |
 
-a deployment is listed or read only when every machine it targets is one the calling machine may act on; `list_deployments` says in `leftOut` how many it skipped for that. `cancel_deployment` is refused unless every machine whose install it would cancel is one the calling machine may act on.
+a deployment is listed or read only when every machine it targets is one the calling machine may act on; `list_deployments` says in `leftOut` how many it skipped for that. any other deployment answers as not found, to `get_deployment` and to `cancel_deployment` alike. creating one needs the site's plan to include deployments, as in the dashboard; cancelling does not.
 
 active hours hold back an install, and no call from a machine overrides that: the install on that machine fails with an `active_hours` error. `update_owlette_agent` is not held back by them.
 
@@ -114,7 +114,7 @@ active hours hold back an install, and no call from a machine overrides that: th
 | `deploy_roost_version` | 3 | several machines | deploys a published version to the machines of a roost: the first wave (about a tenth, at least 1 and at most 50) first, the rest once enough of it has succeeded. `machines` narrows it |
 | `rollback_roost` | 3 | several machines | points a roost back at a version it already published and tells every machine it deploys to to download it at once, with no first wave |
 
-a roost is listed, or read, only when every machine it deploys to is one the calling machine may act on; `list_roosts` says in `leftOut` how many it skipped. `deploy_roost_version` and `rollback_roost` are refused whole when any machine they would act on is outside that.
+a roost is listed, or read, only when every machine it deploys to is one the calling machine may act on; `list_roosts` says in `leftOut` how many it skipped. any other roost answers as not found, to `list_roost_versions`, `deploy_roost_version` and `rollback_roost` alike, even when a deploy is narrowed to machines it may act on. deploying and rolling back need the site's plan to include roost, and are refused while roost is switched off for the site.
 
 ---
 

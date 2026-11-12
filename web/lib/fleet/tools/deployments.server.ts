@@ -273,12 +273,15 @@ const cancelDeploymentTool: FleetServerTool = {
     const id = params.deployment_id;
     if (typeof id !== 'string' || !DEPLOYMENT_ID_RE.test(id)) return { error: 'deployment_id must be a deployment id' };
     const snap = await ctx.db.collection('sites').doc(ctx.siteId).collection('deployments').doc(id).get();
-    if (!snap.exists) return { error: `deployment ${id} not found` };
+    const data = snap.data() ?? {};
+    // one that names a machine outside the grant answers as an unknown one does,
+    // as get_deployment answers it: the call learns neither that it exists nor its machines
+    if (!snap.exists || !visibleToGrant(ctx, data)) return { error: `deployment ${id} not found` };
     // the targets the core would cancel, by its own rule: one that is installing
     // or finished is not acted on, so its machine need not pass the checks
     const ids = [
       ...new Set(
-        targetsOf(snap.data() ?? {})
+        targetsOf(data)
           .filter((target) => typeof target.status === 'string' && PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status))
           .map((target) => target.machineId)
           .filter((machineId): machineId is string => typeof machineId === 'string'),
