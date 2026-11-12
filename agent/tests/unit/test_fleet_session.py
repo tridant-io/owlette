@@ -12,6 +12,7 @@ keeper's own platform gate is switched on for them.
 import json
 import logging
 import os
+import stat
 import sys
 import threading
 import time
@@ -416,10 +417,10 @@ def test_a_refused_write_is_finished_on_the_next_pass_without_asking_again(keepe
     real_replace = os.replace
     refusals = [PermissionError(13, 'the script has it open')]
 
-    def replace(src, dst):
+    def replace(src, dst, **kwargs):
         if refusals:
             raise refusals.pop()
-        real_replace(src, dst)
+        real_replace(src, dst, **kwargs)
 
     monkeypatch.setattr(fleet_session.os, 'replace', replace)
     ensured = []
@@ -447,10 +448,10 @@ def test_a_session_the_file_never_took_is_dropped_once_it_runs_out(keeper, api, 
     real_replace = os.replace
     held = [True]
 
-    def replace(src, dst):
+    def replace(src, dst, **kwargs):
         if held[0]:
             raise PermissionError(13, 'the script has it open')
-        real_replace(src, dst)
+        real_replace(src, dst, **kwargs)
 
     monkeypatch.setattr(fleet_session.os, 'replace', replace)
     keeper.refresh_once()
@@ -634,6 +635,7 @@ def test_an_unchanged_failure_is_logged_once(keeper, api, clock, caplog):
 
 # ----- the folder, and the script's side of the contract ---------------------------
 
+@pytest.mark.skipif(sys.platform != 'win32', reason='the Windows DACL table')
 def test_the_folder_is_created_with_the_row_the_acl_table_gives_it(tmp_path, monkeypatch):
     monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
     folder = os.path.dirname(fleet_session.session_path())
@@ -673,8 +675,225 @@ def test_the_script_reads_what_the_keeper_writes(keeper, api, monkeypatch):
     }
 
 
-def test_the_keeper_is_windows_only_for_now():
-    assert fleet_session._SUPPORTED == (sys.platform == 'win32')
+def test_the_keeper_runs_on_windows_and_macos_only():
+    assert fleet_session._SUPPORTED == (sys.platform in ('win32', 'darwin'))
+
+
+# ----- macOS: the file and the folder ----------------------------------------------
+
+posix_only = pytest.mark.skipif(sys.platform == 'win32', reason='the POSIX mode bits')
+
+
+@pytest.fixture
+def on_mac(tmp_path, monkeypatch, client, clock):
+    """A keeper on a tmp data root with the platform stubbed to darwin. The
+    group handover is recorded; the mode bits are the real ones."""
+    monkeypatch.setenv('OWLETTE_DATA_ROOT', str(tmp_path))
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(fleet_session, '_SUPPORTED', True)
+    monkeypatch.setattr(fleet_session.shared_utils, 'get_environment', lambda: 'development')
+    handed = []
+
+    def grant(fd):
+        # the file must still be empty: no byte of the session before the group.
+        # and still the service's alone: no group reads it before it is the service's group
+        info = os.fstat(fd)
+        handed.append((fd, info.st_size, stat.S_IMODE(info.st_mode)))
+
+    monkeypatch.setattr(fleet_session.shared_utils, 'grant_data_group', grant)
+    return SimpleNamespace(keeper=FleetSessionKeeper(lambda: client, clock=clock), handed=handed)
+
+
+@posix_only
+def test_on_macos_the_file_is_0640_granted_to_the_group_and_replaced_atomically(on_mac, api):
+    api.answers = [granted('owf_first', START + 900), granted('owf_second', START + 1500)]
+
+    on_mac.keeper.refresh_once()
+    path = fleet_session.session_path()
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+    assert len(on_mac.handed) == 1 and isinstance(on_mac.handed[0][0], int)
+    assert on_mac.handed[0][1] == 0
+    assert on_mac.handed[0][2] == 0o600
+    assert stored()['token'] == 'owf_first'
+    first_inode = os.stat(path).st_ino
+
+    on_mac.keeper._clock = lambda: START + REFRESH_SECONDS
+    on_mac.keeper.refresh_once()
+    assert stored()['token'] == 'owf_second'
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
+    assert len(on_mac.handed) == 2 and on_mac.handed[1][1] == 0
+    # a new file moved over the old one, not the old one rewritten
+    assert os.stat(path).st_ino != first_inode
+    assert os.listdir(os.path.dirname(path)) == [fleet_session.SESSION_FILE]
+
+
+@posix_only
+def test_on_macos_the_temp_file_is_never_wider_than_0640_while_it_is_written(on_mac, api, monkeypatch):
+    api.answers = [granted('owf_first', START + 900)]
+    seen = []
+    real_replace = os.replace
+
+    def replace(src, dst, **kwargs):
+        seen.append(stat.S_IMODE(os.stat(src, dir_fd=kwargs['src_dir_fd']).st_mode))
+        real_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(fleet_session.os, 'replace', replace)
+
+    on_mac.keeper.refresh_once()
+
+    assert seen == [0o640]
+
+
+@posix_only
+def test_on_macos_the_folder_is_made_0770_and_given_to_the_service_group(on_mac, monkeypatch):
+    hardened = []
+    from osadapter import posix
+    monkeypatch.setattr(posix, 'harden_data_root', lambda root, dirs: hardened.append((root, dirs)))
+
+    fleet_session._ensure_session_dir()
+
+    folder = os.path.dirname(fleet_session.session_path())
+    assert os.path.isdir(folder)
+    assert hardened == [(fleet_session.shared_utils.get_data_path(), [folder])]
+
+
+@posix_only
+def test_on_macos_the_mode_table_gives_the_folder_0770(on_mac):
+    fleet_session._ensure_session_dir()
+
+    folder = os.path.dirname(fleet_session.session_path())
+    assert stat.S_IMODE(os.stat(folder).st_mode) == 0o770
+
+
+@posix_only
+def test_on_macos_a_folder_that_is_a_link_is_not_the_services(on_mac, tmp_path):
+    folder = os.path.dirname(fleet_session.session_path())
+    os.makedirs(os.path.dirname(folder))
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    os.symlink(elsewhere, folder)
+
+    with pytest.raises(acl_hardening.UntrustedDirectory):
+        fleet_session._ensure_session_dir()
+
+
+@posix_only
+def test_on_macos_a_folder_owned_by_someone_else_is_not_the_services(on_mac, monkeypatch):
+    folder = os.path.dirname(fleet_session.session_path())
+    os.makedirs(folder)
+    monkeypatch.setattr(os, 'geteuid', lambda: os.stat(folder).st_uid + 1)
+
+    with pytest.raises(acl_hardening.UntrustedDirectory):
+        fleet_session._ensure_session_dir()
+
+
+def swap_folder_for(link_target):
+    """Move the real ipc/fleet aside and put `link_target` at its name, as the
+    console user (in the group of ipc/) could."""
+    folder = os.path.dirname(fleet_session.session_path())
+    os.rename(folder, folder + '.real')
+    os.symlink(link_target, folder)
+
+
+@posix_only
+def test_on_macos_a_link_planted_after_the_first_write_gets_no_write(on_mac, api, tmp_path):
+    api.answers = [granted('owf_first', START + 900), granted('owf_second', START + 1500)]
+    on_mac.keeper.refresh_once()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    swap_folder_for(elsewhere)
+
+    on_mac.keeper._clock = lambda: START + REFRESH_SECONDS
+    on_mac.keeper.refresh_once()
+
+    assert os.listdir(elsewhere) == []
+    assert len(api.calls) == 2
+
+
+@posix_only
+def test_on_macos_a_folder_swapped_for_another_uids_is_refused_at_the_write(on_mac, api, monkeypatch):
+    api.answers = [granted('owf_first', START + 900), granted('owf_second', START + 1500)]
+    on_mac.keeper.refresh_once()
+    folder = os.path.dirname(fleet_session.session_path())
+    monkeypatch.setattr(os, 'geteuid', lambda: os.stat(folder).st_uid + 1)
+
+    on_mac.keeper._clock = lambda: START + REFRESH_SECONDS
+    on_mac.keeper.refresh_once()
+
+    assert stored()['token'] == 'owf_first'
+    assert os.listdir(folder) == [fleet_session.SESSION_FILE]
+
+
+@posix_only
+def test_on_macos_removal_does_not_follow_a_planted_link(on_mac, api, tmp_path):
+    api.answers = [granted('owf_first', START + 900)]
+    on_mac.keeper.refresh_once()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    for name in (fleet_session.SESSION_FILE, fleet_session.SESSION_FILE + '.tmp'):
+        (elsewhere / name).write_text('not ours', encoding='utf-8')
+    swap_folder_for(elsewhere)
+
+    on_mac.keeper.withdraw()
+
+    assert sorted(os.listdir(elsewhere)) == [fleet_session.SESSION_FILE, fleet_session.SESSION_FILE + '.tmp']
+
+
+@posix_only
+def test_on_macos_removal_with_no_folder_has_nothing_to_remove(on_mac):
+    on_mac.keeper.withdraw()
+
+    assert on_mac.keeper._expires_at is None
+
+
+@posix_only
+def test_on_macos_a_refusal_and_a_withdrawal_delete_the_file(on_mac, api):
+    api.answers = [granted('owf_first', START + 900), refused(403, 'fleet_not_granted')]
+    on_mac.keeper.refresh_once()
+    assert stored() is not None
+
+    on_mac.keeper._clock = lambda: START + REFRESH_SECONDS
+    on_mac.keeper.refresh_once()
+    assert stored() is None
+
+    api.answers = [granted('owf_again', START + NOT_GRANTED_SECONDS + REFRESH_SECONDS + 900)]
+    on_mac.keeper._clock = lambda: START + NOT_GRANTED_SECONDS + REFRESH_SECONDS
+    on_mac.keeper.refresh_once()
+    assert stored() is not None
+    on_mac.keeper.withdraw()
+    assert stored() is None
+
+
+def test_on_linux_tick_and_withdraw_leave_the_session_file_alone(keeper, api, monkeypatch):
+    leave_a_file()
+    monkeypatch.setattr(fleet_session, '_SUPPORTED', False)
+
+    keeper.tick()
+    keeper.withdraw()
+
+    assert keeper._thread is None
+    assert api.calls == []
+    assert stored() == {'token': 'left-by-a-dead-run'}
+
+
+@posix_only
+def test_an_error_on_the_macos_write_path_names_no_token(on_mac, api, caplog, monkeypatch):
+    caplog.set_level(logging.DEBUG)
+    api.answers = [granted('owf_secret_session', START + 900)]
+
+    real_open = os.open
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith('.tmp'):
+            raise PermissionError(13, 'no')
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'open', refuse)
+    on_mac.keeper.refresh_once()
+
+    assert 'could not write the session file' in caplog.text
+    assert 'owf_secret_session' not in caplog.text
+    assert AGENT_TOKEN not in caplog.text
 
 
 # ----- the service's side ----------------------------------------------------------

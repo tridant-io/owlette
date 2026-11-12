@@ -125,7 +125,7 @@ download. Takes an agent update.
 
 ### added — hoot mcp: an AI agent on one machine can act on the others
 
-An AI agent running on a paired Windows machine (Claude Code, or any MCP client)
+An AI agent running on a paired Windows machine or Mac (Claude Code, or any MCP client)
 can now use hoot's tools on the other machines of its site. The owlette agent
 on that machine is the MCP server and the machine's pairing is the credential:
 there is no API key and nothing to sign in to. It is off until a site owner or

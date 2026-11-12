@@ -91,8 +91,8 @@ export function ConnectAgentDialog({ open, onClose }: ConnectAgentDialogProps) {
           <DialogTitle>connect an ai agent</DialogTitle>
           <DialogDescription>
             an ai agent on this machine can use hoot&apos;s tools on the other machines of its site. a
-            site owner or admin turns this machine on first, in the dashboard&apos;s admin panel, under
-            hoot.
+            site owner or site admin turns this machine on first, in the dashboard&apos;s admin panel,
+            under hoot.
           </DialogDescription>
         </DialogHeader>
 

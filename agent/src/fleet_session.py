@@ -14,13 +14,18 @@ work and starts it on a daemon thread, one at a time. Nothing here ever logs the
 session or the agent's token: a failed request is named by its exception type
 alone, because requests quotes a header it refuses.
 
-Windows only for now. Off Windows `tick()` and `withdraw()` do nothing: the file
-needs the data root's group handling there first.
+Windows and macOS. On macOS the service is root and the console user reads the
+file through the service group: `ipc/fleet` takes the data-root mode table's row
+for a folder under `ipc/` (0770), and the file is written 0640 with that group,
+the way the hoot token file is. Elsewhere (Linux) `tick()` and `withdraw()` do
+nothing.
 """
 
+import errno
 import json
 import logging
 import os
+import stat
 import sys
 import threading
 import time
@@ -52,7 +57,7 @@ _REFUSALS = {
     (401, 'pairing_revoked'): 'this machine is no longer paired to its site',
 }
 
-_SUPPORTED = sys.platform == 'win32'
+_SUPPORTED = sys.platform in ('win32', 'darwin')
 
 
 def session_path():
@@ -61,11 +66,78 @@ def session_path():
 
 
 def _ensure_session_dir():
-    """Create ipc\\fleet with its DACL: the service writes, the console user
-    reads. Raises when the directory exists and is not the service's own."""
+    """Create ipc/fleet: the service writes, the console user reads. Raises when
+    the directory exists and is not the service's own."""
     path = os.path.dirname(session_path())
-    aces = {os.path.normcase(entry.path): entry.aces for entry in acl_hardening.specs()}
-    acl_hardening.create_private_dir(path, aces[os.path.normcase(path)])
+    if sys.platform == 'win32':
+        aces = {os.path.normcase(entry.path): entry.aces for entry in acl_hardening.specs()}
+        acl_hardening.create_private_dir(path, aces[os.path.normcase(path)])
+        return
+    # ipc/ is group-writable, so a folder the console user planted is theirs
+    os.makedirs(path, exist_ok=True)
+    info = os.lstat(path)
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid():
+        raise acl_hardening.UntrustedDirectory(f"refusing to use {path}: not a folder the service owns")
+    from osadapter import posix
+
+    posix.harden_data_root(shared_utils.get_data_path(), [path])
+
+
+def _open_session_dir():
+    """A descriptor on ipc/fleet, checked on the descriptor: a folder owned by
+    the service, not a link. ipc/ is group-writable, so the name can be swapped
+    at any moment and every file operation goes through a descriptor taken fresh
+    here. Raises FileNotFoundError when there is no folder."""
+    try:
+        fd = os.open(
+            os.path.dirname(session_path()),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise acl_hardening.UntrustedDirectory("ipc/fleet is not a folder") from e
+        raise
+    if os.fstat(fd).st_uid != os.geteuid():
+        os.close(fd)
+        raise acl_hardening.UntrustedDirectory("ipc/fleet is not owned by the service")
+    return fd
+
+
+def _publish_session(session):
+    """Write the session to a new file that no one but the service and, off
+    Windows, its group can read at any moment, then move it over the old one."""
+    path = session_path()
+    if sys.platform == 'win32':
+        temp_path = f"{path}.tmp"
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(session, f)
+        os.replace(temp_path, path)
+        return
+    name = os.path.basename(path)
+    temp_name = f"{name}.tmp"
+    dir_fd = _open_session_dir()
+    try:
+        # shared_utils.open_new_file takes no dir_fd, and a path open here would
+        # follow a swapped folder
+        try:
+            os.unlink(temp_name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        # created for the service alone: the group may read it only once it
+        # is the service's group, never whatever group a new file starts with
+        file_fd = os.open(
+            temp_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        with os.fdopen(file_fd, 'w', encoding='utf-8') as f:
+            shared_utils.grant_data_group(f.fileno())
+            os.fchmod(f.fileno(), 0o640)
+            json.dump(session, f)
+        os.replace(temp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _is_number(value):
@@ -255,15 +327,12 @@ class FleetSessionKeeper:
         with self._lock:
             if epoch != self._epoch:
                 return
-        path = session_path()
-        temp_path = f"{path}.tmp"
+        temp_path = f"{session_path()}.tmp"
         try:
             if not self._dir_ready:
                 _ensure_session_dir()
                 self._dir_ready = True
-            with open(temp_path, 'w', encoding='utf-8') as f:
-                json.dump(session, f)
-            os.replace(temp_path, path)
+            _publish_session(session)
         except (acl_hardening.UntrustedDirectory, acl_hardening.AclApplyError) as e:
             # nothing a retry fixes: the folder is not the service's to write in
             self._set_due(self._clock() + NOT_GRANTED_SECONDS, epoch)
@@ -317,11 +386,23 @@ class FleetSessionKeeper:
             self._expires_at = None if gone else 0.0
 
     def _discard(self, path):
-        """Delete one file. True when it is gone."""
+        """Delete one file. True when it is gone. Off Windows through a checked
+        descriptor on the folder: a folder that is not the service's is not
+        followed, and its files are not ours to delete."""
         try:
-            os.remove(path)
+            if sys.platform == 'win32':
+                os.remove(path)
+            else:
+                dir_fd = _open_session_dir()
+                try:
+                    os.unlink(os.path.basename(path), dir_fd=dir_fd)
+                finally:
+                    os.close(dir_fd)
         except FileNotFoundError:
             pass
+        except acl_hardening.UntrustedDirectory as e:
+            self._say(f"could not delete {os.path.basename(path)} ({type(e).__name__}: {e})")
+            return False
         except OSError as e:
             self._say(f"could not delete {os.path.basename(path)} ({type(e).__name__}: {e})")
             return False
