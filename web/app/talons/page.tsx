@@ -13,11 +13,10 @@ import { Loader2, Plus, Zap } from 'lucide-react';
 import { PageCascade } from '@/components/PageCascade';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import DownloadButton from '@/components/DownloadButton';
 import { FallingFeather } from '@/components/FallingFeather';
 import { LoadingWord } from '@/components/LoadingWord';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
+import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
 import { PageHeader } from '@/components/PageHeader';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
@@ -47,12 +46,9 @@ export default function TalonsPage() {
     sitesLoading,
     currentSiteId,
     currentSite,
-    createSite,
-    updateSite,
-    deleteSite,
+    limitedOnly,
     selectSite,
-    pickSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const talonsGated = usePlanGated('talons', siteOwner);
 
@@ -65,9 +61,6 @@ export default function TalonsPage() {
     updatePreset: updateTalonPreset,
   } = useTalonPresets(currentSiteId || null);
 
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   // The talon the editor is opened on. `null` = create mode.
@@ -156,6 +149,13 @@ export default function TalonsPage() {
   // not "none", and rendering an empty state early flashes the wrong answer.
   const loading = sitesLoading || talonsLoading;
 
+  // the live entry, not the copy taken at open: every save carries `enabled`, and
+  // the system may switch the talon off mid-edit. the copy stays as the fallback
+  // so a talon deleted mid-edit does not turn the form into a create.
+  const liveEditingTalon = editingTalon
+    ? (talons.find((talon) => talon.id === editingTalon.id) ?? editingTalon)
+    : undefined;
+
   return (
     <PageCascade className="relative min-h-screen pb-8">
       <PageHeader
@@ -163,42 +163,8 @@ export default function TalonsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={() => {
-          setManageEditSiteId(currentSiteId);
-          setManageDialogOpen(true);
-        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter((s) => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       <AccountSettingsDialog open={accountSettingsOpen} onOpenChange={setAccountSettingsOpen} />
@@ -243,12 +209,7 @@ export default function TalonsPage() {
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
           </div>
         ) : !currentSiteId ? (
-          <Card className="border-border bg-card/50 p-8 text-center">
-            <p className="text-sm text-foreground">no sites available</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              you need site access to manage talons. ask a site admin to add you.
-            </p>
-          </Card>
+          <NoSitesEmptyState action="manage talons" limited={limitedOnly} />
         ) : talons.length === 0 ? (
           // Compact on purpose: it sits where the list would and must not push the page down.
           <Card className="border-border bg-card/50 p-6 text-center">
@@ -314,7 +275,7 @@ export default function TalonsPage() {
             online: m.online,
             processes: m.processes,
           }))}
-          talon={editingTalon ?? undefined}
+          talon={liveEditingTalon}
           isSiteAdmin={isSiteAdmin(currentSiteId)}
         />
       )}

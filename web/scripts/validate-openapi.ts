@@ -45,6 +45,11 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/alert',
   '/api/agent/screenshot',
   '/api/agent/generate-installer',
+  // a granted machine's own routes (ADR 0017): the agent and its local script call them, never an api key.
+  '/api/agent/fleet/session',
+  '/api/agent/fleet/tools',
+  '/api/agent/fleet/call',
+  '/api/agent/fleet/calls/{callId}',
   '/api/alerts/trigger',
   '/api/bug-report',
   // signs the dashboard issue dialog's file uploads; session only, like /api/bug-report.
@@ -68,6 +73,8 @@ const INTERNAL_ROUTES = new Set([
   // Site-admin-only hoot policy toggle (session surface, no api-key scope) + alias.
   '/api/sites/{siteId}/hoot-settings',
   '/api/sites/{siteId}/cortex-settings',
+  // the process editor's check_path, session only: it refuses every api key (ADR 0014).
+  '/api/sites/{siteId}/machines/{machineId}/path-check',
   '/api/cron/display-alerts',
   '/api/cron/status-ping',
   '/api/settings/llm-key',

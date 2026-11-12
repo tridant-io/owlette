@@ -3,7 +3,12 @@
  *      that actually grant access, and derives each person's role FROM THE ROW.
  *      It used to query `users where sites array-contains {siteId}` and compute
  *      the per-site role from the GLOBAL role, which reported a real site-admin
- *      as a plain member forever.
+ *      as a plain member forever. each member also carries `swoop`, their own
+ *      swoop mode: null when the role decides (always, on the owner's row), and
+ *      `none` for a malformed value, so a hand edit never reads as a grant. and
+ *      `machineIds`, their machine scope: null for the whole site, else the
+ *      machines they reach, read as the rules read it, so `[]` or a malformed
+ *      value is no machines.
  *
  * POST /api/sites/{siteId}/members  `{uid | email, role}` — writes the member
  *      row through `addMember`, so the requested role is STORED rather than
@@ -12,13 +17,18 @@
  *      knows a colleague's address, not their uid) and resolves through Admin
  *      Auth to the same uid path. Idempotency-Key required. `roleHonored` says
  *      whether the row was actually written at the requested role — adding an
- *      existing member is a 200 no-op, not a promotion.
+ *      existing member is a 200 no-op, not a promotion. the body may also carry
+ *      `swoop` (`none`, `view` or `control`), written on a new row only; the
+ *      no-op writes no mode either. `machineIds`, 1-30 machines of this site,
+ *      makes the new row a scoped member; absent means the whole site. like the
+ *      mode it is written on a new row only, and nobody scopes themselves.
  *
  * Auth (both verbs): `authorizedSiteHandler({ capability: 'SITE_MEMBER_MANAGE' })`,
  * with api-key permissions `['read','admin']` on GET and `['write','admin']` on
  * POST. Site access is membership — a global `admin` role grants nothing here.
  * POST additionally re-checks the capability IN the handler, where the
- * `capability_enforcement` kill switch cannot skip it — see the comment there.
+ * `capability_enforcement` kill switch cannot skip it — see
+ * `refuseWithoutSiteMemberManage` in `_shared.ts`.
  *
  * api-sprint wave 3 track 3B (users-api / site-members).
  */
@@ -35,12 +45,15 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { emitMutation } from '@/lib/auditLogClient';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
-import { Capability, hasCapability } from '@/lib/capabilities';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
+  refuseWithoutSiteMemberManage,
 } from '../../../_shared';
 import { addMember, type AssignableRole } from '@/lib/membership.server';
+import { deriveMachineIds, deriveSwoopMode } from '@/lib/sitePolicy.server';
+import { normalizeMachineIdsInput } from '@/lib/machineAccess';
+import { SWOOP_MODES, type SwoopMode } from '@/lib/swoopMode';
 
 const UID_REGEX = /^[A-Za-z0-9_-]{1,128}$/;
 const VALID_ADD_ROLES = new Set(['member', 'admin']);
@@ -53,6 +66,8 @@ interface AddMemberBody {
   uid?: unknown;
   email?: unknown;
   role?: unknown;
+  swoop?: unknown;
+  machineIds?: unknown;
 }
 
 /** Which identifier the caller supplied; resolved to a uid before any write. */
@@ -69,6 +84,24 @@ interface UserDoc {
 
 /** Per-site standing, read from the row that grants it. */
 type MemberRole = 'owner' | 'admin' | 'member';
+
+/**
+ * a 400 naming each id that is not a machine of this site, or null when every
+ * one is. one getAll, however long the list. PATCH /members/{uid} shares it.
+ */
+export async function refuseUnknownMachines(
+  db: FirebaseFirestore.Firestore,
+  siteId: string,
+  machineIds: readonly string[],
+): Promise<NextResponse | null> {
+  const machines = db.collection('sites').doc(siteId).collection('machines');
+  const snaps = await db.getAll(...machineIds.map((id) => machines.doc(id)));
+  const unknown = machineIds.filter((_, i) => !snaps[i].exists);
+  if (unknown.length === 0) return null;
+  return problemValidation('machineIds must name machines on this site', {
+    'body.machineIds': [`unknown machine: ${unknown.join(', ')}`],
+  });
+}
 
 export const GET = authorizedSiteHandler<RouteParams>({
   capability: 'SITE_MEMBER_MANAGE',
@@ -108,6 +141,8 @@ export const GET = authorizedSiteHandler<RouteParams>({
       role: MemberRole;
       globalRole: string;
       displayName: string | null;
+      swoop: SwoopMode | null;
+      machineIds: readonly string[] | null;
     }> = [];
 
     const activeRows = memberRowsSnap.docs.filter(
@@ -135,6 +170,8 @@ export const GET = authorizedSiteHandler<RouteParams>({
         globalRole: typeof data.role === 'string' ? data.role : 'member',
         displayName:
           typeof data.displayName === 'string' ? data.displayName : null,
+        swoop: deriveSwoopMode(row.data() ?? null, rowRole),
+        machineIds: deriveMachineIds(row.data() ?? null, rowRole),
       });
     });
 
@@ -159,37 +196,17 @@ export const POST = authorizedSiteHandler<RouteParams>({
   try {
     const { siteId } = await routeContext.params;
 
-    // CAPABILITY, RE-CHECKED IN THE HANDLER — deliberately not a duplicate of
-    // the wrapper's check, because the wrapper's is SKIPPED while
-    // `capability_enforcement` is false (the 4h operator break-glass in
-    // `global/security_config`) and SITE_MEMBER_MANAGE is not in
-    // BYPASS_EXEMPT_CAPABILITIES. Browser sessions never reach `requireScope`
-    // either, so during that window a plain site `member` reached this handler
-    // and could write a membership row for any account at any role. Nothing
-    // below stopped it: the owner guard refuses only the OWNER as a target, and
-    // `addMember`'s create() refuses only a target that ALREADY has a row.
-    //
-    // What makes that worse than an ordinary bypass is that the grant OUTLIVES
-    // the window. The added account is a site admin on merit, so it keeps
-    // MACHINE_REMOTE_CONTROL and SWOOP_SETTINGS_MANAGE once the switch is back
-    // on, and can then promote the original caller through the sibling PATCH
-    // with enforcement fully restored. Time-boxed break-glass, permanent admin.
-    //
     // Placed before the body read and before `withIdempotency`: the decision
     // depends on nothing but actor and site, and `withIdempotency` saves
     // whatever the handler returns — a 403 stored under a key would be replayed
     // at a legitimate later call.
-    if (!hasCapability(ctx.actor, Capability.SITE_MEMBER_MANAGE, siteId)) {
-      return problem({
-        type: ProblemType.Forbidden,
-        title: 'forbidden',
-        status: 403,
-        detail:
-          'adding a member requires the SITE_MEMBER_MANAGE capability on this site',
-        instance: `/api/sites/${siteId}/members`,
-        code: 'site_member_manage_required',
-      });
-    }
+    const manageRefusal = refuseWithoutSiteMemberManage(
+      ctx.actor,
+      siteId,
+      'adding a member',
+      `/api/sites/${siteId}/members`,
+    );
+    if (manageRefusal) return manageRefusal;
 
     const parsed = await readAndParseJsonBody(request);
     if (!parsed.ok) return parsed.response;
@@ -252,6 +269,24 @@ export const POST = authorizedSiteHandler<RouteParams>({
           );
         }
 
+        // a new row has no mode to clear, so null is a bad value here, unlike on PATCH
+        const requestedSwoop = SWOOP_MODES.find((mode) => mode === body.swoop);
+        if (body.swoop !== undefined && requestedSwoop === undefined) {
+          return problemValidation('swoop must be none, view or control', {
+            'body.swoop': ['must be one of: none, view, control'],
+          });
+        }
+
+        const scopeInput =
+          body.machineIds === undefined
+            ? undefined
+            : normalizeMachineIdsInput(body.machineIds, { allowNull: false });
+        if (scopeInput && !scopeInput.ok) {
+          return problemValidation(scopeInput.error, { 'body.machineIds': [scopeInput.error] });
+        }
+        // allowNull is off, so a valid list is never null
+        const requestedMachineIds = scopeInput?.value ?? undefined;
+
         // An email is only an alias for a uid — resolve it through Admin Auth,
         // then every downstream step is the uid path unchanged.
         let targetUid: string;
@@ -270,6 +305,20 @@ export const POST = authorizedSiteHandler<RouteParams>({
             }
             throw authErr;
           }
+        }
+
+        // scoping yourself changes the row that decides what you may do, which
+        // PATCH /members/{uid} refuses too (`refuseSelfMembershipChange`)
+        if (requestedMachineIds !== undefined && targetUid === ctx.actor.userId) {
+          return problem({
+            type: ProblemType.Forbidden,
+            title: 'cannot modify your own membership',
+            status: 403,
+            detail:
+              'you cannot set your own machine access on this site; ask another admin on this site',
+            instance: `/api/sites/${siteId}/members`,
+            code: 'cannot_modify_own_membership',
+          });
         }
 
         const db = getAdminDb();
@@ -308,6 +357,11 @@ export const POST = authorizedSiteHandler<RouteParams>({
           });
         }
 
+        if (requestedMachineIds !== undefined) {
+          const unknownMachines = await refuseUnknownMachines(db, siteId, requestedMachineIds);
+          if (unknownMachines) return unknownMachines;
+        }
+
         // Wave 2 task 2.3: through the single writer, which dual-writes the member
         // document and the legacy `sites[]` entry in one batch.
         //
@@ -324,6 +378,8 @@ export const POST = authorizedSiteHandler<RouteParams>({
           siteId,
           uid: targetUid,
           role: assignableRole,
+          swoop: requestedSwoop,
+          machineIds: requestedMachineIds,
           addedBy: ctx.actor.userId,
         });
         if (!added.ok && added.failure.kind !== 'already_member') {
@@ -365,6 +421,8 @@ export const POST = authorizedSiteHandler<RouteParams>({
             method: 'POST',
             verb: 'member_added',
             requestedRole,
+            ...(requestedSwoop !== undefined ? { requestedSwoop } : {}),
+            ...(requestedMachineIds !== undefined ? { requestedMachineIds } : {}),
             roleHonored,
             globalRole: targetGlobalRole,
           },

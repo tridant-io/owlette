@@ -23,13 +23,14 @@ use windows::Win32::System::StationsAndDesktops::{
 
 use crate::clipboard::formats::{desktop_from_name, text_from_utf16};
 use crate::ipc::Desktop;
-use crate::session::{Feature, FeatureRequest, FeatureStatus, Outbox, SessionHandle};
+use crate::session::{Feature, FeatureRequest, FeatureStatus, Outbox, SasSlot, SessionHandle};
 use crate::signal::messages::channel::{Channel, Control};
 
 /// How long an unanswered ctrl+alt+del holds back the next one. The service
 /// answers in milliseconds; one that never does must not leave the menu item
-/// dead for the rest of the session.
-const SAS_ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+/// dead for the rest of the session. The session's slot is held exactly as
+/// long, so the next ask finds it free.
+const SAS_ANSWER_TIMEOUT: Duration = SasSlot::ANSWER_TIMEOUT;
 
 /// How long a raised one holds back the next: the service's own floor, so a
 /// quick repeat is dropped here rather than answered "refused" over the

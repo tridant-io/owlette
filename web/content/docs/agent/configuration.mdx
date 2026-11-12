@@ -261,6 +261,8 @@ dashboard writes include `schedulePresetId` only when a schedule preset is suppl
 
 for an executable that commonly runs many instances at once — `node.exe`, `python.exe`, `TouchDesigner.exe` — `file_path` (the desktop app's `path / args` field) does more than pass an argument: because the value appears in the process's command line, it is what lets owlette identify this entry's process among look-alikes before it has ever launched it. with it blank, owlette does not guess between identical instances — it launches its own instance and manages that. see [managed or inherited](/docs/agent/process-monitoring#managed-or-inherited).
 
+the desktop app warns when a launch target, `path / args` or `cwd` you enter won't launch: it isn't on the machine, it's a folder where a file belongs (a macOS `.app` is fine, and so is a folder in `path / args`) or a file where a folder belongs, it's a network path on Windows, or it's a symbolic link. your entry stays saved either way: **ok** keeps it, and **browse** opens the picker in the nearest folder that exists. arguments and relative paths aren't checked.
+
 ### visibility options
 
 Windows only. the desktop app exposes `Normal` and `Hidden`. the launcher also accepts `Minimized` and `Maximized` when a process entry is edited manually.

@@ -20,11 +20,6 @@ export const metricConfig: Record<MetricType, { label: string; color: string; un
   display: { label: 'Displays', color: 'var(--series-display)', unit: '' }, // display topology, not a time series
 };
 
-/** e.g. "Ethernet_tx_util", "Wi-Fi_rx_util". */
-export function isNetworkMetricKey(key: string): boolean {
-  return key.endsWith('_tx_util') || key.endsWith('_rx_util');
-}
-
 /**
  * Parse a per-NIC key from either family — percent (`_tx_util`/`_rx_util`) or
  * raw bytes (`_tx`/`_rx`) — since MetricsDetailPanel flips between them via

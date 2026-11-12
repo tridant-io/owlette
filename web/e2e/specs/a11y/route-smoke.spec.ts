@@ -1,7 +1,14 @@
 import { test, expect, type Page } from '@playwright/test';
 import { AxeBuilder } from '@axe-core/playwright';
 import { roleState } from '../../helpers/roles';
-import { TEST_SITES, TEST_USERS, seedMachine } from '../../helpers/seed';
+import {
+  TEST_SITES,
+  TEST_USERS,
+  grantMembership,
+  releaseFixtureSite,
+  seedMachine,
+  seedSite,
+} from '../../helpers/seed';
 import {
   clearHootFixture,
   seedHootFixture,
@@ -112,6 +119,7 @@ for (const theme of ['dark', 'light'] as const) {
         ['/deployments', 'deployments'],
         ['/roosts', 'roosts'],
         ['/settings/api-keys', 'api keys'],
+        ['/admin/sites/site-A', 'Site A (Assigned)'],
       ] as const) {
         test(`${route} has no serious/critical axe violations`, async ({ page }) => {
           await page.goto(route);
@@ -119,6 +127,23 @@ for (const theme of ['dark', 'light'] as const) {
           await expectNoSeriousA11yViolations(page);
         });
       }
+
+      // the heading renders before the site list resolves, so the scan waits for the switch
+      test('/admin/swoop has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/swoop');
+        await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeEnabled({
+          timeout: 10_000,
+        });
+        await expectNoSeriousA11yViolations(page);
+      });
+
+      // the heading renders before the list does, so the scan waits for a row
+      test('/admin/sites has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/sites');
+        await expect(page.getByRole('heading', { name: 'sites', exact: true })).toBeVisible({ timeout: 10_000 });
+        await expect(page.getByRole('link', { name: 'settings for Site A (Assigned)' })).toBeVisible();
+        await expectNoSeriousA11yViolations(page);
+      });
 
       test('hoot keyed state has no serious/critical axe violations', async ({ page }) => {
         await seedHootFixture({ userId: TEST_USERS.admin.uid });
@@ -155,6 +180,46 @@ for (const theme of ['dark', 'light'] as const) {
         await composer.pressSequentially('@e2e-cortex');
         await expect(page.getByRole('listbox', { name: /machines to mention/i })).toBeVisible();
         await expectNoSeriousA11yViolations(page);
+      });
+
+      // a site of its own: the search offers people from the admin's other sites,
+      // so on site-A itself the list would be empty. without the site doc the page
+      // says "site not found" and the dialog never renders
+      test.describe('add-member search', () => {
+        const SITE_ID = 'site-a11y-members';
+
+        test.beforeAll(async () => {
+          await seedSite({ id: SITE_ID, name: 'Site A11y (members)', owner: 'someone-else', timezone: 'UTC' });
+          await grantMembership(SITE_ID, TEST_USERS.admin.uid, 'admin');
+        });
+
+        test.afterAll(async () => {
+          await releaseFixtureSite(SITE_ID, TEST_USERS.admin.uid);
+        });
+
+        test('add-member dialog and its list have no serious/critical axe violations', async ({ page }) => {
+          await page.goto(`/admin/sites/${SITE_ID}?section=members`);
+          // the members table behind the dialog has loaded, so the scan never sees it mid-load
+          await expect(page.getByRole('button', { name: `options for ${TEST_USERS.admin.email}` })).toBeVisible({
+            timeout: 10_000,
+          });
+          await page.getByRole('button', { name: 'add member', exact: true }).click();
+          const dialog = page.getByRole('dialog', { name: 'add member' });
+          await expect(dialog).toBeVisible();
+
+          // `member@e2e`, not a bare `e2e`: the dedicated users earlier specs leave on
+          // site-A sort ahead and can push member@e2e.test past the list's six rows
+          await dialog.getByLabel('name or email').pressSequentially('member@e2e');
+          await expect(
+            page
+              .getByRole('listbox', { name: 'people you can add' })
+              .getByRole('option', { name: /member@e2e\.test/, selected: true }),
+          ).toBeVisible();
+          // unscoped, unlike the picker's pass: axe takes an open role=dialog for a
+          // modal and does not fault the page it hides, and the popover is not modal,
+          // so the list is scanned beside the input that drives it, as with the mention list
+          await expectNoSeriousA11yViolations(page);
+        });
       });
     });
 

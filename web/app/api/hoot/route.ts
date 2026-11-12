@@ -75,7 +75,7 @@ interface HootRequestBody {
  * never narrow a turn — a follow-up note quoting `@kiosk-01` is the assistant's
  * own words coming back, not a targeting instruction.
  */
-const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_)/;
+const MACHINE_AUTHORED_MESSAGE_ID = /^(?:followup_msg_|talon_msg_|task_msg_)/;
 
 /**
  * What the request ASKS to target: the new `target.machineIds`, else the legacy
@@ -284,6 +284,7 @@ export async function POST(request: NextRequest) {
       // down; anything the new lock wrote carries its explicit list.
       const outcome = await resolveHootTargets(db, siteId, {
         requested: prior.resolvedMachineIds,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 
@@ -315,6 +316,7 @@ export async function POST(request: NextRequest) {
       const outcome = await resolveHootTargets(db, siteId, {
         requested: requested.machineIds,
         mentions,
+        machineScope: access.standing.machineIds,
       });
       if (!outcome.ok) return targetRefusal(outcome);
 

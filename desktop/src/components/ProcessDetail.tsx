@@ -18,7 +18,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useScrollFade } from '@/hooks/useScrollFade'
 import { launchCopy } from '@/lib/launchCopy'
-import { pickDirectory, pickExecutable, pickFile } from '@/lib/pickers'
+import { PATH_FIELDS, type PathField } from '@/lib/missingPath'
+import { pickPath } from '@/lib/pickers'
 import {
   coerceForm,
   formFromProcess,
@@ -44,7 +45,7 @@ import { cn } from '@/lib/utils'
 
 /**
  * Enter and blur both fire for one "done typing"; drop the second within 100ms
- * rather than writing the file twice (`owlette_gui.py:867-871`).
+ * rather than writing the file twice.
  */
 const SAVE_DEBOUNCE_MS = 100
 
@@ -116,6 +117,9 @@ interface ProcessDetailProps {
   startedAt?: number | null
   /** Persist the seven text fields. Already coerced; the caller only writes. */
   onSave: (form: ProcessForm) => void
+  /** the path fields a save just changed. owned above: this pane remounts per
+   *  process, and the check they start can outlast it. */
+  onPathsEntered?: (processId: string, entries: [PathField, string][]) => void
   onLaunchMode: (mode: LaunchMode) => void
   /** Persist the schedule windows authored in the editor. */
   onSchedules: (schedules: ScheduleBlock[]) => void
@@ -144,13 +148,14 @@ interface ProcessDetailProps {
  *
  * Deferred external refresh: the web app and the service write the same file.
  * External changes apply immediately except to the field under the cursor, which
- * keeps its text until focus leaves (`owlette_gui.py:1434-1448`).
+ * keeps its text until focus leaves.
  */
 export function ProcessDetail({
   process,
   status,
   startedAt = null,
   onSave,
+  onPathsEntered,
   onLaunchMode,
   onSchedules,
   scheduleTimezone = '',
@@ -247,9 +252,13 @@ export function ProcessDetail({
       seeded.current = coerced
       setDraft(coerced)
       onSave(coerced)
+      const entries = PATH_FIELDS.filter((name) => coerced[name] !== onDisk[name]).map(
+        (name): [PathField, string] => [name, coerced[name]],
+      )
+      if (entries.length > 0) onPathsEntered?.(latest.current.id, entries)
       return true
     },
-    [onSave],
+    [onSave, onPathsEntered],
   )
 
   const handleBlur = useCallback(() => {
@@ -272,15 +281,9 @@ export function ProcessDetail({
   }, [draft, pendingRefresh, save])
 
   const browse = useCallback(
-    async (field: 'exe_path' | 'file_path' | 'cwd') => {
+    async (field: PathField) => {
       try {
-        const picked =
-          field === 'exe_path'
-            ? await pickExecutable(draft.exe_path)
-            : field === 'file_path'
-              ? await pickFile(draft.file_path)
-              : await pickDirectory(draft.cwd)
-
+        const picked = await pickPath(field, draft[field])
         if (picked === null) return
         const next = { ...draft, [field]: picked }
         setDraft(next)
@@ -704,7 +707,7 @@ export function ProcessDetail({
               how to run
             </SectionToggle>
             <CollapsibleContent className="col-span-2">
-              {/* Dimmed, not disabled — see the isOff note above. */}
+              {/* Dimmed, not disabled — see the unmanaged note above. */}
               <div
                 className={cn(
                   'grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-x-3 gap-y-3 pt-3 @2xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] @4xl:grid-cols-[7rem_minmax(0,1fr)_7rem_minmax(0,1fr)_7rem_minmax(0,1fr)] [&>*]:transition-opacity',

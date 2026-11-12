@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
 import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, emailDataTable, emailTimestamp, EMAIL_COLORS, SEVERITY_COLORS, METRIC_LABELS, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
@@ -67,8 +67,8 @@ export async function POST(request: NextRequest) {
           const subject = safeEmailSubject(`[${severityLabel}] ${ruleName} — ${machineId}`);
 
           for (const recipient of recipients) {
-            // Skip if user has muted this machine
-            if (recipient.mutedMachines.includes(machineId)) continue;
+            // Skip if user has muted this machine or their machine scope does not reach it
+            if (!recipientWantsMachine(recipient, machineId)) continue;
 
             try {
               const unsubscribeUrl = recipient.userId !== 'fallback'

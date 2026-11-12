@@ -142,30 +142,9 @@ type PollOutcome =
   | { kind: 'error'; status: number; problem: ProblemEnvelope };
 
 export function registerMachineCommands(program: Command): void {
-  const machine =
-    (program.commands.find((c) => c.name() === 'machine') as Command | undefined) ??
-    program.command('machine').description('list + inspect machines + remote control');
-
-  // Overwrite any earlier stub description so help text stays canonical.
-  machine.description('list + inspect machines + remote control');
-
-  // Drop stubs left by earlier file-load ordering, mutation verbs included.
-  for (const verb of [
-    'list',
-    'get',
-    'deployments',
-    'reboot',
-    'shutdown',
-    'screenshot',
-    'live-view',
-  ] as const) {
-    const existing = machine.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = machine.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const machine = program
+    .command('machine')
+    .description('list + inspect machines + remote control');
 
   machine
     .command('list')

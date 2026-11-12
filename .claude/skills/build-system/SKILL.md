@@ -58,7 +58,7 @@ node scripts/sync-versions.js            # show every version surface
 node scripts/sync-versions.js X.Y.Z      # bump them all
 ```
 
-The script's own `VERSION_FILES` / `CARGO_TOMLS` tables are the list (product + agent VERSION, the web and desktop `package.json`, `tauri.conf.json`, the desktop, host and swoop `Cargo.toml`, plus the version strings in `README.md`, `.claude/CLAUDE.md` and `docs/internal/version-management.md`). `firestore.rules` is versioned independently.
+The script's own `VERSION_FILES` / `CARGO_TOMLS` tables are the list (product + agent VERSION, the web and desktop `package.json`, `tauri.conf.json`, the desktop, host and swoop `Cargo.toml`, the two version fields at the top of the web and desktop `package-lock.json`, plus the version strings in `README.md` and `.claude/CLAUDE.md`). `firestore.rules` is versioned independently.
 
 Version → `OWLETTE_VERSION` env var → Inno Setup reads it → installer filename + registry.
 
@@ -85,7 +85,8 @@ So the raw list mixes "still shipping" with "fixed on dev weeks ago".
 - **BLOCKING:** an alert whose vulnerable version is still pinned here (`LIVE`),
   an alert this checkout cannot resolve (`UNRESOLVED`), any open code-scanning
   or secret-scanning alert, a draft/triage advisory, or a Dependabot PR left
-  open past 30 days. A check that cannot run is itself a blocker.
+  open past 30 days whose title names a package with an alert this branch cannot
+  show is safe. A check that cannot run is itself a blocker.
 - **Exit 1 = STOP.** Each blocker gets fixed, dismissed on GitHub with a written
   reason, or explicitly accepted by the user — then re-run with
   `--ack "<key>=<why>"` using only the keys the user named. Every ack requires a
@@ -107,14 +108,17 @@ alerts that were already fixed on `dev` is what made nobody look. The
 
 **IMPORTANT: the changelog MUST be updated before every installer build.** Add a new `## [X.Y.Z] - YYYY-MM-DD` section summarising all changes since the last release. Never build or upload an installer without a matching changelog entry.
 
+**Build before anything is pushed.** Nothing goes to GitHub for a release (no push, PR merge or tag) until all three installers are built, uploaded to dev with `--set-latest` and their downloads verified. The owner set this for 4.1.9 and it has held since: a pushed bump with no installer behind it is a release that does not exist yet. Work on a `release/X.Y.Z` branch in its own worktree, so the bump commit stays local until step 6.
+
 **BOTH changelogs, always.** `docs/changelog.md` is internal; `web/content/docs/changelog.mdx` is the one customers actually read at `/docs/changelog`. They carry the same entries and drift the moment one is updated alone — which is what every checklist that named only the first has been causing.
 
 ```bash
-# 1. Update changelog, bump version, commit, push
+# 1. Update changelog, bump version, commit. Do not push yet (see step 6).
 # Edit docs/changelog.md AND web/content/docs/changelog.mdx → add [X.Y.Z] section to both
 node scripts/sync-versions.js X.Y.Z
-# ignore the next steps it prints (bare `screenshots:desktop`, push to main) — this recipe replaces them
-git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin dev
+# `git add -u`, not `-A`: only the tracked files the bump changed, never another
+# session's untracked work that happens to sit in the checkout
+git add -u && git commit -m "release: X.Y.Z"
 
 # 2. Build installer (~5 min, non-interactive)
 # build_installer_full.bat ends with `pause` and has `pause` on every error
@@ -125,14 +129,17 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # means the .exe is built; check the log on failure.
 #
 #   powershell (foreground/background):
-#     cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
+#     $env:OWLETTE_SIGN = '1'; cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 #
 #   bash:
-#     cd <repo>/agent && cmd //c "build_installer_full.bat" < /dev/null > "$TEMP/installer-build.log" 2>&1
+#     cd <repo>/agent && OWLETTE_SIGN=1 cmd //c "build_installer_full.bat" < /dev/null > "$TEMP/installer-build.log" 2>&1
 #     # (if //c gets mangled by Git Bash, fall back to the powershell cmd /c form above)
 #
 # DO NOT use `cd agent && powershell -Command "& './build_installer_full.bat'"` —
 # the trailing pause will hang non-interactive shells indefinitely.
+# OWLETTE_SIGN=1 is what signs a release (TEC-A4D and TEC-B4A can sign). Without it the
+# build still exits 0 unsigned, and step 4's upload refuses the file. The quick build
+# never signs.
 # Output: agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe
 # The .pkg and .deb come from their own build hosts (above), or download all
 # three from the v* tag's GitHub Release — CI never uploads to Owlette.
@@ -177,6 +184,7 @@ git add -A && git commit -m "chore: bump version to X.Y.Z" && git push origin de
 # Prints each finalize response, then the `files` keys on /api/installer/latest; a
 # failure stops the run and names what is left.
 # Notes default to the version's `## [X.Y.Z]` changelog section (--notes overrides).
+# Notes that went out stale are corrected with --notes-only (no files), never by re-uploading.
 # With installer R2 set on the server the files land on download(-staging).tridant.io/owlette/,
 # immutable (409 installer_published on a re-upload: bump the version); without it,
 # Firebase Storage. --set-latest also registers the release with tridant id and prints a
@@ -192,6 +200,12 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
 # 5. Smoke test — upload success is not release success. Run the runbook's
 # "post-release smoke" section (download per platform, pair a test box, tail
 # service.log and service_host.log).
+
+# 6. Only now: push the release branch, open and merge its PR into dev, then tag
+# vX.Y.Z on the merge commit and push the tag. The tag's CI build makes the GitHub
+# Release; its bytes differ from what dev serves, which is expected.
+# A release worktree has no .claude/.env.local: source the main checkout's copy
+# before step 4.
 ```
 
 **Manual curl fallback** (one file, when the script cannot run): the runbook's "the 3-step api upload (in detail)". Two traps it does not spell out: `grep OWLETTE_API_KEY` also matches `OWLETTE_API_KEY_PROD` (use `grep '^OWLETTE_API_KEY='`), and the server treats an omitted `setAsLatest` as `true`, so a bare POST promotes — the script sends `false` for every file but the last. The route requires an `Idempotency-Key` on the POST and the finalize PUT (not on the storage PUT), and the key needs the `installer=*:write` scope.

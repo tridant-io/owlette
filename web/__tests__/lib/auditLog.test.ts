@@ -75,12 +75,19 @@ jest.mock('@/lib/logger', () => ({
   },
 }));
 
+const metricSpy = jest.fn();
+
+jest.mock('@/lib/securityBoundaryMetrics.server', () => ({
+  emitSecurityBoundaryMetric: (...args: unknown[]) => metricSpy(...args),
+}));
+
 beforeEach(() => {
   setCalls.length = 0;
   setShouldReject = null;
   warnSpy.mockClear();
   errorSpy.mockClear();
   infoSpy.mockClear();
+  metricSpy.mockClear();
 });
 
 // helpers
@@ -102,6 +109,17 @@ function systemEntry(overrides: Partial<AuditEntryInput> = {}): AuditEntryInput 
   return {
     correlationId: 'corr_sys_1',
     actor: { type: 'system', name: 'cortex_autonomous' } as AuditActor,
+    capability: 'MACHINE_EXEC_COMMAND' as Capability,
+    target: { kind: 'machine', id: 'mach-1' },
+    outcome: 'allow',
+    ...overrides,
+  };
+}
+
+function machineEntry(overrides: Partial<AuditEntryInput> = {}): AuditEntryInput {
+  return {
+    correlationId: 'corr_machine_1',
+    actor: { type: 'machine', siteId: SITE, machineId: 'studio-pc-01' },
     capability: 'MACHINE_EXEC_COMMAND' as Capability,
     target: { kind: 'machine', id: 'mach-1' },
     outcome: 'allow',
@@ -260,6 +278,30 @@ describe('writeAuditEntryBlocking', () => {
       .data.actor;
     expect(data.userIdPrefix).toBe('uid_su');
     expect(JSON.stringify(payload)).not.toContain('uid_supersecret_long_id');
+  });
+
+  it('persists a machine actor and labels its decision metric `machine`', async () => {
+    await writeAuditEntryBlocking(SITE, machineEntry());
+    expect(setCalls[0].payload.actor).toEqual({ type: 'machine', siteId: SITE, machineId: 'studio-pc-01' });
+    expect(metricSpy).toHaveBeenCalledWith(
+      'capability_decision_total',
+      1,
+      expect.objectContaining({ labels: expect.objectContaining({ role: 'machine' }) }),
+    );
+  });
+
+  it('logs a machine actor in the bypass line by type and machine id only', async () => {
+    await writeAuditEntryBlocking(SITE, machineEntry({ enforcementBypassed: true }));
+    const [, payload] = warnSpy.mock.calls[0];
+    expect((payload as { data: { actor: unknown } }).data.actor).toEqual({
+      type: 'machine',
+      machineId: 'studio-pc-01',
+    });
+    expect(metricSpy).toHaveBeenCalledWith(
+      'authorization_enforcement_bypass_total',
+      1,
+      expect.objectContaining({ labels: expect.objectContaining({ role: 'machine' }) }),
+    );
   });
 
   it('does not log warn when enforcementBypassed=false', async () => {

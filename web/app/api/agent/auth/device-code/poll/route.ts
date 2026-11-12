@@ -5,7 +5,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
 import { DEVICE_CODE_WRAP_VERSION } from '@/lib/deviceCodeCrypto';
 import { normalizePairPhrase } from '@/lib/pairPhrases';
-import { machineLimitRefusal, stampPairedAt } from '@/lib/pairingPlan.server';
+import { ensureAgentAuthUser, machineLimitRefusal, recordPairing } from '@/lib/pairingPlan.server';
 
 const MINT_CLAIM_LEASE_MS = 60_000;
 
@@ -270,6 +270,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       };
 
       const adminAuth = getAdminAuth();
+      await ensureAgentAuthUser(adminAuth, agentUid);
       const customToken = await adminAuth.createCustomToken(agentUid, claims);
 
       const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY;
@@ -352,7 +353,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return NextResponse.json({ error: 'Invalid pairing phrase' }, { status: 404 });
       }
 
-      await stampPairedAt(result.siteId, claimedMachineId);
+      await recordPairing(result.siteId, claimedMachineId);
 
       return NextResponse.json(
         {
@@ -375,7 +376,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // stamped at handover, not at authorize: an authorize after the installer
     // stopped polling must not leave a machine doc that holds a plan slot.
     if (result.paired) {
-      await stampPairedAt(result.paired.siteId, result.paired.machineId);
+      await recordPairing(result.paired.siteId, result.paired.machineId);
     }
 
     return NextResponse.json(result.body, { status: result.status });

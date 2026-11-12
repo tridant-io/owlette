@@ -181,7 +181,7 @@ new accounts are created as `member` with no site access. promote the first plat
 4. change `role` from `"member"` to `"superadmin"`.
 5. save, then sign out and back in to refresh the dashboard session.
 
-once a superadmin exists, use **admin panel → user management** to promote other users, and give people access to a site from that site's members.
+once a superadmin exists, use **admin panel → user management** to promote other users, and give people access to a site from its members section (admin panel → sites → the site's gear).
 
 ---
 
@@ -197,7 +197,11 @@ roles are **per site**. a person's role on one site says nothing about their rol
 | `admin` | write access on that site: commands, configuration, deployments, roosts, talons, webhooks, membership, machine enrollment, and swoop control and settings |
 | `owner` | everything `admin` can do, plus deleting the site and transferring ownership |
 
-access is granted by a `sites/{siteId}/members/{uid}` document with `status: "active"`. account-level roles are separate:
+access is granted by a `sites/{siteId}/members/{uid}` document with `status: "active"`.
+
+a membership can be limited to some machines: a `machineIds` list on the row, 1 to 30 of the site's machines, is the person's [machine scope](/docs/reference/authentication#machine-scope). a scoped member keeps their role and swoop mode, on those machines only: anyone views them and watches or controls them as their swoop mode allows, and an admin also runs commands and edits their configuration. nothing that spans machines reaches them, whatever their role: the site's settings, members and presets, deployments, roost, talons, webhooks, the audit log, kill, kick and the site's swoop sessions list stay with whole-site members. the owner's row is never limited.
+
+account-level roles are separate:
 
 | account role | meaning |
 |------|--------|
@@ -206,7 +210,7 @@ access is granted by a `sites/{siteId}/members/{uid}` document with `status: "ac
 | `superadmin` | platform admin, with implicit access to every site |
 | `agent` | custom-token access to one site and one machine |
 
-the client rules name the helpers `isSuperadmin()`, `isSiteAdmin(siteId)`, `canAccessSite(siteId)`, `isServiceAccount()` and the agent claim helpers. trusted server routes and the Admin SDK handle server-only collections and control-plane writes.
+the client rules name the helpers `isSuperadmin()`, `isSiteAdmin(siteId)`, `canAccessSite(siteId)`, `canAccessWholeSite(siteId)`, `canAccessMachine(siteId, machineId)`, `isServiceAccount()` and the agent claim helpers. trusted server routes and the Admin SDK handle server-only collections and control-plane writes.
 
 ---
 

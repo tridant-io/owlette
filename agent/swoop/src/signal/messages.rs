@@ -117,7 +117,7 @@ pub enum Message {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         server_time_ms: Option<i64>,
     },
-    /// Server only, to host and doorbell.
+    /// Server only, to the host.
     ViewerJoin {
         viewer: String,
         sid: String,

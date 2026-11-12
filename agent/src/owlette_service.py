@@ -19,6 +19,7 @@ import session_state
 import watchdog_state
 import config_sync
 import configure_site
+import fleet_session
 from command_router import COMMAND_DEFERRED, CommandRouter
 from keep_awake import KeepAwake
 from screenshot_capture import ScreenshotCaptureError, capture_and_upload
@@ -204,6 +205,16 @@ REBOOT_OS_COUNTDOWN_SECONDS = 60
 REBOOT_SUCCESS_DETECTION_WINDOW_SECONDS = 60 * 60
 # who queued the reboot a crash loop asks for, in the logs and on the deferral
 _CRASH_LOOP_QUEUED_BY = 'system:crash_loop'
+
+
+def _seconds(value, default):
+    """A typed config value as seconds, or `default` unless it is a finite,
+    non-negative number. Read at every launch, where a raise ends the main loop."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return default
+    return seconds if 0 <= seconds < float('inf') else default
 
 
 def _inside_active_hours():
@@ -1257,6 +1268,9 @@ class OwletteService:
         self._drift_pending_tick_count = 0
         self._drift_pending_key = None
         self._last_auto_restore_success_key = None
+        # the missing-monitor set auto-restore last parked on, so the parked
+        # event fires once per episode and not on every 30 s tick
+        self._auto_restore_parked_key = None
         # Ticks toward ROOST_SCRUB_CHECK_ITERATIONS; _roost_scrub_thread keeps the
         # scrub single-flight.
         self._roost_scrub_check_counter = 0
@@ -1344,6 +1358,13 @@ class OwletteService:
             _register_pairing_handlers(self._command_router)
         except Exception as e:
             logging.warning(f"Failed to register pairing handlers: {e}")
+
+        # check_path: is a path saved in the dashboard on this machine?
+        try:
+            from path_commands import register_handlers as _register_path_handlers
+            _register_path_handlers(self._command_router)
+        except Exception as e:
+            logging.warning(f"Failed to register path handlers: {e}")
 
         self.firebase_client = None
 
@@ -1842,6 +1863,12 @@ class OwletteService:
         # stop path since 3.0.0. Early, so the streamer's teardown runs
         # alongside the presence flush rather than after it.
         self._stop_swoop()
+
+        # The fleet session file must not outlive the service that keeps it.
+        try:
+            self.fleet_session.withdraw()
+        except Exception as e:
+            logging.debug(f"[SHUTDOWN] fleet session withdraw failed: {e}")
 
         # Every Firestore call below now has 3s to land instead of 30.
         if self.firebase_client:
@@ -2646,8 +2673,16 @@ class OwletteService:
 
     def _try_launch_cortex(self):
         """Launch the Cortex process with cooldown. Mirrors _try_launch_tray() pattern.
-        Returns True if launched (or already running), False if skipped/failed."""
-        if not shared_utils.is_cortex_enabled():
+        Returns True if launched (or already running), False if skipped/failed.
+
+        Off Windows it first brings the access token hoot reads into step, so a
+        launch always finds one and a switched-off or unpaired machine loses it.
+        """
+        config = shared_utils.read_config() or {}
+        enabled = shared_utils.is_cortex_enabled(config)
+        paired = bool(config.get('firebase', {}).get('enabled'))
+        self._publish_cortex_token(enabled and paired)
+        if not enabled:
             return False
 
         if self._is_cortex_alive():
@@ -2673,6 +2708,34 @@ class OwletteService:
                 self._cortex_last_launch_time = now
             logging.debug("Could not launch Cortex (no user session?)")
             return False
+
+    def _publish_cortex_token(self, wanted):
+        """Off Windows, keep the access token hoot reads in step with the daemon's.
+
+        hoot runs as the console user and the token store is the daemon's alone
+        there, so the daemon hands it the one-hour access token: written when it
+        changes, withdrawn when hoot is off or the machine is unpaired.
+        """
+        if sys.platform == 'win32':
+            return
+        import auth_manager
+
+        manager = getattr(self.firebase_client, 'auth_manager', None) if wanted else None
+        current = manager.current_token() if manager else (None, None)
+        if current == self._cortex_token_published:
+            return
+        try:
+            if current[0]:
+                auth_manager.publish_token(*current)
+            else:
+                auth_manager.withdraw_token()
+            self._cortex_token_published = current
+            self._cortex_token_error = None
+        except OSError as e:
+            # retried on every tick, said once per cause
+            if str(e) != self._cortex_token_error:
+                self._cortex_token_error = str(e)
+                logging.warning(f"Could not update hoot's access token: {e}")
 
     def _process_cortex_ipc_commands(self):
         """Hand any pending Cortex IPC commands to the drain worker.
@@ -3124,9 +3187,12 @@ class OwletteService:
         up to an hour, and site members could keep chatting with and running
         tools on a revoked machine through it. A relaunch exits on its own
         once the config carries no site.
+        The fleet session file goes too: it is this machine's leave to act on
+        the site's other machines, good for up to 15 minutes more.
         """
         configure_site.unpair(reason)
         self._stop_swoop()
+        self.fleet_session.withdraw()
         if self._is_cortex_alive():
             try:
                 psutil.Process(self.cortex_pid).terminate()
@@ -3922,14 +3988,18 @@ class OwletteService:
 
         file_path = process.get('file_path', '')
         if file_path:
-            file_path = file_path.replace('/', '\\')
+            # a file when the whole value is one, arguments otherwise, and
+            # arguments reach the program unchanged. quotes and padding come off
+            # only for this check, or quoting a network path or a link would
+            # carry it past the refusal as "arguments".
+            candidate = file_path.strip(' \t\r\n"').replace('/', '\\')
             try:
-                file_path = self._validate_path(file_path, "File path")
+                resolved = self._validate_path(candidate, "File path")
             except ValueError as e:
                 logging.error(f'Error: {e}')
                 return None
-        # If file path exists, leave as-is (could be file or cmd args)
-        file_path = f"{file_path}" if os.path.isfile(file_path) else file_path
+            if os.path.isfile(resolved):
+                file_path = resolved
         logging.info(f"Starting {exe_path}{' ' if file_path else ''}{file_path}...")
 
         cwd = process.get('cwd', None)
@@ -4548,9 +4618,9 @@ class OwletteService:
 
         if not self.reached_max_relaunch_attempts(process, after_crash):
             process_list_id = process['id']
-            delay = float(process.get('time_delay', 0))
+            delay = _seconds(process.get('time_delay'), 0)
 
-            time_to_init = float(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id))
+            time_to_init = _seconds(shared_utils.read_config(keys=['time_to_init'], process_list_id=process_list_id), 0)
 
             last_info = self.last_started.get(process_list_id, {})
             last_time = last_info.get('time')
@@ -4673,9 +4743,15 @@ class OwletteService:
     def handle_process(self, process):
         process_list_id = process['id']
 
-        # Skip processing entirely if this process is locked for an active deployment
-        if process_list_id in self.install_locks:
-            logging.debug(f"Skipping '{process.get('name')}' - install lock active (deployment: {self.install_locks[process_list_id]})")
+        # Skip processing entirely if this process is locked for an active deployment.
+        # read once: the slow worker drops the lock the moment its install ends, and
+        # a test followed by a second read can land either side of that
+        try:
+            locking_deployment = self.install_locks[process_list_id]
+        except KeyError:
+            pass
+        else:
+            logging.debug(f"Skipping '{process.get('name')}' - install lock active (deployment: {locking_deployment})")
             return
 
         last_info = self.last_started.get(process_list_id, {})
@@ -4736,7 +4812,7 @@ class OwletteService:
                 # (TouchDesigner) being double-launched before psutil sees them.
                 last_time = last_info.get('time')
                 if last_time:
-                    time_to_init = max(float(process.get('time_to_init', 0) or TIME_TO_INIT), 60.0)
+                    time_to_init = max(_seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT), 60.0)
                     elapsed = (self.current_time - last_time).total_seconds()
                     if elapsed < time_to_init:
                         return  # Still cooling down, skip this cycle
@@ -4745,7 +4821,7 @@ class OwletteService:
                 # an adopted pid never passed through _record_launch.
                 osadapter.watch_exit(last_pid)
                 last_time = last_info.get('time')
-                time_to_init = float(process.get('time_to_init', 0) or TIME_TO_INIT)
+                time_to_init = _seconds(process.get('time_to_init') or TIME_TO_INIT, TIME_TO_INIT)
                 if last_time and (self.current_time - last_time).total_seconds() < time_to_init:
                     shared_utils.update_process_status_in_json(last_pid, 'LAUNCHING', self.firebase_client, process_id=process_list_id)
                     new_pid = None
@@ -5565,7 +5641,8 @@ class OwletteService:
             with self._config_baseline_lock:
                 self._local_config_mtime = applied_mtime
 
-    def _terminate_processes_for_install(self, close_processes, suppress_projects, deployment_id, cmd_id):
+    def _terminate_processes_for_install(self, close_processes, suppress_projects, deployment_id, cmd_id,
+                                         locked_project_ids=None):
         """Gracefully terminate MANAGED processes and set install locks before
         a deployment.
 
@@ -5577,16 +5654,23 @@ class OwletteService:
         managed entry is logged and skipped: owlette has no business
         terminating processes it does not manage, whatever their image name.
 
+        Every entry it shuts is locked, named by project id or by exe name
+        alike: an entry closed without a lock is relaunched by the monitor's
+        next tick, under the installer.
+
         Args:
             close_processes: List of exe names to close (e.g., ["TouchDesigner.exe"])
             suppress_projects: List of owlette project config IDs to lock from relaunching
             deployment_id: Deployment ID for logging and lock tracking
             cmd_id: Command ID for progress reporting
+            locked_project_ids: List each lock is appended to as it is taken, so the
+                caller still has them all when this raises part-way
 
         Returns:
-            List of project config IDs that were locked (for cleanup in finally block)
+            List of project config IDs that were locked
         """
-        locked_project_ids = []
+        if locked_project_ids is None:
+            locked_project_ids = []
 
         if self.firebase_client:
             self.firebase_client.update_command_progress(cmd_id, 'closing_processes', deployment_id)
@@ -5648,6 +5732,10 @@ class OwletteService:
                 continue
             for entry in matching_entries:
                 entry_id = entry.get('id')
+                if entry_id and entry_id not in locked_project_ids:
+                    self.install_locks[entry_id] = deployment_id
+                    locked_project_ids.append(entry_id)
+                    logging.info(f"Install lock set for project {entry_id} (deployment: {deployment_id})")
                 # Recorded pids only: the tracked pid plus whatever the durable
                 # identity record proves is still ours (they usually coincide;
                 # after a restart only the record survives).
@@ -5677,8 +5765,8 @@ class OwletteService:
             time.sleep(2)
 
         killed_summary = []
-        if suppress_projects:
-            killed_summary.append(f"{len(suppress_projects)} managed project(s) locked")
+        if locked_project_ids:
+            killed_summary.append(f"{len(locked_project_ids)} managed project(s) locked")
         if close_processes:
             killed_summary.append(
                 f"resolved {', '.join(close_processes)} against managed entries")
@@ -5716,10 +5804,20 @@ class OwletteService:
             # enablement toggle inside five seconds would be refused and
             # recorded as a failed command. site_settings_refresh is exempt for
             # the same reason: an admin flipping a site switch twice inside five
-            # seconds must land the second flip too.
+            # seconds must land the second flip too. check_path too: one save asks
+            # about up to three fields, and each folder opened in the browser is one
+            # more, with the route's rate limit and path_commands' slots as the bound.
+            # cancel_installation too: two deployments cancelled inside five seconds
+            # are two installs to stop, and the refused cancel would be recorded
+            # as cancelled while its install carried on. install_software too: the
+            # slow lane already runs installs one at a time, and one that ends
+            # inside five seconds, refused or cancelled, would get the install
+            # queued behind it refused.
             if cmd_type not in ('mcp_tool_call', 'ack_display_topology',
                                 'swoop_session_requested', 'swoop_kill',
-                                'swoop_refresh', 'site_settings_refresh'):
+                                'swoop_refresh', 'site_settings_refresh',
+                                'check_path', 'cancel_installation',
+                                'install_software'):
                 now = time.time()
                 rate_key = f"{cmd_type}:{cmd_data.get('process_id') or cmd_data.get('processId') or cmd_data.get('process_name') or ''}"
                 last_time = self._command_rate_limits.get(rate_key, 0)
@@ -5941,7 +6039,7 @@ class OwletteService:
                 silent_flags = cmd_data.get('silent_flags', '')
                 verify_path = cmd_data.get('verify_path')  # Optional — auto-derived from /DIR if absent
                 timeout_seconds = cmd_data.get('timeout_seconds', 2400)  # Default: 40 minutes
-                expected_sha256 = cmd_data.get('sha256_checksum')  # Optional but recommended
+                expected_sha256 = cmd_data.get('sha256_checksum')  # required: refused below without one
                 deployment_id = cmd_data.get('deployment_id')  # For tracking deployment progress
                 parallel_install = cmd_data.get('parallel_install', False)
 
@@ -5954,6 +6052,15 @@ class OwletteService:
                 if refusal:
                     return refusal
 
+                # Mandatory: without it a hijacked URL or a writable command doc
+                # ships arbitrary elevated code. The third-party install path
+                # used to skip this check.
+                if not expected_sha256:
+                    return (
+                        f"Error: Refusing to install {installer_name} without "
+                        f"sha256_checksum. Re-issue the command with a checksum."
+                    )
+
                 # Auto-derive verify_path from /DIR flag if not explicitly provided
                 if not verify_path and silent_flags:
                     dir_match = re.search(r'/DIR="([^"]+)"', silent_flags, re.IGNORECASE)
@@ -5964,20 +6071,14 @@ class OwletteService:
                         logging.debug(f"Auto-derived verify_path from /DIR: {verify_path}")
 
                 logging.info(f"Starting software installation: {installer_name}")
-                logging.debug(f"URL: {installer_url}")
+                logging.debug(f"URL: {installer_utils.redact_query_strings(installer_url)}")
                 logging.debug(f"Flags: {silent_flags}")
                 logging.debug(f"Timeout: {timeout_seconds} seconds")
-                if expected_sha256:
-                    logging.debug(f"Checksum verification enabled: {expected_sha256[:16]}...")
+                logging.debug(f"Checksum verification enabled: {expected_sha256[:16]}...")
 
                 close_processes = cmd_data.get('close_processes', [])
                 suppress_projects = cmd_data.get('suppress_projects', [])
                 locked_project_ids = []
-
-                if close_processes or suppress_projects:
-                    locked_project_ids = self._terminate_processes_for_install(
-                        close_processes, suppress_projects, deployment_id, cmd_id
-                    )
 
                 temp_installer_path = installer_utils.get_temp_installer_path(installer_name)
 
@@ -5986,23 +6087,21 @@ class OwletteService:
                         self.firebase_client.update_command_progress(cmd_id, 'downloading', deployment_id)
 
                     logging.debug(f"Downloading installer to: {temp_installer_path}")
-                    download_success, actual_installer_path = installer_utils.download_file(installer_url, temp_installer_path)
+                    download_success, actual_installer_path = installer_utils.download_file(
+                        installer_url, temp_installer_path,
+                        should_stop=lambda: installer_utils.cancel_requested(cmd_id),
+                    )
 
                     if not download_success:
-                        return f"Error: Failed to download installer from {installer_url}"
+                        if installer_utils.cancel_requested(cmd_id):
+                            return f"{installer_utils.INSTALL_CANCELLED} during the download"
+                        return (
+                            f"Error: Failed to download installer from "
+                            f"{installer_utils.redact_query_strings(installer_url)}"
+                        )
 
                     # Use the actual path where the file was saved (may differ if file was in use)
                     temp_installer_path = actual_installer_path
-
-                    # Mandatory: without it a hijacked URL or a writable command doc
-                    # ships arbitrary elevated code. The third-party install path
-                    # used to skip this check.
-                    if not expected_sha256:
-                        installer_utils.cleanup_installer(temp_installer_path, force=True)
-                        return (
-                            f"Error: Refusing to install {installer_name} without "
-                            f"sha256_checksum. Re-issue the command with a checksum."
-                        )
 
                     logging.info("Verifying installer checksum...")
                     checksum_valid = installer_utils.verify_checksum(temp_installer_path, expected_sha256)
@@ -6011,14 +6110,34 @@ class OwletteService:
                         return f"Error: Checksum verification failed for {installer_name}. Installation aborted for security."
                     logging.info("[OK] Checksum verification passed")
 
-                    if self.firebase_client:
-                        self.firebase_client.update_command_progress(cmd_id, 'installing', deployment_id)
-
                     # Session 0 has no desktop, so sub-installers (CodeMeter, VC++
                     # redists) hang there — run elevated in the user's session.
                     install_token, install_env = self._get_elevated_install_token()
                     if not install_token:
                         return "Error: No interactive user session available for installation. A user must be logged in."
+
+                    if installer_utils.cancel_requested(cmd_id):
+                        return f"{installer_utils.INSTALL_CANCELLED} before anything was closed"
+
+                    # only now, when nothing but the installer itself can still
+                    # fail: a failed download, a wrong checksum or a machine
+                    # with nobody logged in must not have stopped the show
+                    if close_processes or suppress_projects:
+                        # the close appends each lock to the list as it takes it,
+                        # so one that raises part-way leaves them to the finally
+                        self._terminate_processes_for_install(
+                            close_processes, suppress_projects, deployment_id, cmd_id,
+                            locked_project_ids,
+                        )
+
+                    # the last look and the point of no return, in one step: a
+                    # cancel either gets here first or finds the installer
+                    # launched, and a launched installer is left to finish
+                    if not installer_utils.claim_launch(cmd_id):
+                        return f"{installer_utils.INSTALL_CANCELLED} before the installer ran"
+
+                    if self.firebase_client:
+                        self.firebase_client.update_command_progress(cmd_id, 'installing', deployment_id)
 
                     # Hide existing registry keys so the installer can't detect and
                     # uninstall previous versions.
@@ -6090,23 +6209,29 @@ class OwletteService:
 
             elif cmd_type == 'cancel_installation':
                 installer_name = cmd_data.get('installer_name')
+                deployment_id = cmd_data.get('deployment_id')
+                target = installer_name or deployment_id
 
-                if not installer_name:
-                    return "Error: No installer name provided for cancellation"
+                if not target:
+                    return "Error: No deployment id or installer name provided for cancellation"
 
-                logging.info(f"Cancellation requested for: {installer_name}")
+                logging.info(f"Cancellation requested for: {target}")
 
-                success, message = installer_utils.cancel_installation(
-                    installer_name,
-                    self.active_installations
-                )
+                # nothing is killed here. an install that has not launched its
+                # installer stops itself at its next look; a launched installer
+                # is left to finish, because ending one part-way can leave the
+                # machine without the program at all
+                cancelled, launched = installer_utils.request_cancel(installer_name, deployment_id)
+                if cancelled:
+                    logging.info(f"Installation cancelled: {target}")
+                    return f"Installation cancelled: {target}"
 
-                if success:
-                    logging.info(f"Installation cancelled: {installer_name}")
-                    return f"Installation cancelled: {installer_name}"
+                if launched:
+                    message = f"{target} is already installing and will finish"
                 else:
-                    logging.warning(f"Cancellation failed: {message}")
-                    return f"Cancellation failed: {message}"
+                    message = f"No active installation found for {target}"
+                logging.warning(f"Cancellation failed: {message}")
+                return f"Cancellation failed: {message}"
 
             elif cmd_type == 'uninstall_software':
                 if sys.platform == 'darwin':
@@ -6914,6 +7039,7 @@ class OwletteService:
             self._drift_pending_tick_count = 0
             self._drift_pending_key = None
             self._last_auto_restore_success_key = None
+            self._auto_restore_parked_key = None
             return
 
         drift_key = self._assigned_drift_key(drift_details)
@@ -7134,18 +7260,36 @@ class OwletteService:
             })
             return
 
-        # Gate 5b: an assigned monitor that is powered off can never be applied
+        # gate 5b: an assigned monitor that is not live can never be applied
         # (apply_topology returns MISSING_MONITORS pre-SetDisplayConfig), and
         # retrying every tick emits a `display_apply_failed` audit each time.
-        # `display_monitor_removed` already records the absence, so skip
-        # silently; drift is re-evaluated once the monitor returns.
+        # park, and say so once per missing set: a powered-off panel returns
+        # on its own, but a panel that re-enumerated under a new id (#29)
+        # never does, and without the event the dashboard showed drift with
+        # no sign that auto-restore had stopped trying
         live_hashes = {
             m.get('edidHash')
             for m in (new_profile.get('monitors') or [])
             if isinstance(m, dict) and m.get('edidHash')
         }
-        if any(h not in live_hashes for h in assigned_hashes):
+        missing_live = sorted(h for h in assigned_hashes if h not in live_hashes)
+        if missing_live:
+            parked_key = ','.join(missing_live)
+            if parked_key != getattr(self, '_auto_restore_parked_key', None):
+                self._auto_restore_parked_key = parked_key
+                first_missing = next(
+                    m for m in assigned_monitors if m.get('edidHash') == missing_live[0]
+                )
+                self._emit_display_event('display_auto_restore_parked', 'warning', {
+                    'eventType': 'display_auto_restore_parked',
+                    'severity': 'warning',
+                    'reason': 'assigned_monitor_absent',
+                    # the stored entry: the panel is not live to describe itself
+                    'monitor': self._display_monitor_summary(first_missing),
+                    'missingFromLive': missing_live,
+                })
             return
+        self._auto_restore_parked_key = None
 
         # Gate 6: >= 2 consecutive drift ticks, so a cable wiggle can't fire it.
         if self._drift_pending_tick_count < 2:
@@ -8748,7 +8892,7 @@ class OwletteService:
         logging.info(f"Current version: {shared_utils.APP_VERSION}")
         logging.info(f"Target version: {target_version}")
         logging.info("="*60)
-        logging.debug(f"Installer URL: {installer_url}")
+        logging.debug(f"Installer URL: {installer_utils.redact_query_strings(installer_url)}")
         logging.debug(f"Checksum: {expected_sha256[:16]}...")
 
         os_family = shared_utils.get_os_family_arch()[0]
@@ -8876,7 +9020,9 @@ class OwletteService:
             )
 
             if not download_success:
-                raise Exception(f"Failed to download installer after 3 retries from {installer_url}")
+                raise Exception(
+                    f"Failed to download installer after 3 retries from "
+                    f"{installer_utils.redact_query_strings(installer_url)}")
 
             temp_installer_path = actual_path
             logging.debug(f"Installer downloaded to: {temp_installer_path}")
@@ -9555,6 +9701,17 @@ class OwletteService:
         # Cortex (local AI agent) launch tracking
         self._cortex_last_launch_time = 0
         self._cortex_launch_cooldown = 30
+        # off windows: the (token, expiry) last published for hoot, empty so the
+        # first tick acts and withdraws a stale one, and the last write failure
+        self._cortex_token_published = ()
+        self._cortex_token_error = None
+
+        # This machine's fleet session (ADR 0017), fetched off the loop and kept
+        # where the logged-in user's MCP script reads it. The client is looked
+        # up on every refresh: a re-pair replaces it.
+        self.fleet_session = fleet_session.FleetSessionKeeper(
+            lambda: getattr(self, 'firebase_client', None)
+        )
 
         # Before Firebase init, which can take seconds — the user needs immediate
         # feedback that the service is starting.
@@ -9835,6 +9992,8 @@ class OwletteService:
                 self._try_launch_cortex()
 
                 self._process_cortex_ipc_commands()
+
+                self.fleet_session.tick()
 
                 self._process_privileged_requests()
 

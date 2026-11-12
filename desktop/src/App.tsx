@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { AppMenu } from '@/components/AppMenu'
+import { ConnectAgentDialog } from '@/components/ConnectAgentDialog'
 import { ConfirmDialog, type ConfirmRequest } from '@/components/ConfirmDialog'
 import { DropConfirm } from '@/components/DropConfirm'
 import { DropOverlay } from '@/components/DropOverlay'
 import { JoinSiteDialog } from '@/components/JoinSiteDialog'
 import { OwletteEye } from '@/components/landing/OwletteEye'
 import { LeaveSiteDialog } from '@/components/LeaveSiteDialog'
+import { MissingPathDialog } from '@/components/MissingPathDialog'
 import { ProcessDetail } from '@/components/ProcessDetail'
 import { ProcessList, type ProcessAction } from '@/components/ProcessList'
 import { ReportIssueDialog } from '@/components/ReportIssueDialog'
@@ -24,6 +26,7 @@ import { useAppStates } from '@/hooks/useAppStates'
 import { useDetailSections } from '@/hooks/useDetailSections'
 import { useFileDrop } from '@/hooks/useFileDrop'
 import { useLaunchFlag } from '@/hooks/useLaunchFlag'
+import { useMissingPath, type MissingPathWarning } from '@/hooks/useMissingPath'
 import { useOwletteConfig } from '@/hooks/useOwletteConfig'
 import { useRestartPrompt } from '@/hooks/useRestartPrompt'
 import { useServiceHealth } from '@/hooks/useServiceHealth'
@@ -39,6 +42,8 @@ import {
   type DropCard,
 } from '@/lib/dropQueue'
 import { classifyOptions, tauriFsProbe } from '@/lib/fsProbe'
+import { withArgs } from '@/lib/missingPath'
+import { pickPath } from '@/lib/pickers'
 import {
   ARG_PAIR,
   accessibilityGranted,
@@ -95,7 +100,7 @@ function fileNameOf(path: string): string {
  * The owlette configuration window: a view over three files in
  * `%PROGRAMDATA%\Owlette` owned by the python service, edited read-modify-write.
  * No cloud client here on purpose — the service is the only thing that talks to
- * owlette and uploads the config it reads from disk (`owlette_gui.py:2403-2408`).
+ * owlette and uploads the config it reads from disk.
  */
 function App() {
   const config = useOwletteConfig()
@@ -110,13 +115,16 @@ function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<ConfirmRequest | null>(null)
   const [dropped, setDropped] = useState<DropCard[]>([])
-  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | null>(null)
+  const [menuDialog, setMenuDialog] = useState<'join' | 'leave' | 'report' | 'agent' | null>(null)
   const [host, setHost] = useState<string | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
   // Owned here, not in the pane: the pane remounts per process
   // (`key={selected.id}`), so the disclosures would shut themselves when
   // comparing two entries. Persisted per user beside the window layout.
   const detailSections = useDetailSections()
+  // here for the same reason: a check can take seconds, and the operator may have
+  // moved to another process, or removed this one, by the time it answers.
+  const { warnings: pathWarnings, check: checkPaths, dismiss: dismissPathWarning } = useMissingPath()
 
   // Guarded on purpose: closing the dialog calls `pairLaunch.dismiss()`, which
   // flips `armed` back to false and re-runs this effect. Without the `if`, that
@@ -132,15 +140,13 @@ function App() {
   }, [])
 
   const [startOnLogin, setStartOnLogin] = useState<boolean | null>(null)
-  useEffect(() => {
-    startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
-  }, [])
 
   // macOS Screen Recording and Accessibility, re-read whenever the window
   // comes back: Screen Recording takes effect on relaunch, but the banner
   // should at least stop showing once the user has switched it on and come back.
   // Accessibility takes effect at once, so its notice also re-reads it on a
-  // timer while it shows.
+  // timer while it shows. start on login too: the tray toggles the same
+  // shortcut while the window is hidden, and hiding does not unmount it.
   const [screenRecording, setScreenRecording] = useState<boolean | null>(null)
   const [accessibility, setAccessibility] = useState<boolean | null>(null)
   const readAccessibility = useCallback(() => {
@@ -155,6 +161,7 @@ function App() {
       screenRecordingGranted().then(setScreenRecording, () => setScreenRecording(null))
       readAccessibility()
       readClipboardSharing()
+      startupLinkEnabled().then(setStartOnLogin, () => setStartOnLogin(null))
     }
     read()
     window.addEventListener('focus', read)
@@ -335,6 +342,38 @@ function App() {
     [editSelected],
   )
 
+  // a warning stays current only while its process still holds the value it is about.
+  const pathWarning =
+    pathWarnings.find((warning) => {
+      const value = processes.find((process) => process.id === warning.subject)?.[warning.field]
+      return typeof value === 'string' && value.trim() === warning.value
+    }) ?? null
+
+  /**
+   * browse from a warning writes to the process the warning came from, which may
+   * not be the one selected, and only the one field: `edit` re-reads the rest.
+   */
+  const handlePathWarningBrowse = useCallback(
+    async (warning: MissingPathWarning) => {
+      dismissPathWarning(warning)
+      let picked: string | null
+      try {
+        picked = await pickPath(warning.field, warning.folder ?? undefined)
+      } catch (cause) {
+        toast.error('could not open the file picker', { description: message(cause) })
+        return
+      }
+      if (picked === null) return
+
+      const value = withArgs(picked, warning.rest)
+      const written = await edit('could not save the process', (document) =>
+        updateProcess(document, warning.subject, (process) => ({ ...process, [warning.field]: value })),
+      )
+      if (written) checkPaths(warning.subject, [[warning.field, value]])
+    },
+    [checkPaths, dismissPathWarning, edit],
+  )
+
   /**
    * Leaving `off` needs a name and an exe — refuse rather than write a launch mode
    * the service cannot act on. Same wording as the legacy GUI.
@@ -354,7 +393,7 @@ function App() {
       // whatever mode it is switched to, so kill/restart stay offered until it
       // is actually gone (the service prunes dead pids). Only a dead row gets
       // the intent written over it — `INACTIVE` for off, `QUEUED` while the
-      // service picks it up — as `owlette_gui.on_launch_mode_change` did.
+      // service picks it up — as the python GUI did before 3.0.0 removed it.
       const pid = livePidForProcess(appStates.states, selected.id)
       if (pid === null) return
       const status = statusForProcess(appStates.states, selected.id)
@@ -497,6 +536,7 @@ function App() {
             onJoinSite={() => setMenuDialog('join')}
             onLeaveSite={() => setMenuDialog('leave')}
             onReportIssue={() => setMenuDialog('report')}
+            onConnectAgent={() => setMenuDialog('agent')}
             startOnLogin={startOnLogin}
             onStartOnLoginChange={(next) => {
               void setStartupLink(next).then(setStartOnLogin, (cause: unknown) =>
@@ -600,6 +640,7 @@ function App() {
                 sections={detailSections.sections}
                 onSectionToggle={detailSections.toggle}
                 onSave={handleSaveForm}
+                onPathsEntered={checkPaths}
                 onLaunchMode={handleLaunchMode}
                 onSchedules={(schedules: ScheduleBlock[]) =>
                   editSelected('could not save the schedule', (process) =>
@@ -637,7 +678,15 @@ function App() {
           hostname={host}
           starting={health.starting}
           // macos: launchd keeps the agent running; this app cannot start it
-          onStart={IS_MAC ? undefined : () => void health.start()}
+          onStart={
+            IS_MAC
+              ? undefined
+              : () => {
+                  void health.start().catch((cause: unknown) =>
+                    toast.error('could not start the service', { description: message(cause) }),
+                  )
+                }
+          }
           onJoin={() => setMenuDialog('join')}
         />
 
@@ -666,9 +715,16 @@ function App() {
           onJoin={() => setMenuDialog('join')}
         />
         <ReportIssueDialog open={menuDialog === 'report'} onClose={() => setMenuDialog(null)} />
+        <ConnectAgentDialog open={menuDialog === 'agent'} onClose={() => setMenuDialog(null)} />
         <RestartCountdown open={restartPrompt.armed} onClose={restartPrompt.dismiss} />
 
         <ConfirmDialog request={confirm} onClose={() => setConfirm(null)} />
+        <MissingPathDialog
+          missing={pathWarning}
+          processName={String(processes.find((process) => process.id === pathWarning?.subject)?.name ?? '')}
+          onClose={() => pathWarning && dismissPathWarning(pathWarning)}
+          onBrowse={(warning) => void handlePathWarningBrowse(warning)}
+        />
         <DropConfirm
           card={dropCard}
           remaining={dropped.length}

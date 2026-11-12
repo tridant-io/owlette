@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Loader2, Monitor, RotateCw, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -8,64 +8,25 @@ import { toast } from '@/lib/toast';
 import { formatRelativeTime } from '@/lib/timeUtils';
 import { activeHoursGuardOf, powerCommandParams, type PowerCommandOptions } from '@/lib/activeHours';
 import { useMachineOperations } from '@/hooks/useMachineOperations';
+import { useSiteMachines, type SiteMachine } from '@/hooks/useSiteMachines';
 import { RemoveMachineDialog } from '@/components/RemoveMachineDialog';
 import { MachinePowerConfirm, usePowerCommand } from '@/components/MachinePowerConfirm';
 
-interface SiteMachine {
-  id: string;
-  name: string;
-  online: boolean;
-  lastHeartbeat: string | null;
-  agentVersion: string | null;
-  /** keep screens awake as the agent reports it; null before 4.1.1. only `held` is read here. */
-  displayAwake?: { held?: boolean } | null;
-  /** what tells whether the agent would refuse a restart inside active hours; null where it reports none. */
-  osFamily?: string | null;
-  capabilities?: { activeHoursGuard?: number } | null;
-  activeHours?: unknown;
-  machineTimezone?: string | null;
-}
-
 interface SiteMachinesListProps {
   siteId: string;
-  /** Report the fetched machine count so the parent row can display it. */
-  onCountLoaded?: (siteId: string, count: number) => void;
 }
 
 /**
- * Expanded machine list for one site row in the manage-sites dialog.
- *
- * Uses GET /api/sites/{siteId}/machines (admin-SDK, scope-checked server side)
- * rather than a client Firestore listener, so superadmins can inspect sites
- * they aren't members of without loosening rules. Mounted only while expanded,
- * so collapsing unmounts and re-expanding refetches.
+ * the machines section of a site's settings page (`/admin/sites/{siteId}?section=machines`).
  */
-export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProps) {
-  const [machines, setMachines] = useState<SiteMachine[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export function SiteMachinesList({ siteId }: SiteMachinesListProps) {
+  const { machines, error, refresh: fetchMachines } = useSiteMachines(siteId);
   // the target outlives the dialog's close, so its closing frames keep the same machine and choice
   const [restartTarget, setRestartTarget] = useState<SiteMachine | null>(null);
   const [restartOpen, setRestartOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<SiteMachine | null>(null);
   const { removeMachineFromSite, removing } = useMachineOperations(siteId);
   const power = usePowerCommand(siteId);
-
-  const fetchMachines = useCallback(async () => {
-    setError(null);
-    try {
-      const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/machines`);
-      if (!response.ok) throw new Error(`failed to load machines (${response.status})`);
-      const body = (await response.json()) as { machines: SiteMachine[] };
-      setMachines(body.machines);
-      onCountLoaded?.(siteId, body.machines.length);
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'failed to load machines');
-    }
-  }, [siteId, onCountLoaded]);
-
-  useEffect(() => {
-    void fetchMachines();
-  }, [fetchMachines]);
 
   const handleConfirmRestart = async (options: PowerCommandOptions) => {
     if (!restartTarget) return;
@@ -100,11 +61,12 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
     if (!removeTarget) return;
     try {
       await removeMachineFromSite(removeTarget.id);
-      toast.success(`Machine "${removeTarget.name}" removed from site successfully!`);
+      toast.success('machine removed', { description: `${removeTarget.name} is no longer on this site.` });
       setRemoveTarget(null);
       await fetchMachines();
     } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : 'failed to remove machine');
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error('could not remove the machine', { description: message });
     }
   };
 
@@ -152,8 +114,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
         {machines.map((m) => (
           <li
             key={m.id}
-            className="grid items-center gap-3 px-3 py-1.5"
-            style={{ gridTemplateColumns: 'minmax(0,2fr) minmax(0,1.3fr) minmax(0,1fr) 64px' }}
+            className="grid grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_64px] items-center gap-3 px-3 py-1.5 sm:grid-cols-[minmax(0,2fr)_minmax(0,1.3fr)_minmax(0,1fr)_64px]"
           >
             <span className="flex min-w-0 items-center gap-2">
               <span
@@ -171,7 +132,7 @@ export function SiteMachinesList({ siteId, onCountLoaded }: SiteMachinesListProp
             <span className={`min-w-0 truncate text-[11px] ${m.online ? 'text-success dark:text-success/90' : 'text-muted-foreground'}`}>
               {lastSeen(m)}
             </span>
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
+            <span className="hidden min-w-0 truncate font-mono text-[11px] text-muted-foreground sm:block">
               {m.agentVersion ? `v${m.agentVersion}` : '—'}
             </span>
             <span className="flex items-center justify-end gap-0.5">

@@ -8,6 +8,13 @@
  * menu learns the machine is locked. Without control, the live machine keeps
  * process configuration but trades restart, kill and restart approval for a
  * "part of core" link. Every machine with no plan passed renders as before.
+ *
+ * Who may act is per machine too (machine scope, ADR 0016): an admin limited
+ * to some machines gets commands and process editing on those, and the menu
+ * learns they are not a whole-site admin; a member gets neither.
+ *
+ * Someone whose swoop mode on the site is none: both views tell the menu, which
+ * then offers no swoop (MachineContextMenu.test.tsx).
  */
 
 import React from 'react';
@@ -24,10 +31,17 @@ jest.mock('@/components/ui/tooltip', () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
+// the viewer's row on the site: a whole-site admin unless a case says otherwise
+let mockAccess: { role: 'admin' | 'member'; machineScope: string[] | null } = { role: 'admin', machineScope: null };
+const mockIsSiteAdmin = () => mockAccess.role === 'admin' && mockAccess.machineScope === null;
 jest.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({
     userPreferences: { temperatureUnit: 'C', timeDisplayMode: 'machine', timezone: undefined, mutedMachines: [] },
-    isSiteAdmin: () => true,
+    isSiteAdmin: mockIsSiteAdmin,
+    isMachineAdmin: (_siteId: string, machineId: string) =>
+      mockAccess.role === 'admin' && (mockAccess.machineScope === null || mockAccess.machineScope.includes(machineId)),
+    machineScope: () => mockAccess.machineScope,
+    siteRole: () => mockAccess.role,
   }),
 }));
 
@@ -76,7 +90,7 @@ const FREE_SITE: SitePlan = {
   swoopLocked: true,
 };
 
-function renderCards(sitePlan?: SitePlan) {
+function renderCards(sitePlan?: SitePlan, props: Partial<React.ComponentProps<typeof MachineCardView>> = {}) {
   return render(
     <MachineCardView
       machines={[machine('kiosk-1'), machine('kiosk-2')]}
@@ -93,6 +107,7 @@ function renderCards(sitePlan?: SitePlan) {
       onSetLaunchMode={jest.fn()}
       onRemoveMachine={jest.fn()}
       onMetricClick={jest.fn()}
+      {...props}
     />,
   );
 }
@@ -106,6 +121,7 @@ const menuPropsFor = (machineId: string) =>
 beforeEach(() => {
   mockMenuProps.mockClear();
   mockSparkline.mockClear();
+  mockAccess = { role: 'admin', machineScope: null };
 });
 
 describe('machine card outside the plan', () => {
@@ -178,37 +194,38 @@ describe('machine card outside the plan', () => {
   });
 });
 
-describe('machine row outside the plan', () => {
-  function renderRow(planLimit?: number | null, onToggleExpanded = jest.fn(), controlLocked?: boolean) {
-    render(
-      <table>
-        <tbody>
-          <MachineRow
-            machine={machine('kiosk-2')}
-            isExpanded
-            currentSiteId={SITE_ID}
-            siteTimezone="UTC"
-            siteTimeFormat="24h"
-            userPreferences={{ temperatureUnit: 'C' }}
-            isSiteAdmin
-            planLimit={planLimit}
-            controlLocked={controlLocked}
-            onToggleExpanded={onToggleExpanded}
-            onEditProcess={jest.fn()}
-            onCreateProcess={jest.fn()}
-            onKillProcess={jest.fn()}
-            onRestartProcess={jest.fn()}
-            onSetLaunchMode={jest.fn()}
-            onRemoveMachine={jest.fn()}
-          />
-        </tbody>
-      </table>,
-    );
-    return onToggleExpanded;
-  }
+/** a list row as the dashboard renders it, which passes the site-wide flag from useAuth. */
+function renderRow(props: Partial<React.ComponentProps<typeof MachineRow>> = {}) {
+  const onToggleExpanded = jest.fn();
+  render(
+    <table>
+      <tbody>
+        <MachineRow
+          machine={machine('kiosk-2')}
+          isExpanded
+          currentSiteId={SITE_ID}
+          siteTimezone="UTC"
+          siteTimeFormat="24h"
+          userPreferences={{ temperatureUnit: 'C' }}
+          isSiteAdmin={mockIsSiteAdmin()}
+          onToggleExpanded={onToggleExpanded}
+          onEditProcess={jest.fn()}
+          onCreateProcess={jest.fn()}
+          onKillProcess={jest.fn()}
+          onRestartProcess={jest.fn()}
+          onSetLaunchMode={jest.fn()}
+          onRemoveMachine={jest.fn()}
+          {...props}
+        />
+      </tbody>
+    </table>,
+  );
+  return onToggleExpanded;
+}
 
+describe('machine row outside the plan', () => {
   it('spans the metric columns with the notice and drops the disclosure and processes', () => {
-    const onToggleExpanded = renderRow(1);
+    const onToggleExpanded = renderRow({ planLimit: 1 });
 
     const notice = screen.getByTestId('machine-plan-notice');
     expect(notice.closest('td')).toHaveAttribute('colspan', '5');
@@ -223,7 +240,7 @@ describe('machine row outside the plan', () => {
   });
 
   it('without control, trades restart and kill for the part-of-core link in both layouts, keeping edit', () => {
-    renderRow(undefined, jest.fn(), true);
+    renderRow({ controlLocked: true });
 
     // the wide and the compact rail are both in the dom; css shows one.
     expect(screen.getAllByTestId('control-upgrade')).toHaveLength(2);
@@ -234,7 +251,7 @@ describe('machine row outside the plan', () => {
   });
 
   it('renders as before with no plan', () => {
-    renderRow(undefined);
+    renderRow();
 
     expect(screen.queryByTestId('machine-plan-notice')).toBeNull();
     expect(screen.queryByTestId('control-upgrade')).toBeNull();
@@ -243,5 +260,87 @@ describe('machine row outside the plan', () => {
     expect(screen.getByText('show.exe')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'restart show.exe' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'kill show.exe' })).toBeInTheDocument();
+  });
+});
+
+describe('machine scope on both views', () => {
+  /** a restart under way, which the status pill offers to cancel. */
+  const counting = (machineId: string) =>
+    ({ ...machine(machineId), rebooting: true, rebootScheduledAt: Math.floor(Date.now() / 1000) + 120 }) as Machine;
+
+  type Access = typeof mockAccess;
+  const SCOPED_ADMIN: Access = { role: 'admin', machineScope: ['kiosk-1'] };
+  const MEMBER: Access = { role: 'member', machineScope: null };
+
+  it('gives an admin limited to kiosk-1 its commands and process editing there, and the menu no site-wide items', () => {
+    mockAccess = SCOPED_ADMIN;
+    renderCards(undefined, { machines: [counting('kiosk-1'), counting('kiosk-2')], onCancelRestart: jest.fn() });
+
+    const mine = card('kiosk-1');
+    expect(mine.getByTestId('machine-status-cancel-pill')).toBeInTheDocument();
+    expect(mine.getByTestId('reboot-pending-approve')).toBeInTheDocument();
+    expect(mine.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();
+    expect(mine.getByRole('group', { name: 'launch mode for show.exe' })).toBeInTheDocument();
+    expect(mine.getByRole('button', { name: 'edit show.exe' })).toBeInTheDocument();
+    expect(mine.getByRole('button', { name: 'restart show.exe' })).toBeInTheDocument();
+    expect(mine.getByRole('button', { name: /add process/ })).toBeInTheDocument();
+    expect(menuPropsFor('kiosk-1')).toMatchObject({ isSiteAdmin: false, isMachineAdmin: true });
+
+    // the dashboard never lists a machine outside the machine scope; were one there, it offers nothing
+    const other = card('kiosk-2');
+    expect(other.queryByTestId('machine-status-cancel-pill')).toBeNull();
+    expect(other.queryByTestId('reboot-pending-approve')).toBeNull();
+    expect(other.queryByRole('button', { name: 'edit show.exe' })).toBeNull();
+    expect(menuPropsFor('kiosk-2')).toMatchObject({ isSiteAdmin: false, isMachineAdmin: false });
+  });
+
+  it('gives a member none of them', () => {
+    mockAccess = MEMBER;
+    renderCards(undefined, { machines: [counting('kiosk-1')], onCancelRestart: jest.fn() });
+
+    const theirs = card('kiosk-1');
+    expect(theirs.getByRole('img', { name: /^restarting, \d{2}:\d{2} remaining$/ })).toBeInTheDocument();
+    expect(theirs.queryByTestId('machine-status-cancel-pill')).toBeNull();
+    expect(theirs.getByTestId('reboot-pending-banner')).toBeInTheDocument();
+    expect(theirs.queryByTestId('reboot-pending-approve')).toBeNull();
+    expect(theirs.queryByTestId('reboot-pending-dismiss')).toBeNull();
+    expect(theirs.queryByRole('group', { name: 'launch mode for show.exe' })).toBeNull();
+    expect(theirs.queryByRole('button', { name: 'edit show.exe' })).toBeNull();
+    expect(theirs.queryByRole('button', { name: 'restart show.exe' })).toBeNull();
+    expect(theirs.queryByRole('button', { name: /add process/ })).toBeNull();
+    expect(menuPropsFor('kiosk-1')).toMatchObject({ isSiteAdmin: false, isMachineAdmin: false });
+  });
+
+  it.each<[string, Access, boolean]>([
+    ['an admin limited to it', { role: 'admin', machineScope: ['kiosk-2'] }, true],
+    ['an admin limited to another machine', SCOPED_ADMIN, false],
+    ['a member', MEMBER, false],
+  ])('gives %s the same on a list row', (_label, access, acts) => {
+    mockAccess = access;
+    renderRow({ machine: counting('kiosk-2'), onCancelRestart: jest.fn() });
+
+    for (const found of [
+      screen.queryByTestId('machine-status-cancel-pill'),
+      screen.queryByRole('group', { name: 'launch mode for show.exe' }),
+      screen.queryByRole('button', { name: 'edit' }),
+      screen.queryByRole('button', { name: 'more options for show.exe' }),
+      screen.queryByRole('button', { name: 'restart show.exe' }),
+      screen.queryByRole('button', { name: /add process/ }),
+    ]) {
+      if (acts) expect(found).toBeInTheDocument();
+      else expect(found).toBeNull();
+    }
+    expect(menuPropsFor('kiosk-2')).toMatchObject({ isSiteAdmin: false, isMachineAdmin: acts });
+  });
+});
+
+describe('swoop mode on both views', () => {
+  it.each([true, false])('hands the menu noSwoop %p on a card and on a list row', (noSwoop) => {
+    renderCards(undefined, { noSwoop });
+    expect(menuPropsFor('kiosk-1')).toMatchObject({ noSwoop });
+
+    mockMenuProps.mockClear();
+    renderRow({ noSwoop });
+    expect(menuPropsFor('kiosk-2')).toMatchObject({ noSwoop });
   });
 });

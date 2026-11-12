@@ -30,13 +30,13 @@ jobs:
     # node --test. It should finish inside a couple of minutes.
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # Node 22: functions/package.json pins `engines.node: 22` (the nodejs22
       # Cloud Functions runtime), and firebase-admin 14 requires >=22.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           cache: npm
@@ -53,12 +53,8 @@ jobs:
         working-directory: functions
         run: npm run build
 
-      # No lint step: functions/package.json carries a vestigial
-      # `lint: eslint --ext .ts src/` script, but eslint is not a dependency
-      # there and there is no eslint config in functions/, so it exits 1 on
-      # "'eslint' is not recognized". Wiring a gate onto a script that cannot
-      # run would just be a red X. Adding eslint to functions/ is a separate
-      # call (it means a new dependency).
+      # No lint step: functions' `lint` script is `tsc --noEmit`, which the
+      # build above already covers.
       - name: test
         working-directory: functions
         run: npm test

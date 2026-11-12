@@ -1,7 +1,8 @@
 /**
- * Typed access to the Rust host. Every Tauri command has exactly one wrapper
- * here and nothing else calls `invoke` directly, so a rename in
- * `src-tauri/src/commands.rs` breaks the build instead of failing at runtime.
+ * Typed access to the Rust host. A Tauri command's wrappers live in one file,
+ * here or beside the feature it serves (`agentCli.ts`, `issueAttachments.ts`),
+ * and nothing else calls `invoke` directly, so a renamed command in
+ * `src-tauri/src/commands.rs` has one file to change.
  *
  * Mirrors the python service's file seam: JSON reads/writes go through the
  * `Global\OwletteJsonFileMutex` named mutex and land atomically; the three
@@ -21,12 +22,6 @@ export const OWLETTE_FILES = {
 
 /** Discriminant carried by a file-changed event. */
 export type OwletteFile = 'config' | 'app_states' | 'service_status'
-
-/**
- * The service rewrites `service_status.json` on a 30 s throttle, so older than
- * this means nothing is writing it, not that it is slow.
- */
-export const SERVICE_STATUS_STALE_SECONDS = 120
 
 /** Event names emitted by the host (see `src-tauri/src/lib.rs`). */
 const EVENT_FILE_CHANGED = 'owlette://file-changed'
@@ -66,10 +61,18 @@ export interface StatusFileInfo {
   exists: boolean
   /** Seconds since the last write, when the file exists. */
   ageSecs: number | null
-  /** True when missing or older than {@link SERVICE_STATUS_STALE_SECONDS}. */
+  /**
+   * True when missing or older than two minutes (`STATUS_STALE_AFTER` in
+   * `service_ctl.rs`, the one copy): the service rewrites the file on a 30 s
+   * throttle, so older means nothing is writing it, not that it is slow.
+   */
   stale: boolean
 }
 
+/**
+ * windows: the SCM's state. linux: systemd's ActiveState, passed through.
+ * macos: `running` or `stopped`. `unknown` when the service is not installed.
+ */
 export type ServiceState =
   | 'running'
   | 'stopped'
@@ -78,14 +81,39 @@ export type ServiceState =
   | 'continue_pending'
   | 'pause_pending'
   | 'paused'
+  | 'active'
+  | 'reloading'
+  | 'inactive'
+  | 'failed'
+  | 'activating'
+  | 'deactivating'
+  | 'maintenance'
+  | 'refreshing'
   | 'unknown'
 
+/**
+ * windows: the SCM's start type. linux: systemd's UnitFileState, passed
+ * through. macos: always `launchd`. `unknown` when it cannot be read.
+ */
 export type ServiceStartType =
   | 'auto_start'
   | 'on_demand'
   | 'disabled'
   | 'system_start'
   | 'boot_start'
+  | 'enabled'
+  | 'enabled-runtime'
+  | 'linked'
+  | 'linked-runtime'
+  | 'alias'
+  | 'masked'
+  | 'masked-runtime'
+  | 'static'
+  | 'indirect'
+  | 'generated'
+  | 'transient'
+  | 'bad'
+  | 'launchd'
   | 'unknown'
 
 export interface ServiceStatus {
@@ -98,8 +126,11 @@ export interface ServiceStatus {
 }
 
 export interface ServiceCommandOutcome {
-  /** `scm` issued directly, `elevated` via a UAC prompt, `noop` already there. */
-  method: 'scm' | 'elevated' | 'noop' | 'systemd'
+  /**
+   * `scm` issued directly, `elevated` via a UAC prompt, `noop` already there,
+   * `systemd` through systemctl on linux, `seam` asked of the daemon on macos.
+   */
+  method: 'scm' | 'elevated' | 'noop' | 'systemd' | 'seam'
   /**
    * State before the request. An elevated start only confirms the shell
    * accepted it, so callers poll {@link serviceStatus} for the result.
@@ -116,14 +147,6 @@ export interface TerminateOutcome {
   windowsClosed: number
   imagePath: string | null
 }
-
-/** Absolute path of the owlette data root (`%PROGRAMDATA%\Owlette`). */
-export function owletteDataRoot(): Promise<string> {
-  return invoke<string>('owlette_data_root')
-}
-
-/** Argument the service passes to ask for a tray icon with no window. */
-export const ARG_TRAY = '--tray'
 
 /** Argument the service passes when a process has exhausted its relaunch budget. */
 export const ARG_RESTART_PROMPT = '--restart-prompt'
@@ -171,6 +194,17 @@ export function hostname(): Promise<string> {
   return invoke<string>('hostname')
 }
 
+export type PathStatus = 'file' | 'folder' | 'missing' | 'unknown' | 'file-link' | 'folder-link' | 'broken-link'
+
+/** whether a path is on this machine; anything that keeps it from saying is `unknown`, never `missing`. */
+export async function pathStatus(path: string): Promise<PathStatus> {
+  try {
+    return await invoke<PathStatus>('path_status', { path })
+  } catch {
+    return 'unknown'
+  }
+}
+
 /** Whether the run-on-login startup shortcut exists. */
 export function startupLinkEnabled(): Promise<boolean> {
   return invoke<boolean>('startup_link_enabled')
@@ -187,6 +221,15 @@ export function swoopViewerInstalled(): Promise<boolean> {
  */
 export function openSwoopViewer(): Promise<void> {
   return invoke<void>('open_swoop_viewer')
+}
+
+/**
+ * the interpreter and the script an mcp client starts to reach hoot from this
+ * machine, in that order; null where this machine cannot be the acting side of
+ * hoot mcp yet.
+ */
+export function hootMcpCommand(): Promise<string[] | null> {
+  return invoke<string[] | null>('hoot_mcp_command')
 }
 
 /** macOS's answer on Screen Recording for this app; null off macOS. */
@@ -283,18 +326,32 @@ export function serviceRestart(): Promise<ServiceCommandOutcome> {
 }
 
 /**
+ * What the service recorded about the process it bound to a pid, at launch or
+ * adoption (`read_process_identity` in `agent/src/shared_utils.py`).
+ */
+export interface RecordedIdentity {
+  /** psutil's `create_time`, unix seconds, exactly as the service wrote it. */
+  createTime: number
+  /** The image it started from; null checks the creation time alone. */
+  exe: string | null
+}
+
+/**
  * Close a process gracefully (WM_CLOSE, then terminate), but only if the pid is
- * still running `expectedExe` — a recycled pid rejects rather than killing an
- * unrelated process.
+ * still running `expectedExe` and, when there is a record, is still the process
+ * the service recorded — a recycled pid rejects rather than killing an
+ * unrelated process, even one running the same exe.
  */
 export function terminatePid(
   pid: number,
   expectedExe: string,
+  recorded: RecordedIdentity | null,
   gracefulTimeoutMs?: number,
 ): Promise<TerminateOutcome> {
   return invoke<TerminateOutcome>('terminate_pid', {
     pid,
     expectedExe,
+    recorded,
     gracefulTimeoutMs: gracefulTimeoutMs ?? null,
   })
 }

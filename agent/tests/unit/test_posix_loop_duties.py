@@ -140,11 +140,13 @@ def test_the_hoot_tick_degrades_when_nobody_is_signed_in(monkeypatch, caplog):
 
     svc = SimpleNamespace(
         cortex_pid=None,
+        firebase_client=None,
+        _cortex_token_published=(None, None),
         _cortex_last_launch_time=0.0,
         _cortex_launch_cooldown=0,
     )
     for name in ('_is_cortex_alive', 'launch_python_script_as_user',
-                 '_spawn_as_console_user'):
+                 '_spawn_as_console_user', '_publish_cortex_token'):
         setattr(svc, name, _bound(name, svc))
 
     with caplog.at_level(logging.DEBUG):
@@ -719,7 +721,8 @@ def test_a_deployment_resolves_its_close_names_against_the_managed_entries(
     # The negative control: folded, the name became `kiosk-app` and the entry
     # `\opt\kiosk\kiosk-app`, which share no basename — nothing was closed.
     assert terminated == [(4242, exe)]
-    assert locked == []
+    # held down for the install, like an entry ticked by id
+    assert locked == ['kiosk']
 
 
 def test_a_live_managed_process_is_adopted_rather_than_launched_again(
@@ -788,11 +791,13 @@ def test_the_hoot_launcher_does_not_resolve_the_seat_on_every_tick(monkeypatch):
 
     svc = SimpleNamespace(
         cortex_pid=None,
+        firebase_client=None,
+        _cortex_token_published=(None, None),
         _cortex_last_launch_time=0.0,
         _cortex_launch_cooldown=30,
     )
     for name in ('_is_cortex_alive', 'launch_python_script_as_user',
-                 '_spawn_as_console_user'):
+                 '_spawn_as_console_user', '_publish_cortex_token'):
         setattr(svc, name, _bound(name, svc))
     tick = _bound('_try_launch_cortex', svc)
 

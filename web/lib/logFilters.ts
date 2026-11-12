@@ -26,13 +26,21 @@ export interface ActionFilterPlan {
  * not have to enumerate the catalogue to mean "don't narrow anything" — and so
  * does a selection that covers the whole catalogue, which is the same query with
  * 47 redundant disjunctions.
+ *
+ * firestore caps a query at 30 disjunctions in total, not 30 per clause, so an
+ * action `in` beside a machine `in` gets floor(30 / machines) values; the
+ * caller passes that share as `maxInValues`.
  */
-export function planActionFilter(selected: string[], totalOptions: number): ActionFilterPlan {
+export function planActionFilter(
+  selected: string[],
+  totalOptions: number,
+  maxInValues = FIRESTORE_IN_LIMIT,
+): ActionFilterPlan {
   if (selected.length === 0) return { inValues: null, clientSide: false };
   if (totalOptions > 0 && selected.length >= totalOptions) {
     return { inValues: null, clientSide: false };
   }
-  if (selected.length <= FIRESTORE_IN_LIMIT) return { inValues: selected, clientSide: false };
+  if (selected.length <= maxInValues) return { inValues: selected, clientSide: false };
   return { inValues: null, clientSide: true };
 }
 

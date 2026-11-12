@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, type RestartSchedule } from '@/hooks/useFirestore';
 import { toast } from '@/lib/toast';
 
@@ -63,7 +64,8 @@ function ApplyScheduleToMachinesDialogBody({
   currentMachineId,
   schedule,
 }: Omit<ApplyScheduleToMachinesDialogProps, 'open'>) {
-  const { machines, updateRestartSchedule } = useMachines(siteId);
+  const { machineScope } = useAuth();
+  const { machines, updateRestartSchedule } = useMachines(siteId, machineScope(siteId));
   const [selected, setSelected] = useState<Set<string>>(() => new Set([currentMachineId]));
   const [applying, setApplying] = useState(false);
 

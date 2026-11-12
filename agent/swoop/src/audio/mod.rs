@@ -200,7 +200,8 @@ mod live {
         /// thread exists, and a machine that has not been asked must not be
         /// reported as one without audio.
         endpoint: AtomicU8,
-        /// §5's `mute`, which a watcher may send. Read by the encode loop: it
+        /// §5's `mute` as the session settles it: on once the session has seen
+        /// a `mute` and no viewer in it is listening. Read by the encode loop: it
         /// stops putting packets on the wire while the frame clock keeps
         /// running, so the timestamps on the other side of an unmute are still
         /// contiguous. The browser mutes its own element on the same click,

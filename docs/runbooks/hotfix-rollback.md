@@ -115,14 +115,25 @@ Signals favoring mark-broken:
 - You need to stop additional machines from taking it.
 - Customers already updated cannot be downgraded by command.
 Agent rollback is demotion plus forward-fix.
-Use `setAsLatest:false` or the current finalize call that demotes to a known-good prior version.
+Demote with `POST /api/installer/{version}/set-latest` on the known-good prior version (recipe under "agent" below).
 `min-active-versions >= 2` prevents deleting the only version.
 Known gap:
-- `setAsLatest:false` rollback procedure not documented.
 - Agent fleet self-update kill switch undocumented.
 - Roost has `sites/{siteId}.roostEnabled`; agent equivalent UNKNOWN.
 ## per-surface rollback recipes
 Before commands, confirm current branch, target environment, bad SHA, known-good SHA, and who is watching verification.
+### machine scope trap (4.1.28 on)
+Code from before 4.1.28 ignores `machineIds` on member rows, so any rollback past it widens every scoped member to the whole site at once.
+Check first (`--env=dev` for dev):
+```bash
+node scripts/check-membership-read-path.mjs --env=prod --list-scoped
+```
+While it lists any row:
+- Never roll the web back by redeploying an older Railway deployment.
+- Never let the Vercel standby serve older code: a failover to it is a rollback too.
+- Never restore rules older than 2.12.0.
+Remove the scoped members first, with the `DELETE /api/sites/{siteId}/members/{uid}` the script prints for each row (the owner's call, and mutating).
+Only once the list is empty: revert the web, then the rules, then the usage function (`getUsageSummaryHttp`).
 ### web (Railway)
 Rollback model: revert the offending commit on `dev` or `main`, push, and Railway auto-redeploys.
 Use revert when the bad commit is isolated:
@@ -207,6 +218,7 @@ firebase deploy --only firestore:rules
 ```
 Migration ordering trap:
 - Rule changes paired with data migrations cannot be rolled back out-of-order.
+- Rules older than 2.12.0 widen every scoped member: see "machine scope trap" above.
 - Live admins can lose access if rules are restored before compatible data state.
 - See `scripts/README.md:111-114`.
 After deploy:
@@ -239,11 +251,13 @@ R2 warning:
 - Do not "fix" the prefix without coordinating R2 migration.
 ### agent (installed customer machines)
 Rollback model: no force-downgrade fleet command. Demote the bad release, then ship a higher fixed version for machines already updated.
-Demote bad release:
+Demote bad release by pointing `latest` back at the known-good version: **set as latest** on its row in `/admin/installers`, `owlette installer set-latest <good-version>`, or the API with an `installer=*:admin` key (superadmin-minted) or a superadmin session:
 ```bash
-# Use setAsLatest:false or the current finalize call that demotes to a known-good prior version.
-# Exact command is currently undocumented.
+curl -s -X POST "https://owlette.app/api/installer/<good-version>/set-latest" \
+  -H "x-api-key: <key with installer=*:admin>" \
+  -H "Idempotency-Key: installer-set-latest-<good-version>-$(date +%s)"
 ```
+It refuses a version that is missing or soft-deleted. On dev it also registers the version with tridant id, which yanks the releases above it, and the download host refuses a re-upload of a file it already holds (`409 installer_published`); prod does neither until it is promoted to 4.x. Either way, never re-upload the good version to demote.
 Forward-fix:
 ```bash
 git status
@@ -262,7 +276,7 @@ Agent warnings:
 - Never import `firebase_admin`.
 - Never log OAuth tokens.
 - Never modify the firebase section of `config.json` during remote update.
-- No blocking operations in the 10 second loop.
+- No blocking operations in the 5 second loop.
 - No reconnection logic outside `ConnectionManager`.
 - Never read, log, or commit `.tokens.enc`.
 Installer warning:
@@ -352,7 +366,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 | # | fact | hotfix consequence |
 |---|------|--------------------|
 | 1 | `OwletteService` has no constructor: `agent/src/owlette_service.py` `_init_state()` is the single place instance attributes are set, and `agent/src/owlette_runner.py` builds the instance with `object.__new__` and calls it. | Any new `self._foo` goes in `_init_state()`. The two-copy version of this was bitten 3 times before the second copy was deleted. |
-| 2 | Main loop is 10 seconds at `agent/src/owlette_service.py:6557`. `_upload_metrics()` is the recurring heartbeat, not `_update_presence`. Adaptive: about 5s GUI, 30s monitored procs, 120s idle. Dashboard checks `online && heartbeatAge < 300s`. | Do not strip `online` or `lastHeartbeat` from `_upload_metrics()`. |
+| 2 | Main loop is 5 seconds (`SLEEP_INTERVAL` in `agent/src/owlette_service.py`). `_upload_metrics()` is the recurring heartbeat, not `_update_presence`. Adaptive: about 5s GUI, 30s monitored procs, 120s idle. Dashboard checks `online && heartbeatAge < 300s`. | Do not strip `online` or `lastHeartbeat` from `_upload_metrics()`. |
 | 3 | `ConnectionManager` backoff: `BACKOFF_BASE=30s`, `BACKOFF_MAX=3600s`, `BACKOFF_JITTER=0.5`, `FATAL_ERROR_BACKOFF=3600s`, `WATCHDOG_INTERVAL=10s` at `agent/src/connection_manager.py:225-234`. | Older "5 minute" docs refer to recovery probe cadence, not backoff cap. Backoff has 1 hour ceiling and never gives up. |
 | 4 | Agent uses a custom Firestore REST client and never imports `firebase_admin`. Auth is Firebase ID token custom claims `{role:'agent', site_id, machine_id}`. Agents do not have `users/{uid}` docs. | Do not debug agent auth by looking for user docs or adding Admin SDK. |
 | 5 | `.tokens.enc` is machine-bound to the machine binding alone — MachineGuid on Windows, IOPlatformUUID on macOS, `/etc/machine-id` on Linux. The hostname term was dropped when identity moved to `config/machine_id`, so a rename no longer bricks the store; another machine still cannot read it. A store written under the old derivation is re-encrypted on first load and the original is kept beside it as `.tokens.enc.v1` for one minor. | Re-pair via device code on transfer. Never read, log, or commit it. Rolling the agent back below that change: rename `.tokens.enc.v1` over `.tokens.enc` first, or the old build cannot decrypt the store — but the copy is never refreshed, so once the agent has refreshed once (hourly, 5-minute grace on the superseded token) the rename restores a dead refresh token and the 401 clears both files: copy `.tokens.enc` aside first and expect a re-pair. `cortex.apiKeyEncrypted` in `config.json` is re-encrypted in place with no copy kept, so re-provision the hoot key from the dashboard after any such rollback. |
@@ -362,7 +376,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 | 9 | `currentEnv()` reads `ROOST_ENV`, then `RAILWAY_ENVIRONMENT`, then `RAILWAY_PUBLIC_DOMAIN`. Default is `dev`. | Never default to `prod`; `ROOST_ENV` explicit override wins. |
 | 10 | R2 keys still use `project-manifests/{roostId}/{versionId}` after manifest -> version rename. Migration deferred. | Do not "fix" the prefix without coordinating R2 migration. |
 | 11 | `Idempotency-Key` required on `/api/installer/upload` for `POST` and `PUT`. Skipped for streaming responses by `428c78b`. | Do not remove idempotency when debugging upload retries. |
-| 12 | Agent dev restart sequence is `CLAUDE.md:181-188`: taskkill GUI, service restart as admin, relaunch GUI. GUI-only edits skip service restart. | Use the correct sequence or you may verify stale service behavior. |
+| 12 | Agent dev restart sequence is in `.claude/CLAUDE.md` (agent dev testing workflow): close the desktop app by PID, restart `OwletteService` elevated, and the service relaunches the app. | Use the correct sequence or you may verify stale service behavior. |
 ## landmines: don't do this
 ### files not to touch
 - `web/components/ui/*`: auto-generated.
@@ -373,7 +387,7 @@ Lesson: every install command must stay aligned or one workflow drifts.
 - Never import `firebase_admin`.
 - Never log OAuth tokens.
 - Never modify the firebase section of `config.json` during remote update.
-- No blocking operations in the 10 second loop.
+- No blocking operations in the 5 second loop.
 - No reconnection logic outside `ConnectionManager`.
 - Never assume interactive-user paths match LocalSystem paths.
 - Never set a new `self._foo` anywhere but `OwletteService._init_state()`.
@@ -399,24 +413,13 @@ Lesson: every install command must stay aligned or one workflow drifts.
 - Do not make kitchen-sink commits.
 - Do not revert before reading whether the commit contains unrelated good code.
 - Do not "log warning and proceed" on installer, updater, or execution paths.
-- Tag discipline lapsed since `v2.0.47`; do not assume tags tell the full release story.
+- Tags are reliable only from `v4.1.5` on (4.1.12 never shipped). Earlier releases, prod's 3.3.6 among them, are mostly untagged: find a prod release by its merge commit on `main`. A tag's CI build rolls nothing out either; agents run what the `latest` pointer names.
 ## restart sequence for agent dev
-Use this when testing service-affecting agent changes.
-GUI-only edits skip service restart.
-### 1. kill the gui
-```powershell
-taskkill /IM Owlette.exe /F
-```
-If the executable name differs, kill the GUI process by its actual process name.
-### 2. restart the service as admin
-Run from an elevated shell:
-```powershell
-Restart-Service Owlette
-```
-If the service name differs in the local install, use the actual service name.
-### 3. relaunch the gui
-Start the GUI again after the service is running.
-Confirm GUI connects, service logs show fresh process start, heartbeat resumes, and metrics upload uses current config.
+Use this when testing service-affecting agent changes. It is the sequence in `.claude/CLAUDE.md` (agent dev testing workflow).
+1. Close the desktop app by the `owlette-desktop.exe` PID in `C:\ProgramData\Owlette\tmp\tray.pid`, never by image name.
+2. Restart the service: `powershell -Command "Start-Process cmd -ArgumentList '/c net stop OwletteService && net start OwletteService' -Verb RunAs -Wait"`.
+3. The service relaunches the desktop app on its next status check; start `C:\ProgramData\Owlette\app\owlette-desktop.exe --tray` yourself only if you will not wait.
+Confirm the service log shows a fresh start, heartbeat resumes, and metrics upload uses current config.
 ## post-fix verification
 Do not close the incident when the code merges.
 Close it when production signals recover.
@@ -454,11 +457,9 @@ Known gap:
 These are currently undocumented and a hotfix author would otherwise have to discover during an incident.
 Do not speculate around them.
 - Cherry-pick / hotfix-on-main playbook not formalized.
-- `setAsLatest:false` rollback procedure not documented.
 - Agent fleet self-update kill switch undocumented.
 - Roost has `sites/{siteId}.roostEnabled`; agent equivalent UNKNOWN.
 - Branch-protection rules unknown.
-- Tag discipline lapsed since `v2.0.47`.
 - Migration rollback SOP not written.
 - Sentry-context-for-hotfixes runbook doesn't exist.
 - No pre-flight `setAsLatest` confirmation gate.
@@ -466,7 +467,6 @@ Do not speculate around them.
 - Customer comms protocol on hotfix not in any doc.
 - Reboot-scheduler "fired against my dev machine" guard is memory-only, not a code-level guard.
 Maintainer input needed:
-- Exact `setAsLatest:false` command or finalize API call.
 - Whether an agent fleet kill switch exists.
 - Branch-protection constraints for hotfix-on-main.
 - Migration rollback ordering SOP.

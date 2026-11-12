@@ -3,27 +3,33 @@
 /**
  * the picture, and the surface everything else overlays.
  *
- * gate g1 chose the rtp media track, so the stage is a `<video>` element rather
+ * gate g1 chose the rtp media track, so the picture is a `<video>` element rather
  * than the canvas the plan's arm A would have drawn into. `video/receiver.ts`
  * owns that element — it attaches the track, sets `srcObject`, mutes it for
  * autoplay and runs the single `requestVideoFrameCallback` chain. this
  * component only places it and hands the hook the ref.
+ *
+ * over the video lies smooth scaling's canvas, which the presenter draws a
+ * picture shown below 1:1 on and hides otherwise. while it draws, it sets the
+ * video to opacity 0 under it (`video/smooth.ts` says why); it takes no
+ * pointer, so input still lands on the stage.
  *
  * the wrapper is what input capture binds to, which is why it is focusable and
  * why the fullscreen/keyboard-lock gesture in the toolbar targets it. input
  * capture itself is attached by the `input` feature in `lib/swoop/features.ts`
  * — this component must not attach a second one.
  *
- * **`object-contain` on the video is load-bearing.** a `<video>` whose aspect
- * ratio does not match its box letterboxes, and `session.contentRect()` derives
- * the picture's box from exactly this fit and this (default, centred) position.
- * input capture normalises against that rect, not the element's — normalising
- * against the element makes `0..1` span the black bars and every pointer
- * position lands offset. changing the fit or the object-position here without
- * changing `contentRect` breaks clicks on every non-matching aspect ratio.
+ * **the video's own box is the picture's box.** the video sits in an area, the
+ * stage's content box, and `useSwoopView` writes its left, top, width and
+ * height from `layoutPicture` (`lib/swoop/view.ts`): whole device pixels,
+ * snapped or sharp. `session.contentRect()` is that element's rect, so input,
+ * touch and the overlays read the one box the picture is drawn in, and the bars
+ * around it are the area's. giving the video a size or position of its own here,
+ * or a fit other than `object-fill`, puts the picture somewhere input does not
+ * think it is.
  */
 
-import { useCallback, useEffect, useId, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -33,6 +39,7 @@ import { readMouseCapture, subscribeMouseCapture } from '@/lib/swoop/mouseCaptur
 import { isViewerApp } from '@/lib/swoop/viewerApp';
 import type { SwoopSessionState, SwoopStallRecovery } from '@/hooks/useSwoopSession';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { useSwoopView } from '@/hooks/useSwoopView';
 import type { SwoopNoPath } from '@/lib/swoop/peer';
 
 export interface SwoopStageProps {
@@ -42,6 +49,10 @@ export interface SwoopStageProps {
   error?: string | null;
   /** seconds until the next automatic reconnect, while one is scheduled. */
   retryIn?: number | null;
+  /** the machine said it is restarting or updating; this speaks for the stage until its picture is back. */
+  restarting?: boolean;
+  /** the path under a session with a picture is down, so what shows is its last frame. */
+  linkLost?: boolean;
   /**
    * the api's code for a refusal that is final; `swoop_disabled` says where to
    * turn swoop on, `plan_required` where to upgrade.
@@ -57,6 +68,8 @@ export interface SwoopStageProps {
   stall?: SwoopStallRecovery;
   stageRef: RefObject<HTMLDivElement | null>;
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** smooth scaling's canvas, over the video. */
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   /**
    * where keyboard focus goes when it leaves the stage — escape twice, see
    * `InputCapture.onEscapeTwice`. without it the stage only lets focus go.
@@ -138,6 +151,8 @@ export function SwoopStage({
   state,
   error = null,
   retryIn = null,
+  restarting = false,
+  linkLost = false,
   refusal = null,
   settingsHref = null,
   upgradeHref = null,
@@ -145,11 +160,14 @@ export function SwoopStage({
   stall = 'none',
   stageRef,
   videoRef,
+  canvasRef,
   onLeave,
   children,
 }: SwoopStageProps) {
   const [locked, setLocked] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const areaRef = useRef<HTMLDivElement | null>(null);
+  useSwoopView({ videoRef, areaRef, session });
   // in the app the way back from a settled notice is the picker
   const inApp = useViewerAppPlatform() !== null;
   // the way out, said on each entry into fullscreen and only where it is not
@@ -223,7 +241,11 @@ export function SwoopStage({
   const recovering = stall === 'reattaching' || stall === 'reconnecting';
   // an ended or failed session is not connecting: it says why, and the way on.
   const settled = state === 'ended' || state === 'error';
+  // a machine that said it is restarting speaks for the stage, unless the network is the problem.
+  const restartNotice = restarting && !noPath && state !== 'connected' && stall === 'none';
   const swoopOff = refusal === 'swoop_disabled';
+  // only a refused create sets this (a refused lease ends as ended, on its own sentence): the session never started.
+  const noSwoopAccess = refusal === 'capability_missing';
   // the site's plan leaves swoop out, so its switch would not help and an upgrade would.
   const planLocked = refusal === 'plan_required';
   // the picture behind a stall notice is the frozen frame, so it sits on a wash of the stage.
@@ -240,6 +262,7 @@ export function SwoopStage({
     // by day, the night page at night.
     <div
       ref={stageRef}
+      data-testid="swoop-stage"
       tabIndex={-1}
       role={capture ? 'application' : undefined}
       aria-label={capture ? 'remote screen' : undefined}
@@ -247,13 +270,12 @@ export function SwoopStage({
       onPointerDown={onPointerDown}
       className="dark relative h-full w-full overflow-hidden bg-swoop-stage outline-none touch-none overscroll-none select-none [-webkit-touch-callout:none] [&:fullscreen]:bg-black"
     >
-      <video
-        ref={videoRef}
-        muted
-        playsInline
-        className="h-full w-full object-contain"
-        aria-label="remote screen"
-      />
+      {/* the area is in flow, so the phone keyboard's padding on the stage shrinks it. the
+          video's box is useSwoopView's alone: max-w-none keeps preflight's max-width off it */}
+      <div ref={areaRef} data-testid="swoop-area" className="relative h-full w-full">
+        <video ref={videoRef} muted playsInline className="absolute max-w-none object-fill" aria-label="remote screen" />
+        <canvas ref={canvasRef} aria-hidden className="pointer-events-none absolute inset-0 size-full" />
+      </div>
       {recovering && (
         <p role="status" className={washed}>
           <Loader2 className="size-6 animate-spin" aria-hidden />
@@ -269,7 +291,21 @@ export function SwoopStage({
           </span>
         </p>
       )}
-      {state !== 'connected' && !settled && stall === 'none' && (
+      {restartNotice && (
+        <p role="status" className={NOTICE}>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          machine is restarting
+          <span className={NOTICE_DETAIL}>swoop reconnects when it&apos;s back.</span>
+        </p>
+      )}
+      {linkLost && state === 'connected' && stall === 'none' && (
+        <p role="status" className={washed}>
+          <Loader2 className="size-6 animate-spin" aria-hidden />
+          connection lost
+          <span className={NOTICE_DETAIL}>trying to reach this machine again.</span>
+        </p>
+      )}
+      {!restartNotice && state !== 'connected' && !settled && stall === 'none' && (
         <p className={NOTICE}>
           <Loader2 className="size-6 animate-spin" aria-hidden />
           {noPath ? "can't reach this machine from your network" : 'connecting'}
@@ -278,16 +314,16 @@ export function SwoopStage({
           )}
         </p>
       )}
-      {settled && stall === 'none' && (
+      {!restartNotice && settled && stall === 'none' && (
         <p role="alert" className={`${NOTICE} px-4 text-center`}>
-          {state === 'ended' ? 'session ended' : error}
+          {state === 'ended' ? 'session ended' : noSwoopAccess ? "you can't use swoop on this site" : error}
           {state === 'ended' && error && <span className={NOTICE_DETAIL}>{error}</span>}
           {/* a session that failed after finding no path keeps saying which network to look at */}
           {noPath && <span className={NOTICE_DETAIL}>{noPathDetail(noPath)}</span>}
           {retryIn !== null && <span className={NOTICE_DETAIL}>reconnecting in {retryIn} s…</span>}
           {swoopOff && (
             <span className={NOTICE_DETAIL}>
-              {settingsHref ? 'turn it on in site settings.' : 'ask a site owner or admin to turn it on.'}
+              {settingsHref ? 'turn it on in swoop settings.' : 'ask a site owner or admin to turn it on.'}
             </span>
           )}
           {planLocked && (
@@ -295,12 +331,15 @@ export function SwoopStage({
               {upgradeHref ? 'swoop is part of pro.' : 'swoop is part of pro. ask the site owner to upgrade.'}
             </span>
           )}
+          {noSwoopAccess && (
+            <span className={NOTICE_DETAIL}>a site owner or admin sets who can watch and control. ask one of them.</span>
+          )}
           {/* text lines carry leading above and below their ink and the buttons' edge does not,
               so the same gap reads 7px tighter there; measured at these sizes */}
           <span className="pointer-events-auto mt-[7px] flex gap-2">
             {swoopOff && settingsHref && (
               <Button asChild size="sm">
-                <Link href={settingsHref}>open site settings</Link>
+                <Link href={settingsHref}>open swoop settings</Link>
               </Button>
             )}
             {planLocked && upgradeHref && (

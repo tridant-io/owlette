@@ -22,8 +22,12 @@
  *   24 ms max, which held chrome to ~22 fps against a 60 fps source and put
  *   the stream 14 s behind. timing comes from the user agent's own
  *   `presentationTime` instead.
- * - **`requestVideoFrameCallback` observes, it never schedules** (plan.md
- *   D17). nothing here presents; the element does.
+ * - **one `requestVideoFrameCallback` chain, and nothing paced from rAF.**
+ *   D17's arm-B reading was that rvfc observes and never schedules, with no
+ *   canvas in the shipping path. from 4.2.0 smooth scaling's canvas mirrors
+ *   the element for a picture shown below 1:1, and `onPresent` draws it from
+ *   this chain, one draw per presented frame
+ *   (dev/active/swoop-clarity/plan.md, C2). otherwise the element presents.
  *
  * `swoop-meta` carries `PROTOCOL.md` §4 records header-only
  * (`payloadBytes = 0`) and they are joined to the track by `rtpTimestamp90k`.
@@ -82,6 +86,12 @@ export interface SwoopReceiverOptions {
   video: HTMLVideoElement;
   /** one call per presented frame that joined a host record. */
   onFrame?: (observation: FrameObservation) => void;
+  /**
+   * one call per rvfc callback, joined or not: the presenter draws smooth
+   * scaling's canvas from here. a join can land later, from `swoop-meta`, so
+   * `onFrame` cannot drive a draw.
+   */
+  onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
   /**
    * send `{"t":"idr"}` on `swoop-control`. called once per lost-sync episode —
    * the host coalesces requests behind a 250–500 ms cooldown anyway.
@@ -158,6 +168,7 @@ function asBytes(data: unknown): ArrayBuffer | ArrayBufferView | null {
 export class SwoopReceiver {
   private readonly video: HTMLVideoElement;
   private readonly onFrame?: (observation: FrameObservation) => void;
+  private readonly onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
   private readonly onIdrRequest?: () => void;
 
   private stream: MediaStream | null = null;
@@ -188,6 +199,7 @@ export class SwoopReceiver {
   constructor(options: SwoopReceiverOptions) {
     this.video = options.video;
     this.onFrame = options.onFrame;
+    this.onPresent = options.onPresent;
     this.onIdrRequest = options.onIdrRequest;
     this.rvfcSupported =
       typeof HTMLVideoElement !== 'undefined' &&
@@ -341,6 +353,8 @@ export class SwoopReceiver {
     if (!this.running) return;
     this.rvfcCallbacks += 1;
     try {
+      // first: the draw is on the picture's path, and the join is not
+      this.onPresent?.(metadata);
       if (metadata.rtpTimestamp === undefined) {
         this.unjoinableFrames += 1;
       } else {

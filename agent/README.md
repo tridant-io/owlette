@@ -236,8 +236,7 @@ agent/
 ├── scripts/                    # install.bat / uninstall.bat, shipped in the Windows install
 ├── vendor/                     # WebView2 bootstrapper and PawnIO driver installer, bundled by the Windows build
 ├── requirements.txt            # runtime dependencies, with sys_platform markers
-├── requirements-dev.txt        # pytest and tooling
-├── config.template.json        # starting config
+├── requirements-dev.txt        # pytest, and one pin the release gate reads
 └── VERSION                     # the agent's version
 ```
 

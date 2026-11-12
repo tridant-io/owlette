@@ -9,10 +9,13 @@ import {
   HOLD_MS,
   SLOP_PX,
   TWO_FINGER_TAP_MS,
+  attach,
   createGestures,
+  swoopTouch,
   type AimState,
   type TouchCapture,
 } from '@/lib/swoop/touch';
+import type { SwoopSession } from '@/lib/swoop/features';
 import { NO_ZOOM, type ZoomState } from '@/lib/swoop/zoom';
 
 // a 400x200 stage at the client origin, wholly filled by a 2:1 picture
@@ -221,6 +224,31 @@ describe('two fingers', () => {
     expect(r.calls).toEqual(['move 150,100']);
   });
 
+  it('pans a zoomed picture for fingers moving together, and sends the machine nothing', () => {
+    const r = rig();
+    r.gestures.down(1, 150, 100);
+    r.gestures.down(2, 250, 100);
+    r.gestures.move(1, 100, 100);
+    r.gestures.move(2, 300, 100);
+    r.gestures.up(1, 100, 100);
+    r.gestures.up(2, 300, 100);
+    expect(r.zoom().scale).toBeCloseTo(2);
+    expect(r.zoom().y).toBeCloseTo(-100);
+
+    r.gestures.down(1, 100, 100);
+    r.gestures.down(2, 200, 100);
+    r.gestures.move(1, 100, 120);
+    r.gestures.move(2, 200, 120);
+    r.gestures.up(1, 100, 120);
+    r.gestures.up(2, 200, 120);
+    // the picture follows the fingers down 20 css px, at the same zoom
+    expect(r.zoom().scale).toBeCloseTo(2);
+    expect(r.zoom().x).toBeCloseTo(-200);
+    expect(r.zoom().y).toBeCloseTo(-80);
+    // each first finger only moves the pointer, as a pinch's does: no wheel, no button
+    expect(r.calls).toEqual(['move 150,100', 'move 100,100']);
+  });
+
   it('ignores a finger that lands on a drag under way', () => {
     const r = rig();
     r.gestures.down(1, 100, 50);
@@ -279,6 +307,49 @@ describe('the bars around the picture', () => {
     r.gestures.down(2, 100, 195);
     r.gestures.up(2, 100, 195);
     expect(r.calls).toEqual(['move 100,195', 'down 0', 'up 0']);
+  });
+});
+
+describe('on a stage', () => {
+  /** a 400x200 picture laid out at (10, 20) in a 420x240 area at the client origin. */
+  function stage() {
+    const root = document.createElement('div');
+    const area = document.createElement('div');
+    const video = document.createElement('video');
+    area.append(video);
+    root.append(area);
+    document.body.append(root);
+    const layout = (element: HTMLElement, box: Record<string, number>) => {
+      for (const [key, value] of Object.entries(box)) Object.defineProperty(element, key, { configurable: true, value });
+    };
+    layout(area, { offsetLeft: 0, offsetTop: 0, offsetWidth: 420, offsetHeight: 240 });
+    layout(video, { offsetLeft: 10, offsetTop: 20, offsetWidth: 400, offsetHeight: 200 });
+    const session = { stage: root, video, contentRect: () => video.getBoundingClientRect() } as unknown as SwoopSession;
+    // a watcher's: it zooms all the same, and needs no capture
+    const detach = attach(session, null);
+    const finger = (type: string, target: Element, pointerId: number, clientX: number, clientY: number) =>
+      target.dispatchEvent(
+        Object.assign(new Event(type, { bubbles: true }), { pointerType: 'touch', pointerId, clientX, clientY }),
+      );
+    return { root, area, video, session, detach, finger };
+  }
+
+  it('zooms about the area, for a pinch that starts on the bars around the picture', () => {
+    const { root, area, video, session, detach, finger } = stage();
+    try {
+      finger('pointerdown', area, 1, 160, 230);
+      finger('pointerdown', area, 2, 260, 230);
+      finger('pointermove', area, 1, 110, 230);
+      finger('pointermove', area, 2, 310, 230);
+      // the transform is the area's, so its origin is the area's corner in the element's own pixels
+      expect(video.style.transformOrigin).toBe('-10px -20px');
+      // twice as big, as wide as the area allows and the picture's foot on the area's
+      expect(swoopTouch(session)?.zoom.get()).toEqual({ scale: 2, x: -210, y: -200 });
+      expect(video.style.transform).toBe('translate(-210px, -200px) scale(2)');
+    } finally {
+      detach();
+      root.remove();
+    }
   });
 });
 

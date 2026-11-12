@@ -392,6 +392,28 @@ describe('keyboard', () => {
     expect(h.sent()).toHaveLength(2);
   });
 
+  it("toggles the host's caps lock each time a mac's does, though a mac sends only a down as it locks and only an up as it unlocks", () => {
+    const h = harness({ viewerIsMac: true });
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock', { modifierCapsLock: true }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock', { modifierCapsLock: false }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up', 'CapsLock:down', 'CapsLock:up']);
+  });
+
+  it("toggles the host once for a mac browser's press that comes with both halves", () => {
+    const h = harness({ viewerIsMac: true });
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock', { modifierCapsLock: true }));
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock', { modifierCapsLock: true }));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+  });
+
+  it("passes a pc's caps lock through as it comes, a down and an up for each press", () => {
+    const h = harness();
+    h.target.dispatchEvent(keyEvent('keydown', 'CapsLock'));
+    h.target.dispatchEvent(keyEvent('keyup', 'CapsLock'));
+    expect(edges(h)).toEqual(['CapsLock:down', 'CapsLock:up']);
+  });
+
   it('sends nothing while an IME composition owns the keyboard', () => {
     const h = harness();
     h.target.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
@@ -1021,54 +1043,6 @@ describe('releases', () => {
       // firefox on windows: the character altgr types carries no ctrl and no alt, only AltGraph.
       h.target.dispatchEvent(keyEvent('keydown', 'KeyQ', { ctrlKey: false, altKey: false, modifierAltGraph: true }));
       expect(edges(h)).toEqual(['ControlLeft:down', 'AltRight:down', 'KeyQ:down']);
-    });
-  });
-
-  describe("a modifier's release sent again, since swoop-input never retransmits", () => {
-    beforeEach(() => jest.useFakeTimers());
-    afterEach(() => jest.useRealTimers());
-
-    it('goes again at 100 ms and 500 ms, so one lost on the way, or overtaking its press, still lands', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      h.clear();
-      jest.advanceTimersByTime(99);
-      expect(h.sent()).toHaveLength(0);
-      jest.advanceTimersByTime(1);
-      expect(edges(h)).toEqual(['ControlLeft:up']);
-      jest.advanceTimersByTime(400);
-      expect(edges(h)).toEqual(['ControlLeft:up', 'ControlLeft:up']);
-    });
-
-    it('stays quiet once the modifier is down again', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      jest.advanceTimersByTime(100);
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.clear();
-      jest.advanceTimersByTime(1_000);
-      expect(h.sent()).toHaveLength(0);
-    });
-
-    it('never goes again for a letter or a mouse button: the host injects every up it gets, held or not', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'KeyA'));
-      h.target.dispatchEvent(keyEvent('keyup', 'KeyA'));
-      h.target.dispatchEvent(pointerEvent('pointerdown', { clientX: 50, clientY: 50 }));
-      h.target.dispatchEvent(pointerEvent('pointerup', { clientX: 50, clientY: 50 }));
-      h.clear();
-      jest.advanceTimersByTime(1_000);
-      expect(h.sent()).toHaveLength(0);
-    });
-
-    it('is dropped on detach', () => {
-      const h = harness();
-      h.target.dispatchEvent(keyEvent('keydown', 'ControlLeft'));
-      h.target.dispatchEvent(keyEvent('keyup', 'ControlLeft'));
-      h.capture.detach();
-      expect(jest.getTimerCount()).toBe(0);
     });
   });
 });

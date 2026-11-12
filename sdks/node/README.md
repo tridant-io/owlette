@@ -6,11 +6,22 @@ and `fs` modules.
 
 ## install
 
+`@owlette/sdk` is not on npm yet. Until the `rc` tag is published, build it from a checkout of this repository and install the folder:
+
+```bash
+# in the repository root
+npm install
+npm run build:sdk
+
+# in your project
+npm install <path-to-checkout>/sdks/node
+```
+
+Once it is published:
+
 ```bash
 npm install @owlette/sdk@rc
 ```
-
-`@owlette/sdk@rc` is the public launch target. Until the Wave 5.3 distribution gate is complete and the npm `rc` tag is visible, install from the monorepo source checkout.
 
 ## quickstart
 
@@ -90,6 +101,11 @@ removed.
 | `owlette.users`   | `list`, `promote`, `demote`, `assignSites`, `removeSites`, `delete` |
 | `owlette.members(siteId)` | `list`, `add`, `remove`                                    |
 | `owlette.quotas`  | `current`, `history`                                               |
+
+`installerDeployments.uninstall(siteId, deploymentId, { softwareName })` takes
+the program's exact name in the machines' software list, since a deployment
+records only its installer file. Finished targets whose machine lists it get
+the uninstall; the rest come back in `skipped`.
 
 For complete runnable scripts, see `examples/`: auth/inventory,
 token-to-publish, command polling, and webhook verification.

@@ -148,9 +148,44 @@ const CAPTURES: Capture[] = [
   { slug: 'add-machine', path: '/add?code=silver-compass-drift', role: 'admin', scenario: 'dashboard-mixed-states' },
   // admin panel
   { slug: 'admin-installers-seeded', path: '/admin/installers', role: 'superadmin', scenario: 'dashboard-mixed-states', seed: seedInstallers },
-  ...(['installers', 'presets', 'members', 'users', 'tokens', 'schedules', 'alerts', 'webhooks', 'email'] as const).map(
+  ...(['installers', 'presets', 'sites', 'users', 'tokens', 'schedules', 'alerts', 'webhooks', 'email'] as const).map(
     (page): Capture => ({ slug: `admin-${page}`, path: `/admin/${page}`, role: 'superadmin', scenario: 'dashboard-mixed-states' }),
   ),
+  { slug: 'admin-site-settings', path: (siteId) => `/admin/sites/${siteId}?section=members`, role: 'superadmin', scenario: 'dashboard-mixed-states' },
+  {
+    slug: 'admin-site-general',
+    path: (siteId) => `/admin/sites/${siteId}`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByLabel('site name', { exact: true })).toBeVisible({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-site-machines',
+    path: (siteId) => `/admin/sites/${siteId}?section=machines`,
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: 'keep screens awake', exact: true })).toBeEnabled({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-swoop',
+    path: '/admin/swoop',
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
+  },
+  {
+    slug: 'admin-sidebar',
+    path: '/admin/swoop',
+    role: 'superadmin',
+    scenario: 'dashboard-mixed-states',
+    ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
+    // the sidebar shows beside the page from lg up; below it is a drawer behind the menu button
+    act: async (page) => {
+      const menu = page.getByRole('button', { name: 'open admin menu' });
+      if (await menu.isVisible()) await menu.click();
+      await expect(page.locator('#admin-sidebar').getByRole('link', { name: 'hoot', exact: true })).toBeVisible();
+    },
+  },
 ];
 
 /** releases as the field has them: the newest on every platform, an old one windows-only */

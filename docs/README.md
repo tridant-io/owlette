@@ -2,13 +2,17 @@
 
 two trees, one rule. **published product docs live in `web/content/docs/`** — that tree is app source. it is edited like code, it rides the web build, and a change there triggers CI and an auto-deploy to dev.owlette.app or owlette.app. treat it as shipping code, never as a scratchpad.
 
-**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `e2e-machine/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
+**everything in this directory is maintainer-facing and is never published** — `docs/internal/`, `docs/runbooks/`, `docs/changelog.md`, `docs/roadmap.md`, and the quickstart. one rule binds the two trees: the **dual-changelog rule** — every release updates BOTH `docs/changelog.md` (here) and `web/content/docs/changelog.mdx` (published). they are separate files and staying in sync is manual. code-adjacent READMEs (`agent/`, `web/e2e/`, `scripts/`, `infra/`, `test/`) stay next to their code; they are the sanctioned exception to "all maintainer docs live in `docs/`".
 
 ## start here
 
 - [maintainer-quickstart.md](maintainer-quickstart.md) — first-time path for an engineer cloning the repo: toolchain versions, day-1 web dev server, day-2 agent pairing, week-1 installer ship.
 - [roadmap.md](roadmap.md) — living, roughly-prioritized list of what's next. not a commitment.
 - [changelog.md](changelog.md) — release history; an installer must never ship without a matching `## [X.Y.Z]` entry here.
+
+## adr/ — settled decisions
+
+- [adr/](adr/) — one short record per decision that is hard to reverse, with why it was made and what it costs. read the ones for the area you touch before changing it; the format is in `adr/0001-*`.
 
 ## runbooks/ — operational procedures
 
@@ -32,8 +36,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/threat-model.md](internal/threat-model.md) — canonical security design constraint for roost, reconciled against the code that actually shipped.
 - [internal/manifest-format.md](internal/manifest-format.md) — roost manifest format spec v1 (approved).
 - [internal/v1-v2-migration.md](internal/v1-v2-migration.md) — canonical v1 → v2 (roost) migration design.
-- [internal/architecture-decisions.md](internal/architecture-decisions.md) — the owlette 2.0 architecture decision record.
-- [internal/version-management.md](internal/version-management.md) — independent component versioning and `scripts/sync-versions.js`.
+- [internal/version-management.md](internal/version-management.md) — what `scripts/sync-versions.js` writes, why `firestore.rules` keeps its own version, and the tag patterns.
 - [internal/slsa-build-l3.md](internal/slsa-build-l3.md) — hermetic CI installer build with signed in-toto provenance, verifiable with `slsa-verifier`.
 - [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned `claude.exe` that agents fetch on demand.
 - [internal/dmca-takedown-sop.md](internal/dmca-takedown-sop.md) — 17 U.S.C. § 512(c) safe-harbor operator SOP for roost user content.

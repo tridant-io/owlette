@@ -26,8 +26,17 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
 jest.mock('@/lib/firebase-admin', () => ({
-  getAdminDb: () => mockDbFactory(),
+  getAdminDb: () => ({
+    ...mockDbFactory(),
+    // the renewal reads and writes the session in a transaction, on the same doc mocks
+    runTransaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        get: (ref: MockTxRef) => ref.get(),
+        set: (ref: MockTxRef, ...a: unknown[]) => ref.set(...a),
+      }),
+  }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
 }));
 
@@ -123,6 +132,12 @@ function signIn(userId: string): void {
   mockSession.expiresAt = Date.now() + 86_400_000;
 }
 
+/** narrows `uid`'s row to `machineIds`, as the members api writes a machine scope. */
+function limitTo(uid: string, machineIds: string[]): void {
+  const key = `${SITE}/${uid}`;
+  mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds });
+}
+
 function request(body: Record<string, unknown> = { viewerId: VIEWER, fp: FP }) {
   return createMockRequest(
     `http://localhost/api/sites/${SITE}/machines/${MACHINE}/swoop/sessions/${SID}/lease`,
@@ -206,6 +221,31 @@ describe('POST swoop/sessions/{sid}/lease', () => {
     // 404, not 403: the site-access gate answers identically for "no such site"
     // and "no standing on it", deliberately (`authorizedHandler.server.ts`).
     expect(res.status).toBe(404);
+  });
+
+  // narrowing a machine scope takes a dropped machine away at the next renewal,
+  // with the same 404 a removed member gets.
+  it('refuses a renewal once the viewer’s machine scope no longer holds the machine, with 404 and no write', async () => {
+    limitTo(ADMIN, ['machine-2']);
+
+    const { status, body } = await parseResponse(await POST(request(), routeContext));
+
+    expect(status).toBe(404);
+    expect(body).toMatchObject({ detail: 'machine not found or no access', code: 'not_found' });
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'machine_out_of_scope' }),
+    );
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('POSITIVE CONTROL: renews for a viewer whose machine scope still holds the machine', async () => {
+    limitTo(ADMIN, [MACHINE]);
+
+    const { status, body } = await parseResponse(await POST(request(), routeContext));
+
+    expect(status).toBe(200);
+    expect(typeof (body.data as Record<string, unknown>).viewerJwt).toBe('string');
   });
 
   it('refuses a control lease once the capability is gone, with 403 capability_missing', async () => {

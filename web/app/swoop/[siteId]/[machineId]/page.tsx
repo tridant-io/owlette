@@ -18,6 +18,7 @@ import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } f
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 import {
   applyBarPosition,
   currentBarPosition,
@@ -55,13 +56,13 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath } =
+  const { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
     useSwoopSession(siteId, machineId);
   const { isSiteAdmin, isSiteOwner } = useAuth();
-  // the keyboard follows the machine's system. no hook reads one machine
-  // document, so this takes it off the site's list; an agent that reports no
-  // system is a windows one.
-  const { machines } = useMachines(siteId);
+  // the keyboard follows the machine's system, read off this one machine's
+  // document: a scoped member may read no other. a refused read or an agent
+  // that reports no system is a windows one, and never says the machine left.
+  const { machines } = useMachines(siteId, [machineId]);
   const osFamily = machines.find((machine) => machine.machineId === machineId)?.osFamily ?? 'windows';
   // the overlay covers the picture, so it is off until asked for — and the
   // toolbar is out of reach once fullscreen holds, so the choice is made here.
@@ -150,14 +151,17 @@ export default function SwoopPage({
           state={state}
           error={error}
           retryIn={retryIn}
+          restarting={restarting}
+          linkLost={!stats.linkUp}
           refusal={refusal}
-          settingsHref={isSiteAdmin(siteId) ? `/dashboard?settings=${encodeURIComponent(siteId)}` : null}
+          settingsHref={isSiteAdmin(siteId) ? SWOOP_SETTINGS_PATH : null}
           // a site runs on its owner's plan, so only the owner is sent to upgrade it
           upgradeHref={isSiteOwner(siteId) ? '/settings/plan' : null}
           noPath={noPath}
           stall={stats.stall.recovery}
           stageRef={stageRef}
           videoRef={videoRef}
+          canvasRef={canvasRef}
           onLeave={leaveStage}
         >
           <SwoopCursor session={session} />

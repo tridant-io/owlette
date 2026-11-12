@@ -1,5 +1,7 @@
 # Upgrade to 2.12.x — Full Procedure
 
+> **Historical.** Prod took this promotion in `073e031f` (2026-05-19) and has moved on since. Do not rerun its migrations: `migrate-roles.mjs` (step 2.2) now refuses to run, because the per-site role model replaced the values it writes.
+
 Self-contained runbook for promoting the 2.12.x hardening release from
 `dev` to `main` (production). Owns the entire chain: legacy key handling,
 env-var provisioning, R2 keys, migrations, Firebase + Railway deploys,

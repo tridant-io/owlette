@@ -119,6 +119,12 @@ const nextConfig: NextConfig = {
         destination: '/docs/:path*',
         permanent: true,
       },
+      // old bookmarks and links; a 307 until the release reaches prod, so a revert is not cached in browsers.
+      {
+        source: '/admin/members',
+        destination: '/admin/sites',
+        permanent: false,
+      },
     ];
   },
   async headers() {
@@ -160,6 +166,23 @@ const nextConfig: NextConfig = {
           },
         ],
       },
+      // dev is for testing, and crawlers were reading its /register. a header, not robots.txt:
+      // cloudflare's managed robots.txt allows every crawler ahead of the app's rules, and a
+      // noindex only works where the crawler may fetch it. keyed on the project, as rateLimit.ts
+      // is, so a deploy that names no project is never de-listed
+      ...(process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID?.includes('-dev')
+        ? [
+            {
+              source: '/:path*',
+              headers: [
+                {
+                  key: 'X-Robots-Tag',
+                  value: 'noindex, nofollow',
+                },
+              ],
+            },
+          ]
+        : []),
     ];
   },
 };

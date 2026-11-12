@@ -9,6 +9,7 @@ mod json_io;
 mod mac_window;
 #[cfg(target_os = "macos")]
 mod menu_bar_position;
+mod path_status;
 mod paths;
 mod pid_file;
 mod process_ctl;
@@ -62,7 +63,6 @@ struct SecondInstance {
 /// Holds the file watchers for the life of the app; dropping this stops them.
 struct Watchers(Mutex<Option<watchers::WatchHandle>>);
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
     // First: plugins init in registration order, and this one must claim the instance lock.
@@ -85,12 +85,12 @@ pub fn run() {
     .plugin(tauri_plugin_dialog::init())
     // Degraded-state toasts from the tray monitor.
     .plugin(tauri_plugin_notification::init())
-    // For upcoming filesystem browsing under the owlette tree; unused so far.
+    // Metadata reads (exists, readDir, stat) for the drag-drop classifier.
     .plugin(tauri_plugin_fs::init())
     .invoke_handler(tauri::generate_handler![
-      commands::owlette_data_root,
       commands::launch_args,
       commands::hostname,
+      path_status::path_status,
       commands::screen_recording_granted,
       commands::open_screen_recording_settings,
       commands::accessibility_granted,
@@ -116,6 +116,7 @@ pub fn run() {
       commands::discard_issue_screenshots,
       commands::swoop_viewer_installed,
       commands::open_swoop_viewer,
+      commands::hoot_mcp_command,
       commands::log_event,
       commands::sidebar_width,
       commands::set_sidebar_width,

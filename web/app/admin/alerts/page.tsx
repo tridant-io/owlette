@@ -30,6 +30,7 @@ import {
 import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
@@ -70,6 +71,8 @@ const OPERATORS = [
 ] as const;
 
 const SEVERITIES = ['info', 'warning', 'critical'] as const;
+
+const NO_RULES: AlertRule[] = [];
 
 // light takes the family surface; dark keeps the solid tint these badges always had
 const SEVERITY_COLORS: Record<string, string> = {
@@ -149,7 +152,10 @@ export default function AlertsPage() {
   // alert rules ride on control, the core flag (plan.md decision 4)
   const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
   const rulesGated = usePlanGated('control', siteOwner);
-  const [rules, setRules] = useState<AlertRule[]>([]);
+  // rules carry the site they were read or saved for: a save that lands after the
+  // admin moved to another site must not show, or be saved again, under that one
+  const [loaded, setLoaded] = useState<{ siteId: string; rules: AlertRule[] }>({ siteId: '', rules: [] });
+  const rules = loaded.siteId === selectedSiteId ? loaded.rules : NO_RULES;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -185,9 +191,9 @@ export default function AlertsPage() {
       const alertsRef = doc(db, 'sites', siteId, 'settings', 'alerts');
       const snap = await getDoc(alertsRef);
       if (snap.exists() && Array.isArray(snap.data()?.rules)) {
-        setRules(snap.data().rules as AlertRule[]);
+        setLoaded({ siteId, rules: snap.data().rules as AlertRule[] });
       } else {
-        setRules([]);
+        setLoaded({ siteId, rules: [] });
       }
     } catch (err: unknown) {
       console.error('Failed to fetch alert rules:', err);
@@ -207,9 +213,10 @@ export default function AlertsPage() {
   // resolves false when the save failed, so callers don't confirm a change that didn't land.
   const saveRules = async (updatedRules: AlertRule[]): Promise<boolean> => {
     if (!db || !selectedSiteId) return false;
+    const siteId = selectedSiteId;
     setSaving(true);
     try {
-      const response = await fetch(`/api/sites/${encodeURIComponent(selectedSiteId)}/alerts`, {
+      const response = await fetch(`/api/sites/${encodeURIComponent(siteId)}/alerts`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rules: updatedRules }),
@@ -218,7 +225,7 @@ export default function AlertsPage() {
         const body = await response.json().catch(() => ({}));
         throw new Error(typeof body.detail === 'string' ? body.detail : 'Failed to save alert rules');
       }
-      setRules(updatedRules);
+      setLoaded((prev) => (prev.siteId === siteId ? { siteId, rules: updatedRules } : prev));
       return true;
     } catch (err: unknown) {
       console.error('Failed to save alert rules:', err);
@@ -383,7 +390,7 @@ export default function AlertsPage() {
         <AdminPageHeader
           className="mb-6 md:mb-8"
           title="alerts"
-          description="configure rules to get notified when machine metrics exceed thresholds"
+          description="the alerts you get, and this site's rules for machine metrics"
           toolbar={
             <>
               {sites.length > 1 && (
@@ -427,6 +434,16 @@ export default function AlertsPage() {
           }
           actions={!rulesGated && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
         />
+
+        {/* the built-in alerts are each person's own emails, the same on every site (owner, 2026-11-11) */}
+        <section aria-labelledby="alerts-built-in" className="mb-6 md:mb-8">
+          <h2 id="alerts-built-in" className="mb-3 text-sm font-medium text-foreground">
+            built-in <span className="font-normal text-muted-foreground">· your emails, from every site</span>
+          </h2>
+          <AlertEmailToggles />
+        </section>
+
+        <h2 className="mb-3 text-sm font-medium text-foreground">custom rules</h2>
 
         {/* Empty state */}
         {rules.length === 0 && !loading && (

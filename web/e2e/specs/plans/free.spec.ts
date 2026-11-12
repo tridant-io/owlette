@@ -185,10 +185,8 @@ test.describe('owlette free', () => {
     await signIn(page);
     await page.getByTestId('site-switcher-trigger').click();
     await page.getByRole('menuitem', { name: /manage sites/i }).click();
-    await page
-      .getByRole('dialog', { name: /manage sites/i })
-      .getByRole('button', { name: 'new site', exact: true })
-      .click();
+    await expect(page).toHaveURL(/\/admin\/sites$/);
+    await page.getByRole('button', { name: 'new site', exact: true }).click();
 
     const dialog = page.getByRole('dialog', { name: /create new site/i });
     await dialog.getByLabel('site name').fill('Second Plan Site');

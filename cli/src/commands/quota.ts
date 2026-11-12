@@ -51,22 +51,9 @@ const VALID_PERIODS = ['7d', '14d', '30d', '60d', '90d'] as const;
 type QuotaPeriod = (typeof VALID_PERIODS)[number];
 
 export function registerQuotaCommands(program: Command): void {
-  const quota =
-    (program.commands.find((c) => c.name() === 'quota') as Command | undefined) ??
-    program.command('quota').description('inspect site storage + bandwidth quota');
-
-  // Overwrite any stub registered earlier, so help text is order-independent.
-  quota.description('inspect site storage + bandwidth quota');
-
-  // Drop stubs left by earlier file-load ordering.
-  for (const verb of ['show', 'history'] as const) {
-    const existing = quota.commands.find((c) => c.name() === verb);
-    if (existing) {
-      const list = quota.commands as Command[];
-      const idx = list.indexOf(existing);
-      if (idx >= 0) list.splice(idx, 1);
-    }
-  }
+  const quota = program
+    .command('quota')
+    .description('inspect site storage + bandwidth quota');
 
   quota
     .command('show')

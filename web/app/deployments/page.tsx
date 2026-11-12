@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { useMachines } from '@/hooks/useFirestore';
+import { ApiRequestError, useMachines } from '@/hooks/useFirestore';
 import { useCurrentSite } from '@/hooks/useCurrentSite';
 import { PageCascade } from '@/components/PageCascade';
 import { NoSitesEmptyState } from '@/components/NoSitesEmptyState';
@@ -21,8 +21,6 @@ import {
   type MachineInActiveHours,
 } from '@/components/ActiveHoursDeployConfirm';
 import UninstallDialog from '@/components/UninstallDialog';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
@@ -33,6 +31,7 @@ import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 import { useUninstall } from '@/hooks/useUninstall';
 import { describeCommandError } from '@/lib/activeHours';
+import { PRE_FLIGHT_DEPLOYMENT_STATUSES, retryableTarget } from '@/lib/deploymentStatuses';
 import { formatSiteScopedTimestamp } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
 
@@ -100,6 +99,36 @@ function retryKey(deployment: Deployment, machineIds?: string[]): string {
   return machineIds?.length === 1 ? `${deployment.id}:${machineIds[0]}` : deployment.id;
 }
 
+/** the in-flight key of one machine's cancel. */
+function cancelKey(deploymentId: string, machineId: string): string {
+  return `${deploymentId}:${machineId}`;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * the page offers a retry only on a failed install, so a `no_failed_targets` refusal means
+ * the targets moved on after the page drew them: they left `failed`, or an uninstall failed.
+ */
+function retryFailure(error: unknown, machineIds?: string[]): string {
+  if (error instanceof ApiRequestError && error.code === 'no_failed_targets') {
+    return machineIds?.length === 1
+      ? `${machineIds[0]} is no longer a failed install, so nothing was retried`
+      : 'the machines this retry picked are no longer failed installs, so nothing was retried';
+  }
+  return errorText(error) || 'failed to retry deployment';
+}
+
+/** the server words its refusal for an API caller; the page names the machine. */
+function cancelFailure(error: unknown, machineId: string): string {
+  if (error instanceof ApiRequestError && error.code === 'no_cancellable_targets') {
+    return `${machineId} has already started installing or finished, so it can't be cancelled`;
+  }
+  return errorText(error) || 'failed to cancel deployment';
+}
+
 const DeploymentRow = React.memo(function DeploymentRow({
   deployment,
   isSelected,
@@ -110,6 +139,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
   onDelete,
   onCancel,
   retrying,
+  cancelling,
   timeDisplayMode,
   userTz,
   siteTz,
@@ -122,9 +152,11 @@ const DeploymentRow = React.memo(function DeploymentRow({
   onRetryTarget: (deployment: Deployment, machineId: string) => void;
   onUninstall: (deployment: Deployment) => void;
   onDelete: (id: string) => void;
-  onCancel: (deploymentId: string, machineId: string, installerName: string) => void;
+  onCancel: (deploymentId: string, machineId: string) => void;
   /** in-flight retry keys: deployment id (bulk) or `${deploymentId}:${machineId}` (per-row). */
   retrying: ReadonlySet<string>;
+  /** in-flight cancel keys, `${deploymentId}:${machineId}`. */
+  cancelling: ReadonlySet<string>;
   timeDisplayMode: 'user' | 'machine' | 'site';
   userTz: string | undefined;
   siteTz: string | undefined;
@@ -204,7 +236,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
               </TooltipContent>
             </Tooltip>
             <DropdownMenuContent align="end" className="border-border bg-raised">
-              {deployment.targets.some((t: DeploymentTarget) => t.status === 'failed') && (
+              {deployment.targets.some(retryableTarget) && (
                 <DropdownMenuItem
                   disabled={bulkRetrying}
                   onClick={(e) => {
@@ -278,7 +310,7 @@ const DeploymentRow = React.memo(function DeploymentRow({
                           <span className="text-xs text-muted-foreground">{target.progress}%</span>
                         )}
                         {getStatusBadge(target.status)}
-                        {target.status === 'failed' && (() => {
+                        {retryableTarget(target) && (() => {
                           const rowRetrying = bulkRetrying || retrying.has(`${deployment.id}:${target.machineId}`);
                           return (
                             <Tooltip>
@@ -300,16 +332,24 @@ const DeploymentRow = React.memo(function DeploymentRow({
                             </Tooltip>
                           );
                         })()}
-                        {(target.status === 'pending' || target.status === 'closing_processes' || target.status === 'downloading' || target.status === 'installing') && (
-                          <Button
-                            size="sm"
-                            variant="ghost-destructive"
-                            onClick={() => onCancel(deployment.id, target.machineId, deployment.installer_name)}
-                            aria-label={`cancel deployment to ${target.machineId}`}
-                            className="h-7 px-2 cursor-pointer"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
+                        {PRE_FLIGHT_DEPLOYMENT_STATUSES.has(target.status) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                size="sm"
+                                variant="ghost-destructive"
+                                disabled={cancelling.has(cancelKey(deployment.id, target.machineId))}
+                                onClick={() => onCancel(deployment.id, target.machineId)}
+                                aria-label={`cancel deployment to ${target.machineId}`}
+                                className="h-7 px-2 cursor-pointer"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <p>cancel this machine. an installer that is already running finishes</p>
+                            </TooltipContent>
+                          </Tooltip>
                         )}
                       </div>
                     </div>
@@ -337,12 +377,9 @@ export default function DeploymentsPage() {
     currentSite,
     siteTimezone,
     hasNoSites,
+    limitedOnly,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const deploymentsGated = usePlanGated('deployments', siteOwner);
   const [deployDialogOpen, setDeployDialogOpen] = useState(false);
@@ -350,9 +387,6 @@ export default function DeploymentsPage() {
   const [initialSoftwareName, setInitialSoftwareName] = useState<string | undefined>(undefined);
   const [uninstallDeploymentId, setUninstallDeploymentId] = useState<string | undefined>(undefined);
   const [selectedDeploymentId, setSelectedDeploymentId] = useState<string | null>(null);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deploymentToDelete, setDeploymentToDelete] = useState<string | null>(null);
@@ -379,8 +413,7 @@ export default function DeploymentsPage() {
     try {
       await createUninstall(currentSiteId, softwareName, machineIds, deploymentId);
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(message || 'failed to create uninstall task');
+      throw new Error(errorText(error) || 'failed to create uninstall task');
     }
   };
 
@@ -392,8 +425,7 @@ export default function DeploymentsPage() {
       toast.success('deployment record deleted successfully');
     } catch (error: unknown) {
       console.error('Failed to delete deployment:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(message || 'failed to delete deployment record');
+      toast.error(errorText(error) || 'failed to delete deployment record');
     } finally {
       setDeploymentToDelete(null);
     }
@@ -425,8 +457,7 @@ export default function DeploymentsPage() {
       return true;
     } catch (error: unknown) {
       console.error('Failed to retry deployment:', error);
-      const message = error instanceof Error ? error.message : String(error);
-      toast.error(message || 'failed to retry deployment');
+      toast.error(retryFailure(error, machineIds));
       return false;
     } finally {
       setRetrying((prev) => {
@@ -452,7 +483,7 @@ export default function DeploymentsPage() {
 
   const retryOrAsk = useCallback(async (deployment: Deployment, machineIds?: string[]) => {
     const retriedIds = machineIds
-      ?? deployment.targets.filter((t: DeploymentTarget) => t.status === 'failed').map((t) => t.machineId);
+      ?? deployment.targets.filter(retryableTarget).map((t) => t.machineId);
     const inActiveHours = machinesInActiveHours(machinesRef.current, retriedIds);
     if (inActiveHours.length > 0) {
       setRetryConfirm({ open: true, deployment, machineIds, machines: inActiveHours });
@@ -462,7 +493,7 @@ export default function DeploymentsPage() {
   }, [runRetry]);
 
   const handleRetryDeployment = useCallback(async (deployment: Deployment) => {
-    if (!deployment.targets.some((t: DeploymentTarget) => t.status === 'failed')) {
+    if (!deployment.targets.some(retryableTarget)) {
       toast.error('no failed targets to retry');
       return;
     }
@@ -502,11 +533,24 @@ export default function DeploymentsPage() {
   const cancelDeploymentRef = useRef(cancelDeployment);
   cancelDeploymentRef.current = cancelDeployment;
 
-  const handleCancelTarget = useCallback(async (deploymentId: string, machineId: string, installerName: string) => {
+  // a second click while the first is in flight sends a second cancel, which the
+  // server refuses once the first has landed
+  const [cancelling, setCancelling] = useState<ReadonlySet<string>>(new Set());
+
+  const handleCancelTarget = useCallback(async (deploymentId: string, machineId: string) => {
+    const key = cancelKey(deploymentId, machineId);
+    setCancelling((prev) => new Set(prev).add(key));
     try {
-      await cancelDeploymentRef.current(deploymentId, machineId, installerName);
+      await cancelDeploymentRef.current(deploymentId, machineId);
     } catch (error: unknown) {
       console.error('Failed to cancel deployment:', error);
+      toast.error(cancelFailure(error, machineId));
+    } finally {
+      setCancelling((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     }
   }, []);
 
@@ -537,42 +581,8 @@ export default function DeploymentsPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={() => {
-          setManageEditSiteId(currentSiteId);
-          setManageDialogOpen(true);
-        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       <main className="relative z-10 mx-auto max-w-screen-2xl p-3 md:p-4">
@@ -700,7 +710,7 @@ export default function DeploymentsPage() {
               on a permanent "loading deployments..." spinner. */}
           {hasNoSites ? (
             <div className="p-8">
-              <NoSitesEmptyState action="manage deployments" />
+              <NoSitesEmptyState action="manage deployments" limited={limitedOnly} />
             </div>
           ) : deploymentsLoading || sitesLoading || !currentSiteId ? (
             <div className="p-8 text-center">
@@ -737,6 +747,7 @@ export default function DeploymentsPage() {
                   onUninstall={handleUninstallFromRow}
                   onDelete={handleDeleteFromRow}
                   onCancel={handleCancelTarget}
+                  cancelling={cancelling}
                   timeDisplayMode={userPreferences.timeDisplayMode || 'machine'}
                   userTz={userPreferences.timezone}
                   siteTz={siteTimezone}

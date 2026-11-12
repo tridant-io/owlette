@@ -89,6 +89,49 @@ describe('SwoopWindowControls', () => {
     expect(appWindow.minimize).toHaveBeenCalledTimes(1);
     expect(appWindow.toggleMaximize).toHaveBeenCalledTimes(1);
     expect(appWindow.close).toHaveBeenCalledTimes(1);
+    // outside a session close asks nothing
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('fills its row by default, and with half takes 24 px at the top of it', () => {
+    as(WINDOWS_APP);
+    fakeBridge();
+    render(<SwoopWindowControls className="self-stretch" />);
+    expect(screen.getByTestId('window-controls')).toHaveClass('items-stretch', 'self-stretch');
+    for (const button of screen.getAllByRole('button')) {
+      expect(button).toHaveClass('w-[46px]');
+      expect(button).not.toHaveClass('h-6');
+    }
+    cleanup();
+
+    render(<SwoopWindowControls half />);
+    for (const button of screen.getAllByRole('button')) {
+      expect(button).toHaveClass('h-6', 'w-[46px]');
+    }
+  });
+
+  it('asks before it closes while the page holds a seat in a session, and cancel keeps the window', async () => {
+    as(WINDOWS_APP);
+    const { appWindow } = fakeBridge();
+    const user = userEvent.setup();
+    render(<SwoopWindowControls leaving="TEC-B4A" />);
+
+    await user.click(screen.getByRole('button', { name: 'close' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('leave TEC-B4A and close the window?');
+    expect(dialog).toHaveTextContent('you leave the session. anyone else in it stays connected.');
+    await user.click(screen.getByRole('button', { name: 'cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // escape is a cancel too
+    await user.click(screen.getByRole('button', { name: 'close' }));
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(appWindow.close).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'close' }));
+    await user.click(screen.getByTestId('window-close-confirm'));
+    expect(appWindow.close).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('swaps maximize for restore as the window reports its size, and stops listening when gone', async () => {
@@ -149,6 +192,16 @@ describe('SwoopWindowControls', () => {
     expect(inset).toHaveStyle({ width: `${TRAFFIC_LIGHTS_INSET_PX}px` });
     expect(inset).toHaveAttribute('data-tauri-drag-region', 'deep');
   });
+
+  it('on macos keeps the strip only the traffic lights’ room, half or not', () => {
+    as(MAC_APP);
+    fakeBridge();
+    render(<SwoopWindowStrip half />);
+    const strip = screen.getByTestId('swoop-window-strip');
+    expect(strip).toHaveClass('pointer-events-none', 'h-8');
+    expect(strip).not.toHaveClass('h-6');
+    expect(strip.children).toHaveLength(1);
+  });
 });
 
 describe('SwoopWindowStrip', () => {
@@ -170,5 +223,31 @@ describe('SwoopWindowStrip', () => {
       'maximize',
       'close',
     ]);
+  });
+
+  it.each([
+    ['windows', WINDOWS_APP],
+    ['linux', LINUX_APP],
+  ])('at half height on %s, is 24 px with its controls, and still lets presses through', (_os, ua) => {
+    as(ua);
+    fakeBridge();
+    render(<SwoopWindowStrip half />);
+
+    const strip = screen.getByTestId('swoop-window-strip');
+    expect(strip).toHaveClass('pointer-events-none', 'fixed', 'inset-x-0', 'top-0', 'h-6', 'justify-end');
+    expect(strip).not.toHaveClass('h-8');
+    expect(strip).not.toHaveAttribute('data-tauri-drag-region');
+    expect(screen.getByTestId('swoop-window-drag')).toHaveClass('pointer-events-auto', 'w-40');
+    for (const button of screen.getAllByRole('button')) expect(button).toHaveClass('h-6');
+  });
+
+  it('passes the session it holds a seat in to its close', async () => {
+    as(WINDOWS_APP);
+    const { appWindow } = fakeBridge();
+    const user = userEvent.setup();
+    render(<SwoopWindowStrip half leaving="TEC-B4A" />);
+    await user.click(screen.getByRole('button', { name: 'close' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('leave TEC-B4A and close the window?');
+    expect(appWindow.close).not.toHaveBeenCalled();
   });
 });

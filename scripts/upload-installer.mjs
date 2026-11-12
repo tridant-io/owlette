@@ -7,17 +7,25 @@
  * carries them all.
  *
  * Usage:
- *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…
+ *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…
+ *   node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] --notes-only
  *
  *   <file>   Owlette-Installer-vX.Y.Z.exe | .pkg | .deb — the platform is the
  *            extension (windows_x64 / macos_arm64 / linux_x64), one file each.
  *   --notes  the release notes; without it, the version's `## [X.Y.Z]` section of
  *            docs/changelog.md. They are what tridant id shows for the release.
+ *   --notes-only   sends no files: replaces a published version's release notes
+ *                  (PATCH /api/installer/{version}), on the latest pointer too when
+ *                  it is that version, and syncs it with tridant id again. Notes
+ *                  that went out stale are corrected this way, never by re-uploading.
  *   --set-latest   promotes the version once the LAST file has finalized, so the
  *                  latest pointer carries every entry rather than the first one,
  *                  and registers it with tridant id.
  *   --key-tag      appended to the idempotency keys, to publish a version again
  *                  within 24h (e.g. moving it from firebase storage to R2).
+ *   --allow-unsigned  uploads an .exe without a valid Windows signature, which is
+ *                  otherwise refused: an unsigned build exits 0, so nothing else
+ *                  catches a release built without OWLETTE_SIGN=1.
  *
  * Credentials (auto-loaded from web/.env.local, .claude/.env.local, scripts/.env.local):
  *   dev:  OWLETTE_API_KEY       + OWLETTE_DEV_API_URL
@@ -28,6 +36,7 @@
  * refuses the key if the body changed — use a new version, a --key-tag, or wait it out.
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs';
 import { request as httpRequest } from 'node:http';
@@ -42,14 +51,15 @@ const EXTENSIONS = Object.keys(PLATFORM_BY_EXT).join(', ');
 function usage(message) {
   console.error(`error: ${message}\n`);
   console.error(
-    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] <file>…',
+    'Usage: node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] [--set-latest] [--key-tag <tag>] [--allow-unsigned] <file>…\n' +
+      '       node scripts/upload-installer.mjs --env dev|prod --version X.Y.Z [--notes "…"] --notes-only',
   );
   process.exit(1);
 }
 
 // --- arguments ----------------------------------------------------------------
 const args = process.argv.slice(2);
-const options = { env: undefined, version: undefined, notes: undefined, setLatest: false, keyTag: '' };
+const options = { env: undefined, version: undefined, notes: undefined, notesOnly: false, setLatest: false, keyTag: '', allowUnsigned: false };
 const paths = [];
 for (let i = 0; i < args.length; i += 1) {
   const arg = args[i];
@@ -68,15 +78,21 @@ for (let i = 0; i < args.length; i += 1) {
   if (name === 'env') options.env = value();
   else if (name === 'version') options.version = value();
   else if (name === 'notes') options.notes = value();
+  else if (name === 'notes-only') options.notesOnly = true;
   else if (name === 'set-latest') options.setLatest = true;
   else if (name === 'key-tag') options.keyTag = value();
+  else if (name === 'allow-unsigned') options.allowUnsigned = true;
   else usage(`unknown option --${name}`);
 }
 
-const { env, version, setLatest, keyTag } = options;
+const { env, version, notesOnly, setLatest, keyTag } = options;
 if (env !== 'dev' && env !== 'prod') usage('--env must be dev or prod');
 if (!/^\d+\.\d+\.\d+$/.test(version ?? '')) usage('--version must be X.Y.Z');
-if (paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
+if (notesOnly && paths.length > 0) usage('--notes-only takes no files');
+if (notesOnly && (setLatest || keyTag || options.allowUnsigned)) {
+  usage('--notes-only promotes, tags and uploads nothing: drop --set-latest, --key-tag and --allow-unsigned');
+}
+if (!notesOnly && paths.length === 0) usage(`give at least one installer file (${EXTENSIONS})`);
 if (!/^[a-z0-9-]*$/.test(keyTag)) usage('--key-tag may hold only a-z, 0-9 and -');
 
 /** The body of the version's `## [X.Y.Z]` section, without its heading. */
@@ -104,6 +120,24 @@ for (const target of targets) {
     usage(`two files map to ${target.platform}; give one file per platform`);
   }
 }
+
+/** Refuses a Windows installer without a valid signature. Only Windows can read one, so elsewhere it warns. */
+function checkWindowsSignature({ path, fileName, platform }) {
+  if (platform !== 'windows_x64' || options.allowUnsigned) return;
+  if (process.platform !== 'win32') {
+    console.warn(`warning: cannot check the signature of ${fileName} on this OS`);
+    return;
+  }
+  const status = execFileSync(
+    'powershell',
+    ['-NoProfile', '-Command', '(Get-AuthenticodeSignature -LiteralPath $env:OWLETTE_UPLOAD_FILE).Status'],
+    { env: { ...process.env, OWLETTE_UPLOAD_FILE: path }, encoding: 'utf8' },
+  ).trim();
+  if (status !== 'Valid') {
+    usage(`${fileName}: signature status is ${status}. Build it with OWLETTE_SIGN=1, or pass --allow-unsigned`);
+  }
+}
+targets.forEach(checkWindowsSignature);
 
 // --- credentials ----------------------------------------------------------------
 function loadEnvFile(path) {
@@ -167,7 +201,8 @@ async function api(method, route, { body, idempotencyKey } = {}) {
   if (body !== undefined) headers['content-type'] = 'application/json';
   if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
   // a 2xx with no body has been seen once on a cold route; the idempotency key
-  // makes the retry replay the same result, so one more try is safe
+  // makes the retry replay the same result, and a notes change without one only
+  // sets the same notes again, so one more try is safe
   for (let attempt = 0; ; attempt += 1) {
     const response = await fetch(`${baseUrl}${route}`, {
       method,
@@ -212,6 +247,12 @@ function putBytes(url, path, size) {
   });
 }
 
+function printTridant(result) {
+  if (!result.tridant) return;
+  const { status, error } = result.tridant;
+  console.log(`tridant id: ${status}${error ? ` (${error})` : ''}`);
+}
+
 // --- the upload -------------------------------------------------------------------
 async function uploadOne(target, promote) {
   const { path, fileName, platform, size } = target;
@@ -231,21 +272,29 @@ async function uploadOne(target, promote) {
   });
   console.log(`  finalized${promote ? ' and promoted to latest' : ''}:`);
   console.log(JSON.stringify(finalized, null, 2));
-  if (finalized.tridant) {
-    const { status, error } = finalized.tridant;
-    console.log(`tridant id: ${status}${error ? ` (${error})` : ''}`);
-  }
+  printTridant(finalized);
+}
+
+async function correctNotes() {
+  const updated = await api('PATCH', `/api/installer/${version}`, { body: { releaseNotes: notes } });
+  console.log(`release notes set on v${version}${updated.latest ? ' and on latest' : ''}:`);
+  console.log(JSON.stringify(updated, null, 2));
+  printTridant(updated);
 }
 
 let done = 0;
 try {
-  for (const [index, target] of targets.entries()) {
-    await uploadOne(target, setLatest && index === targets.length - 1);
-    done += 1;
+  if (notesOnly) {
+    await correctNotes();
+  } else {
+    for (const [index, target] of targets.entries()) {
+      await uploadOne(target, setLatest && index === targets.length - 1);
+      done += 1;
+    }
+    const latest = await api('GET', '/api/installer/latest');
+    const files = latest?.files && typeof latest.files === 'object' ? Object.keys(latest.files) : [];
+    console.log(`latest: v${latest?.version ?? '?'}  files: ${files.join(', ') || '(none)'}`);
   }
-  const latest = await api('GET', '/api/installer/latest');
-  const files = latest?.files && typeof latest.files === 'object' ? Object.keys(latest.files) : [];
-  console.log(`latest: v${latest?.version ?? '?'}  files: ${files.join(', ') || '(none)'}`);
 } catch (error) {
   console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
   const left = targets.slice(done).map((target) => target.fileName);

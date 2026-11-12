@@ -118,9 +118,9 @@ export default function WebhooksSettingsPage() {
       <PageHeader currentPage="webhooks" />
       <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,
-              delivery history, and retry are all live. Automatic dispatch of
-              roost lifecycle events (`version.published`, `version.rolled_back`,
-              `deployment.*`) is deferred — the routes carry explicit TODOs.
+              delivery history, and retry are all live, and so is dispatch of
+              `version.published` and `version.rolled_back`. `deployment.*` has
+              no emitter yet.
               We surface that gap here rather than letting users subscribe
               silently to events that won't fire. It stays up on a gated site
               that still has subscriptions: it is a caveat about delivery, which
@@ -133,9 +133,9 @@ export default function WebhooksSettingsPage() {
               </span>
               <div className="text-xs text-foreground/80 leading-relaxed">
                 subscription management, the manual <code className="text-[11px] bg-card px-1 rounded">/api/webhooks/probe</code> endpoint,
-                delivery history, and retry are live. <strong>automatic dispatch</strong> of roost lifecycle events
-                (<code className="text-[11px]">version.published</code>, <code className="text-[11px]">version.rolled_back</code>,
-                <code className="text-[11px]">deployment.*</code>) is not wired yet — subscriptions are accepted but those
+                delivery history, and retry are live, and <code className="text-[11px]">version.published</code> and{' '}
+                <code className="text-[11px]">version.rolled_back</code> are sent as they happen. <strong>automatic dispatch</strong> of{' '}
+                <code className="text-[11px]">deployment.*</code> is not wired yet — subscriptions are accepted but those
                 events will not fire until a future release.
               </div>
             </div>

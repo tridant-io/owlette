@@ -9,7 +9,9 @@
  */
 
 import { useEffect } from 'react';
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
+import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import type { SwoopSession } from '@/lib/swoop/features';
 import type { SwoopPeerOptions } from '@/lib/swoop/peer';
 import type { SwoopSignalingOptions } from '@/lib/swoop/signaling';
@@ -21,12 +23,15 @@ const wired: {
   session: SwoopSession | null;
   /** what the hook told the peer about the signalling socket, in order. */
   signalOpen: boolean[];
-} = { peer: null, signaling: null, session: null, signalOpen: [] };
+  /** what the faked peer answers about the path under its channels. */
+  linkUp: boolean;
+} = { peer: null, signaling: null, session: null, signalOpen: [], linkUp: true };
 
 /**
  * what the faked receiver reports: the host's records, rvfc, and `getStats()`
- * answers in turn; the element's own state; and the frame callback the hook
- * handed the receiver.
+ * answers in turn; the element's own state; the frame and present callbacks
+ * the hook handed the receiver; and the faked presenter: what it was made
+ * with, the presents it was handed, and the frames smooth scaling's canvas drew.
  */
 const picture = {
   metaRecords: 0,
@@ -36,10 +41,14 @@ const picture = {
   reattach: jest.fn(async () => undefined),
   element: { paused: false, readyState: 4 },
   onFrame: null as ((observation: unknown) => void) | null,
+  onPresent: null as ((metadata: VideoFrameCallbackMetadata) => void) | null,
+  presenter: null as { video: unknown; options: unknown } | null,
+  presents: [] as unknown[][],
+  drawnFrames: 0,
 };
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 } }),
+  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, user: { uid: 'user-me' } }),
 }));
 
 jest.mock('@/lib/swoop/clientCaps', () => ({
@@ -56,7 +65,7 @@ jest.mock('@/lib/swoop/peer', () => ({
       handleSignal: async () => undefined,
       channel: () => null,
       signalOpen: (open: boolean) => wired.signalOpen.push(open),
-      linkUp: () => true,
+      linkUp: () => wired.linkUp,
       connection: { addEventListener: () => undefined, removeEventListener: () => undefined },
     };
   },
@@ -71,8 +80,12 @@ jest.mock('@/lib/swoop/signaling', () => ({
 
 jest.mock('@/lib/swoop/video/receiver', () => ({
   SwoopReceiver: class {
-    constructor(options: { onFrame?: (observation: unknown) => void }) {
+    constructor(options: {
+      onFrame?: (observation: unknown) => void;
+      onPresent?: (metadata: VideoFrameCallbackMetadata) => void;
+    }) {
       picture.onFrame = options.onFrame ?? null;
+      picture.onPresent = options.onPresent ?? null;
     }
     attachTrack() {}
     async start() {}
@@ -97,7 +110,19 @@ jest.mock('@/lib/swoop/video/receiver', () => ({
 }));
 
 jest.mock('@/lib/swoop/video/presenter', () => ({
-  createPresenter: () => ({ detach: () => undefined, observe: () => undefined, stats: () => ({}) }),
+  createPresenter: (video: unknown, options: unknown) => {
+    picture.presenter = { video, options };
+    return {
+      detach: () => undefined,
+      observe: () => undefined,
+      present: (...args: unknown[]) => picture.presents.push(args),
+      invalidate: () => undefined,
+      get drawnFrames() {
+        return picture.drawnFrames;
+      },
+      stats: () => ({}),
+    };
+  },
 }));
 
 jest.mock('@/lib/swoop/features', () => ({
@@ -114,6 +139,7 @@ jest.mock('@/lib/swoop/features', () => ({
 }));
 
 import { useSwoopSession, type UseSwoopSession } from '@/hooks/useSwoopSession';
+import { smoothActive } from '@/hooks/useSwoopView';
 import { STEP_UP_WINDOW_OPEN } from '@/lib/swoop/stepUp';
 
 const SITE = 'site-1';
@@ -136,7 +162,8 @@ interface Reply {
   body?: unknown;
 }
 
-let mint: Reply;
+/** the create's answer, or one per ask: control first, then the watch it steps down to. */
+let mint: Reply | ((ask: { control?: unknown }) => Reply);
 let lease: Reply;
 /** the session record, read when a retry is due. */
 let record: Reply;
@@ -149,7 +176,9 @@ const fetchMock = jest.fn(async (url: string, init?: RequestInit) => {
         ? lease
         : url === `${SESSIONS}/${GRANT.sid}`
           ? record
-          : mint;
+          : typeof mint === 'function'
+            ? mint(JSON.parse(String(init?.body ?? '{}')) as { control?: unknown })
+            : mint;
   return { ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response;
 });
 
@@ -157,15 +186,21 @@ const deletes = () => fetchMock.mock.calls.filter(([, init]) => init?.method ===
 const mints = () => fetchMock.mock.calls.filter(([url]) => url === SESSIONS);
 const recordReads = () => fetchMock.mock.calls.filter(([url, init]) => url === `${SESSIONS}/${GRANT.sid}` && !init?.method);
 
+/** the record as the GET answers it once the session ended, for `endReason` and, on a revocation, `endedFor`. */
+function ended(endReason: string, endedFor?: string): Reply {
+  return { status: 200, body: { data: { sid: GRANT.sid, state: 'ended', endReason, ...(endedFor ? { endedFor } : {}) } } };
+}
+
 let swoop: UseSwoopSession;
 
 function Page({ onCommit }: { onCommit: (session: UseSwoopSession) => void }) {
   const session = useSwoopSession(SITE, MACHINE);
-  const { stageRef, videoRef } = session;
+  const { stageRef, videoRef, canvasRef } = session;
   useEffect(() => onCommit(session));
   return (
     <div ref={stageRef}>
       <video ref={videoRef} />
+      <canvas ref={canvasRef} />
     </div>
   );
 }
@@ -205,6 +240,7 @@ beforeEach(() => {
   wired.signaling = null;
   wired.session = null;
   wired.signalOpen = [];
+  wired.linkUp = true;
   (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
 });
 
@@ -296,8 +332,10 @@ describe('useSwoopSession — how a session ends', () => {
   it('a kill is final, and the silence it leaves behind does not bring it back', async () => {
     await open();
     const killed = wired.session!;
+    record = ended('killed');
 
     act(() => wired.peer!.onClosed!('kill'));
+    await flush();
     expect(swoop.state).toBe('ended');
     expect(swoop.error).toBe('this session was ended from elsewhere.');
     expect(swoop.retryIn).toBeNull();
@@ -307,6 +345,328 @@ describe('useSwoopSession — how a session ends', () => {
     await advance(60_000);
     expect(mints()).toHaveLength(1);
     expect(deletes()).toHaveLength(0);
+  });
+
+  it.each([
+    ['a record that cannot be read', { status: 503 }],
+    ['a refusal that is not the api’s own', { status: 403 }],
+    ['no record at all', { status: 404, body: { code: 'session_not_found' } }],
+    ['a refusal a revocation does not cause', { status: 403, body: { code: 'swoop_disabled' } }],
+    ['a revocation that names nobody', ended('revoked')],
+    ['a record the machine has not ended yet', { status: 200, body: { data: { sid: GRANT.sid, state: 'live' } } }],
+  ])('a kill with %s is final, as it always was', async (_what, reply) => {
+    await open();
+    record = reply;
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    expect(swoop.state).toBe('ended');
+    expect(swoop.error).toBe('this session was ended from elsewhere.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  /**
+   * one streamer serves everyone on the machine and has no way to drop one
+   * viewer, so removing a member, or taking control from them, ends the session
+   * for all of them. the record names whom it was for: everyone else starts the
+   * next session on the ladder, as after any end that was not a decision.
+   */
+  it('someone else’s revocation ends it for this viewer too, which comes back on its own', async () => {
+    await open();
+    record = ended('revoked', 'user-other');
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    expect(recordReads()).toHaveLength(1);
+    // never disconnected on the way, which would give fullscreen back
+    expect(swoop.state).toBe('ended');
+    expect(swoop.error).toBeNull();
+    expect(swoop.retryIn).not.toBeNull();
+
+    await advance(30_000);
+    expect(mints()).toHaveLength(2);
+    expect(swoop.state).toBe('connecting');
+    expect(deletes()).toHaveLength(0);
+  });
+
+  /**
+   * the one a revocation was for comes back on the same ladder, and the api
+   * decides what they may do now: a removed member's ask is refused, which is
+   * what says their access went; someone whose control was taken watches.
+   */
+  describe('a revocation of this user', () => {
+    /** the asks this page made, control or watch, in order. */
+    const asks = () => mints().map(([, init]) => (JSON.parse(String(init?.body)) as { control?: unknown }).control);
+    const CAPABILITY_REFUSAL: Reply = { status: 403, body: { code: 'forbidden', detail: 'capability not granted' } };
+
+    it.each([
+      ['the record names this user', ended('revoked', 'user-me')],
+      // a removed member may no longer read the record at all
+      ['the record is no longer this user’s to read', { status: 404, body: { code: 'not_found' } }],
+    ])('rejoins on the ladder like everyone else, where %s, and the api refusing the ask says their access went', async (_what, reply) => {
+      await open();
+      record = reply;
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 404, body: { code: 'not_found', detail: 'site not found or no access' } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('revoked');
+      expect(swoop.error).toBe('your access to this machine was removed.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('comes back watching after a demotion, with no notice', async () => {
+      await open();
+      record = ended('revoked', 'user-me');
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+
+      mint = (ask) =>
+        ask.control === true ? CAPABILITY_REFUSAL : { status: 201, body: { data: { ...GRANT, sid: 'sid-2', ctl: false } } };
+      await advance(30_000);
+      // the control ask is refused for the capability they lost, and the watch ask follows at once
+      expect(asks()).toEqual([true, true, false]);
+      expect(swoop.state).toBe('connecting');
+      expect(swoop.error).toBeNull();
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.retryIn).toBeNull();
+    });
+
+    it('is refused at the watch ask where members may not watch, which says their access went', async () => {
+      await open();
+      record = ended('revoked', 'user-me');
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+
+      mint = (ask) =>
+        ask.control === true
+          ? CAPABILITY_REFUSAL
+          : { status: 403, body: { code: 'members_may_not_watch', detail: 'this site does not let members watch.' } };
+      await advance(30_000);
+      expect(asks()).toEqual([true, true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toBe('your access to this machine was removed.');
+    });
+
+    it('is the only refusal that says so: one with no revocation behind it says what the api said', async () => {
+      mint = { status: 404, body: { code: 'not_found', detail: 'site not found or no access' } };
+      await open();
+      expect(swoop.state).toBe('error');
+      expect(swoop.error).toBe('site not found or no access');
+    });
+  });
+
+  /**
+   * a kick ends the session for everyone in it, as a revocation does, but the
+   * one it was for keeps their access: the api would let them straight back
+   * in, so their page stops on the record's word, and only they rejoin it.
+   */
+  describe('a kick', () => {
+    it('stops the page of the one it was for, with no ladder, until they reconnect', async () => {
+      await open();
+      record = ended('kicked', 'user-me');
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('kicked');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+
+      // the session is over already: ending it again tells the server nothing
+      act(() => swoop.end());
+      expect(deletes()).toHaveLength(0);
+      // a kick is not a ban: the deliberate rejoin
+      act(() => swoop.reconnect());
+      await flush();
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('connecting');
+    });
+
+    it('brings everyone else back on the ladder, as a revocation of someone else does', async () => {
+      await open();
+      record = ended('kicked', 'user-other');
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      await advance(30_000);
+      expect(mints()).toHaveLength(2);
+      expect(swoop.state).toBe('connecting');
+      expect(deletes()).toHaveLength(0);
+    });
+
+    it('stops a page that missed the bye, between sessions, on the record read when its retry is due', async () => {
+      await open();
+      act(() => wired.peer!.onClosed!('timeout'));
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).not.toBeNull();
+
+      record = ended('kicked', 'user-me');
+      await advance(30_000);
+      expect(recordReads()).toHaveLength(1);
+      expect(mints()).toHaveLength(1);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('kicked');
+      expect(swoop.error).toBe('a site admin took you out of this session.');
+      expect(swoop.retryIn).toBeNull();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+    });
+
+    it.each([
+      [
+        'its bye',
+        async () => {
+          act(() => wired.peer!.onClosed!('kill'));
+          await flush();
+        },
+      ],
+      [
+        'the record its retry read',
+        async () => {
+          act(() => wired.peer!.onClosed!('timeout'));
+          await advance(30_000);
+        },
+      ],
+    ])('retries a rejoin that fails on the way, after a kick told by %s, and never reads the kick again', async (_how, kickThem) => {
+      await open();
+      record = ended('kicked', 'user-me');
+      await kickThem();
+      expect(swoop.refusal).toBe('kicked');
+
+      mint = { status: 409, body: { code: 'machine_offline', detail: 'this machine is offline; swoop cannot reach it until it reconnects.' } };
+      act(() => swoop.reconnect());
+      await flush();
+      expect(swoop.state).toBe('error');
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(3);
+      expect(swoop.state).toBe('connecting');
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.error).toBeNull();
+    });
+  });
+
+  describe('while a kill’s record is read', () => {
+    /** the next record read waits for `answer`. */
+    function holdRecord(): (reply: Reply) => void {
+      let answer: (reply: Reply) => void = () => {};
+      fetchMock.mockImplementationOnce(
+        async () =>
+          new Promise<Response>((resolve) => {
+            answer = (reply) =>
+              resolve({ ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response);
+          }),
+      );
+      return (reply) => answer(reply);
+    }
+
+    it('the session has not ended yet: nothing disconnects before the record says how', async () => {
+      await open();
+      act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+      await flush();
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await flush();
+      expect(swoop.state).toBe('connected');
+
+      answer(ended('revoked', 'user-other'));
+      await flush();
+      expect(swoop.state).toBe('ended');
+      expect(swoop.retryIn).not.toBeNull();
+    });
+
+    it('what the killed run notices meanwhile ends nothing', async () => {
+      await open();
+      const killed = wired.session!;
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      act(() => killed.end('peer_failed'));
+      await flush();
+      expect(swoop.retryIn).toBeNull();
+
+      answer(ended('killed'));
+      await flush();
+      expect(swoop.error).toBe('this session was ended from elsewhere.');
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+    });
+
+    it('gives up on a read that hangs, and ends as a kill always did', async () => {
+      await open();
+      fetchMock.mockImplementationOnce(
+        async (_url: string, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+
+      act(() => wired.peer!.onClosed!('kill'));
+      await advance(5_000);
+      expect(swoop.state).toBe('ended');
+      expect(swoop.error).toBe('this session was ended from elsewhere.');
+    });
+
+    it('the operator can still end it', async () => {
+      await open();
+      const answer = holdRecord();
+
+      act(() => wired.peer!.onClosed!('kill'));
+      act(() => swoop.end());
+      expect(swoop.state).toBe('ended');
+      // a kill already ended it: there is nothing left to leave
+      expect(deletes()).toHaveLength(0);
+
+      answer(ended('revoked', 'user-other'));
+      await flush();
+      await advance(60_000);
+      expect(mints()).toHaveLength(1);
+      expect(swoop.retryIn).toBeNull();
+    });
+  });
+
+  it('the operator reconnecting while a kill’s record is read keeps the session it started', async () => {
+    await open();
+    let answer: (reply: Reply) => void = () => {};
+    fetchMock.mockImplementationOnce(
+      async () =>
+        new Promise<Response>((resolve) => {
+          answer = (reply) =>
+            resolve({ ok: reply.status < 400, status: reply.status, json: async () => reply.body ?? {} } as Response);
+        }),
+    );
+
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+    act(() => swoop.reconnect());
+    await flush();
+    expect(mints()).toHaveLength(2);
+
+    answer(ended('revoked', 'user-me'));
+    await flush();
+    expect(swoop.state).toBe('connecting');
+    expect(swoop.error).toBeNull();
   });
 
   it('the operator’s end sends exactly one DELETE, saying closed', async () => {
@@ -321,7 +681,12 @@ describe('useSwoopSession — how a session ends', () => {
     expect(deletes()).toHaveLength(1);
     const [url, init] = deletes()[0];
     expect(url).toBe(`${SESSIONS}/${GRANT.sid}`);
-    expect(JSON.parse(String(init?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+    // its own seat, named: other viewers of the session stay in it.
+    expect(JSON.parse(String(init?.body))).toEqual({
+      endReason: 'closed',
+      viewerReason: 'closed',
+      viewerId: GRANT.viewerId,
+    });
     expect(mints()).toHaveLength(1);
   });
 
@@ -357,6 +722,20 @@ describe('useSwoopSession — how a session ends', () => {
     expect(mints()).toHaveLength(1);
   });
 
+  // the wrapper's 404 for a machine outside the person's scope carries no code:
+  // final on its own sentence, and never read as the machine leaving the site.
+  it('a machine out of scope on the mint is final, and does not say it left the site', async () => {
+    mint = { status: 404, body: { detail: 'machine not found or no access' } };
+    await open();
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('machine not found or no access');
+    expect(swoop.refusal).toBeNull();
+    expect(swoop.retryIn).toBeNull();
+
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
   it('a plan refusal on the mint is final, and names the plan', async () => {
     mint = {
       status: 402,
@@ -369,6 +748,38 @@ describe('useSwoopSession — how a session ends', () => {
 
     await advance(60_000);
     expect(mints()).toHaveLength(1);
+  });
+
+  describe('a person with no swoop', () => {
+    /** what each session POST asked for: control first, then the watch ask it steps down to. */
+    const asks = () => mints().map(([, init]) => (JSON.parse(String(init?.body)) as { control: boolean }).control);
+
+    it('is refused on the control ask and then the watch ask, and the viewer stops there', async () => {
+      mint = { status: 403, body: { code: 'capability_missing', detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBe('capability_missing');
+      expect(swoop.retryIn).toBeNull();
+
+      await advance(60_000);
+      expect(mints()).toHaveLength(2);
+    });
+
+    it('a watch ask refused with no code is still retried on the ladder', async () => {
+      // the same sentence without the api's code: the control ask still steps down on it
+      mint = { status: 403, body: { detail: 'capability not granted' } };
+      await open();
+      expect(asks()).toEqual([true, false]);
+      expect(swoop.state).toBe('error');
+      expect(swoop.refusal).toBeNull();
+      expect(swoop.retryIn).not.toBeNull();
+
+      mint = { status: 201, body: { data: GRANT } };
+      await advance(30_000);
+      expect(mints()).toHaveLength(3);
+      expect(wired.session).not.toBeNull();
+    });
   });
 
   it('a plan refusal on a renewal ends the session for good, and names the plan', async () => {
@@ -494,6 +905,157 @@ describe('useSwoopSession — how a session ends', () => {
     expect(wired.signalOpen).toEqual([false, true]);
   });
 
+  /**
+   * tec-b4a rebooting, 2026-10-31: the last frame stayed up under "poor
+   * connection" for minutes. a path that is gone is not a slow one.
+   */
+  it('a machine that went away with the picture up reads as lost, not as a poor connection', async () => {
+    await open();
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+    expect(swoop.state).toBe('connected');
+
+    wired.linkUp = false;
+    act(() => wired.signaling!.onStatus!('reconnecting'));
+    await advance(5 * 60_000);
+
+    render(
+      <TooltipProvider>
+        <SwoopToolbar
+          session={null}
+          machineId={MACHINE}
+          state={swoop.state}
+          error={swoop.error}
+          stats={swoop.stats}
+          retryIn={swoop.retryIn}
+          onEnd={() => {}}
+          onReconnect={() => {}}
+          statsOpen={false}
+          onToggleStats={() => {}}
+        />
+      </TooltipProvider>,
+    );
+    expect(screen.getByTestId('session-badge')).toHaveTextContent('connection lost');
+  });
+
+  it('a machine that said it is restarting keeps saying so until its picture is back', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    await flush();
+    expect(swoop.state).toBe('ended');
+    expect(swoop.restarting).toBe(true);
+    expect(swoop.retryIn).not.toBeNull();
+
+    // the next session finds nobody home while it boots.
+    await advance(30_000);
+    expect(mints()).toHaveLength(2);
+    act(() => wired.peer!.onError!('host_silent'));
+    expect(swoop.restarting).toBe(true);
+    expect(swoop.retryIn).not.toBeNull();
+
+    await advance(30_000);
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+    expect(swoop.state).toBe('connected');
+    expect(swoop.restarting).toBe(false);
+  });
+
+  it('an offline machine stops reading as restarting after ten minutes, and the api says what it is', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    // the ten minutes run from the record saying it is a restart
+    await flush();
+    mint = { status: 409, body: { detail: 'this machine is offline', code: 'machine_offline' } };
+
+    await advance(9 * 60_000);
+    expect(swoop.restarting).toBe(true);
+    await advance(60_000);
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.error).toBe('this machine is offline');
+    expect(swoop.retryIn).not.toBeNull();
+  });
+
+  it('a lapsed login during a restart asks to sign in, instead of waiting on the machine', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    mint = { status: 401, body: {} };
+    await advance(30_000);
+
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.error).toBe('sign in again to resume.');
+  });
+
+  /**
+   * a machine removed from the site ends its sessions as `machine_removed`, and
+   * its agent byes its viewers `restart` as it unpairs, as for any service stop.
+   * the record says which, so the page says the machine left instead of waiting
+   * on it to come back.
+   */
+  it('a machine that left the site says so at its restart, and stops', async () => {
+    await open();
+    record = ended('machine_removed');
+
+    act(() => wired.peer!.onClosed!('restart'));
+    await flush();
+    expect(swoop.restarting).toBe(false);
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('machine_removed');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a retry whose record says the machine left the site stops there, and says so', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('timeout'));
+    record = ended('machine_removed');
+
+    await advance(30_000);
+    expect(mints()).toHaveLength(1);
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+  });
+
+  // the backstop for a leave the server never saw: the tray's own, or a stale link
+  it('a mint the api answers machine_not_found says the machine left the site, and stops', async () => {
+    mint = { status: 404, body: { code: 'machine_not_found', detail: 'machine not found' } };
+    await open();
+
+    expect(swoop.state).toBe('error');
+    expect(swoop.refusal).toBe('machine_removed');
+    expect(swoop.error).toBe('this machine has left the site.');
+    expect(swoop.retryIn).toBeNull();
+    await advance(60_000);
+    expect(mints()).toHaveLength(1);
+  });
+
+  it('a picture that is still coming has no link to lose', async () => {
+    wired.linkUp = false;
+    await open();
+    await advance(2_000);
+    act(() => wired.peer!.onTrack!({} as MediaStream, { track: { kind: 'video' } } as RTCRtpReceiver));
+    await flush();
+
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.linkUp).toBe(true);
+  });
+
+  it('a machine that never came back from a restart stops saying it is restarting', async () => {
+    await open();
+    act(() => wired.peer!.onClosed!('restart'));
+    await advance(30_000);
+    act(() => wired.peer!.onError!('host_silent'));
+    await advance(30_000);
+    jest.setSystemTime(Date.now() + 10 * 60_000);
+    act(() => wired.peer!.onError!('host_silent'));
+
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toMatch(/has not answered for ten minutes/);
+    expect(swoop.restarting).toBe(false);
+  });
+
   describe('owlette swoop closing the window', () => {
     let ua: jest.SpyInstance;
     const close = () =>
@@ -517,7 +1079,11 @@ describe('useSwoopSession — how a session ends', () => {
       await advance(60_000);
 
       expect(deletes()).toHaveLength(1);
-      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({ endReason: 'closed', viewerReason: 'closed' });
+      expect(JSON.parse(String(deletes()[0][1]?.body))).toEqual({
+        endReason: 'closed',
+        viewerReason: 'closed',
+        viewerId: GRANT.viewerId,
+      });
     });
 
     it('does nothing in a browser', async () => {
@@ -560,10 +1126,53 @@ describe('useSwoopSession — control across a reload of the tab', () => {
 
   it('a kill forgets it', async () => {
     await open();
+    record = ended('killed');
     act(() => wired.peer!.onClosed!('kill'));
+    await flush();
 
     await open();
     expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('this user’s own revocation forgets it', async () => {
+    await open();
+    record = ended('revoked', 'user-me');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('someone else’s revocation keeps it, so this viewer comes back in control', async () => {
+    await open();
+    record = ended('revoked', 'user-other');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
+    expect(mintBody(1).continuity).toBe('continuity-1');
+  });
+
+  it('a kick of this user forgets it, so their rejoin asks again', async () => {
+    await open();
+    record = ended('kicked', 'user-me');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    act(() => swoop.reconnect());
+    await flush();
+    expect(mintBody(1).continuity).toBeUndefined();
+  });
+
+  it('a kick of someone else keeps it', async () => {
+    await open();
+    record = ended('kicked', 'user-other');
+    act(() => wired.peer!.onClosed!('kill'));
+    await flush();
+
+    await advance(30_000);
+    expect(mintBody(1).continuity).toBe('continuity-1');
   });
 });
 
@@ -624,7 +1233,7 @@ describe('useSwoopSession — a picture that froze', () => {
 
   beforeEach(() => {
     sessionStorage.clear();
-    Object.assign(picture, { metaRecords: 0, rvfcCallbacks: 0, codec: 'hevc', stats: [] });
+    Object.assign(picture, { metaRecords: 0, rvfcCallbacks: 0, codec: 'hevc', stats: [], drawnFrames: 0 });
     Object.assign(picture.element, { paused: false, readyState: 4 });
     picture.reattach.mockReset();
     picture.reattach.mockImplementation(async () => undefined);
@@ -751,6 +1360,79 @@ describe('useSwoopSession — a picture that froze', () => {
     expect(reports()).toHaveLength(0);
   });
 
+  /**
+   * smooth scaling's canvas draws every frame the host sends, over a video at
+   * opacity 0 that chromium counts every frame of as dropped.
+   */
+  async function drawOnCanvas(seconds: number) {
+    for (let i = 0; i < seconds; i += 1) {
+      picture.metaRecords += 60;
+      quality.totalVideoFrames += 60;
+      quality.droppedVideoFrames += 60;
+      picture.rvfcCallbacks += 60;
+      picture.drawnFrames += 60;
+      await advance(1000);
+    }
+  }
+
+  it('never fires while smooth scaling’s canvas draws, though the element counts every frame dropped', async () => {
+    await open();
+    await connect();
+    await drawOnCanvas(12);
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.stall).toEqual({ recovery: 'none', episodes: 0, kind: null });
+    expect(reports()).toHaveLength(0);
+  });
+
+  it('declares a picture whose canvas stops drawing while the host still sends', async () => {
+    await open();
+    await connect();
+    await drawOnCanvas(3);
+    for (let i = 0; i < 5; i += 1) {
+      picture.metaRecords += 60;
+      quality.totalVideoFrames += 60;
+      quality.droppedVideoFrames += 60;
+      await advance(1000);
+    }
+    expect(reports()).toHaveLength(1);
+    expect(swoop.stats.stall.episodes).toBe(1);
+  });
+
+  it('counts a frame the canvas drew after a reattach as the picture back', async () => {
+    picture.stats = [...RENDER_STATS];
+    picture.reattach.mockImplementation(async () => {
+      // the reloaded element counts from zero, and under the canvas shows none of its own
+      quality.totalVideoFrames = 0;
+      quality.droppedVideoFrames = 0;
+    });
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reattaching');
+
+    picture.drawnFrames += 30;
+    await advance(2000);
+    expect(swoop.state).toBe('connected');
+    expect(swoop.stats.stall.recovery).toBe('none');
+  });
+
+  it('does not take the canvas’s earlier draws for a reloaded element’s new frames', async () => {
+    picture.stats = [...RENDER_STATS];
+    picture.drawnFrames = 100;
+    picture.reattach.mockImplementation(async () => {
+      quality.totalVideoFrames = 0;
+      quality.droppedVideoFrames = 0;
+    });
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reattaching');
+
+    await advance(2000);
+    expect(swoop.state).toBe('ended');
+    expect(swoop.stats.stall.recovery).toBe('reconnecting');
+  });
+
   it('reattaches a picture that decodes but never paints, and keeps the session once frames show', async () => {
     picture.stats = [
       { framesReceived: 100, framesDecoded: 100 },
@@ -838,9 +1520,24 @@ describe('useSwoopSession — a picture that froze', () => {
     await freeze(5);
     expect(swoop.stats.stall.recovery).toBe('reattaching');
     act(() => endIt());
+    // a kill ends the run once its record is read
+    await flush();
     expect(swoop.state).toBe('ended');
     expect(swoop.stats.stall.recovery).toBe('none');
     await advance(5000);
+    expect(swoop.stats.stall.recovery).toBe('none');
+  });
+
+  it('a machine that left the site while its picture was being replaced says so, with no stall notice over it', async () => {
+    await open();
+    await connect();
+    await freeze(5);
+    expect(swoop.stats.stall.recovery).toBe('reconnecting');
+
+    record = ended('machine_removed');
+    await advance(30_000);
+    expect(swoop.state).toBe('error');
+    expect(swoop.error).toBe('this machine has left the site.');
     expect(swoop.stats.stall.recovery).toBe('none');
   });
 
@@ -958,5 +1655,29 @@ describe('useSwoopSession — frames', () => {
     expect(seen).toEqual([{ frameId: 1 }]);
     expect(logged).toHaveBeenCalledWith(expect.stringContaining('[swoop]'), expect.any(Error));
     logged.mockRestore();
+  });
+});
+
+describe('useSwoopSession — smooth scaling’s canvas', () => {
+  it('builds the presenter on the video and the canvas, drawn while smooth scaling is active, from every presented frame', async () => {
+    await open();
+    const canvas = swoop.canvasRef.current;
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    expect(picture.presenter).toEqual({ video: swoop.videoRef.current, options: { canvas, smooth: smoothActive } });
+
+    const metadata = { presentedFrames: 3 } as VideoFrameCallbackMetadata;
+    picture.presents = [];
+    picture.onPresent!(metadata);
+    expect(picture.presents).toEqual([[metadata]]);
+  });
+});
+
+describe('useSwoopSession — the picture box', () => {
+  it("is the video's own rect, which useSwoopView lays out as the picture", async () => {
+    await open();
+    const { video } = wired.session!;
+    const rect = { x: 10, y: 20, left: 10, top: 20, width: 1280, height: 720, right: 1290, bottom: 740 } as DOMRect;
+    video.getBoundingClientRect = () => rect;
+    expect(wired.session!.contentRect()).toBe(rect);
   });
 });

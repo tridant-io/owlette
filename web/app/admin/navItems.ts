@@ -7,7 +7,7 @@
 
 import {
   Users,
-  UserPlus,
+  Building2,
   Package,
   Settings,
   Mail,
@@ -17,27 +17,32 @@ import {
   Bell,
   MonitorPlay,
   Inbox,
-  type LucideIcon,
 } from 'lucide-react';
+import type { ElementType } from 'react';
+import { HootIcon } from '@/components/icons/HootIcon';
 import type { UserRole } from '@/contexts/AuthContext';
 
 /** Lowest global role a destination admits; 'admin' also admits superadmins. */
 export type AdminMinRole = 'admin' | 'superadmin';
 
-/** The sidebar's sections, in the order they are shown. */
+/**
+ * The sidebar's sections, in the order they are shown. A feature is one item
+ * under fleet, never a section of its own (owner, 2026-11-11).
+ */
 export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'configuration', 'support'] as const;
 export type AdminNavGroup = (typeof ADMIN_NAV_GROUPS)[number];
 
 export interface AdminNavItem {
   name: string;
   href: string;
-  icon: LucideIcon;
+  icon: ElementType;
   description: string;
   minRole: AdminMinRole;
   group: AdminNavGroup;
 }
 
-// in display order: grouped by job, people first and support last (owner, 2026-10-15)
+// in display order: grouped by job, people first and support last (owner, 2026-10-15);
+// sites leads the fleet, since a site holds its machines (owner, 2026-11-10)
 const NAV_ITEMS: AdminNavItem[] = [
   {
     name: 'users',
@@ -48,12 +53,12 @@ const NAV_ITEMS: AdminNavItem[] = [
     group: 'people',
   },
   {
-    name: 'members',
-    href: '/admin/members',
-    icon: UserPlus,
-    description: 'manage site members',
+    name: 'sites',
+    href: '/admin/sites',
+    icon: Building2,
+    description: 'your sites, their members and settings',
     minRole: 'admin',
-    group: 'people',
+    group: 'fleet',
   },
   {
     name: 'installers',
@@ -75,7 +80,15 @@ const NAV_ITEMS: AdminNavItem[] = [
     name: 'swoop',
     href: '/admin/swoop',
     icon: MonitorPlay,
-    description: 'view and end live swoop sessions',
+    description: 'turn swoop on per site, and see and end live sessions',
+    minRole: 'admin',
+    group: 'fleet',
+  },
+  {
+    name: 'hoot',
+    href: '/admin/hoot',
+    icon: HootIcon,
+    description: 'which machines may act on others through hoot',
     minRole: 'admin',
     group: 'fleet',
   },

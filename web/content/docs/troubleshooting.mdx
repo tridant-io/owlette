@@ -191,7 +191,7 @@ some hoot tools are Windows only; on a Mac or Linux machine they refuse rather t
 |-----|---------|-------|-------|
 | service | `C:\ProgramData\Owlette\logs\service.log` | `/Library/Application Support/Owlette/logs/service.log` | `/var/lib/owlette/logs/service.log` |
 | desktop app (per-user) | `%LOCALAPPDATA%\app.owlette.desktop\logs\owlette-desktop.log` | `~/Library/Logs/app.owlette.desktop/owlette-desktop.log` | `~/.local/share/app.owlette.desktop/logs/owlette-desktop.log` |
-| hoot | `logs\cortex.log` | `logs/cortex.log` | `logs/cortex.log` |
+| hoot | `logs\cortex.log` | `logs/cortex/cortex.log` | `logs/cortex/cortex.log` |
 | pairing | `logs\pairing_debug.log` | `logs/pairing_debug.log`, and `logs/pairing.log` for a preseed | `logs/pairing_debug.log`, and `logs/pairing.log` for a preseed |
 | self-update | `logs\installer_update.log` | `logs/update_installer.log` | `journalctl -u owlette-update` |
 | swoop streamer | `logs\swoop\swoop.log` | `logs/swoop/swoop.log` | — |

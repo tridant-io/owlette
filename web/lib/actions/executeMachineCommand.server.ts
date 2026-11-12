@@ -46,6 +46,13 @@ export const ALLOWED_COMMAND_TYPES: ReadonlySet<string> = new Set<string>([
   'update_owlette',
 ]);
 
+/**
+ * queued only by a route that passes `dashboardOnly`, never through the allowlist
+ * above: that one also serves api keys, talon outputs and the like, and these
+ * tell a caller what is on a machine's disk.
+ */
+const DASHBOARD_ONLY_COMMAND_TYPES: ReadonlySet<string> = new Set<string>(['check_path']);
+
 // the types every plan may queue (plan.md decision 7): every plan keeps
 // updating, and anything already running can always be stopped.
 // dismissing a pending reboot also resets the relaunch counters crash-restart needs.
@@ -74,9 +81,12 @@ export interface ExecuteMachineCommandInput {
   /**
    * a person's approval to act inside the machine's active hours, written onto
    * the envelope as `activeHoursOverride: { reason, approvedBy: ctx.auditActor }`;
-   * refused for any actor but `user:` and `apiKey:`.
+   * refused for any actor but `user:` and `apiKey:`, so `system:` and a granted
+   * machine's `machine:` never carry one (ADR 0013, ADR 0017).
    */
   activeHoursOverride?: { reason: string };
+  /** added to the `machine_command_dispatched` audit row. */
+  auditAttributes?: Record<string, unknown>;
 }
 
 export interface ExecuteMachineCommandResult {
@@ -89,7 +99,7 @@ export interface ExecuteMachineCommandContext {
   machineId: string;
   /** Acting principal. Kept as a hook for per-actor branching; unread today. */
   actor: Actor;
-  /** Audit-actor descriptor: `user:<uid>`, `apiKey:<keyId>` or `system:<name>`. */
+  /** Audit-actor descriptor: `user:<uid>`, `apiKey:<keyId>`, `system:<name>` or `machine:<machineId>`. */
   auditActor: string;
   /**
    * Stamped into the envelope so the agent write-back correlates with the
@@ -174,7 +184,7 @@ export type ResolvedActiveHoursOverride =
 /**
  * a caller's `active_hours_override` as the envelope value, `approvedBy` the
  * actor. only a person approves one: a dashboard user or an api key's owner,
- * never `system:`. undefined or null means no override.
+ * never `system:` or `machine:`. undefined or null means no override.
  */
 export function resolveActiveHoursOverride(value: unknown, actor: string): ResolvedActiveHoursOverride {
   const parsed = parseActiveHoursOverride(value);
@@ -228,6 +238,8 @@ export interface ExecuteMachineCommandOptions {
   db?: ReturnType<typeof getAdminDb>;
   /** Override the wall-clock `now` — unit tests use this for deterministic command ids. */
   now?: () => number;
+  /** the caller is a session-only dashboard route, and may queue `DASHBOARD_ONLY_COMMAND_TYPES`. */
+  dashboardOnly?: boolean;
 }
 
 export async function executeMachineCommand(
@@ -258,7 +270,10 @@ export async function executeMachineCommand(
     );
   }
   const cmdType = input.type.trim();
-  if (!ALLOWED_COMMAND_TYPES.has(cmdType)) {
+  if (
+    !ALLOWED_COMMAND_TYPES.has(cmdType) &&
+    !(options.dashboardOnly && DASHBOARD_ONLY_COMMAND_TYPES.has(cmdType))
+  ) {
     throw new ExecuteMachineCommandError(
       400,
       'unsupported_command_type',
@@ -363,6 +378,7 @@ export async function executeMachineCommand(
       ...(activeHoursOverride
         ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
         : {}),
+      ...input.auditAttributes,
     },
   });
 

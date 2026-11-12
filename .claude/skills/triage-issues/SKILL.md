@@ -35,11 +35,11 @@ A **403 `scope_insufficient`** means the owner has not ticked issue read/write o
 
 ## steps
 
-1. **List new issues.**
+1. **List the issues nobody has written up**: every `new` one, and every `triaged` one with no `triageNote`. Opening an issue in the admin panel marks it triaged without a note, so an issue someone only looked at stays in this queue.
    ```bash
    mkdir -p "$SCRATCH/issues"
-   curl -sS -H "x-api-key: $KEY" "$API/api/admin/issues?status=new&page_size=100" -o "$SCRATCH/issues/$ENV-new.json" -w '%{http_code}\n'
-   node -e 'for (const i of require(process.argv[1]).issues) console.log(`#${i.number ?? i.id}`, i.category, i.appVersion ?? "-", i.attachments.available ? (i.attachments.files.length ? "files" : "zip") : "", JSON.stringify(i.title))' "$SCRATCH/issues/$ENV-new.json"
+   for S in new triaged; do curl -sS -H "x-api-key: $KEY" "$API/api/admin/issues?status=$S&page_size=100" -o "$SCRATCH/issues/$ENV-$S.json" -w '%{http_code}\n'; done
+   node -e 'for (const f of process.argv.slice(1)) for (const i of require(f).issues) if (i.status === "new" || !i.triageNote) console.log(`#${i.number ?? i.id}`, i.status, i.category, i.appVersion ?? "-", i.attachments.available ? (i.attachments.files.length ? "files" : "zip") : "", JSON.stringify(i.title))' "$SCRATCH/issues/$ENV-new.json" "$SCRATCH/issues/$ENV-triaged.json"
    ```
    Follow `nextPageToken` with `&page_token=` when present. An issue with `number: null` predates the backfill; use its `id` wherever `$N` appears.
 

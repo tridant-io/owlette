@@ -9,7 +9,9 @@ updates:
   # weekly PR. Dependabot bumps version tags today; once actions are pinned to
   # SHAs it bumps the SHA and its trailing "# vX" comment together.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/owlette-roost-deploy
     target-branch: dev
     schedule:
       interval: weekly
@@ -69,12 +71,13 @@ updates:
       - dependency-name: "eslint-config-next"
         versions: [">=16.4.0"]
 
-  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, and
-  # the swoop remote-desktop host crate.
+  # Rust crates: the owlette-host service wrapper, the Tauri desktop app, the
+  # swoop viewer app, and the swoop remote-desktop host crate.
   - package-ecosystem: cargo
     directories:
       - /agent/host
       - /desktop/src-tauri
+      - /desktop/viewer
       - /agent/swoop
     target-branch: dev
     schedule:
@@ -90,12 +93,11 @@ updates:
       prefix: deps
 
   # Python dependencies: the agent, the published Python SDK, and the
-  # integration / agent-runner test harnesses.
+  # agent-runner test harness.
   - package-ecosystem: pip
     directories:
       - /agent
       - /sdks/python
-      - /test/integration
       - /test/infra/agent-runner
     target-branch: dev
     schedule:

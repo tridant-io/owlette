@@ -8,13 +8,11 @@ vi.mock('@tauri-apps/api/event', () => ({ listen: (...args: unknown[]) => listen
 
 const {
   OWLETTE_FILES,
-  SERVICE_STATUS_STALE_SECONDS,
   appearanceTheme,
   isServiceDown,
   onOwletteFileChanged,
   onOwletteFileChangedFor,
   onSecondInstance,
-  owletteDataRoot,
   readOwletteJson,
   serverFromArgs,
   serviceRestart,
@@ -56,10 +54,6 @@ describe('seam constants', () => {
       serviceStatus: 'tmp/service_status.json',
     })
   })
-
-  it('keeps the 120 s staleness rule the tray uses', () => {
-    expect(SERVICE_STATUS_STALE_SECONDS).toBe(120)
-  })
 })
 
 describe('json commands', () => {
@@ -90,13 +84,6 @@ describe('json commands', () => {
     invoke.mockRejectedValue('config/config.json contains invalid JSON: EOF while parsing')
 
     await expect(readOwletteJson(OWLETTE_FILES.config)).rejects.toContain('invalid JSON')
-  })
-
-  it('resolves the data root', async () => {
-    invoke.mockResolvedValue('C:\\ProgramData\\Owlette')
-
-    await expect(owletteDataRoot()).resolves.toBe('C:\\ProgramData\\Owlette')
-    expect(invoke).toHaveBeenCalledWith('owlette_data_root')
   })
 })
 
@@ -139,6 +126,25 @@ describe('service commands', () => {
     expect(isServiceDown({ ...healthy, running: false, state: 'stopped' })).toBe(true)
     expect(isServiceDown({ ...healthy, installed: false })).toBe(true)
   })
+
+  it('takes the words the host uses off windows', async () => {
+    // service_ctl.rs passes systemd's ActiveState and UnitFileState through on linux,
+    // names the start type `launchd` on macos, and restarts macos through the seam
+    const linux: ServiceStatus = {
+      installed: true,
+      running: false,
+      state: 'activating',
+      startType: 'enabled',
+      statusFile: { exists: true, ageSecs: 12, stale: false },
+    }
+    const macos: ServiceStatus = { ...linux, running: true, state: 'running', startType: 'launchd' }
+    const restart: Awaited<ReturnType<typeof serviceRestart>> = { method: 'seam', stateBefore: 'running' }
+    invoke.mockResolvedValue(restart)
+
+    expect(isServiceDown(linux)).toBe(true)
+    expect(isServiceDown(macos)).toBe(false)
+    await expect(serviceRestart()).resolves.toEqual(restart)
+  })
 })
 
 describe('terminate_pid', () => {
@@ -150,23 +156,38 @@ describe('terminate_pid', () => {
       imagePath: 'C:\\apps\\player.exe',
     })
 
-    await terminatePid(4242, 'C:\\apps\\player.exe', 2000)
+    await terminatePid(4242, 'C:\\apps\\player.exe', null, 2000)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'C:\\apps\\player.exe',
+      recorded: null,
       gracefulTimeoutMs: 2000,
+    })
+  })
+
+  it('forwards what the service recorded about the pid', async () => {
+    invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
+
+    await terminatePid(4242, 'player.exe', { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' })
+
+    expect(invoke).toHaveBeenCalledWith('terminate_pid', {
+      pid: 4242,
+      expectedExe: 'player.exe',
+      recorded: { createTime: 1788367385.5616167, exe: 'c:\\apps\\player.exe' },
+      gracefulTimeoutMs: null,
     })
   })
 
   it('lets the host apply its own grace period when none is given', async () => {
     invoke.mockResolvedValue({ method: 'not_found', waitedMs: 0, windowsClosed: 0, imagePath: null })
 
-    await terminatePid(4242, 'player.exe')
+    await terminatePid(4242, 'player.exe', null)
 
     expect(invoke).toHaveBeenCalledWith('terminate_pid', {
       pid: 4242,
       expectedExe: 'player.exe',
+      recorded: null,
       gracefulTimeoutMs: null,
     })
   })

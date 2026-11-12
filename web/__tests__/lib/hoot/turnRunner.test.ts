@@ -166,7 +166,15 @@ function baseParams(overrides: Partial<StartTurnParams> = {}): StartTurnParams {
     siteId: SITE_ID,
     messages: [userMsg('u1', 'check the cpu')],
     userId: 'user-1',
-    access: { role: 'admin', isSuperadmin: false, isSiteAdmin: true, isSiteOwner: true },
+    access: {
+      role: 'admin',
+      siteRole: 'owner',
+      swoopMode: null,
+      standing: { role: 'owner', swoopMode: null, machineIds: null },
+      isSuperadmin: false,
+      isSiteAdmin: true,
+      isSiteOwner: true,
+    },
     resolved: resolvedOn([MACHINE_ID]),
     turnTarget: { machineIds: [MACHINE_ID], fanOut: false, source: 'chat' },
     chatTarget: { machineIds: [MACHINE_ID] },
@@ -489,6 +497,120 @@ describe('startTurn — happy path', () => {
     expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
       maxToolTier: 1,
     });
+  });
+
+  it('hands the tools the machine that started the turn', async () => {
+    const machineActor = {
+      type: 'machine' as const,
+      siteId: SITE_ID,
+      machineId: 'lobby-01',
+      maxTier: 2 as const,
+      machineIds: [MACHINE_ID],
+    };
+    await collectChunks(startTurn(fakeDb, baseParams({ machineActor })));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({ machineActor });
+  });
+
+  it('hands the tools no machine on a turn a person started', async () => {
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7].machineActor).toBeUndefined();
+  });
+
+  it('hands the tools the swoop mode beside the site role, so an admin held to view stays held', async () => {
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'view',
+            standing: { role: 'admin', swoopMode: 'view', machineIds: null },
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userStanding: { role: 'admin', swoopMode: 'view', machineIds: null },
+      machineScope: null,
+    });
+  });
+
+  it('hands a scoped turn its standing and scope, and lists the site within that scope', async () => {
+    const standing = { role: 'admin' as const, swoopMode: 'control' as const, machineIds: [MACHINE_ID] };
+    (hootUtils.listSiteMachines as jest.Mock).mockResolvedValue([
+      { id: MACHINE_ID, online: true, hootEnabled: true, activeHoursGuard: false },
+    ]);
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        baseParams({
+          access: {
+            role: 'member',
+            siteRole: 'admin',
+            swoopMode: 'control',
+            standing,
+            isSuperadmin: false,
+            isSiteAdmin: true,
+            isSiteOwner: false,
+          },
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, [MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual([MACHINE_ID]);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][7]).toMatchObject({
+      userStanding: standing,
+      machineScope: [MACHINE_ID],
+    });
+  });
+
+  it('drops a resolved machine that has left the scope since the turn was resolved', async () => {
+    // the real listing: both machines are online on the site, one is outside the scope now
+    const { listSiteMachines } = jest.requireActual('@/lib/hoot-utils.server');
+    const docs = [
+      { id: 'machine-1', data: () => ({ online: true }) },
+      { id: 'machine-2', data: () => ({ online: true }) },
+    ];
+    const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
+    );
+
+    await collectChunks(
+      startTurn(
+        fakeDb,
+        siteParams({
+          access: {
+            role: 'member',
+            siteRole: 'member',
+            swoopMode: null,
+            standing: { role: 'member', swoopMode: null, machineIds: ['machine-1'] },
+            isSuperadmin: false,
+            isSiteAdmin: false,
+            isSiteOwner: false,
+          },
+          resolved: resolvedOn(['machine-1', 'machine-2']),
+        }),
+      ),
+    );
+    await flushAsync();
+
+    expect(hootUtils.listSiteMachines).toHaveBeenCalledWith(fakeDb, SITE_ID, ['machine-1']);
+    expect((hootUtils.buildExecutableTools as jest.Mock).mock.calls[0][6]).toEqual(['machine-1']);
+    expect(turnStore.recordResolvedMachines).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, ['machine-1']);
   });
 });
 
@@ -847,6 +969,75 @@ describe('startTurn — heartbeat abort decision', () => {
     // A single (or repeated) transient Firestore blip must not kill a healthy,
     // still-owned turn — the tool ran to completion without an abort.
     expect(observe.aborted).toBe(false);
+  });
+});
+
+describe('startTurn — the ownership check a tool asks before it writes', () => {
+  /**
+   * A tool that asks, as deploy_software does before its first write, whether the turn
+   * still owns the chat. The heartbeat stays at its 20s default, so any abort it sees
+   * came from that question, not from a beat.
+   */
+  function ownershipProbeSetup(observe: { ownership?: unknown; abortedAfter?: boolean }) {
+    (hootUtils.buildExecutableTools as jest.Mock).mockImplementation((...args: unknown[]) => {
+      const { toolCallbacks } = args[7] as {
+        toolCallbacks?: { stillOwnsChat?: () => Promise<unknown>; abortSignal?: AbortSignal };
+      };
+      return {
+        deploy_software: tool({
+          description: 'deploy',
+          inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+          execute: async () => {
+            observe.ownership = await toolCallbacks?.stillOwnsChat?.();
+            observe.abortedAfter = toolCallbacks?.abortSignal?.aborted;
+            return { ok: true };
+          },
+        }),
+      };
+    });
+
+    let call = 0;
+    mockModel = new MockLanguageModelV3({
+      doStream: async () => {
+        call += 1;
+        return {
+          stream: simulateReadableStream({
+            chunks:
+              call === 1
+                ? [
+                    { type: 'tool-call' as const, toolCallId: 'call_deploy', toolName: 'deploy_software', input: '{}' },
+                    { ...finishChunk, finishReason: { unified: 'tool-calls' as const, raw: undefined } },
+                  ]
+                : textChunks('done'),
+          }),
+        };
+      },
+    });
+  }
+
+  it("reads the turn's ownership the way the heartbeat does, and a loss stops the turn at once", async () => {
+    (turnStore.touch as jest.Mock).mockResolvedValue('lost');
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe('lost');
+    expect(observe.abortedAfter).toBe(true);
+    expect(turnStore.touch).toHaveBeenLastCalledWith(fakeDb, CHAT_ID, TURN_ID);
+  });
+
+  it.each(['owned', 'error'] as const)("leaves the turn running on '%s', as the heartbeat does", async (ownership) => {
+    (turnStore.touch as jest.Mock).mockResolvedValue(ownership);
+    const observe: { ownership?: unknown; abortedAfter?: boolean } = {};
+    ownershipProbeSetup(observe);
+
+    await collectChunks(startTurn(fakeDb, baseParams()));
+    await flushAsync();
+
+    expect(observe.ownership).toBe(ownership);
+    expect(observe.abortedAfter).toBe(false);
   });
 });
 
@@ -1314,8 +1505,8 @@ describe('startTurn — which agents hold a restart for active hours', () => {
       { id: 'machine-3', data: () => ({ online: true }) },
     ];
     const machinesDb = { collection: () => ({ doc: () => ({ collection: () => ({ get: async () => ({ docs }) }) }) }) };
-    (hootUtils.listSiteMachines as jest.Mock).mockImplementation((_db: unknown, siteId: string) =>
-      listSiteMachines(machinesDb, siteId),
+    (hootUtils.listSiteMachines as jest.Mock).mockImplementation(
+      (_db: unknown, siteId: string, machineScope: readonly string[] | null) => listSiteMachines(machinesDb, siteId, machineScope),
     );
 
     await collectChunks(startTurn(fakeDb, siteParams({ resolved: resolvedOn(['machine-1', 'machine-2']) })));

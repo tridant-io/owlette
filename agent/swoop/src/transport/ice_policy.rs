@@ -65,6 +65,18 @@
 //! on, and the session ends that viewer. Until then the viewer is held,
 //! because a lid, a roam or a page re-dialing the room comes back.
 //!
+//! # `checking` is bounded too
+//!
+//! A restart flushes str0m's pairs and remote candidates, and a browser's
+//! restart offer carries none: its candidates trickle after it. str0m counts
+//! an ICE agent with no remote candidate as still possible, so if they never
+//! come it stays in `checking` for good and never says `disconnected`
+//! (TEC-A4D, 2026-11-10: a viewer whose page went away mid-restart sat on the
+//! roster for hours, its records overflowing the queue). Checking is not a
+//! lost path, so no frame waits on it; but checking that has found no pair
+//! [`DISCONNECTED_LIMIT`] after it began is given up on the same way, the
+//! first negotiation included.
+//!
 //! # Logging
 //!
 //! Nothing here logs. Every decision is returned to the caller, which is the
@@ -100,7 +112,8 @@ pub const DISCONNECTED_GRACE: Duration = Duration::from_secs(2);
 /// page bounds its own restart at 10 s, counted only while its signalling
 /// socket is open, so a viewer whose whole network dropped can come back
 /// through a re-dial and still find its peer; a path gone for longer is a
-/// new session.
+/// new session. ICE checking that finds no pair is given up on this long
+/// after it began.
 pub const DISCONNECTED_LIMIT: Duration = Duration::from_secs(60);
 
 /// The floor between two recovery restarts. An ICE restart is a renegotiation
@@ -317,10 +330,12 @@ pub enum IceEvent {
     Connected { relayed: bool },
     /// The selected pair changed under a live session.
     PairChanged { relayed: bool },
-    /// Checks are failing but the pair has not been given up on yet.
+    /// No pair yet, and checks are running: the first negotiation, or a
+    /// restart until its new pair is nominated.
+    Checking,
+    /// Checks are failing but the pair has not been given up on yet. str0m's
+    /// agent has no `failed` state: this is the last word it gives.
     Disconnected,
-    /// ICE gave up.
-    Failed,
     /// A network interface came up, went down or changed address.
     InterfaceChanged,
 }
@@ -333,8 +348,6 @@ pub enum RestartReason {
     RelayPromotion,
     /// `disconnected` outlasted [`DISCONNECTED_GRACE`].
     LinkDown,
-    /// ICE reported `failed`.
-    Failed,
     /// The machine's interfaces changed under a live session.
     InterfaceChanged,
 }
@@ -346,8 +359,8 @@ pub enum IceAction {
     /// fresh `accept_offer` once the browser re-offers, which is why the host
     /// asks for it rather than doing it.
     RestartIce(RestartReason),
-    /// The link has been down for [`DISCONNECTED_LIMIT`] in a row: end this
-    /// viewer. Asked once per episode.
+    /// The link has been down, or ICE checking without a pair, for
+    /// [`DISCONNECTED_LIMIT`] in a row: end this viewer. Asked once per episode.
     GiveUp,
 }
 
@@ -384,6 +397,11 @@ pub struct IcePolicy {
     /// When the link went down, kept through the restart `link` moves on to,
     /// so the give-up clock runs from the loss and not from the ask.
     down_since: Option<Instant>,
+    /// When ICE last started checking with no pair, until one is nominated.
+    /// Not a lost path, so no frame waits on it; it has its own give-up clock
+    /// because str0m never reports `disconnected` for an ICE agent that has no
+    /// remote candidate to check.
+    checking_since: Option<Instant>,
     last_restart: Option<Instant>,
     restarts: u32,
 }
@@ -400,6 +418,7 @@ impl IcePolicy {
             promotion: Promotion::Idle,
             link: Link::Up,
             down_since: None,
+            checking_since: None,
             last_restart: None,
             restarts: 0,
         }
@@ -427,6 +446,7 @@ impl IcePolicy {
             IceEvent::Connected { relayed } | IceEvent::PairChanged { relayed } => {
                 self.link = Link::Up;
                 self.down_since = None;
+                self.checking_since = None;
                 self.arm_promotion(now, relayed);
                 None
             }
@@ -439,9 +459,9 @@ impl IcePolicy {
                 self.down_since.get_or_insert(now);
                 None
             }
-            IceEvent::Failed => {
-                // No grace: `failed` is ICE saying the checks are over.
-                self.restart(now, RestartReason::Failed)
+            IceEvent::Checking => {
+                self.checking_since.get_or_insert(now);
+                None
             }
             IceEvent::InterfaceChanged => self.restart(now, RestartReason::InterfaceChanged),
         }
@@ -449,11 +469,12 @@ impl IcePolicy {
 
     /// Run the timers. Cheap enough for the session's own loop.
     pub fn poll(&mut self, now: Instant) -> Option<IceAction> {
-        if self
-            .down_since
-            .is_some_and(|since| now.saturating_duration_since(since) >= DISCONNECTED_LIMIT)
-        {
+        let past_limit = |since: Option<Instant>| {
+            since.is_some_and(|at| now.saturating_duration_since(at) >= DISCONNECTED_LIMIT)
+        };
+        if past_limit(self.down_since) || past_limit(self.checking_since) {
             self.down_since = None;
+            self.checking_since = None;
             return Some(IceAction::GiveUp);
         }
         if let Link::Down(since) = self.link {
@@ -1094,15 +1115,51 @@ mod tests {
         assert_eq!(policy.poll(at(base, 115_000)), Some(IceAction::GiveUp));
     }
 
+    /// TEC-A4D, 2026-11-10: a restart whose candidates never came. str0m sits
+    /// in `checking` for good and never says `disconnected`, so the checking
+    /// itself is what gives the viewer up, on the same limit a down link has.
     #[test]
-    fn failed_restarts_at_once() {
+    fn a_restart_that_never_finds_a_pair_gives_the_viewer_up_at_the_limit() {
         let base = Instant::now();
         let mut policy = IcePolicy::new();
-
+        policy.observe(base, IceEvent::Connected { relayed: true });
         assert_eq!(
-            policy.observe(base, IceEvent::Failed),
-            Some(IceAction::RestartIce(RestartReason::Failed))
+            policy.poll(at(base, 3_000)),
+            Some(IceAction::RestartIce(RestartReason::RelayPromotion))
         );
+
+        assert_eq!(policy.observe(at(base, 3_500), IceEvent::Checking), None);
+        assert_eq!(policy.poll(at(base, 63_499)), None, "held until the limit");
+        assert_eq!(policy.poll(at(base, 63_500)), Some(IceAction::GiveUp));
+        assert_eq!(policy.poll(at(base, 90_000)), None, "asked once");
+    }
+
+    /// A restart that finds its pair is the promotion working, and checking
+    /// is no loss: the picture keeps going out and nothing is asked for.
+    #[test]
+    fn checking_holds_no_frames_and_a_pair_ends_it() {
+        let base = Instant::now();
+        let mut policy = IcePolicy::new();
+        policy.observe(base, IceEvent::Connected { relayed: true });
+        policy.poll(at(base, 3_000));
+
+        policy.observe(at(base, 3_500), IceEvent::Checking);
+        assert_eq!(policy.down_for(at(base, 30_000)), None, "not a lost path");
+        assert_eq!(policy.poll(at(base, 30_000)), None);
+        policy.observe(at(base, 40_000), IceEvent::Connected { relayed: false });
+        assert_eq!(policy.poll(at(base, 120_000)), None);
+        assert_eq!(policy.restarts(), 1, "only the promotion");
+    }
+
+    /// The first negotiation is checking too: an offer whose candidates
+    /// never arrive is a viewer that never connects, and it goes the same way.
+    #[test]
+    fn a_first_negotiation_that_never_connects_is_given_up() {
+        let base = Instant::now();
+        let mut policy = IcePolicy::new();
+        policy.observe(base, IceEvent::Checking);
+        assert_eq!(policy.poll(at(base, 59_999)), None);
+        assert_eq!(policy.poll(at(base, 60_000)), Some(IceAction::GiveUp));
     }
 
     #[test]
@@ -1136,8 +1193,8 @@ mod tests {
         let base = Instant::now();
         let mut policy = IcePolicy::new();
         policy.observe(base, IceEvent::Connected { relayed: true });
-        // A failure inside the promotion window takes the restart.
-        policy.observe(at(base, 500), IceEvent::Failed);
+        // An interface change inside the promotion window takes the restart.
+        policy.observe(at(base, 500), IceEvent::InterfaceChanged);
 
         // The promotion falls due inside the cooldown, so it is refused — and
         // it is spent rather than held, or one attempt becomes two.

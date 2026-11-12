@@ -39,12 +39,14 @@ describe('TimezoneSelect', () => {
     expect(await screen.findByRole('button', { name: /Tokyo/ })).not.toHaveAttribute('aria-current');
   });
 
-  it('keeps keyboard focus visible on the trigger, the search box and the options', async () => {
+  it('keeps keyboard focus visible on the trigger and the options', async () => {
     await openPicker();
 
     expect(screen.getByRole('combobox')).not.toHaveClass('outline-none');
+    // the search is the menus' search row (owner, 2026-11-05): no box and no
+    // outline on the input; its row's rule tints while it has the focus
     const search = screen.getByRole('textbox', { name: 'search timezones' });
-    expect(search).not.toHaveClass('outline-none');
+    expect(search.parentElement).toHaveClass('focus-within:border-ring');
     // 16px below md, so ios safari does not zoom the page on focus
     expect(search).toHaveClass('text-base', 'md:text-sm');
     for (const option of screen.getAllByRole('button')) {

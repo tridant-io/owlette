@@ -71,7 +71,7 @@ for `restart_process`, `timeout_seconds` is the graceful-terminate window before
 | command | description | data payload |
 |---------|-------------|--------------|
 | `install_software` | download, checksum, and install software. refused inside active hours on Windows, see [active hours](#active-hours) | `{installer_url, sha256_checksum, installer_name?, silent_flags?, verify_path?, timeout_seconds?, deployment_id?, parallel_install?, close_processes?, suppress_projects?, activeHoursOverride?}` |
-| `cancel_installation` | cancel an in-progress installer process | `{installer_name}` |
+| `cancel_installation` | stop an install the agent holds, before its installer runs. from agent 4.2.0 `deployment_id` alone is enough; an older agent refuses a cancel without `installer_name`, and acts on one only after the install has ended | `{installer_name, deployment_id?}` |
 | `uninstall_software` | run a software uninstaller | `{software_name, uninstall_command, silent_flags?, installer_type?, verify_paths?, timeout_seconds?, deployment_id?}` |
 | `cancel_uninstall` | cancel an in-progress uninstall process | `{software_name}` |
 | `refresh_software_inventory` | force an immediate installed-software inventory sync | `{}` |
@@ -138,9 +138,9 @@ the server queues these itself; nothing else should write them.
 | `swoop_session_requested` | a viewer has asked for a [swoop](/docs/dashboard/swoop) session; the agent starts the streamer for it, or attaches it to the one already running | `{sid}` |
 | `swoop_kill` | end the named session, or whatever session is running when there is no `sid` | `{sid?}` |
 | `swoop_refresh` | the site turned swoop on or off; the agent updates its standing connection to the signalling room | `{}` |
-| `site_settings_refresh` | a site setting the agent mirrors changed — today the [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) switch; the agent reads its site's settings again | `{}` |
+| `site_settings_refresh` | a site setting the agent mirrors changed: the [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) switch, or whether this machine may act on others ([hoot mcp](/docs/agent/hoot-mcp)). the agent reads its site's settings again and asks at once whether it may act | `{}` |
 
-a swoop command carries a session ID and nothing else: the pending document is readable by every member of the site, so the session's keys and tokens never travel in it, and a swoop command with any other field is refused. all four run on the fast command lane, so a kill never waits behind an install.
+a swoop command carries a session ID and nothing else: the pending document is readable by every member whose access covers the machine, so the session's keys and tokens never travel in it, and a swoop command with any other field is refused. all four run on the fast command lane, so a kill never waits behind an install.
 
 ---
 

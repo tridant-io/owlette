@@ -211,6 +211,10 @@ export async function PATCH(
         });
       }
       updates.paused = body.paused;
+      // the sender switches a failing webhook off with the legacy `enabled: false`;
+      // dropping it leaves `paused` the one switch, and a resume gets ten fresh tries.
+      updates.enabled = FieldValue.delete();
+      if (!body.paused) updates.failCount = 0;
     }
 
     if (Object.keys(updates).length === 0) {

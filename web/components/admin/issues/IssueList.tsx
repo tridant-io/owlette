@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Inbox, Loader2, RefreshCw } from 'lucide-react';
 import { useIssues, type Issue, type IssueStatus } from '@/hooks/useIssues';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { ISSUE_STATUSES, issueCategoryLabel } from '@/lib/issues';
@@ -28,23 +29,11 @@ function filterLabel(filter: IssueFilter): string {
   return filter === 'all' ? 'all' : ISSUE_STATUS_LABEL[filter];
 }
 
-function StatusFilter({ value, onChange }: { value: IssueFilter; onChange: (filter: IssueFilter) => void }) {
-  return (
-    <div role="group" aria-label="status" className="flex flex-wrap gap-0.5 rounded-lg border border-border bg-card p-0.5">
-      {ISSUE_FILTERS.map((filter) => (
-        <Button
-          key={filter}
-          variant="ghost"
-          size="sm"
-          aria-pressed={value === filter}
-          onClick={() => onChange(filter)}
-          className="h-7 px-2.5 text-xs sm:px-3"
-        >
-          {filterLabel(filter)}
-        </Button>
-      ))}
-    </div>
-  );
+/** the description on one line, less a title the server took from its first line. */
+function issueSnippet(issue: Issue): string {
+  const text = issue.description.text.replace(/\s+/g, ' ').trim();
+  const title = issue.title.replace(/\s+/g, ' ').trim();
+  return title && text.startsWith(title) ? text.slice(title.length).trim() : text;
 }
 
 // one grid, two shapes. a phone: number, title and age on the first line, the
@@ -53,6 +42,7 @@ function StatusFilter({ value, onChange }: { value: IssueFilter; onChange: (filt
 function IssueRow({ issue }: { issue: Issue }) {
   const created = issue.createdAt ? Date.parse(issue.createdAt) : NaN;
   const sender = issueSender(issue);
+  const snippet = issueSnippet(issue);
   return (
     <li>
       <Link
@@ -65,8 +55,9 @@ function IssueRow({ issue }: { issue: Issue }) {
         >
           {issue.number === null ? '—' : `#${issue.number}`}
         </span>
-        <span className="col-[2/4] row-[1] truncate text-sm font-medium text-foreground md:col-[2]">
-          {issue.title || 'untitled'}
+        <span className="col-[2/4] row-[1] truncate text-sm md:col-[2]">
+          <span className="font-medium text-foreground">{issue.title || 'untitled'}</span>
+          {snippet && <span className="text-muted-foreground"> — {snippet}</span>}
         </span>
         <span className="col-[2] row-[2] md:col-[3] md:row-[1/3]">
           <IssueStatusBadge status={issue.status} />
@@ -186,7 +177,14 @@ export function IssueList({
               <RefreshCw />
             </IconButton>
           }
-          toolbar={<StatusFilter value={filter} onChange={onFilterChange} />}
+          toolbar={
+            <SegmentedControl
+              label="status"
+              options={ISSUE_FILTERS.map((f) => ({ value: f, label: filterLabel(f) }))}
+              value={filter}
+              onChange={onFilterChange}
+            />
+          }
         />
         <IssueResults key={`${filter}:${reloads}`} filter={filter} />
       </div>

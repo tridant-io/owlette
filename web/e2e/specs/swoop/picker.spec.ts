@@ -8,7 +8,8 @@
  * the session in the same window, which comes back to the picker when the
  * session ends, and a right-click or shift+enter opens it in a new one. signed
  * out, it goes through the login and the second factor and comes back. the
- * cards are a grid: four columns on a wide screen, one on a phone.
+ * cards are a grid: four columns on a wide screen, one on a phone. the online
+ * card names who is in its machine's session, and the offline one nobody.
  *
  * a site and users of the spec's own, so no fixture's saved site moves.
  */
@@ -149,6 +150,46 @@ test("the online card's corner button hands the machine to owlette swoop, signed
   // nothing took the link and the page kept its focus: the app is offered instead.
   await expect(page.getByText("the owlette swoop desktop app isn't installed on this computer")).toBeVisible();
   await expect(page.getByRole('button', { name: 'get it' })).toBeVisible();
+});
+
+test("a card names who is in its machine's session, and an offline card nobody", async ({ page }) => {
+  const db = getAdminDb();
+  const machineDocs = [ONLINE_ID, OFFLINE_ID].map((id) => db.doc(`sites/${SITE_ID}/machines/${id}`));
+  // what the server mirrors from the session records; on the offline machine it is a stale copy
+  const mirror = {
+    capabilities: { swoop: 1 },
+    swoopViewers: 2,
+    swoopSeats: [
+      { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true },
+      { uid: 'uid-bob', displayName: 'Bob Watcher', ctl: false },
+    ],
+  };
+  await Promise.all(machineDocs.map((machineDoc) => machineDoc.set(mirror, { merge: true })));
+  try {
+    await page.goto('/login?redirect=%2Fswoop');
+    await fillLogin(page, viewer);
+    await expect(page).toHaveURL(/\/swoop$/, { timeout: 20_000 });
+
+    const online = page.getByTestId(`swoop-picker-machine-${ONLINE_ID}`);
+    await expect(online.getByText('Ada L.', { exact: true })).toBeVisible();
+    await expect(online.getByText('Bob W.', { exact: true })).toBeVisible();
+    await expect(online.getByTitle('Ada Lovelace, Bob Watcher')).toBeVisible();
+    // what a screen reader hears in place of the short names
+    await expect(online).toHaveAccessibleName(/2 in the session: Ada Lovelace, Bob Watcher/);
+    // a picture, not an assertion: the people sit on the card's right without growing it
+    await test.info().attach('card with people', { body: await online.screenshot(), contentType: 'image/png' });
+    await test.info().attach('picker with people', { body: await page.screenshot(), contentType: 'image/png' });
+
+    const offline = page.getByTestId(`swoop-picker-machine-${OFFLINE_ID}`);
+    await expect(offline).toBeDisabled();
+    await expect(offline).not.toContainText('Ada');
+    await expect(offline).not.toContainText('in the session');
+  } finally {
+    // every other test here reads the same two cards
+    await Promise.all(
+      machineDocs.map((machineDoc) => machineDoc.set({ swoopViewers: 0, swoopSeats: [] }, { merge: true })),
+    );
+  }
 });
 
 test.describe('inside owlette swoop', () => {

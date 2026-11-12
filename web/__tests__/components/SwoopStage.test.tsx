@@ -15,9 +15,10 @@
  */
 
 import React from 'react';
-import { render, screen, cleanup, act } from '@testing-library/react';
+import { render, screen, cleanup, act, within } from '@testing-library/react';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { setMouseCapture } from '@/lib/swoop/mouseCapture';
+import type { SwoopSession } from '@/lib/swoop/features';
 
 /** the input capture's escape-twice seam, or null for a view-only session. */
 let mockCapture: {
@@ -54,7 +55,17 @@ afterEach(() => {
 function renderStage(props: Partial<React.ComponentProps<typeof SwoopStage>> = {}) {
   const stageRef = React.createRef<HTMLDivElement>();
   const videoRef = React.createRef<HTMLVideoElement>();
-  render(<SwoopStage session={null} state="connected" stageRef={stageRef} videoRef={videoRef} {...props} />);
+  const canvasRef = React.createRef<HTMLCanvasElement>();
+  render(
+    <SwoopStage
+      session={null}
+      state="connected"
+      stageRef={stageRef}
+      videoRef={videoRef}
+      canvasRef={canvasRef}
+      {...props}
+    />,
+  );
   return stageRef;
 }
 
@@ -273,6 +284,43 @@ describe('SwoopStage — leaving with the keyboard', () => {
   });
 });
 
+describe('SwoopStage layout', () => {
+  it('names the stage, and lays the video out in an area inside it', () => {
+    const stageRef = renderStage();
+    const stage = screen.getByTestId('swoop-stage');
+    const area = screen.getByTestId('swoop-area');
+    const video = screen.getByLabelText('remote screen', { selector: 'video' });
+    expect(stage).toBe(stageRef.current);
+    expect(area.parentElement).toBe(stage);
+    expect(video.parentElement).toBe(area);
+    // the area in flow, so the phone keyboard's padding on the stage shrinks it
+    expect(area).toHaveClass('relative', 'h-full', 'w-full');
+    // the video's box is the picture's, written by useSwoopView
+    expect(video).toHaveClass('absolute', 'object-fill');
+    expect(video).not.toHaveClass('object-contain');
+  });
+
+  it('lays smooth scaling’s canvas over the video in the area, out of the way of input and screen readers', () => {
+    renderStage();
+    const area = screen.getByTestId('swoop-area');
+    const canvas = area.querySelector('canvas');
+    expect(canvas).not.toBeNull();
+    expect(canvas!.previousElementSibling).toBe(screen.getByLabelText('remote screen', { selector: 'video' }));
+    expect(canvas).toHaveClass('pointer-events-none', 'absolute', 'inset-0', 'size-full');
+    expect(canvas).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('tells the session’s presenter each time it lays the picture out', () => {
+    const invalidate = jest.fn();
+    renderStage({ session: { presenter: { invalidate } } as unknown as SwoopSession });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(invalidate).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('SwoopStage touch', () => {
   it('keeps touch gestures from panning the page or pulling it to refresh', () => {
     const stageRef = renderStage();
@@ -398,10 +446,10 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: 'swoop is excluded on this machine.',
       refusal: 'machine_excluded',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/swoop',
     });
     expect(screen.queryByText(/turn it on/)).toBeNull();
-    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 
   it('says a plan refusal is about the plan, with the way to upgrade, not the swoop switch', () => {
@@ -409,13 +457,13 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/swoop',
       upgradeHref: '/settings/plan',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro.');
     expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
     expect(screen.queryByText(/turn it on/)).toBeNull();
-    expect(screen.queryByRole('link', { name: 'open site settings' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 
   it('tells someone who does not pay for the site to ask its owner, with no upgrade link', () => {
@@ -423,10 +471,26 @@ describe('SwoopStage — a session that failed or ended', () => {
       state: 'error',
       error: "your plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
-      settingsHref: '/dashboard?settings=site-1',
+      settingsHref: '/admin/swoop',
     });
     expect(screen.getByRole('alert')).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');
     expect(screen.queryByRole('link', { name: 'upgrade' })).toBeNull();
+  });
+
+  it("tells someone with no swoop on the site who to ask, not the api's sentence or the swoop switch", () => {
+    renderStage({
+      state: 'error',
+      error: 'capability not granted',
+      refusal: 'capability_missing',
+      // an admin held to no swoop still gets a settings link, and the switch there is not what refused them
+      settingsHref: '/admin/swoop',
+    });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent("you can't use swoop on this site");
+    expect(alert).toHaveTextContent('a site owner or admin sets who can watch and control. ask one of them.');
+    expect(screen.getByRole('link', { name: 'back to dashboard' })).toHaveAttribute('href', '/dashboard');
+    expect(screen.queryByText(/capability not granted/)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'open swoop settings' })).toBeNull();
   });
 });
 
@@ -454,5 +518,45 @@ describe('SwoopStage — a picture that froze', () => {
     renderStage({ state: 'ended' });
     expect(screen.getByText('session ended')).toBeInTheDocument();
     expect(screen.queryByText(/picture stalled|picture froze/)).toBeNull();
+  });
+});
+
+describe('SwoopStage — a machine that went away', () => {
+  it.each(['ended', 'connecting', 'error'] as const)('a restart speaks for the stage while the session is %s', (state) => {
+    renderStage({ state, restarting: true, retryIn: 4, error: 'this machine did not answer.' });
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('machine is restarting');
+    expect(notice.querySelector('.animate-spin')).not.toBeNull();
+    expect(screen.queryByText('session ended')).toBeNull();
+    expect(screen.queryByText('connecting')).toBeNull();
+    expect(screen.queryByText('this machine did not answer.')).toBeNull();
+  });
+
+  it('a machine that left the site says so, with the way back, and no restart notice', () => {
+    renderStage({ state: 'error', refusal: 'machine_removed', error: 'this machine has left the site.' });
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('this machine has left the site.');
+    expect(within(alert).getByRole('link', { name: 'back to dashboard' })).toBeInTheDocument();
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.queryByText(/reconnecting in/)).toBeNull();
+  });
+
+  it('a restart gives way to a network the machine cannot be reached from', () => {
+    renderStage({ state: 'ended', restarting: true, noPath: 'no_candidates' as never });
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('a link that is down says so over the last frame, with a spinner', () => {
+    renderStage({ state: 'connected', linkLost: true });
+    const notice = screen.getByRole('status');
+    expect(notice).toHaveTextContent('connection lost');
+    expect(notice.querySelector('.animate-spin')).not.toBeNull();
+  });
+
+  it('a live picture says neither', () => {
+    renderStage({ state: 'connected' });
+    expect(screen.queryByText('machine is restarting')).toBeNull();
+    expect(screen.queryByText('connection lost')).toBeNull();
   });
 });

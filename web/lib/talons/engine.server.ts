@@ -26,6 +26,7 @@ import { generateCorrelationId } from '@/lib/auditLog.server';
 import type { Actor } from '@/lib/capabilities';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
+import { TalonAuthorError, resolveTalonAuthor } from './author.server';
 import {
   executeTalonOutput,
   resolveBaseUrl,
@@ -236,6 +237,7 @@ export async function runTalonManual(
 }
 
 function describeActor(actor: Actor): string {
+  if (actor.type === 'machine') return `machine:${actor.machineId}`;
   return actor.type === 'user' ? `user:${actor.userId}` : `system:${actor.name}`;
 }
 
@@ -405,8 +407,8 @@ async function recordTerminalRun(
 }
 
 /**
- * Execute one run end to end: create the record, evaluate the condition, fire
- * the outputs in order, finalize.
+ * Execute one run end to end: create the record, evaluate the condition,
+ * re-check the author, fire the outputs in order, finalize.
  */
 async function executeRun(
   env: RunEnvironment,
@@ -460,29 +462,34 @@ async function executeRun(
       detail: 'condition_passed',
     }));
   } else {
-    const outputCtx: TalonOutputContext = {
-      db: env.db,
-      siteId: env.siteId,
-      siteLabel: env.siteLabel,
-      siteName: env.siteName,
-      talon,
-      talonId: talon.id,
-      talonName: talon.name,
-      triggerSummary: env.triggerSummary,
-      runId: ref.id,
-      correlationId,
-      ...(machine ? { machineId: machine.id, machineName: machine.name } : {}),
-      // Machine-scoped run targets its own machine; site-level fans out.
-      targetMachineIds: machine ? [machine.id] : env.targetMachineIds,
-      ...(conditionForOutputs ? { condition: conditionForOutputs } : {}),
-      baseUrl: env.baseUrl,
-      now: env.now,
-    };
+    const refusal = await authorRefusal(env.db, env.siteId, talon);
+    if (refusal) {
+      outputs = talon.outputs.map((output) => ({ type: output.type, ...refusal }));
+    } else {
+      const outputCtx: TalonOutputContext = {
+        db: env.db,
+        siteId: env.siteId,
+        siteLabel: env.siteLabel,
+        siteName: env.siteName,
+        talon,
+        talonId: talon.id,
+        talonName: talon.name,
+        triggerSummary: env.triggerSummary,
+        runId: ref.id,
+        correlationId,
+        ...(machine ? { machineId: machine.id, machineName: machine.name } : {}),
+        // Machine-scoped run targets its own machine; site-level fans out.
+        targetMachineIds: machine ? [machine.id] : env.targetMachineIds,
+        ...(conditionForOutputs ? { condition: conditionForOutputs } : {}),
+        baseUrl: env.baseUrl,
+        now: env.now,
+      };
 
-    outputs = [];
-    for (const output of talon.outputs) {
-      // Sequential + individually recorded: one failure must not stop the rest.
-      outputs.push(await executeTalonOutput(outputCtx, output));
+      outputs = [];
+      for (const output of talon.outputs) {
+        // Sequential + individually recorded: one failure must not stop the rest.
+        outputs.push(await executeTalonOutput(outputCtx, output));
+      }
     }
   }
 
@@ -516,6 +523,40 @@ async function executeRun(
     ...(condition ? { condition } : {}),
     ...(disabledReason ? { disabledReason } : {}),
   };
+}
+
+/**
+ * a talon acts on its author's authority, so whatever its outputs, the author
+ * is re-resolved before the first one fires. `null` lets them fire; otherwise
+ * each records this instead, as a hoot output records its own author check: an
+ * unrecoverable refusal carries the reason that switches the talon off now, and
+ * an unreadable check stays on the failure counter. either way nothing fires.
+ * the hoot output and the visual check still resolve it themselves, since
+ * neither takes a resolved author.
+ */
+async function authorRefusal(
+  db: Firestore,
+  siteId: string,
+  talon: StoredTalon,
+): Promise<Omit<TalonRunOutput, 'type'> | null> {
+  try {
+    await resolveTalonAuthor(db, siteId, talon);
+    return null;
+  } catch (error) {
+    if (error instanceof TalonAuthorError) {
+      return {
+        status: 'failed',
+        detail: error.reason,
+        error: error.message,
+        disabledReason: error.reason,
+      };
+    }
+    return {
+      status: 'failed',
+      detail: 'author_check_failed',
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 /**

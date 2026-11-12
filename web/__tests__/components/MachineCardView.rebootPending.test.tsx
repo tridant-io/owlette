@@ -35,6 +35,9 @@ jest.mock('@/contexts/AuthContext', () => ({
       timezone: 'UTC',
     },
     isSiteAdmin: () => true,
+    isMachineAdmin: () => true,
+    machineScope: () => null,
+    siteRole: () => 'admin',
   }),
 }));
 

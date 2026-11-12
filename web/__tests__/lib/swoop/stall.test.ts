@@ -15,21 +15,31 @@ import {
 function harness() {
   let at = 0;
   const detector = createStallDetector(() => at);
-  const counters = { hostFrames: 0, totalFrames: 0, droppedFrames: 0, rvfcCallbacks: 0 as number | null };
+  const counters = { hostFrames: 0, totalFrames: 0, droppedFrames: 0, drawnFrames: 0, rvfcCallbacks: 0 as number | null };
   return {
     detector,
-    /** one second later: the host sent `sent`, the element showed `shown`. */
+    /**
+     * one second later: the host sent `sent`, the element showed `shown`, and
+     * smooth scaling's canvas drew `drawn` of the frames the element dropped.
+     */
     tick(
       sent: number,
       shown: number,
-      options: { gated?: boolean; rvfc?: boolean; ms?: number; dropped?: number } = {},
+      options: { gated?: boolean; rvfc?: boolean; ms?: number; dropped?: number; drawn?: number } = {},
     ): StallTick {
       at += options.ms ?? 1000;
       counters.hostFrames += sent;
       counters.totalFrames += shown + (options.dropped ?? 0);
       counters.droppedFrames += options.dropped ?? 0;
-      if (options.rvfc !== false && counters.rvfcCallbacks !== null) counters.rvfcCallbacks += shown;
-      const sample: StallSample = { ...counters, gated: options.gated ?? true };
+      counters.drawnFrames += options.drawn ?? 0;
+      if (options.rvfc !== false && counters.rvfcCallbacks !== null) counters.rvfcCallbacks += shown + (options.drawn ?? 0);
+      const sample: StallSample = {
+        hostFrames: counters.hostFrames,
+        totalFrames: counters.totalFrames,
+        shownFrames: counters.totalFrames - counters.droppedFrames + counters.drawnFrames,
+        rvfcCallbacks: counters.rvfcCallbacks,
+        gated: options.gated ?? true,
+      };
       return detector.tick(sample);
     },
     noRvfc() {
@@ -128,7 +138,7 @@ describe('swoop stall watchdog', () => {
     const h = settled();
     h.tick(60, 0);
     // a reattached element counts from zero again.
-    const reloaded = h.detector.tick({ hostFrames: 1000, totalFrames: 0, droppedFrames: 0, rvfcCallbacks: 0, gated: true });
+    const reloaded = h.detector.tick({ hostFrames: 1000, totalFrames: 0, shownFrames: 0, rvfcCallbacks: 0, gated: true });
     expect(reloaded).toMatchObject({ phase: 'ok', change: null });
   });
 
@@ -169,6 +179,23 @@ describe('swoop stall watchdog', () => {
   it('counts frames the element dropped as not shown', () => {
     const h = settled();
     expect(h.tick(60, 0, { dropped: 60 }).change).toBe('suspect');
+  });
+
+  // smooth scaling's canvas hides the video at opacity 0, and chromium counts
+  // every frame of a video it does not composite as dropped.
+  it('never fires while the canvas draws, though the element counts every frame dropped', () => {
+    const h = settled();
+    for (let i = 0; i < 12; i += 1) {
+      expect(h.tick(60, 0, { dropped: 60, drawn: 60 })).toMatchObject({ phase: 'ok', change: null, rvfcSilent: false });
+    }
+  });
+
+  it('declares a picture whose canvas stops drawing while the host sends', () => {
+    const h = settled();
+    h.tick(60, 0, { dropped: 60, drawn: 60 });
+    expect(h.tick(60, 0, { dropped: 60 }).change).toBe('suspect');
+    expect(h.tick(60, 0, { dropped: 60 }).change).toBeNull();
+    expect(h.tick(60, 0, { dropped: 60 })).toMatchObject({ change: 'stalled', evidence: { windowMs: 3000, hostFrames: 180 } });
   });
 });
 

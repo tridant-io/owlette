@@ -5,7 +5,8 @@
  * machine doc from the swoop session records. `useMachines` whitelists the
  * fields it rebuilds a machine from, so a field that is declared but never
  * mapped would silently read undefined and the dashboard would show nobody
- * watching.
+ * watching. `Machine.swoopSeats` is the same seats with each person's name,
+ * which the swoop picker's cards show, so the same goes for it.
  */
 import { renderHook, act, waitFor } from '@testing-library/react';
 
@@ -110,5 +111,61 @@ describe('useMachines — swoop viewer count', () => {
 
     await waitFor(() => expect(result.current.machines).toHaveLength(1));
     expect(result.current.machines[0].swoopViewers).toBeUndefined();
+  });
+});
+
+describe('useMachines — swoop seats', () => {
+  it('passes the seats the server mirrors through', async () => {
+    const { result } = renderHook(() => useMachines(SITE_ID));
+    const swoopSeats = [
+      { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true },
+      { uid: 'uid-bob', displayName: null, ctl: false },
+    ];
+
+    act(() => {
+      emitMachines([machineDoc('kiosk-01', { swoopViewers: 2, swoopSeats })]);
+    });
+
+    await waitFor(() => expect(result.current.machines).toHaveLength(1));
+    expect(result.current.machines[0].swoopSeats).toEqual(swoopSeats);
+  });
+
+  it('drops a malformed seat, and reads a blank name as none', async () => {
+    const { result } = renderHook(() => useMachines(SITE_ID));
+
+    act(() => {
+      emitMachines([
+        machineDoc('kiosk-01', {
+          swoopSeats: [
+            { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true },
+            null,
+            'uid-bob',
+            { displayName: 'No Uid', ctl: true },
+            { uid: 7, displayName: 'Numbered', ctl: false },
+            { uid: 'uid-cy', displayName: '  ', ctl: 'yes' },
+          ],
+        }),
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.machines).toHaveLength(1));
+    expect(result.current.machines[0].swoopSeats).toEqual([
+      { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true },
+      { uid: 'uid-cy', displayName: null, ctl: false },
+    ]);
+  });
+
+  it('leaves the seats undefined when none are mirrored, or they are not a list', async () => {
+    const { result } = renderHook(() => useMachines(SITE_ID));
+
+    act(() => {
+      emitMachines([
+        machineDoc('kiosk-01', {}),
+        machineDoc('kiosk-02', { swoopSeats: { uid: 'uid-ada', displayName: 'Ada Lovelace', ctl: true } }),
+      ]);
+    });
+
+    await waitFor(() => expect(result.current.machines).toHaveLength(2));
+    expect(result.current.machines.map((machine) => machine.swoopSeats)).toEqual([undefined, undefined]);
   });
 });

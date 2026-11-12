@@ -1,5 +1,5 @@
 /**
- * Two-layer per-capability rate limiter with isolated user and system buckets —
+ * Two-layer per-capability rate limiter with isolated user, system and machine buckets —
  * hoot bursts and scheduled jobs can't squeeze human operators out of quota.
  *
  * Layer 1: per-process token bucket keyed `{bucket}:{subject}:{capability}`,
@@ -48,6 +48,7 @@ export const USER_LIMITS: Readonly<Record<Capability, CapabilityLimit>> = {
   [CapabilityEnum.MACHINE_REMOTE_VIEW]: { perMinute: 20 },
   // Keeps the ceiling the route carried while it was MACHINE_CONFIG_WRITE.
   [CapabilityEnum.SWOOP_SETTINGS_MANAGE]: { perMinute: 30 },
+  [CapabilityEnum.FLEET_SETTINGS_MANAGE]: { perMinute: 30 },
   [CapabilityEnum.MACHINE_CONFIG_WRITE]: { perMinute: 30 },
   [CapabilityEnum.MACHINE_REMOVE]: { perMinute: 5 },
   [CapabilityEnum.DEPLOYMENT_MANAGE]: { perMinute: 30 },
@@ -83,6 +84,7 @@ export const SYSTEM_LIMITS: Readonly<Record<Capability, CapabilityLimit>> = {
   [CapabilityEnum.MACHINE_REMOTE_CONTROL]: { perMinute: 50 },
   [CapabilityEnum.MACHINE_REMOTE_VIEW]: { perMinute: 100 },
   [CapabilityEnum.SWOOP_SETTINGS_MANAGE]: { perMinute: 150 },
+  [CapabilityEnum.FLEET_SETTINGS_MANAGE]: { perMinute: 150 },
   [CapabilityEnum.MACHINE_CONFIG_WRITE]: { perMinute: 150 },
   [CapabilityEnum.MACHINE_REMOVE]: { perMinute: 25 },
   [CapabilityEnum.DEPLOYMENT_MANAGE]: { perMinute: 150 },
@@ -107,7 +109,17 @@ export const SYSTEM_LIMITS: Readonly<Record<Capability, CapabilityLimit>> = {
   [CapabilityEnum.USER_SELF_DELETE]: { perMinute: 5 },
 };
 
-export type Bucket = 'user' | 'system';
+/**
+ * Machine bucket — a granted machine on the fleet routes, which holds only
+ * these two (`hasCapability`). Commands at the user ceiling; views higher,
+ * because the stdio script polls a running call's result about once a second.
+ */
+export const MACHINE_LIMITS: Readonly<Partial<Record<Capability, CapabilityLimit>>> = {
+  [CapabilityEnum.MACHINE_EXEC_COMMAND]: { perMinute: 60 },
+  [CapabilityEnum.MACHINE_VIEW]: { perMinute: 300 },
+};
+
+export type Bucket = 'user' | 'system' | 'machine';
 export const SHARD_COUNT = 10;
 export const WINDOW_SEC = 60;
 
@@ -124,20 +136,34 @@ export type RateLimitResult =
 
 type RateLimitObservationSource = 'in_memory' | 'firestore';
 
-/** Sessions and api keys map to `'user'`; hoot / scheduled jobs to `'system'`. */
+/** Sessions and api keys map to `'user'`; hoot / scheduled jobs to `'system'`; a granted machine to `'machine'`. */
 export function bucketForActor(actor: Actor): Bucket {
-  return actor.type === 'system' ? 'system' : 'user';
+  if (actor.type === 'system') return 'system';
+  if (actor.type === 'machine') return 'machine';
+  return 'user';
+}
+
+function limitsFor(bucket: Bucket): Readonly<Partial<Record<Capability, CapabilityLimit>>> {
+  if (bucket === 'system') return SYSTEM_LIMITS;
+  if (bucket === 'machine') return MACHINE_LIMITS;
+  return USER_LIMITS;
 }
 
 /** Stable display identifier for an actor inside its bucket. */
 export function actorIdentifier(actor: Actor): string {
   if (actor.type === 'system') return actor.name;
+  if (actor.type === 'machine') return actor.machineId;
   return actor.apiKeyId ?? actor.userId;
 }
 
-/** Authoritative subject: sessions by uid, API-key calls by key id, system by name. */
+/**
+ * Authoritative subject: sessions by uid, API-key calls by key id, system by
+ * name, a machine by site and machine id. machine ids are hostnames, reused
+ * across sites, and the in-memory key carries no site.
+ */
 export function rateLimitSubjectKey(actor: Actor): string {
   if (actor.type === 'system') return `system:${actor.name}`;
+  if (actor.type === 'machine') return `machine:${actor.siteId}:${actor.machineId}`;
   if (actor.apiKeyId) return `apiKey:${actor.apiKeyId}`;
   return `user:${actor.userId}`;
 }
@@ -199,8 +225,7 @@ export function checkInMemoryBurst(
   actor: Actor,
   capability: Capability
 ): boolean {
-  const limits = bucketForActor(actor) === 'system' ? SYSTEM_LIMITS : USER_LIMITS;
-  const limit = limits[capability];
+  const limit = limitsFor(bucketForActor(actor))[capability];
   if (!limit) return true; // no limit configured -> allow
   const capacity = limit.perMinute;
   const refillPerMs = capacity / (WINDOW_SEC * 1000);
@@ -456,8 +481,7 @@ export async function checkRateLimit(
   }
 
   const bucket = bucketForActor(actor);
-  const limits = bucket === 'system' ? SYSTEM_LIMITS : USER_LIMITS;
-  const limit = limits[capability];
+  const limit = limitsFor(bucket)[capability];
   if (!limit) {
     // No limit configured for this capability/bucket pair — allow.
     return { ok: true };

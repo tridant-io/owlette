@@ -10,7 +10,7 @@ keywords: ["time zone", "dst", "daylight saving", "local time", "utc", "site tim
 |----------|--------|------------|------------------------------|
 | **machine** | the machine's own local timezone, as its OS reports it — on Windows, macOS and Linux alike | the agent, as `machine_timezone_iana` on the machine's Firestore document, with every heartbeat | always for restart schedules. for process launch windows too, unless the site has opted into site time |
 | **user** | the dashboard viewer's preferred IANA timezone | you, as **your timezone** in [preferences](/docs/dashboard/account-settings#preferences) (default: detected from your browser) | never — display only |
-| **site** | the site's configured timezone | set when the site is created (detected from the creator's browser, editable there) and changeable afterwards in manage sites | process launch windows, but only once the site turns on `schedulesFollowSiteTime` (see [process schedules](#process-schedules)). talon schedules, always |
+| **site** | the site's configured timezone | set when the site is created (detected from the creator's browser, editable there) and changeable afterwards in the site's settings | process launch windows, but only once the site turns on `schedulesFollowSiteTime` (see [process schedules](#process-schedules)). talon schedules, always |
 
 all three are stored as IANA identifiers (e.g. `America/New_York`, `Europe/Berlin`). there is no offset or abbreviation field — offsets are resolved from the IANA name, so DST transitions work.
 
@@ -74,7 +74,7 @@ the switch is a single field on the site, `schedulesFollowSiteTime`, with three 
 
 absent and `false` behave identically on the machines. they are stored differently so the dashboard can tell whether the site has answered yet — that is the only thing the banner depends on.
 
-once the banner is answered, the dashboard has no control to change the choice: manage sites edits the site's name and timezone, not this flag. change it with `PATCH /api/sites/{siteId}`.
+once the banner is answered, the dashboard has no control to change the choice: the site's settings edit its name and timezone, not this flag. change it with `PATCH /api/sites/{siteId}`.
 
 <Callout type="warning" title={"a site cannot follow site time without a timezone"}>
 turning the flag on is rejected unless the site ends the write with a non-empty `timezone`. set the timezone and the flag together in one edit — the dashboard banner does exactly that, and so should an API caller. turning it back off never needs a timezone.

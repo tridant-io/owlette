@@ -7,6 +7,828 @@ tocDepth: 2
 ---
 
 ## [Unreleased]
+### changed — the issues list shows each description, and opening an issue marks it triaged
+
+In the admin panel's issues list, each row shows the issue's description beside
+its title. Opening a new issue marks it triaged, since someone has now looked at
+it; its status can still be set back to new.
+
+### changed — swoop's text stays clear at any window size
+
+Small text on a machine shown smaller than its own screen could look
+stair-stepped in swoop, because browsers shrink video with a filter that drops
+parts of thin strokes. The picture now lands on whole pixels of your screen, and
+a window a little bigger than the machine's screen, or than half of it, shows it
+at exactly full size or half size, where text is crisp. The quality menu gains
+two settings for how the picture is drawn on your screen. Its **size** row
+offers **sharp**: the largest of full size, a half, a third and so on that fits
+the window, for the clearest text (a third and smaller need smooth scaling). Its
+**smooth scaling** setting averages the picture down at any other size, so thin
+text keeps its strokes. It is on by default in Chrome, Edge and other Chromium
+browsers on a computer, and in owlette swoop on Windows; elsewhere it is off and
+you can turn it on, and wherever the picture lags or looks wrong you can turn it
+off. Both are kept in this browser and never sent to the machine. The latency
+stats add **shown at**, the picture's size against the machine's own pixels,
+**scaling**, how it is drawn, and, while smooth scaling draws, an estimate of
+the time it adds. Nothing to update on the machine: reload the swoop page.
+
+### changed — swoop keeps the machine's resolution on a slow connection
+
+On a connection that could not keep up, the machine lowered swoop's frame rate
+and then its resolution, down to 720p, where a big screen's small text could
+not be read. From agent 4.2.0 a slow connection costs frame rate and bitrate,
+never resolution: the picture keeps the resolution you chose in the quality
+menu, at down to 15 frames a second. When you would rather have smooth motion
+than readable text on a slow connection, pick 1080p or 720p there yourself.
+
+Text is sharper from a machine with an NVIDIA GPU: its encoder runs a slower,
+higher-quality setting, and goes back to its fastest one for the rest of the
+session when the GPU cannot keep up, which the machine's swoop log records. On
+an Intel or AMD GPU the streamer asks the GPU's encoder for balanced quality,
+under the same check. With an NVIDIA GPU a picture that stops moving also
+sharpens in about half a second instead of several: after a scroll or a drag
+ends, the machine sends the still picture again at the session's frame rate for
+half a second, then at the usual two frames a second.
+
+A Windows machine with no GPU, such as a virtual machine, now averages its
+screen when it scales it down, instead of skipping pixels, so thin text keeps
+its strokes. These need the machine's agent updated to 4.2.0; the viewer needs
+nothing.
+
+### fixed — a portrait display streams upright in swoop
+
+A display turned to portrait on a Windows machine reached swoop on its side.
+From agent 4.2.0 the machine turns the picture of a rotated display upright
+before it sends it, and the pointer and taps land where you point on the
+upright picture. A Mac already sent rotated displays upright.
+
+### fixed — swoop lets go of a viewer whose connection never comes back
+
+After a network change, a viewer's browser could ask the machine to restart
+the connection and then never finish. The machine kept that viewer in the
+session for good, so everyone else saw an extra, nameless watch-only viewer.
+From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
+already did for a viewer whose connection dropped.
+
+### fixed — an install queued behind one that ended at once is no longer refused
+
+When an install on a machine ended within five seconds, because it was refused
+or cancelled, the next install waiting for that machine was refused as rate
+limited and failed. Installs already run one at a time, so the limit no longer
+applies to them. A deployment refused inside active hours can also be retried
+with a reason straight away. Takes an agent update.
+
+### fixed — cancelling a deployment stops it on the machine
+
+Cancelling a target the machine had already picked up marked it cancelled while
+the install carried on: the cancel waited in line behind the install it was
+meant to stop. The agent now acts on a cancel at once. An install that is still
+waiting never starts. One that is downloading stops the download and deletes
+what it fetched, with nothing closed and nothing installed. One that is closing
+processes does not run the installer, and the processes start again. Once the
+installer is running it is left to finish, because an installer stopped part-way
+can leave the machine without the program; the target then shows how that
+install ended, and the deployments page says so on the cancel button. Each
+stopped install writes a deployment cancelled row to the activity log, and two
+deployments cancelled one after the other are both stopped. A cancel never
+touches another deployment, a later retry, or a new install of the same
+installer. Takes an agent update.
+
+### changed — a failed download's error names the link without its query string
+
+When an installer or an agent update cannot be downloaded, the error on the
+target and in the activity log now shows the link up to its question mark. Takes
+an agent update.
+
+### fixed — a process closed by name stays closed until the install ends
+
+A managed process closed because its program name was listed, and not because it
+was ticked, started again a few seconds later, while the installer was still
+running. It is now held until the install ends, like a ticked one, and starts
+again then. Other managed processes that run the same program are held with it.
+Takes an agent update.
+
+### fixed — an install closes your apps only when it is ready to run
+
+A deployment closed the processes you chose first, and only then downloaded the
+installer and checked it. A download that failed, a checksum that did not match,
+or a machine with nobody logged in stopped the show and installed nothing. The
+agent now downloads and checks first, and closes the processes last, right
+before it runs the installer. An install with no checksum is refused before
+anything is downloaded. On a Mac or Linux machine, where a deployment cannot
+install, nothing is closed any more. A target now reads downloading, then
+closing processes, then installing, and the show keeps running through the
+download. Takes an agent update.
+
+### added — hoot mcp: an AI agent on one machine can act on the others
+
+An AI agent running on a paired Windows machine or Mac (Claude Code, or any MCP client)
+can now use hoot's tools on the other machines of its site. The owlette agent
+on that machine is the MCP server and the machine's pairing is the credential:
+there is no API key and nothing to sign in to. It is off until a site owner or
+admin turns it on, in the admin panel under hoot, and says for each machine how
+far it may go (read, bounded changes or privileged) and on which machines.
+Beside hoot's own machine tools it can read a machine's metrics history,
+installed software, recent screenshots (as pictures), saved display layout and
+reboot schedule; set that schedule; list, start and cancel software
+deployments; update owlette on a machine; and list, deploy and roll back
+roosts. A call that names several machines is refused whole unless every one
+of them is a machine it may act on, and what belongs to the whole site (alert
+rules, the audit log, display settings) is read only by a machine allowed on
+the whole site. A machine can also hand hoot a task in words and read the
+answer back; that runs on the site owner's LLM key, at tier 2 at most, six
+times an hour. What a machine changes is in the audit log under the machine.
+Update the machine the AI agent runs on to use it; the machines it acts on
+need no update. The desktop app's menu has a new item, connect an ai agent,
+that shows the command to run. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp) and the
+[tool reference](https://owlette.app/docs/reference/hoot-mcp-tools).
+
+### changed — hoot's site settings have their own page in the admin panel
+
+The admin panel has a hoot page, under fleet. It holds the
+switch that makes hoot wait for approval before a privileged (tier 3) tool,
+which used to be the shield button in the hoot chat header, and the new
+settings for machines that act on other machines. The setting itself and its
+default are unchanged: approval is on unless a site owner or admin turns it
+off. Nothing to update on the machine.
+
+### changed — swoop is turned on from the admin panel's swoop page
+
+The admin panel's swoop page, under fleet, lists each site you own or administer
+with its swoop switch, above the live sessions. A site's settings page no longer
+has a swoop & screens section:
+keep screens awake is in its machines section. Old links to the swoop & screens
+section, turn on swoop… in a machine's menu, and open swoop settings in the swoop
+picker and the viewer all open the swoop page. Nothing to update on the machine.
+
+### fixed — saving a talon edit keeps the switch where it is now
+
+The talon editor sent the on or off state from the moment it was opened. If the
+talon was switched off in the meantime, by the system after repeated failures or
+by someone else, saving the edit switched it back on. The editor now saves the
+state the talon has when you save. Nothing to update on the machine.
+
+### fixed — a talon switched back on gets its ten tries back
+
+A talon that failed ten runs in a row switched off, and when someone switched it
+back on it kept that count of ten, so its first failed run switched it off
+again. Switching a talon from off to on, from its card, through hoot or over the
+API, now starts the count over; switching it off keeps the count. An API update
+that switches a talon on now also clears why it was off and schedules its next
+run from now, as the switch on its card always did. Nothing to update on the
+machine.
+
+### fixed — hoot's replies are saved in API conversations
+
+A send through the hoot conversations API (`owlette chat send`, the SDKs) saved
+your message but never hoot's reply, so the conversation held only your side and
+every follow-up reached hoot without its own earlier answers. The reply's text
+is now saved when it finishes. A reply that ends in an error is not saved, and
+tool calls are not stored. Nothing to update on the machine.
+
+### fixed — a failed local hoot turn reads as an error
+
+When hoot ran on the machine (local hoot) and its turn failed, the conversations
+API sent the agent's error message as if it were hoot's answer and saved it as
+hoot's reply, so later turns treated it as something hoot had said. The error
+now arrives as the stream's error line, which `owlette chat send` and the SDKs
+already report as an error, and nothing is saved for that turn. Nothing to
+update on the machine.
+
+### fixed — hoot sees a restarted process as running
+
+For up to five minutes after a process was restarted, hoot's `get_process_list`
+tool reported it as killed and not running while the dashboard showed it
+running: the tool read the record of the instance that had been stopped, not
+the new one's. A hoot chat, a talon and hoot mcp all read that tool, so each
+could report a healthy process as down. The tool now reads the record the
+dashboard reads, and a launch that failed outright can no longer make the tool
+fail. Takes an agent update.
+
+### fixed — hoot's deployments install instead of closing the show and failing
+
+A deployment hoot started carried no installer checksum, so every machine closed
+the processes it named, downloaded the installer and then refused to run it.
+Hoot now pins the checksum first: a preset's own, or one the server computes by
+downloading the installer, which can take a few minutes for a large one.
+Stopping the reply meanwhile deploys nothing. If the checksum cannot be had,
+nothing is deployed and nothing is closed, and hoot says why. Its deployments now
+also time out like any other when a machine never answers, and list in date
+order with the rest in the API and CLI. Nothing to update on the machine.
+
+### fixed — the deployments page offers cancel and retry only where they work
+
+The x on a machine that was already installing did nothing: the server refused
+the cancel and the page said nothing. The x now shows only on a machine that has
+not started installing, and a cancel or retry the server refuses, because the
+machine moved on while the click was on its way, says so in plain words. A
+machine whose uninstall failed no longer offers retry this machine, and retry
+failed shows only when an install failed: a retry installs, and would put the
+program back. Nothing to update on the machine.
+
+### fixed — a cancel that cannot reach a machine still cancels what it stopped
+
+When the cancel command could not be written to one machine, a cancel had
+already removed the queued installs but marked nothing, so those machines stayed
+pending with nothing left to run until they timed out. Every machine whose
+queued install was removed is now marked cancelled before the error is reported,
+and one whose install could not be removed is left as it was. Nothing to update
+on the machine.
+
+### fixed — a cancelled deployment target that was already installing shows how the install ended
+
+A cancel cannot stop an install the agent has already started, and the agent's
+answer to that cancel arrives after the install, so a machine that finished
+installing was switched back to cancelled with the program in place. That answer
+no longer changes the deployment: the machine shows the install's own result,
+completed or failed. A cancel still stops every machine whose install had not
+started. Nothing to update on the machine.
+
+### fixed — stuck deployment targets time out again
+
+The server fails a target still `pending` after 15 minutes, or `downloading` or
+`installing` after 30, counted from the deployment's creation or its last retry.
+Since late May it did that only for sites it was already watching, so most stuck
+targets stayed in flight for good and could not be retried. A machine that was
+only offline still runs its install when it reconnects. Nothing to update on the
+machine.
+
+### fixed — a retry no longer undoes results or installs twice
+
+A retry that first had to download and hash the installer wrote back the record
+it had read before the download, erasing results that arrived meanwhile, and two
+retries at once could each send an install to the same machine. A retry now
+claims its targets on the latest record before it queues anything, and replaces
+an install still queued for a machine that was offline, so each machine runs
+one. Nothing to update on the machine.
+
+### fixed — retry failed no longer reinstalls a program whose uninstall failed
+
+A deployment target whose uninstall failed could be picked up by retry failed,
+which installs, and so put the program back. A failed target now records which
+command failed, and a retry skips a failed uninstall: the page offers no retry
+on that machine, and over the API a retry that reaches only failed uninstalls is
+refused. Over the API the target carries `failedCommandType`. Nothing to update
+on the machine.
+
+### fixed — an uninstall started from a deployment updates that deployment
+
+Uninstall software from a deployment's menu removed the program but left the
+deployment showing completed. Each machine the deployment finished on now turns
+uninstalled, or failed with the reason, when its agent reports. Over the API,
+the machine uninstall route takes the same optional `deployment_id`. Nothing to
+update on the machine.
+
+### fixed — uninstalling a deployment over the API works, and needs the program's name
+
+`POST …/deployments/{id}/uninstall` and `owlette deploy uninstall` queued a
+command every agent rejected, which marked every machine failed. The call now
+requires `software_name` (`--software` in the CLI): a script that sends none
+gets `400 validation_failed` until it names the program. The program is
+uninstalled from each machine that finished the install, is still on the site
+and lists that exact name once; the rest come back in `skipped` with the
+reason. Nothing to update on the machine.
+
+### fixed — cancelling one machine in a deployment cancels only that machine
+
+The x on a machine in a deployment cancelled every machine still queued in it.
+It now cancels that machine only, and two cancels in quick succession no longer
+undo each other. Over the API, the cancel route takes an optional `machines`
+list, as retry does; without it every machine that can still be cancelled is,
+as before. Nothing to update on the machine.
+
+### fixed — a deployment keeps every machine's result
+
+When several machines reported on one deployment at the same moment, only one
+result was kept. The others stayed installing until they were marked failed,
+or, after an uninstall, stayed completed. Each result is now applied to the
+latest record, and a machine whose result arrives while stale installs are
+being checked is no longer marked failed. Nothing to update on the machine.
+
+### fixed — on Windows, kill and restart in the desktop app reach the running instance
+
+When the newest row for a process held a pid that Windows had since given to
+something else, kill and restart stopped there with "refusing to terminate".
+They now move on to the instance the service actually recorded. Arrives with
+the next agent version.
+
+### fixed — on Windows, kill and restart in the desktop app cannot close the wrong process
+
+A pid that Windows had handed to another instance of the same program (two
+TouchDesigner entries, or any cmd.exe for a script entry) passed the app's name
+check and could be closed. The app now also checks the start time and executable
+the service recorded for that pid, the same check the service's own kills make.
+macOS and Linux keep the name check. Arrives with the next agent version.
+
+### fixed — the desktop app no longer nudges the start times the service records
+
+Whenever the desktop app wrote the process table (a kill, a restart, a launch
+mode change), about one recorded start time in twenty came back a hair off. The
+service then took that running process for a recycled pid: it dropped its row,
+refused a kill from the dashboard, or launched it again after a service restart.
+The app now reads and writes those times exactly, on Windows, macOS and Linux.
+Arrives with the next agent version.
+
+### fixed — the CLI publishes the same files as the same version from any machine
+
+Pushing a roost from a second CI runner, another computer or a newer CLI made a
+new version of unchanged files and rolled it out to every target again. The CLI
+no longer writes its host name, platform or version into the version, so the
+same files get the same version wherever they are pushed from. The first push
+of unchanged files onto a version an older CLI published still makes one new
+version. Nothing to update on the machine.
+
+### changed — the CLI and SDK pages say how to install them today
+
+The CLI and SDK pages opened with npm and pip commands for packages that are
+not published yet. They now open with the install from source, which works, and
+show the registry command as what it becomes once the packages are out. The SDK
+reboot examples no longer pass `delay_seconds`, which the agent ignores. Nothing
+to update on the machine.
+
+### fixed — the landing page's developer samples
+
+The developer section showed install commands for npm packages that are not
+published yet, and a sign-in command that does not exist. It now shows the API
+and the CLI installed from source, and signs in with `owlette auth login`.
+Nothing to update on the machine.
+
+### fixed — machine.offline for a connection failure, and none for a pending restart
+
+When an agent reported a connection failure, its `machine.offline` webhook was
+sent only on a site where someone takes the offline email; it is now sent
+whatever the email settings are. A machine reporting a pending restart was
+announced as `machine.offline` as well. It is online, so it sends its email and
+no webhook. Nothing to update on the machine.
+
+### fixed — roost writes a changed file of the same size
+
+A roost rollout or rollback skipped every file whose size had not changed, so a
+file edited without changing its length kept its old contents. A file is now
+skipped only when the version already on the machine had the same bytes. The
+integrity check reads only the version on disk instead of every older one, and
+a sync cut off by a restart no longer holds on to the chunks it downloaded.
+Arrives with the next agent version.
+
+### fixed — swoop refused sessions after a few failed starts
+
+A swoop session that failed before its streamer started still counted toward
+the limit on streamer starts, twice, so a short outage could leave the machine
+refusing swoop for a while. Only real starts count now. Arrives with the next
+agent version.
+
+### changed — download links stay out of the agent's logs
+
+A failed installer or roost download wrote its signed link into the agent's log
+and into the error the dashboard shows. The link is now cut off after its path.
+Arrives with the next agent version.
+
+### fixed — the agent reconnects on a network that only lets https out
+
+After a dropped connection the agent looked for the internet by reaching a
+public DNS resolver, so on a network that blocks that it stayed disconnected
+until the service was restarted. It now also tries owlette itself over https.
+Arrives with the next agent version.
+
+### fixed — small things in the dashboard
+
+A failed clear logs now says why. The screenshot and live view dialogs could
+show the previous machine's picture; they show the machine they were opened on,
+and a picked history screenshot stays picked. swoop's bar said disconnected
+while a failed start was being retried; it counts down, as the picture area
+does. An owlette update sent again to a machine that had timed out kept reading
+"may have failed"; it reads updating. A metrics chart could draw the range you
+had just switched away from. A failed sign-in, sign-up or Google sign-in showed
+two messages, and a new account was told "you can now sign in" while already
+signed in. Switching site while an alert rules save was on its way showed one
+site's rules under the other. The deploy dialog asked for the installer URL when
+only its file name was missing; it asks for the file name. /demo, /swoop and the
+swoop sign-in pages name their browser tab, and the sitemap lists the docs and
+legal pages. Nothing to update on the machine.
+
+### fixed — api answers that were wrong or missing
+
+The machine detail API, and `owlette machine get`, always returned an empty
+process list; they list the machine's processes. A chat listing ended early
+when it met deleted chats; each page now fills. The rollout list refused
+`stage=fleet`; it filters on it. A cancelled command read as failed with no
+reason; the reason is in `error`. A talon could take an install's progress
+report as the command's answer; it waits for the end. Nothing to update on the
+machine.
+
+### fixed — deleting a site removes its process configs too
+
+Deleting a site left its process configs, display layouts, restart schedules
+and presets behind. They are deleted with it, and a machine on 4.1.8 or later
+leaves the site when that happens. A preset with a very long name could be
+created but then neither edited nor deleted; its id is now short enough for
+both. Nothing to update on the machine.
+
+### fixed — schedule days and restart times the agent cannot match are refused
+
+A process schedule day sent through the API as `Monday` or `TUE` was stored as
+sent and never ran; it is now stored as `mon` or `tue`, and anything that is not
+a weekday is refused. A restart schedule accepted `99:99`, `24:00` or `Monday`,
+and the agent skipped it; those are refused too, naming the field. A schedule
+saved earlier with such a day gets the same refusal the next time it is saved,
+until the day is corrected. Nothing to update on the machine.
+
+### fixed — a webhook switched off after ten failures can be turned back on
+
+A webhook that failed ten times in a row was switched off for good: neither the
+dashboard switch nor the API could turn it back on, and the API reported it as
+active. Turning it on from the dashboard, or a `PATCH` with `paused: false`, now
+clears it and starts the failure count over, and the API reports it as paused
+with its failure count. Nothing to update on the machine.
+
+### fixed — two people in one swoop session
+
+With two people in one swoop session, a reconnect could cost everyone but the
+last to join their picture, and one person muting their tab silenced the machine
+for the others. Each viewer now reconnects on its own, and the machine's audio
+stays on while anyone is listening. A ctrl+alt+del whose answer was lost no
+longer stops it working for the rest of the session. Arrives with the next agent
+version.
+
+### fixed — three things in the owlette app
+
+The start service button in the app's footer showed nothing when the start
+failed; it now says why. The start on login checkbox in the app's menu kept its
+old value after a change from the tray until the app restarted; it now follows
+the tray. The 15-minute steppers beside a schedule time ignored Enter and Space
+and did not say which time they moved; they work from the keyboard and name the
+time. Arrives with the next agent version.
+
+### fixed — two answers from the owlette CLI
+
+`owlette key list` stopped with "Invalid time value" for anyone who had a key;
+it lists the keys again. `owlette site add-member` said "added" when the person
+was already a member and nothing had changed; it now says they keep their role
+and names the command that changes it, `owlette site set-role`. Nothing to
+update on the machine.
+
+### fixed — three sentences that were out of date
+
+The page for AI assistants called owlette Windows-only in three places; it
+covers Windows, macOS and Linux. The webhooks page said publishes and rollbacks
+are not sent; they are, and only `deployment.*` is still to come. The CLI sign-in
+page named a command that does not exist; it is `owlette auth login`. Nothing to
+update on the machine.
+
+### fixed — retrying a deployment closes the apps first, like the first attempt
+
+A deployment set to close processes and hold their projects during the install
+did neither when it was retried, so the retry installed over the running app.
+A retry now does both. Nothing to update on the machine.
+
+### fixed — offline webhooks and talons fire when nobody takes the email
+
+On a site where every user had turned the offline email off, a machine going
+offline sent no `machine.offline` webhook and started no talon either. Both now
+fire whatever the email settings are. Nothing to update on the machine.
+
+### fixed — the missing-executable alert keeps appearing
+
+Once a site had more than twenty missing-executable alerts in its logs, a new
+one usually no longer popped up on the dashboard. It does again, with its "use
+path" action. Nothing to update on the machine.
+
+### fixed — hoot reads the agent's log
+
+Asked for a machine's agent log, hoot could read a different log from the same
+folder, such as the one submit issue writes, and report on that. It now reads
+the agent's log. Arrives with the next agent version.
+
+### fixed — display changes are refused while NVIDIA Mosaic is on
+
+A display change sent from the dashboard to a machine running NVIDIA Mosaic is
+meant to be refused, because changing one display there can break up the Mosaic
+grid. The check never ran, so the change went through. It is now refused with a
+message that says why. Arrives with the next agent version.
+
+### fixed — scrolling a page at a time through swoop
+
+A mouse wheel set to scroll a page at a time barely moved the machine: one page
+arrived as a sixty-fourth of a page. It now scrolls the page. Arrives with the
+next agent version.
+
+### fixed — a schedule time or launch delay the agent could not read no longer stops it
+
+A process schedule with a time no clock has (`24:00`), or a launch delay or
+init timeout left empty in the dashboard's edit form, made the agent stop and
+start again over and over, so nothing on that machine was kept running. The
+dashboard and the API now refuse a time like that and store the default for an
+empty field, so no machine is sent one. Nothing to update on the machine; the
+agent's own guard, which skips a value it cannot read, arrives with the next
+version.
+
+### fixed — a config file that could not be read is no longer written over
+
+Saving hoot's key at a moment when the machine's config file could not be read
+(another program holding it, for one) wrote the file back with only hoot's
+section, and the machine came up unpaired. The agent now leaves the file as it
+is and reports that the key was not saved. Arrives with the next agent version.
+
+### fixed — local hoot starts on macOS and Linux
+
+On a Mac or a Linux machine, local hoot never started. It runs as the
+signed-in user, who could neither write the agent's log folder nor read its
+token store, so every launch ended at once and the agent tried again every
+30 seconds. hoot now logs to `logs/cortex/cortex.log` there, and the agent
+hands it a one-hour access token, so hoot never holds the agent token.
+Windows is unchanged. Takes an agent update.
+
+## [4.1.28] - 2026-11-10
+### added — a member can be limited to some machines
+
+A site admin can now give someone access to only some of the site's machines, up
+to 30: in the site's members section, **change access...** → **some machines**, or
+the same choice when adding them. That person sees only those machines on the
+dashboard, in swoop, in hoot and in the activity log, gets alert emails only for
+them, and acts on them at their site role, with their swoop mode applying there:
+give a member **control** and they can take control of just those machines.
+Nothing that spans machines reaches them, whatever their role: no site settings,
+members, deployments, roost, talons, webhooks, audit log or admin panel. Their API
+keys carry the same limit. Everyone else keeps the whole site, as before. A
+machine that is removed or leaves the site drops out of everyone's access, and
+limiting someone's access stops the talons they wrote. The API takes `machineIds`
+on `POST /api/sites/{siteId}/members` and `PATCH /api/sites/{siteId}/members/{uid}`
+(`null` gives back the whole site) and returns it from the members list.
+Firestore rules 2.12.0 enforce the same limit on every read.
+
+### changed — the swoop bar's connection pill fades
+
+The pill on the swoop bar that says poor connection, connection lost,
+reconnecting or disconnected now fades up into place when it comes and fades
+out when it goes, instead of popping on and off. With reduced motion on, it
+comes and goes at once, as the rest of the app does. Nothing to update on the
+machine.
+
+### changed — the site filter is a search row
+
+Past ten sites, the filter in the site switcher and in owlette swoop's site
+list is a search row at the top of the menu, with a magnifier and an x to
+clear it, instead of a boxed field. Nothing to update on the machine.
+
+### changed — the bar's warnings are an icon
+
+A warning the swoop bar has for you (fullscreen refused, the keyboard or the
+mouse not captured, the clipboard not shared or a copy held back) is now a
+warning icon on every layout, with the sentence on hover, instead of a
+sentence that took the bar's room beside the people in the session. The five
+sentences are plainer too: they say what happened and what to do about it.
+Nothing to update on the machine.
+
+### changed — every search in a menu is a search row
+
+The machine switcher on the metrics page and the timezone picker now have the
+same search row the site switcher got: a magnifier, a plain field with no box,
+a rule under it and an x to clear it. Hoot's conversation search is an enclosed
+field with the same magnifier and x, and focusing it tints its border rather
+than lighting it up. Nothing to update on the machine.
+
+### added — a release's notes can be corrected
+
+`PATCH /api/installer/{version}` changes a published version's release notes,
+on the version and on the latest release when it is that one, and
+`scripts/upload-installer.mjs --notes-only` sends the version's changelog
+section through it. The installer files never change. Nothing to update on the
+machine.
+
+### fixed — swoop types every key you type, on a link that drops packets
+
+On a link that lost some of its packets, swoop lost some of the keys typed
+through it: a sentence reached the machine with letters missing. Swoop's input
+now goes reliably and in order, so every key lands, in the order it was typed.
+Nothing to update on the machine: reload the swoop page.
+
+### changed — owlette swoop's window buttons cover less of the picture
+
+In owlette swoop on Windows and Linux, with the bar down a side, minimize,
+maximize and close are now half height at the window's top right, so they cover
+less of the picture's top corner and the picture keeps the window's full height.
+The close button asks first while you are in a session. Nothing to update on the
+machine or in owlette swoop.
+
+### fixed — caps lock from a mac stays in step
+
+Caps lock turned on and off on a mac viewing another machine through swoop
+could leave that machine's caps lock the other way round: still on after you
+turned it off, then off when you turned it on. A mac tells the browser only
+half of each caps lock press, and swoop now sends the machine the whole press.
+Nothing to update on the machine: reload the swoop page.
+
+## [4.1.27] - 2026-11-04
+### added — each person's swoop on a site
+
+A site's owners and admins can now set each person to no swoop, watch or
+control in the site's members section, without changing their site role. A
+member set to control takes control after a second factor and gets nothing
+else: no commands, no configuration, nothing site-wide. An admin held to watch
+keeps the rest of what an admin does. Without a mode of their own, the site
+role decides as before: members watch, and owners and admins control. The
+site's members-may-watch setting (`membersMayWatch`) is now the default for
+members without a mode, and a member's own mode wins over it. Kill and the
+admin panel's swoop page stay with the site's owners and admins, whatever their
+own swoop mode.
+
+### added — each site has a settings page
+
+A new page, **admin panel → sites**, lists your sites, with a gear on each one
+you own or administer; owlette's superadmins see every site. The gear opens the
+site's settings page, one section at a time: general (its name and timezone),
+members, machines, swoop & screens (the swoop and keep screens awake switches)
+and danger zone, which only the site's owner and owlette's superadmins see. The
+site switcher offers **site settings** (the current site's page) to that site's
+owners and admins, **manage sites** (the list) to anyone who administers a
+site, and **new site** to people who administer none yet.
+
+### added — finding someone to add
+
+Adding a member now suggests people as you type: those on your other sites, the
+ones you own or administer, who are not on this site yet. A full email still
+adds anyone with an owlette account. owlette never searches every account for
+you, so someone who is on none of your sites is added by their email.
+
+### added — a pill lights up while its viewer moves the pointer
+
+In swoop's bar, a person's pill now lights up while they move the pointer on
+the picture: its edge and its pointer turn cyan, so everyone in the session can
+see who is working the machine. Your own pill also fills in while you click;
+others' clicks light up in a later agent release. The pointer of someone else
+in control no longer carries their name over the picture: its colour matches
+their pill. Nothing to update on the machine.
+
+### added — kick someone from a swoop session
+
+A site owner or admin, or a superadmin, can take someone out of a live swoop
+session: click their pill in the bar (or their row in a phone's "in this
+session" list), then **kick**. They are told a site admin took them out and can
+rejoin; to keep someone out, change their swoop mode in the site's members
+section. One streamer serves everyone on a machine, so everyone else in the
+session comes back on their own within a couple of seconds. Nothing to update
+on the machine.
+
+### added — the machine picker says who is in each session
+
+The machine cards in owlette swoop and on `/swoop` now name the people in each
+machine's session: first name and last initial, with a pointer for someone in
+control and an eye for someone watching, and full names on hover. The
+dashboard's cards keep their count. Nothing to update on the machine.
+
+### added — a filter in the site switcher
+
+With more than ten sites, the site switcher and owlette swoop's site list open
+on a filter that finds a site by its name or ID. Nothing to update on the
+machine.
+
+### changed — site owners and admins change roles in the dashboard
+
+A site's owners and admins can now make a member an admin, or an admin a
+member, with **change access...** on the person's row in the members section,
+which sets their swoop mode too. It changes that site only. Nobody changes
+their own access or the owner's; the owner's role moves only with a transfer of
+ownership.
+
+### fixed
+
+- The role dialog no longer says a role is account-wide. A role is for one
+  site, and the dialog says so.
+- Removing a member who wrote talons offers this site's owners and admins to
+  take them over, rather than people picked by their account role.
+- Adding someone who is already on the site says it changed nothing, instead of
+  "member added".
+- The swoop switch's description says members watch by default; it used to name
+  only admins.
+- Deleting a site says what goes with it: its machines lose their agent tokens
+  and stop reporting, and its ID can't be used again. It used to say machine
+  data might remain.
+- A site admin who opens an admin page in a fresh tab is no longer sent away
+  with "access denied" before their sites have loaded.
+
+### removed — the manage sites dialog and /admin/members
+
+The header's manage sites dialog is gone: admin panel → sites and each site's
+settings page do what it did. `/admin/members` now redirects to `/admin/sites`.
+
+## [4.1.26] - 2026-11-04
+### added — swoop's bar shows who is in the session
+
+The bar now shows a pill for each viewer in a swoop session, beside the machine's
+name: first name and last initial, yours marked, and an eye for anyone who only
+watches. Hover one for the full name; site owners and admins also see the email.
+On a phone the pills fold into one button with the count, which lists everyone
+in full. The list that sat over the picture is gone, and the pointers of others
+in control carry their names instead of an account ID. Nothing to update on the
+machine.
+
+### fixed — a second viewer no longer ends the first viewer's swoop session
+
+Opening swoop on a machine someone was already in started a session of its own,
+and the machine ended theirs. Everyone who opens a machine now joins the session
+running there, with a lease of their own: ending yours or closing the tab takes
+only you out, and an admin's kill still ends it for everyone. Two people
+opening it at the same moment land in the same session too. Removing someone
+from the site, or taking their control, ends the session at once: everyone in
+it reconnects on their own, the removed member to a notice that their access
+was removed, and the demoted one to watching. Nothing to update on the machine.
+
+### fixed — swoop says a machine has left the site instead of "machine is restarting"
+
+A machine removed from the site, or one that left it from its own tray, told
+everyone watching it that it was restarting, and then showed a bare "machine
+not found". Removing a machine now ends its swoop sessions, and the viewer says
+the machine has left the site, with the way back. A machine on an agent older
+than 4.1.8 says nothing as it goes, so there the viewer says it once its lease
+runs out, within about five and a half minutes. Nothing to update on the
+machine.
+
+## [4.1.25] - 2026-11-02
+
+### added — the Windows installer is signed by Tridant, Inc.
+
+The installer, its uninstaller and owlette's own programs now carry a verified
+publisher, so Windows names Tridant, Inc. instead of an unknown publisher.
+SmartScreen can still warn until that name has built reputation. Nothing changes
+in how owlette installs or updates.
+
+### added — the dashboard warns when a saved path won't launch
+
+After a save changes a path in the process editor, the dashboard asks the machine
+about it. If it isn't there, or owlette would refuse it (a folder as the launch
+target, a file as the working directory, a symbolic link, a network path), a warning
+names the process and field and offers **ok**, which leaves it as typed, and
+**browse**, which opens a folder browser on the machine at the closest folder that
+exists; picking a file saves it to that process and keeps any arguments after the
+path. The save is never held up, and moving on to another process doesn't lose the
+warning. It needs an agent newer than 4.1.24: an older agent, an offline
+machine or no answer in 15 seconds means no warning. Site admins and owners only, as
+for editing the process; API keys can't use it.
+
+### fixed — path / args reach the program as written
+
+On Windows the agent ran every `path / args` value through its path check, so
+arguments came out rewritten: `--fullscreen --display 2` reached the program as
+`<agent folder>\--fullscreen --display 2`, `/S` as `C:\S`, and a quoted path got
+the agent folder in front of it. A value is now a file when the whole string is
+one and arguments otherwise, and arguments go through unchanged.
+
+This changes what some saved values do at their next launch. Slashes in arguments
+now reach the program unflipped. A saved value the old rewriting broke, like
+`cmd.exe` with `/c ...` or `powershell.exe` with `-Command ...`, now runs.
+
+The agent refuses a value that is, as a whole, quoted or not, a network path or a
+symbolic link, and a value that opens with a network path and goes on to
+arguments. Everything else passes as written, including `--project \\server\...`,
+`file://...` and `"C:\link.toe" --flag`.
+
+Finding a running process by its `path / args` now ignores quote marks, so a
+quoted value still matches the process it started. A process already running
+keeps its old command line until it next launches.
+
+### added — the desktop app warns about a path owlette can't launch from
+
+Entering a launch target, a path or a working directory now says so as soon as it's
+saved if it won't launch: it isn't on the machine, it's a folder where a file belongs
+(a macOS `.app` is fine) or a file where a folder belongs, it's a network path on
+Windows, or it's a symbolic link. The value stays as typed: "ok" keeps it, and "browse"
+opens the picker in the nearest folder on the way up that exists. The warning names its
+process and still arrives if you've moved to another one while a slow path was checked;
+browse saves to the process it's about. Arguments and relative paths are left alone.
+
+### fixed — swoop says when a machine is gone or restarting
+
+A machine that went away left its last frame up under "poor connection". A path
+that is down now reads "connection lost" over that frame. A machine whose agent
+says it is going away to come back shows "machine is restarting" with a spinner
+through the reconnects, until its picture is back or ten minutes pass.
+
+### security — re2js, glob and minimatch
+
+re2js in the web app moves to 2.9.1, fixing a high-severity denial of service.
+glob and minimatch in functions and the cli and sdk workspace move to their fixed
+majors. Three web packages nothing imported are gone.
+
+### security — rustls 0.23.46 and tauri 2.12.5
+
+rustls in the swoop streamer moves to 0.23.46, which fixes four advisories. Tauri
+moves to 2.12.5 with its plugins, in the desktop app and in owlette swoop.
+
+## [4.1.24] - 2026-10-27
+
+### fixed — display auto-restore on a panel stuck in a fallback mode
+
+A panel that had fallen back to 640x480 rejected every restore at Windows's
+validate step with a bare `rc=31`, three times over, and the breaker tripped.
+The restore kept the panel's current timing in the layout it asked Windows to
+apply; it now lets Windows pick the timing for the requested size and refresh.
+When Windows still refuses, the error names the monitor and the mode, and says
+whether the panel offers that mode right now. And when auto-restore is waiting
+on a stored monitor that is not connected, it logs
+`display_auto_restore_parked` once, naming the monitor, instead of saying
+nothing; a panel that came back under a new identity after a reboot had left
+the dashboard showing drift with no explanation.
 
 ### fixed — the changelog's list of releases opens at once on a phone
 

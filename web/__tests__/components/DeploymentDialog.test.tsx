@@ -179,6 +179,19 @@ describe('DeploymentDialog — active hours', () => {
     );
   });
 
+  it('asks for a file name at the end of a URL that has none, not for the URL it already has', async () => {
+    const { toast } = jest.requireMock('@/lib/toast') as { toast: { error: jest.Mock } };
+    toast.error.mockClear();
+    const onCreateDeployment = jest.fn();
+    const user = renderDialog(onCreateDeployment);
+    await user.type(screen.getByLabelText('installer URL'), 'https://example.com/download?id=5');
+    await user.click(screen.getByText('kiosk-1'));
+    await user.click(screen.getByRole('button', { name: 'deploy to 1 machine' }));
+
+    expect(toast.error).toHaveBeenCalledWith('the installer URL has to end in the file name, like setup.exe');
+    expect(onCreateDeployment).not.toHaveBeenCalled();
+  });
+
   it('cancel goes back to the deployment with the choice intact and sends nothing', async () => {
     const { user, onCreateDeployment } = await chooseAndDeploy(['kiosk-show', 'kiosk-later']);
 

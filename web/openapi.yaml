@@ -29,7 +29,9 @@ info:
     callers must hold every listed scope (permissions are exact — `admin` does
     not imply `write` or `read`) and must also satisfy resource ownership, site
     membership, role, and capability checks. A site the caller cannot access
-    answers `404`, not `403`. If several credentials are sent, `?api_key=` wins,
+    answers `404`, not `403`. A machine outside the caller's machine scope
+    answers `404` the same way; a caller with a machine scope gets `403` from
+    every site-wide operation. If several credentials are sent, `?api_key=` wins,
     then `x-api-key`, then `Authorization: Bearer`; a bearer that is not an
     `owk_` key is treated as a Firebase ID token.
 
@@ -1264,10 +1266,11 @@ paths:
       summary: talons one person authored on this site
       description: |
         The departure preview. Removing a member touches nothing under
-        `sites/{siteId}`, so their talons survive the removal — but a talon
-        with a `cortex` output re-resolves its AUTHOR's site access on every
-        run, so it starts failing the moment they lose access. Call this before
-        removing a member to learn what that removal will break.
+        `sites/{siteId}`, so their talons survive the removal — but every
+        talon re-resolves its AUTHOR's site access before any output fires,
+        so each one switches off at its next run, with nothing fired, once they
+        lose whole-site access. Call this before removing or limiting a member
+        to learn what that change will switch off.
 
         Names only — this is not a second way to read a talon. Bounded by the
         20-talon per-site cap.
@@ -1443,10 +1446,8 @@ paths:
         Two shapes, chosen by the body:
 
         - `{ "enabled": <bool> }` and nothing else flips the talon on or off.
-          Enabling re-arms `nextRunAt` from now, so a talon that sat disabled
-          for a month does not fire the instant it is switched back on, and
-          re-checks that the author still has an LLM key when the talon uses AI
-          (`400 llm_key_required`).
+          Switching on re-checks that the author still has an LLM key when the
+          talon uses AI (`400 llm_key_required`).
         - anything else replaces the caller-owned fields wholesale and is
           revalidated exactly like a create — including the `command`-output
           privilege gate, the webhook-url SSRF check, and the author-LLM-key
@@ -1454,10 +1455,24 @@ paths:
           including `enabled` (default `true`), so a replacement that omits it
           switches a paused talon back on.
 
-        Run bookkeeping (`lastRunAt`, `lastRunStatus`, `consecutiveFailures`)
-        is never touched by either shape. `disabledReason` is cleared by the
-        enable/disable shape — a person moving the switch settles the question
-        of why it moved.
+        Moving the switch does the same through either shape. The toggle
+        shape always counts as moving it; a replacement counts only when its
+        `enabled` differs from the talon's, so an edit that carries the
+        current value moves nothing.
+
+        - Either edge clears `disabledReason` — a person moving the switch
+          settles the question of why it moved. Editing a talon the system
+          switched off, without switching it on, keeps the reason.
+        - Switching on re-arms `nextRunAt` from now, so a talon that sat
+          disabled for a month does not fire the instant it is switched back
+          on.
+        - Switching from off to on starts `consecutiveFailures` over at 0, so
+          a talon the system switched off after 10 failed runs gets 10 more
+          tries. Switching it off, or sending `enabled: true` for a talon that
+          is already on, keeps the count.
+
+        The rest of the run bookkeeping (`lastRunAt`, `lastRunStatus`) is
+        never touched by either shape.
 
         Requires `TALON_MANAGE`; API keys need `site=<siteId>:write`.
       security:
@@ -1672,6 +1687,10 @@ paths:
         `Roost-Version` is `400`.
         Use `page_size` and `page_token`; legacy `limit` and `cursor`
         are accepted for existing callers.
+
+        A caller with a machine scope gets only the rows of the machines in
+        it; rows with no machine are left out, and a `machineId` filter
+        outside it answers an empty page.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -1841,7 +1860,9 @@ paths:
       description: |
         Returns one entry from `sites/{siteId}/logs`. Any member of the site
         may read; API keys need `site=<siteId>:read`. An unsupported
-        `Roost-Version` is `400`.
+        `Roost-Version` is `400`. For a caller with a machine scope, another
+        machine's entry, or one with no machine, answers the same `404` as a
+        missing entry.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -2250,6 +2271,77 @@ paths:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
         '500': { $ref: '#/components/responses/Problem500' }
+    patch:
+      operationId: updateInstallerReleaseNotes
+      tags: [Installer]
+      summary: Correct a version's release notes
+      description: |
+        Sets the version's `release_notes`, and the `latest` pointer's when it
+        points at this version. Nothing else on either record changes, and the
+        installer files never do. The upload applies `releaseNotes` only when it
+        creates a version, so this is how notes that went out stale are
+        corrected; `null` clears them. A soft-deleted version is `404`, like a
+        missing one. Any other body field is ignored.
+
+        The version is then synced with tridant id again, so a listed release
+        shows the new notes (`null` clears them there too), while one a
+        rollback yanked keeps its old copy until it is listed again
+        (`tridant`); a tridant id failure never fails the change. No `Idempotency-Key`: sending the same notes again
+        changes nothing.
+
+        Superadmin-only; API-key callers need `installer=*:write`.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      parameters:
+        - name: version
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^\d+\.\d+\.\d+$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [releaseNotes]
+              properties:
+                releaseNotes:
+                  type: string
+                  nullable: true
+                  description: The new release notes; `null` clears them.
+      responses:
+        '200':
+          description: Notes set on the version, and on `latest` when it is this version
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, release_notes, latest, tridant]
+                properties:
+                  version:
+                    type: string
+                  release_notes:
+                    type: string
+                    nullable: true
+                  latest:
+                    type: boolean
+                    description: True when the `latest` pointer is this version and took the notes too.
+                  tridant:
+                    $ref: '#/components/schemas/TridantSync'
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404':
+          description: Version not found or soft-deleted
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '500': { $ref: '#/components/responses/Problem500' }
 
   /api/installer/{version}/set-latest:
     post:
@@ -2483,6 +2575,10 @@ paths:
         hoot-enabled machines. `initial_message` is stored as the first
         message and does not trigger a reply. Requires `chat=<siteId>:write`
         and `Idempotency-Key`.
+
+        `machineId` must be within the caller's machine scope (`404`
+        otherwise); a site-wide conversation covers only the caller's
+        machines.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -2523,7 +2619,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404':
-          description: The site does not exist or the caller has no access to it.
+          description: The site does not exist or the caller has no access to it, or `machineId` is outside the caller's machine scope ('machine not found or no access').
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -2640,7 +2736,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404':
-          description: The site does not exist or the caller has no access to it.
+          description: The site does not exist or the caller has no access to it, or `machineId` is outside the caller's machine scope ('machine not found or no access').
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -2677,6 +2773,11 @@ paths:
         otherwise); create a new conversation to change the target machine.
         API-key callers are capped to tier-1 (read-only) Hoot tools, and every
         reply spends the LLM key of the user behind the credential.
+
+        A conversation pinned to a machine that is now outside the caller's
+        machine scope answers `404` ('machine not found or no access'); the
+        message is still saved. A site-wide conversation covers only the
+        machines in the caller's machine scope.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -3698,7 +3799,8 @@ paths:
 
         Required scope: `site=<siteId>:read` for API keys — this route is
         authorized against the site, so a `roost=` scope does not cover it.
-        The caller must be a member of the site.
+        The caller must be a whole-site member of the site; a caller with a
+        machine scope gets `403`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -4506,8 +4608,8 @@ paths:
           required: false
           schema:
             type: string
-            enum: [scheduled, canary, complete, aborted]
-          description: Filter by rollout stage. `fleet` is not accepted as a filter.
+            enum: [scheduled, canary, fleet, complete, aborted]
+          description: Filter by rollout stage.
       responses:
         '200':
           description: Paginated deployments.
@@ -4787,10 +4889,14 @@ paths:
       tags: [Sites]
       summary: delete a site
       description: |
-        Deletes the top-level site document. The caller must be the site
+        Deletes the site and everything under it. The caller must be the site
         **owner** or a superadmin — a site admin who does not own the site is
-        refused. The id is tombstoned on delete and cannot be reused.
-        Subcollection cascade cleanup is deferred from the MVP surface.
+        refused. In order, it writes the audit row to the platform's own log
+        (the site's log goes with the site), retires the id so it cannot be
+        reused, revokes the site's agent refresh tokens, clears the site from
+        every member's legacy `users/{uid}.sites[]`, and deletes the site
+        document and every subcollection: machines and their history, roosts,
+        talons, webhooks, settings and member rows.
 
         ### Authentication and scopes
 
@@ -4838,7 +4944,8 @@ paths:
       description: |
         Machine inventory with online state and current roost summaries.
         The MVP route is intentionally unpaginated and returns all machines
-        visible in the site.
+        visible in the site. A caller with a machine scope gets only those
+        machines.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -4898,7 +5005,9 @@ paths:
       description: |
         Hard-deletes the machine document, its config document, the fixed
         pending/completed command-map documents, and the machine's agent
-        refresh tokens (so the agent cannot reconnect). Idempotent.
+        refresh tokens (so the agent cannot reconnect), and ends the machine's
+        swoop sessions as `machine_removed`, so their viewers say the machine
+        has left the site. Idempotent.
 
         ### Authentication and scopes
 
@@ -5274,7 +5383,18 @@ paths:
         `sha256_checksum`, the server first downloads the installer to compute
         and store one; a failed download answers `400`, `413` or `422` as
         `POST .../deployments/checksum` does. `409 no_failed_targets` when
-        nothing matches. Requires `DEPLOYMENT_MANAGE`; API keys need
+        nothing matches. A target whose failure was an uninstall
+        (`failedCommandType: uninstall_software` on the target) is not
+        retried, since the install would put the program back; run the
+        uninstall again instead. The targets are claimed on a fresh read of
+        the record before any install is queued, so one that left `failed`
+        meanwhile (another retry, or a late result) gets no second install;
+        when none is left the answer is `409 no_failed_targets` and nothing is
+        queued. An install of this deployment still queued for a retried
+        machine (one timed out while it was offline) is replaced, so the
+        machine runs one. If an install cannot be queued after its target was
+        claimed, the answer is `500`; that target stays `pending` until the
+        server times it out. Requires `DEPLOYMENT_MANAGE`; API keys need
         `site=<siteId>:write`.
 
         A target refused inside its active hours is `failed` with an `error`
@@ -5342,12 +5462,24 @@ paths:
         Marks every target in `pending` / `closing_processes` /
         `downloading` state as `cancelled`, removes this deployment's
         `install_software` command from those machines' pending queue, and
-        queues `cancel_installation` on them. Targets that have started
-        `installing` (or are already terminal) are left alone. Once no target
-        is in flight the deployment settles to `cancelled`, `completed`,
-        `failed` or `partial`; otherwise it stays `in_progress`.
-        `409 no_cancellable_targets` when nothing is cancellable. Requires
-        `DEPLOYMENT_MANAGE`; API keys need `site=<siteId>:write`.
+        queues `cancel_installation` on them. With `machines`, only those
+        machines' targets are cancelled and the rest carry on. Targets that
+        have started `installing` (or are already terminal) are left alone.
+        Once no target is in flight the deployment settles to `cancelled`,
+        `completed`, `failed` or `partial`; otherwise it stays `in_progress`.
+        `409 no_cancellable_targets` when nothing is cancellable, or nothing
+        named in `machines` is; a malformed `machines` is `400`. The same 409
+        comes back when every target started `installing` or finished while
+        the call ran, though `cancel_installation` may already have been sent
+        to those machines. If a write or read for some machine fails, the
+        answer is `500`; the record is settled first unless writing it is
+        what failed.
+        Every target still `pending`, `closing_processes` or `downloading`
+        whose queued install was removed is then `cancelled`, even if its
+        `cancel_installation` could not be sent, and a target whose queued
+        install could not be removed stays as it was, since that install may
+        still run. Requires `DEPLOYMENT_MANAGE`; API keys need
+        `site=<siteId>:write`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -5358,7 +5490,14 @@ paths:
         required: false
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              properties:
+                machines:
+                  type: array
+                  minItems: 1
+                  items: { type: string, minLength: 1 }
+                  description: Cancel only these machines' targets. Omit to cancel every cancellable target.
       responses:
         '200':
           description: Cancellation processed.
@@ -5393,12 +5532,23 @@ paths:
     post:
       operationId: uninstallSiteDeployment
       tags: [Deployments]
-      summary: queue uninstall_software per target
+      summary: uninstall a program from the deployment's targets
       description: |
-        Queues `uninstall_software` on every target machine, whatever its status,
-        and flips the deployment-level status to `uninstalling`. Per-target
-        reconciliation is asynchronous — poll `GET ../{deploymentId}` for
-        progress. `409 no_targets` when the deployment has no targets.
+        Looks `software_name` up, by exact name, in each target machine's
+        software list and queues its uninstall there, the same command
+        `POST /api/sites/{siteId}/machines/{machineId}/uninstall` queues, tied
+        to this deployment. Targets not queued come back in `skipped`, each with
+        a `reason`: `install_in_flight` (the target is not finished yet),
+        `machine_not_found` (the machine was removed from the site),
+        `software_not_found` (the machine does not list the program),
+        `software_ambiguous` (it lists more than one version under that name;
+        uninstall the one you mean per machine) or `software_record_invalid`
+        (its entry has no uninstall command). Each
+        queued target turns `uninstalled`, or `failed` with an `error`, when its
+        agent reports; poll `GET ../{deploymentId}`. `409 no_uninstallable_targets`
+        when no target can take it, and then nothing is queued (the problem
+        carries `skipped`). `404` when the deployment does not exist; `409
+        no_targets` when it has no targets.
 
         ### Authentication and scopes
 
@@ -5412,26 +5562,49 @@ paths:
       parameters:
         - $ref: '#/components/parameters/RequiredIdempotencyKeyHeader'
       requestBody:
-        required: false
+        required: true
         content:
           application/json:
-            schema: { type: object }
+            schema:
+              type: object
+              required: [software_name]
+              properties:
+                software_name:
+                  type: string
+                  minLength: 1
+                  maxLength: 256
+                  description: The program's exact name in the machines' software list.
       responses:
         '200':
-          description: Uninstall queued.
+          description: Uninstall queued on the targets that list the program.
           content:
             application/json:
               schema:
                 type: object
-                required: [deploymentId, siteId, status, queued, machine_ids]
+                required: [deploymentId, siteId, status, queued, machine_ids, skipped]
                 properties:
                   deploymentId: { type: string }
                   siteId: { type: string }
-                  status: { type: string }
+                  status: { type: string, description: The deployment's status as read; this call does not change it. }
                   queued: { type: integer }
                   machine_ids:
                     type: array
                     items: { type: string }
+                  skipped:
+                    type: array
+                    items:
+                      type: object
+                      required: [machineId, reason]
+                      properties:
+                        machineId: { type: string }
+                        reason:
+                          type: string
+                          enum:
+                            - install_in_flight
+                            - machine_not_found
+                            - software_not_found
+                            - software_ambiguous
+                            - software_record_invalid
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '402': { $ref: '#/components/responses/PlanRequired' }
@@ -6069,7 +6242,8 @@ paths:
         `pendingBytes`) against the site's storage allowance, and the 20
         most recent fired alarm thresholds. Bandwidth is not included; see
         `/quota/history` for daily egress. See
-        [rate-limits.md](/docs/api/rate-limits).
+        [rate-limits.md](/docs/api/rate-limits). Any whole-site member may
+        read; a caller with a machine scope gets `403`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6146,7 +6320,8 @@ paths:
       summary: list audit records for a site
       description: |
         Paginated hash-chained audit log, newest first by `recordedAt`.
-        Requires `site=<siteId>:read` scope. Record kinds match the audit
+        Requires `site=<siteId>:read` scope. Any whole-site member may read;
+        a caller with a machine scope gets `403`. Record kinds match the audit
         sink taxonomy:
         `signed_url_issued`, `distribution_started`,
         `version_pointer_changed`, `api_key_used`, `gc_run`,
@@ -6261,7 +6436,8 @@ paths:
       tags: [Webhooks]
       summary: list webhook subscriptions
       description: |
-        Lists webhook subscriptions on a site.
+        Lists webhook subscriptions on a site. Any whole-site member may
+        read; a caller with a machine scope gets `403`.
         Use `page_size` and `page_token`; legacy `limit` and `cursor`
         are accepted for existing clients.
         See [webhooks.md](/docs/api/webhooks).
@@ -6312,8 +6488,8 @@ paths:
         **once** on creation.
 
         Requires `site=<siteId>:write` scope and admin of this site.
-        Listing and reading subscriptions is open to any member of the
-        site; creating, updating, deleting and rotating are not.
+        Listing and reading subscriptions is open to any whole-site member
+        of the site; creating, updating, deleting and rotating are not.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6726,8 +6902,9 @@ paths:
         open, `keepalive` (`{ t, siteId }`, after a `: ping` comment) every 15 s,
         and `closing` (`{ reason: "max_duration_reached" }`) when the 30-minute
         lifetime ends. `events` must name valid webhook event types (`400`
-        otherwise) and is only echoed in `connected`. Any member of the site may
-        connect; API keys need `site=<siteId>:read` and may be passed as
+        otherwise) and is only echoed in `connected`. Any whole-site member of
+        the site may connect, and a caller with a machine scope gets `403`;
+        API keys need `site=<siteId>:read` and may be passed as
         `api_key` for EventSource clients that cannot set headers.
       security:
         - apiKey: []
@@ -6803,7 +6980,9 @@ paths:
         `start_live_view` and `stop_live_view` need MACHINE_VIEW (any site
         member); every other type needs MACHINE_EXEC_COMMAND (site admin or
         owner; superadmin anywhere). API keys need `machine=<machineId>:write`
-        for every type. 60/min per caller.
+        for every type. 60/min per caller. The dashboard's read-only
+        `check_path` command is not on this allowlist, for any caller: it has a
+        session-only route of its own and refuses API keys.
 
         Returns 409 `machine_offline` if `machines/{machineId}.online`
         is `false` — the command is NOT queued.
@@ -6855,7 +7034,8 @@ paths:
                   type: object
                   description: |
                     Per-type parameters. `reboot_machine` /
-                    `shutdown_machine` accept `delay_seconds` (>=0) and
+                    `shutdown_machine` accept `delay_seconds` (>=0), which the
+                    agent ignores (the countdown is 60 seconds), and
                     `active_hours_override`; `reboot_machine` also accepts
                     `when`. A malformed override (missing, blank or over-long
                     `reason`, or any other key), an override on another type,
@@ -7816,7 +7996,14 @@ paths:
         Queues an uninstall of an installed program, looked up by name in the
         machine's software inventory. `404` carries `machine_not_found` or
         `software_not_found`; `409 software_record_invalid` means the inventory
-        entry has no usable uninstall command.
+        entry has no usable uninstall command. When the machine lists more than
+        one version under the name, the first record found is used. With
+        `deployment_id`, the uninstall moves that deployment's target for this
+        machine to `uninstalled` (or `failed`) when the agent reports. A
+        `deployment_id` that is not a deployment on this site is `400`, and so is
+        one whose target for this machine has not finished installing; one that
+        does not target this machine is ignored and the uninstall is queued
+        untied.
 
         ### Authentication and scopes
 
@@ -7845,6 +8032,10 @@ paths:
                   maxItems: 32
                   items: { type: string, minLength: 1 }
                 timeout_seconds: { type: number, description: Clamped to 1-86400. }
+                deployment_id:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,128}$'
+                  description: A deployment on this site whose finished target on this machine the uninstall moves.
       responses:
         '202':
           description: Uninstall command queued.
@@ -7941,6 +8132,14 @@ paths:
         session key is never returned, and no secret is ever placed in a URL —
         the room URL names a room and nothing else.
 
+        One streamer on a machine serves every viewer, so when the machine is
+        already in a session — someone in it still holds a lease they have
+        renewed, or it started under a minute ago — the caller joins it
+        instead (`joined: true`): the same `sid`, with a viewer id, JWT, key
+        and lease of its own, and nobody already in it is disconnected. A
+        machine serves four viewers at once: a fifth person is refused with
+        `409 session_full` until someone leaves.
+
         `control: true` asks for input control, which additionally requires an
         open step-up window. Send a live second-factor `mfaProof` in the same
         request to open one, or this tab's `continuity` token from its previous
@@ -7951,13 +8150,16 @@ paths:
         session. Watching needs MACHINE_REMOTE_VIEW (20/min per caller), control
         MACHINE_REMOTE_CONTROL (10/min).
 
+        A machine outside the caller's machine scope answers `404` before any
+        of the refusals below; inside it, the caller's swoop mode applies.
+
         **API keys cannot call this operation.** Every swoop session route
         refuses a key with `403` and `code: api_key_not_permitted` before it
         parses the body or reads any swoop state: swoop is a human-in-the-loop
         surface, and a key has no second factor to present. The standard
         authorization checks run first, so a key lacking the route's scope is
         refused earlier with `scope_insufficient`, and one whose user lacks the
-        route's capability with `forbidden`.
+        route's capability with `capability_missing`.
       security:
         - firebaseIdToken: []
       requestBody:
@@ -8034,6 +8236,9 @@ paths:
                         description: |
                           Epoch milliseconds at which the lease must have been
                           renewed — not the JWT expiry.
+                      joined:
+                        type: boolean
+                        description: Whether this viewer joined the session already running on the machine rather than starting one.
                       continuity:
                         type: string
                         description: Control sessions only. Send it as `continuity` on this tab's next control session to skip the step-up ceremony once.
@@ -8059,22 +8264,31 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`. A passkey challenge
-            issued to someone else answers plain `{ error, code:
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own). A passkey challenge issued to
+            someone else answers plain `{ error, code:
             challenge_user_mismatch }` JSON.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404':
-          description: The site or the machine does not exist, or the caller has no access to the site.
+          description: |
+            The site does not exist or the caller has no access to it
+            (`code: not_found`), the machine is outside the caller's machine
+            scope (`code: not_found`, 'machine not found or no access'), or the
+            machine is not in the site (`code: machine_not_found`).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '409':
-          description: '`code: machine_offline` — the machine document does not read `online: true`.'
+          description: |
+            `code: machine_offline` — the machine document does not read `online: true`.
+            `code: session_full` — four other people are already in the machine's
+            session; a seat comes back when one of them leaves.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8108,6 +8322,14 @@ paths:
         Returns the live state of one session and its viewers. The session
         record holds no key material by construction.
 
+        A caller who is in the session gets each viewer's `displayName`, and a
+        caller whose role on the site is owner or admin with the whole site,
+        or a superadmin, gets each viewer's `email` too: an admin with a
+        machine scope gets names only. A caller who is not in the session gets
+        neither, whatever their role. A caller in the session also gets each
+        viewer's `kickable`: whether `POST …/{sessionId}/kick` would take that
+        viewer out for them.
+
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
       security:
@@ -8135,35 +8357,65 @@ paths:
                           properties:
                             viewerId: { type: string }
                             uid: { type: string }
+                            displayName:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session. Null when the viewer's account has no name, or is gone.
+                            email:
+                              type: string
+                              nullable: true
+                              description: Only when the caller is in the session and their role on the site is owner or admin with the whole site, or they are a superadmin. Null when the viewer's account is gone.
+                            kickable:
+                              type: boolean
+                              description: Only when the caller is in the session. Whether `POST …/{sessionId}/kick` would take this viewer out for the caller — a site owner or admin with the whole site, or a superadmin — and never on the caller's own seats.
                             ctl: { type: boolean }
                             joinedAt: { type: integer }
                             leaseExpiresAt: { type: integer }
-                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
+                            renewedAt: { type: integer, description: When this viewer last renewed its lease; absent until it first has. }
+                      endReason: { type: string, enum: [closed, idle, killed, lease_expired, session_cap, signal_lost, host_exit, revoked, kicked, machine_removed, error, no_capture_source, no_encoder, spawn_failed, spawn_rate_ceiling, bundle_unavailable, not_installed, install_unverified, version_mismatch, bundle_invalid] }
                       endedAt: { type: integer }
+                      endedFor:
+                        type: string
+                        description: The uid a `revoked` or `kicked` end was for. Removing a member, taking control from them, or kicking them ends the session for everyone in it, and everyone else starts the next one on their own.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
-        '404': { $ref: '#/components/responses/Problem404' }
+        '404':
+          description: |
+            `code: not_found` when the site does not exist or the caller is not
+            in it, `code: session_not_found` when the machine has no session
+            with this id.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
     delete:
       operationId: endSwoopSession
       tags: [Machines]
-      summary: end a swoop session
+      summary: leave or end a swoop session
       description: |
-        Ends the session record and stops the streamer through the signalling
+        Takes the caller's own viewer out of the session: the one `viewerId`
+        names, or every one of the caller's when it names none. While anyone
+        else is still in the session it goes on for them (`left: true`), and a
+        `viewerId` that is not the caller's answers `404`. The last one out
+        ends the session record and stops the streamer through the signalling
         broadcast, queueing a polled command only when the broadcast does not
         land. Neither failing withholds the `200`: the record is already ended,
-        and a streamer that survives both is stopped by its own lease.
+        and a streamer that survives both is stopped by its own lease. Ending
+        a session for everyone in it is `POST …/swoop/kill`; taking one other
+        person out of it is `POST …/{sessionId}/kick`.
 
         `endReason` is optional and may only be one a caller may claim:
         `closed` (the default), `killed`, or `revoked`. The machine-side
@@ -8187,9 +8439,12 @@ paths:
                   type: string
                   enum: [closed, unmounted, kill, lease_expired, lease_refused, host_gone, signal_lost, peer_failed, start_failed, refused, same_machine, picture_stalled]
                   description: The page's own reason, recorded in the audit trail beside `endReason`.
+                viewerId:
+                  type: string
+                  description: The caller's viewer, as the session was started or joined with.
       responses:
         '200':
-          description: Session ended.
+          description: The caller left the session, or, as the last one out, ended it.
           content:
             application/json:
               schema:
@@ -8200,16 +8455,19 @@ paths:
                     type: object
                     properties:
                       sid: { type: string }
-                      state: { type: string, enum: [ended] }
+                      state: { type: string, enum: [pending, live, ended] }
+                      left: { type: boolean, description: The session goes on for the others in it. }
                       endReason: { type: string }
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8285,12 +8543,13 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`, or
-            `capability_missing` when a control viewer has lost the
-            remote-control capability.
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own), or `capability_missing` when a
+            control viewer has lost the remote-control capability.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8391,11 +8650,13 @@ paths:
         '402': { $ref: '#/components/responses/PlanRequired' }
         '403':
           description: |
-            `code`: `scope_insufficient` or `forbidden` (the capability is
-            missing) and `api_key_not_permitted` (an api key called this
-            route) before the body is read; then, once the body has passed
-            the `400` checks, swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`.
+            `code`: `scope_insufficient` or `capability_missing` (the
+            capability gate: your site role or swoop mode does not include
+            what was asked) and `api_key_not_permitted` (an api key called
+            this route) before the body is read; then, once the body has
+            passed the `400` checks, swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8414,6 +8675,113 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}/kick:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{1,64}$'
+        description: The session id (`sid`) the person is in.
+    post:
+      operationId: kickSwoopViewer
+      tags: [Machines]
+      summary: kick someone from a swoop session
+      description: |
+        Takes one other person out of a live session: body `{ viewerId }`, a
+        seat they hold, and every seat of theirs goes with it. One streamer
+        serves everyone on the machine and cannot drop one viewer, so the
+        session ends for everyone in it with `endReason: kicked` and `endedFor`
+        naming them: their page stops and tells them a site admin took them
+        out, and everyone else's page starts the next session on its own
+        within a couple of seconds. The streamer is stopped through the
+        signalling broadcast, with the polled command queued when that does
+        not land.
+
+        A kick is not a ban: their access is intact and they may rejoin. Their
+        continuity grants are spent, so a token cannot stand in for the step-up
+        once their window has closed; the windows themselves stay open, only
+        `POST …/swoop/kill` closes them, so a rejoin inside one asks for
+        nothing. Keeping someone out is their swoop mode in the site's members
+        section.
+
+        Site owner or admin with the whole site, or a superadmin, whatever
+        their own swoop mode: the swoop-settings capability, as for a kill, so
+        a caller with a machine scope gets `403`. Anyone but yourself, with
+        no order among them. Not gated on the site's swoop settings or the
+        payer's plan.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [viewerId]
+              properties:
+                viewerId:
+                  type: string
+                  pattern: '^[A-Za-z0-9_-]{1,64}$'
+                  description: A seat of the person to kick, as the session record lists it. Your own seat is refused with `400`.
+            example:
+              viewerId: viewer0000000000000000000000002
+      responses:
+        '200':
+          description: The session ended for everyone in it, naming the person kicked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      sid: { type: string }
+                      state: { type: string, enum: [ended] }
+                      endReason: { type: string, enum: [kicked] }
+                      endedFor: { type: string, description: The uid of the person kicked. }
+        '400':
+          description: A malformed body or `viewerId`, or a `viewerId` that names the caller's own seat.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability: your site role is not owner or
+            admin), `api_key_not_permitted` (an api key called this route). A
+            caller with a machine scope gets `capability_missing` before any of
+            them.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404':
+          description: |
+            `code: not_found` when the site does not exist, the caller is not
+            in it, or the machine is outside the caller's machine scope,
+            `code: session_not_found` when the machine has no session
+            with this id, `code: viewer_not_found` when nobody holds that seat
+            any more.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '409':
+          description: '`code: session_ended`: the session had already ended.'
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
   /api/sites/{siteId}/machines/{machineId}/swoop/kill:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
@@ -8424,10 +8792,12 @@ paths:
       summary: stop whatever swoop is streaming on a machine
       description: |
         Ending your own session is the `DELETE` above; this one ends whatever
-        anyone is running on the machine, so it takes the machine
-        remote-control capability. Omit `sid` to mean "kill whatever is
-        running", which is what a revocation wants when it does not know the
-        live session.
+        anyone is running on the machine, so it requires the swoop-settings
+        capability (site admin or owner), whatever the caller's own swoop
+        mode. A caller with a machine scope gets `403`, even on a machine in
+        it, and `404` on a machine outside it. Omit `sid` to mean "kill
+        whatever is running", which is what a revocation wants when it does
+        not know the live session.
 
         Deliberately not gated on the site's swoop settings: stopping a stream
         has to work after the feature has been switched off, which is exactly
@@ -8472,14 +8842,15 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            machine remote-control capability is missing), or
-            `api_key_not_permitted` (an api key called this route).
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing), or
+            `api_key_not_permitted` (an api key called this route). A caller
+            with a machine scope gets `capability_missing` before any of them.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404':
-          description: 'Neither path delivered the kill and the machine document does not exist (`code: not_found`).'
+          description: "The machine is outside the caller's machine scope ('machine not found or no access'), or neither path delivered the kill and the machine document does not exist; both `code: not_found`."
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8599,11 +8970,13 @@ paths:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            capability is missing), `api_key_not_permitted` (an api key called
-            this route), then swoop policy — `swoop_disabled`,
-            `machine_excluded`, `members_may_not_watch`. A passkey challenge
-            issued to someone else answers plain `{ error, code:
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the capability gate: your site role or swoop mode does not
+            include what was asked), `api_key_not_permitted` (an api key
+            called this route), then swoop policy — `swoop_disabled`,
+            `machine_excluded`, `members_may_not_watch` (only for a member
+            with no swoop mode of their own). A passkey challenge issued to
+            someone else answers plain `{ error, code:
             challenge_user_mismatch }` JSON.
           content:
             application/problem+json:
@@ -8631,8 +9004,9 @@ paths:
         through `swoop/kill` with the session's `sid`.
 
         A viewer whose account is gone keeps their row, with `email` and
-        `displayName` null. Requires the machine remote-control capability
-        (site admin or owner).
+        `displayName` null. Requires the swoop-settings capability (site
+        admin or owner), whatever the caller's own swoop mode. A caller with
+        a machine scope gets `403`.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -8672,9 +9046,10 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
           description: |
-            `code`, in check order: `scope_insufficient`, `forbidden` (the
-            machine remote-control capability is missing), or
-            `api_key_not_permitted` (an api key called this route).
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing), or
+            `api_key_not_permitted` (an api key called this route). A caller
+            with a machine scope gets `capability_missing` before any of them.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8709,7 +9084,15 @@ paths:
                   ok: { type: boolean }
                   data: { $ref: '#/components/schemas/SwoopSiteSettings' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing: a site owner or admin
+            is needed), or `api_key_not_permitted` (an api key called this
+            route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -8762,7 +9145,116 @@ paths:
                         description: How many machines the change was fanned out to.
         '400': { $ref: '#/components/responses/Problem400' }
         '401': { $ref: '#/components/responses/Problem401' }
-        '403': { $ref: '#/components/responses/Problem403' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (the swoop-settings capability is missing: a site owner or admin
+            is needed), or `api_key_not_permitted` (an api key called this
+            route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/fleet-settings:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: getFleetSettings
+      tags: [Sites]
+      summary: read which machines may act on a site's machines
+      description: |
+        Off until a site turns it on. Each sender is a machine of the site that
+        may act on the site's machines through the server, up to its tier and
+        only on the machines it names. Site-admin surface: requires
+        `site=<siteId>:read` and a site owner or site admin.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/FleetSettings' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (a site owner or admin is needed), or `api_key_not_permitted` (an
+            api key called this route). A caller with a machine scope gets
+            `capability_missing`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+    patch:
+      operationId: setFleetSettings
+      tags: [Sites]
+      summary: change which machines may act on a site's machines
+      description: |
+        Changes `enabled`, `senders` or both; at least one is required.
+        `senders`, when sent, is the whole new set: a machine left out loses
+        its grant, and each entry replaces that machine's grant whole. A new
+        sender's `maxTier` defaults to 2; an existing one keeps its tier when
+        `maxTier` is left out. Every machine this change adds, as a sender or
+        to a sender's list, must be a machine of the site; one already
+        granted that has since left the site is dropped from what is written.
+        Requires `site=<siteId>:write` and a site owner or site admin, 30/min
+        per caller.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+
+        Every call a granted machine makes is checked against the grant as it
+        stands, so a change applies from its next call. A machine removed from
+        the grant has its sessions deleted, and turning the setting off
+        deletes every session on the site.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/FleetSettings'
+                - type: object
+                  minProperties: 1
+      responses:
+        '200':
+          description: Settings updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      settings: { $ref: '#/components/schemas/FleetSettings' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (a site owner or admin is needed), or `api_key_not_permitted` (an
+            api key called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404': { $ref: '#/components/responses/Problem404' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
@@ -9140,8 +9632,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 launch_mode:
                   type: string
@@ -9232,8 +9724,8 @@ paths:
                 cwd: { type: string }
                 priority: { type: string, example: Normal, description: "Windows only — `Low`, `Normal`, `High` or `Realtime`; macOS and Linux agents ignore it. Not validated by the API. Defaults to `Normal`." }
                 visibility: { type: string, example: Normal, description: "Windows only — `Normal` or `Hidden` (hidden works for console apps only); legacy `Show` / `Hide` read as `Normal` / `Hidden`. macOS and Linux agents ignore it. Not validated by the API." }
-                time_delay: { type: string }
-                time_to_init: { type: string }
+                time_delay: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds to wait before a relaunch, as a string. An empty string stores the default `0`; anything else that is not a number of zero or more is refused." }
+                time_to_init: { type: string, pattern: '^(\d+(\.\d*)?|\.\d+)?$', description: "Seconds the process is given to start, as a string. An empty string stores the default `10`; anything else that is not a number of zero or more is refused." }
                 relaunch_attempts: { type: string, description: "Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`." }
                 autolaunch: { type: boolean }
                 launch_mode:
@@ -9903,8 +10395,9 @@ paths:
       description: |
         The account-deletion preview. `DELETE /api/users/{uid}` refuses to
         orphan the SITES a user owns but says nothing about the automations
-        they wrote, and a talon with a `cortex` output resolves its author's
-        site access on every run — so soft-deleting the author stops it.
+        they wrote, and every talon resolves its author's site access before
+        any output fires — so soft-deleting the author switches each one off at
+        its next run, with nothing fired.
 
         One collection-group query rather than a walk of the user's site
         membership: a superadmin's `sites[]` can be empty while they author
@@ -10255,6 +10748,7 @@ paths:
                     type: array
                     items:
                       type: object
+                      required: [swoop, machineIds]
                       properties:
                         uid: { type: string }
                         email: { type: string, nullable: true }
@@ -10265,6 +10759,25 @@ paths:
                           type: string
                           enum: [user, member, admin, superadmin]
                         displayName: { type: string, nullable: true }
+                        swoop:
+                          type: [string, 'null']
+                          enum: [none, view, control, null]
+                          description: |
+                            The person's own swoop mode on this site. `null`
+                            means the site role decides: members watch where
+                            the site lets members watch, admins and owners
+                            control. Always `null` on the owner's row. A stored
+                            value that is not one of the three reads as `none`.
+                        machineIds:
+                          type: [array, 'null']
+                          items: { type: string }
+                          maxItems: 30
+                          description: |
+                            The machines this member reaches; `null` means the
+                            whole site. Nothing scopes an owner, so the owner's
+                            row reads `null`. An empty list means no machines:
+                            every one they had has left the site, or the stored
+                            value is malformed.
         '401': { description: Unauthorized }
         '403': { description: Forbidden (not site admin) }
         '404': { description: Site not found or no access }
@@ -10283,11 +10796,26 @@ paths:
         gain nothing on any other site.
 
         `roleHonored` says whether the row was actually written at the
-        requested role. Adding someone who is ALREADY a member is a 200
-        no-op — nothing is overwritten and their existing role stands — and
-        answers `roleHonored: false`. Use
+        requested role, swoop mode and machine scope. Adding someone who is
+        ALREADY a member is a 200 no-op — nothing is overwritten, the swoop
+        mode and machine scope included, and their existing role stands —
+        and answers `roleHonored: false`. Use
         `PATCH /api/sites/{siteId}/members/{uid}` to change an existing
-        member's role.
+        member's role, swoop mode or machine scope.
+
+        `swoop` optionally sets the new member's own swoop mode: `none`,
+        `view` or `control`. Leave it out and the site role decides: members
+        watch where the site lets members watch, admins control. `null` is a
+        `400` here.
+
+        `machineIds` optionally gives the new member a machine scope: they
+        then see and act on only those machines, and nothing site-wide.
+        Leave it out for the whole site; `null` and `[]` are a `400` here.
+        Duplicates are dropped and the list is stored sorted. A malformed
+        list is `400` on field `body.machineIds`, as is an id that is not a
+        machine of this site (`unknown machine: <ids>`). Nobody scopes
+        themselves: `machineIds` with your own uid or email is
+        `403 cannot_modify_own_membership`.
 
         Identify the target by **exactly one** of `uid` or `email`.
         `email` is trimmed and lowercased, then resolved to a uid through
@@ -10316,6 +10844,16 @@ paths:
                 uid: { type: string }
                 email: { type: string, format: email, maxLength: 254 }
                 role: { type: string, enum: [admin, member] }
+                swoop:
+                  type: string
+                  enum: [none, view, control]
+                  description: The new member's own swoop mode. Omit it to let the site role decide.
+                machineIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 30
+                  items: { type: string, pattern: '^[A-Za-z0-9_-]{1,128}$' }
+                  description: The new member's machine scope, each a machine of this site. Omit it for the whole site.
               oneOf:
                 - required: [uid]
                 - required: [email]
@@ -10333,11 +10871,80 @@ paths:
                   requestedRole: { type: string, enum: [admin, member] }
                   roleHonored: { type: boolean }
                   globalRole: { type: string }
-        '400': { description: Validation failure }
+        '400': { description: "Validation failure, including a malformed `machineIds` or one naming a machine not on this site (`body.machineIds`)" }
         '401': { description: Unauthorized }
-        '403': { description: "Forbidden (not site admin — `site_member_manage_required`)" }
+        '403': { description: "Forbidden (not site admin — `site_member_manage_required`), or `machineIds` sent for your own row — `cannot_modify_own_membership`" }
         '404': { description: User or site not found }
         '409': { description: "`target_is_owner` — the target already owns this site" }
+        '503': { $ref: '#/components/responses/Problem503' }
+
+  /api/sites/{siteId}/member-candidates:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: listSiteMemberCandidates
+      tags: [Site Members]
+      summary: list people who can be added to a site
+      description: |
+        The people the dashboard's add-member search may offer for this site.
+        A site owner or admin is offered the active members of the other sites
+        where they hold SITE_MEMBER_MANAGE, minus the people already on this
+        site: rosters they can already read through
+        `GET /api/sites/{siteId}/members`. It never lists every account for
+        them, because anyone can create a site and become its owner. A
+        superadmin is offered every account except this site's members.
+        Soft-deleted accounts and superadmin accounts are never offered.
+
+        Each candidate carries only `uid`, `email` and `displayName`: no site
+        role, global role, swoop mode or site list. This route never resolves
+        an email; adding someone by their exact email is
+        `POST /api/sites/{siteId}/members` with `{ email }`. There is no
+        search parameter: the list is fetched once and filtered in the
+        browser.
+
+        ### Authentication and scopes
+
+        A signed-in user session or Firebase ID token only. Requires
+        SITE_MEMBER_MANAGE on the site (site owner or admin; superadmin
+        anywhere), re-checked in the handler, so switching
+        `capability_enforcement` off does not open it.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`. It shares the 30/min SITE_MEMBER_MANAGE
+        budget with adding, removing and changing members.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: The candidates, sorted by display name, else email, ignoring case.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [candidates]
+                properties:
+                  candidates:
+                    type: array
+                    items:
+                      type: object
+                      required: [uid, email, displayName]
+                      properties:
+                        uid: { type: string }
+                        email: { type: [string, 'null'] }
+                        displayName: { type: [string, 'null'] }
+              example:
+                candidates:
+                  - uid: k3Vq8ZtN1cWb7RpYx2LmHs9JdFa4
+                    email: dana@example.com
+                    displayName: Dana Okafor
+                  - uid: P7eGu2nXo5TjQw0iBy6KcMr3SvLh
+                    email: lee@example.com
+                    displayName: null
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
 
   /api/sites/{siteId}/transfer-ownership:
@@ -10367,9 +10974,11 @@ paths:
         loser re-reads, finds the owner changed, and is refused.
 
         The successor need not already be a member; they are made one by the same
-        transaction. The outgoing owner is demoted to `admin` and KEEPS their
-        membership — handing a site over is not eviction. Transferring to the
-        current owner is `409 successor_already_owner` rather than a silent no-op.
+        transaction. The successor's row loses any machine scope and swoop
+        mode: an owner is whole site and always controls. The outgoing owner
+        is demoted to `admin` and KEEPS their membership — handing a site over
+        is not eviction. Transferring to the current owner is
+        `409 successor_already_owner` rather than a silent no-op.
 
         API keys need BOTH `site=<siteId>:write` and `site=<siteId>:admin`; the
         caller must be the owner or a superadmin. An unsupported `Roost-Version`
@@ -10425,31 +11034,57 @@ paths:
         schema: { type: string }
     patch:
       tags: [Site Members]
-      summary: change a member's per-site role
+      summary: change a member's per-site role, swoop mode or machine scope
       description: |
-        Sets the member's role on THIS site only, leaving their global role
-        untouched. Before this endpoint existed there was no per-site role to
-        change — it was derived from the global role at read time, so making
-        someone an admin on one site meant promoting them globally, on every
-        site they belong to. That is the leak per-site roles close.
+        Sets the member's role, their swoop mode, their machine scope, or any
+        of them together, on THIS site only, leaving their global role
+        untouched. Send at least one of `role`, `swoop` and `machineIds`; a
+        change to one keeps the others. Before this endpoint existed there
+        was no per-site role to change — it was derived from the global role
+        at read time, so making someone an admin on one site meant promoting
+        them globally, on every site they belong to. That is the leak
+        per-site roles close.
+
+        `swoop` is the person's own swoop mode: `none`, `view` or `control`.
+        `null` clears it, so the site role decides again: members watch where
+        the site lets members watch, admins control. A role change keeps an
+        explicit mode, so an admin set to `control` who is made a `member`
+        keeps control.
+
+        `machineIds` is the person's machine scope: 1-30 machines of this
+        site, the only ones they then reach, with nothing site-wide.
+        Duplicates are dropped and the list is stored sorted. `null` gives
+        them the whole site again; `[]` is a `400`. A malformed list is `400`
+        on field `body.machineIds`, as is an id that is not a machine of this
+        site (`unknown machine: <ids>`). A role change keeps the machine
+        scope, so a scoped member made an admin is a scoped admin.
 
         `owner` is not assignable here. Ownership moves only through
         `POST /api/sites/{siteId}/transfer-ownership`, and the owner is refused
         as a target as well, so an admin can neither promote themselves into
-        ownership (`400`) nor demote the owner out of it
-        (`409 cannot_change_owner_role`). Both are enforced inside the
+        ownership (`400`) nor change the owner's role, swoop mode or machine
+        scope (`409 cannot_change_owner_role`). Both are enforced inside the
         transaction that performs the write.
 
-        A caller may never change their OWN row
-        (`403 cannot_modify_own_membership`), whatever their role and whatever
-        the platform's `capability_enforcement` setting: the row is what decides
-        what they may do. Ask another admin on the site.
+        A caller may never change their OWN row, swoop mode and machine scope
+        included (`403 cannot_modify_own_membership`), whatever their role and
+        whatever the platform's `capability_enforcement` setting: the row is
+        what decides what they may do. Ask another admin on the site.
 
-        Demoting a member to `member` also ends any swoop session in which they
-        hold control; a watch they may still hold survives.
+        One change ends the person's swoop sessions once, for everything it
+        took away. Taking away control takes them out of every session in
+        which they hold control; a watch they still hold survives. Taking
+        away swoop altogether takes them out of every session they are in.
+        Narrowing their machine scope takes them out of every session on a
+        machine that left it (audited as `scope_changed` when that is all the
+        change took away). Taking someone out ends the session for everyone
+        in it, and the others rejoin on their own.
 
-        Requires SITE_MEMBER_MANAGE on the site. API keys need BOTH
-        `site=<siteId>:write` and `site=<siteId>:admin`.
+        Requires SITE_MEMBER_MANAGE on the site, whatever
+        `capability_enforcement` is set to: without it the answer is `403`,
+        `site_member_manage_required` (or `forbidden` from the capability
+        gate). API keys need BOTH `site=<siteId>:write` and
+        `site=<siteId>:admin`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -10460,26 +11095,45 @@ paths:
           application/json:
             schema:
               type: object
-              required: [role]
+              minProperties: 1
               properties:
                 role: { type: string, enum: [admin, member] }
+                swoop:
+                  type: [string, 'null']
+                  enum: [none, view, control, null]
+                  description: The person's own swoop mode on this site. `null` returns them to the site role's default.
+                machineIds:
+                  type: [array, 'null']
+                  minItems: 1
+                  maxItems: 30
+                  items: { type: string, pattern: '^[A-Za-z0-9_-]{1,128}$' }
+                  description: The person's machine scope, each a machine of this site. `null` gives them the whole site again.
       responses:
         '200':
-          description: Role changed
+          description: Role, swoop mode or machine scope changed
           content:
             application/json:
               schema:
                 type: object
-                required: [siteId, uid, role]
+                required: [siteId, uid, role, swoop, machineIds]
                 properties:
                   siteId: { type: string }
                   uid: { type: string }
                   role: { type: string, enum: [admin, member] }
-        '400': { description: Validation failure (including role=owner) }
+                  swoop:
+                    type: [string, 'null']
+                    enum: [none, view, control, null]
+                    description: The member's swoop mode after the change. `null` means the site role decides.
+                  machineIds:
+                    type: [array, 'null']
+                    items: { type: string }
+                    maxItems: 30
+                    description: The member's machine scope after the change. `null` means the whole site.
+        '400': { description: "Validation failure: `role, swoop or machineIds is required` when none is sent, `role=owner`, a `swoop` that is not one of the three or `null`, or a `machineIds` that is malformed or names a machine not on this site (`body.machineIds`)" }
         '401': { description: Unauthorized }
         '403': { description: "Forbidden (not site admin, or the target is the caller's own row — `cannot_modify_own_membership`)" }
         '404': { description: User is not a member of this site }
-        '409': { description: Target is the site owner }
+        '409': { description: "`cannot_change_owner_role` — the target is the site owner, whose role, swoop mode and access come with ownership" }
         '503': { $ref: '#/components/responses/Problem503' }
     delete:
       tags: [Site Members]
@@ -10491,9 +11145,9 @@ paths:
         transfer ownership first with `POST /api/sites/{siteId}/transfer-ownership`.
 
         Talons the departing member authored survive the removal — nothing
-        under `sites/{siteId}` is touched — but a talon with a `cortex` output
-        re-resolves its AUTHOR's site access on every run, so it starts failing
-        the moment they lose access. `talonCount` is therefore always in the
+        under `sites/{siteId}` is touched — but every talon re-resolves its
+        AUTHOR's site access before any output fires, so each one switches off
+        at its next run, with nothing fired. `talonCount` is therefore always in the
         response, and `?talonSuccessorUid=<uid>` moves those talons to a
         successor *before* the membership write, so the automation never has a
         moment where its author has no access. A refused successor answers
@@ -10507,9 +11161,10 @@ paths:
         (`403 cannot_modify_own_membership`), whatever their role — ask another
         admin on the site. Same rule as the sibling `PATCH`.
 
-        Requires SITE_MEMBER_MANAGE on the site; reassignment additionally
-        requires `TALON_MANAGE` (`403 talon_manage_required`). API keys need
-        BOTH `site=<siteId>:write` and `site=<siteId>:admin`. An unsupported
+        Requires SITE_MEMBER_MANAGE on the site, checked whatever
+        `capability_enforcement` is set to; reassignment additionally requires
+        `TALON_MANAGE` (`403 talon_manage_required`). API keys need BOTH
+        `site=<siteId>:write` and `site=<siteId>:admin`. An unsupported
         `Roost-Version` header is `400 unsupported_version`.
       security:
         - apiKey: []
@@ -11067,8 +11722,10 @@ components:
             ignore it. Not validated by the API; reads back as `Show` when never set.
         time_delay:
           type: string
+          description: Seconds to wait before a relaunch, as a string. Always a number of zero or more.
         time_to_init:
           type: string
+          description: Seconds the process is given to start, as a string. Always a number of zero or more.
         relaunch_attempts:
           type: string
           description: Relaunches before escalating to a machine restart, as a string. `0` relaunches forever and never restarts the machine. Defaults to `3`.
@@ -11112,7 +11769,7 @@ components:
           type: number
         days:
           type: array
-          items: { type: string }
+          items: { type: string, example: "mon", description: "`mon` … `sun`. A full or capitalised English day name is stored as its three-letter name; anything else is refused." }
         ranges:
           type: array
           minItems: 1
@@ -11120,8 +11777,8 @@ components:
             type: object
             required: [start, stop]
             properties:
-              start: { type: string }
-              stop: { type: string }
+              start: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "09:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
+              stop: { type: string, pattern: '^([01]?\d|2[0-3]):[0-5]?\d$', example: "17:00", description: "24-hour clock time. Stored as `HH:MM`; a time no clock has is refused." }
 
     ScheduleTimeRange:
       description: A single start/stop time range within a schedule.
@@ -11625,7 +12282,11 @@ components:
               nullable: true
             consecutiveFailures:
               type: integer
-              description: Reset to 0 on any successful run; drives auto-disable backoff.
+              description: >-
+                Failed runs in a row; at 10 the system switches the talon off
+                with `disabledReason: repeated_failures`. Reset to 0 by any
+                successful run and when a person switches the talon from off
+                to on.
             disabledReason:
               type: string
               nullable: true
@@ -12274,6 +12935,42 @@ components:
           enum: [banner, tray, none]
           default: banner
           description: What the machine shows while a session is live.
+    FleetSender:
+      type: object
+      description: |
+        One machine's grant. It acts only up to `maxTier`, and only on the
+        machines in `machineIds`, or on every machine of the site when
+        `wholeSite` is true. A grant naming neither reaches no machine.
+      properties:
+        maxTier:
+          type: integer
+          enum: [1, 2, 3]
+          description: The highest hoot tool tier it may use.
+        machineIds:
+          type: array
+          items: { type: string }
+          maxItems: 30
+          description: |
+            The machines it may act on; itself only when listed. Never sent
+            beside `wholeSite: true`.
+        wholeSite:
+          type: boolean
+          description: Every machine of the site, now and later.
+    FleetSettings:
+      type: object
+      description: |
+        Which machines of a site may act on its machines through the server.
+        Off until a site owner or site admin turns it on.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+          description: Whether any grant is honoured.
+        senders:
+          type: object
+          maxProperties: 64
+          additionalProperties: { $ref: '#/components/schemas/FleetSender' }
+          description: The granted machines, keyed by machine id.
     DisplaySiteSettings:
       type: object
       description: A site's display policy.
@@ -12566,9 +13263,10 @@ components:
           type: object
           additionalProperties: true
           description: |
-            Free-form metadata; the server requires no keys. The CLI and SDKs
-            write `producer`, `cliVersion`, `createdAt`, `hostname` and
-            `platform`. Every key is part of the hashed version id.
+            Free-form metadata; the server requires no keys. The SDKs write
+            `producer`, `cliVersion`, `createdAt`, `hostname` and `platform`;
+            the CLI and the dashboard send it empty. Every key is part of the
+            hashed version id.
         files:
           type: array
           minItems: 1
@@ -13313,6 +14011,9 @@ components:
         error:
           type: string
           nullable: true
+        failedCommandType:
+          type: string
+          description: On a `failed` target, the agent command that failed (`install_software` or `uninstall_software`). A retry skips a failed uninstall.
         completedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         cancelledAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
         retriedAt: { $ref: '#/components/schemas/FirestoreTimestampJson' }
@@ -13971,8 +14672,12 @@ components:
       description: |
         Webhook subscription wrapper with activity fields. Returned on
         `GET /api/webhooks`, `GET /api/webhooks/{webhookId}` and PATCH.
-        `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` are not
-        updated by the dispatcher yet; read delivery history instead.
+        `lastDeliveryAt` and `lastDeliveryStatus` are not updated yet.
+        `failureCount` counts the `machine.offline` sender's consecutive
+        failures: after 10 it switches the subscription off, which reads here
+        as `paused`, and a PATCH with `paused: false` turns it back on and
+        starts the count over. For the dispatcher's deliveries, read delivery
+        history.
       allOf:
         - $ref: '#/components/schemas/WebhookSubscription'
         - type: object

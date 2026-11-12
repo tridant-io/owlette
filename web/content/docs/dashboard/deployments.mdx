@@ -6,7 +6,7 @@ keywords: ["install software", "push installer", "remote install", "silent insta
 
 the **deploy** page (`/deployments`) installs software across a site's machines. each deployment is one record with one target per machine, and every target is tracked from queued to installed.
 
-**deployments run on Windows only.** the dashboard lets you pick a Mac or Linux machine as a target, but its agent cannot run the installer: it closes the processes you chose, downloads and checks the file, then fails the target with "Error: No interactive user session available for installation. A user must be logged in." see [platform support](/docs/reference/platform-support#software).
+**deployments run on Windows only.** the dashboard lets you pick a Mac or Linux machine as a target, but its agent cannot run the installer: it downloads and checks the file, then fails the target with "Error: No interactive user session available for installation. A user must be logged in." it closes nothing; an agent older than 4.2.0 closes the processes you chose first. see [platform support](/docs/reference/platform-support#software).
 
 creating, retrying, cancelling, uninstalling and deleting need a site owner or admin.
 
@@ -54,7 +54,9 @@ the dialog computes it for you. once the URL stops changing, owlette's server do
 **close running processes before install** opens two inputs:
 
 - **managed processes**: the processes owlette manages on the machines you selected, so select machines first. a ticked process is closed and kept from relaunching until the install ends, then owlette starts it again
-- **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says
+- **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says. a managed process closed by name is kept from relaunching until the install ends, like a ticked one; an agent older than 4.2.0 relaunched it within seconds, while the installer ran
+
+the agent closes them last, right before it runs the installer: after the download, the checksum check and the check that someone is logged in. an install that fails any of those closes nothing. an agent older than 4.2.0 closes them first, before the download, so there a failed download or a checksum that does not match has already closed them; owlette starts them again when the install ends.
 
 a warning lists everything that will be closed before you deploy.
 
@@ -95,8 +97,8 @@ the page header counts **total**, **in progress** and **templates**. times follo
 | state | meaning |
 |---|---|
 | `pending` | the install is queued for the agent |
-| `closing_processes` | the agent is closing the processes you chose |
 | `downloading` | the agent is downloading the installer; progress may show |
+| `closing_processes` | the agent is closing the processes you chose, right before the installer runs. an agent older than 4.2.0 does this first, before `downloading` |
 | `installing` | the installer is running; progress may show |
 | `completed` | the installer succeeded, and the verify path exists if one was set. exit code 3010 counts as success and says a reboot is required |
 | `failed` | something stopped it; the error is on the target line |
@@ -121,7 +123,7 @@ on Windows the agent runs the installer with SYSTEM rights in the machine's cons
 
 the agent stops an installer that runs longer than 40 minutes. separately, a scheduled sweeper is meant to fail targets whose agent stops reporting: `pending` after 15 minutes, and `downloading`, `installing` or `uninstalling` after 30, both counted from when the deployment was created, not from the target's last change. it only reaches sites it is already sweeping, so do not count on it: a target whose agent never reports back can stay in its state.
 
-each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments).
+each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments), or `deployment_cancelled` when a cancel stopped the install on the machine.
 
 ---
 
@@ -129,10 +131,13 @@ each finished target also writes `deployment_completed` or `deployment_failed` t
 
 - **retry failed**, in the row's menu (**more options**), requeues every failed target on the same record. the targets go back to `pending` with their errors cleared, and the deployment returns to `in_progress`. no new record is made
 - **retry this machine**, on a failed target's line, does the same for that one machine
+- a target whose **uninstall** failed is not retried: a retry installs, and would put the program back. its line has no **retry this machine**, and **retry failed** shows only while another target's install failed. run **uninstall software** again for it. over the API, a retry that reaches only such targets is refused with `409 no_failed_targets`
+- when a machine is no longer a failed install by the time the retry reaches it, for example it left `failed`, the page says so and nothing is retried. any other refusal shows the server's reason
+- two retries at once, or one while a machine reports, do not undo each other, and a machine that already left `failed` is not sent a second install. a machine that timed out while offline still has its first install queued; the retry replaces it, so the machine runs one
 
 a deployment created before checksums were pinned has none. a retry then downloads and hashes the installer first, which takes a while for a large file (the button spins), and saves the checksum on the record.
 
-a retry sends the installer, flags, checksum, verify path and parallel setting again, but not the processes to close. close them yourself first, or start a new deployment.
+a retry sends the installer, flags, checksum, verify path, parallel setting and the processes to close again.
 
 a retry does not carry the deployment's active-hours reason over: it asks its own. when a machine it retries is inside its active hours, **retry inside active hours?** lists those machines and needs a reason for **retry anyway**.
 
@@ -140,12 +145,20 @@ a retry does not carry the deployment's active-hours reason over: it asks its ow
 
 ## cancelling
 
-the × on a target that is `pending`, `closing_processes`, `downloading` or `installing` cancels the **whole deployment**, not that machine, and asks for no confirm:
+the × on a target that is `pending`, `closing_processes` or `downloading` cancels **that machine only**, and asks for no confirm. the other machines in the deployment carry on. the target is marked `cancelled` at once.
 
-- every target still `pending`, `closing_processes` or `downloading` has its queued install removed, gets a `cancel_installation` command, and is marked `cancelled`
-- targets that are `installing` or finished are left alone. the × shows on an installing target, but when nothing cancellable remains the request is refused with `409 no_cancellable_targets`, and the page shows nothing
+what the cancel does on the machine depends on how far the install has got:
 
-a cancel is only certain for a target the agent has not picked up. one already closing processes or downloading is marked `cancelled`, but the agent has no installer running to stop yet, so the install can carry on and the target can still end `completed`.
+- **still waiting**, on the server or behind another install on the machine: it never starts. nothing is downloaded, closed or installed
+- **downloading**: the download stops, and what was fetched is deleted. nothing is closed or installed
+- **closing processes**: the installer does not run, and owlette starts the closed processes again
+- **the installer is already running**, because the cancel reached the machine a moment late: it is left to finish, since an installer ended part-way can leave the machine without the program. the line then shows that install's result, `completed` or `failed`
+
+the first three write `deployment_cancelled` to [activity logs](/docs/dashboard/activity-logs#deployments), unless the install was removed before the machine picked it up.
+
+an agent older than 4.2.0 only skips an install it has not picked up, and an online machine picks one up within seconds. after that it carries on to the end although the target says `cancelled`, closing the processes you chose on the way, and the line then shows that install's result.
+
+a target that is `installing` or finished cannot be cancelled, and has no ×. a machine that started installing while the click was on its way is not cancelled: the server refuses with `409 no_cancellable_targets`, and the page says the machine has already started installing or finished.
 
 ---
 
@@ -165,7 +178,7 @@ owlette sends one uninstall per machine, by program name, and looks the program 
 | macOS | the agent quits the application and removes its bundle, only for an application bundle the machine's software list shows (type `APP`) |
 | Linux | the uninstall fails |
 
-today the uninstall is not tied to the deployment: its targets keep their install states, the record never reaches `uninstalled`, and the menu keeps offering **uninstall software**.
+on a machine whose install in this deployment has finished, the uninstall is tied to the record: when the agent reports, that target's line turns `uninstalled`, or `failed` with the reason, also when several machines report at the same moment. a target turns `uninstalled` even when Windows still lists the program and asks for a reboot. once every target is `uninstalled`, the record is `uninstalled` and the menu stops offering **uninstall software**. a selected machine that is not a target, or whose install is still running, runs the uninstall without changing the record.
 
 ---
 
@@ -202,11 +215,11 @@ the file the machine downloaded is not the one that was hashed. a URL that alway
 
 ### a target is stuck
 
-a target whose agent stops reporting, because it went offline or restarted mid-install, can stay in `downloading` or `installing`. an installing target cannot be cancelled or retried, and it keeps the record from being deleted; the dashboard has no way to clear it today. a machine that never picked the install up stays `pending` and takes it when it reconnects.
+a target whose agent stops reporting, because it went offline or restarted mid-install, is failed by the server: after 15 minutes still `pending`, or 30 minutes `downloading` or `installing`, counted from the deployment's creation or its last retry. its line then starts `Timed out:`, and it can be retried. a machine that was only offline keeps the install queued and runs it when it reconnects; its line turns `completed` if that succeeds. a target held in `closing_processes` is not timed out.
 
 ### the deployment cannot be cancelled
 
-the cancel only reaches targets still `pending`, `closing_processes` or `downloading`. once every target is installing or finished, there is nothing to cancel: use **retry failed** for failures, or **uninstall software** to remove a finished install.
+the cancel only reaches targets still `pending`, `closing_processes` or `downloading`. once a target is installing or finished, there is nothing to cancel on it: use **retry failed** for failures, or **uninstall software** to remove a finished install.
 
 ### the record cannot be deleted
 
@@ -218,4 +231,4 @@ wait until every target has finished, or cancel what can be cancelled. deleting 
 
 - **trust the source.** the agent runs installers with SYSTEM rights. deploy only installers you trust, and try new ones on one machine first
 - **agent updates** are not deployments: **update owlette**, beside **new deployment**, updates the agent itself. see [self-update](/docs/agent/self-update#from-the-dashboard)
-- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` (with an optional `machines` list), `…/cancel` and `…/uninstall` act on it; `DELETE …/{deploymentId}` removes the record. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. create and retry take `active_hours_override: { "reason" }`, which the server writes onto every install it queues, with you as `approvedBy`. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI, where `--override-active-hours --reason <text>` sends the override
+- **over the API**: `POST /api/sites/{siteId}/deployments` creates one; `…/{deploymentId}/retry` and `…/cancel` (each with an optional `machines` list) act on it; `DELETE …/{deploymentId}` removes the record. `…/uninstall` takes the program's exact `software_name` from the machines' software lists and uninstalls it from every finished target that lists it; the others come back in `skipped`, and when none can take it the call is refused with `409 no_uninstallable_targets`. every change takes an [`Idempotency-Key`](/docs/api/idempotency). the API does not compute the checksum: send `sha256_checksum` yourself, or every agent refuses the install. create and retry take `active_hours_override: { "reason" }`, which the server writes onto every install it queues, with you as `approvedBy`. the same calls are in the [`owlette deploy`](/docs/cli/reference/deploy) CLI, where `--override-active-hours --reason <text>` sends the override

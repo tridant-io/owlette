@@ -21,6 +21,7 @@ from datetime import datetime
 import osadapter
 import shared_utils
 import hardware_profile
+import installer_utils
 import config_sync
 import swoop_capability
 
@@ -42,8 +43,9 @@ SHUTDOWN_REQUEST_TIMEOUT = 3.0
 # "log-only", never a bad write.
 # Excluded on purpose — display_auto_restore_fired, display_apply_acked,
 # display_revert_deferred, display_auto_restore_skipped_unfixable,
-# display_auto_restore_circuit_breaker_tripped: no routing entry, so they hit the
-# endpoint's generic branch and duplicate the log doc the agent already wrote.
+# display_auto_restore_circuit_breaker_tripped, display_auto_restore_parked: no
+# routing entry, so they hit the endpoint's generic branch and duplicate the log
+# doc the agent already wrote.
 DISPLAY_ALERT_EVENT_TYPES = frozenset({
     # email + webhook
     'display_monitor_removed',
@@ -213,6 +215,9 @@ class FirebaseClient:
         self.config_update_callback: Optional[Callable] = None
         # Takes a reason; the service leaves the site with it. See _on_removed_from_site.
         self.removed_callback: Optional[Callable[[str], None]] = None
+
+        self._check_path_answers: list = []
+        self._check_path_answers_lock = threading.Lock()
 
         # Slow-command queue (installs/uninstalls/updates — serialised).
         # Worker starts in start(), after self.running = True.
@@ -719,6 +724,8 @@ class FirebaseClient:
                 self.logger.debug(f"Pre-populated {len(self._seen_commands)} seen commands from completed doc")
 
                 for cmd_id, entry in completed_data.items():
+                    if isinstance(entry, dict) and entry.get('type') == 'check_path':
+                        self._check_path_answers.append(cmd_id)
                     if isinstance(entry, dict) and entry.get('status') == 'running':
                         self.logger.warning(f"Command {cmd_id} was interrupted by service restart — marking failed")
                         self._mark_command_failed(
@@ -1603,19 +1610,28 @@ class FirebaseClient:
             self.connection_manager.report_error(e, "Metrics upload")
             return False
 
-    # Fast (<30s) and concurrency-safe. The two cancel_* interrupts MUST stay on
-    # this lane or they serialise behind the work they are meant to stop (OWL-06).
+    # Fast (<30s) and concurrency-safe. cancel_sync, cancel_mcp_tool and
+    # cancel_installation MUST stay on this lane or they serialise behind the
+    # work they are meant to stop (OWL-06). cancel_uninstall is not on it: it
+    # runs on the slow lane, once the uninstall it names has ended.
     # Heavy roost work (sync_pull, rollback) stays on the slow lane.
     # The three swoop types belong here too: on the slow lane they would queue
     # behind an in-flight install, which would make the kill switch minutes late.
     # site_settings_refresh likewise: a site switch should land in seconds.
     _FAST_COMMAND_TYPES = frozenset({
         'mcp_tool_call', 'capture_screenshot', 'cancel_sync', 'cancel_mcp_tool',
+        'cancel_installation',
         'swoop_session_requested', 'swoop_kill', 'swoop_refresh',
         'site_settings_refresh',
         # a revoke must not wait behind an install
         'unpair',
+        # read-only and bounded; the dashboard stops listening after seconds
+        'check_path',
     })
+
+    # see _drop_old_check_path_answers; with path_commands.MAX_ANSWER_BYTES this is
+    # the most check_path can ever hold of the completed doc.
+    _CHECK_PATH_ANSWERS_KEPT = 8
 
     def _process_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
         """Dispatch a command to its execution lane.
@@ -1636,14 +1652,20 @@ class FirebaseClient:
             t.start()
         else:
             pending_sync_cancel = _register_pending_sync_cancel(cmd_data)
+            if cmd_type == 'install_software':
+                # held before it is queued, so a cancel finds it however long it waits
+                installer_utils.hold_install(
+                    cmd_id, cmd_data.get('installer_name'), cmd_data.get('deployment_id'))
             try:
                 self._slow_command_queue.put_nowait((cmd_id, cmd_data))
             except queue.Full:
                 _discard_pending_sync_cancel(pending_sync_cancel)
+                installer_utils.release_install(cmd_id)
                 self.logger.warning(f"Slow command queue full, rejecting command {cmd_id}")
                 self._mark_command_failed(cmd_id, "Command queue full — too many pending installs", cmd_data.get('deployment_id'), cmd_data.get('type'))
             except Exception:
                 _discard_pending_sync_cancel(pending_sync_cancel)
+                installer_utils.release_install(cmd_id)
                 raise
 
     def _execute_command(self, cmd_id: str, cmd_data: Dict[str, Any]):
@@ -1707,12 +1729,23 @@ class FirebaseClient:
         cmd_type = cmd_data.get('type')
         deployment_id = cmd_data.get('deployment_id')
         is_error = isinstance(result, str) and result.startswith("Error:")
+        # the hold ends here, where the status is decided: a cancel that lands
+        # later finds nothing held. cancelled only when the install stopped for
+        # the cancel; one a cancel had named that failed for a reason of its own
+        # is recorded as that failure.
+        install_cancelled = (
+            installer_utils.release_install(cmd_id)
+            and isinstance(result, str)
+            and result.startswith(installer_utils.INSTALL_CANCELLED))
 
         if cmd_id in self._cancelled_commands:
             # cancel_mcp_tool already wrote the terminal 'cancelled' entry
             # — re-assert it, don't clobber it with the dead subprocess's
             # completed/failed result.
             self._cancelled_commands.discard(cmd_id)
+            self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
+        elif install_cancelled:
+            self.logger.info(f"Install command {cmd_id} was cancelled: {result}")
             self._mark_command_cancelled(cmd_id, 'cancelled by user', deployment_id, cmd_type)
         elif cmd_type == 'cancel_installation':
             self._mark_command_cancelled(cmd_id, result, deployment_id, cmd_type)
@@ -1721,11 +1754,16 @@ class FirebaseClient:
         else:
             self._mark_command_completed(cmd_id, result, deployment_id, cmd_type)
 
+        # read-only, so nothing on the dashboard moved and no metrics push is owed.
+        if cmd_type == 'check_path':
+            self._drop_old_check_path_answers(cmd_id)
+            return
+
         # Deployment lifecycle → site logs (audit trail)
         deployment_cmd_types = ('install_software', 'uninstall_software', 'update_owlette')
         if cmd_type in deployment_cmd_types and deployment_id:
             software_name = cmd_data.get('installer_name') or cmd_data.get('software_name') or cmd_type
-            if cmd_type == 'cancel_installation':
+            if install_cancelled:
                 self.log_event('deployment_cancelled', 'warning', software_name,
                                f"Deployment {deployment_id} cancelled: {result}")
             elif is_error:
@@ -1742,6 +1780,34 @@ class FirebaseClient:
             self.logger.debug(f"Immediate metrics push after command {cmd_id}")
         except Exception as me:
             self.logger.warning(f"Post-command metrics push failed: {me}")
+
+    def _drop_old_check_path_answers(self, cmd_id: str):
+        """keep the newest check_path answers and delete the rest from the doc.
+
+        a listing can run to tens of KB and the doc holds every command's result
+        for 24 hours, so a few minutes of browsing could reach firestore's 1 MiB,
+        and then every terminal write on this machine fails. an answer is only read
+        by the dashboard listening for it, within seconds, so keeping a handful
+        leaves room for one save's fields and a browser's clicks to be read.
+        """
+        with self._check_path_answers_lock:
+            self._check_path_answers.append(cmd_id)
+            # chunked: REST API URL length limit
+            stale = self._check_path_answers[:-self._CHECK_PATH_ANSWERS_KEPT][:50]
+        if not stale:
+            return
+        try:
+            self.db.collection('sites').document(self.site_id)\
+                .collection('machines').document(self.machine_id)\
+                .collection('commands').document('completed')\
+                .update({stale_id: DELETE_FIELD for stale_id in stale})
+        except Exception as e:
+            # still listed, so the next check tries them again.
+            self.logger.warning(f"Could not drop old check_path answers: {e}")
+            return
+        with self._check_path_answers_lock:
+            dropped = set(stale)
+            self._check_path_answers = [kept for kept in self._check_path_answers if kept not in dropped]
 
     def _handle_cancel_mcp_tool(self, cmd_data: Dict[str, Any]) -> str:
         """Cancel an in-flight mcp_tool_call subprocess (Cortex cancel button).
@@ -1799,10 +1865,17 @@ class FirebaseClient:
             except queue.Empty:
                 continue
             try:
-                self._execute_command(cmd_id, cmd_data)
+                if installer_utils.cancel_requested(cmd_id):
+                    # cancelled while it waited its turn: it never starts
+                    self.finish_command(
+                        cmd_id, cmd_data, f"{installer_utils.INSTALL_CANCELLED} before it started")
+                else:
+                    self._execute_command(cmd_id, cmd_data)
             except Exception as e:
                 self.logger.error(f"Slow command worker error: {e}")
             finally:
+                # finish_command has released it; this is for one that never got there
+                installer_utils.release_install(cmd_id)
                 self._slow_command_queue.task_done()
 
     def update_command_progress(self, cmd_id: str, status: str, deployment_id: Optional[str] = None, progress: Optional[int] = None, force: bool = False):

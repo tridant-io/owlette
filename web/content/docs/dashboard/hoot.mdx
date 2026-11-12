@@ -20,7 +20,7 @@ hoot's tools are grouped by risk:
 | **tier 2** | process and machine management with validated parameters | auto-approved |
 | **tier 3** | privileged shell, file, deployment, reboot and shutdown actions | in-chat approval (on by default, per site) |
 
-what you can use depends on who you are. site admins, owners and superadmins get the full tool set. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin.
+what you can use depends on who you are. site admins, owners and superadmins get the full tool set. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tools on those machines, but is never offered the tools that span the site: `get_site_logs`, `deploy_software` and the three talon tools.
 
 ---
 
@@ -80,9 +80,10 @@ a chat talks to a *set* of machines. with one machine ticked, hoot reports and a
 
 ### choosing machines
 
-the target picker is a checkbox menu over the site's machines, with an **all machines** row at the top.
+the target picker is a checkbox menu over the site's machines that your access covers, with an **all machines** row at the top.
 
 - **all machines** is dynamic, not a shortcut for ticking every box: a machine added to the site later joins the target on its own. unticking one machine spells the rest out; ticking the last missing one collapses back to **all machines**.
+- for someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope), **all machines** means all the machines their access covers, and a machine outside it is refused as unknown, never reached.
 - the menu stays open while you tick, so a set takes one visit. the trigger shows the target — `all machines`, `kiosk-01`, `kiosk-01, kiosk-02`, or `kiosk-01, kiosk-02 +3` — and, in brackets, how many of those machines are online.
 - each row carries its status as text: *offline*, *hoot off*, or both.
 
@@ -92,7 +93,7 @@ the selection is stored on the conversation and remembered per site across your 
 
 to start from a machine instead, pick **hoot** in its menu on the dashboard (the ⋮ on its card or row). hoot opens on that machine's site with a new conversation aimed at that machine alone and the cursor in the message box. your saved selection for the site stays as it was.
 
-a follow-up that hoot schedules for later fires on the machines **that turn** was targeting, re-validated when it comes due — not on whatever the chat is pointed at by then. see [`schedule_followup`](/docs/reference/hoot-tools#schedule_followup).
+a follow-up that hoot schedules for later fires on the machines **that turn** was targeting, re-validated when it comes due, against your access at that time — not on whatever the chat is pointed at by then. see [`schedule_followup`](/docs/reference/hoot-tools#schedule_followup).
 
 ### machines that can't take the turn
 
@@ -145,7 +146,7 @@ hoot works on every platform, but 13 of its tools — the Windows Update, regist
 
 ## the conversation list
 
-the column beside the chat lists your conversations on the selected site, plus the site's autonomous investigations, newest first. more load as you scroll.
+the column beside the chat lists your conversations on the selected site, plus the site's autonomous investigations, newest first. more load as you scroll. on a site where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope), the autonomous investigations are left out.
 
 **new hoot** at the top starts a conversation. it sits above every group until its first message gives it a title.
 
@@ -186,10 +187,10 @@ a hoot turn — the model's reasoning plus any tool calls it makes — runs on t
 
 ## approving privileged (tier-3) actions
 
-tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site **approval** setting, the shield toggle in the hoot header (site admins only):
+tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site setting, **require approval for privileged tools**. a site owner or admin finds it in the admin panel, under **fleet** → **hoot**:
 
-- **approval required** (the default) — privileged tool calls pause in the chat for an explicit approve or deny before they run.
-- **approval off** — privileged tool calls run at once, with no prompt. turning the gate off weakens safety, so the toggle asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
+- **on** (the default) — privileged tool calls pause in the chat for an explicit approve or deny before they run.
+- **off** — privileged tool calls run at once, with no prompt. turning the gate off weakens safety, so the switch asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
 
 the setting is stored per site at `sites/{siteId}/settings/cortex.requireTier3Approval`.
 
@@ -268,7 +269,7 @@ the [hoot tools reference](/docs/reference/hoot-tools) has the current tool list
 
 ## how it works
 
-every dashboard chat runs the same way. `POST /api/hoot` carries the chat's target as `target.machineIds` — an explicit list, or `null` for the dynamic **all machines** — and the web server resolves it **once**, before the turn starts: the IDs have to belong to this site, and machines that are offline or have hoot off drop out. the turn is then handed that resolved list and can only ever narrow it, never widen it. which execution path it takes depends on how many machines are left.
+every dashboard chat runs the same way. `POST /api/hoot` carries the chat's target as `target.machineIds` — an explicit list, or `null` for the dynamic **all machines** — and the web server resolves it **once**, before the turn starts: the IDs have to belong to this site and to your access, `null` means every machine your access covers, and machines that are offline or have hoot off drop out. the turn is then handed that resolved list and can only ever narrow it, never widen it. which execution path it takes depends on how many machines are left.
 
 ### one machine
 

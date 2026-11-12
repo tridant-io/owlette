@@ -30,6 +30,10 @@ jest.mock('@/lib/apiAuth.server', () => {
     requireAdminOrIdToken: jest.fn(),
     assertUserHasSiteAccess: jest.fn(),
     requireApiKeyBilling: jest.fn(),
+    resolveAuth: jest.fn(),
+    // every caller here is a session, which the real requireScope passes too
+    requireScope: jest.fn(() => ({ isLegacy: false })),
+    auditApiKeyUse: jest.fn(),
   };
 });
 
@@ -38,10 +42,28 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: jest.fn(),
 }));
 
+// the documents `resolveSiteAccess` reads, by path, for the capability gates
+const mockDocs: Record<string, Record<string, unknown>> = {};
+const mockVerifyIdToken = jest.fn();
+function mockRef(path: string) {
+  return {
+    get: async () => ({ exists: path in mockDocs, data: () => mockDocs[path] }),
+    collection: (sub: string) => ({ doc: (id: string) => mockRef(`${path}/${sub}/${id}`) }),
+  };
+}
+jest.mock('@/lib/firebase-admin', () => ({
+  getAdminAuth: () => ({ verifyIdToken: (...args: unknown[]) => mockVerifyIdToken(...args) }),
+  getAdminDb: () => ({
+    collection: (name: string) => ({ doc: (id: string) => mockRef(`${name}/${id}`) }),
+    getAll: (...refs: Array<{ get: () => Promise<unknown> }>) => Promise.all(refs.map((r) => r.get())),
+  }),
+}));
+
 import {
   ApiAuthError,
   requireAdminOrIdToken,
   assertUserHasSiteAccess,
+  resolveAuth,
 } from '@/lib/apiAuth.server';
 import {
   parseJsonBody,
@@ -50,11 +72,19 @@ import {
   validateSiteIdBody,
   requireAuthOrProblem,
   requireSiteScope,
+  requireSiteAuthAndScope,
+  requireSiteMachineAuthAndScope,
+  requireMachineAuthAndScope,
+  requireRoostAuthAndScope,
+  requireChatAuthAndScope,
+  requireDistributionManageCapability,
+  requireWebhookManageCapability,
   MAX_HASHES_PER_REQUEST,
 } from '@/app/api/_shared';
 
 const mockedRequireAuth = requireAdminOrIdToken as jest.MockedFunction<typeof requireAdminOrIdToken>;
 const mockedAssertSite = assertUserHasSiteAccess as jest.MockedFunction<typeof assertUserHasSiteAccess>;
+const mockedResolveAuth = resolveAuth as jest.MockedFunction<typeof resolveAuth>;
 
 function makeRequest(opts: {
   url?: string;
@@ -140,7 +170,7 @@ describe('_shared.ts (v2 route helpers)', () => {
 
   describe('requireSiteScope', () => {
     it('returns null when the user has access', async () => {
-      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null });
+      mockedAssertSite.mockResolvedValueOnce({ siteId: 'site_abc', siteData: null, machineIds: null });
       const result = await requireSiteScope('user-1', 'site_abc');
       expect(result).toBeNull();
     });
@@ -297,6 +327,135 @@ describe('_shared.ts (v2 route helpers)', () => {
       const r = await parseJsonBody(req);
       expect(r.ok).toBe(false);
       if (!r.ok) expect(r.response.status).toBe(400);
+    });
+  });
+
+
+  describe('machine scope', () => {
+    const SITE = 'site_abc';
+
+    function asCaller(machineIds: readonly string[] | null) {
+      mockedResolveAuth.mockResolvedValue({ userId: 'user-1', keyContext: null });
+      mockedAssertSite.mockResolvedValue({ siteId: SITE, siteData: null, machineIds });
+    }
+
+    async function refusal(result: { ok: boolean; response?: Response }) {
+      expect(result.ok).toBe(false);
+      return { status: result.response!.status, body: await result.response!.json() };
+    }
+
+    describe('requireSiteAuthAndScope', () => {
+      it('refuses a scoped member with 403 by default', async () => {
+        asCaller(['m1']);
+        const { status, body } = await refusal(await requireSiteAuthAndScope(makeRequest(), SITE, 'read'));
+        expect(status).toBe(403);
+        expect(body.detail).toBe('capability not granted');
+      });
+
+      it('admits a scoped member with machineScope admit, returning their machines', async () => {
+        asCaller(['m1']);
+        const result = await requireSiteAuthAndScope(makeRequest(), SITE, 'read', { machineScope: 'admit' });
+        expect(result.ok && result.machineIds).toEqual(['m1']);
+      });
+
+      it('admits a whole-site member by default, with no machine scope', async () => {
+        asCaller(null);
+        const result = await requireSiteAuthAndScope(makeRequest(), SITE, 'read');
+        expect(result.ok).toBe(true);
+        expect(result.ok && result.machineIds).toBeNull();
+      });
+    });
+
+    describe('requireSiteMachineAuthAndScope', () => {
+      it('lets a scoped member reach a machine in their machine scope', async () => {
+        asCaller(['m1']);
+        const result = await requireSiteMachineAuthAndScope(makeRequest(), SITE, 'm1', 'read');
+        expect(result.ok && result.machineIds).toEqual(['m1']);
+      });
+
+      it('answers 404 for a machine outside their machine scope', async () => {
+        asCaller(['m1']);
+        const { status, body } = await refusal(
+          await requireSiteMachineAuthAndScope(makeRequest(), SITE, 'm2', 'read'),
+        );
+        expect(status).toBe(404);
+        expect(body.detail).toBe('machine not found or no access');
+      });
+    });
+
+    describe('requireMachineAuthAndScope', () => {
+      it('lets a scoped member reach a machine in their machine scope', async () => {
+        asCaller(['m1']);
+        const result = await requireMachineAuthAndScope(makeRequest(), SITE, 'm1', 'write');
+        expect(result.ok && result.machineIds).toEqual(['m1']);
+      });
+
+      it('answers 404 for a machine outside their machine scope', async () => {
+        asCaller(['m1']);
+        const { status, body } = await refusal(
+          await requireMachineAuthAndScope(makeRequest(), SITE, 'm2', 'write'),
+        );
+        expect(status).toBe(404);
+        expect(body.detail).toBe('machine not found or no access');
+      });
+
+      it("lets m2's agent token through on the short-circuit, before any membership read", async () => {
+        mockVerifyIdToken.mockResolvedValueOnce({
+          uid: 'agent-m2',
+          role: 'agent',
+          site_id: SITE,
+          machine_id: 'm2',
+        });
+        const result = await requireMachineAuthAndScope(
+          makeRequest({ headers: { authorization: 'Bearer agent-id-token' } }),
+          SITE,
+          'm2',
+          'write',
+        );
+        expect(result.ok && result.machineIds).toBeNull();
+        expect(mockedAssertSite).not.toHaveBeenCalled();
+      });
+    });
+
+    it('requireRoostAuthAndScope refuses a scoped member a read with 403', async () => {
+      asCaller(['m1']);
+      const { status, body } = await refusal(
+        await requireRoostAuthAndScope(makeRequest(), SITE, 'roost-0001', 'read'),
+      );
+      expect(status).toBe(403);
+      expect(body.detail).toBe('capability not granted');
+    });
+
+    it('requireChatAuthAndScope admits a scoped member and returns their machines', async () => {
+      asCaller(['m1']);
+      const result = await requireChatAuthAndScope(makeRequest(), SITE, 'read');
+      expect(result.ok && result.machineIds).toEqual(['m1']);
+    });
+
+    describe('requireSiteCapability', () => {
+      const session = { userId: 'user-1', keyContext: null };
+
+      function adminRow(extra: Record<string, unknown> = {}) {
+        for (const key of Object.keys(mockDocs)) delete mockDocs[key];
+        mockDocs[`sites/${SITE}`] = { name: 'site a' };
+        mockDocs['users/user-1'] = { role: 'member' };
+        mockDocs[`sites/${SITE}/members/user-1`] = { uid: 'user-1', role: 'admin', status: 'active', ...extra };
+      }
+
+      it.each([
+        ['WEBHOOK_MANAGE', requireWebhookManageCapability],
+        ['DISTRIBUTION_MANAGE', requireDistributionManageCapability],
+      ])('refuses a scoped admin %s, a site-wide capability', async (_name, gate) => {
+        adminRow({ machineIds: ['m1'] });
+        const response = await gate(session, SITE);
+        expect(response?.status).toBe(403);
+        expect((await response!.json()).detail).toBe('capability not granted');
+      });
+
+      it('allows a whole-site admin', async () => {
+        adminRow();
+        expect(await requireWebhookManageCapability(session, SITE)).toBeNull();
+      });
     });
   });
 });

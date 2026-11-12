@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { getSessionFromRequest } from '@/lib/sessionManager.server';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { resolveSiteAccess } from '@/lib/sitePolicy.server';
-import { type Actor, type Capability, hasCapability } from '@/lib/capabilities';
+import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
+import { type Actor, type Capability, hasCapability, siteStanding } from '@/lib/capabilities';
 import {
   type ApiKeyEnvironment,
   type ApiKeyLookup,
@@ -426,7 +426,12 @@ export async function assertActiveUser(
 export async function assertUserHasSiteAccess(
   userId: string,
   siteId: string
-): Promise<{ siteId: string; siteData: Record<string, unknown> | null }> {
+): Promise<{
+  siteId: string;
+  siteData: Record<string, unknown> | null;
+  /** the caller's machine scope on the site; null for the whole site */
+  machineIds: readonly string[] | null;
+}> {
   const outcome = await resolveSiteAccess(userId, siteId);
 
   if (!outcome.ok) {
@@ -442,7 +447,7 @@ export async function assertUserHasSiteAccess(
     }
   }
 
-  return { siteId, siteData: outcome.facts.siteData };
+  return { siteId, siteData: outcome.facts.siteData, machineIds: outcome.facts.machineIds };
 }
 
 /**
@@ -466,9 +471,7 @@ export async function assertUserHasSiteCapability(
     type: 'user',
     userId,
     role: outcome.facts.globalRole,
-    siteRoles: outcome.facts.membershipRole
-      ? { [siteId]: outcome.facts.membershipRole }
-      : {},
+    ...siteStanding([[siteId, standingOf(outcome.facts)]]),
   };
   if (!hasCapability(actor, capability, siteId)) {
     throw new ApiAuthError(403, 'Forbidden: capability not granted');

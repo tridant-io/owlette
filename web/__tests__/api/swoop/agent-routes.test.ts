@@ -45,9 +45,18 @@ function makeCollection(collectionPath: string) {
   };
 }
 
+type MockDoc = ReturnType<typeof makeDoc>;
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: () => ({ verifyIdToken: (...args: unknown[]) => mockVerifyIdToken(...args) }),
-  getAdminDb: () => ({ collection: (name: string) => makeCollection(name) }),
+  getAdminDb: () => ({
+    collection: (name: string) => makeCollection(name),
+    // a viewer leaving is read and written in a transaction, on the same documents
+    runTransaction: async (fn: (tx: unknown) => unknown) =>
+      fn({
+        get: (ref: MockDoc) => ref.get(),
+        set: (ref: MockDoc, data: Record<string, unknown>) => ref.set(data),
+      }),
+  }),
 }));
 jest.mock('@/lib/withRateLimit', () => ({ withRateLimit: (h: unknown) => h }));
 jest.mock('@sentry/nextjs', () => ({ captureException: jest.fn(), captureMessage: jest.fn() }));
@@ -531,11 +540,13 @@ describe('POST /api/agent/swoop/events', () => {
 
     it('drops a viewer who left, so the row does not outlive them', async () => {
       agentToken();
+      // live leases: a row whose lease ran out past the grace goes with any write anyway
+      const leaseExpiresAt = Date.now() + 300_000;
       docs.set(SESSION, {
         ...(docs.get(SESSION) as Record<string, unknown>),
         viewers: [
-          { viewerId: 'viewer-1', uid: 'uid-1', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
-          { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
+          { viewerId: 'viewer-1', uid: 'uid-1', ctl: false, joinedAt: 1, leaseExpiresAt },
+          { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt },
         ],
       });
 
@@ -548,7 +559,7 @@ describe('POST /api/agent/swoop/events', () => {
       );
 
       expect(recordWrite()?.viewers).toEqual([
-        { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt: 2 },
+        { viewerId: 'viewer-2', uid: 'uid-2', ctl: false, joinedAt: 1, leaseExpiresAt },
       ]);
     });
 

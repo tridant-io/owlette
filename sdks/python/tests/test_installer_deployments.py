@@ -103,9 +103,37 @@ async def test_uninstall_propagates_403_scope_insufficient() -> None:
         retry=RetryPolicy(max_attempts=1),
     ) as client:
         with pytest.raises(RoostApiError) as excinfo:
-            await client.installer_deployments.uninstall("s1", "dep_1")
+            await client.installer_deployments.uninstall("s1", "dep_1", software_name="VLC")
         assert excinfo.value.status == 403
         assert excinfo.value.code == "scope_insufficient"
+
+
+@pytest.mark.asyncio
+async def test_uninstall_sends_the_program_name() -> None:
+    captured: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "deploymentId": "dep_1",
+                "queued": 1,
+                "machine_ids": ["m1"],
+                "skipped": [{"machineId": "m2", "reason": "software_not_found"}],
+            },
+        )
+
+    async with Roost(token="owk_live_x", transport=_transport(handler)) as client:
+        out = await client.installer_deployments.uninstall(
+            "s1", "dep_1", software_name="VLC media player"
+        )
+
+    req = captured[0]
+    assert req.method == "POST"
+    assert req.url.path == "/api/sites/s1/deployments/dep_1/uninstall"
+    assert json.loads(req.content) == {"software_name": "VLC media player"}
+    assert out["skipped"] == [{"machineId": "m2", "reason": "software_not_found"}]
 
 
 @pytest.mark.asyncio

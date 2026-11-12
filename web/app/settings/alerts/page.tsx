@@ -8,82 +8,17 @@
  * account-settings dialog's "alerts" section — this is the deep-linkable view.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useAuth, type UserPreferences } from '@/contexts/AuthContext';
-import { Switch } from '@/components/ui/switch';
-import { Label } from '@/components/ui/label';
+import { useAuth } from '@/contexts/AuthContext';
+import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ChevronLeft, Loader2 } from 'lucide-react';
 
-type AlertKey =
-  | 'healthAlerts'
-  | 'processAlerts'
-  | 'thresholdAlerts'
-  | 'cortexAlerts'
-  | 'displayAlerts'
-  | 'talonAlerts'
-  | 'apiKeyAlerts';
-
-const ALERT_TOGGLES: { key: AlertKey; label: string; desc: string }[] = [
-  {
-    key: 'healthAlerts',
-    label: 'machine offline alerts',
-    desc: 'receive email alerts when machines go offline',
-  },
-  {
-    key: 'processAlerts',
-    label: 'process crash alerts',
-    desc: 'receive email alerts when monitored processes crash or fail to start',
-  },
-  {
-    key: 'thresholdAlerts',
-    label: 'threshold alerts',
-    desc: 'receive email alerts when health metrics (CPU, GPU temp, disk, etc.) exceed configured thresholds',
-  },
-  {
-    key: 'cortexAlerts',
-    label: 'hoot escalation alerts',
-    desc: "receive email alerts when automated diagnostics can't resolve an issue",
-  },
-  {
-    key: 'displayAlerts',
-    label: 'display events',
-    desc: 'receive email alerts when monitors are removed, layouts drift, or display apply fails',
-  },
-  {
-    key: 'talonAlerts',
-    label: 'talon alerts',
-    desc: 'emails when a talon fires or fails',
-  },
-  {
-    key: 'apiKeyAlerts',
-    label: 'api key expiry',
-    desc: 'emails before an api key expires',
-  },
-];
-
-function pickAlertPrefs(p: UserPreferences): Record<AlertKey, boolean> {
-  return {
-    healthAlerts: p.healthAlerts,
-    processAlerts: p.processAlerts,
-    thresholdAlerts: p.thresholdAlerts,
-    cortexAlerts: p.cortexAlerts,
-    displayAlerts: p.displayAlerts,
-    talonAlerts: p.talonAlerts,
-    apiKeyAlerts: p.apiKeyAlerts,
-  };
-}
-
 export default function ManageAlertsPage() {
   const router = useRouter();
-  const { user, userPreferences, updateUserPreferences, loading: authLoading } = useAuth();
-
-  const [prefs, setPrefs] = useState<Record<AlertKey, boolean>>(() =>
-    pickAlertPrefs(userPreferences),
-  );
-  const [savingKey, setSavingKey] = useState<AlertKey | null>(null);
+  const { user, loading: authLoading } = useAuth();
 
   // Send unauthenticated visitors to login, preserving the return path so they
   // land back here after signing in (the email link is the common entry point).
@@ -93,12 +28,6 @@ export default function ManageAlertsPage() {
     }
   }, [authLoading, user, router]);
 
-  // Keep local toggles in sync with the source-of-truth preferences.
-  // `userPreferences` only changes reference when preferences actually change.
-  useEffect(() => {
-    setPrefs(pickAlertPrefs(userPreferences));
-  }, [userPreferences]);
-
   if (authLoading || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -106,21 +35,6 @@ export default function ManageAlertsPage() {
       </div>
     );
   }
-
-  const toggle = async (key: AlertKey, value: boolean) => {
-    setPrefs((prev) => ({ ...prev, [key]: value })); // optimistic
-    setSavingKey(key);
-    try {
-      await updateUserPreferences({ [key]: value } as Partial<UserPreferences>, {
-        silent: true,
-      });
-    } catch {
-      // updateUserPreferences already surfaces a toast; revert the switch.
-      setPrefs((prev) => ({ ...prev, [key]: !value }));
-    } finally {
-      setSavingKey(null);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -144,27 +58,7 @@ export default function ManageAlertsPage() {
           </div>
         </div>
 
-        <div className="space-y-3">
-          {ALERT_TOGGLES.map(({ key, label, desc }) => (
-            <div
-              key={key}
-              className="flex items-center justify-between rounded-md border border-border bg-card/50 p-4"
-            >
-              <div className="space-y-0.5 pr-4">
-                <Label htmlFor={key} className="text-foreground">
-                  {label}
-                </Label>
-                <p className="text-xs text-muted-foreground">{desc}</p>
-              </div>
-              <Switch
-                id={key}
-                checked={prefs[key]}
-                onCheckedChange={(v) => toggle(key, v)}
-                disabled={savingKey !== null}
-              />
-            </div>
-          ))}
-        </div>
+        <AlertEmailToggles />
 
         <p className="mt-6 text-xs text-muted-foreground">
           changes save automatically. need more control (CC recipients, threshold

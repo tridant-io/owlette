@@ -6,6 +6,7 @@
  *   POST   /api/sites/{siteId}/machines/{machineId}/swoop/sessions
  *   GET    /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}
  *   DELETE /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}
+ *   POST   /api/sites/{siteId}/machines/{machineId}/swoop/sessions/{sessionId}/kick
  *
  * The real `authorizedSiteHandler` runs here — the api-key, membership and
  * capability answers are the wrapper's, and mocking it away would prove nothing
@@ -18,6 +19,7 @@ import {
   mocks,
   mockDbFactory,
   docSnapshot,
+  querySnapshot,
   seedMember,
   seedSiteOwner,
   apiKeyAuth,
@@ -30,21 +32,27 @@ jest.mock('@sentry/nextjs', () => ({
 }));
 
 type MockTxRef = { get: () => unknown; set: (...a: unknown[]) => unknown };
+// transactions run one at a time, as Firestore serializes two over the same documents
+let mockTxQueue: Promise<unknown> = Promise.resolve();
 jest.mock('@/lib/firebase-admin', () => ({
   getAdminDb: () => ({
     ...mockDbFactory(),
     // the verified-network write reads then writes on the same doc mocks, and
     // its writes land, or fail, at commit
-    runTransaction: async (fn: (tx: unknown) => unknown) => {
-      const writes: unknown[] = [];
-      const result = await fn({
-        get: (ref: MockTxRef) => ref.get(),
-        set: (ref: MockTxRef, ...a: unknown[]) => {
-          writes.push(ref.set(...a));
-        },
+    runTransaction: (fn: (tx: unknown) => unknown) => {
+      const run = mockTxQueue.then(async () => {
+        const writes: unknown[] = [];
+        const result = await fn({
+          get: (ref: MockTxRef) => ref.get(),
+          set: (ref: MockTxRef, ...a: unknown[]) => {
+            writes.push(ref.set(...a));
+          },
+        });
+        await Promise.all(writes);
+        return result;
       });
-      await Promise.all(writes);
-      return result;
+      mockTxQueue = run.catch(() => undefined);
+      return run;
     },
   }),
   getAdminAuth: () => ({ verifyIdToken: jest.fn().mockRejectedValue(new Error('n/a')) }),
@@ -152,8 +160,10 @@ import {
   GET,
   DELETE,
 } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/route';
+import { POST as KICK } from '@/app/api/sites/[siteId]/machines/[machineId]/swoop/sessions/[sessionId]/kick/route';
 import { stepUpMachineBinding } from '@/lib/swoop/policy.server';
-import { mintContinuity } from '@/lib/swoop/continuity.server';
+import { mintContinuity, parseContinuity } from '@/lib/swoop/continuity.server';
+import { viewerKeyForResponse } from '@/lib/swoop/keys.server';
 import { STUN_ONLY, mintTurnCredentials } from '@/lib/swoop/turn.server';
 
 const SITE = 'site-a';
@@ -211,10 +221,12 @@ function queuedCommands(type: string): Array<Record<string, unknown>> {
 }
 
 const PREVIOUS_SID = 'sid0000000000000000000000000009';
+const PREVIOUS_VIEWER = 'viewer00000000000000000000009';
 
 /**
  * this tab's last control session, ended for a transient reason and written as
- * the store leaves an ended record: no viewer rows. returns the token the tab holds.
+ * the store leaves an ended record: no viewer rows, and the tab's viewer's
+ * continuity grant. returns the token the tab holds.
  */
 function stageContinuedSession(): { token: string } {
   const continuity = mintContinuity(PREVIOUS_SID);
@@ -225,7 +237,7 @@ function stageContinuedSession(): { token: string } {
     startedAt: Date.now() - 3_600_000,
     viewers: [],
     endReason: 'lease_expired',
-    continuityHash: continuity.hash,
+    continuity: { [PREVIOUS_VIEWER]: { uid: ADMIN, hash: continuity.hash } },
   });
   return { token: continuity.token };
 }
@@ -237,11 +249,71 @@ function continuityRequest(token: string) {
   });
 }
 
-/** whether any write this run marked a continuity token spent. */
+/** every payload this run wrote with `set`, whatever the document. */
+function setPayloads(): Array<Record<string, unknown>> {
+  return mocks.set.mock.calls.map(([payload]) => payload as Record<string, unknown>);
+}
+
+/** whether any write this run marked a continuity grant spent. */
 function continuitySpent(): boolean {
-  return mocks.set.mock.calls.some(
-    ([payload]) => typeof (payload as Record<string, unknown>).continuityUsedAt === 'number',
+  return setPayloads().some((payload) =>
+    Object.values((payload.continuity ?? {}) as Record<string, { usedAt?: unknown }>).some(
+      (grant) => typeof grant.usedAt === 'number',
+    ),
   );
+}
+
+const SESSIONS_PATH = `sites/${SITE}/machines/${MACHINE}/swoop_sessions/`;
+const LIVE_SID = 'sid000000000000000000000000000a';
+const SEATED = 'viewer0000000000000000000000a';
+
+/**
+ * a viewer's row as the store keeps it. its lease runs five minutes from its
+ * last renewal, or from its join while it has not renewed (`renewedAgoMs: null`).
+ */
+function seat(
+  uid: string,
+  opts: { viewerId?: string; ctl?: boolean; joinedAgoMs?: number; renewedAgoMs?: number | null } = {},
+): Record<string, unknown> {
+  const now = Date.now();
+  const joinedAt = now - (opts.joinedAgoMs ?? 10 * 60_000);
+  const renewedAt = opts.renewedAgoMs === null ? undefined : now - (opts.renewedAgoMs ?? 60_000);
+  return {
+    viewerId: opts.viewerId ?? SEATED,
+    uid,
+    ctl: opts.ctl ?? false,
+    joinedAt,
+    leaseExpiresAt: (renewedAt ?? joinedAt) + 300_000,
+    ...(renewedAt !== undefined ? { renewedAt } : {}),
+  };
+}
+
+/** a session already on the machine: by default ten minutes old, with the admin in control and renewing. */
+function stageLiveSession(data: Record<string, unknown> = {}, sid = LIVE_SID): void {
+  staged.set(`${SESSIONS_PATH}${sid}`, {
+    sid,
+    siteId: SITE,
+    machineId: MACHINE,
+    state: 'pending',
+    createdBy: `user:${ADMIN}`,
+    startedAt: Date.now() - 10 * 60_000,
+    viewers: [seat(ADMIN, { ctl: true })],
+    ...data,
+  });
+}
+
+/** the machine's unended sessions, as its `state in [pending, live]` query answers. */
+function unendedMachineSessions() {
+  return querySnapshot(
+    [...staged.entries()]
+      .filter(([path, data]) => path.startsWith(SESSIONS_PATH) && data !== null && data.state !== 'ended')
+      .map(([path, data]) => ({ id: path.slice(SESSIONS_PATH.length), data: data! })),
+  );
+}
+
+/** a viewer token's claims, read without verifying it. */
+function claimsOf(token: string): Record<string, unknown> {
+  return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8')) as Record<string, unknown>;
 }
 
 /** A ceremony this user already ran, `openedAt` ms ago, for one machine. */
@@ -276,6 +348,9 @@ beforeEach(() => {
   mocks.get.mockImplementation((path: string) =>
     Promise.resolve(docSnapshot(path.split('/').pop() ?? '', staged.get(path) ?? null)),
   );
+  mocks.collectionGet.mockImplementation(async () => unendedMachineSessions());
+  // a test that writes through to `staged` must not carry that into the next one
+  mocks.set.mockResolvedValue(undefined);
 
   seedSiteOwner(SITE);
   seedMember(SITE, ADMIN, 'admin');
@@ -393,6 +468,21 @@ describe('POST swoop/sessions', () => {
 
     expect(status).toBe(409);
     expect(body.code).toBe('machine_offline');
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  // the page's backstop for a machine that left the site: from its own tray, or a stale link.
+  it('refuses a machine that is not in the site with 404 machine_not_found, and never rings it', async () => {
+    staged.delete(`sites/${SITE}/machines/${MACHINE}`);
+
+    const res = await POST(
+      createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } }),
+      routeContext(),
+    );
+    const { status, body } = await parseResponse(res);
+
+    expect(status).toBe(404);
+    expect(body.code).toBe('machine_not_found');
     expect(mockRing).not.toHaveBeenCalled();
   });
 
@@ -764,6 +854,230 @@ describe('POST swoop/sessions', () => {
 });
 
 /**
+ * The bug (owner, 2026-11-04, TEC-B4A): a second person opening swoop on a
+ * machine minted a sid of its own, and the agent — one streamer per machine,
+ * a new sid replaces the old session — ended the first person's session. One
+ * streamer serves every viewer (PROTOCOL.md §6, §11), so a machine someone is
+ * already in is joined, never replaced.
+ */
+describe('POST swoop/sessions — a machine someone is already in', () => {
+  const watchRequest = () => createMockRequest(url(), { method: 'POST', body: { control: false, fp: FP } });
+  const controlRequest = () => createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } });
+
+  /** every write that started a session record of its own. */
+  const sessionCreates = () => setPayloads().filter((payload) => payload.state === 'pending' && 'sid' in payload);
+  /** the viewer rows as the last write that set them left them. */
+  const lastViewers = () => setPayloads().filter((payload) => Array.isArray(payload.viewers)).at(-1)?.viewers;
+
+  const allowRows = () =>
+    (writeAuditEntryBlocking.mock.calls as [string, { metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'session_started')
+      .map(([, entry]) => entry);
+
+  it('joins the session there: its sid, a viewer, a token and a key of its own, and no record of its own', async () => {
+    stageLiveSession();
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(201);
+    const data = body.data as Record<string, unknown>;
+    expect(data.sid).toBe(LIVE_SID);
+    expect(data.joined).toBe(true);
+    expect(data.viewerId).not.toBe(SEATED);
+    expect(claimsOf(String(data.viewerJwt))).toMatchObject({
+      sid: LIVE_SID,
+      viewer: data.viewerId,
+      uid: MEMBER,
+      ctl: false,
+    });
+    expect(data.k).toBe(viewerKeyForResponse(LIVE_SID, String(data.viewerId)));
+    expect(sessionCreates()).toEqual([]);
+    expect(lastViewers()).toEqual([
+      expect.objectContaining({ viewerId: SEATED, uid: ADMIN, ctl: true }),
+      expect.objectContaining({ viewerId: data.viewerId, uid: MEMBER, ctl: false }),
+    ]);
+  });
+
+  // the agent returns at once for the sid it is running, and an agent that
+  // restarted under the session has forgotten it: this is what starts its
+  // streamer again, for every viewer of the sid.
+  it('tells the machine the sid it is already serving', async () => {
+    stageLiveSession();
+    signIn(MEMBER);
+
+    await POST(watchRequest(), routeContext());
+
+    expect(mockRing).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: LIVE_SID });
+    expect(queuedCommands('swoop_session_requested')).toEqual([expect.objectContaining({ sid: LIVE_SID })]);
+  });
+
+  it('seats a second tab of the same person beside the first, rather than taking it over', async () => {
+    stageLiveSession();
+    openWindow(ADMIN);
+
+    const { status, body } = await parseResponse(await POST(controlRequest(), routeContext()));
+
+    expect(status).toBe(201);
+    const data = body.data as Record<string, unknown>;
+    expect([data.sid, data.ctl, data.joined]).toEqual([LIVE_SID, true, true]);
+    expect(lastViewers()).toEqual([
+      expect.objectContaining({ viewerId: SEATED, uid: ADMIN }),
+      expect.objectContaining({ viewerId: data.viewerId, uid: ADMIN, ctl: true }),
+    ]);
+  });
+
+  it('joins a session still starting, whose first viewer has not reached the machine yet', async () => {
+    stageLiveSession({
+      startedAt: Date.now() - 5_000,
+      viewers: [seat(ADMIN, { ctl: true, joinedAgoMs: 5_000, renewedAgoMs: null })],
+    });
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).sid).toBe(LIVE_SID);
+  });
+
+  it.each([
+    ['it ended', { state: 'ended', endReason: 'closed', viewers: [] }],
+    ['every lease in it ran out', { viewers: [seat(ADMIN, { renewedAgoMs: 6 * 60_000 })] }],
+    [
+      'nobody in it reached the machine in its first minute',
+      {
+        startedAt: Date.now() - 2 * 60_000,
+        viewers: [seat(ADMIN, { joinedAgoMs: 2 * 60_000, renewedAgoMs: null })],
+      },
+    ],
+    ['nobody is in it', { viewers: [] }],
+  ])('starts a session of its own when the one there is over: %s', async (_why, data) => {
+    stageLiveSession(data);
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(201);
+    const grant = body.data as Record<string, unknown>;
+    expect(grant.sid).not.toBe(LIVE_SID);
+    expect(grant.joined).toBe(false);
+    expect(sessionCreates()).toEqual([expect.objectContaining({ sid: grant.sid })]);
+  });
+
+  // two first viewers at once used to start two sessions, and the machine ended
+  // the earlier one's for the later: the one transaction is what lets the second
+  // find the first one's session.
+  it('lands two first viewers who arrive at once in one session', async () => {
+    signIn(MEMBER);
+    // a new session's record writes through, so the second transaction reads it
+    mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+      if (payload.state === 'pending' && typeof payload.sid === 'string') {
+        staged.set(`${SESSIONS_PATH}${payload.sid}`, { ...payload });
+      }
+    });
+
+    const [first, second] = await Promise.all([
+      POST(watchRequest(), routeContext()).then(parseResponse),
+      POST(watchRequest(), routeContext()).then(parseResponse),
+    ]);
+
+    expect([first.status, second.status]).toEqual([201, 201]);
+    const grants = [first.body.data, second.body.data] as Array<Record<string, unknown>>;
+    expect(grants[0].sid).toBe(grants[1].sid);
+    expect(grants.map((grant) => grant.joined).sort()).toEqual([false, true]);
+    expect(sessionCreates()).toHaveLength(1);
+  });
+
+  it('turns a fifth person away with 409 session_full, before any grant is recorded', async () => {
+    stageLiveSession({
+      viewers: ['u1', 'u2', 'u3', 'u4'].map((uid, i) => seat(uid, { viewerId: `viewer000000000000000000000${i}` })),
+    });
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(409);
+    expect(body.code).toBe('session_full');
+    expect(allowRows()).toEqual([]);
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'session_full' }),
+    );
+    expect(lastViewers()).toBeUndefined();
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  // a closed tab's row stays until its lease runs out, so counting rows would
+  // turn people away from a machine with room to spare.
+  it('counts people, not seats: one person in four tabs leaves room for the next', async () => {
+    stageLiveSession({
+      viewers: [0, 1, 2, 3].map((i) => seat(ADMIN, { viewerId: `viewer000000000000000000000${i}` })),
+    });
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).sid).toBe(LIVE_SID);
+  });
+
+  it('gives a joining controller a continuity grant of its own, and leaves the others alone', async () => {
+    stageLiveSession({ continuity: { [SEATED]: { uid: ADMIN, hash: 'a'.repeat(64) } } });
+    openWindow(ADMIN);
+
+    const { body } = await parseResponse(await POST(controlRequest(), routeContext()));
+
+    const data = body.data as Record<string, unknown>;
+    const token = String(data.continuity);
+    expect(token.startsWith(`${LIVE_SID}.`)).toBe(true);
+    const grants = setPayloads()
+      .map((payload) => payload.continuity)
+      .filter((grant) => grant !== undefined);
+    expect(grants).toEqual([{ [String(data.viewerId)]: { uid: ADMIN, hash: parseContinuity(token)!.hash } }]);
+  });
+
+  it('records the join on the shared sid, naming the viewer it seated', async () => {
+    stageLiveSession();
+    signIn(MEMBER);
+
+    const { body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    const data = body.data as Record<string, unknown>;
+    expect(allowRows()).toEqual([
+      expect.objectContaining({
+        outcome: 'allow',
+        target: { kind: 'swoop_session', id: LIVE_SID, machineId: MACHINE },
+        metadata: expect.objectContaining({ viewerId: data.viewerId, ctl: false, joined: true }),
+      }),
+    ]);
+  });
+
+  it('gives the seat up again when the join cannot be recorded', async () => {
+    stageLiveSession();
+    signIn(MEMBER);
+    // the seat's write is what the give-up reads back, so the session document writes through
+    mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+      if (Array.isArray(payload.viewers)) {
+        const path = `${SESSIONS_PATH}${LIVE_SID}`;
+        staged.set(path, { ...staged.get(path), viewers: payload.viewers });
+      }
+    });
+    writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
+      const entry = args[1] as { metadata?: { event?: string } } | undefined;
+      if (entry?.metadata?.event === 'session_started') throw new Error('firestore down');
+      return undefined;
+    });
+
+    const { status, body } = await parseResponse(await POST(watchRequest(), routeContext()));
+
+    expect(status).toBe(503);
+    expect(body.code).toBe('audit_unavailable');
+    expect(lastViewers()).toEqual([expect.objectContaining({ viewerId: SEATED })]);
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * owner, 2026-10-10: a second factor passed at sign-in must not be asked for
  * again two minutes later. A ceremony this sign-in ran under five minutes ago
  * opens the window for the machine asked for, on the record.
@@ -895,6 +1209,92 @@ describe('POST swoop/sessions — a second factor passed at sign-in', () => {
   });
 });
 
+// a scoped member reaches only the machines in their machine scope (ADR 0016),
+// and the wrapper refuses any other before the handler runs: no ceremony is
+// asked for, no window is written and no session is made for it.
+describe('POST swoop/sessions — a machine scope', () => {
+  const OTHER = 'machine-2';
+
+  /** narrows `uid`'s row to `machineIds`, as the members api writes a machine scope. */
+  const limitTo = (uid: string, machineIds: string[]): void => {
+    const key = `${SITE}/${uid}`;
+    mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds });
+  };
+
+  const create = (machineId: string, body: Record<string, unknown>) =>
+    POST(
+      createMockRequest(`http://localhost/api/sites/${SITE}/machines/${machineId}/swoop/sessions`, {
+        method: 'POST',
+        body: { fp: FP, ...body },
+      }),
+      { params: Promise.resolve({ siteId: SITE, machineId }) },
+    );
+
+  const denyReasons = () =>
+    (writeAuditEntry.mock.calls as [string, { outcome?: string; denyReason?: string }][])
+      .filter(([, entry]) => entry.outcome === 'deny')
+      .map(([, entry]) => entry.denyReason);
+
+  // the other machine is on the site and online, so only the scope can refuse it
+  beforeEach(() => staged.set(`sites/${SITE}/machines/${OTHER}`, { online: true }));
+
+  it.each([
+    ['a scoped admin', ADMIN, 'admin', {}],
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+  ] as const)('answers %s 404 on another machine, before any window or session is written', async (_who, uid, role, extra) => {
+    seedMember(SITE, uid, role, extra);
+    limitTo(uid, [MACHINE]);
+    // a ceremony two minutes old and a proof: either opens a window once the handler runs
+    signIn(uid, 'challenge', 2 * 60_000);
+
+    const { status, body } = await parseResponse(
+      await create(OTHER, { control: true, mfaProof: { code: '123456' } }),
+    );
+
+    expect(status).toBe(404);
+    // the wrapper's own 404, never release 1's machine_not_found: the machine has not left
+    expect(body).toMatchObject({ detail: 'machine not found or no access', code: 'not_found' });
+    expect(denyReasons()).toEqual(['machine_out_of_scope']);
+    expect(mockVerifyMfaProof).not.toHaveBeenCalled();
+    expect(mocks.set).not.toHaveBeenCalled();
+    expect(writeAuditEntryBlocking).not.toHaveBeenCalled();
+    expect(mockRing).not.toHaveBeenCalled();
+  });
+
+  it('lets a scoped member watch the machine in their scope', async () => {
+    limitTo(MEMBER, [MACHINE]);
+    signIn(MEMBER);
+
+    const { status, body } = await parseResponse(await create(MACHINE, { control: false }));
+
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(false);
+  });
+
+  it.each([
+    ['a scoped member set to control', MEMBER, 'member', { swoop: 'control' }],
+    ['a scoped admin', ADMIN, 'admin', {}],
+  ] as const)('takes %s through the step-up on the machine in their scope, as a whole-site admin', async (_who, uid, role, extra) => {
+    seedMember(SITE, uid, role, extra);
+    limitTo(uid, [MACHINE]);
+    signIn(uid);
+
+    const asked = await parseResponse(await create(MACHINE, { control: true }));
+    expect(asked.status).toBe(401);
+    expect(asked.body.code).toBe('step_up_required');
+
+    const { status, body } = await parseResponse(
+      await create(MACHINE, { control: true, mfaProof: { code: '123456' } }),
+    );
+    expect(status).toBe(201);
+    expect((body.data as Record<string, unknown>).ctl).toBe(true);
+    expect(mockVerifyMfaProof).toHaveBeenCalledTimes(1);
+    expect(
+      (mocks.set.mock.calls as [Record<string, unknown>][]).filter(([payload]) => payload.openedBy === 'ceremony'),
+    ).toHaveLength(1);
+  });
+});
+
 describe('GET / DELETE swoop/sessions/{sid}', () => {
   beforeEach(() => {
     staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
@@ -914,11 +1314,233 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     expect((body.data as Record<string, unknown>).state).toBe('live');
   });
 
-  it('404s an unknown session', async () => {
+  // everyone else in a session a revocation ended reads whom it was for, and comes back.
+  it('names whom a revocation ended it for', async () => {
+    staged.set(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`, {
+      sid: SID,
+      state: 'ended',
+      createdBy: `user:${ADMIN}`,
+      startedAt: Date.now() - 60_000,
+      viewers: [],
+      endReason: 'revoked',
+      endedFor: MEMBER,
+      endedAt: Date.now(),
+    });
+
+    const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+
+    expect(status).toBe(200);
+    expect(body.data).toMatchObject({ state: 'ended', endReason: 'revoked', endedFor: MEMBER });
+  });
+
+  it('404s an unknown session, with a code of its own', async () => {
     staged.delete(`sites/${SITE}/machines/${MACHINE}/swoop_sessions/${SID}`);
 
-    const res = await GET(createMockRequest(url(`/${SID}`)), routeContext(SID));
-    expect(res.status).toBe(404);
+    const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+    expect(status).toBe(404);
+    expect(body.code).toBe('session_not_found');
+  });
+
+  // the bar names who is in the session (owner ruling 2026-11-04).
+  describe('naming the people in it', () => {
+    const ADMIN_SEAT = 'viewer0000000000000000000000b';
+    const MEMBER_SEAT = 'viewer0000000000000000000000c';
+    const OWNER_SEAT = 'viewer0000000000000000000000d';
+    const GONE = 'user-gone';
+    const NAMES: Record<string, string> = { [ADMIN]: 'Ada Lovelace', [MEMBER]: 'Bob Watcher', [SITE_OWNER]: 'Olive Owner' };
+    // `seedMember` keeps these accounts for the whole file, and a later test reads the admin's email
+    const held = new Map<string, Record<string, unknown> | null | undefined>();
+
+    beforeEach(() => {
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        sid: SID,
+        state: 'live',
+        createdBy: `user:${ADMIN}`,
+        startedAt: Date.now() - 600_000,
+        viewers: [
+          seat(ADMIN, { viewerId: ADMIN_SEAT, ctl: true }),
+          seat(MEMBER, { viewerId: MEMBER_SEAT }),
+          seat(SITE_OWNER, { viewerId: OWNER_SEAT }),
+          seat(GONE, { viewerId: 'viewer0000000000000000000000e' }),
+        ],
+      });
+      for (const [uid, displayName] of Object.entries(NAMES)) {
+        held.set(uid, mocks.userDocs.get(uid));
+        mocks.userDocs.set(uid, { email: `${uid}@example.test`, role: 'member', sites: [], displayName });
+      }
+    });
+
+    afterEach(() => {
+      for (const [uid, doc] of held) {
+        if (doc === undefined) mocks.userDocs.delete(uid);
+        else mocks.userDocs.set(uid, doc);
+      }
+      held.clear();
+    });
+
+    const viewersAs = async (userId: string): Promise<Array<Record<string, unknown>>> => {
+      signIn(userId);
+      const { status, body } = await parseResponse(await GET(createMockRequest(url(`/${SID}`)), routeContext(SID)));
+      expect(status).toBe(200);
+      return (body.data as { viewers: Array<Record<string, unknown>> }).viewers;
+    };
+
+    /** `uid`'s seat in the session, holding control or only watching. */
+    const seatHolds = (uid: string, ctl: boolean): void => {
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: Array<Record<string, unknown>> };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: record.viewers.map((viewer) => (viewer.uid === uid ? { ...viewer, ctl } : viewer)),
+      });
+    };
+
+    it('names everyone in it to a member who is in it, with no email', async () => {
+      const viewers = await viewersAs(MEMBER);
+
+      expect(viewers.map((viewer) => [viewer.viewerId, viewer.displayName])).toEqual([
+        [ADMIN_SEAT, 'Ada Lovelace'],
+        [MEMBER_SEAT, 'Bob Watcher'],
+        [OWNER_SEAT, 'Olive Owner'],
+        // an account that is gone keeps its seat, with no name
+        ['viewer0000000000000000000000e', null],
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+    });
+
+    it.each([
+      ['an admin', ADMIN],
+      ['the owner', SITE_OWNER],
+    ])('gives %s in it every email too', async (_who, userId) => {
+      const viewers = await viewersAs(userId);
+
+      expect(viewers.map((viewer) => [viewer.displayName, viewer.email])).toEqual([
+        ['Ada Lovelace', `${ADMIN}@example.test`],
+        ['Bob Watcher', `${MEMBER}@example.test`],
+        ['Olive Owner', `${SITE_OWNER}@example.test`],
+        [null, null],
+      ]);
+    });
+
+    // an admin limited to some machines holds the site role but not the whole site
+    it('names everyone in it to a scoped admin, with no email', async () => {
+      const key = `${SITE}/${ADMIN}`;
+      mocks.memberDocs.set(key, { ...mocks.memberDocs.get(key), machineIds: [MACHINE] });
+
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
+    });
+
+    // a superadmin holds no site role and sees every email, as the admin list does
+    it('gives a superadmin in it the names and every email', async () => {
+      const SUPER = 'user-super';
+      held.set(SUPER, mocks.userDocs.get(SUPER));
+      mocks.userDocs.set(SUPER, { email: `${SUPER}@example.test`, role: 'superadmin', sites: [], displayName: 'Sam Super' });
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: unknown[] };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: [...record.viewers, seat(SUPER, { viewerId: 'viewer0000000000000000000000f' })],
+      });
+
+      const viewers = await viewersAs(SUPER);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+        'Sam Super',
+      ]);
+      for (const viewer of viewers) expect(viewer).toHaveProperty('email');
+      expect(viewers.at(-1)?.email).toBe(`${SUPER}@example.test`);
+    });
+
+    // the bar offers kick only where the kick route would say yes
+    it('tells an admin in it whom they may kick: everyone but their own seat', async () => {
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => [viewer.viewerId, viewer.kickable])).toEqual([
+        [ADMIN_SEAT, false],
+        [MEMBER_SEAT, true],
+        [OWNER_SEAT, true],
+        ['viewer0000000000000000000000e', true],
+      ]);
+    });
+
+    it('tells a member in it they may kick nobody', async () => {
+      const viewers = await viewersAs(MEMBER);
+
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
+    });
+
+    // a swoop mode changes watch and control and nothing else, so emails still follow the site role
+    it('gives a member set to control no email, even while in control', async () => {
+      seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+      // members may not watch here by default, so the row's own mode is what lets this member in
+      staged.set(`sites/${SITE}/settings/swoop`, { enabled: true, membersMayWatch: false });
+      seatHolds(MEMBER, true);
+
+      const viewers = await viewersAs(MEMBER);
+
+      expect(viewers.map((viewer) => viewer.displayName)).toEqual([
+        'Ada Lovelace',
+        'Bob Watcher',
+        'Olive Owner',
+        null,
+      ]);
+      for (const viewer of viewers) expect(viewer).not.toHaveProperty('email');
+      // nor any kick: that administers the site's swoop, which no swoop mode reaches
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, false, false, false]);
+    });
+
+    it('POSITIVE CONTROL: still gives an admin held to watch every email', async () => {
+      seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+      seatHolds(ADMIN, false);
+
+      const viewers = await viewersAs(ADMIN);
+
+      expect(viewers.map((viewer) => [viewer.displayName, viewer.email])).toEqual([
+        ['Ada Lovelace', `${ADMIN}@example.test`],
+        ['Bob Watcher', `${MEMBER}@example.test`],
+        ['Olive Owner', `${SITE_OWNER}@example.test`],
+        [null, null],
+      ]);
+      // and every kick but of their own seat
+      expect(viewers.map((viewer) => viewer.kickable)).toEqual([false, true, true, true]);
+      // the hold is in force: the same admin may not take control
+      const { status, body } = await parseResponse(
+        await POST(createMockRequest(url(), { method: 'POST', body: { control: true, fp: FP } }), routeContext()),
+      );
+      expect(status).toBe(403);
+      expect(body.code).toBe('capability_missing');
+    });
+
+    it.each([
+      ['a member', MEMBER],
+      ['an admin', ADMIN],
+    ])('names nobody to %s who is not in it', async (_who, userId) => {
+      const record = staged.get(`${SESSIONS_PATH}${SID}`) as { viewers: Array<{ uid: string }> };
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...record,
+        viewers: record.viewers.filter((viewer) => viewer.uid !== userId),
+      });
+
+      const viewers = await viewersAs(userId);
+
+      expect(viewers).toHaveLength(3);
+      for (const viewer of viewers) {
+        expect(viewer).not.toHaveProperty('displayName');
+        expect(viewer).not.toHaveProperty('email');
+        expect(viewer).not.toHaveProperty('kickable');
+      }
+    });
   });
 
   it('ends a session with the caller endReason and broadcasts the kill', async () => {
@@ -986,6 +1608,312 @@ describe('GET / DELETE swoop/sessions/{sid}', () => {
     );
 
     expect(res.status).toBe(400);
+  });
+
+  // a viewer leaving must not put a kick no admin made in the audit trail
+  it('refuses an endReason only the kick route records', async () => {
+    const res = await DELETE(
+      createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'kicked' } }),
+      routeContext(SID),
+    );
+
+    expect(res.status).toBe(400);
+    expect(setPayloads().some((payload) => payload.state === 'ended')).toBe(false);
+  });
+
+  describe('with several viewers in the session', () => {
+    const ADMIN_SEAT = 'viewer0000000000000000000000b';
+    const MEMBER_SEAT = 'viewer0000000000000000000000c';
+
+    beforeEach(() => {
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        sid: SID,
+        state: 'live',
+        createdBy: `user:${ADMIN}`,
+        startedAt: Date.now() - 600_000,
+        viewers: [seat(ADMIN, { viewerId: ADMIN_SEAT, ctl: true }), seat(MEMBER, { viewerId: MEMBER_SEAT })],
+        continuity: { [ADMIN_SEAT]: { uid: ADMIN, hash: 'a'.repeat(64) } },
+      });
+    });
+
+    const leave = (viewerId: string) =>
+      DELETE(
+        createMockRequest(url(`/${SID}`), {
+          method: 'DELETE',
+          body: { endReason: 'closed', viewerReason: 'closed', viewerId },
+        }),
+        routeContext(SID),
+      );
+    const lastViewers = () => setPayloads().filter((payload) => Array.isArray(payload.viewers)).at(-1)?.viewers;
+    const endedRows = () =>
+      (writeAuditEntryBlocking.mock.calls as [string, { metadata?: Record<string, unknown> }][])
+        .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'session_ended')
+        .map(([, entry]) => entry.metadata);
+
+    it('takes only the viewer who leaves out of it, and the session goes on for the rest', async () => {
+      signIn(MEMBER);
+
+      const { status, body } = await parseResponse(await leave(MEMBER_SEAT));
+
+      expect(status).toBe(200);
+      expect(body.data).toEqual({ sid: SID, state: 'live', left: true });
+      expect(lastViewers()).toEqual([expect.objectContaining({ viewerId: ADMIN_SEAT })]);
+      expect(setPayloads().some((payload) => payload.state === 'ended')).toBe(false);
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(queuedCommands('swoop_kill')).toEqual([]);
+      expect(endedRows()).toEqual([
+        expect.objectContaining({ viewerId: MEMBER_SEAT, endReason: 'closed', left: true }),
+      ]);
+    });
+
+    it('spends the continuity of a controller who leaves: a deliberate end asks again next time', async () => {
+      signIn(ADMIN);
+
+      await leave(ADMIN_SEAT);
+
+      expect(setPayloads().map((payload) => payload.continuity).filter(Boolean)).toEqual([
+        { [ADMIN_SEAT]: { usedAt: expect.any(Number) } },
+      ]);
+    });
+
+    it('ends the session and stops the streamer when the last viewer leaves', async () => {
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...(staged.get(`${SESSIONS_PATH}${SID}`) as Record<string, unknown>),
+        viewers: [seat(MEMBER, { viewerId: MEMBER_SEAT })],
+      });
+      signIn(MEMBER);
+
+      const { status, body } = await parseResponse(await leave(MEMBER_SEAT));
+
+      expect(status).toBe(200);
+      expect(body.data).toEqual({ sid: SID, state: 'ended', endReason: 'closed' });
+      // the end lands in the seat's own write: no join can come between the two
+      expect(setPayloads().filter((payload) => payload.state === 'ended')).toEqual([
+        expect.objectContaining({ viewers: [], endReason: 'closed', viewerReason: 'closed' }),
+      ]);
+      expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+    });
+
+    // ending it for everyone is the kill route's, behind the swoop-settings capability.
+    it('answers a seat that is not the caller’s as a missing one, and ends nothing', async () => {
+      signIn(MEMBER);
+
+      const res = await leave(ADMIN_SEAT);
+
+      expect(res.status).toBe(404);
+      expect(setPayloads().some((payload) => payload.state === 'ended')).toBe(false);
+      expect(mockKill).not.toHaveBeenCalled();
+    });
+
+    it('takes out every seat of its own a caller names none of, and only those', async () => {
+      staged.set(`${SESSIONS_PATH}${SID}`, {
+        ...(staged.get(`${SESSIONS_PATH}${SID}`) as Record<string, unknown>),
+        viewers: [
+          seat(ADMIN, { viewerId: ADMIN_SEAT, ctl: true }),
+          seat(MEMBER, { viewerId: MEMBER_SEAT }),
+          seat(MEMBER, { viewerId: 'viewer0000000000000000000000d' }),
+        ],
+      });
+      signIn(MEMBER);
+
+      const res = await DELETE(
+        createMockRequest(url(`/${SID}`), { method: 'DELETE', body: { endReason: 'closed' } }),
+        routeContext(SID),
+      );
+
+      expect(res.status).toBe(200);
+      expect(lastViewers()).toEqual([expect.objectContaining({ viewerId: ADMIN_SEAT })]);
+      expect(mockKill).not.toHaveBeenCalled();
+    });
+  });
+});
+
+/**
+ * a site owner or admin takes someone out of a session. one streamer serves
+ * everyone and cannot drop one viewer, so it is the revocation's cut: the record
+ * ends naming them and the streamer stops, and their access stays as it was.
+ */
+describe('POST swoop/sessions/{sid}/kick', () => {
+  const ADMIN_SEAT = 'viewer0000000000000000000000b';
+  const MEMBER_SEAT = 'viewer0000000000000000000000c';
+  const OWNER_SEAT = 'viewer0000000000000000000000d';
+
+  beforeEach(() => {
+    stageLiveSession(
+      {
+        state: 'live',
+        viewers: [
+          seat(ADMIN, { viewerId: ADMIN_SEAT, ctl: true }),
+          seat(MEMBER, { viewerId: MEMBER_SEAT }),
+          seat(SITE_OWNER, { viewerId: OWNER_SEAT }),
+        ],
+      },
+      SID,
+    );
+  });
+
+  const kick = (viewerId: unknown) =>
+    KICK(createMockRequest(url(`/${SID}/kick`), { method: 'POST', body: { viewerId } }), routeContext(SID));
+  const endedWrites = () => setPayloads().filter((payload) => payload.state === 'ended');
+  const endedRows = () =>
+    (writeAuditEntryBlocking.mock.calls as [string, { metadata?: Record<string, unknown> }][])
+      .filter(([site, entry]) => site === SITE && entry.metadata?.event === 'session_ended')
+      .map(([, entry]) => entry.metadata);
+
+  it('takes a member out: the record ends naming them, the streamer stops, and the trail says whom it was for', async () => {
+    const { status, body } = await parseResponse(await kick(MEMBER_SEAT));
+
+    expect(status).toBe(200);
+    expect(body.data).toEqual({ sid: SID, state: 'ended', endReason: 'kicked', endedFor: MEMBER });
+    // for everyone in it: everyone but the member reads the record and comes back
+    expect(endedWrites()).toEqual([expect.objectContaining({ endReason: 'kicked', endedFor: MEMBER, viewers: [] })]);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+    expect(queuedCommands('swoop_kill')).toEqual([]);
+    expect(endedRows()).toEqual([
+      expect.objectContaining({ endReason: 'kicked', endedFor: MEMBER, durationMs: expect.any(Number) }),
+    ]);
+    // the machine's step-up windows stay open: closing them is the kill's
+    expect(setPayloads().some((payload) => 'revokedAt' in payload)).toBe(false);
+  });
+
+  it('falls back to one polled kill when the room broadcast did not land', async () => {
+    mockKill.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    const res = await kick(MEMBER_SEAT);
+
+    expect(res.status).toBe(200);
+    expect(queuedCommands('swoop_kill')).toEqual([expect.objectContaining({ sid: SID })]);
+  });
+
+  it('spends every continuity grant of the one kicked before the end, and nobody else’s', async () => {
+    const DROPPED = 'viewer0000000000000000000000e';
+    const SPENT = 'viewer0000000000000000000000f';
+    stageLiveSession(
+      {
+        ...(staged.get(`${SESSIONS_PATH}${SID}`) as Record<string, unknown>),
+        continuity: {
+          [ADMIN_SEAT]: { uid: ADMIN, hash: 'a'.repeat(64) },
+          [MEMBER_SEAT]: { uid: MEMBER, hash: 'b'.repeat(64) },
+          // a tab of theirs whose seat already went: its grant would carry it back past the step-up
+          [DROPPED]: { uid: MEMBER, hash: 'c'.repeat(64) },
+          [SPENT]: { uid: MEMBER, hash: 'd'.repeat(64), usedAt: 1 },
+        },
+      },
+      SID,
+    );
+
+    await kick(MEMBER_SEAT);
+
+    const writes = setPayloads();
+    expect(writes.map((payload) => payload.continuity).filter(Boolean)).toEqual([
+      { [MEMBER_SEAT]: { usedAt: expect.any(Number) } },
+      { [DROPPED]: { usedAt: expect.any(Number) } },
+    ]);
+    // spent before the streamer stops, so no rejoin can beat it
+    expect(writes.findIndex((payload) => payload.continuity !== undefined)).toBeLessThan(
+      writes.findIndex((payload) => payload.state === 'ended'),
+    );
+  });
+
+  // a rejoin undoes a kick, so a rank between them would guard nothing
+  it('lets an admin kick the owner', async () => {
+    const { status, body } = await parseResponse(await kick(OWNER_SEAT));
+
+    expect(status).toBe(200);
+    expect(body.data).toMatchObject({ endReason: 'kicked', endedFor: SITE_OWNER });
+  });
+
+  // a kick administers the site's swoop, so a swoop mode never reaches it
+  it.each([
+    ['a member', () => signIn(MEMBER)],
+    [
+      'a member set to control',
+      () => {
+        seedMember(SITE, MEMBER, 'member', { swoop: 'control' });
+        signIn(MEMBER);
+      },
+    ],
+  ])('refuses %s, and ends nothing', async (_who, asCaller) => {
+    asCaller();
+
+    const { status, body } = await parseResponse(await kick(ADMIN_SEAT));
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('capability_missing');
+    expect(endedWrites()).toEqual([]);
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it('positive control: an admin held to watch still kicks', async () => {
+    seedMember(SITE, ADMIN, 'admin', { swoop: 'view' });
+
+    const res = await kick(MEMBER_SEAT);
+
+    expect(res.status).toBe(200);
+    expect(mockKill).toHaveBeenCalledWith({ siteId: SITE, machineId: MACHINE, sid: SID });
+  });
+
+  it('refuses an api key, and records the refusal', async () => {
+    mockResolveAuth.mockResolvedValue(apiKeyAuth(SITE_OWNER));
+
+    const { status, body } = await parseResponse(await kick(MEMBER_SEAT));
+
+    expect(status).toBe(403);
+    expect(body.code).toBe('api_key_not_permitted');
+    expect(writeAuditEntry).toHaveBeenCalledWith(
+      SITE,
+      expect.objectContaining({ outcome: 'deny', denyReason: 'api_key_not_permitted' }),
+    );
+    expect(endedWrites()).toEqual([]);
+  });
+
+  it('refuses your own seat: a tab of yours is closed, not kicked', async () => {
+    const res = await kick(ADMIN_SEAT);
+
+    expect(res.status).toBe(400);
+    expect(endedWrites()).toEqual([]);
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it('answers a seat that is no longer in it as viewer_not_found', async () => {
+    const { status, body } = await parseResponse(await kick('viewer0000000000000000000000z'));
+
+    expect(status).toBe(404);
+    expect(body.code).toBe('viewer_not_found');
+    expect(body.detail).toBe('that person is no longer in this session');
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it('answers a session that already ended as session_ended, and keeps the reason it ended for', async () => {
+    stageLiveSession(
+      { ...(staged.get(`${SESSIONS_PATH}${SID}`) as Record<string, unknown>), state: 'ended', endReason: 'closed' },
+      SID,
+    );
+
+    const { status, body } = await parseResponse(await kick(MEMBER_SEAT));
+
+    expect(status).toBe(409);
+    expect(body.code).toBe('session_ended');
+    expect(endedWrites()).toEqual([]);
+    expect(mockKill).not.toHaveBeenCalled();
+  });
+
+  it('answers a session there is none of as session_not_found, and creates none', async () => {
+    staged.delete(`${SESSIONS_PATH}${SID}`);
+
+    const { status, body } = await parseResponse(await kick(MEMBER_SEAT));
+
+    expect(status).toBe(404);
+    expect(body.code).toBe('session_not_found');
+    expect(setPayloads()).toEqual([]);
+  });
+
+  it('refuses a viewer id that is not one, naming the field and never its value', async () => {
+    const { status, body } = await parseResponse(await kick('../../users/someone'));
+
+    expect(status).toBe(400);
+    expect(body.detail).toContain('viewerId');
+    expect(JSON.stringify(body)).not.toContain('../../users/someone');
   });
 });
 
@@ -1103,8 +2031,14 @@ describe('swoop audit trail', () => {
     expect(serialized).not.toContain(FP);
   });
 
-  it('refuses to start a session it cannot record', async () => {
+  it('refuses to start a session it cannot record, and ends the one it started for it', async () => {
     openWindow(ADMIN);
+    // the new session's record writes through, so the give-up reads it back
+    mocks.set.mockImplementation(async (payload: Record<string, unknown>) => {
+      if (payload.state === 'pending' && typeof payload.sid === 'string') {
+        staged.set(`${SESSIONS_PATH}${payload.sid}`, { ...payload });
+      }
+    });
     // Only swoop's own row fails — the wrapper's allow row has already been
     // written by then, so this is the handler's fail-closed path, not its.
     writeAuditEntryBlocking.mockImplementation(async (...args: unknown[]) => {
@@ -1122,6 +2056,8 @@ describe('swoop audit trail', () => {
     expect(status).toBe(503);
     expect(body.code).toBe('audit_unavailable');
     expect(mockRing).not.toHaveBeenCalled();
+    // its only seat given up, the record it started ends with it
+    expect(setPayloads()).toContainEqual(expect.objectContaining({ viewers: [], state: 'ended', endReason: 'error' }));
   });
 
   it('records the page\'s own reason beside the caller endReason', async () => {

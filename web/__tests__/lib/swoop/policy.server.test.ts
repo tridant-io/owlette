@@ -43,7 +43,8 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
-import type { Actor } from '@/lib/capabilities';
+import { siteStanding, type Actor, type SiteRole } from '@/lib/capabilities';
+import { effectiveSwoopMode, type SwoopMode } from '@/lib/swoopMode';
 import {
   SWOOP_FRESH_CEREMONY_MS,
   SWOOP_SETTINGS_DEFAULTS,
@@ -65,9 +66,9 @@ import {
 const SITE = 'site-a';
 const MACHINE = 'machine-x';
 
-const member: Actor = { type: 'user', userId: 'm', role: 'member', siteRoles: { [SITE]: 'member' } };
-const admin: Actor = { type: 'user', userId: 'a', role: 'member', siteRoles: { [SITE]: 'admin' } };
-const owner: Actor = { type: 'user', userId: 'o', role: 'member', siteRoles: { [SITE]: 'owner' } };
+const member: Actor = { type: 'user', userId: 'm', role: 'member', siteRoles: { [SITE]: 'member' }, machineScopes: { [SITE]: null } };
+const admin: Actor = { type: 'user', userId: 'a', role: 'member', siteRoles: { [SITE]: 'admin' }, machineScopes: { [SITE]: null } };
+const owner: Actor = { type: 'user', userId: 'o', role: 'member', siteRoles: { [SITE]: 'owner' }, machineScopes: { [SITE]: null } };
 const outsider: Actor = { type: 'user', userId: 'x', role: 'member', siteRoles: {} };
 
 const ON: SwoopSiteSettings = { ...SWOOP_SETTINGS_DEFAULTS, enabled: true };
@@ -317,6 +318,184 @@ describe('evaluateLeaseRenewal', () => {
     expect(renewal({ settings: { ...ON, membersMayWatch: false } })).toMatchObject({
       code: 'members_may_not_watch',
     });
+  });
+});
+
+/**
+ * owner rulings 13-14: a person's swoop mode on their member row decides watch
+ * and control, and the site's `membersMayWatch` is only the default for members
+ * with no mode of their own.
+ */
+describe('swoop mode', () => {
+  const MEMBERS_MAY_NOT_WATCH: SwoopSiteSettings = { ...ON, membersMayWatch: false };
+
+  function withMode(siteRole: SiteRole, mode: SwoopMode): Actor {
+    return {
+      type: 'user',
+      userId: `${siteRole}-${mode}`,
+      role: 'member',
+      siteRoles: { [SITE]: siteRole },
+      swoopModes: { [SITE]: mode },
+      machineScopes: { [SITE]: null },
+    };
+  }
+
+  describe('with membersMayWatch off', () => {
+    const offAccess = (over: Partial<Parameters<typeof evaluateSwoopAccess>[0]>) =>
+      access({ settings: MEMBERS_MAY_NOT_WATCH, ...over });
+
+    it('refuses a member with no mode of their own', () => {
+      expect(offAccess({})).toMatchObject({ code: 'members_may_not_watch' });
+    });
+
+    it('lets a member set to view watch', () => {
+      expect(offAccess({ actor: withMode('member', 'view') })).toEqual({ ok: true, ctl: false });
+    });
+
+    it('asks a member set to control for the step-up, and lets them take control after it', () => {
+      const actor = withMode('member', 'control');
+      expect(offAccess({ actor, intent: 'control' })).toEqual({
+        ok: false,
+        status: 401,
+        code: 'step_up_required',
+        error: expect.any(String),
+      });
+      expect(offAccess({ actor, intent: 'control', stepUpOpen: true })).toEqual({ ok: true, ctl: true });
+    });
+
+    it('refuses a member set to none on the capability', () => {
+      expect(offAccess({ actor: withMode('member', 'none') })).toMatchObject({ code: 'capability_missing' });
+    });
+  });
+
+  it('refuses an admin held to view control, and lets them watch', () => {
+    const actor = withMode('admin', 'view');
+    expect(access({ actor, intent: 'control', stepUpOpen: true })).toMatchObject({ code: 'capability_missing' });
+    expect(access({ actor })).toEqual({ ok: true, ctl: false });
+  });
+
+  it('refuses an admin held to none both', () => {
+    const actor = withMode('admin', 'none');
+    expect(access({ actor, intent: 'control', stepUpOpen: true })).toMatchObject({ code: 'capability_missing' });
+    expect(access({ actor })).toMatchObject({ code: 'capability_missing' });
+  });
+
+  it('refuses a control viewer at renewal once their mode is view', () => {
+    for (const siteRole of ['member', 'admin'] as SiteRole[]) {
+      expect(
+        evaluateLeaseRenewal({
+          actor: withMode(siteRole, 'view'),
+          siteId: SITE,
+          machineId: MACHINE,
+          intent: 'control',
+          viaApiKey: false,
+          settings: ON,
+        }),
+      ).toMatchObject({ code: 'capability_missing' });
+    }
+  });
+
+  /**
+   * release 3 adds the machine scope beside the mode: a machine outside it
+   * refuses every ask on the capability, before the members switch and before
+   * the step-up, so no window is ever written for it.
+   */
+  describe('agrees with effectiveSwoopMode and the machine scope for an actor built by siteStanding', () => {
+    for (const siteRole of ['member', 'admin', 'owner'] as SiteRole[]) {
+      for (const mode of [null, 'none', 'view', 'control'] as Array<SwoopMode | null>) {
+        for (const membersMayWatch of [true, false]) {
+          for (const machineIds of [null, ['m1']] as Array<readonly string[] | null>) {
+            for (const machineId of ['m1', 'm2']) {
+              const effective = effectiveSwoopMode(siteRole, mode, membersMayWatch);
+              const covered = machineIds === null || machineIds.includes(machineId);
+              const scope = machineIds === null ? 'whole site' : `[${machineIds.join(', ')}]`;
+
+              it(`${siteRole}, mode ${mode ?? 'absent'}, membersMayWatch ${membersMayWatch}, ${scope} on ${machineId}: ${covered ? effective : 'out of scope'}`, () => {
+                const actor: Actor = {
+                  type: 'user',
+                  userId: 'u',
+                  role: 'member',
+                  ...siteStanding([[SITE, { role: siteRole, swoopMode: mode, machineIds }]]),
+                };
+                const settings: SwoopSiteSettings = { ...ON, membersMayWatch };
+                expect(access({ actor, settings, machineId }).ok).toBe(covered && effective !== 'none');
+                expect(access({ actor, settings, machineId, intent: 'control', stepUpOpen: true }).ok).toBe(
+                  covered && effective === 'control',
+                );
+                if (!covered) {
+                  for (const ask of [
+                    { intent: 'view' as const },
+                    { intent: 'control' as const },
+                    { intent: 'control' as const, stepUpOpen: true },
+                  ]) {
+                    expect(access({ actor, settings, machineId, ...ask })).toMatchObject({
+                      status: 403,
+                      code: 'capability_missing',
+                    });
+                  }
+                }
+              });
+            }
+          }
+        }
+      }
+    }
+  });
+});
+
+/** release 3: a person's machine scope decides which machines their role and mode reach. */
+describe('machine scope', () => {
+  function scoped(siteRole: SiteRole, mode: SwoopMode | null, machineIds: readonly string[]): Actor {
+    return {
+      type: 'user',
+      userId: `scoped-${siteRole}`,
+      role: 'member',
+      ...siteStanding([[SITE, { role: siteRole, swoopMode: mode, machineIds }]]),
+    };
+  }
+
+  it('asks a scoped member set to control for the step-up on their machine, and refuses another before it', () => {
+    const actor = scoped('member', 'control', ['m1']);
+    expect(access({ actor, machineId: 'm1', intent: 'control' })).toEqual({
+      ok: false,
+      status: 401,
+      code: 'step_up_required',
+      error: expect.any(String),
+    });
+    expect(access({ actor, machineId: 'm1', intent: 'control', stepUpOpen: true })).toEqual({ ok: true, ctl: true });
+    expect(access({ actor, machineId: 'm2', intent: 'control', stepUpOpen: true })).toEqual({
+      ok: false,
+      status: 403,
+      code: 'capability_missing',
+      error: expect.any(String),
+    });
+  });
+
+  it('keeps the members switch for a scoped member with no mode, and an explicit view overrides it', () => {
+    const settings: SwoopSiteSettings = { ...ON, membersMayWatch: false };
+    expect(access({ actor: scoped('member', null, ['m1']), machineId: 'm1', settings })).toMatchObject({
+      code: 'members_may_not_watch',
+    });
+    expect(access({ actor: scoped('member', 'view', ['m1']), machineId: 'm1', settings })).toEqual({
+      ok: true,
+      ctl: false,
+    });
+  });
+
+  it('refuses a renewal once its machine is dropped from the scope', () => {
+    for (const intent of ['view', 'control'] as const) {
+      const renew = (machineIds: readonly string[]) =>
+        evaluateLeaseRenewal({
+          actor: scoped('member', 'control', machineIds),
+          siteId: SITE,
+          machineId: 'm1',
+          intent,
+          viaApiKey: false,
+          settings: ON,
+        });
+      expect(renew(['m1', 'm2'])).toEqual({ ok: true, ctl: intent === 'control' });
+      expect(renew(['m2'])).toMatchObject({ code: 'capability_missing' });
+    }
   });
 });
 

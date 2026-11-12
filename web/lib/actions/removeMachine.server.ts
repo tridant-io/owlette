@@ -6,7 +6,14 @@
  * Atomicity: machine + config delete in one batch; command maps and tokens are
  * best-effort follow-ups because they may not exist (a freshly-paired machine
  * has no commands subcollection). Firestore deletes are idempotent on absent
- * docs, so no existence pre-check.
+ * docs, so no existence pre-check. The machine's unended swoop sessions are
+ * ended the same best-effort way, as `machine_removed`: their records are a
+ * subcollection of the deleted doc and outlive it, and that end is how every
+ * viewer of the machine learns it left the site rather than waiting on it.
+ * The id then leaves every member's machine scope, and the site's fleet grant
+ * with its fleet sessions and call records (ADR 0017), best-effort too: machine
+ * ids get reused, and a failed prune is caught when the id next pairs
+ * (`recordPairing`).
  *
  * No active-deployment guard: the legacy client-side check was racy against
  * in-flight commands and lived in the UI, not the data layer. The audit log
@@ -18,7 +25,12 @@
 import { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
+import type { Actor } from '@/lib/capabilities';
+import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
+import { pruneMachineFromMembers } from '@/lib/membership.server';
+import { recordSwoopSessionEnded } from '@/lib/swoop/audit.server';
+import { endSwoopSession, listUnendedSwoopSessionsForMachine } from '@/lib/swoop/sessionStore.server';
 
 const AGENT_REFRESH_TOKEN_DELETE_BATCH_SIZE = 500;
 
@@ -27,6 +39,8 @@ export interface RemoveMachineInput {
   machineId: string;
   /** Audit actor string ("user:<uid>" or "apiKey:<keyId>"). */
   auditActor: string;
+  /** Who removed it, for the audit row of each swoop session the removal ends. */
+  actor: Actor;
   /** Inject a Firestore instance — tests pass a mock; production omits. */
   db?: Firestore;
 }
@@ -41,6 +55,30 @@ export interface RemoveMachineResult {
     pendingCommands: string;
     completedCommands: string;
   };
+}
+
+/**
+ * End the machine's unended swoop sessions as `machine_removed`, each with its
+ * audit row. Each on its own: one that cannot be ended or recorded leaves the
+ * rest to end, and the first failure is thrown after them.
+ */
+async function endSwoopSessions(siteId: string, machineId: string, actor: Actor): Promise<void> {
+  const sessions = await listUnendedSwoopSessionsForMachine({ siteId, machineId });
+  const results = await Promise.allSettled(
+    sessions.map(async (session) => {
+      await endSwoopSession({ siteId, machineId, sid: session.sid, endReason: 'machine_removed' });
+      await recordSwoopSessionEnded({
+        siteId,
+        machineId,
+        sid: session.sid,
+        actor,
+        endReason: 'machine_removed',
+        durationMs: Date.now() - session.startedAt,
+      });
+    }),
+  );
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
 }
 
 /**
@@ -78,6 +116,46 @@ export async function removeMachine(
   batch.delete(machineRef);
   batch.delete(configRef);
   await batch.commit();
+
+  // after the batch, so a failed removal leaves its sessions running too.
+  try {
+    await endSwoopSessions(siteId, machineId, input.actor);
+  } catch (err) {
+    logger.warn('removeMachine: swoop session end failed (non-fatal)', {
+      context: 'removeMachine',
+      data: {
+        siteId,
+        machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  try {
+    await pruneMachineFromMembers({ siteId, machineId, db });
+  } catch (err) {
+    logger.warn('removeMachine: machine scope prune failed (non-fatal)', {
+      context: 'removeMachine',
+      data: {
+        siteId,
+        machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
+
+  try {
+    await pruneMachineFromFleet({ siteId, machineId, db });
+  } catch (err) {
+    logger.warn('removeMachine: fleet prune failed (non-fatal)', {
+      context: 'removeMachine',
+      data: {
+        siteId,
+        machineId,
+        err: err instanceof Error ? err.message : String(err),
+      },
+    });
+  }
 
   // Best-effort: these docs may never have existed. Warn rather than throw,
   // so unexpected modes (e.g. permission denied) stay visible in telemetry.

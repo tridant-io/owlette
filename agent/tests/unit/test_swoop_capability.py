@@ -1,26 +1,16 @@
 """
-Unit tests for swoop_capability — the heartbeat's capability + platform keys.
+Unit tests for swoop_capability — the heartbeat's capability key.
 
-Three contracts are pinned here:
-
-  * cross-plan rule C3's normalisation tables. The tri-platform agent plan
-    writes the same osFamily/arch spellings, so a change on either side that
-    isn't a change on both is a fleet-wide reporting split.
-  * an ABSENT osFamily means 'windows'. Every agent in the field predates the
-    key, so a reader that defaults to anything else marks the whole fleet
-    unknown. The default belongs to the reader — the agent never writes it as a
-    stand-in for Windows.
-  * capabilities.swoop is the exe being there AND this OS's osadapter arm
-    saying the machine can stream — on macOS, the desktop app's fresh Screen
-    Recording report. No probe, no process spawn — this runs on the 5-second
-    loop — and no exception, since the heartbeat's handler would book it as a
-    Firestore error.
+The contract pinned here: capabilities.swoop is the exe being there AND this
+OS's osadapter arm saying the machine can stream — on macOS, the desktop app's
+fresh Screen Recording report. No probe, no process spawn — this runs on the
+5-second loop — and no exception, since the heartbeat's handler would book it
+as a Firestore error.
 """
 
 import importlib
 import json
 import os
-import platform
 import sys
 import time
 from types import SimpleNamespace
@@ -41,80 +31,6 @@ darwin_only = pytest.mark.skipif(
 
 WINDOWS_STREAMER = r'C:\ProgramData\Owlette\swoop\owlette-swoop.exe'
 MAC_STREAMER = '/Applications/owlette.app/Contents/MacOS/owlette-swoop'
-
-
-# C3 normalisation tables
-
-class TestOsFamily:
-    """sys.platform -> osFamily, plus the absent-means-windows contract."""
-
-    @pytest.mark.parametrize('sys_platform,expected', [
-        ('win32', 'windows'),
-        ('darwin', 'macos'),
-        ('linux', 'linux'),
-    ])
-    def test_every_c3_mapping(self, monkeypatch, sys_platform, expected):
-        monkeypatch.setattr(sys, 'platform', sys_platform)
-
-        assert swoop_capability.os_family() == expected
-
-    def test_unknown_platform_falls_back_without_raising(self, monkeypatch):
-        monkeypatch.setattr(sys, 'platform', 'freebsd14')
-
-        assert swoop_capability.os_family() == 'unknown'
-
-    def test_table_holds_exactly_the_c3_entries(self):
-        """A fourth entry here is a cross-plan change, not a local one."""
-        assert swoop_capability.OS_FAMILY_BY_PLATFORM == {
-            'win32': 'windows',
-            'darwin': 'macos',
-            'linux': 'linux',
-        }
-
-    def test_absent_os_family_reads_as_windows(self):
-        """The documented reader contract for pre-swoop agents.
-
-        The agent never writes 'windows' to stand in for a missing key, so the
-        default lives with whoever reads the machine document.
-        """
-        machine_doc = {'machineId': 'INF-FLEX-3'}
-
-        assert machine_doc.get('osFamily', 'windows') == 'windows'
-        assert 'osFamily' not in machine_doc
-
-
-class TestArch:
-    """platform.machine() -> arch."""
-
-    @pytest.mark.parametrize('machine,expected', [
-        ('AMD64', 'x64'),
-        ('x86_64', 'x64'),
-        ('arm64', 'arm64'),
-        ('aarch64', 'arm64'),
-    ])
-    def test_every_c3_mapping(self, monkeypatch, machine, expected):
-        monkeypatch.setattr(platform, 'machine', lambda: machine)
-
-        assert swoop_capability.arch() == expected
-
-    def test_unknown_machine_falls_back_without_raising(self, monkeypatch):
-        monkeypatch.setattr(platform, 'machine', lambda: 'riscv64')
-
-        assert swoop_capability.arch() == 'unknown'
-
-    def test_undeterminable_machine_falls_back(self, monkeypatch):
-        """platform.machine() returns '' rather than raising when it can't tell."""
-        monkeypatch.setattr(platform, 'machine', lambda: '')
-
-        assert swoop_capability.arch() == 'unknown'
-
-    def test_table_holds_exactly_the_c3_entries(self):
-        assert swoop_capability.ARCH_BY_MACHINE == {
-            'AMD64': 'x64',
-            'x86_64': 'x64',
-            'arm64': 'arm64',
-            'aarch64': 'arm64',
-        }
 
 
 # streamer_capable / swoop_capability_value

@@ -106,9 +106,10 @@ export function ManageUserSitesDialog({
   };
 
   /**
-   * Ask about the talons first: a talon run re-resolves its AUTHOR's site access,
-   * so removing access silently breaks any automation they wrote. Look the damage
-   * up before acting, and go straight through only when there is none.
+   * Ask about the talons first: every talon re-resolves its AUTHOR's site access
+   * before any output fires, so removing access switches off every automation they
+   * wrote at its next run. Look them up before acting, and go straight through only
+   * when there are none.
    */
   const handleRemoveSiteClick = async (siteId: string, siteName: string) => {
     setRemovingFrom(siteId);
@@ -226,7 +227,7 @@ export function ManageUserSitesDialog({
           {userRole === 'admin' && (
             <div className="bg-accent-cyan/10 border border-accent-cyan/30 rounded-lg p-3 mt-4">
               <p className="text-accent-cyan text-sm">
-                <strong className="font-semibold">note:</strong> the account-level admin role grants nothing on a site on its own. access comes from the site assignments below, and a per-site role is set from that site&apos;s members page.
+                <strong className="font-semibold">note:</strong> the account-level admin role grants nothing on a site on its own. access comes from the site assignments below, and a per-site role is set in that site&apos;s members section (admin panel → sites).
               </p>
             </div>
           )}
@@ -386,10 +387,9 @@ export function ManageUserSitesDialog({
         </DialogContent>
       </Dialog>
 
-      {/* Sibling of the sites dialog, not a child of it — same shape as the
-          delete confirmation in ManageSitesDialog. Only reached when this user
-          actually authored talons on the site being taken away; the zero case
-          removes access with no extra click. */}
+      {/* Sibling of the sites dialog, not a child of it. Only reached when this
+          user actually authored talons on the site being taken away; the zero
+          case removes access with no extra click. */}
       <ConfirmDialog
         open={pendingRemoval !== null}
         onOpenChange={(next) => {

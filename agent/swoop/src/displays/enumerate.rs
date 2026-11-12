@@ -22,14 +22,12 @@
 //! - The virtual desktop's origin is **negative in both axes** — (-2160, -1138)
 //!   — so nothing below may assume it starts at zero.
 //! - A rotated output reports a **transposed** `ModeDesc` against its texture
-//!   (2160x3840 mode, 3840x2160 texture). [`DisplayEntry::texture`] therefore
-//!   derives the size from the desktop rect through
-//!   [`Rotation::swap_axes`](crate::capture::Rotation::swap_axes), never from a
-//!   mode.
+//!   (2160x3840 mode, 3840x2160 texture). Capture turns the texture upright,
+//!   so [`DisplayEntry::texture`] is the desktop rect's size, as displayed.
 //! - Per-monitor DPI differs (96 and 120 here) and a desktop rect is in
 //!   **physical** pixels whatever the scaling is. So DPI never enters
 //!   [`DisplayEntry::canvas_point`]; it is carried for the cursor path's
-//!   [`crate::cursor::Output`], which reports the output's scale.
+//!   [`crate::cursor::OutputGeometry`], which reports the output's scale.
 //!
 //! # Hardware test
 //!
@@ -67,16 +65,11 @@ pub struct DisplayEntry {
 }
 
 impl DisplayEntry {
-    /// The acquired texture's size: un-rotated, and what the browser is handed.
-    ///
-    /// Nothing in this pipeline rotates a frame — `gpu::scale` leaves the video
-    /// processor's rotation off deliberately — so the viewer sees the texture
-    /// and a rotated panel is described to it transposed against the desktop.
+    /// The size of the picture the browser is handed: the desktop rect's,
+    /// because capture turns a rotated output's texture upright.
     pub fn texture(&self) -> (u32, u32) {
         let rect = self.output.desktop_rect;
-        self.output
-            .rotation
-            .swap_axes((rect.width() as u32, rect.height() as u32))
+        (rect.width() as u32, rect.height() as u32)
     }
 
     /// Host pixels per css pixel on this output.
@@ -92,9 +85,9 @@ impl DisplayEntry {
     /// client canvas, or `None` when the point is on a different output.
     ///
     /// The whole of virtual-desktop → output → client canvas: subtract the
-    /// output's origin (negative in both axes on this box), normalise over the
-    /// **displayed** size, then un-apply the rotation to land in texture space,
-    /// which is what the browser draws.
+    /// output's origin (negative in both axes on this box) and normalise over
+    /// the **displayed** size, which is what the browser draws: capture
+    /// streams a rotated output upright.
     ///
     /// The divisor is `size - 1`, the same convention
     /// [`crate::input::absolute_from_desktop`] and
@@ -266,15 +259,26 @@ mod tests {
         (primary, rotated)
     }
 
+    /// Capture turns a rotated output upright, so every output is sized as it
+    /// is displayed, whichever way its panel is turned, and a desktop point is
+    /// that point of the picture.
     #[test]
-    fn a_rotated_output_is_sized_from_the_texture_and_not_the_mode() {
+    fn every_output_is_sized_as_it_is_displayed() {
         let (primary, rotated) = layout();
         assert_eq!(primary.texture(), (1920, 1080));
-        // 2160x3840 on the desktop, 3840x2160 as the encoder and the browser
-        // see it — the trap spike 0.8 measured.
-        assert_eq!(rotated.output.desktop_rect.width(), 2160);
-        assert_eq!(rotated.output.desktop_rect.height(), 3840);
-        assert_eq!(rotated.texture(), (3840, 2160));
+        // duplication hands its texture over as 3840x2160; it is shown 2160x3840
+        assert_eq!(rotated.texture(), (2160, 3840));
+        let portrait = rotated.output.desktop_rect;
+        let landscape = primary.output.desktop_rect;
+        for (rect, rotation, shown) in [
+            (portrait, Rotation::Rotate90, (2160, 3840)),
+            (landscape, Rotation::Rotate180, (1920, 1080)),
+            (portrait, Rotation::Rotate270, (2160, 3840)),
+        ] {
+            assert_eq!(entry(rect, rotation, 96, 60).texture(), shown, "{rotation:?}");
+        }
+        assert_eq!(rotated.canvas_point((-2160, -1138)), Some((0.0, 0.0)));
+        assert_eq!(rotated.canvas_point((-1, 2701)), Some((1.0, 1.0)));
     }
 
     #[test]

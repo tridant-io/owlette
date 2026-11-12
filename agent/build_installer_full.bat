@@ -53,6 +53,20 @@ if "%OWLETTE_VERSION%"=="" (
 echo Building Owlette version: %OWLETTE_VERSION%
 echo.
 
+:: A signed build finds out now, not after the slow steps, that it cannot sign.
+if "%OWLETTE_SIGN%"=="1" (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "..\scripts\sign.ps1" -DryRun
+    if errorlevel 1 (
+        echo ERROR: OWLETTE_SIGN=1 but this machine cannot sign.
+        pause
+        exit /b 1
+    )
+)
+
+:: ci builds in two jobs so that only the one that signs is given an azure
+:: token: "payload" stops after step 8, "compile" goes straight to step 9.
+if /i "%~1"=="compile" goto :compile
+
 :: ============================================================================
 :: Step 1: Clean previous builds
 :: ============================================================================
@@ -125,9 +139,31 @@ echo [3/9] Configuring Python import paths...
 :: Step 4: Install pip
 :: ============================================================================
 echo [4/9] Installing pip...
+:: pinned to one pypa/get-pip commit (pip 26.2.2) and checked like the python zip. the
+:: latest copy, which ran unchecked, broke on the embedded interpreter on 2026-11-02: its
+:: pip 26.3 refused to modify itself.
+set GETPIP_EXPECTED_HASH=f4448a01e3ab2914c65f4ca59d4cacba6b2dbde19a483fbac46587f8bbaff424
 if not exist "downloads\get-pip.py" (
-    curl -o downloads\get-pip.py https://bootstrap.pypa.io/get-pip.py
+    curl -L -o downloads\get-pip.py https://raw.githubusercontent.com/pypa/get-pip/fa4e90301bf000c36309f3ad79c3ac720b55d6df/public/get-pip.py
+    if errorlevel 1 (
+        echo ERROR: Failed to download get-pip.py
+        pause
+        exit /b 1
+    )
 )
+for /f "skip=1 tokens=*" %%a in ('certutil -hashfile downloads\get-pip.py SHA256') do (
+    if not defined GETPIP_ACTUAL_HASH set "GETPIP_ACTUAL_HASH=%%a"
+)
+if /i not "%GETPIP_ACTUAL_HASH%"=="%GETPIP_EXPECTED_HASH%" (
+    echo ERROR: get-pip.py checksum mismatch
+    echo Expected: %GETPIP_EXPECTED_HASH%
+    echo Actual:   %GETPIP_ACTUAL_HASH%
+    echo A stale or tampered copy; it is deleted, so the next run downloads the pinned one.
+    del downloads\get-pip.py
+    pause
+    exit /b 1
+)
+set "GETPIP_ACTUAL_HASH="
 "%~dp0build\python\python.exe" "%~dp0downloads\get-pip.py"
 if errorlevel 1 (
     echo ERROR: Failed to install pip
@@ -493,6 +529,12 @@ echo Copying installation scripts...
 copy /Y scripts\install.bat build\installer_package\scripts\ >nul
 copy /Y scripts\uninstall.bat build\installer_package\scripts\ >nul
 
+if /i "%~1"=="payload" (
+    echo Package ready: build\installer_package
+    exit /b 0
+)
+
+:compile
 :: ============================================================================
 :: Step 9: Compile with Inno Setup
 :: ============================================================================
@@ -544,7 +586,24 @@ if not exist "build\installer_package\swoop\owlette-swoop.exe" (
 :: cannot be satisfied by a stale exe left behind by an earlier aborted run.
 if exist "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe" del /q "build\installer_output\Owlette-Installer-v%OWLETTE_VERSION%.exe"
 
-"%INNO_PATH%" owlette_installer.iss
+:: Our own executables are signed here, before Inno packs them; Inno then signs
+:: setup and its uninstaller itself. The embedded python and vendor installers
+:: are not ours to sign.
+set "SIGN_SCRIPT=%CD%\..\scripts\sign.ps1"
+set "SIGN_ARGS="
+if "%OWLETTE_SIGN%"=="1" (
+    for %%F in (tools\owlette-host.exe swoop\owlette-swoop.exe app\owlette-desktop.exe app\owlette-swoop-viewer.exe) do (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%SIGN_SCRIPT%" -Path "build\installer_package\%%F"
+        if errorlevel 1 (
+            echo ERROR: signing %%F failed.
+            pause
+            exit /b 1
+        )
+    )
+    set SIGN_ARGS=/DSign "/Sartifact=powershell -NoProfile -ExecutionPolicy Bypass -File $q%SIGN_SCRIPT%$q -Path $f"
+)
+
+"%INNO_PATH%" !SIGN_ARGS! owlette_installer.iss
 
 :: Every other error branch in this script pauses and exits 1. This one used
 :: to print a WARNING and fall through to exit 0, so a failed compile reported

@@ -94,6 +94,18 @@
 //! frames/s) and a hardware decoder handed nothing stalls, so [`FloorTimer`]
 //! hands the last picture to the encoder again every [`FLOOR_INTERVAL`].
 //!
+//! On NVENC the floor also sharpens. A scroll is coded at the QP the bitrate
+//! allows, and a CBR encoder wins that detail back only from repeats of the
+//! picture, so once motion (three fresh frames inside 100 ms) stops, the last
+//! picture is repeated on the loop's first wake after each rung interval for
+//! [`REFINE_FOR`], then at the floor. The repeats wait until no fresh frame
+//! has come for 50 ms or two frame intervals, whichever is longer, so a video
+//! is coded from its own frames; a caret or a clock never opens the window.
+//! [`feeds`] decides it per tier. mf-sw would pay each repeat in the machine's
+//! CPU, mf-hw's rate control is unmeasured on Intel and AMD, and VideoToolbox
+//! sends its settle keyframe instead ([`settles`]), so they keep the plain
+//! floor.
+//!
 //! # Capture and the linger
 //!
 //! §6 keeps the process alive for about a minute after the last viewer leaves,
@@ -114,13 +126,13 @@
 //!
 //! # Rotation
 //!
-//! Nothing in this pipeline rotates a frame — `gpu::scale` leaves the video
-//! processor's rotation off and says so, and Task 6.4 owns applying it. The
-//! browser therefore sees the **un-rotated texture**, so [`PointerSpace`] and
-//! [`OutputGeometry`] are both built with the output's real rotation and the
-//! rotation is applied in the coordinate transform instead of to the picture.
-//! On a non-rotated monitor the two choices are identical, which is exactly why
-//! it is written down here.
+//! Every frame reaches this session upright. Desktop Duplication's texture is
+//! a rotated output's framebuffer un-rotated, and capture turns it on the GPU
+//! before anything else sees it (`capture`'s own `# Rotation`); macOS hands it
+//! over upright already. The browser therefore draws the desktop as it is
+//! displayed, the source size is the desktop rect's, and [`PointerSpace`] and
+//! [`OutputGeometry`] are built with no rotation over that size: a viewer's
+//! point is that point of the desktop, on a turned panel as on any other.
 //!
 //! # Hardware test (manual, `#[ignore]`d)
 //!
@@ -581,7 +593,28 @@ impl Default for IdrPolicy {
 /// Duplication answers `DXGI_ERROR_WAIT_TIMEOUT` and the 0.8 box measured an
 /// idle output at 0.28 frames/s. A repeat of a still picture is a few hundred
 /// bytes, so 2 Hz costs nothing and is well inside every stall threshold.
+///
+/// On NVENC a picture that has just stopped moving is repeated faster than
+/// this for [`REFINE_FOR`] ([`FloorTimer::refine_due`]); everywhere else, and
+/// outside that window, this is the whole floor.
 pub const FLOOR_INTERVAL: Duration = Duration::from_millis(500);
+
+/// How long a picture that stopped moving is repeated at its rung's rate, from
+/// the last fresh frame of the motion. Motion is coded at whatever QP the
+/// bitrate allowed, and only a repeat lets a CBR encoder win back the detail
+/// it crushed: at the floor's 2 Hz that takes seconds, at the rung's rate half
+/// a second (NVENC's quarter-res two-pass, swoop-clarity task 2.1's
+/// still-frame test). Each repeat stays inside its frame's share of the bitrate.
+pub const REFINE_FOR: Duration = Duration::from_millis(500);
+
+/// Three fresh frames inside this are motion: a scroll, a drag, a video. A
+/// caret, a clock or typing never puts three so close together.
+const MOTION_SPAN: Duration = Duration::from_millis(100);
+
+/// The shortest quiet before a refining repeat, whatever the rung: a 24–60 fps
+/// source is coded from its own frames while it moves, and the encoder never
+/// runs at the rung's rate on top of it.
+const QUIET_MIN: Duration = Duration::from_millis(50);
 
 /// How long after the last big move a Mac tier sends its settle keyframe.
 const SETTLE_AFTER: Duration = Duration::from_secs(1);
@@ -608,20 +641,70 @@ pub fn settles(moved_at: Option<Instant>, now: Instant) -> bool {
 #[derive(Debug)]
 pub struct FloorTimer {
     last: Instant,
+    /// The screen's last three fresh frames, oldest first.
+    recent: [Option<Instant>; 3],
+    /// The end of the refinement window the last motion opened.
+    refine_until: Option<Instant>,
 }
 
 impl FloorTimer {
     pub fn new(now: Instant) -> Self {
-        Self { last: now }
+        Self {
+            last: now,
+            recent: [None; 3],
+            refine_until: None,
+        }
     }
 
     pub fn fed(&mut self, now: Instant) {
         self.last = now;
     }
 
+    /// A fresh frame from the screen, whether or not the rate gate passes it.
+    /// One that makes three inside [`MOTION_SPAN`] (re)opens the refinement
+    /// window; a lone one only restarts the quiet.
+    pub fn fresh(&mut self, now: Instant) {
+        self.recent = [self.recent[1], self.recent[2], Some(now)];
+        if self.recent[0].is_some_and(|first| now.saturating_duration_since(first) <= MOTION_SPAN) {
+            self.refine_until = Some(now + REFINE_FOR);
+        }
+    }
+
     pub fn due(&self, now: Instant) -> bool {
         now.saturating_duration_since(self.last) >= FLOOR_INTERVAL
     }
+
+    /// Whether a refining repeat is due: inside the window, once no fresh frame
+    /// has come for max([`QUIET_MIN`], two of `interval`), one `interval`
+    /// after the last frame the encoder was handed.
+    pub fn refine_due(&self, now: Instant, interval: Duration) -> bool {
+        let (Some(until), Some(seen)) = (self.refine_until, self.recent[2]) else {
+            return false;
+        };
+        now < until
+            && now.saturating_duration_since(seen) >= QUIET_MIN.max(interval * 2)
+            && now.saturating_duration_since(self.last) >= interval
+    }
+}
+
+/// The capture loop's per-tier decision: whether this turn hands the encoder a
+/// frame, at one per `interval` (the tier's rung). A fresh frame is the
+/// screen's motion before it is the gate's, so it is recorded before the rate
+/// gate decides; a repeat is the floor's, or with `refine` (NVENC only) a
+/// refining one. The caller marks the floor fed once the encoder took it.
+pub fn feeds(
+    floor: &mut FloorTimer,
+    gate: &mut RateGate,
+    fresh: bool,
+    now: Instant,
+    interval: Duration,
+    refine: bool,
+) -> bool {
+    if fresh {
+        floor.fresh(now);
+        return gate.admit(now, interval);
+    }
+    floor.due(now) || (refine && floor.refine_due(now, interval))
 }
 
 /// How early a frame may arrive against its rung's slot and still go to the
@@ -763,6 +846,76 @@ impl Denials {
     /// with the same id gets its own first event rather than silence.
     pub fn forget(&mut self, viewer: &str) {
         self.reported.remove(viewer);
+    }
+}
+
+/// §5's `mute` is one viewer's, and the machine has one audio capture for all
+/// of them. The page starts muted and says nothing until its first toggle, so
+/// a viewer is known to listen only once it has sent `mute` off. Until the
+/// session's first `mute` the machine is audible, as it always was; after it,
+/// only while a viewer in the session is listening.
+#[derive(Debug, Default)]
+pub struct MuteVotes {
+    listening: std::collections::BTreeSet<String>,
+    voted: bool,
+    quiet: bool,
+}
+
+impl MuteVotes {
+    /// This viewer's own `mute`. `Some` with the session's state when it moved.
+    pub fn vote(&mut self, viewer: &str, on: bool, present: &[String]) -> Option<bool> {
+        self.voted = true;
+        if on {
+            self.listening.remove(viewer);
+        } else {
+            self.listening.insert(viewer.to_owned());
+        }
+        self.settle(present)
+    }
+
+    /// After a join or a departure, with the viewers now in the session. One
+    /// that left takes its vote with it.
+    pub fn settle(&mut self, present: &[String]) -> Option<bool> {
+        self.listening.retain(|viewer| present.contains(viewer));
+        let quiet = self.voted && self.listening.is_empty();
+        (quiet != self.quiet).then(|| {
+            self.quiet = quiet;
+            quiet
+        })
+    }
+}
+
+/// The one ctrl+alt+del with the service. One at a time, because the service
+/// answers in order and a second would take the first one's answer.
+///
+/// The service can skip an answer (a sid it does not recognise, a pipe write
+/// that failed), so the slot has a deadline: without one, a lost answer left
+/// every later ctrl+alt+del refused for the rest of the session.
+#[derive(Debug, Default)]
+pub struct SasSlot {
+    pending: Option<(&'static str, String, Instant)>,
+}
+
+impl SasSlot {
+    /// How long one request holds the slot: `securedesk`'s own wait before it
+    /// asks again, so its next ask finds the slot free.
+    pub const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+
+    /// `true` when this request is the one in flight now, and the service is
+    /// owed a `sas_request` for it.
+    pub fn ask(&mut self, feature: &'static str, viewer: &str, now: Instant) -> bool {
+        if let Some((_, _, asked)) = self.pending {
+            if now.duration_since(asked) < Self::ANSWER_TIMEOUT {
+                return false;
+            }
+        }
+        self.pending = Some((feature, viewer.to_owned(), now));
+        true
+    }
+
+    /// The feature and viewer the service's answer belongs to.
+    pub fn answer(&mut self) -> Option<(&'static str, String)> {
+        self.pending.take().map(|(feature, viewer, _)| (feature, viewer))
     }
 }
 
@@ -958,9 +1111,10 @@ mod host {
     use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError};
 
     use super::{
-        codec_wire_name, feature_room, limits_for, moved, pick_codec, settles, tier_encodes, tiers,
-        CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
-        Joining, Outbox, RateGate, SessionHandle, TierEncode, ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
+        codec_wire_name, feature_room, feeds, limits_for, moved, pick_codec, settles, tier_encodes,
+        tiers, CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
+        Joining, MuteVotes, Outbox, RateGate, SasSlot, SessionHandle, TierEncode, ViewerRate,
+        HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
@@ -1098,8 +1252,9 @@ mod host {
 
     /// Capture and input → session.
     enum FromWorker {
-        /// The duplication is open. Carries the un-rotated texture size, which
-        /// is what the encoder and the browser are sized from.
+        /// The duplication is open. Carries the frame size, the desktop as it
+        /// is displayed, which is what the encoder and the browser are sized
+        /// from.
         Opened { width: u32, height: u32 },
         /// Capture or encode could not start at all.
         Failed(Exit),
@@ -1108,7 +1263,7 @@ mod host {
         StoppedAtHost,
         Frame(Box<EncodedFrame>),
         Cursor(channel::Cursor),
-        /// The source's texture size changed under a rebuild; the session
+        /// The source's frame size changed under a rebuild; the session
         /// re-plans and re-sends [`ToCapture::Encode`].
         SourceSize { width: u32, height: u32 },
         /// Which backend the selection chain actually opened on. Sent when it
@@ -1132,11 +1287,12 @@ mod host {
     enum ToCapture {
         /// The whole tier set: one encoder per entry, keyed by codec class.
         ///
-        /// A tier whose codec is already running and whose size is unchanged
-        /// keeps its encoder; a **size** change drops it, because a new size is
-        /// a new encoder whose first frame is an IRAP and nothing from the old
-        /// one may follow it. Bitrate and frame rate move in place. A codec not
-        /// named here has lost its last viewer and its encoder closes.
+        /// A tier whose codec is already running and whose size and frame rate
+        /// are unchanged keeps its encoder; a **size** or **frame-rate** change
+        /// drops it (`TierPass::retarget`), because the new encoder is opened
+        /// at them and its first frame is an IRAP that nothing from the old one
+        /// may follow. The bitrate moves in place. A codec not named here has
+        /// lost its last viewer and its encoder closes.
         Tiers(Vec<TierEncode>),
         /// Force one keyframe out of one tier's encoder.
         Idr(Codec),
@@ -1254,8 +1410,8 @@ mod host {
 
         // Probed once, here, and then carried: NVENC's `probe` opens encode
         // sessions until the driver refuses in order to count them, and the
-        // capture thread opens a new encoder on every resolution rung, every
-        // retarget and every ACCESS_LOST recovery.
+        // capture thread opens a new encoder on every rung, every retarget and
+        // every ACCESS_LOST recovery.
         let caps = select::probe_chain();
         #[cfg(feature = "testhooks")]
         let caps = overridden_caps(caps, bundle.overrides.as_ref());
@@ -1295,7 +1451,7 @@ mod host {
             }
         };
 
-        // The texture size, which on a rotated output is not the mode's. This
+        // The frame size, a rotated output's turned upright. This
         // is also the last thing that can produce exit 12 or 13, so `ready`
         // goes out once it has arrived and **before** the room is dialled: a
         // machine whose relay is down should still tell the service what it can
@@ -1314,9 +1470,6 @@ mod host {
             }
         };
 
-        // The browser sees the un-rotated texture — nothing in this pipeline
-        // rotates a frame — so the pointer space carries the output's real
-        // rotation and applies it in the transform instead.
         let _ = ipc::emit(
             &mut io::stdout(),
             &Event::Ready {
@@ -1671,9 +1824,10 @@ mod host {
             window: Window::new(w.started),
             encoder: None,
             display: 0,
-            sas_pending: None,
+            sas: SasSlot::default(),
             sas_viewer: None,
             control_viewer: None,
+            mutes: MuteVotes::default(),
             test_override: describe_override(bundle),
             features: Vec::new(),
             outbox: Outbox::new(w.started),
@@ -1822,7 +1976,7 @@ mod host {
         /// The feature whose [`FeatureRequest::Sas`] is outstanding, by name,
         /// and the viewer it was asked for. `sas_result` goes to that feature
         /// and to nothing else, and §5's `sas-result` to that viewer alone.
-        sas_pending: Option<(&'static str, String)>,
+        sas: SasSlot,
         /// The controller whose `sas` passed the gate last. Recorded at the
         /// gate, not taken from `control_viewer`: the feature raises its
         /// request a turn later, after anyone's swoop-control traffic.
@@ -1832,10 +1986,11 @@ mod host {
         /// this is how a [`FeatureRequest`] raised from inside one — a
         /// `sas_request`, a clipboard audit row — names the viewer behind it.
         control_viewer: Option<String>,
+        /// Every viewer's own `mute`. The features are told the session's,
+        /// never one viewer's.
+        mutes: MuteVotes,
         /// The bundle's test-only `overrides`, named on every `status`. Always
-        /// `None` on a release build, and on a `testhooks` build until the
-        /// override backends exist (Tasks 7.2 and 8.7) — `drive` refuses a
-        /// bundle that names one until then, so the session never starts.
+        /// `None` on a release build, which refuses a bundle carrying one.
         test_override: Option<String>,
         features: Vec<Box<dyn Feature>>,
         /// What the features produced this turn, bounded and paced so a
@@ -2186,7 +2341,7 @@ mod host {
         }
 
         fn on_admitted(&mut self, viewer: String, ctl: bool) {
-            let present: Vec<String> = self.viewers.iter().map(|v| v.id.clone()).collect();
+            let present = self.viewer_ids();
             match super::on_join(&viewer, &present, self.encoder_budget) {
                 // A re-offer after an ice restart is admitted again by the room
                 // and is not a second viewer.
@@ -2213,6 +2368,7 @@ mod host {
             // no setter for one — only `Roster::verify` over a verified token.
             self.roster.join(&viewer);
             self.viewers.push(Viewer::new(viewer.clone(), auto_bitrate_bps(self.source)));
+            self.settle_mute();
             let ready = self.client.host_ready(Some(&viewer));
             self.send(&ready);
             self.publish_roster();
@@ -2388,7 +2544,7 @@ mod host {
                 .as_mut()
                 .expect("just bound")
                 .dtls_fingerprint();
-            if let Err(e) = self.client.set_host_fingerprint(&fingerprint) {
+            if let Err(e) = self.client.set_host_fingerprint(&viewer, &fingerprint) {
                 ::log::error!("swoop: local dtls fingerprint unusable: {e}");
                 return false;
             }
@@ -2421,6 +2577,7 @@ mod host {
             }
             self.roster.leave(viewer);
             self.denials.forget(viewer);
+            self.settle_mute();
             // A feature's next request must not be attributed to the viewer that
             // just left.
             if self.control_viewer.as_deref() == Some(viewer) {
@@ -2735,8 +2892,9 @@ mod host {
                 if changed {
                     header.flags |= flags::RESOLUTION_CHANGED;
                 }
-                // Sets IRAP on any frame-id gap: a gap without it *is* the
-                // dangling reference §4 forbids.
+                // Never IRAP on a frame-id gap: §4 has the receiver drop to the
+                // next recovery point, and a delta stamped IRAP is a chunk whose
+                // references the decoder never had.
                 v.sequencer.prepare(&mut header);
                 let record = header.encode();
                 if let Some(peer) = v.peer.as_mut() {
@@ -2897,7 +3055,7 @@ mod host {
                 }
                 IceAction::GiveUp => {
                     ::log::info!(
-                        "swoop: viewer {viewer} ice down for {} s, dropping it",
+                        "swoop: viewer {viewer} without a working ice pair for {} s, dropping it",
                         DISCONNECTED_LIMIT.as_secs()
                     );
                     let effects = self.client.end_viewer(viewer, LeftReason::Timeout);
@@ -2998,30 +3156,29 @@ mod host {
                 }
             }
             for (name, request) in asked {
-                self.on_request(name, request);
+                self.on_request(name, request, now);
             }
         }
 
         /// One [`FeatureRequest`], acted on by the only thread that holds the
         /// worker channels. Every hand-off is a `try_send`: a capture thread
         /// inside a ten-second re-duplication must never hold the loop up.
-        fn on_request(&mut self, feature: &'static str, request: FeatureRequest) {
+        fn on_request(&mut self, feature: &'static str, request: FeatureRequest, now: Instant) {
             match request {
                 FeatureRequest::Sas => {
                     // §6's `sas_request` names a viewer, and there is no
                     // ctrl+alt+del without a controller still here to have
-                    // asked for it. One in flight: the service answers in
-                    // order, so a second would take the first one's answer.
+                    // asked for it.
                     let asker = self.sas_viewer.take().filter(|viewer| {
                         self.is_viewer(viewer) && self.roster.control_granted(viewer)
                     });
-                    let (Some(viewer), None) = (asker, &self.sas_pending) else {
+                    let Some(viewer) = asker.filter(|viewer| self.sas.ask(feature, viewer, now))
+                    else {
                         // answered, so the feature is not left waiting on a
                         // request that was never sent
                         self.route_sas_result(feature, false);
                         return;
                     };
-                    self.sas_pending = Some((feature, viewer.clone()));
                     let event = Event::SasRequest {
                         sid: self.sid.clone(),
                         viewer,
@@ -3060,7 +3217,7 @@ mod host {
         /// The service's answer to a `sas_request`, routed to the feature that
         /// asked and to nothing else.
         fn on_sas_result(&mut self, ok: bool) {
-            let Some((name, viewer)) = self.sas_pending.take() else {
+            let Some((name, viewer)) = self.sas.answer() else {
                 ::log::warn!("swoop: unexpected sas_result ok={ok}");
                 return;
             };
@@ -3090,6 +3247,10 @@ mod host {
             if channel == Channel::SwoopControl {
                 self.control_viewer = Some(viewer.to_owned());
             }
+            self.offer(channel, ctl, data);
+        }
+
+        fn offer(&mut self, channel: Channel, ctl: bool, data: &[u8]) {
             for feature in self.features.iter_mut() {
                 if let Err(e) = feature.on_message(channel, ctl, data) {
                     ::log::warn!(
@@ -3097,6 +3258,28 @@ mod host {
                         feature.name()
                     );
                 }
+            }
+        }
+
+        /// The session's `mute`, as the one `audio` reads. Nobody's message,
+        /// so no viewer is named and nothing gated rides on it.
+        fn tell_features_mute(&mut self, on: bool) {
+            match serde_json::to_vec(&ControlMessage::Mute { on }) {
+                Ok(payload) => self.offer(Channel::SwoopControl, false, &payload),
+                Err(e) => ::log::error!("swoop: could not encode mute: {e}"),
+            }
+        }
+
+        fn viewer_ids(&self) -> Vec<String> {
+            self.viewers.iter().map(|v| v.id.clone()).collect()
+        }
+
+        /// After a join or a departure: a viewer that left takes its `mute`
+        /// with it, and a newcomer's page starts muted.
+        fn settle_mute(&mut self) {
+            let present = self.viewer_ids();
+            if let Some(quiet) = self.mutes.settle(&present) {
+                self.tell_features_mute(quiet);
             }
         }
 
@@ -3231,35 +3414,46 @@ mod host {
         }
 
         fn on_channel_data(&mut self, viewer: &str, ch: Channel, binary: bool, data: &[u8]) {
-            match ch {
+            let to_features = match ch {
                 Channel::SwoopControl if !binary => self.on_control(viewer, data),
-                Channel::SwoopInput if !binary => self.on_input(viewer, data),
-                Channel::SwoopFeedback if !binary => self.on_feedback(viewer, data),
+                Channel::SwoopInput if !binary => {
+                    self.on_input(viewer, data);
+                    true
+                }
+                Channel::SwoopFeedback if !binary => {
+                    self.on_feedback(viewer, data);
+                    true
+                }
                 // Host → viewer channels, and §3's channels are text.
                 _ => {
                     ::log::warn!("swoop: unexpected data on {ch:?} (binary {binary})");
                     return;
                 }
+            };
+            if to_features {
+                self.offer_to_features(viewer, ch, data);
             }
-            self.offer_to_features(viewer, ch, data);
         }
 
-        fn on_control(&mut self, viewer: &str, data: &[u8]) {
+        /// `false` when the features must not be offered this payload as it
+        /// came: a `mute`, which reaches them as the session's own, and any
+        /// control message from a viewer the session no longer holds.
+        fn on_control(&mut self, viewer: &str, data: &[u8]) -> bool {
             let Ok(message) = serde_json::from_slice::<ControlMessage>(data) else {
                 // Not a malformation: §5 shares this channel with the
                 // clipboard, so a payload the control codec refuses is the
                 // expected shape of a clip frame. `offer_to_features` still
                 // gets it.
                 ::log::debug!("swoop: a swoop-control payload is not a control message");
-                return;
+                return true;
             };
             if !self.is_viewer(viewer) {
-                return;
+                return false;
             }
             // The roster's verdict, from the token this host verified itself.
             if message.requires_control() && !self.roster.control_granted(viewer) {
                 self.deny(viewer, "gated_control");
-                return;
+                return true;
             }
             match message {
                 // §8's viewer token has no field on `offer`, so both ends put
@@ -3336,7 +3530,7 @@ mod host {
                         auto_bitrate_bps(self.source),
                     );
                     let Some(v) = self.viewer_mut(viewer) else {
-                        return;
+                        return true;
                     };
                     v.governor.set_ceiling(ceiling);
                     let target = v.governor.target_bps();
@@ -3355,7 +3549,15 @@ mod host {
                 ControlMessage::Display { index } => {
                     ::log::info!("swoop: display {index} requested (task 6.4)")
                 }
-                ControlMessage::Mute { .. } => {}
+                // This viewer's own: the machine stays audible while another
+                // viewer in the session is listening.
+                ControlMessage::Mute { on } => {
+                    let present = self.viewer_ids();
+                    if let Some(quiet) = self.mutes.vote(viewer, on, &present) {
+                        self.tell_features_mute(quiet);
+                    }
+                    return false;
+                }
                 // Host → viewer types, which a viewer may not send.
                 ControlMessage::HelloHost { .. }
                 | ControlMessage::SasResult { .. }
@@ -3364,6 +3566,7 @@ mod host {
                     ::log::warn!("swoop: viewer sent a host-only control message")
                 }
             }
+            true
         }
 
         /// One §5 input message from one viewer.
@@ -3993,7 +4196,8 @@ mod host {
         /// once; every later open reports a change or says nothing.
         reported: Option<(u32, u32)>,
         /// Which backend the last encoder opened on, so a rebuild that lands on
-        /// the same one is not re-reported to the session.
+        /// the same one is not re-reported to the session. It also decides
+        /// whether the floor refines, for every tier of the pass.
         backend: Option<&'static str>,
     }
 
@@ -4008,7 +4212,8 @@ mod host {
         /// belongs to the size it was opened for.
         scaler: Option<Downscaler>,
         force_irap: bool,
-        /// When this tier's encoder was last handed anything, for the floor.
+        /// When this tier's encoder was last handed anything, and when the
+        /// screen last moved, for the floor and its refinement.
         floor: FloorTimer,
         /// Its rung's frame rate, over the fresh frames.
         gate: RateGate,
@@ -4080,6 +4285,16 @@ mod host {
             }
         }
         *tiers = next;
+    }
+
+    /// Tell every open encoder how many tiers the pass encodes. They encode one
+    /// after another, so each gated encoder judges its share of the pass's
+    /// encode-time budget; a tier with no encoder yet is told when it opens.
+    fn share_among(tiers: &mut [TierPass]) {
+        let count = tiers.len();
+        for encoder in tiers.iter_mut().filter_map(|tier| tier.encoder.as_mut()) {
+            encoder.share_encode_time(count);
+        }
     }
 
     enum Pass {
@@ -4170,6 +4385,7 @@ mod host {
                     Ok(ToCapture::Tiers(wanted)) => {
                         ctx.wanted = wanted;
                         apply_tiers(&mut tiers, &ctx.wanted, Instant::now());
+                        share_among(&mut tiers);
                     }
                     Ok(ToCapture::Idr(codec)) => {
                         if let Some(tier) = tiers.iter_mut().find(|t| t.want.codec == codec) {
@@ -4304,15 +4520,14 @@ mod host {
             };
 
             let mut rebuilt = false;
+            let count = tiers.len();
+            let refine = ctx.backend == Some("nvenc");
             for tier in tiers.iter_mut() {
-                if fresh {
-                    // The ladder's frame-rate rung, and the only place it can be
-                    // enforced: a CBR encoder handed every frame just spends the
-                    // same budget on all of them.
-                    if !tier.gate.admit(now, frame_interval(tier.want.fps)) {
-                        continue;
-                    }
-                } else if !tier.floor.due(now) {
+                // the ladder's frame-rate rung is enforced here, and only here:
+                // a CBR encoder handed every frame just spends the same budget
+                // on all of them
+                let interval = frame_interval(tier.want.fps);
+                if !feeds(&mut tier.floor, &mut tier.gate, fresh, now, interval, refine) {
                     continue;
                 }
 
@@ -4374,6 +4589,7 @@ mod host {
                             let tx = ctx.tx.clone();
                             let drops = Arc::clone(&ctx.drops);
                             created.set_sink(Box::new(move |frame| hand_over(&tx, &drops, frame)));
+                            created.share_encode_time(count);
                             tier.encoder = Some(created);
                             tier.unproven = Some(backend);
                             if ctx.backend != Some(backend) {
@@ -4741,6 +4957,8 @@ mod host {
 
     #[cfg(test)]
     mod tests {
+        use std::sync::Mutex;
+
         use super::*;
 
         const OFFER_WITH_CANDIDATES: &str = "v=0\r\n\
@@ -5257,6 +5475,409 @@ mod host {
             assert!(resumed >= 1, "the resume did not re-open the duplication");
         }
 
+        /// Swoop-clarity task 3.3 on the real capture thread: a picture that
+        /// stops moving is repeated at its rung's rate for half a second on
+        /// NVENC, and only at the floor on any other backend (mf-sw here).
+        ///
+        /// **Do not touch the mouse or keyboard while it runs**, and leave the
+        /// rest of the primary display still: anything else that repaints there
+        /// is a fresh frame (a spinner counts, even under the popup), and the
+        /// test refuses to judge a screen that sent more than 2 frames in 350 ms
+        /// before the popup moved.
+        ///
+        /// ```text
+        /// cd agent/swoop
+        /// cargo test --lib session::host::tests::a_still_screen_refines -- --ignored --nocapture
+        /// ```
+        ///
+        /// Expected on the dev box: `swoop refine: in 350 ms of a still screen
+        /// nvenc sent A frames and mf-sw B; 100 to 450 ms after the last paint,
+        /// N and M` with A and B ≤ 2, N ≥ 10 and M ≤ 2.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "paints a window on this box's real desktop, captures it and opens its encoder"]
+        fn a_still_screen_refines_after_motion() {
+            // nvenc first: on the dev box an nvenc session opened after this
+            // process probed the media foundation rungs fails
+            // NV_ENC_ERR_INVALID_VERSION
+            let probed = select::probe_chain();
+            let mut soft = probed.clone();
+            let (on, on_still, refined) = frames_after_motion(probed);
+            while !soft.iter().any(|caps| caps.backend == "mf-sw") && select::probe_further(&mut soft) {}
+            let soft: Vec<BackendCaps> = soft.into_iter().filter(|caps| caps.backend == "mf-sw").collect();
+            let (off, off_still, floored) = frames_after_motion(soft);
+            println!(
+                "swoop refine: in 350 ms of a still screen {} sent {on_still} frames and {} {off_still}; \
+                 100 to 450 ms after the last paint, {refined} and {floored}",
+                on.unwrap_or("nothing"),
+                off.unwrap_or("nothing")
+            );
+            assert_eq!(on, Some("nvenc"), "the probed chain did not encode on nvenc");
+            assert_eq!(off, Some("mf-sw"), "the filtered chain did not encode on mf-sw");
+            // a display that repaints on its own feeds fresh frames all along,
+            // and the counts below would pass or fail for the wrong reason
+            assert!(
+                on_still <= 2 && off_still <= 2,
+                "the primary display is not still: something on it repaints on its own"
+            );
+            assert!(refined >= 10, "nvenc did not repeat the still picture at its rung");
+            assert!(floored <= 2, "mf-sw repeated a still picture faster than the floor");
+        }
+
+        /// One capture thread on the primary display over `backends`, with a
+        /// popup on it: left still, then painted white and black in turn every
+        /// 16 ms for a second, then still again. The backend the thread
+        /// reported, and how many encoded frames arrived in 350 ms of the first
+        /// stillness and between 100 and 450 ms after the last paint.
+        #[cfg(windows)]
+        fn frames_after_motion(backends: Vec<BackendCaps>) -> (Option<&'static str>, usize, usize) {
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
+            let output = primary(&outputs).clone();
+            let caps = select::codec_caps(&backends);
+            assert!(!caps.is_empty(), "no encoder backend in {backends:?}");
+            let codec = caps[0].codec;
+            let limits = limits_for(&caps, codec).expect("the codec it just reported");
+
+            let clock = HostClock::new(
+                platform::clock::hz().expect("a host clock"),
+                crate::bundle::TimeAnchor::new(0),
+                0,
+            );
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = bounded::<FromWorker>(WORKER_QUEUE);
+            let (capture_tx, capture_rx) = bounded::<ToCapture>(8);
+            let handle = {
+                let stop = Arc::clone(&stop);
+                thread::spawn(move || {
+                    capture_thread(output, backends, clock, tx, capture_rx, stop, Arc::default())
+                })
+            };
+            let source = match rx.recv_timeout(CAPTURE_OPEN_TIMEOUT) {
+                Ok(FromWorker::Opened { width, height }) => (width, height),
+                _ => {
+                    stop.store(true, Ordering::Relaxed);
+                    panic!("capture did not open within {CAPTURE_OPEN_TIMEOUT:?}");
+                }
+            };
+            let encoded = match scale::plan(source, limits) {
+                Plan::AsIs => source,
+                Plan::Downscale { width, height } => (width, height),
+                Plan::Refuse => panic!("{source:?} has no legal encode size"),
+            };
+            capture_tx
+                .send(ToCapture::Tiers(vec![one_tier(codec, encoded)]))
+                .expect("the capture thread is running");
+
+            // the primary display's top-left is the desktop's origin
+            let popup = Popup::open(100, 100);
+            let mut backend = None;
+            // the encoder opens, and anything the popup's arrival started ends
+            arrivals(&rx, Instant::now() + Duration::from_secs(1), &mut backend);
+            let still = arrivals(&rx, Instant::now() + Duration::from_millis(350), &mut backend).len();
+            let moving = Instant::now() + Duration::from_secs(1);
+            let mut white = false;
+            let painted = loop {
+                white = !white;
+                popup.paint(white);
+                let painted = Instant::now();
+                arrivals(&rx, painted + Duration::from_millis(16), &mut backend);
+                if Instant::now() >= moving {
+                    break painted;
+                }
+            };
+            let seen = arrivals(&rx, painted + Duration::from_millis(600), &mut backend);
+            drop(popup);
+
+            stop.store(true, Ordering::Relaxed);
+            let _ = capture_tx.send(ToCapture::Stop);
+            let _ = handle.join();
+
+            let counted = (painted + Duration::from_millis(100))..=(painted + Duration::from_millis(450));
+            (backend, still, seen.iter().filter(|at| counted.contains(at)).count())
+        }
+
+        /// When each encoded frame arrived before `until`, noting the backend
+        /// if the capture thread reports one meanwhile.
+        #[cfg(windows)]
+        fn arrivals(rx: &Receiver<FromWorker>, until: Instant, backend: &mut Option<&'static str>) -> Vec<Instant> {
+            let mut seen = Vec::new();
+            while let Some(left) = until.checked_duration_since(Instant::now()) {
+                match rx.recv_timeout(left) {
+                    Ok(FromWorker::Frame(_)) => seen.push(Instant::now()),
+                    Ok(FromWorker::Backend(name)) => *backend = Some(name),
+                    Ok(FromWorker::Failed(exit)) => panic!("capture failed: {}", exit.code()),
+                    Ok(_) => {}
+                    Err(_) => break,
+                }
+            }
+            seen
+        }
+
+        /// A topmost 200x200 popup the test paints, closed when it drops. A
+        /// system `STATIC` window, so there is no class to register, shown
+        /// without taking the focus.
+        #[cfg(windows)]
+        struct Popup(windows::Win32::Foundation::HWND);
+
+        #[cfg(windows)]
+        impl Popup {
+            const SIZE: i32 = 200;
+
+            fn open(x: i32, y: i32) -> Self {
+                use windows::core::w;
+                use windows::Win32::UI::WindowsAndMessaging::{
+                    CreateWindowExW, ShowWindow, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+                    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+                };
+
+                let hwnd = unsafe {
+                    CreateWindowExW(
+                        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                        w!("STATIC"),
+                        w!(""),
+                        WS_POPUP,
+                        x,
+                        y,
+                        Self::SIZE,
+                        Self::SIZE,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                }
+                .expect("a popup on this desktop");
+                let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+                Self(hwnd)
+            }
+
+            /// Fill it white or black, after the messages it is owed.
+            fn paint(&self, white: bool) {
+                use windows::Win32::Foundation::{COLORREF, RECT};
+                use windows::Win32::Graphics::Gdi::{
+                    CreateSolidBrush, DeleteObject, FillRect, GdiFlush, GetDC, ReleaseDC,
+                };
+                use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, MSG, PM_REMOVE};
+
+                let area = RECT {
+                    left: 0,
+                    top: 0,
+                    right: Self::SIZE,
+                    bottom: Self::SIZE,
+                };
+                unsafe {
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                        DispatchMessageW(&msg);
+                    }
+                    let dc = GetDC(Some(self.0));
+                    let brush = CreateSolidBrush(COLORREF(if white { 0x00ff_ffff } else { 0 }));
+                    FillRect(dc, &area, brush);
+                    let _ = DeleteObject(brush.into());
+                    let _ = GdiFlush();
+                    ReleaseDC(Some(self.0), dc);
+                }
+            }
+        }
+
+        #[cfg(windows)]
+        impl Drop for Popup {
+            fn drop(&mut self) {
+                let _ = unsafe { windows::Win32::UI::WindowsAndMessaging::DestroyWindow(self.0) };
+            }
+        }
+
+        /// Every attached output that is rotated. With none, a rotation test
+        /// would pass having proved nothing, so it fails and says what is owed.
+        #[cfg(windows)]
+        fn rotated_outputs(proof: &str) -> Vec<OutputInfo> {
+            let outputs = platform::enumerate_outputs().expect("the platform enumerates its outputs");
+            let rotated: Vec<OutputInfo> = outputs
+                .iter()
+                .filter(|output| output.rotation != crate::capture::Rotation::Identity)
+                .cloned()
+                .collect();
+            if rotated.is_empty() {
+                let attached: Vec<String> = outputs
+                    .iter()
+                    .map(|output| format!("{} {:?}", output.device_name, output.rotation))
+                    .collect();
+                panic!(
+                    "skipped: no rotated output is attached ({}), so {proof} is owed",
+                    attached.join(", ")
+                );
+            }
+            rotated
+        }
+
+        /// A rotated display streams upright: on every rotated output, the
+        /// frame the capture pass hands its encoder is the desktop rect's
+        /// size, and a popup at the desktop's top-left is at the frame's
+        /// top-left, painted white and then black. Leave that corner alone
+        /// while it runs.
+        ///
+        /// ```text
+        /// cd agent/swoop
+        /// cargo test -- --ignored rotat --test-threads=1 --nocapture
+        /// ```
+        ///
+        /// Expected on TEC-A4D, whose DISPLAY2 is rotate270: `swoop rotation:
+        /// \\.\DISPLAY2 Rotate270, frame 2160x3840, fed 2160x3840, the popup at
+        /// its top-left`. With no rotated output it fails with `skipped: ...`.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "paints a window on this box's rotated display and captures it"]
+        fn a_rotated_display_streams_upright() {
+            use windows::core::Interface;
+            use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+
+            use crate::capture::Duplication;
+            use crate::gpu::scale::Readback;
+
+            for output in rotated_outputs("the upright frame's proof") {
+                let rect = output.desktop_rect;
+                let (width, height) = (rect.width() as u32, rect.height() as u32);
+                // before the duplication: it moves this thread onto the input
+                // desktop without the right to create windows
+                let popup = Popup::open(rect.left, rect.top);
+                let mut source = Duplication::open(&output, RebuildSignal::new())
+                    .unwrap_or_else(|e| panic!("duplicate {}: {e:#}", output.device_name));
+                let mut scaler: Option<Downscaler> = None;
+                let mut fed_size = (0, 0);
+                for white in [true, false] {
+                    popup.paint(white);
+                    let deadline = Instant::now() + Duration::from_secs(3);
+                    loop {
+                        assert!(
+                            Instant::now() < deadline,
+                            "{}: the popup at the desktop's top-left never reached the frame's",
+                            output.device_name
+                        );
+                        let Some(frame) = source.next_frame(ACQUIRE_TIMEOUT_MS).expect("acquire") else {
+                            continue;
+                        };
+                        assert_eq!(
+                            (frame.width, frame.height),
+                            (width, height),
+                            "{} {:?}: the frame is not the desktop rect's size",
+                            output.device_name,
+                            output.rotation
+                        );
+                        // the capture pass's own step: a tier over h.264's
+                        // ceiling is fed through its scaler
+                        let fed = match scale::plan((width, height), crate::displays::policy::ceiling(Codec::H264)) {
+                            Plan::AsIs => frame,
+                            Plan::Downscale { width, height } => scaler
+                                .get_or_insert_with(|| Downscaler::open(&frame, width, height).expect("a scaler"))
+                                .scale(&frame)
+                                .expect("a scaled frame"),
+                            Plan::Refuse => panic!("{width}x{height} has no legal encode size"),
+                        };
+                        fed_size = (fed.width, fed.height);
+                        let raw = fed.handle as *mut std::ffi::c_void;
+                        // SAFETY: borrowed from the source or the scaler, both alive.
+                        let texture = unsafe { ID3D11Texture2D::from_raw_borrowed(&raw) }.expect("the fed texture");
+                        let device = unsafe { texture.GetDevice() }.expect("its device");
+                        // the popup's middle, where the fed frame has it
+                        let half = (Popup::SIZE / 2) as u32;
+                        let (x, y) = (half * fed.width / width, half * fed.height / height);
+                        let pixel = Readback::bgra(&device, fed.width, fed.height)
+                            .expect("a readback")
+                            .read(texture, |pixels, pitch| {
+                                let at = y as usize * pitch + x as usize * 4;
+                                [pixels[at], pixels[at + 1], pixels[at + 2]]
+                            })
+                            .expect("the fed frame's pixels");
+                        let painted = if white { pixel.iter().all(|&c| c >= 250) } else { pixel.iter().all(|&c| c <= 5) };
+                        if painted {
+                            break;
+                        }
+                    }
+                }
+                println!(
+                    "swoop rotation: {} {:?}, frame {width}x{height}, fed {}x{}, the popup at its top-left",
+                    output.device_name, output.rotation, fed_size.0, fed_size.1
+                );
+            }
+        }
+
+        /// A tap on a rotated display lands where it was tapped: a pointer move
+        /// at a viewer point, sent through the session's input thread with the
+        /// pointer space the session builds for that output, puts the system
+        /// pointer at that point of the desktop rect. The pointer is put back
+        /// where it was, pass or fail.
+        ///
+        /// Expected on TEC-A4D: `swoop rotation: \\.\DISPLAY2 Rotate270, (0.25,
+        /// 0.75) -> (-1620, 1741)` and `(0.9, 0.1) -> (-217, -754)`. With no
+        /// rotated output it fails with `skipped: ...`.
+        #[cfg(windows)]
+        #[test]
+        #[ignore = "moves the real mouse pointer on this box's rotated display"]
+        fn a_tap_on_a_rotated_display_lands_where_it_was_tapped() {
+            use windows::Win32::Foundation::POINT;
+            use windows::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos};
+
+            struct PutBack(POINT);
+            impl Drop for PutBack {
+                fn drop(&mut self) {
+                    let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+                }
+            }
+
+            let outputs = rotated_outputs("the tap's proof");
+            let mut was = POINT::default();
+            unsafe { GetCursorPos(&mut was) }.expect("the pointer's position");
+            let _put_back = PutBack(was);
+
+            for output in outputs {
+                let rect = output.desktop_rect;
+                let stop = Arc::new(AtomicBool::new(false));
+                let (tx, _rx) = bounded::<FromWorker>(WORKER_QUEUE);
+                let (input_tx, input_rx) = bounded::<ToInput>(8);
+                let handle = {
+                    let stop = Arc::clone(&stop);
+                    let space = PointerSpace::from_output(&output);
+                    thread::spawn(move || input_thread(space, tx, input_rx, stop))
+                };
+                for (x, y) in [(0.25f32, 0.75f32), (0.9, 0.1)] {
+                    input_tx
+                        .send(ToInput::Inject(vec![InputEvent::MouseMove { x, y }]))
+                        .expect("the input thread is running");
+                    // the picture is the desktop as displayed, so a viewer
+                    // point is that point of the desktop rect
+                    let want = (
+                        rect.left + (f64::from(x) * f64::from(rect.width() - 1)).round() as i32,
+                        rect.top + (f64::from(y) * f64::from(rect.height() - 1)).round() as i32,
+                    );
+                    let deadline = Instant::now() + Duration::from_secs(1);
+                    let mut at = POINT::default();
+                    loop {
+                        unsafe { GetCursorPos(&mut at) }.expect("the pointer's position");
+                        // one pixel of slack: SendInput rounds through 0..65535
+                        if (at.x - want.0).abs() <= 1 && (at.y - want.1).abs() <= 1 {
+                            break;
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "{} {:?}: ({x}, {y}) put the pointer at ({}, {}), not {want:?}",
+                            output.device_name,
+                            output.rotation,
+                            at.x,
+                            at.y
+                        );
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    println!(
+                        "swoop rotation: {} {:?}, ({x}, {y}) -> ({}, {})",
+                        output.device_name, output.rotation, at.x, at.y
+                    );
+                }
+                stop.store(true, Ordering::Relaxed);
+                let _ = input_tx.send(ToInput::Stop);
+                let _ = handle.join();
+            }
+        }
+
         // linux has no chain yet, so nothing to override
         #[cfg(all(feature = "testhooks", any(windows, target_os = "macos")))]
         #[test]
@@ -5311,6 +5932,61 @@ mod host {
                 vec![floor]
             );
             assert_eq!(overridden_caps(probed.clone(), None).len(), probed.len());
+        }
+
+        /// An encoder that only remembers the tier counts it is told.
+        struct Told(Arc<Mutex<Vec<usize>>>);
+
+        impl Encoder for Told {
+            fn encode(&mut self, _frame: &Frame, _force_irap: bool) -> anyhow::Result<Option<EncodedFrame>> {
+                Ok(None)
+            }
+
+            fn set_bitrate(&mut self, _bitrate_bps: u32) -> anyhow::Result<()> {
+                Ok(())
+            }
+
+            fn share_encode_time(&mut self, tiers: usize) {
+                self.0.lock().expect("the record").push(tiers);
+            }
+        }
+
+        /// The pass encodes its tiers one after another, so an H.264 and an
+        /// HEVC viewer watching at once halve each encoder's share of the
+        /// encode-time budget.
+        #[test]
+        fn every_open_encoder_is_told_its_share_of_the_pass() {
+            let want = |codec| TierEncode {
+                codec,
+                width: 1920,
+                height: 1080,
+                bitrate_bps: 20_000_000,
+                fps: 60,
+            };
+            let told = |record: &Arc<Mutex<Vec<usize>>>| record.lock().expect("the record").clone();
+            let now = Instant::now();
+            let mut tiers = Vec::new();
+            apply_tiers(&mut tiers, &[want(Codec::H264)], now);
+            let h264 = Arc::new(Mutex::new(Vec::new()));
+            tiers[0].encoder = Some(Box::new(Told(Arc::clone(&h264))));
+
+            apply_tiers(&mut tiers, &[want(Codec::H264), want(Codec::H265)], now);
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2]);
+            // the new hevc tier has no encoder yet: it is skipped here and told
+            // when the pass opens one
+            assert!(tiers[1].encoder.is_none());
+
+            let h265 = Arc::new(Mutex::new(Vec::new()));
+            tiers[1].encoder = Some(Box::new(Told(Arc::clone(&h265))));
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2, 2]);
+            assert_eq!(told(&h265), vec![2]);
+
+            apply_tiers(&mut tiers, &[want(Codec::H264)], now);
+            share_among(&mut tiers);
+            assert_eq!(told(&h264), vec![2, 2, 1]);
+            assert_eq!(told(&h265), vec![2], "a closed encoder is told nothing");
         }
     }
 }
@@ -5626,6 +6302,168 @@ mod tests {
         assert!(floor.due(now + FLOOR_INTERVAL));
     }
 
+    const RUNG_60: Duration = Duration::from_micros(1_000_000 / 60);
+    const RUNG_30: Duration = Duration::from_micros(1_000_000 / 30);
+
+    /// Fresh frames every `period_us` for `count` frames, from the start.
+    fn every(period_us: u64, count: u64) -> Vec<Duration> {
+        (0..count).map(|k| Duration::from_micros(k * period_us)).collect()
+    }
+
+    /// One tier of the capture loop over a script, through [`feeds`]: the loop
+    /// wakes at each fresh frame and every millisecond between, until `end`.
+    /// The real loop wakes every 8 ms plus its encode, so its repeats land on
+    /// the first wake after each interval; this grain is the logic's own. The
+    /// fresh frames the encoder was handed, and the repeats, as offsets from
+    /// the start.
+    fn handed(
+        fresh: &[Duration],
+        end: Duration,
+        interval: Duration,
+        refine: bool,
+    ) -> (Vec<Duration>, Vec<Duration>) {
+        let t0 = Instant::now();
+        let mut floor = FloorTimer::new(t0);
+        let mut gate = RateGate::default();
+        let mut ticks: Vec<Duration> = (0..=end.as_millis() as u64)
+            .map(Duration::from_millis)
+            .chain(fresh.iter().copied())
+            .collect();
+        ticks.sort();
+        ticks.dedup();
+        let (mut frames, mut repeats) = (Vec::new(), Vec::new());
+        for at in ticks {
+            let is_fresh = fresh.binary_search(&at).is_ok();
+            if feeds(&mut floor, &mut gate, is_fresh, t0 + at, interval, refine) {
+                floor.fed(t0 + at);
+                if is_fresh {
+                    frames.push(at);
+                } else {
+                    repeats.push(at);
+                }
+            }
+        }
+        (frames, repeats)
+    }
+
+    /// The gaps between consecutive repeats, after the first.
+    fn gaps(repeats: &[Duration]) -> Vec<Duration> {
+        repeats.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    }
+
+    /// A scroll that stops is sharpened at the rung's rate for half a second
+    /// and then left to the floor; while it moves its own frames are enough.
+    #[test]
+    fn a_scroll_that_stops_is_repeated_at_its_rung_for_half_a_second_then_at_the_floor() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, Duration::from_millis(2_600), RUNG_60, true);
+        assert_eq!(frames, scroll, "a 60 Hz scroll on a 60 fps rung goes through whole");
+        assert!(repeats.iter().all(|at| *at > last), "a repeat while it scrolled");
+
+        let (refined, floor): (Vec<Duration>, Vec<Duration>) =
+            repeats.iter().copied().partition(|at| *at < last + REFINE_FOR);
+        let first = refined[0] - last;
+        assert!(
+            first >= QUIET_MIN && first < QUIET_MIN + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert!((26..=28).contains(&refined.len()), "{} refining repeats", refined.len());
+        for gap in gaps(&refined) {
+            assert!(gap >= RUNG_60 && gap <= RUNG_60 + Duration::from_millis(1), "a {gap:?} gap");
+        }
+        // then exactly today's floor, from the last refining repeat
+        let tail: Vec<Duration> = [*refined.last().expect("refined")].into_iter().chain(floor).collect();
+        assert_eq!(tail.len(), 3);
+        assert_eq!(gaps(&tail), vec![FLOOR_INTERVAL; 2]);
+    }
+
+    /// A 30 fps video on a 60 fps rung is coded from its own frames, never at
+    /// 60 on top of them, and still sharpens once it stops.
+    #[test]
+    fn a_slower_source_is_never_repeated_between_its_own_frames() {
+        let video = every(33_333, 30);
+        let last = *video.last().expect("a video");
+        let (frames, repeats) = handed(&video, last + REFINE_FOR, RUNG_60, true);
+        assert_eq!(frames, video);
+        assert!(repeats.iter().all(|at| *at >= last + QUIET_MIN), "a repeat between its frames");
+        assert!((26..=28).contains(&repeats.len()), "{} repeats once it stopped", repeats.len());
+    }
+
+    /// A clock or a blinking caret is never motion, so its picture keeps the
+    /// plain floor.
+    #[test]
+    fn a_frame_now_and_then_never_opens_the_window() {
+        let ticking = every(530_000, 6);
+        let end = Duration::from_secs(4);
+        let refined = handed(&ticking, end, RUNG_60, true);
+        assert_eq!(refined, handed(&ticking, end, RUNG_60, false));
+        assert!(gaps(&refined.1).iter().all(|gap| *gap >= FLOOR_INTERVAL));
+    }
+
+    /// A caret blinking while the scroll's window is open delays the next
+    /// repeat by the quiet, and the window still closes where the scroll put
+    /// it.
+    #[test]
+    fn a_lone_frame_in_the_window_restarts_the_quiet_and_never_extends_it() {
+        let mut script = every(16_667, 60);
+        let last = *script.last().expect("a scroll");
+        let caret = last + Duration::from_millis(200);
+        script.push(caret);
+        let (frames, repeats) = handed(&script, Duration::from_millis(2_000), RUNG_60, true);
+        assert_eq!(frames.last(), Some(&caret), "the caret is coded as it comes");
+
+        let after: Vec<Duration> = repeats.iter().copied().filter(|at| *at > caret).collect();
+        let resumed = after[0] - caret;
+        assert!(
+            resumed >= QUIET_MIN && resumed < QUIET_MIN + Duration::from_millis(1),
+            "the repeats resumed {resumed:?} after the caret"
+        );
+        let (refined, floor): (Vec<Duration>, Vec<Duration>) =
+            after.into_iter().partition(|at| *at < last + REFINE_FOR);
+        assert!(refined.len() >= 10, "only {} refining repeats after the caret", refined.len());
+        assert_eq!(
+            floor[0] - *refined.last().expect("refined"),
+            FLOOR_INTERVAL,
+            "the caret kept the window open past the scroll's half second"
+        );
+    }
+
+    /// On a 30 fps rung the quiet is two of its intervals and the repeats come
+    /// at its rate, and the gate still holds the scroll to 30.
+    #[test]
+    fn a_slower_rung_refines_at_its_own_rate() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, last + REFINE_FOR, RUNG_30, true);
+        assert!((29..=31).contains(&frames.len()), "the gate took {} of 60", frames.len());
+        let first = repeats[0] - last;
+        assert!(
+            first >= RUNG_30 * 2 && first < RUNG_30 * 2 + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert!((12..=14).contains(&repeats.len()), "{} refining repeats", repeats.len());
+        for gap in gaps(&repeats) {
+            assert!(gap >= RUNG_30 && gap <= RUNG_30 + Duration::from_millis(1), "a {gap:?} gap");
+        }
+    }
+
+    /// Every backend but NVENC keeps the floor as it was.
+    #[test]
+    fn without_refinement_a_scroll_that_stops_gets_only_the_floor() {
+        let scroll = every(16_667, 60);
+        let last = *scroll.last().expect("a scroll");
+        let (frames, repeats) = handed(&scroll, Duration::from_millis(2_600), RUNG_60, false);
+        assert_eq!(frames, scroll);
+        assert_eq!(repeats.len(), 3);
+        let first = repeats[0] - last;
+        assert!(
+            first >= FLOOR_INTERVAL && first < FLOOR_INTERVAL + Duration::from_millis(1),
+            "the first repeat came {first:?} after the scroll stopped"
+        );
+        assert_eq!(gaps(&repeats), vec![FLOOR_INTERVAL; 2]);
+    }
+
     /// Frames out, pings in and no `fb` back is a decoder that stopped
     /// presenting: reported once when it reaches the threshold, and once more
     /// when the feedback comes back.
@@ -5704,6 +6542,52 @@ mod tests {
         denials.forget("viewer_a");
         assert!(denials.note("viewer_a"));
         assert!(!denials.note("viewer_b"));
+    }
+
+    /// One viewer muting its own tab must not silence the machine for another
+    /// that is listening. The page starts muted and says so only on its first
+    /// toggle, so a viewer that never sent `mute` is not a listener to wait for.
+    #[test]
+    fn one_viewers_mute_does_not_silence_another_that_is_listening() {
+        let mut mutes = MuteVotes::default();
+        let two = ["viewer_a".to_owned(), "viewer_b".to_owned()];
+        // audible until the session's first `mute`, as before.
+        assert_eq!(mutes.settle(&two), None);
+        assert_eq!(mutes.vote("viewer_a", false, &two), None, "already audible");
+        assert_eq!(mutes.vote("viewer_b", false, &two), None);
+        assert_eq!(mutes.vote("viewer_b", true, &two), None, "a is still listening");
+        assert_eq!(mutes.vote("viewer_a", true, &two), Some(true));
+        assert_eq!(mutes.vote("viewer_b", false, &two), Some(false));
+        assert_eq!(mutes.vote("viewer_b", true, &two), Some(true));
+
+        // a newcomer's page starts muted, so it does not turn the audio back on
+        let three = [two[0].clone(), two[1].clone(), "viewer_c".to_owned()];
+        assert_eq!(mutes.settle(&three), None);
+        // until it un-mutes, and its departure takes that with it.
+        assert_eq!(mutes.vote("viewer_c", false, &three), Some(false));
+        assert_eq!(mutes.settle(&two), Some(true));
+
+        // a viewer that only watches never holds the machine audible.
+        assert_eq!(mutes.vote("viewer_a", false, &two), Some(false));
+        assert_eq!(mutes.vote("viewer_a", true, &two), Some(true));
+        assert_eq!(mutes.settle(&[]), None);
+    }
+
+    /// One ctrl+alt+del at a time, and an answer that never comes costs the
+    /// click that lost it, not every click after it for the rest of the session.
+    #[test]
+    fn a_lost_sas_answer_costs_one_click() {
+        let t0 = Instant::now();
+        let mut sas = SasSlot::default();
+        assert!(sas.ask("securedesk", "viewer_a", t0));
+        assert!(
+            !sas.ask("securedesk", "viewer_a", t0 + Duration::from_secs(1)),
+            "the first is still with the service"
+        );
+        // `securedesk` asks again once its own wait is over.
+        assert!(sas.ask("securedesk", "viewer_a", t0 + SasSlot::ANSWER_TIMEOUT));
+        assert_eq!(sas.answer(), Some(("securedesk", "viewer_a".to_owned())));
+        assert_eq!(sas.answer(), None, "one answer per request");
     }
 
     /// §6 keeps the process alive for the linger after the last viewer leaves,

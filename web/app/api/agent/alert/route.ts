@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL, ENV_LABEL } from '@/lib/resendClient.server';
 import {
   wrapEmailLayout,
@@ -34,9 +34,13 @@ import { sanitizeForLog } from '@/lib/logSanitize';
  * POST /api/agent/alert — agent-authenticated alert intake (connection
  * failures, process crash/start failures, display events).
  * Auth: `Authorization: Bearer <agent-firebase-id-token>`.
- * Rate limits: connection failures 5/hr per IP, process alerts 3/hr per
- * `machineId:processName`.
+ * Rate limits: 5/hr per IP for every event, plus 3/hr per
+ * `machineId:processName` for process alerts and one per `machineId:eventType`
+ * per hour (four hours for drift) for display events.
  */
+
+/** the `errorCode` the agent's reboot-pending check posts (`_check_and_alert_reboot_pending`). */
+const REBOOT_PENDING_NOTICE = 'reboot_pending';
 
 
 function buildAlertEmail(
@@ -392,6 +396,19 @@ export const POST = withRateLimit(
         return NextResponse.json({ success: true, queued: true });
       }
 
+      // before the email, which has two early exits below: a site that routes
+      // this alert to a webhook must hear about it with no email recipients.
+      // not for a reboot-pending notice, which rides this branch with no
+      // eventType: that machine is online and saying it has a restart pending,
+      // so it keeps its email and is no machine.offline.
+      if (errorCode !== REBOOT_PENDING_NOTICE) {
+        const siteDoc = await db.collection('sites').doc(siteId).get();
+        const siteName = siteDoc.data()?.name || siteId;
+        fireWebhooks(siteId, siteName, webhookEvent, {
+          machine: { id: machineId, name: machineId },
+        }).catch(console.error);
+      }
+
       // Connection failures email immediately.
       const resendClient = getResend();
       if (!resendClient) {
@@ -414,8 +431,8 @@ export const POST = withRateLimit(
       let emailsSent = 0;
 
       for (const recipient of recipients) {
-        // Honor per-machine mutes (mirrors the critical-display loop).
-        if (recipient.mutedMachines.includes(machineId)) continue;
+        // Honor per-machine mutes and machine scope (mirrors the critical-display loop).
+        if (!recipientWantsMachine(recipient, machineId)) continue;
         try {
           const unsubscribeUrl = recipient.userId !== 'fallback'
             ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`
@@ -442,12 +459,6 @@ export const POST = withRateLimit(
       }
 
       console.log(`[agent/alert] Alert sent for ${sanitizeForLog(machineId)} (${sanitizeForLog(siteId)}): ${sanitizeForLog(resolvedEventType)}, ${recipients.length} recipient(s)`);
-
-      const siteDoc = await db.collection('sites').doc(siteId).get();
-      const siteName = siteDoc.data()?.name || siteId;
-      fireWebhooks(siteId, siteName, webhookEvent, {
-        machine: { id: machineId, name: machineId },
-      }).catch(console.error);
 
       return NextResponse.json({ success: true, emailSent: emailsSent > 0, recipients: emailsSent });
     } catch (error: unknown) {
@@ -527,7 +538,7 @@ async function triggerAutonomousHoot(
  * Send one critical-path display alert inline, bypassing the digest cron —
  * `display_monitor_removed` / `display_auto_revert_fired` can't wait minutes.
  * Shares `buildDisplayDigestEmail` with the cron path so the layout is
- * identical, and honors `mutedMachines` + unsubscribe links the same way.
+ * identical, and honors mutes, machine scope and unsubscribe links the same way.
  * Returns the number of emails that actually sent.
  */
 async function sendCriticalDisplayEmailNow(params: {
@@ -570,8 +581,8 @@ async function sendCriticalDisplayEmailNow(params: {
   let emailsSent = 0;
   for (const recipient of recipients) {
     try {
-      // Critical-path bypass must not override the operator's mute.
-      if (recipient.mutedMachines.includes(machineId)) continue;
+      // Critical-path bypass must not override the operator's mute or machine scope.
+      if (!recipientWantsMachine(recipient, machineId)) continue;
 
       const unsubscribeUrl = recipient.userId !== 'fallback'
         ? `${baseUrl}/api/unsubscribe?token=${generateUnsubscribeToken(recipient.userId)}`

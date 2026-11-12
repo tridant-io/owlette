@@ -47,7 +47,7 @@ function CliAuthorizeInner() {
 
   async function handleAuthorize() {
     if (!code) {
-      toast.error('pairing phrase missing — re-run `roost auth login` in the cli');
+      toast.error('pairing phrase missing — re-run `owlette auth login` in the cli');
       return;
     }
     if (!name.trim()) {

@@ -10,7 +10,7 @@ the agent takes its work from two Firestore documents per machine. this page lis
 
 ## the queue
 
-each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member of the site can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
+each machine has two documents, `sites/{siteId}/machines/{machineId}/commands/pending` and `.../commands/completed`. both hold commands as top-level map fields keyed by command ID, not as subcollections. every member whose access covers the machine can read both; only the server and the machine's own agent write them (see the [data model](/docs/reference/firestore-data-model)).
 
 ```
 1. a writer merges one entry into commands/pending under a new command id
@@ -39,7 +39,7 @@ besides `type`, `status: "pending"` and the command's own fields, an entry carri
 
 ### lanes
 
-the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh` and `site_settings_refresh`.
+the **fast lane** runs each command on a thread of its own, at once: `mcp_tool_call`, `capture_screenshot`, `cancel_sync`, `cancel_mcp_tool`, `swoop_session_requested`, `swoop_kill`, `swoop_refresh`, `site_settings_refresh`, `unpair`, `check_path` and, from agent 4.2.0, `cancel_installation`: on the worker it waited behind the install it was meant to stop.
 
 everything else goes through **one worker**, one command at a time, so installs, updates and roost syncs never overlap. that includes process control and reboots: a `restart_process` queued behind an install waits for it. the worker's queue holds 50 commands; one that arrives to a full queue is failed with `Command queue full — too many pending installs`.
 
@@ -47,7 +47,7 @@ everything else goes through **one worker**, one command at a time, so installs,
 
 the agent refuses a second command of the same type for the same process within 5 seconds. the key is the type plus `process_id`, `processId` or `process_name`, so commands that name no process share one key per type. the refusal, `Error: rate limited - <type> executed too recently, try again in a few seconds`, is recorded as failed.
 
-exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types and `site_settings_refresh`. `cancel_mcp_tool` never reaches the check.
+exempt: `mcp_tool_call`, `ack_display_topology`, the three swoop types, `site_settings_refresh`, `check_path` and, from agent 4.2.0, `cancel_installation` and `install_software`: the worker already runs installs one at a time, and an install that ended inside five seconds, refused or cancelled, got the one queued behind it refused. `cancel_mcp_tool` never reaches the check.
 
 ### active hours
 
@@ -59,7 +59,7 @@ the refusal is a failed command:
 Error: active_hours: inside active hours 08:00–17:00 (machine time); they end at 17:00
 ```
 
-an install is refused before it closes any process. each refusal logs `active_hours_refused` to the site log, and it counts toward the rate limit above like any other run, so a retry with an override straight after a refusal waits 5 seconds.
+an install is refused before it closes any process. each refusal logs `active_hours_refused` to the site log. a refused reboot or shutdown counts toward the rate limit above like any other run, so a retry with an override straight after the refusal waits 5 seconds. an install is exempt from agent 4.2.0, so its retry runs at once; on an older agent it waits too.
 
 two ways through:
 
@@ -72,7 +72,7 @@ the agent writes the window it enforces to the machine document as `activeHours:
 
 ### completed, failed or cancelled
 
-a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. two exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel, and `cancel_mcp_tool` writes its target `cancelled` itself.
+a result is recorded as `failed`, in `error`, only when it is a string starting with `Error:`. anything else is `completed`, with the value in `result`: usually a string, a JSON string for `mcp_tool_call`, an object for `capture_screenshot`. three exceptions: `cancel_installation` is always recorded as `cancelled`, even when there was nothing to cancel or the installer had already launched; an `install_software` that a cancel stopped is recorded as `cancelled`, with the result `cancelled by user`; and `cancel_mcp_tool` writes its target `cancelled` itself.
 
 these come back `completed` although the command did not do its job, so check `result` as well as `status`:
 
@@ -90,10 +90,11 @@ an `mcp_tool_call` whose tool failed is `completed` too: the tool's own error, `
 
 - a `running` marker that survives a service restart is turned into `failed` with `interrupted by service restart`. the ID is already handled, so the command never runs twice
 - periodically the agent deletes pending entries whose `timestamp` is more than an hour old, and completed entries more than 24 hours old, by `completedAt`, `startedAt` or `timestamp`. an entry with no `timestamp`, such as every `sync_pull`, is never aged out of pending
+- `check_path` answers don't wait for that: only the newest 8 stay in `completed`, and the agent deletes older ones as it finishes each check. a folder listing can run to tens of KB, and when the document reaches Firestore's 1 MiB limit every terminal write on the machine fails
 
 ### progress
 
-while it works, a command merges partial records under its ID: `running` (with `startedAt` and `type`, before every command), then `closing_processes`, `downloading`, `installing` or `uninstalling` where they apply. a change of status always writes; repeats of one status are throttled. the record has room for a `progress` percentage, but no handler sets one today.
+while it works, a command merges partial records under its ID: `running` (with `startedAt` and `type`, before every command the agent starts; an install cancelled while it waited never starts, and goes straight to its `cancelled` record), then `downloading`, `closing_processes`, `installing` or `uninstalling` where they apply (an agent older than 4.2.0 writes `closing_processes` before `downloading`). a change of status always writes; repeats of one status are throttled. the record has room for a `progress` percentage, but no handler sets one today.
 
 a roost sync reports its progress to `sites/{siteId}/roosts/{roostId}/target_state/{machineId}` instead: `pending`, `downloading`, `assembling`, then `committed`, `failed` or `cancelled`.
 
@@ -150,6 +151,12 @@ every process command finds the configured process by ID or by name.
 | `toggle_autolaunch` | ID or name; `autolaunch` | legacy: sets `launch_mode` to `always` or `off`. nothing queues it any more | same |
 | `update_config` | `config` | overwrites `config.json` with `config`, keeping the local `firebase` section. nothing queues it any more | same |
 
+### checking a path
+
+`check_path` is read-only and names no process. it takes `field`, one of `exe_path`, `file_path`, `cwd` or `folder`, and `value`, up to 1,024 characters. the process editor queues it after a save changes a path, and its folder browser queues it with `field: "folder"` for each folder it opens. the agent reads the value the way the launchers do, under a 3-second limit, and answers a JSON string with `status` (`file`, `folder`, `missing` or `unknown`), `warning`, `path`, `rest` and `nearest`. `warning` is null, `missing`, `not_absolute`, `network`, `refused`, `folder`, `file` or `link`. a path it can't read is `unknown`, never `missing`, and a value starting with two slashes on Windows is refused without touching it.
+
+for `folder`, a folder that can be read also answers `parent`, `folders`, `files` and `truncated`: names only, with no sizes, dates or contents, capped at 200 entries and 16 KiB of names. an agent at 4.1.24 or older answers `Unknown command type: check_path`, and the dashboard says nothing. see [process management](/docs/dashboard/process-management).
+
 ---
 
 ## power
@@ -201,8 +208,8 @@ every agent reports `capabilities.displayRemoteApply: 1`, whatever its platform,
 
 | type | fields | what the agent does | macOS and Linux |
 |------|--------|---------------------|-----------------|
-| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects`; `activeHoursOverride` | refused inside [active hours](#active-hours) without an override, before anything is closed. otherwise closes `close_processes` and locks `suppress_projects`, downloads, refuses the file without a checksum or on a mismatch, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. fails when there is no console session | not supported: the agent closes the named processes, downloads and verifies, then fails with `No interactive user session available for installation…` |
-| `cancel_installation` | `installer_name`, `deployment_id` | kills the installer's process tree and deletes the download | nothing to cancel |
+| `install_software` | `installer_url`; `sha256_checksum` (required); `installer_name` (default `installer.exe`); `silent_flags`; `verify_path` (taken from `/DIR=` in the flags when absent); `timeout_seconds` (default 2400); `deployment_id`; `parallel_install`; `close_processes`; `suppress_projects`; `activeHoursOverride` | refused inside [active hours](#active-hours) without an override, or without a checksum, before anything is downloaded or closed. otherwise downloads, refuses the file on a checksum mismatch, fails when there is no console session, and only then closes `close_processes` and keeps them and `suppress_projects` from relaunching until the install ends, runs the installer elevated on the console user's desktop (a copy of the service's SYSTEM token placed in that session), then checks `verify_path`. `parallel_install` hides the product's registry keys during the install so the installer cannot remove older builds. an agent older than 4.2.0 closes first, before the download, and holds down only `suppress_projects` | not supported: the agent downloads and verifies, then fails with `No interactive user session available for installation…`, and closes nothing. an agent older than 4.2.0 closes the named processes first |
+| `cancel_installation` | `deployment_id`, or `installer_name` alone | stops the `install_software` the agent holds for that deployment, as long as its installer has not launched: one still waiting never starts, one that is downloading stops the download, and one that is closing processes does not run the installer. the install is recorded `cancelled` and what it downloaded is deleted. an installer that has launched is left to finish, and the cancel answers `Cancellation failed: … is already installing and will finish`. a cancel that matches no install the agent holds does nothing, then or later. an agent older than 4.2.0 refuses it without `installer_name`, and runs it only after the install has ended, when there is nothing left to stop | the same; an install never gets as far as an installer there |
 | `uninstall_software` | `software_name`, `uninstall_command`, `silent_flags`, `installer_type`, `verify_paths`, `timeout_seconds` (default 1200), `deployment_id` | runs the uninstaller with silent flags, detected from `installer_type` when absent, then checks `verify_paths` and the registry. writers also send `close_processes`, which the agent does not read | macOS: only an application bundle (`installer_type: "app"`) that the software inventory lists at that moment; the agent quits what runs from it, then removes the bundle. Linux: fails |
 | `cancel_uninstall` | `software_name` | kills the uninstaller tracked as `uninstall_<software_name>` | macOS has nothing long-running to cancel; Linux never starts one |
 | `refresh_software_inventory` | none | forces an inventory sync. nothing queues it any more | macOS lists application bundles, Linux `dpkg` packages |
@@ -250,7 +257,7 @@ the roost fan-out queues `sync_pull` under `roost_sync_{roostId}_{versionId}`. a
 | `swoop_session_requested` | `sid`, required | starts the swoop streamer for the session, or attaches it to the one running | macOS: the agent asks the owlette app to start the streamer. Linux: never queued, since the machine reports `capabilities.swoop: 0` |
 | `swoop_kill` | `sid`, optional | stops the streamer serving `sid`, or whatever is running when there is none. queued even to an offline machine, so a streamer left over from before a drop stops when it reconnects | same |
 | `swoop_refresh` | none | the site turned swoop on or off; the agent refreshes its standing connection to the signalling room | same |
-| `site_settings_refresh` | none | re-reads `GET /api/agent/site` on a thread of its own, one fetch at a time; requests that land during a fetch buy one more pass. queued on a site's online machines when [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) changes | same |
+| `site_settings_refresh` | none | re-reads `GET /api/agent/site` on a thread of its own, one fetch at a time; requests that land during a fetch buy one more pass. queued on a site's online machines when [keep screens awake](/docs/dashboard/getting-started#keep-screens-awake) changes, and to a machine that [hoot mcp](/docs/agent/hoot-mcp)'s settings just let act on others or cut off, which then asks at once whether it still may | same |
 
 a swoop command carries the envelope and, where its type takes one, a `sid`. any other field is refused with `Error:`. only `requestSwoopSession` writes them, for the session, kill and session-end routes, viewer revocation and the swoop settings route; `swoop_session_requested` and `swoop_refresh` to an offline machine are refused with `409 machine_offline`. the agent reports `capabilities.swoop: 1` only when the streamer is installed and the machine can stream: every Windows machine, a Mac whose owlette app reported Screen Recording granted within the last 5 minutes, and no Linux machine. see [swoop](/docs/dashboard/swoop).
 
@@ -268,7 +275,8 @@ a swoop command carries the envelope and, where its type takes one, a `sid`. any
 | `POST /api/hoot/provision-key` | `provision_cortex_key` |
 | the roost fan-out and rollout functions, and the rollback route | `sync_pull` |
 | `requestSwoopSession` | `swoop_session_requested`, `swoop_kill`, `swoop_refresh` |
-| `PATCH /api/sites/{siteId}/display-settings` | `site_settings_refresh` |
+| `PATCH /api/sites/{siteId}/display-settings`, and `PATCH /api/sites/{siteId}/fleet-settings` for the machines it turns on or cuts | `site_settings_refresh` |
+| `POST /api/sites/{siteId}/machines/{machineId}/path-check`, session only: it refuses API keys, and the type is not in [the public list](#queuing-through-the-api) | `check_path` |
 | nothing | `update_config`, `toggle_autolaunch`, `refresh_software_inventory`, `cancel_sync`, `rollback_to_version`. the agent still accepts them |
 
 ---
@@ -308,6 +316,6 @@ the process routes, `POST /api/sites/{siteId}/machines/{machineId}/processes/{pr
 
 ## where the handlers live
 
-the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types) and `site_commands.py` (`site_settings_refresh`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
+the agent checks a command router first. its handlers are registered from `sync_commands.py` (`sync_pull`, `cancel_sync`, `rollback_to_version`), `machine_commands.py` (`capture_screenshot`), `process_commands.py` (`restart_process`), `swoop_commands.py` (the three swoop types), `site_commands.py` (`site_settings_refresh`) and `path_commands.py` (`check_path`). a type the router does not hold falls through to the if/elif chain in `owlette_service.py`'s `handle_firebase_command`, which carries every other type. `cancel_mcp_tool` is answered inside `firebase_client.py` before either is reached.
 
 a handler module that fails to import at service start leaves its types unregistered. `restart_process` then falls back to the chain's branch, shared with `start_process`; every other router type answers `Unknown command type`, recorded as completed.

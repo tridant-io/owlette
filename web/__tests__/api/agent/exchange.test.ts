@@ -4,7 +4,8 @@
  * /api/agent/auth/exchange and the machine limit (plan.md decision 6): a
  * registration code mints credentials, so the limit is checked before the mint,
  * refused as 402 `{ error }` (never 401/403, which an agent reads as a dead
- * credential), and a successful mint stamps `pairedAt` once.
+ * credential), and a successful mint records the pairing: `pairedAt` once, and
+ * a machine new to the site leaves every machine scope.
  */
 
 import { NextRequest } from 'next/server';
@@ -27,6 +28,16 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
+const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/membership.server', () => ({
+  pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
+}));
+
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
+}));
+
 type Doc = Record<string, unknown>;
 // the whole fake store, keyed by document path
 let mockDocs: Record<string, Doc> = {};
@@ -36,6 +47,7 @@ const mockTxSet = jest.fn();
 const mockStampFailure = { on: false };
 const mockPlanRead = jest.fn();
 const mockCreateCustomToken = jest.fn();
+const mockCreateUser = jest.fn();
 
 function mockSnap(path: string) {
   const data = mockDocs[path];
@@ -89,6 +101,7 @@ jest.mock('@/lib/firebase-admin', () => ({
     },
   }),
   getAdminAuth: () => ({
+    createUser: mockCreateUser,
     createCustomToken: mockCreateCustomToken,
     setCustomUserClaims: jest.fn().mockResolvedValue(undefined),
   }),
@@ -127,6 +140,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockStampFailure.on = false;
   mockCreateCustomToken.mockResolvedValue('custom-token');
+  mockCreateUser.mockResolvedValue(undefined);
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY = 'test-api-key';
   global.fetch = jest.fn().mockResolvedValue({
     ok: true,
@@ -162,7 +176,7 @@ function enforceFree() {
 }
 
 describe('POST /api/agent/auth/exchange', () => {
-  it('pairs, claims the code and stamps pairedAt, never reading the plan with enforcement off', async () => {
+  it('pairs, claims the code and records the pairing, never reading the plan with enforcement off', async () => {
     mockDocs['sites/site-1/machines/other-pc'] = {};
     mockGetEntitlements.mockResolvedValue(FREE);
 
@@ -172,6 +186,8 @@ describe('POST /api/agent/auth/exchange', () => {
     expect((await res.json()).accessToken).toBe('id-token');
     expect(mockTxUpdate).toHaveBeenCalledWith('agent_tokens/reg-code', expect.objectContaining({ used: true }));
     expect(pairedAtWrite('new-pc')?.slice(1)).toEqual([{ pairedAt: 'SERVER_TIMESTAMP' }, { merge: true }]);
+    expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
     expect(mockGetEntitlements).not.toHaveBeenCalled();
     expect(mockPlanRead).not.toHaveBeenCalled();
   });
@@ -192,7 +208,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(mockTxSet).not.toHaveBeenCalled();
   });
 
-  it("lets a machine already in the payer's sites re-pair, keeping its first pairedAt", async () => {
+  it("lets a machine already in the payer's sites re-pair, keeping its first pairedAt and its grants", async () => {
     enforceFree();
     mockDocs['sites/site-1/machines/home-pc'] = { pairedAt: 'FIRST' };
 
@@ -201,6 +217,8 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(res.status).toBe(200);
     expect(mockCreateCustomToken).toHaveBeenCalled();
     expect(pairedAtWrite('home-pc')).toBeUndefined();
+    expect(mockPrune).not.toHaveBeenCalled();
+    expect(mockFleetPrune).not.toHaveBeenCalled();
   });
 
   it('never stamps a nested doc for a machine id with a slash', async () => {
@@ -208,6 +226,39 @@ describe('POST /api/agent/auth/exchange', () => {
 
     expect(res.status).toBe(200);
     expect(mockTxSet).not.toHaveBeenCalled();
+    expect(mockPrune).not.toHaveBeenCalled();
+  });
+
+  it("creates the agent's auth user before the token sign-in, so pairing works with sign-up off", async () => {
+    const res = await exchange('new-pc');
+
+    expect(res.status).toBe(200);
+    expect(mockCreateUser).toHaveBeenCalledWith({ uid: 'agent_site_1_new_pc' });
+    expect(mockCreateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      (global.fetch as jest.Mock).mock.invocationCallOrder[0],
+    );
+  });
+
+  it('signs in as usual when the auth user already exists', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('exists'), { code: 'auth/uid-already-exists' }));
+
+    const res = await exchange('new-pc');
+
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect((await res.json()).accessToken).toBe('id-token');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails the pairing, minting nothing, when the auth user cannot be created', async () => {
+    mockCreateUser.mockRejectedValueOnce(Object.assign(new Error('quota exceeded'), { code: 'auth/quota-exceeded' }));
+
+    const res = await exchange('new-pc');
+
+    expect(res.status).toBe(500);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(mockTxUpdate).not.toHaveBeenCalled();
   });
 
   it('still hands over the credentials when the pairedAt stamp fails', async () => {

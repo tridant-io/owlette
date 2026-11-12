@@ -96,7 +96,7 @@ a [rollback](/docs/api/versions#rollback) moved the roost's current pointer to a
 
 ### machine.offline
 
-a machine stopped reporting. it is sent when the health check, which runs every 5 minutes, finds a machine whose heartbeat has gone stale (at most once an hour per machine), and when an agent reports a connection failure through its alert channel.
+a machine stopped reporting. it is sent when the health check, which runs every 5 minutes, finds a machine whose heartbeat has gone stale (at most once an hour per machine), and when an agent reports a connection failure through its alert channel. a machine reporting a pending restart is not offline and sends none.
 
 this event comes from owlette's older alerting sender, not the roost dispatcher, so it does not follow the rest of this page:
 
@@ -115,7 +115,7 @@ this event comes from owlette's older alerting sender, not the roost dispatcher,
 - headers are `Content-Type: application/json`, `User-Agent: owlette-Webhooks/1.0`, `X-owlette-Event: machine.offline`, and `X-owlette-Signature: sha256=<hex>` — the lowercase hex HMAC-SHA256 of the raw body, keyed with the subscription's signing secret. there is no timestamp in the signature, so no replay window, and no `Roost-*` headers.
 - a URL on `hooks.slack.com` or `discord.com/api/webhooks` receives a chat-formatted message instead, unsigned.
 - each event is one attempt with a 5-second timeout: no retries, no entry in [delivery history](#delivery-history).
-- after 10 consecutive failed attempts the sender disables the subscription, which also stops its version events. the API does not show that state and `PATCH` cannot clear it; create the subscription again to resume.
+- after 10 consecutive failed attempts the sender switches the subscription off, which also stops its version events. the API reports it as `paused`, with the failures in `failureCount`; `PATCH` with `paused: false` turns it back on and starts the count over.
 
 ### not dispatched yet
 
@@ -170,7 +170,7 @@ the SDKs are not on npm or PyPI yet; until they are, install them from the repos
 ### Node
 
 ```ts
-// npm install @owlette/sdk@rc express   (run with: npx tsx server.ts)
+// needs express and @owlette/sdk (from a checkout until it is on npm); run with: npx tsx server.ts
 import express from 'express';
 import { verifySignature } from '@owlette/sdk';
 
@@ -319,7 +319,7 @@ probe deliveries send the same four headers plus `User-Agent: roost-probe/1.0`; 
 - **pause and delete.** pausing or deleting a subscription stops new deliveries from being queued for it. deliveries already queued are still sent.
 - **states.** a delivery is `pending` until it succeeds (`succeeded`) or gives up (`failed`).
 - **ordering.** deliveries are not ordered. use `occurredAt` when order matters.
-- **subscription counters.** `lastDeliveryAt`, `lastDeliveryStatus` and `failureCount` on a subscription are not updated by the dispatcher yet; read [delivery history](#delivery-history) instead.
+- **subscription counters.** `lastDeliveryAt` and `lastDeliveryStatus` on a subscription are not updated yet, and `failureCount` counts only the [machine.offline](#machineoffline) sender's consecutive failures. for the dispatcher's deliveries, read [delivery history](#delivery-history).
 
 ---
 
@@ -333,11 +333,11 @@ send your API key as `Authorization: Bearer $OWLETTE_API_KEY` (`x-api-key` also 
 
 | route | API-key scope | role |
 |---|---|---|
-| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | member |
+| `GET /api/webhooks`, `GET /api/webhooks/{webhookId}`, `GET .../deliveries`, `GET .../deliveries/{deliveryId}` | `site=<siteId>:read` | whole-site member |
 | `POST /api/webhooks`, `PATCH` or `DELETE /api/webhooks/{webhookId}`, `POST .../rotate-secret` | `site=<siteId>:write` | site admin or owner |
-| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | member |
+| `POST .../deliveries/{deliveryId}/retry`, `POST /api/webhooks/probe` | `site=<siteId>:write` | whole-site member |
 
-a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
+a key without the scope gets `403 scope_insufficient`; a member without the role gets `403 forbidden` (`capability not granted`). webhooks span the site's machines, so a member whose access is [limited to some machines](/docs/reference/authentication#machine-scope) gets `403 forbidden` on every route here, whatever their role. the `admin` permission is not involved. every route also accepts the optional `Roost-Version: 2026-04-22` header.
 
 `Idempotency-Key` is optional on create, update, rotate-secret and retry: the same key with the same body within 24 hours replays the first success with `Idempotent-Replayed: true`. delete and probe ignore it. see [idempotency](/docs/api/idempotency).
 

@@ -6,7 +6,7 @@
 
 ### ai-powered fleet management for Windows, macOS and Linux applications
 
-[![Version](https://img.shields.io/badge/version-4.1.23-blue)](https://github.com/tridant-io/owlette/releases)
+[![Version](https://img.shields.io/badge/version-4.1.28-blue)](https://github.com/tridant-io/owlette/releases)
 [![License](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-green)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://owlette.app)
 
@@ -34,7 +34,7 @@ live CPU, memory, disk, GPU, temperature and network metrics, with history and s
 add a program, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding), and on Windows restarts the machine when relaunching is not enough.
 
 **swoop: remote desktop**
-a machine's screen, live in a browser tab, on a phone, or in owlette swoop, the desktop viewer app, with keyboard, mouse and clipboard. watching needs site membership; control needs a site owner or admin and a step-up, a second-factor check that covers that machine for 7 days. off until a site turns it on, every session leased and audited, and an API key can never start one. Windows and macOS machines host it; Windows gives the best picture with an NVIDIA GPU.
+a machine's screen, live in a browser tab, on a phone, or in owlette swoop, the desktop viewer app, with keyboard, mouse and clipboard. watching needs a membership that reaches the machine; control needs a swoop mode of control there (site owners and admins have it unless set otherwise) and a step-up, a second-factor check that covers that machine for 7 days. off until a site turns it on, every session leased and audited, and an API key can never start one. Windows and macOS machines host it; Windows gives the best picture with an NVIDIA GPU. small text stays legible at any window size: the picture lands on whole pixels of your screen, **sharp** shows the machine's pixels whole, and smooth scaling averages it down at any other size.
 
 **remote deployment**
 push software silently to any number of Windows machines: NSIS, Inno Setup, MSI, and custom installers. save deployment templates, track progress in real time, and cancel mid-install. the agent itself updates remotely on all three platforms.
@@ -43,7 +43,7 @@ push software silently to any number of Windows machines: NSIS, Inno Setup, MSI,
 drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; a new version uploads only the chunks that changed, and a machine that already holds a chunk skips it. every upload is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowed extract path.
 
 **hoot: ai assistant**
-LLM-powered fleet management in natural language, on your own Anthropic or OpenAI key. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, and shareable conversations.
+LLM-powered fleet management in natural language, on your own Anthropic or OpenAI key. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, and shareable conversations. with hoot mcp, an AI agent running on one of your machines gets the same tools on the others, and the machine's pairing is the credential: no API key.
 
 **talons: automations**
 site-scoped automations: a trigger (a schedule, a machine or process event, a metric threshold), an optional condition, and one or more outputs. hoot can write them for you, and every run is recorded.
@@ -52,7 +52,7 @@ site-scoped automations: a trigger (a schedule, a machine or process event, a me
 restart machines on a weekly schedule in their own timezone, and keep screens awake: a site switch that stops every machine sleeping, blanking or locking. on Windows, owlette also stores a machine's monitor layout and restores it when it drifts, and refuses reboots, shutdowns and deployments inside the machine's active hours unless a person overrides it.
 
 **multi-site access control**
-organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site; a platform superadmin reaches every site. sign-in with email, Google or a passkey, and a required second factor.
+organize machines into sites by location, department or project. roles are per site (member, admin, owner), granted by a membership on each site that can be limited to some of its machines; a platform superadmin reaches every site. a site's owners and admins run it from its settings page in the admin panel: members with their roles and swoop modes, and machines with the keep screens awake switch; the swoop switch is on the admin panel's swoop page. sign-in with email, Google or a passkey, and a required second factor.
 
 **alerts, webhooks and api**
 threshold and offline alerts by email, signed webhooks for external systems, and an activity log across the fleet. a public REST API with an [OpenAPI reference](https://owlette.app/docs/api), a command line client (`@owlette/cli`), and SDKs for Node (`@owlette/sdk`) and Python (`owlette-sdk`).
@@ -185,6 +185,7 @@ full documentation is available at **[owlette.app/docs](https://owlette.app/docs
 - [remote deployment](https://owlette.app/docs/dashboard/deployments): silent software installation across machines
 - [roost](https://owlette.app/docs/dashboard/roost): content-addressed project sync, versions, rollback
 - [hoot](https://owlette.app/docs/dashboard/hoot) and its [tools](https://owlette.app/docs/reference/hoot-tools): the AI assistant
+- [hoot mcp](https://owlette.app/docs/agent/hoot-mcp): hoot's tools for an AI agent on your machines
 - [talons](https://owlette.app/docs/dashboard/talons): automations
 - [API reference](https://owlette.app/docs/api) and [CLI](https://owlette.app/docs/cli/overview)
 - [architecture](https://owlette.app/docs/architecture): system design and data flow

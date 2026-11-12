@@ -69,10 +69,10 @@ the room only enforces who may send what, and to whom.
 | `viewer-join` | **server only** | the host, once per viewer id per session (see below) |
 | `error` | **server only** | the offending socket |
 | `kill` | **server only** (from `POST /v1/kill`) | every socket of the named `sid` (every socket when `sid` is null), then `close(1000)` |
-| `offer` | viewer only | host and doorbell |
+| `offer` | viewer only | the host |
 | `answer` | host only | the named viewer (`to`) |
 | `host-ready` | host only | the named viewer, or all viewers when `to` is absent |
-| `candidate` | viewer or host | viewer → host and doorbell; host → the named viewer, or all viewers |
+| `candidate` | viewer or host | viewer → the host; host → the named viewer, or all viewers |
 | `bye` | viewer or host | same direction rule as `candidate` |
 
 refusals, each an `error` frame carrying a code and nothing else:
@@ -153,7 +153,7 @@ all five are opened by the **browser** (it is the offerer), negotiated in-band, 
 
 | label | ordered | reliability | direction | carries |
 |---|---|---|---|---|
-| `swoop-input` | false | `maxRetransmits: 0` | viewer → host | section 5 input |
+| `swoop-input` | true | reliable | viewer → host | section 5 input |
 | `swoop-cursor` | false | `maxRetransmits: 0` | host → viewer | section 5 cursor |
 | `swoop-control` | true | reliable | both | section 5 control **and** clipboard |
 | `swoop-feedback` | false | `maxPacketLifeTime: 250` | viewer → host | section 5 feedback |
@@ -263,11 +263,11 @@ swaps cmd and ctrl for a windows or linux host, and a client that is not a mac s
 host, so cmd arrives as `ControlLeft` / `ControlRight` and the mac's control as `MetaLeft` / `MetaRight`, and
 the other way round. the viewer may turn the swap off, and then every key goes as pressed.
 
-`swoop-input` is unordered and never retransmits, so a release can be lost or arrive before its own press. a
-viewer sends a modifier's release (`Control*`, `Shift*`, `Alt*`, `Meta*`) again 100 ms and 500 ms later,
-unless it has pressed that key again by then. the host injects every up it is sent, whether that viewer holds
-the key or not, and for a modifier that is already up that is a release nothing acts on. no other release is
-sent again: a second mouse up is a real release wherever the pointer has gone.
+`swoop-input` is reliable and ordered. it was unordered with `maxRetransmits: 0`, and on a link that drops
+packets that lost key presses outright: the text typed came out with letters missing, and a press that
+overtook the one before it would have typed the two swapped. a pointer move held up behind a retransmit is the
+smaller cost. the reliability is the sender's, so a host takes the channel however the browser opens it. the
+host injects every up it is sent, whether that viewer holds the key or not.
 `PrintScreen` and `Pause` are sequences, not single scancodes; keymap.json's `sequences` object holds them. a
 macos host goes on from the scancode to the mac's virtual keycode through
 [`testdata/keymap-macos.json`](testdata/keymap-macos.json), so the host's keyboard layout decides what a key
@@ -464,10 +464,10 @@ somebody is about to call about. `targetKbps` is the sum across all of them, so 
 |---|---|
 | `preset` | the quality ceiling in force, as one word: `auto`, or `<n>mbps/<resolution>/<n>fps`. it is *rendered* from the ceiling's three numbers and never parsed back — section 5's `quality` is the only thing that sets them. |
 | `targetKbps` | what the governor is aiming at, against `bitrateKbps`, which is what actually went out. the pair is the point: a target the link never delivered is invisible from either number alone. |
-| `rungFps` | the quality ladder's current frame-rate rung. it is a **capture-side** cap — the encoder is never told — so it is not the same number as `fps`, which is measured. |
-| `rungResolution` | that rung's resolution cap, in `quality.preset`'s own spelling (`native` \| `1440p` \| `1080p` \| `720p`). |
+| `rungFps` | the quality ladder's current frame-rate rung: the **capture-side** cap the encoder is opened at (each rung is a new encoder at that rate), so it is not the same number as `fps`, which is measured. |
+| `rungResolution` | that rung's resolution cap, in `quality.preset`'s own spelling (`native` \| `1440p` \| `1080p` \| `720p`). from a 4.2.0 streamer it is always the preset's own resolution, because the ladder spends frame rate and never resolution; an older streamer can still report a `1440p`, `1080p` or `720p` rung below its preset. |
 | `rungIndex` | how far down the preset's ladder that rung is. absent means zero, the preset's own rung, which is where a healthy session sits. |
-| `governor` | `ceiling` (at the preset with nothing to answer) \| `holding` (inside the 2 s hold after a cut) \| `climbing` \| `pinned` (at the floor — every further degraded window is answered by the ladder, or by nothing). |
+| `governor` | `ceiling` (at the preset with nothing to answer) \| `holding` (inside the 2 s hold after a cut) \| `climbing` \| `pinned` (at the floor — every further degraded window is answered by a lower frame rate, or by nothing). |
 
 `display` names the output being captured, in the same numbering `hello-host`'s `displays[]` uses.
 
@@ -621,13 +621,15 @@ the `mac` field of `signaling/signal-answer.json`.
 
 a live session holds a **5-minute lease** the browser renews silently, and no absolute cap: it lasts as long as
 its viewers keep renewing. the point of the lease is that authorisation is re-checked while the session runs: a member removed from the
-site, a site that turns swoop off, a capability revoked or a machine excluded all take effect within one
-lease rather than at the next reconnect.
+site, a site that turns swoop off, a capability revoked, a machine excluded or a machine dropped from the
+viewer's machine scope all take effect within one lease rather than at the next reconnect.
 
 1. every `leaseSeconds` (default 300, from the bundle's `enablement`) the browser calls
-   `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, site enablement and capability and, if
-   all still hold, mints a **fresh viewer jwt** — same claims, new `iat`/`exp`/`jti` — and returns it with the
-   new `expiresAt`.
+   `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, machine scope, site enablement and
+   capability and, if all still hold, mints a **fresh viewer jwt** — same claims, new `iat`/`exp`/`jti` — and
+   returns it with the new `expiresAt`. a machine outside the viewer's scope answers 404, which is not a
+   withdrawal: the browser retries it, as it does for a removed member, until the host drops the viewer at
+   expiry + 30 s.
 2. the browser forwards that token to the host on `swoop-control` as `{"t":"lease","token":"…"}`.
 3. the host verifies it exactly as it verified the connect token (section 11's order), with one addition: the
    token's `fp` MUST equal the fingerprint of the **already established** dtls session. it answers
@@ -650,7 +652,9 @@ when the last viewer is gone the streamer lingers about 60 s and exits 0 with `r
 **host behaviour on a lost path.** ice going `disconnected` does not end a viewer. the host asks the viewer for
 an ice restart after 2 s, pauses that viewer's media while the path is down, and asks for a keyframe once it
 is back. a viewer still disconnected 60 s after ice reports the path down (str0m does that 15–25 s after the
-last packet) is let go with `reason: "timeout"`, and a dtls or sctp close ends it at once. the page matches
+last packet) is let go with `reason: "timeout"`, and so is one whose ice is still checking with no working pair
+60 s after checking began (a restart offer that carries no candidates leaves it there for good). a dtls or sctp
+close ends a viewer at once. the page matches
 it: its silence watchdog only judges a live path, and a restart offer's answer is timed only while the page's
 own signalling socket is open. a viewer that is itself offline waits, and a host that stays silent while the
 offer can reach it is given up on 10 s later. the picture comes back with the path; after a long drop the
@@ -664,6 +668,12 @@ nor zero.
 
 the kill switch is faster and independent of all of this: the worker broadcasts `kill`, the streamer exits,
 and that path completes in ≤ 2 s. the polled command is only the last resort for a machine with no socket.
+
+a membership change takes the same fast path. narrowing a viewer's machine scope ends every session they sit
+in on a machine it drops, shared or not: the api ends the **whole** session through the sid-scoped kill
+(`endReason: "revoked"`, `endedFor` the viewer, audited `scope_changed`) within about 2 s, and everyone else in
+it reconnects on their own and is decided again. the narrowed viewer's lease is only the backstop, for a sweep
+that failed: their next renewal answers 404, and they are out within one lease plus the 30 s grace.
 
 ---
 

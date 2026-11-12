@@ -913,7 +913,7 @@ describe('golden signaling vectors, on the wire', () => {
     const joinVector = readVector<{ message: Frame }>('signaling/signal-viewer-join.json');
     expect(stripTime(await host.waitFor('viewer-join'))).toEqual(stripTime(joinVector.message));
 
-    // offer: viewer -> host and doorbell
+    // offer: viewer -> host
     const offerVector = readVector<{ message: Frame }>('signaling/signal-offer.json');
     viewer.send({ type: 'offer', sdp: offerVector.message.sdp });
     expect(stripTime(await host.waitFor('offer'))).toEqual(stripTime(offerVector.message));

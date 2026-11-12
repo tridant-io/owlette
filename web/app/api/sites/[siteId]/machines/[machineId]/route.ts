@@ -18,7 +18,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import {
   applyAuthDeprecations,
   readAndParseJsonBody,
-  requireSiteAuthAndScope,
+  requireSiteMachineAuthAndScope,
 } from '../../../../_shared';
 import { authorizedSiteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
@@ -35,7 +35,7 @@ type PathParams = { siteId: string; machineId: string } & Record<string, string 
 export async function GET(request: NextRequest, { params }: RouteParams) {
   try {
     const { siteId, machineId } = await params;
-    const auth = await requireSiteAuthAndScope(request, siteId, 'read');
+    const auth = await requireSiteMachineAuthAndScope(request, siteId, machineId, 'read');
     if (!auth.ok) return auth.response;
 
     const db = getAdminDb();
@@ -87,11 +87,7 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
         capabilities: data.capabilities ?? null,
         // live swoop viewers, mirrored by the server from the session records
         swoopViewers: typeof data.swoopViewers === 'number' ? data.swoopViewers : null,
-        processes: Array.isArray(data.processes)
-          ? data.processes
-          : Array.isArray(data.status?.processes)
-            ? data.status.processes
-            : [],
+        processes: liveProcessList(data.metrics?.processes),
       }),
       auth.scopeCheck,
     );
@@ -124,6 +120,7 @@ export const DELETE = authorizedSiteHandler<PathParams>({
           siteId: ctx.siteId,
           machineId,
           auditActor: siteAuditActor(ctx),
+          actor: ctx.actor,
         });
 
         return applyAuthDeprecations(
@@ -140,6 +137,14 @@ export const DELETE = authorizedSiteHandler<PathParams>({
     return problemFromError(err, 'v2/sites/[siteId]/machines/[machineId]:DELETE');
   }
 });
+
+/** the heartbeat's `metrics.processes` map (id → live entry) as a list in config order */
+function liveProcessList(map: unknown): Record<string, unknown>[] {
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return [];
+  return Object.entries(map as Record<string, Record<string, unknown>>)
+    .map(([processId, entry]): Record<string, unknown> => ({ processId, ...entry }))
+    .sort((a, b) => Number(a.index ?? 0) - Number(b.index ?? 0));
+}
 
 function heartbeatToIso(v: unknown): string | null {
   if (v === null || v === undefined) return null;

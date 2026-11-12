@@ -87,6 +87,9 @@ const SECRET_SHAPED = /(_KEY|_SECRET|_TOKEN|_DSN)$/;
 
 const SWOOP_E2E_KEYS = swoopE2eKeys();
 
+// ci's ubuntu-latest runner has no gpu (.github/workflows/e2e.yml:35) and chromium 137+ dropped the automatic swiftshader fallback; the emulator build lets smoothCanDraw() accept swiftshader.
+const SWIFTSHADER = ['--enable-unsafe-swiftshader'];
+
 /**
  * Deny by default. Reads .env.local for key NAMES only — never values — and
  * refuses to start when a secret-shaped one appears in neither list above.
@@ -260,7 +263,7 @@ export default defineConfig({
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: { ...devices['Desktop Chrome'], launchOptions: { args: SWIFTSHADER } },
       // A project-level testIgnore REPLACES the config-level one rather than
       // merging, so security-boundary must be repeated here.
       testIgnore: ['**/security-boundary/**', '**/mobile/**', '**/functions/**'],
@@ -275,6 +278,7 @@ export default defineConfig({
         isMobile: true,
         hasTouch: true,
         deviceScaleFactor: 3,
+        launchOptions: { args: SWIFTSHADER },
       },
       // Scoped so workers:1 doesn't pay for a second full pass. Playwright
       // normalizes to forward slashes, so this matches on Windows too.

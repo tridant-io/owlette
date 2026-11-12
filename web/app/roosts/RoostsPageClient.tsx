@@ -28,8 +28,6 @@ import ProjectDistributionDialog, {
 import ConfirmDialog from '@/components/ConfirmDialog';
 import { MinimizedUploadCard } from '@/components/MinimizedUploadCard';
 import { useRoostUpload } from '@/hooks/useRoostUpload';
-import { ManageSitesDialog } from '@/components/ManageSitesDialog';
-import { CreateSiteDialog } from '@/components/CreateSiteDialog';
 import { PageHeader } from '@/components/PageHeader';
 import { AccountSettingsDialog } from '@/components/AccountSettingsDialog';
 import DownloadButton from '@/components/DownloadButton';
@@ -57,21 +55,15 @@ export default function RoostsPageClient() {
     currentSite,
     siteTimezone,
     hasNoSites,
+    limitedOnly,
     selectSite,
-    pickSite,
-    createSite,
-    updateSite,
-    deleteSite,
-  } = useCurrentSite();
+  } = useCurrentSite({ wholeSiteOnly: true });
   const siteOwner = currentSite?.owner ?? null;
   const roostGated = usePlanGated('roost', siteOwner);
   const [distributionDialogOpen, setDistributionDialogOpen] = useState(false);
   // When set, the dialog opens in "+ new version" mode for an existing roost.
   // null = normal "new roost" mode.
   const [newVersionContext, setNewVersionContext] = useState<NewVersionContext | null>(null);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   // Pending row actions; `null` = no prompt open. Each carries the roost plus
   // whatever the handler needs after confirm.
@@ -287,43 +279,8 @@ export default function RoostsPageClient() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={() => {
-          setManageEditSiteId(currentSiteId);
-          setManageDialogOpen(true);
-        }}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
-      />
-
-      <CreateSiteDialog
-        open={createDialogOpen}
-        onOpenChange={setCreateDialogOpen}
-        onCreateSite={createSite}
-        onSiteCreated={(siteId) => pickSite(siteId)}
       />
 
       {/* Main content */}
@@ -409,7 +366,7 @@ export default function RoostsPageClient() {
                 site-less accounts spinning forever with no next step. */}
             {hasNoSites ? (
               <div className="p-8">
-                <NoSitesEmptyState action="manage roosts" />
+                <NoSitesEmptyState action="manage roosts" limited={limitedOnly} />
               </div>
             ) : sitesLoading || !currentSiteId || roostsLoading ? (
               <div className="p-8 text-center">

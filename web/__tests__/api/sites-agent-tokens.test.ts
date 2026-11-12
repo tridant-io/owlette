@@ -10,6 +10,7 @@ type TestUserActor = {
   userId: string;
   role: 'member' | 'admin' | 'superadmin';
   siteRoles: Record<string, 'owner' | 'admin' | 'member'>;
+  machineScopes: Record<string, readonly string[] | null>;
 };
 
 const SUPERADMIN: TestUserActor = {
@@ -17,6 +18,7 @@ const SUPERADMIN: TestUserActor = {
   userId: 'test-admin',
   role: 'superadmin',
   siteRoles: {},
+  machineScopes: {},
 };
 
 let tokenDocs: TokenDoc[] = [];
@@ -83,6 +85,13 @@ jest.mock('@/lib/logger', () => ({
 const mockEmitMutation = jest.fn();
 jest.mock('@/lib/auditLogClient', () => ({
   emitMutation: (...args: unknown[]) => mockEmitMutation(...args),
+}));
+
+// the collection fake below answers every query with token docs, so the real
+// session store would delete those; the route's calls to it are what is pinned.
+const mockRevokeFleetSessions = jest.fn(async (..._a: unknown[]) => 0);
+jest.mock('@/lib/fleet/session.server', () => ({
+  revokeFleetSessions: (...a: unknown[]) => mockRevokeFleetSessions(...a),
 }));
 
 // One fake for every collection: token docs answer every query (the route only
@@ -191,7 +200,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   // on site-scoped AGENT_TOKEN_REVOKE, so a site admin could revoke a token they
   // could not list. These three cases fail if that split ever comes back.
   it('lets a site admin list tokens for a site they are assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
     tokenDocs = [
       { id: 'live', siteId: 'site-a', machineId: 'm1', createdAt: timestamp('2026-02-01T00:00:00Z') },
     ];
@@ -206,7 +215,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a site admin listing tokens for a site they are NOT assigned to', async () => {
-    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' } };
+    mockActor = { type: 'user', userId: 'u1', role: 'admin', siteRoles: { ['site-a']: 'admin' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-b/agent-tokens'),
@@ -217,7 +226,7 @@ describe('/api/sites/{siteId}/agent-tokens', () => {
   });
 
   it('denies a member listing tokens on their own site', async () => {
-    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' } };
+    mockActor = { type: 'user', userId: 'u2', role: 'member', siteRoles: { ['site-a']: 'member' }, machineScopes: { ['site-a']: null } };
 
     const res = await GET(
       new NextRequest('http://localhost/api/sites/site-a/agent-tokens'),
@@ -577,5 +586,92 @@ describe('/api/sites/{siteId}/agent-tokens/revoke', () => {
 
     expect(res.status).toBe(200);
     expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+});
+
+// ADR 0017: a fleet session outlives the refresh token that minted it by up to
+// 15 minutes and no fleet route re-checks pairing, so a revoke ends it.
+describe('/api/sites/{siteId}/agent-tokens/revoke: fleet sessions', () => {
+  const revoke = (body: Record<string, unknown>) =>
+    POST(
+      new NextRequest('http://localhost/api/sites/site-a/agent-tokens/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ siteId: 'site-a' }) },
+    );
+  const dead = () => ({ supersededAt: Date.now() - 600_000, retiresAt: lifecycleTs(Date.now() - 300_000) });
+
+  beforeEach(() => {
+    mockRevokeFleetSessions.mockClear();
+  });
+
+  it("machineId mode ends that machine's sessions on the path site, and no other's", async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm1' }];
+
+    await revoke({ machineId: 'm1' });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm1' }]);
+  });
+
+  it('all ends every session on the site in one call that names no machine', async () => {
+    tokenDocs = [
+      { id: 't1', siteId: 'site-a', machineId: 'm1' },
+      { id: 't2', siteId: 'site-a', machineId: 'm2' },
+    ];
+
+    await revoke({ all: true });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a' }]);
+  });
+
+  it('tokenId ends the sessions of the machine a live token belonged to', async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm7' }];
+
+    await revoke({ tokenId: 't1' });
+
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm7' }]);
+  });
+
+  it('tokenId on a dead token, or one with no machine, ends none: never the whole site', async () => {
+    tokenDocs = [
+      { id: 'dead', siteId: 'site-a', machineId: 'm7', ...dead() },
+      { id: 'no-machine', siteId: 'site-a' },
+    ];
+
+    await revoke({ tokenId: 'dead' });
+    await revoke({ tokenId: 'no-machine' });
+
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+  });
+
+  it('latestOnly ends them only when a live token went', async () => {
+    tokenDocs = [{ id: 'dead', siteId: 'site-a', machineId: 'm1', ...dead() }];
+    await revoke({ machineId: 'm1', latestOnly: true });
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+
+    tokenDocs = [{ id: 'fresh', siteId: 'site-a', machineId: 'm1', lastUsed: lifecycleTs(Date.now()) }];
+    await revoke({ machineId: 'm1', latestOnly: true });
+    expect(mockRevokeFleetSessions.mock.calls.map((call) => call[1])).toEqual([{ siteId: 'site-a', machineId: 'm1' }]);
+  });
+
+  it('prune ends none: it removes no live credential', async () => {
+    tokenDocs = [{ id: 'dead', siteId: 'site-a', machineId: 'm1', ...dead() }];
+
+    await revoke({ prune: true });
+
+    expect(mockRevokeFleetSessions).not.toHaveBeenCalled();
+  });
+
+  it('a failed end is not fatal: the tokens are revoked and the unpair is still queued', async () => {
+    tokenDocs = [{ id: 't1', siteId: 'site-a', machineId: 'm1' }];
+    mockRevokeFleetSessions.mockRejectedValueOnce(new Error('unavailable'));
+
+    const res = await revoke({ machineId: 'm1' });
+
+    expect(res.status).toBe(200);
+    expect(deletedIds).toEqual(['t1']);
+    expect(unpairCommands().map(([machineId]) => machineId)).toEqual(['m1']);
   });
 });

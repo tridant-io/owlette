@@ -84,3 +84,59 @@ describe('useOwletteUpdates — updateMachines', () => {
     expect(skipped).toEqual([{ machineId: 'pi-1', reason: 'no linux arm64 build in v3.4.0' }]);
   });
 });
+
+describe('useOwletteUpdates — an update that never reported back', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  it('reads stale after 15 minutes, and updating again once it is sent again', async () => {
+    jest.useFakeTimers();
+    latestWith({ windows_x64: EXE });
+    const machines = [machine({ machineId: 'win-1' })];
+    const { result } = renderHook(() => useOwletteUpdates(machines));
+
+    await act(async () => {
+      await result.current.updateMachines('site-a', ['win-1']);
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(16 * 60 * 1000);
+    });
+    expect(result.current.staleMachines).toEqual(new Set(['win-1']));
+
+    await act(async () => {
+      await result.current.updateMachines('site-a', ['win-1']);
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(30_000);
+    });
+
+    expect(result.current.updatingMachines).toEqual(new Set(['win-1']));
+    expect(result.current.staleMachines).toEqual(new Set());
+  });
+
+  it('does not read stale once a resend to a stale machine failed', async () => {
+    jest.useFakeTimers();
+    latestWith({ windows_x64: EXE });
+    const machines = [machine({ machineId: 'win-1' })];
+    const { result } = renderHook(() => useOwletteUpdates(machines));
+
+    await act(async () => {
+      await result.current.updateMachines('site-a', ['win-1']);
+    });
+    await act(async () => {
+      jest.advanceTimersByTime(16 * 60 * 1000);
+    });
+    expect(result.current.staleMachines).toEqual(new Set(['win-1']));
+
+    mockSend.mockRejectedValueOnce(new Error('offline'));
+    const quiet = jest.spyOn(console, 'error').mockImplementation(() => {});
+    await act(async () => {
+      await expect(result.current.updateMachines('site-a', ['win-1'])).rejects.toThrow('0/1 updates sent');
+    });
+    quiet.mockRestore();
+
+    expect(result.current.updatingMachines).toEqual(new Set());
+    expect(result.current.staleMachines).toEqual(new Set());
+  });
+});

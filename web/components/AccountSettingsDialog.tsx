@@ -8,7 +8,6 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { VisuallyHidden } from '@radix-ui/react-visually-hidden';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { EyeIcon, EyeOffIcon, AlertTriangle, Shield, Check, Loader2, User, Bell, BellOff, Trash2, Key, Plus, X, Code } from 'lucide-react';
@@ -367,9 +366,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="border-border text-foreground sm:max-w-4xl p-0 gap-0 max-h-[90dvh]">
-        <VisuallyHidden>
-          <DialogTitle>account settings</DialogTitle>
-        </VisuallyHidden>
+        <DialogTitle className="sr-only">account settings</DialogTitle>
         {/* min-w-0: DialogContent is a grid, and its auto column grows to the widest
             child's min-content, which on a phone is the whole tab bar */}
         <div ref={boxRef} className="flex flex-col sm:flex-row sm:min-h-[480px] min-h-0 min-w-0 max-h-[85dvh]">
@@ -544,7 +541,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                       {([
                         { value: 'machine', label: "each machine's local timezone", help: 'every machine renders its own heartbeats and timestamps in its own local clock. best when monitoring kiosks across multiple timezones.' },
                         { value: 'user', label: 'my timezone', help: 'all machines render in your selected timezone (below). best when you want a single shared reference frame.' },
-                        { value: 'site', label: "site timezone", help: "all machines render in the site's configured timezone (set in manage sites). preserves the legacy behavior." },
+                        { value: 'site', label: "site timezone", help: "all machines render in the site's configured timezone (set in site settings). preserves the legacy behavior." },
                       ] as const).map(opt => (
                         <label
                           key={opt.value}

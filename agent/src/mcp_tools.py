@@ -405,7 +405,8 @@ def _get_process_list(params, config):
         config = shared_utils.read_config()
 
     processes = config.get('processes', [])
-    runtime_state = shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH)
+    state_rows = shared_utils.state_rows_by_process(
+        shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH))
 
     result = []
     for proc in processes:
@@ -415,17 +416,7 @@ def _get_process_list(params, config):
         launch_mode = proc.get('launch_mode', 'always' if autolaunch else 'off')
         schedules = proc.get('schedules', None)
 
-        state_info = {}
-        if runtime_state:
-            for key, val in runtime_state.items():
-                if isinstance(val, dict) and val.get('id') == proc_id:
-                    state_info = val
-                    state_info['_pid'] = key
-                    break
-
-        # PID is the dict key in app_states.json, stored as _pid during lookup
-        pid_str = state_info.get('_pid')
-        pid = int(pid_str) if pid_str else None
+        pid, state_info = state_rows.get(proc_id, (None, {}))
         is_running = False
         if pid:
             try:
@@ -572,15 +563,13 @@ def _get_agent_logs(params, config):
     if not os.path.isdir(log_dir):
         return {'error': 'Log directory not found', 'log_dir': log_dir}
 
-    log_files = sorted(
-        [f for f in os.listdir(log_dir) if f.endswith('.log')],
-        reverse=True
-    )
-
-    if not log_files:
+    # the agent's own log, by the name initialize_logging("service") gives it.
+    # the folder also holds the issue tool's, owlette-host's and the installer's
+    # logs, and "whichever .log sorts last" picked one of those.
+    log_name = 'service.log'
+    log_path = os.path.join(log_dir, log_name)
+    if not os.path.isfile(log_path):
         return {'error': 'No log files found', 'log_dir': log_dir}
-
-    log_path = os.path.join(log_dir, log_files[0])
 
     try:
         with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
@@ -593,7 +582,7 @@ def _get_agent_logs(params, config):
         recent = lines[-max_lines:]
 
         return {
-            'log_file': log_files[0],
+            'log_file': log_name,
             'lines': [l.rstrip() for l in recent],
             'count': len(recent),
             'total_lines': len(lines),

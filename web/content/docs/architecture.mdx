@@ -106,7 +106,7 @@ the dashboard is a Next.js 16 application on Railway, with a failover origin beh
 - **manages processes**: add, edit, remove, start, stop, kill
 - **deploys software**: pushes installers to machines with progress tracking
 - **publishes roost versions**: content-addressed project sync through R2 chunks, immutable version history, resync and rollback
-- **manages access**: per-site roles and capabilities; see the [admin panel](/docs/dashboard/admin)
+- **manages access**: per-site roles and capabilities, each membership the whole site or limited to some of its machines; see the [admin panel](/docs/dashboard/admin)
 - **runs swoop sessions**: the viewer, and the routes that authorise and lease each session
 - **provides hoot**: an AI chat for machine interaction, plus autonomous crash investigation
 
@@ -347,13 +347,14 @@ see the [authentication reference](/docs/reference/authentication) for the compl
 
 ### site-based access control
 
-all data is scoped to **sites**, and what a person may do on a site is decided by their role on that site, held in `sites/{siteId}/members/{uid}`. their account-level role grants nothing on a site.
+all data is scoped to **sites**, and what a person may do on a site is decided by their role on that site and the machines it covers, held in `sites/{siteId}/members/{uid}`. their account-level role grants nothing on a site.
 
 | who | access |
 |------|--------|
 | **member** | read access to the site: machines, screenshots, live view, watching swoop |
 | **admin** | a member's access plus writes: commands, configuration, deployments, roosts, swoop control and settings, membership |
 | **owner** | an admin's access plus deleting the site and transferring ownership. one per site |
+| **scoped member** | a member or admin whose row lists `machineIds`, 1 to 30 machines: their role on those machines only, and nothing that spans the site. see [machine scope](/docs/dashboard/admin/member-management#machine-scope) |
 | **superadmin** | every site and the platform-level operations, without member rows |
 | **agent** | a single site and a single machine, from its token's claims |
 
@@ -364,8 +365,9 @@ the full capability list is in the [admin panel](/docs/dashboard/admin#capabilit
 rules enforce access at the database level, so no client can bypass them:
 
 - users must be authenticated, and a deleted user is refused immediately
-- site access is checked through `canAccessSite(siteId)`: a superadmin, or an active member row for that site
-- site-level elevated operations are checked through `isSiteAdmin(siteId)`: an owner or admin member row, or a superadmin
+- site access is checked through `canAccessSite(siteId)`: a superadmin, or an active member row for that site, scoped or not
+- a machine's data is checked through `canAccessMachine(siteId, machineId)`, and data that spans the site through `canAccessWholeSite(siteId)`, so a scoped member reads only their machines
+- site-level elevated operations are checked through `isSiteAdmin(siteId)`: an owner or admin member row with the whole site, or a superadmin
 - platform-wide operations are checked through `isSuperadmin()`
 - agents are scoped by the `site_id` and `machine_id` claims in their custom token, through `agentCanAccessMachine(siteId, machineId)`
 - the token collections (`agent_tokens`, `agent_refresh_tokens`) are server-side only
@@ -444,11 +446,13 @@ the agent stamps `_last_apply_finished_at = time.time()` at the end of every suc
 4. _apply_in_flight             (false required — no concurrent manual apply)
 5. drift fixable                (every drifted edidHash present in assigned.monitors)
                                 — else: emit display_auto_restore_skipped_unfixable, return
+5b. stored monitors live        (every assigned edidHash present in the live profile)
+                                — else: emit display_auto_restore_parked once per missing set, return
 6. _drift_pending_tick_count    (>= 2 — drift persisted across two 30s topology checks ≈ 60s)
 7. apply cooldown               (time.time() - _last_apply_time >= _APPLY_COOLDOWN_SECONDS)
 ```
 
-gates 1 to 3 short-circuit silently: the operator already knows their config, so no audit is needed. gate 5 emits the `display_auto_restore_skipped_unfixable` audit so the operator sees why the auto-fix did not fire when a new monitor was plugged in. gates 4, 6 and 7 are silent; the next topology check retries.
+gates 1 to 3 short-circuit silently: the operator already knows their config, so no audit is needed. gate 5 emits the `display_auto_restore_skipped_unfixable` audit so the operator sees why the auto-fix did not fire when a new monitor was plugged in. gate 5b emits `display_auto_restore_parked` once per missing-monitor set, naming the stored monitor, so a layout that waits on a panel that is off, or one that came back under a new identity, is not mistaken for a silent failure (issue #29); the key resets when the monitor returns or the drift clears. gates 4, 6 and 7 are silent; the next topology check retries.
 
 ### auto-restore: fixability model
 
@@ -520,13 +524,13 @@ version bodies are stored at `project-manifests/{siteId}/{roostId}/{versionId}.j
 
 ### version body format
 
-the version body is an OCI-derived JSON document with media type `application/vnd.owlette.version.v1+json`. it is canonical JSON with a `config` object and a non-empty `files[]` array. `config` is free-form provenance about the push: the server checks only that it is an object and stores it verbatim, so it can later answer "how was this version produced?". the keys below are what `owlette push` emits (`cli/src/lib/versionBuilder.ts`); `hostname` and `platform` are left out when the CLI can't determine them. minimal shape:
+the version body is an OCI-derived JSON document with media type `application/vnd.owlette.version.v1+json`. it is canonical JSON with a `config` object and a non-empty `files[]` array. `config` is free-form provenance about the push: the server checks only that it is an object and stores it verbatim. it is part of what the version id is computed from, so `owlette push` and the dashboard send it empty: the same files then get the same version from any machine. minimal shape:
 
 ```json
 {
   "schemaVersion": 2,
   "mediaType": "application/vnd.owlette.version.v1+json",
-  "config": { "producer": "owlette-cli", "cliVersion": "1.0.0-rc.0", "hostname": "studio-01", "platform": "win32" },
+  "config": {},
   "files": [
     { "path": "project.toe", "size": 123456, "chunks": [
       { "hash": "a1b2...", "size": 4194304 }

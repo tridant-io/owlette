@@ -4,6 +4,7 @@
  */
 
 import { FieldValue } from 'firebase-admin/firestore';
+import type { SwoopMode } from '@/lib/swoopMode';
 import { getAdminAuth, getAdminDb } from './emulator';
 
 /**
@@ -182,11 +183,14 @@ export type SeedMemberRole = 'owner' | 'admin' | 'member';
  * fixture seeded without a member row is simply denied.
  *
  * That the seam existed is why this is one edit instead of one per spec file.
+ *
+ * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide
  */
 export async function grantMembership(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
+  extra?: { swoop?: SwoopMode; machineIds?: string[] },
 ): Promise<void> {
   const db = getAdminDb();
   await db
@@ -196,7 +200,7 @@ export async function grantMembership(
   if (role === 'owner') {
     await db.collection('sites').doc(siteId).set({ owner: uid }, { merge: true });
   }
-  await seedMemberRow(siteId, uid, role);
+  await seedMemberRow(siteId, uid, role, extra);
 }
 
 /**
@@ -207,11 +211,14 @@ export async function grantMembership(
  * api specs that seed a site inline. Since wave 5.1 this row is what GRANTS, so
  * a site seeded without one is unreadable even by the uid its `owner` field
  * names — which is exactly how the owner-delete spec started failing.
+ *
+ * a row with machineIds is a scoped member: it reaches only those machines and nothing site-wide
  */
 export async function seedMemberRow(
   siteId: string,
   uid: string,
   role: SeedMemberRole = 'member',
+  extra?: { swoop?: SwoopMode; machineIds?: string[] },
 ): Promise<void> {
   await getAdminDb()
     .collection('sites')
@@ -224,6 +231,7 @@ export async function seedMemberRow(
       status: 'active',
       addedAt: new Date(0),
       addedBy: 'system:e2e-seed',
+      ...extra,
     });
 }
 

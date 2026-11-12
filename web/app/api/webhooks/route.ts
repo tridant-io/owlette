@@ -311,10 +311,15 @@ export function serializeSubscription(
     ...(description ? { description } : {}),
     createdAt: timestampToIso(data.createdAt),
     updatedAt: timestampToIso(data.updatedAt),
-    paused: Boolean(data.paused),
+    // the sender's auto-off (`enabled: false`) and counter (`failCount`) are what
+    // decide delivery; the public names alone would report a dead webhook as healthy.
+    paused: data.paused === true || data.enabled === false,
     lastDeliveryAt: timestampToIso(data.lastDeliveryAt),
     lastDeliveryStatus:
       typeof data.lastDeliveryStatus === 'string' ? data.lastDeliveryStatus : null,
-    failureCount: typeof data.failureCount === 'number' ? data.failureCount : 0,
+    failureCount:
+      typeof data.failCount === 'number' ? data.failCount
+        : typeof data.failureCount === 'number' ? data.failureCount
+          : 0,
   };
 }

@@ -166,7 +166,7 @@ test.describe('swoop bar position — admin on site-A', () => {
 
     // quality waits for a live session, so it is disabled here
     for (const [button, tip] of [
-      ['quality ceiling', 'quality'],
+      ['quality and display', 'quality'],
       ['send a key combination', 'send a key combination'],
       ['bar position', 'bar position'],
       ['latency stats', 'stats'],
@@ -184,7 +184,7 @@ test.describe('swoop bar position — admin on site-A', () => {
       await page.mouse.move(800, 450, { steps: 8 });
       await expect(tooltip).toBeHidden();
     }
-    await page.getByRole('button', { name: 'quality ceiling', exact: true }).hover({ force: true });
+    await page.getByRole('button', { name: 'quality and display', exact: true }).hover({ force: true });
     await expect(page.getByRole('tooltip')).toBeVisible();
     await shot(page, 'left-tooltip');
   });

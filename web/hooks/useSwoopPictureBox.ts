@@ -1,8 +1,8 @@
 /**
  * the picture's box inside the stage, for the overlays that place a pointer on it.
  *
- * a pointer's position arrives normalised over the PICTURE — the letterboxed
- * content area, not the element — so the arithmetic here is the same one
+ * a pointer's position arrives normalised over the PICTURE — the video's own
+ * box, not the stage around it — so the arithmetic here is the same one
  * `session.contentRect()` exists for on the input side, including its
  * `size - 1` convention. measuring is a layout read, so it happens in an
  * effect after a commit and not in render: a position changes 60 times a
@@ -55,12 +55,12 @@ export const toPixel = (normalised: number, offset: number, size: number): numbe
 
 /**
  * re-measured on a window resize, on entering or leaving fullscreen, on a
- * change of the local zoom (`lib/swoop/zoom.ts`), and on the
- * `<video>` element's own `resize` — which is the first frame, before which
- * there is no box, and the display switch, which changes the picture's aspect
- * ratio inside an element whose box never moved and so fires nothing else.
- * re-measuring per cursor message instead would be a layout read sixty times a
- * second for a box that changes when the window does.
+ * change of the local zoom (`lib/swoop/zoom.ts`), on the `<video>` element's
+ * own `resize` — which is the first frame, before which there is no box, and
+ * the display switch, which lays the picture out again — and when the video or
+ * the area it is laid out in changes size. re-measuring per cursor message
+ * instead would be a layout read sixty times a second for a box that changes
+ * when the window does.
  */
 export function useSwoopPictureBox(session: SwoopSession | null): PictureBox | null {
   const [box, setBox] = useState<PictureBox | null>(null);
@@ -79,11 +79,14 @@ export function useSwoopPictureBox(session: SwoopSession | null): PictureBox | n
     session.video.addEventListener('resize', sync);
     // a pinch moves the picture without moving the element, so nothing above fires for it
     const offZoom = swoopTouch(session)?.zoom.subscribe(sync);
-    // nor for the phone keyboard's padding, which resizes the element alone,
-    // or, when the visible area pans, moves it at one size; the padding lands
-    // in the render that event starts, so the move is measured a frame on
+    // nor for the phone keyboard's padding, which resizes the area alone, or,
+    // when the visible area pans, moves it at one size; the padding lands in
+    // the render that event starts, so the move is measured a frame on. the
+    // area can also resize around a picture that only moves within it
     const resizes = typeof ResizeObserver === 'function' ? new ResizeObserver(sync) : null;
     resizes?.observe(session.video);
+    const area = session.video.parentElement;
+    if (area) resizes?.observe(area);
     let frame = 0;
     const afterPadding = () => {
       cancelAnimationFrame(frame);

@@ -65,9 +65,11 @@ import {
   resolveAuth,
   assertActiveUser,
   assertUserHasSiteAccess,
+  assertUserHasSiteCapability,
   type ApiKeyContext,
   type ResolvedAuth,
 } from '@/lib/apiAuth.server';
+import { Capability } from '@/lib/capabilities';
 
 function makeRequest(url = 'http://localhost/test', init?: RequestInit) {
   return new NextRequest(new URL(url), init as unknown as ConstructorParameters<typeof NextRequest>[1]);
@@ -616,6 +618,57 @@ describe('assertUserHasSiteAccess', () => {
     await expect(assertUserHasSiteAccess('user-7', 'site-7')).rejects.toThrow(
       expect.objectContaining({ status: 403 }),
     );
+  });
+});
+
+/** a site, an active user with no global privilege, and their member row on it */
+function mockMemberOn(memberRow: Record<string, unknown>) {
+  mockDocGet.mockImplementation((col: string) => {
+    if (col === 'sites') return Promise.resolve({ exists: true, data: () => ({ name: 'Site S' }) });
+    if (col === 'users') return Promise.resolve({ exists: true, data: () => ({ role: 'member' }) });
+    if (col === 'members') return Promise.resolve({ exists: true, data: () => memberRow });
+    return Promise.resolve({ exists: false });
+  });
+}
+
+describe('assertUserHasSiteAccess machine scope', () => {
+  it("returns a scoped member's machines", async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active', machineIds: ['m1'] });
+    const result = await assertUserHasSiteAccess('user-s', 'site-s');
+    expect(result.machineIds).toEqual(['m1']);
+  });
+
+  it('returns null for a whole-site member', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active' });
+    const result = await assertUserHasSiteAccess('user-s', 'site-s');
+    expect(result.machineIds).toBeNull();
+  });
+});
+
+describe('assertUserHasSiteCapability', () => {
+  it('refuses MACHINE_ENROLL to a scoped admin', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'admin', status: 'active', machineIds: ['m1'] });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).rejects.toThrow(
+      expect.objectContaining({ status: 403, message: 'Forbidden: capability not granted' }),
+    );
+  });
+
+  it('refuses MACHINE_ENROLL to a member set to swoop control', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'member', status: 'active', swoop: 'control' });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).rejects.toThrow(
+      expect.objectContaining({ status: 403, message: 'Forbidden: capability not granted' }),
+    );
+  });
+
+  it('allows MACHINE_ENROLL to a whole-site admin', async () => {
+    mockMemberOn({ uid: 'user-s', role: 'admin', status: 'active' });
+    await expect(
+      assertUserHasSiteCapability('user-s', 'site-s', Capability.MACHINE_ENROLL),
+    ).resolves.toMatchObject({ siteId: 'site-s', siteData: { name: 'Site S' } });
   });
 });
 

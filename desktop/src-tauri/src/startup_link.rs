@@ -6,9 +6,9 @@
 //! shortcut (`owlette_installer.iss`, `[Icons]`) needs no elevation, and
 //! turning it off leaves the service running.
 //!
-//! Enabling always REWRITES the shortcut: the installer's version points at
-//! `pythonw.exe owlette_tray.py`, so an upgraded machine would otherwise keep
-//! auto-starting the python tray instead of this exe with `--tray`.
+//! Enabling always rewrites the shortcut to this exe with `--tray`, the target
+//! the installer's own entry has had since 3.0.0, and drops the pre-rename
+//! `Owlette Tray.lnk`.
 
 use std::path::{Path, PathBuf};
 
@@ -298,10 +298,10 @@ fn legacy_link_path() -> Result<PathBuf, String> {
 
 /// True when owlette is set to start with this user's session.
 ///
-/// Presence is the whole test. An installer-left shortcut still points at the
-/// python tray, but something owlette DOES launch at login, so "on" is correct
-/// and [`enable`] then replaces it. The pre-rename name counts for the same
-/// reason: reporting "off" while it sits there is a lie the toggle can't fix.
+/// Presence is the whole test, whatever the shortcut points at: something
+/// owlette launches at login, so "on" is correct and [`enable`] rewrites it.
+/// The pre-rename name counts for the same reason: reporting "off" while it
+/// sits there is a lie the toggle can't fix.
 #[cfg(windows)]
 pub fn is_enabled() -> bool {
   match (link_path(), legacy_link_path()) {

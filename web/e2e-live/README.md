@@ -90,7 +90,7 @@ One run, in order ([`run.mjs`](run.mjs)):
 4. **Playwright** — [`playwright.live.config.ts`](../playwright.live.config.ts). Global setup
    proves the web API key is dev's, seeds site `smoke-live` and the three persistent users (fresh
    passwords, held in memory), signs `smoke-siteadmin` and `smoke-member` in through `/login`, and
-   stores the LLM key if none is stored. The seven tests run one at a time with one retry each
+   stores the LLM key if none is stored. The eight tests run one at a time with one retry each
    (120 s per test, 180 s for the tier-3 check). Global teardown then removes what the run created.
 5. **Finish** — the stub is stopped over IPC (killed by PID after 15 s). Ten seconds later a last
    `teardown()` pass sweeps what its final writes set off — every write to its machine doc samples
@@ -231,16 +231,21 @@ session for that uid, and dev's stored sign counter must match the authenticator
 
 `smoke-target` has no standing in `smoke-live` before or after each check.
 
-- **Site admin** — `smoke-siteadmin` goes dashboard → user menu → admin panel, and the members
-  page must list `smoke-live` alone. It adds `smoke-target` as a member through the dialog, makes
-  them an admin, and removes them; `sites/smoke-live/members/smoke-target` is read back after each
-  step. The row menu must offer a site admin only "remove...": "change role..." is superadmin-only,
-  so the check sends the role change as the `PATCH` that control would make, from the site
-  admin's page.
-- **Member** — `smoke-member` is turned away from `/admin/members` ("access denied"), has no
-  "admin panel" in the user menu, and an in-page `POST /api/sites/smoke-live/members` is refused
-  403 `capability not granted` with no row written. Positive control: the same request as
-  `smoke-siteadmin` answers 200 and writes the row, then is undone.
+- **Site admin** — `smoke-siteadmin` goes dashboard → user menu → admin panel, which lands on
+  `/admin/sites`, then `smoke-live`'s gear → members, and the members section must list
+  `smoke-live` alone. It adds `smoke-target` as a member by typing their email into the dialog's
+  "name or email", makes them an admin with the row menu's "change access..." (the dialog's role
+  select, then save), and removes them; `sites/smoke-live/members/smoke-target` is read back after
+  each step. The row menu must offer a site admin "change access..." and "remove...": site admins
+  change roles in the UI (owner ruling, 2026-11-04).
+- **Hard loads** — `smoke-siteadmin` loads `/admin/sites` and
+  `/admin/sites/smoke-live?section=members` fresh, and each settles on its page with no "access
+  denied" toast: the admin panel's guard waits for the memberships before it decides.
+- **Member** — `smoke-member` is turned away from `/admin/sites` (back on `/dashboard`, "access
+  denied"), has no "admin panel" in the user menu, and an in-page
+  `POST /api/sites/smoke-live/members` is refused 403 `capability not granted` with no row
+  written. Positive control: the same request as `smoke-siteadmin` answers 200 and writes the row,
+  then is undone.
 
 ## Manual cleanup
 

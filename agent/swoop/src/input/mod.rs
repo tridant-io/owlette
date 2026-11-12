@@ -4,14 +4,15 @@
 //! the whole reason this module has as much arithmetic as it does:
 //!
 //! 1. **viewer space** — what `PROTOCOL.md` §5's `m` message carries: `0..1`
-//!    normalised over the selected display's captured texture. Normalised so a
+//!    normalised over the selected display's picture. Normalised so a
 //!    resolution or scale change mid-session does not move the cursor.
 //! 2. **virtual-desktop pixels** — where the selected output actually sits.
 //!    Both axes go negative: spike 0.8 measured this box's origin at
-//!    (-2160, -1138) on every run, so nothing here may assume zero. The
-//!    captured texture is also *un-rotated* while the desktop rect is rotated —
-//!    a rotate270 output hands back a 3840x2160 texture for a 2160x3840 rect —
-//!    so [`PointerSpace`] applies the rotation the texture never had.
+//!    (-2160, -1138) on every run, so nothing here may assume zero. A rotated
+//!    output's texture is un-rotated — a rotate270 output hands back a
+//!    3840x2160 texture for a 2160x3840 rect — but capture turns it upright
+//!    before anything sees it, so the picture is the desktop rect as
+//!    displayed and [`PointerSpace`] has no rotation to apply.
 //! 3. **`SendInput`'s absolute space** — its own `0..65535` normalisation of
 //!    the virtual desktop, which is neither of the above. Getting this wrong
 //!    still looks perfect on a single 1080p monitor and puts the cursor on the
@@ -223,12 +224,11 @@ pub fn coalesce(events: &[InputEvent]) -> Vec<InputEvent> {
 
 /// The display a viewer's normalised coordinates belong to.
 ///
-/// `rotation` is the rotation **as capture reports it, un-applied**: viewer
-/// coordinates are in texture space, and the texture is the un-rotated
-/// framebuffer. If a later convert/scale path rotates the frame before it is
-/// encoded, then the viewer is already clicking in desktop-local space and this
-/// must be built with [`Rotation::Identity`] instead — the session owns that
-/// choice, which is why this is a parameter and not read from the output.
+/// `rotation` is how far the picture the viewer clicks on is turned from the
+/// desktop. Every capture source hands its frames over upright — capture
+/// turns Desktop Duplication's un-rotated texture, and macOS's arrives so —
+/// so the session's space is [`PointerSpace::from_output`]'s, with
+/// [`Rotation::Identity`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointerSpace {
     pub rect: Rect,
@@ -236,10 +236,11 @@ pub struct PointerSpace {
 }
 
 impl PointerSpace {
+    /// The output's own desktop rect, as the upright picture shows it.
     pub fn from_output(output: &OutputInfo) -> Self {
         Self {
             rect: output.desktop_rect,
-            rotation: output.rotation,
+            rotation: Rotation::Identity,
         }
     }
 
@@ -277,8 +278,9 @@ impl PointerSpace {
     }
 }
 
-/// Apply an output's rotation to a normalised texture point, which is what
-/// turns un-rotated texture space into the desktop-local space the user sees.
+/// Apply a [`PointerSpace`]'s rotation to a normalised viewer point, turning
+/// a picture streamed un-rotated into the desktop-local space the user sees.
+/// The session's spaces are upright and pass Identity.
 ///
 /// The displayed image is the texture rotated clockwise by `rotation`, so a
 /// clockwise 90 sends `(u, v)` to `(1-v, u)` and the other two follow from
@@ -674,7 +676,7 @@ fn per_notch(mode: WheelMode) -> f64 {
     match mode {
         WheelMode::Pixel => PIXELS_PER_NOTCH,
         WheelMode::Line => LINES_PER_NOTCH,
-        WheelMode::Page => LINES_PER_PAGE / LINES_PER_NOTCH,
+        WheelMode::Page => LINES_PER_NOTCH / LINES_PER_PAGE,
     }
 }
 
@@ -1510,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn viewer_space_crosses_the_rotation_and_the_origin() {
+    fn viewer_space_crosses_the_origin_of_a_rotated_output() {
         let outputs = measured_outputs();
         let bounds = measured_bounds();
 
@@ -1518,21 +1520,45 @@ mod tests {
         assert_eq!(primary.to_desktop(0.0, 0.0), (0, 0));
         assert_eq!(primary.to_desktop(1.0, 1.0), (1919, 1079));
 
-        // The rotate270 panel: the texture is the un-rotated framebuffer, so
-        // its top-left is displayed at the bottom-left of the desktop rect.
+        // The rotate270 panel is streamed upright, so the picture's top-left
+        // is the desktop rect's.
         let rotated = PointerSpace::from_output(&outputs[1]);
-        assert_eq!(rotated.to_desktop(0.0, 0.0), (-2160, 2701));
-        assert_eq!(rotated.to_desktop(1.0, 0.0), (-2160, -1138));
-        assert_eq!(rotated.to_desktop(0.25, 0.5), (-1080, 1741));
+        assert_eq!(rotated.to_desktop(0.0, 0.0), (-2160, -1138));
+        assert_eq!(rotated.to_desktop(1.0, 0.0), (-1, -1138));
+        assert_eq!(rotated.to_desktop(0.25, 0.5), (-1620, 782));
         assert_eq!(
             absolute_from_desktop(rotated.to_desktop(0.25, 0.5), bounds),
-            (17352, 49147)
+            (8676, 32776)
         );
 
-        // Out-of-range coordinates from a viewer clamp in texture space, so
+        // Out-of-range coordinates from a viewer clamp in viewer space, so
         // they land on this display's own corner and never on the neighbouring
         // monitor.
-        assert_eq!(rotated.to_desktop(-5.0, 9.0), (-1, 2701));
+        assert_eq!(rotated.to_desktop(-5.0, 9.0), (-2160, 2701));
+    }
+
+    /// Every rotated output is streamed upright, so its pointer space is the
+    /// desktop rect's own with nothing to turn: a viewer clicks where the
+    /// picture shows.
+    #[test]
+    fn a_rotated_output_is_clicked_as_it_is_displayed() {
+        let outputs = measured_outputs();
+        let (landscape, portrait) = (outputs[0].desktop_rect, outputs[1].desktop_rect);
+        for (rect, rotation) in [
+            (portrait, Rotation::Rotate90),
+            (landscape, Rotation::Rotate180),
+            (portrait, Rotation::Rotate270),
+        ] {
+            let output = OutputInfo {
+                device_name: r"\\.\DISPLAY2".to_string(),
+                desktop_rect: rect,
+                rotation,
+            };
+            let space = PointerSpace::from_output(&output);
+            assert_eq!(space, PointerSpace { rect, rotation: Rotation::Identity }, "{rotation:?}");
+            assert_eq!(space.to_desktop(0.0, 0.0), (rect.left, rect.top), "{rotation:?}");
+            assert_eq!(space.to_desktop(1.0, 1.0), (rect.right - 1, rect.bottom - 1), "{rotation:?}");
+        }
     }
 
     #[test]
@@ -1730,6 +1756,14 @@ mod tests {
             vec![InputEvent::MouseWheel {
                 delta_x: 0,
                 delta_y: 120
+            }]
+        );
+        // One page up is LINES_PER_PAGE lines, which is eight notches.
+        assert_eq!(
+            viewer.accept(&wire_wheel(0.0, -1.0, WheelMode::Page), now),
+            vec![InputEvent::MouseWheel {
+                delta_x: 0,
+                delta_y: 960
             }]
         );
     }

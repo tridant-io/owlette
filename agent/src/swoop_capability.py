@@ -1,10 +1,10 @@
 """
-Swoop capability + platform normalisation for the heartbeat.
+Swoop capability for the heartbeat.
 
-Everything here runs on the 5-second heartbeat path, so it stays to dict
-lookups, the single exe-path check that answers "is the streamer installed",
-and the osadapter arm's in-process answer for this OS (on macOS, a read of the
-desktop app's small grant report). The streamer's own `probe` verb is the
+Everything here runs on the 5-second heartbeat path, so it stays to the single
+exe-path check that answers "is the streamer installed" and the osadapter
+arm's in-process answer for this OS (on macOS, a read of the desktop app's
+small grant report). The streamer's own `probe` verb is the
 source of encoder truth and is deliberately NOT run here — it would be a
 process spawn per heartbeat.
 
@@ -12,41 +12,8 @@ process spawn per heartbeat.
 constant in web/lib/versionUtils.ts is advisory copy only.
 """
 
-import platform
-import sys
-
 import osadapter
 import shared_utils
-
-
-# Cross-plan rule C3: one spelling per platform, shared with the tri-platform
-# agent plan. Readers treat an ABSENT osFamily as 'windows' — every agent in the
-# field predates the key, and they are all Windows.
-OS_FAMILY_BY_PLATFORM = {
-    'win32': 'windows',
-    'darwin': 'macos',
-    'linux': 'linux',
-}
-
-ARCH_BY_MACHINE = {
-    'AMD64': 'x64',
-    'x86_64': 'x64',
-    'arm64': 'arm64',
-    'aarch64': 'arm64',
-}
-
-UNKNOWN = 'unknown'
-
-
-def os_family():
-    """C3 osFamily for this machine, or 'unknown' on an unmapped platform."""
-    return OS_FAMILY_BY_PLATFORM.get(sys.platform, UNKNOWN)
-
-
-def arch():
-    """C3 arch for this machine, or 'unknown' on an unmapped machine type."""
-    # platform.machine() returns '' rather than raising when it can't tell.
-    return ARCH_BY_MACHINE.get(platform.machine(), UNKNOWN)
 
 
 def streamer_capable():

@@ -1,0 +1,43 @@
+<!doctype html>
+<!--
+  swoop-clarity task 2.5: a full-window millisecond clock for glass-to-glass
+  checks. the large digits are the last six of Date.now(); the strip under them
+  is the smooth probe's barcode of the same clock, which drive.mjs can read.
+  served by server.mjs at http://127.0.0.1:17460/clock.html; it loads
+  probe.js, which loads the shipped smooth.ts (never a copy) but runs only the
+  clock here.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>smooth probe clock</title>
+    <link rel="icon" href="data:," />
+    <style>
+      :root { color-scheme: dark; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background: #000;
+        color: #fff;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4vh;
+        overflow: hidden;
+      }
+      #digits { font: 700 20vw/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+      #strip { display: flex; }
+    </style>
+  </head>
+  <body data-page="clock">
+    <div id="digits">000000</div>
+    <div id="strip"></div>
+    <script type="module">
+      import('/probe.js').catch((e) => {
+        document.getElementById('digits').textContent = String(e?.message ?? e);
+      });
+    </script>
+  </body>
+</html>

@@ -183,7 +183,7 @@ the dashboard knows the window from the machine's heartbeat, so the restart and 
 | **restart when active hours end** | restart only. the agent holds the restart and fires it once active hours end on the machine's clock |
 | **restart now** / **shut down now** | needs a **reason**, 500 characters or fewer. the agent restarts or shuts down at once and logs `active_hours_override` with the reason and your name |
 
-a machine that does not report its timezone gets the same choice with **may be inside active hours**, since the dashboard cannot tell; the agent still decides. the restart pending banner's **approve**, and the restart button in **manage sites**' machine list, ask the same way.
+a machine that does not report its timezone gets the same choice with **may be inside active hours**, since the dashboard cannot tell; the agent still decides. the restart pending banner's **approve**, and the restart button in the machines section of a site's settings, ask the same way.
 
 **a held restart** shows as an amber **restart at 17:00** pill, in the machine's time (UTC when the machine reports no timezone), with no countdown and no dimmed row. for a site admin it is a cancel button like the countdown's: hover for **cancel**, which sends `cancel_reboot`. the machine menu offers **cancel restart** too, and keeps **restart machine** and **shutdown machine**; restart opens the same confirm. once active hours end, the agent starts the usual one-minute countdown, and the pill becomes it.
 
@@ -226,7 +226,7 @@ this is the per-machine version of the [token management](/docs/dashboard/admin/
 
 ### remove machine
 
-removal is permanent: it deletes the machine's data, process configuration and command history, and revokes the agent's token.
+removal is permanent: it deletes the machine's data, process configuration and command history, and revokes the agent's token. a [swoop](/docs/dashboard/swoop) session on the machine ends, and everyone in it is told the machine has left the site.
 
 - **a machine with deployments in progress cannot be removed.** the dialog blocks confirmation until they finish.
 - **an online machine can be removed.** an agent on 4.1.8 or later notices within seconds, stops syncing, drops its credentials and offers **join site** in the app. an older agent keeps writing on its access token, so the machine comes back and stays until that token expires, within the hour; remove it again then, or update the agent first.

@@ -8,11 +8,12 @@ name: build installer (slsa l3)
 # slsa-verifier can prove every file was built from this repo at this commit
 # by this trusted workflow, not by a human on a laptop.
 #
-# Job graph: security-gate → build-windows / build-macos / build-linux (in
-# parallel) → digest (one `sha256sum` line per file, base64) → provenance →
-# release → verify. Everything past the builds needs all three, so a dispatch
-# run without the Apple secrets stops at build-macos and nothing is attested;
-# build-windows and build-linux still produce their artifacts.
+# Job graph: security-gate → build-windows → package-windows, and build-macos /
+# build-linux in parallel with them → digest (one `sha256sum` line per file,
+# base64) → provenance → release → verify. Everything past the builds needs all
+# three installers, so a dispatch run without the Apple secrets stops at
+# build-macos and nothing is attested; package-windows and build-linux still
+# produce their artifacts.
 #
 # Level 3 requires:
 #   - build runs on a trusted CI system (✅ github-hosted runner)
@@ -31,15 +32,25 @@ name: build installer (slsa l3)
 # auto-creates it unrestricted and empty, and the job's first step fails on
 # the missing names.
 #
-# Authenticode signing is NOT wired up yet. Two corrections to the older plan
-# that used to be documented here, both load-bearing:
+# build-windows builds the payload with no credential and hands it to
+# package-windows, the only job with `id-token: write`, which signs our four
+# executables and compiles the installer (Inno signs setup and its
+# uninstaller). One certificate profile signs every Tridant product, so the
+# token stays out of the job that runs pip, npm and cargo dependencies: a
+# compromised one could otherwise sign anything as Tridant, and a revoked
+# profile stops every product's signing. package-windows signs on a tag only
+# (OWLETTE_SIGN=1, scripts/sign.ps1), with no secret: it signs in to Azure over
+# GitHub OIDC as the Entra app owlette-ci-signing, whose federated credential
+# names the `release` environment (scripts/setup-ci-signing.sh). A dispatch on
+# a branch compiles unsigned. Two points from the older plan, both
+# load-bearing:
 #
-#   1. Signing must happen inside the build job, BEFORE the digest job hashes
+#   1. Signing must happen in package-windows, BEFORE the digest job hashes
 #      the file, not after provenance is sealed. The digest job hashes the
 #      installer bytes into the attested subject, and the verify job re-hashes
 #      the released asset against it. Signing mutates the bytes, so signing
 #      afterwards would fail slsa-verifier on every tagged release. (The pkg
-#      is already signed, notarized and stapled this way.)
+#      is signed, notarized and stapled the same way.)
 #
 #   2. An EV certificate is not the prerequisite. Microsoft removed EV's
 #      instant SmartScreen reputation in 2024 ("Paying a premium for EV solely
@@ -48,8 +59,6 @@ name: build installer (slsa l3)
 #      No certificate grants day-one trust for non-Store distribution; signing
 #      buys a verified publisher name plus reputation that persists across
 #      releases instead of resetting per file hash.
-#
-# The build-windows job will also need `id-token: write` for Azure OIDC login.
 
 # zizmor anchors cache-poisoning to the trigger, so the ignore lives here; the
 # rationale is on the build-windows rust-cache step.
@@ -92,7 +101,7 @@ jobs:
     uses: ./.github/workflows/security-gate.yml
 
   build-windows:
-    name: build installer on windows-latest
+    name: build installer payload on windows-latest
     needs: [security-gate]
     runs-on: windows-latest
     # Three cargo crates now (desktop, host, swoop). On a cold cache the swoop
@@ -100,7 +109,6 @@ jobs:
     # was already close on a warm one.
     timeout-minutes: 60
     outputs:
-      artifact-name: ${{ steps.build.outputs.artifact-name }}
       version: ${{ steps.version.outputs.version }}
     permissions:
       contents: read
@@ -139,23 +147,8 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
           Write-Host "building installer version $v"
 
-      - name: install Inno Setup 6
-        shell: pwsh
-        run: |
-          # The windows-latest image now ships Inno Setup pre-installed (6.7.x),
-          # so `choco install innosetup --version=6.2.2` fails with "a newer
-          # version is already installed" (exit 1). build_installer_full.bat
-          # locates ISCC at the standard path / PATH and works with any 6.x, so:
-          # skip when already present, otherwise install the current version.
-          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-          if ((Test-Path $iscc) -or (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
-            Write-Host "Inno Setup 6 already present — skipping choco install"
-          } else {
-            choco install innosetup -y --no-progress
-          }
-
       - name: pin Python toolchain version
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
 
@@ -174,7 +167,7 @@ jobs:
       # mechanism allows: this workflow writes only from main, and the only
       # other writer of these keys (rust-build.yml) is likewise main/dev. The
       # alternative is a cold three-crate build on every release.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             agent/host
@@ -183,8 +176,7 @@ jobs:
             desktop/viewer
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: build installer
-        id: build
+      - name: build the installer payload
         # zizmor: ignore[misfeature] — cmd is deliberate: this step drives
         # build_installer_full.bat, and rewriting the driver shell in a
         # release-critical hermetic SLSA build trades real regression risk for
@@ -197,10 +189,87 @@ jobs:
           :: The batch file reads agent/VERSION; write our resolved version in
           :: case the checkout didn't match the tag (belt-and-suspenders).
           echo %OWLETTE_VERSION%> VERSION
-          call build_installer_full.bat
+          call build_installer_full.bat payload
           if errorlevel 1 exit /b 1
-          :: output artifact name for downstream jobs
-          echo artifact-name=Owlette-Installer-v%OWLETTE_VERSION%.exe>> %GITHUB_OUTPUT%
+
+      # hidden files too: the payload is a python tree, and a dot-file left out
+      # here would be missing from the installer with no error anywhere.
+      - name: upload the installer payload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-payload
+          path: agent/build/installer_package
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  package-windows:
+    name: sign and compile the windows installer
+    needs: [build-windows]
+    runs-on: windows-latest
+    # the azure ids live here, and azure trusts only this environment's token.
+    # a branch dispatch stays out of it, or github would refuse the job.
+    environment: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || '' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # azure sign-in for signing; the only job that has it
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: check for Inno Setup 6
+        shell: pwsh
+        run: |
+          # the windows-latest image ships Inno Setup 6, and build_installer_full.bat
+          # finds ISCC at the standard path or on PATH. no chocolatey fallback:
+          # this job holds the azure token, so it installs nothing third-party.
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc) -and !(Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
+            throw "Inno Setup 6 is not on this runner image"
+          }
+
+      - name: install the artifact signing dlib
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "artifact-signing-client.zip"
+          Invoke-WebRequest "https://www.nuget.org/api/v2/package/Microsoft.ArtifactSigning.Client/1.0.146" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne "7761E5D8F31E54B764DA21D33CD8B0A2940E1B05526C7DFCB5E94B0431426F70") {
+            throw "the artifact signing dlib package does not match its pinned sha256"
+          }
+          Expand-Archive $zip (Join-Path $env:USERPROFILE ".nuget\packages\microsoft.artifactsigning.client\1.0.146")
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-payload
+          path: agent/build/installer_package
+
+      # the version comes from the job that runs third-party code, and cmd
+      # expands it as text, so it is checked again where the token is.
+      - name: check the version
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          if ($env:VERSION -notmatch '\A\d+\.\d+\.\d+\z') {
+            throw "refusing to sign: version '$env:VERSION' must be X.Y.Z semver"
+          }
+
+      - name: sign and compile the installer
+        # cmd for the same reason as the payload step in build-windows.
+        shell: cmd # zizmor: ignore[misfeature]
+        working-directory: agent
+        env:
+          OWLETTE_VERSION: ${{ needs.build-windows.outputs.version }}
+          OWLETTE_SIGN: ${{ startsWith(github.ref, 'refs/tags/v') && '1' || '' }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: |
+          echo %OWLETTE_VERSION%> VERSION
+          call build_installer_full.bat compile
+          if errorlevel 1 exit /b 1
 
       # Runs after the build and BEFORE the digest job, so a detection stops
       # the release instead of being attested. owlette-swoop.exe is a small,
@@ -241,10 +310,10 @@ jobs:
           }
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-windows
-          path: agent/build/installer_output/Owlette-Installer-v${{ steps.version.outputs.version }}.exe
+          path: agent/build/installer_output/Owlette-Installer-v${{ needs.build-windows.outputs.version }}.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -318,7 +387,7 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "building installer version $v"
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           # the lockfile is desktop/package-lock.json, not at the root, and
@@ -327,13 +396,13 @@ jobs:
 
       # same pin and rationale as rust-build.yml: no version tags upstream, the
       # toolchain comes through the input.
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-10-16
         with:
           toolchain: '1.98.1'
 
       # same scoping as the windows job's cache: written from main only. two
       # workspaces: build.sh builds the swoop streamer, the app's sidecar, first.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: |
             agent/swoop
@@ -429,7 +498,7 @@ jobs:
           fi
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-macos
           path: agent/build/macos/Owlette-Installer-v${{ steps.version.outputs.version }}.pkg
@@ -479,12 +548,12 @@ jobs:
             libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             patchelf libxdo-dev libssl-dev build-essential
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '22'
           package-manager-cache: false
 
-      - uses: dtolnay/rust-toolchain@7e38f4b43b4db5c8dd498af069a4f6196df1d067 # master @ 2026-09-12
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master @ 2026-10-16
         with:
           toolchain: '1.98.1'
 
@@ -492,7 +561,7 @@ jobs:
         run: agent/build/linux/build.sh
 
       - name: upload installer artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-linux
           path: agent/build/linux/Owlette-Installer-v${{ steps.version.outputs.version }}.deb
@@ -504,7 +573,7 @@ jobs:
   # ----------------------------------------------------------------------
   digest:
     name: sha256 subjects
-    needs: [build-windows, build-macos, build-linux]
+    needs: [build-windows, package-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -512,7 +581,7 @@ jobs:
       subjects-b64: ${{ steps.digest.outputs.subjects-b64 }}
       version: ${{ needs.build-windows.outputs.version }}
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true
@@ -583,7 +652,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true
@@ -593,7 +662,7 @@ jobs:
         # zizmor: ignore[superfluous-actions] — kept over `gh release upload`
         # because it CREATES the release when a bare tag push arrives without
         # one; the gh equivalent errors out in that case.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v2 zizmor: ignore[superfluous-actions]
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: |
             Owlette-Installer-v${{ needs.digest.outputs.version }}.exe
@@ -624,7 +693,7 @@ jobs:
           chmod +x /usr/local/bin/slsa-verifier
 
       - name: download installers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           merge-multiple: true

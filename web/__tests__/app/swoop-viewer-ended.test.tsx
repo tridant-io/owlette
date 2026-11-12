@@ -24,7 +24,14 @@ const mockRouter = { push: jest.fn(), replace: jest.fn(), prefetch: jest.fn() };
 jest.mock('next/navigation', () => ({ useRouter: () => mockRouter }));
 
 jest.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mfaFactors: { totp: true, passkeys: 0 }, isSiteAdmin: () => false, isSiteOwner: () => false }),
+  useAuth: () => ({
+    mfaFactors: { totp: true, passkeys: 0 },
+    isSiteAdmin: () => false,
+    isSiteOwner: () => false,
+    machineScope: () => null,
+    isMachineAdmin: () => false,
+    siteRole: () => 'member',
+  }),
 }));
 
 jest.mock('@/hooks/useFirestore', () => ({
@@ -41,9 +48,11 @@ const mockStats = {
   feedback: null,
   frame: null,
   leaseExpiresAt: 0,
+  linkUp: true,
   stall: { recovery: 'none', episodes: 0, kind: null },
 } as unknown as SwoopStats;
 const mockVideoRef = createRef<HTMLVideoElement>();
+const mockCanvasRef = createRef<HTMLCanvasElement>();
 const mockStageRef = createRef<HTMLDivElement>();
 const mockStepUp = { required: false, enrolled: true, submitProof: jest.fn(), cancel: jest.fn() };
 jest.mock('@/hooks/useSwoopSession', () => ({
@@ -53,6 +62,7 @@ jest.mock('@/hooks/useSwoopSession', () => ({
     stats: mockStats,
     session: null,
     videoRef: mockVideoRef,
+    canvasRef: mockCanvasRef,
     stageRef: mockStageRef,
     stepUp: mockStepUp,
     end: jest.fn(),
@@ -161,6 +171,16 @@ it('a refusal or failure keeps its notice and the way back', async () => {
   moveTo(view, { state: 'error', error: 'this machine did not answer.' });
   wait(5000);
   expect(screen.getByRole('alert')).toHaveTextContent('this machine did not answer.');
+  expect(mockRouter.replace).not.toHaveBeenCalled();
+  expect(close).not.toHaveBeenCalled();
+});
+
+it('a machine that left the site keeps its notice in owlette swoop too', async () => {
+  const close = fakeBridge('main');
+  const view = await openViewer();
+  moveTo(view, { state: 'error', error: 'this machine has left the site.' });
+  wait(5000);
+  expect(screen.getByRole('alert')).toHaveTextContent('this machine has left the site.');
   expect(mockRouter.replace).not.toHaveBeenCalled();
   expect(close).not.toHaveBeenCalled();
 });

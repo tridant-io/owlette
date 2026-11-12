@@ -8,7 +8,7 @@ This runbook is for maintainers shipping the Owlette agent installers: one versi
 
 It covers both supported artifact paths: a local maintainer build and a CI build with SLSA L3 provenance.
 
-It also covers the 3-step API upload that rolls a version out to agents, plus operational concerns around `setAsLatest`, demotion, smoke testing, and unsigned installer UX.
+It also covers the 3-step API upload that rolls a version out to agents, plus operational concerns around `setAsLatest`, demotion, smoke testing, and Windows signing.
 
 This document is only for the installer surface. For non-installer deploys, use `/docs/runbooks/production-deploy.md`.
 
@@ -16,8 +16,10 @@ This document is only for the installer surface. For non-installer deploys, use 
 
 - Windows machine with admin rights, for the `.exe`.
 - Inno Setup 6.x installed, or `%ISCC%` set to the compiler path.
+- The signing setup in "code signing context" below. TEC-A4D and TEC-B4A have it.
 - Node.js 22 + npm, and the Rust toolchain (rustup) with the MSVC C++ build tools — the full build compiles the desktop app.
-- The `.pkg` and `.deb`: from the CI release (path b), or `agent/build/macos/build.sh` on a Mac and `agent/build/linux/build.sh` on Ubuntu 24.04.
+- CMake, on `PATH` or the copy inside the Visual Studio install: the swoop build compiles the vendored opus with it, and the full build stops without it.
+- The `.pkg` and `.deb`: `agent/build/macos/build.sh` on a Mac that holds the Developer ID identities and a notarytool profile, and `agent/build/linux/build.sh` on Ubuntu 24.04. The tag's CI build (path b) runs after the upload (step 8), so it cannot supply the files that roll out.
 - `/.claude/.env.local` containing `OWLETTE_API_KEY`.
 - API key scope: `installer=*:write`.
 - Installer upload keys must be minted by a superadmin.
@@ -84,28 +86,23 @@ This is mandatory because every installer bakes the version into its filename.
 node scripts/sync-versions.js X.Y.Z
 ```
 
-This bumps:
+This sets every version surface the script knows, the list in [version-management.md](../internal/version-management.md): the `VERSION` files, the web and desktop packages, both Tauri configs, the four crates' `Cargo.toml` and the version strings in `README.md` and `.claude/CLAUDE.md`. `firestore.rules` keeps its own version.
 
-- `/VERSION`
-- `/agent/VERSION`
-- `/web/package.json`
-- `/desktop/package.json` and `/desktop/src-tauri/tauri.conf.json`
-- `/desktop/src-tauri/Cargo.toml` and `/agent/host/Cargo.toml` (the lockfiles follow on the next build)
-- the version strings in `README.md`, `.claude/CLAUDE.md`, and `docs/internal/version-management.md`
+4. Commit, and do not push.
 
-4. Commit and push.
-
-Commit the changelog and version changes, then push to `dev` or the appropriate branch.
+Commit the changelog and version changes as `release: X.Y.Z` on a `release/X.Y.Z` branch. Nothing goes to GitHub (no push, PR merge or tag) until every installer is built, uploaded to dev and its download verified: a pushed bump with no installer behind it is a release that does not exist yet. Step 8 is the push.
 
 5. Build the installer.
 
 `build_installer_full.bat` ends with `pause` and pauses on every error branch, so run it with stdin redirected from `NUL` and invoke it by full path, or it hangs a non-interactive shell:
 
 ```powershell
-cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
+$env:OWLETTE_SIGN = '1'; cmd /c "<repo>\agent\build_installer_full.bat < NUL > %TEMP%\installer-build.log 2>&1"
 ```
 
 Exit code 0 means the `.exe` was built; read the log on failure. Do not use `powershell -Command "& './build_installer_full.bat'"`, which hangs on the trailing `pause`.
+
+`OWLETTE_SIGN=1` is what signs a release. Without it the build still exits 0 and the installer is unsigned; `upload-installer.mjs` then refuses the file unless you pass `--allow-unsigned`. The quick build never signs. See "code signing context" below.
 
 Expected runtime is about 5 minutes.
 
@@ -113,8 +110,8 @@ Expected output, and where the other two files come from:
 
 ```text
 agent/build/installer_output/Owlette-Installer-vX.Y.Z.exe   this build
-agent/build/macos/Owlette-Installer-vX.Y.Z.pkg              agent/build/macos/build.sh on a Mac, or the CI release
-agent/build/linux/Owlette-Installer-vX.Y.Z.deb              agent/build/linux/build.sh on Ubuntu 24.04, or the CI release
+agent/build/macos/Owlette-Installer-vX.Y.Z.pkg              agent/build/macos/build.sh on a Mac
+agent/build/linux/Owlette-Installer-vX.Y.Z.deb              agent/build/linux/build.sh on Ubuntu 24.04
 ```
 
 Tool discovery:
@@ -137,6 +134,7 @@ node scripts/upload-installer.mjs --env dev --version X.Y.Z --set-latest \
 - The platform is the extension: `.exe` → `windows_x64`, `.pkg` → `macos_arm64`, `.deb` → `linux_x64`. One file per platform, one to three files.
 - `--env dev` reads `OWLETTE_API_KEY` and `OWLETTE_DEV_API_URL`; `--env prod` reads `OWLETTE_API_KEY_PROD` and `OWLETTE_PROD_API_URL`, all from `/.claude/.env.local`.
 - The release notes are the version's `## [X.Y.Z]` section of `docs/changelog.md`; the run stops if there is none. `--notes "…"` overrides them. They are what tridant id shows for the release.
+- Notes that went out stale are corrected with `--notes-only` and no files: it sends the section (or `--notes`) through `PATCH /api/installer/{version}`, which changes only the notes, on the latest pointer too when it is that version. Never re-upload to change them.
 - Where the files land is the server's choice: with `INSTALLER_R2_ACCESS_KEY_ID` and `INSTALLER_R2_SECRET_ACCESS_KEY` set, R2 behind `https://download.tridant.io/owlette/` (prod) or `https://download-staging.tridant.io/owlette/` (dev); without them, Firebase Storage. A file on the download host is immutable: a version already published there is refused (`409 installer_published`), so bump the version.
 - `--set-latest` promotes the version once the last file has finalized and registers it with tridant id; the run prints a `tridant id:` line (`registered`, `failed (<error>)`, `skipped` or `not_configured`). A failed registration never fails the promote; retry it with **register again** on `/admin/installers`. Leave `--set-latest` off until you are ready to roll out.
 - It prints each file's sha256 and finalize response, then the `files` keys on `GET /api/installer/latest`. A failure stops the run and names the files not published.
@@ -149,6 +147,10 @@ The manual curl form is under "the 3-step api upload (in detail)" below.
 
 Upload success is not release success. Run the post-release smoke section before calling the release done.
 
+8. Push.
+
+Only now push the release branch, open and merge its PR into `dev`, then tag `vX.Y.Z` on the merge commit and push the tag. The tag's CI build (path b) makes the GitHub Release; its bytes differ from what dev serves, which is expected.
+
 ## path b: ci build (slsa l3 provenance)
 
 The CI build is `.github/workflows/build-installer.yml`.
@@ -160,12 +162,14 @@ Triggers:
 
 Jobs:
 
-- `build-windows`: `windows-latest`; uses the runner's preinstalled Inno Setup 6 (installing it with Chocolatey only if absent); pins Python 3.11 with `setup-python`; runs `build_installer_full.bat`; uploads artifact `installer-windows`; retains it for 7 days.
-- `build-macos`: `macos-15`, in the tag-restricted `release` GitHub environment that holds the eight `APPLE_*` secrets; imports the Developer ID certificates into a temporary keychain, runs `agent/build/macos/build.sh` to sign, notarize and staple the pkg, validates the staple, then removes the keychain and notary key; uploads artifact `installer-macos`. A dispatch run without the secrets stops here and nothing is attested.
+- `security-gate`: runs `.github/workflows/security-gate.yml` first; every build job waits on it, so a live advisory stops the release before anything is built.
+- `build-windows`: `windows-latest`; pins Python 3.11 with `setup-python`; runs `build_installer_full.bat payload`, which stops before the Inno compile; uploads the payload as artifact `windows-payload` for a day. It holds no credential.
+- `package-windows`: `windows-latest`; the only job with an Azure token; uses the runner's preinstalled Inno Setup 6 and fails if it is missing; runs `build_installer_full.bat compile` on the payload, signed on a `v*` tag through the `release` GitHub environment and unsigned on a branch dispatch; uploads artifact `installer-windows`; retains it for 7 days.
+- `build-macos`: `macos-26` (for its SDK; the pkg still targets macOS 15), in the tag-restricted `release` GitHub environment that holds the eight `APPLE_*` secrets; imports the Developer ID certificates into a temporary keychain, runs `agent/build/macos/build.sh` to sign, notarize and staple the pkg, validates the staple, then removes the keychain and notary key; uploads artifact `installer-macos`. A dispatch run without the secrets stops here and nothing is attested.
 - `build-linux`: `ubuntu-24.04`; runs `agent/build/linux/build.sh`; uploads artifact `installer-linux`.
 - `digest`: one `sha256sum` line per file, base64-encoded as the SLSA subject list.
 - `provenance`: uses `slsa-framework/slsa-github-generator`; creates one in-toto attestation over the three files; signs with Sigstore keyless signing; uploads the attestation as a GitHub Release asset on tag pushes.
-- `release`, tag-only: uses `softprops/action-gh-release@v2` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
+- `release`, tag-only: uses `softprops/action-gh-release@v3` and attaches the `.exe`, `.pkg` and `.deb` to the GitHub Release.
 - `verify`, tag-only: downloads the three installers and the provenance, then runs `slsa-verifier verify-artifact` over all of them.
 
 CI does not push the installers to storage, write `installer_metadata`, update the app's `latest` installer pointer, or replace the manual 3-step API upload.
@@ -209,7 +213,7 @@ Purpose:
 - record whether finalize should set this version as latest
 
 ```bash
-API_KEY=$(grep OWLETTE_API_KEY .claude/.env.local | cut -d= -f2)
+API_KEY=$(grep '^OWLETTE_API_KEY=' .claude/.env.local | cut -d= -f2)   # prod: '^OWLETTE_API_KEY_PROD='
 BASE_URL="https://dev.owlette.app"
 VERSION="X.Y.Z"
 FILE_NAME="Owlette-Installer-vX.Y.Z.exe"   # or the .pkg / .deb: the three steps run once per file
@@ -309,11 +313,12 @@ If omitted, the server computes the checksum.
 - [ ] `/web/content/docs/changelog.mdx` has the SAME entry — this is the one customers read.
 - [ ] Agent docs screenshots recaptured against THIS build: `node scripts/refresh-docs-screens.mjs`, and `node scripts/refresh-docs-screens.mjs --check` exits 0. NOT the bare `npm run screenshots:desktop` — that photographs whatever version is already installed.
 - [ ] Changelog is updated before `build_installer_full.bat`.
+- [ ] The build ran with `OWLETTE_SIGN=1`.
 - [ ] `node scripts/sync-versions.js X.Y.Z` has been run.
 - [ ] `/VERSION` is bumped.
 - [ ] `/agent/VERSION` is bumped.
 - [ ] `/web/package.json` is bumped.
-- [ ] Version and changelog changes are committed and pushed.
+- [ ] Version and changelog changes are committed on `release/X.Y.Z` and not pushed yet.
 - [ ] Inno Setup 6.x is installed, `%ISCC%` is set, or `PATH` can find `ISCC`.
 - [ ] Node.js 22 + npm and the Rust toolchain are available (the build compiles `desktop/`).
 - [ ] Every file the release ships is built, one per platform:
@@ -330,7 +335,7 @@ If omitted, the server computes the checksum.
 - [ ] Any new `self.*` attribute is set in `OwletteService._init_state()`.
 - [ ] `agent/tests/unit/test_service_shutdown.py::test_the_hosted_instance_carries_every_shutdown_attribute` passes.
 - [ ] `service.log` will be tailed for at least 30 seconds after restart.
-- [ ] No blocking IO was added to the 10-second main service loop at `agent/src/owlette_service.py:6557`.
+- [ ] No blocking IO was added to the 5-second main service loop (`SLEEP_INTERVAL` in `agent/src/owlette_service.py`).
 - [ ] ConnectionManager backoff remains `BACKOFF_BASE=30s`.
 - [ ] ConnectionManager backoff remains `BACKOFF_MAX=3600s`.
 - [ ] ConnectionManager still never gives up.
@@ -343,7 +348,7 @@ If omitted, the server computes the checksum.
 - [ ] If using CI artifact, it was downloaded from the GitHub Release.
 - [ ] If using local artifact, no checksum match with CI is expected.
 - [ ] A test machine per platform the release ships is ready for smoke testing (Windows; Apple silicon Mac; Ubuntu 24.04).
-- [ ] The cortex CLI pin the shipped agent actually reads exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). A 3.4+ agent reads `installer_metadata/cortex_cli_<osFamily>_<arch>` — `cortex_cli_windows_x64` for a Windows installer — and never the unsuffixed `installer_metadata/cortex_cli`, which every pre-3.4 agent in the field still reads and which must stay current alongside it until the fleet floor is 3.4. Since 3.0.0 the installer no longer bundles `claude.exe`; a missing or stale pin leaves Cortex dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
+- [ ] The hoot CLI pin the shipped agent actually reads exists in the target environment and pins the CLI version the shipped SDK expects (`claude_agent_sdk/_cli_version.py`). A 3.4+ agent reads `installer_metadata/cortex_cli_<osFamily>_<arch>` — `cortex_cli_windows_x64` for a Windows installer — and never the unsuffixed `installer_metadata/cortex_cli`, which every pre-3.4 agent in the field still reads and which must stay current alongside it until the fleet floor is 3.4. Since 3.0.0 the Windows installer no longer bundles `claude.exe`; a missing or stale pin leaves local hoot dead on every fresh install. See `/docs/internal/cortex-cli-provisioning.md`.
 
 ## post-release smoke
 
@@ -364,15 +369,19 @@ If omitted, the server computes the checksum.
 
 ## demote / rollback
 
-Finalize can move `latest` when step 1 used `setAsLatest:true`.
+Demote by pointing `latest` back at the previous good version, which must still be in `installer_metadata` and not soft-deleted. Any one of:
 
-Known demotion path:
+- **set as latest** on that version's row in `/admin/installers`
+- `owlette installer set-latest <version>`
+- the API, with an `installer=*:admin` key (superadmin-minted) or a superadmin session:
 
-- rerun the 3-step flow for the previous good version
-- set `setAsLatest:true` in step 1
-- finalize that upload
+```bash
+curl -s -X POST "$BASE_URL/api/installer/<version>/set-latest" \
+  -H "x-api-key: <key with installer=*:admin>" \
+  -H "Idempotency-Key: installer-set-latest-<version>-$(date +%s)"
+```
 
-If the older version already exists in `installer_metadata`, an admin endpoint may exist for set-latest-only. That path is unknown and needs maintainer input before use.
+The upload key from the API steps above (`installer=*:write`) is refused here. The call moves the pointer in one transaction. On dev it also registers the version with tridant id, which yanks any registered release above it, and the download host refuses a re-upload of a file it already holds (`409 installer_published`); prod does neither until it is promoted to 4.x. Either way, never re-upload the old version to demote.
 
 Soft-delete is gated by `min-active-versions >= 2`; the system should not delete the only active version.
 
@@ -391,17 +400,29 @@ Practical sequence:
 
 ## code signing context
 
-The Windows installer is not Authenticode-signed today. The macOS pkg is Developer ID signed, notarized and stapled by the CI `build-macos` job; a local `agent/build/macos/build.sh` run without the signing identities produces an unsigned pkg.
+A local Windows build signs when `OWLETTE_SIGN=1` is set; without it the installer is unsigned. CI's Windows build signs on a `v*` tag and stays unsigned on a branch dispatch. The macOS pkg is Developer ID signed, notarized and stapled by `agent/build/macos/build.sh` when it runs with `APPLE_SIGNING_IDENTITY`, `--installer-identity` and `--notarize <notarytool profile>` (or the three `--notary-*` flags): on the Mac that builds the release, and again in CI's `build-macos` job on the tag. A run without the signing identities produces an unsigned pkg.
 
-CI-built installers do ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`.
+`scripts/sign.ps1` does the signing, with Azure Artifact Signing and the metadata in `agent/artifact-signing.json`. The publisher is `Tridant, Inc.`. A local build checks it can sign before the slow steps (in CI, `package-windows` checks after the payload is built), signs `owlette-host`, `owlette-swoop`, `owlette-desktop` and `owlette-swoop-viewer` before Inno packs them, and Inno signs setup and its uninstaller. Upload the file the build produced: the sha256 agents check is of the signed bytes, so signing anything after the upload breaks self-update.
 
-SLSA provenance is not Windows publisher signing.
+The machine needs SignTool 10.0.22621.755 or newer (Windows SDK), the NuGet package `Microsoft.ArtifactSigning.Client` under `%USERPROFILE%\.nuget\packages`, the .NET 8 runtime, and `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` as user variables. TEC-A4D and TEC-B4A have them. The account's 5,000 signatures a month are shared with Moonshine; a build uses six.
 
-Current install UX: Windows SmartScreen can warn `Unknown publisher`, users may need to click through the warning, and enterprise environments may treat unsigned installers differently.
+Check a signed file:
 
-Approximate signing costs: EV Authenticode certificate about `$300-700/year`; OV Authenticode certificate about `$100-300/year`; SignPath signing-as-a-service about `$240/year` base.
+```powershell
+signtool verify /pa /v Owlette-Installer-vX.Y.Z.exe
+```
 
-The signing decision is deferred. Treat it as a business and product call, not a missing runbook step.
+The certificate behind a signature lasts three days. The timestamp `sign.ps1` adds is what keeps the signature valid after that.
+
+CI holds no signing secret. The `package-windows` job gets a GitHub OIDC token, and `sign.ps1` uses it to sign in to Azure as the Entra app `owlette-ci-signing`, which holds only the signer role and trusts only this repo's `release` environment. `scripts/setup-ci-signing.sh` creates all of that, needs an owner's Azure sign-in, and is safe to re-run.
+
+The token never reaches the job that runs pip, npm and cargo dependencies. One certificate profile signs every Tridant product, so a token in a compromised dependency's hands could sign anything as Tridant, and a revoked profile would stop every product's signing. `build-windows` builds the payload with no credential; `package-windows` runs only our scripts, SignTool and the runner's own Inno on it, and fails rather than install Inno itself. So a compromised dependency can no longer use the token or sign arbitrary files. It can still replace any of the four executables in the payload, and on a tag run that replacement is signed as Tridant and published; nothing short of building without third-party code closes that.
+
+One accepted risk remains: the `release` environment admits `v*` tags, so anyone with write access who pushes such a tag gets a build signed as Tridant.
+
+CI-built installers ship with SLSA L3 provenance through a Sigstore-keyless in-toto attestation in `build-installer.yml`. SLSA provenance is not Windows publisher signing.
+
+Signing shows a verified publisher, not day-one trust: SmartScreen can still warn until the publisher has built reputation. An unsigned installer shows `Unknown publisher`, and enterprise environments may treat it differently.
 
 ## known caveats
 
@@ -411,11 +432,10 @@ The signing decision is deferred. Treat it as a business and product call, not a
 - Manual API upload is still required after CI to roll out to agents.
 - Local-built and CI-built installers checksum-differ.
 - If using CI artifacts for rollout, download them from the GitHub Release.
-- The signed, notarized pkg comes only from CI: the Apple secrets live in the tag-restricted `release` environment, and a run without them stops at `build-macos` with nothing attested.
+- CI signs and notarizes the pkg only on a tag: the Apple secrets live in the tag-restricted `release` environment, and a run without them stops at `build-macos` with nothing attested. The pkg that rolls out is the one built and notarized on a Mac before the push (step 5).
 - The fleet update sends each machine the file for its own platform; a machine whose platform the version has no file for is skipped and named. A version missing a platform's file leaves that platform's machines on their current version.
 - The silent install (`/ADD=`) is Windows only; macOS and Linux spend a generated phrase through a `config/pairing.json` preseed, which the dashboard's generate-code tab renders.
-- Demoting to an older version may require rerunning the 3-step finalize.
-- A set-latest-only admin endpoint may exist, but this runbook does not confirm it.
+- Demoting to an older version is `POST /api/installer/{version}/set-latest` (see "demote / rollback"), never a re-upload.
 - Soft-delete is gated by a minimum of 2 active versions.
 - Agents already on a bad version need a higher-version forward fix.
 - Since `9dccd12`, agents reject installers without `sha256_checksum`.
@@ -428,4 +448,4 @@ The signing decision is deferred. Treat it as a business and product call, not a
 - `/docs/internal/version-management.md`
 - `/docs/internal/cortex-cli-provisioning.md`
 - `/agent/BUILD.md`
-- `/CLAUDE.md`
+- `/.claude/CLAUDE.md`

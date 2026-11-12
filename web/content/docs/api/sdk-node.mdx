@@ -12,15 +12,7 @@ the official TypeScript SDK for the [owlette public API](/docs/api/overview). it
 
 ## installation
 
-```bash
-npm install @owlette/sdk@rc
-# or: pnpm add @owlette/sdk@rc
-# or: yarn add @owlette/sdk@rc
-```
-
-the package ships CommonJS `.js` output plus `.d.ts` declarations. no native modules, no wasm, no postinstall script. it needs Node.js 20 or newer (`engines.node: ">=20"`).
-
-`@owlette/sdk` is not on the npm registry yet — the `rc` tag goes out with the [distribution gate](/docs/api/distribution). until then, build it from a checkout of the owlette monorepo and install the folder:
+`@owlette/sdk` is not on the npm registry yet, so `npm install @owlette/sdk` fails today. build it from a checkout of the owlette monorepo and install the folder:
 
 ```bash
 # in the monorepo root
@@ -29,6 +21,16 @@ npm run build:sdk
 
 # in your project
 npm install <path-to-checkout>/sdks/node
+```
+
+the package ships CommonJS `.js` output plus `.d.ts` declarations. no native modules, no wasm, no postinstall script. it needs Node.js 20 or newer (`engines.node: ">=20"`).
+
+once the `rc` tag is published (the [distribution gate](/docs/api/distribution) tracks it), the install becomes:
+
+```bash
+npm install @owlette/sdk@rc
+# or: pnpm add @owlette/sdk@rc
+# or: yarn add @owlette/sdk@rc
 ```
 
 ---
@@ -355,7 +357,7 @@ const status = await owlette.machines.getCommand('site-1', 'machine-a7f3', queue
 
 // or queue any of the three types yourself
 await owlette.machines.dispatchCommand(
-  'site-1', 'machine-a7f3', 'reboot_machine', { delay_seconds: 60 },
+  'site-1', 'machine-a7f3', 'reboot_machine', { when: 'after_active_hours' },
 );
 
 // dispatch + poll + download in one call
@@ -476,7 +478,15 @@ const detail = await owlette.installerDeployments.get('site-1', created.deployme
 await owlette.installerDeployments.retry('site-1', created.deploymentId, {
   activeHoursOverride: { reason: 'venue closed today' },
 });
+
+// later: remove it again, by the program's exact name in the machines' software list
+const removal = await owlette.installerDeployments.uninstall('site-1', created.deploymentId, {
+  softwareName: 'VLC media player',
+});
+console.log(removal.queued, removal.skipped); // skipped: [{ machineId, reason }]
 ```
+
+`uninstall()` needs `softwareName`: a deployment records only its installer file, not the program it added. finished targets whose machine lists that exact name get the uninstall; the rest come back in `skipped`, and when none can take it the call throws `409 no_uninstallable_targets`.
 
 `create()` and `retry()` take an optional `activeHoursOverride: { reason }`, sent as `active_hours_override`. a Windows agent with `capabilities.activeHoursGuard` refuses an install inside the machine's [active hours](/docs/reference/agent-commands#active-hours): that target ends `failed` with an `error` that starts `Error: active_hours:`. with the override the server writes the reason onto every install the call queues, with your key as the approver. a retry needs its own; the deployment's does not carry over.
 

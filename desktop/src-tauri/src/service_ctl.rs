@@ -64,10 +64,12 @@ pub struct ServiceStatus {
   pub installed: bool,
   /// True only for `Running`.
   pub running: bool,
-  /// SCM state: `running`, `stopped`, `start_pending`, ...; `unknown` when the
-  /// service is not installed.
+  /// windows: the SCM state (`running`, `stopped`, `start_pending`, ...).
+  /// linux: systemd's `ActiveState`, passed through. macos: `running` or
+  /// `stopped`. `unknown` when the service is not installed.
   pub state: String,
-  /// SCM start type. A `disabled` service cannot be started, elevated or not.
+  /// windows: the SCM start type; a `disabled` service cannot be started,
+  /// elevated or not. linux: systemd's `UnitFileState`. macos: `launchd`.
   pub start_type: String,
   pub status_file: StatusFileInfo,
 }
@@ -88,11 +90,12 @@ pub struct StatusFileInfo {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceCommandOutcome {
-  /// `scm` (issued directly), `elevated` (UAC-prompted `net` command) or
-  /// `noop` (already in the requested state).
+  /// `scm` (issued directly), `elevated` (UAC-prompted `net` command), `noop`
+  /// (already in the requested state), `systemd` (`systemctl` on linux) or
+  /// `seam` (a restart the macos daemon carried out).
   pub method: String,
-  /// SCM state before the request. Poll [`status`] for the result — an elevated
-  /// launch only means the shell accepted it.
+  /// [`ServiceStatus::state`] before the request. Poll [`status`] for the
+  /// result — an elevated launch only means the shell accepted it.
   pub state_before: String,
 }
 

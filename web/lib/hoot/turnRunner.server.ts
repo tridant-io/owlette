@@ -53,6 +53,7 @@ import {
   type ProcessSummary,
   type PromptLocalTime,
 } from '@/lib/llm';
+import type { MachineActor } from '@/lib/capabilities';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import {
   buildExecutableTools,
@@ -160,6 +161,12 @@ export interface StartTurnParams {
    * for a person rather than auto-executing.
    */
   forceTier3Approval?: boolean;
+  /**
+   * The granted machine that started this turn (ADR 0017), when `userId` did
+   * not. The turn still runs on `userId`'s key and `access`; its server-side
+   * tools act, and are audited, as the machine.
+   */
+  machineActor?: MachineActor;
   source?: 'user' | 'followup' | 'talon';
 }
 
@@ -456,6 +463,19 @@ export function startTurn(
   // stopped) — kills streamText and the in-flight tool poll loops.
   const abortController = new AbortController();
 
+  // The one reading of ownership, for the heartbeat and for a tool that asks between
+  // beats: a guarded `touch`, so it also bumps `updatedAt`. Abort only on genuine loss.
+  // A Firestore `error` is indeterminate — aborting on a single blip would drop a
+  // healthy in-flight response; the next heartbeat re-checks.
+  const checkOwnership = async () => {
+    const ownership = await touch(db, chatId, turnId);
+    if (ownership === 'lost') {
+      abortController.abort();
+      clearHeartbeat();
+    }
+    return ownership;
+  };
+
   // Set by onFinish. If the stream tears down without it (e.g. a chunk the
   // state machine rejects), the pump's finally closes the turn as errored so
   // the stream doc can't leak a fresh-looking 'running' state.
@@ -476,15 +496,7 @@ export function startTurn(
         } catch {
           // Stream already torn down — nothing to heartbeat.
         }
-        void touch(db, chatId, turnId).then((ownership) => {
-          // Abort only on genuine loss. A Firestore `error` is indeterminate —
-          // aborting on a single blip would drop a healthy in-flight response;
-          // the next heartbeat re-checks.
-          if (ownership === 'lost') {
-            abortController.abort();
-            clearHeartbeat();
-          }
-        });
+        void checkOwnership();
       }, timing.heartbeatMs);
 
       // Must precede the turn-start persist, which creates the doc.
@@ -547,7 +559,10 @@ export function startTurn(
       // Re-check the caller's resolved set against the site as it is NOW. This
       // only ever removes machines (see `narrowToLiveMachines`), so an approved
       // tool call cannot reach a machine the approver never saw.
-      const siteMachines = await listSiteMachines(db, params.siteId);
+      // the listing is cut to the person's scope as well, though callers resolve
+      // within it: a machine dropped from the scope since then drops out here.
+      const machineScope = params.access.standing.machineIds;
+      const siteMachines = await listSiteMachines(db, params.siteId, machineScope);
       const resolved = narrowToLiveMachines(params.resolved, siteMachines);
       if (resolved.ids.length === 0) throw noLiveMachinesError(params.turnTarget, resolved);
       // The record has to name what this turn actually dispatches to before it
@@ -621,7 +636,9 @@ export function startTurn(
         {
           userId: params.userId,
           userRole: params.access.role,
-          userSiteRole: params.access.siteRole,
+          userStanding: params.access.standing,
+          machineScope,
+          machineActor: params.machineActor,
           maxToolTier: effectiveTier,
           requireTier3Approval,
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),
@@ -634,6 +651,7 @@ export function startTurn(
             onCommandQueued: (toolCallId: string, commandId: string, machineId: string) =>
               recordToolCommand(db, chatId, turnId, toolCallId, commandId, machineId),
             abortSignal: abortController.signal,
+            stillOwnsChat: checkOwnership,
           },
         },
       );

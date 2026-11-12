@@ -118,7 +118,6 @@ describe('what the create writes', () => {
       expect(onCreateSite).toHaveBeenCalledWith(
         expect.any(String),
         'NYC Office',
-        'creator-uid',
         'America/New_York',
         true,
       ),
@@ -143,7 +142,6 @@ describe('what the create writes', () => {
       expect(onCreateSite).toHaveBeenCalledWith(
         expect.any(String),
         'NYC Office',
-        'creator-uid',
         'Europe/Berlin',
         true,
       ),
@@ -159,7 +157,7 @@ describe('what the create writes', () => {
     await submit(user);
 
     await waitFor(() => expect(onCreateSite).toHaveBeenCalled());
-    const [, , , timezone, flag] = onCreateSite.mock.calls[0];
+    const [, , timezone, flag] = onCreateSite.mock.calls[0];
     expect(timezone).toBeUndefined();
     // `undefined`, never `false`: a site nobody asked must stay askable.
     expect(flag).toBeUndefined();

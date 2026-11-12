@@ -230,4 +230,4 @@ If a customer needs faster machine-down reaction than that, the answer is not a 
 | a talon fires late every time | `deferred` in the response — the 25/minute cap, or a slow talon holding the budget |
 | a burst of `missed` runs | the sweep was down; expected, self-healing |
 | a talon is stuck, no new runs | a run wedged `running` — the janitor clears it within 10 minutes; check the `talon_runs` index if it doesn't |
-| a talon disabled itself | 10 consecutive failed runs (engine auto-disable). the disable is audited with `reason: 'consecutive_failures'` |
+| a talon disabled itself | 10 consecutive failed runs (engine auto-disable). the disable is audited with `reason: 'repeated_failures'` |

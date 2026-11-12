@@ -2,8 +2,8 @@
 
 **Last updated**: 2026-04-29 | **moved** 2026-09-05 from `docs/api/status-uptime.md` | **reviewed** 2026-09-05
 
-**INTERNAL — keep inside `docs/internal/`**, which the fumadocs migration excludes from
-publishing (`excludedPrefixes` in `web/scripts/migrate-docs-to-fumadocs.mjs`). This page was
+**INTERNAL — keep inside `docs/internal/`**, which is never published (only
+`web/content/docs` is). This page was
 written for the MkDocs site that was deleted 2026-05-20 and never reached a published docs
 route. Most of it is operator wiring — cron secrets, vendor component ids, readiness drills —
 that must stay internal. The customer-facing slice (what the status page promises and when an

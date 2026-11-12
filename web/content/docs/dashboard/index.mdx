@@ -36,13 +36,14 @@ the dashboard watches and controls machines on Windows, macOS and Linux. a few f
 
 ### admin
 
-the admin panel's sidebar shows what your role allows. anyone who owns or administers a site sees the site-scoped pages, limited to their sites; superadmins see everything.
+the admin panel's sidebar shows what your role allows, in sections: people, fleet, configuration and support. anyone who owns or administers a site sees the site-scoped pages, limited to their sites; superadmins see everything.
 
 | page | URL | who | what it is |
 |------|-----|-----|------------|
-| **members** | `/admin/members` | site admins | [site membership](/docs/dashboard/admin/member-management) |
+| **sites** | `/admin/sites` | site admins | [sites and their settings](/docs/dashboard/admin/sites) |
 | **agent tokens** | `/admin/tokens` | site admins | [agent token management](/docs/dashboard/admin/token-management) |
-| **swoop** | `/admin/swoop` | site admins | live swoop sessions, and ending them — see [admin → swoop](/docs/dashboard/swoop#admin--swoop) |
+| **swoop** | `/admin/swoop` | site admins | each site's swoop switch, and live swoop sessions — see [admin → swoop](/docs/dashboard/swoop#admin--swoop) |
+| **hoot** | `/admin/hoot` | site admins | hoot's approval setting and the machines that act on others — see [hoot mcp](/docs/agent/hoot-mcp) |
 | **schedules** | `/admin/schedules` | site admins | [schedule presets](/docs/dashboard/admin/schedule-presets) |
 | **alerts** | `/admin/alerts` | site admins | [threshold alert rules](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
 | **webhooks** | `/admin/webhooks` | site admins | [outbound webhooks](/docs/dashboard/admin/webhooks) |

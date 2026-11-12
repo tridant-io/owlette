@@ -49,16 +49,22 @@ pub const EVENT_AGENT_CLI: &str = "owlette://agent-cli";
 /// The bundled interpreter, relative to the data root. `python.exe` rather than
 /// `pythonw.exe`: we need its stdout, and `CREATE_NO_WINDOW` already keeps the
 /// console off the operator's screen.
+const PYTHON_REL_WINDOWS: &str = "python/python.exe";
 #[cfg(windows)]
-const PYTHON_REL: &str = "python/python.exe";
+const PYTHON_REL: &str = PYTHON_REL_WINDOWS;
 /// The bundled interpreter under the install root off windows
 /// (`shared_utils.get_python_exe_path`: `/opt/owlette/python/bin/python3`,
 /// `…/Owlette/runtime/python/bin/python3`).
+const PYTHON_REL_UNIX: &str = "python/bin/python3";
 #[cfg(unix)]
-const PYTHON_REL: &str = "python/bin/python3";
+const PYTHON_REL: &str = PYTHON_REL_UNIX;
 
 /// The agent script that hosts every headless mode.
 const SCRIPT_REL: &str = "agent/src/configure_site.py";
+
+/// The MCP server an AI agent's client starts for hoot mcp, beside the other
+/// agent scripts.
+const HOOT_MCP_SCRIPT_REL: &str = "agent/src/fleet_mcp.py";
 
 /// Where a feedback payload is staged for `--report-issue`. The script deletes
 /// it as soon as it has been read.
@@ -537,9 +543,117 @@ fn emit(app: &AppHandle, event: AgentCliEvent) {
   }
 }
 
+/// The platforms hoot mcp is told apart by: the interpreter lives in a different
+/// place on each, and only Windows and macOS have one to offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HootPlatform {
+  Windows,
+  Macos,
+  Other,
+}
+
+impl HootPlatform {
+  fn current() -> Self {
+    if cfg!(windows) {
+      Self::Windows
+    } else if cfg!(target_os = "macos") {
+      Self::Macos
+    } else {
+      Self::Other
+    }
+  }
+
+  /// The bundled interpreter under the install root, None where hoot mcp is not offered.
+  fn python_rel(self) -> Option<&'static str> {
+    match self {
+      Self::Windows => Some(PYTHON_REL_WINDOWS),
+      Self::Macos => Some(PYTHON_REL_UNIX),
+      Self::Other => None,
+    }
+  }
+}
+
+/// The interpreter and the script an MCP client starts to reach hoot from this
+/// machine, in that order. They are shown to be copied, so each is spelled
+/// with the platform's own separators. None on Linux, and anywhere the script
+/// is not installed.
+pub fn hoot_mcp_command() -> Option<Vec<String>> {
+  hoot_mcp_command_under(&paths::install_root(), HootPlatform::current())
+}
+
+fn hoot_mcp_command_under(install: &Path, platform: HootPlatform) -> Option<Vec<String>> {
+  let python_rel = platform.python_rel()?;
+  let under = |rel: &str| rel.split('/').fold(install.to_path_buf(), |path, part| path.join(part));
+  let script = under(HOOT_MCP_SCRIPT_REL);
+  if !script.is_file() {
+    return None;
+  }
+  Some(vec![
+    under(python_rel).to_string_lossy().into_owned(),
+    script.to_string_lossy().into_owned(),
+  ])
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  /// An install root with the script in it, under a name holding a space as the mac's does.
+  fn installed_root(tag: &str) -> PathBuf {
+    let root = std::env::temp_dir()
+      .join(format!("owlette-hoot-mcp-{tag}-{}", std::process::id()))
+      .join("Application Support")
+      .join("runtime");
+    let src = root.join("agent").join("src");
+    std::fs::create_dir_all(&src).expect("make the src dir");
+    std::fs::write(src.join("fleet_mcp.py"), "").expect("write the script");
+    root
+  }
+
+  fn forget(root: &Path) {
+    let _ = std::fs::remove_dir_all(root.parent().and_then(Path::parent).expect("temp parent"));
+  }
+
+  #[test]
+  fn the_windows_command_is_the_interpreter_then_the_script_in_native_separators() {
+    let root = installed_root("win");
+    let command = hoot_mcp_command_under(&root, HootPlatform::Windows).expect("installed");
+    assert_eq!(
+      command,
+      vec![
+        root.join("python").join("python.exe").to_string_lossy().into_owned(),
+        root.join("agent").join("src").join("fleet_mcp.py").to_string_lossy().into_owned(),
+      ]
+    );
+    if cfg!(windows) {
+      assert!(command.iter().all(|part| !part.contains('/')), "{command:?}");
+    }
+    forget(&root);
+  }
+
+  #[test]
+  fn the_macos_command_is_the_bundled_python3_then_the_script_under_the_runtime() {
+    let root = installed_root("mac");
+    let command = hoot_mcp_command_under(&root, HootPlatform::Macos).expect("installed");
+    assert_eq!(
+      command,
+      vec![
+        root.join("python").join("bin").join("python3").to_string_lossy().into_owned(),
+        root.join("agent").join("src").join("fleet_mcp.py").to_string_lossy().into_owned(),
+      ]
+    );
+    assert!(command[0].contains("Application Support"), "{command:?}");
+    forget(&root);
+  }
+
+  #[test]
+  fn there_is_no_command_where_the_script_is_missing_or_on_linux() {
+    let root = installed_root("none");
+    assert_eq!(hoot_mcp_command_under(&root, HootPlatform::Other), None);
+    assert_eq!(hoot_mcp_command_under(&root.join("nowhere"), HootPlatform::Windows), None);
+    assert_eq!(hoot_mcp_command_under(&root.join("nowhere"), HootPlatform::Macos), None);
+    forget(&root);
+  }
 
   #[test]
   fn every_mode_maps_to_exactly_one_flag() {

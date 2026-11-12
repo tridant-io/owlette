@@ -12,35 +12,39 @@
  * opens it in a new one, which the app turns into a swoop window.
  */
 
-import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { AppWindow, ArrowLeft, Loader2, Monitor } from 'lucide-react';
+import { AppWindow, ArrowLeft, ChevronDown, Eye, Loader2, Monitor, MousePointer2 } from 'lucide-react';
+import { SiteSwitcherList, siteFilterHostProps } from '@/components/SiteSwitcherList';
 import { SwoopLockup, SwoopLogo } from '@/components/swoop/SwoopLockup';
 import { SwoopVersionTooltip } from '@/components/swoop/SwoopVersionTooltip';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines, useSites, type Machine } from '@/hooks/useFirestore';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { LoadingWord } from '@/components/LoadingWord';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopWindowControls, TRAFFIC_LIGHTS_INSET_PX, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
+import { viewerLabel } from '@/lib/swoop/viewerName';
 import { cn } from '@/lib/utils';
 
 // past this many machines the grid grows a filter, as the metrics panel's machine switcher does.
 const FILTER_MIN = 8;
+// a card's second row has room for two people beside the platform; the rest are a count.
+const SHOWN_PEOPLE = 2;
 
 type CardState ='ready' | 'offline' | 'incapable' | 'site-off' | 'this-machine';
 
 export function SwoopPicker() {
-  const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite } = useAuth();
+  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, userSites, lastSiteId, updateLastSite } = useAuth();
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
   // the dashboard's restore, so both open on the same site: the saved site from
   // firestore or this browser, else the first — derived rather than set from an
@@ -52,8 +56,11 @@ export function SwoopPicker() {
     return savedSite && sites.some((s) => s.id === savedSite) ? savedSite : sites[0].id;
   }, [sites, sitesLoading, lastSiteId]);
   const siteId = chosenSiteId && sites.some((s) => s.id === chosenSiteId) ? chosenSiteId : savedSiteId;
+  const siteName = sites.find((s) => s.id === siteId)?.name;
+  const [sitePickerOpen, setSitePickerOpen] = useState(false);
+  const sitePickerId = useId();
   const [filter, setFilter] = useState('');
-  const { machines, loading: machinesLoading } = useMachines(siteId);
+  const { machines, loading: machinesLoading } = useMachines(siteId, machineScope(siteId));
   const { settings: swoop, loading: swoopLoading } = useSwoopSettings(siteId);
   // the app's home has no dashboard to go back to, and its top bar is the window's title bar.
   const platform = useViewerAppPlatform();
@@ -115,6 +122,7 @@ export function SwoopPicker() {
             key={machine.machineId}
             siteId={siteId}
             machine={machine}
+            currentUid={user?.uid}
             siteSwoopOn={swoop.enabled}
             canEnable={canEnable}
             onOpen={inApp ? openSwoopHere : openSwoopWindow}
@@ -128,16 +136,48 @@ export function SwoopPicker() {
 
   const siteControls = sites.length > 0 && (
     <>
-      <Select value={siteId} onValueChange={handleSiteChange}>
-        <SelectTrigger data-testid="swoop-picker-site" aria-label="site" className="min-w-0 max-w-full">
-          <SelectValue placeholder="choose a site" />
-        </SelectTrigger>
-        <SelectContent>
-          {sites.map((site) => (
-            <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {/* a popover, not a select, because a select cannot hold the site filter. modal, as the
+          select was, so a click outside closes the list and opens nothing under it */}
+      <Popover modal open={sitePickerOpen} onOpenChange={setSitePickerOpen}>
+        <PopoverTrigger asChild>
+          {/* still a combobox: a screen reader hears the site beside the "site" label, which a
+              button named "site" would hide, and down opens the list as it did */}
+          <button
+            type="button"
+            role="combobox"
+            data-testid="swoop-picker-site"
+            aria-label="site"
+            aria-expanded={sitePickerOpen}
+            aria-controls={sitePickerOpen ? sitePickerId : undefined}
+            onKeyDown={(e) => {
+              if (e.key !== 'ArrowDown') return;
+              e.preventDefault();
+              setSitePickerOpen(true);
+            }}
+            className="flex h-9 w-fit min-w-0 max-w-full items-center justify-between gap-2 whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-xs outline-none transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 dark:bg-input/30 dark:hover:bg-input/50"
+          >
+            <span className={cn('truncate', !siteName && 'text-muted-foreground')}>{siteName ?? 'choose a site'}</span>
+            <ChevronDown aria-hidden className="size-4 shrink-0 opacity-50" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          id={sitePickerId}
+          align="start"
+          aria-label="sites"
+          className="w-64 min-w-(--radix-popover-trigger-width) max-w-[calc(100vw-2rem)] p-0"
+          {...siteFilterHostProps}
+        >
+          <SiteSwitcherList
+            surface="popover"
+            sites={sites}
+            currentSiteId={siteId}
+            onPick={(next) => {
+              setSitePickerOpen(false);
+              if (next !== siteId) handleSiteChange(next);
+            }}
+          />
+        </PopoverContent>
+      </Popover>
       {machines.length > FILTER_MIN && (
         <Input
           value={filter}
@@ -223,9 +263,44 @@ function Notice({ children, busy = false }: { children: React.ReactNode; busy?: 
   );
 }
 
+interface SeatedPerson {
+  uid: string;
+  /** first name and last initial, or "viewer". */
+  short: string;
+  /** the full name, or "viewer". */
+  full: string;
+  ctl: boolean;
+  you: boolean;
+}
+
+/**
+ * the people in a machine's session, from the seats the server mirrors onto
+ * the machine (`syncMachineSwoopViewers`): a page cannot read a session. in the
+ * mirror's order, and a person's several tabs are one person, in control if
+ * any of them is.
+ */
+function seatedPeople(seats: NonNullable<Machine['swoopSeats']>, currentUid: string | undefined): SeatedPerson[] {
+  const people = new Map<string, SeatedPerson>();
+  for (const seat of seats) {
+    const known = people.get(seat.uid);
+    if (known) {
+      if (seat.ctl) known.ctl = true;
+      continue;
+    }
+    people.set(seat.uid, {
+      uid: seat.uid,
+      ...viewerLabel({ displayName: seat.displayName, email: null }),
+      ctl: seat.ctl,
+      you: seat.uid === currentUid,
+    });
+  }
+  return [...people.values()];
+}
+
 function PickerCard({
   siteId,
   machine,
+  currentUid,
   siteSwoopOn,
   canEnable,
   onOpen,
@@ -234,6 +309,8 @@ function PickerCard({
 }: {
   siteId: string;
   machine: Machine;
+  /** the signed-in account, whose seats are marked "(you)" */
+  currentUid?: string;
   siteSwoopOn: boolean;
   /** an owner or admin of the site, who can turn swoop on for it */
   canEnable: boolean;
@@ -264,8 +341,10 @@ function PickerCard({
           ? 'this-machine'
           : 'ready';
   const ready = state === 'ready';
-  // as on the machine menu: a stale mirror never badges a machine that cannot stream.
-  const watching = online && capable ? (machine.swoopViewers ?? 0) : 0;
+  // as on the machine menu: a stale mirror never names anyone on a machine that cannot stream.
+  const seats = online && capable ? (machine.swoopSeats ?? []) : [];
+  const people = seatedPeople(seats, currentUid);
+  const everyone = people.map((person) => `${person.full}${person.you ? ' (you)' : ''}`).join(', ');
   const reasonId = `swoop-picker-reason-${machineId}`;
   const openNewWindow = ready ? onOpenNewWindow : undefined;
   // a card that stops being ready drops its menu, so the menu cannot come back on its own
@@ -316,14 +395,34 @@ function PickerCard({
           <span className={cn('min-w-0 flex-1 truncate text-sm font-medium', ready ? 'text-foreground' : 'text-muted-foreground')}>
             {machineId}
           </span>
-          {watching > 0 && (
-            <Badge className="tabular-nums">
-              {watching}
-              <span className="sr-only"> watching</span>
-            </Badge>
+        </span>
+        <span className="flex items-center gap-2 pl-4 text-xs text-muted-foreground">
+          <span className="shrink-0">{machine.osFamily ?? 'windows'}</span>
+          {people.length > 0 && (
+            // beside the platform, where the row has room and the name above keeps its own.
+            // the names are drawn short; a screen reader hears the sentence at the end instead
+            <span title={everyone} className="ml-auto flex min-w-0 items-center justify-end gap-2">
+              {people.slice(0, SHOWN_PEOPLE).map((person) => {
+                const Icon = person.ctl ? MousePointer2 : Eye;
+                return (
+                  <span key={person.uid} aria-hidden className="flex min-w-0 items-center gap-1">
+                    <Icon aria-hidden className="size-3 shrink-0" />
+                    <span className="truncate">
+                      {person.short}
+                      {person.you && ' (you)'}
+                    </span>
+                  </span>
+                );
+              })}
+              {people.length > SHOWN_PEOPLE && (
+                <span aria-hidden className="shrink-0 tabular-nums">
+                  +{people.length - SHOWN_PEOPLE}
+                </span>
+              )}
+              <span className="sr-only">{`${people.length} in the session: ${everyone}`}</span>
+            </span>
           )}
         </span>
-        <span className="block pl-4 text-xs text-muted-foreground">{machine.osFamily ?? 'windows'}</span>
       </button>
       {ready && onOpenInApp && (
         <Tooltip>
@@ -376,14 +475,14 @@ function PickerCard({
       )}
       {!ready && (
         <p id={reasonId} data-testid={reasonId} className="pb-3 pl-8 pr-4 text-xs text-muted-foreground">
-          <Reason state={state} siteId={siteId} canEnable={canEnable} />
+          <Reason state={state} canEnable={canEnable} />
         </p>
       )}
     </li>
   );
 }
 
-function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string; canEnable: boolean }) {
+function Reason({ state, canEnable }: { state: CardState; canEnable: boolean }) {
   switch (state) {
     case 'offline':
       return <>offline</>;
@@ -396,8 +495,8 @@ function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string
         <>
           swoop is off for this site ·{' '}
           {canEnable ? (
-            <Link href={`/dashboard?settings=${encodeURIComponent(siteId)}`} className="hl-link text-accent-cyan">
-              open site settings
+            <Link href={SWOOP_SETTINGS_PATH} className="hl-link text-accent-cyan">
+              open swoop settings
             </Link>
           ) : (
             'ask a site owner or admin to turn it on'

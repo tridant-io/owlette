@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 /**
+ * Status: done with. Step 2.3 of the 2.12.x promotion (docs/runbooks/upgrade-2.12.0.md),
+ * which reached prod in 073e031f; nothing reads `synced_folders` any more.
+ *
  * Firestore migration: `sites/{siteId}/synced_folders/{id}` →
  * `sites/{siteId}/roosts/{id}`. Internal rename only — doc ids are preserved and
  * no user-visible id changes.

@@ -13,7 +13,7 @@ verbs:
 - [`deploy get`](#get) — print one deployment with each target's status
 - [`deploy retry`](#retry) — re-queue the targets that failed
 - [`deploy cancel`](#cancel) — cancel targets that have not started
-- [`deploy uninstall`](#uninstall) — queue an uninstall on every target
+- [`deploy uninstall`](#uninstall) — uninstall a program from the targets that list it
 - [`deploy delete`](#delete) — delete a finished deployment's record
 
 every verb takes `--site <siteId>`. every mutation sends an `Idempotency-Key` (default `cli-deploy-<verb>-<uuid>`); pass `--idempotency-key <key>` to pin one. if a mutation fails before a response arrives, the CLI prints the key and the `--idempotency-key` to re-run with.
@@ -188,28 +188,31 @@ backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/cancel`.
 
 ## uninstall
 
-queues an uninstall of the deployment's software on every target machine. the calling key needs `site=<id>` with both `write` **and** `admin`; without `admin` the server returns `403 scope_insufficient` and the CLI adds a hint naming the missing scope.
+uninstalls a program from every finished target of the deployment whose machine lists it. `--software` is the program's exact name in the machines' software list (the dashboard's **uninstall software** dialog shows it); a deployment records only its installer file, so the name is yours to give. a target is skipped when it is still installing, when its machine was removed or does not list the program, or when the machine lists two versions under that name (uninstall the one you mean per machine, from the dashboard). skipped targets are named in the output. when no target can take it the server refuses with `409 no_uninstallable_targets`, nothing is queued, and the error still names each skipped target. each queued target turns `uninstalled`, or `failed` with the reason, when its agent reports: follow it with [`deploy get`](#get).
+
+the calling key needs `site=<id>` with both `write` **and** `admin`; without `admin` the server returns `403 scope_insufficient` and the CLI adds a hint naming the missing scope.
 
 ```bash
-owlette deploy uninstall <deploymentId> --site <siteId> [--yes] [--idempotency-key <key>] [--json]
+owlette deploy uninstall <deploymentId> --site <siteId> --software <name> [--yes] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
 |---|---|---|---|
 | `--site <siteId>` | string | yes | site that owns the deployment |
+| `--software <name>` | string | yes | the program's exact name in the machines' software list |
 | `--yes` | boolean | no | skip the `[y/N]` prompt; required when stdin is not a tty |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` header |
 
-`--json` prints `deploymentId`, `siteId`, `status`, `queued` and `machine_ids`.
+`--json` prints `deploymentId`, `siteId`, `status` (the deployment's, unchanged by the call), `queued`, `machine_ids` and `skipped` (each `{ machineId, reason }`, where `reason` is `install_in_flight`, `machine_not_found`, `software_not_found`, `software_ambiguous` or `software_record_invalid`).
 
 ### examples
 
 ```bash
-owlette deploy uninstall dep_abc123 --site site-1
+owlette deploy uninstall dep_abc123 --site site-1 --software "VLC media player"
 ```
 
 ```bash
-owlette deploy uninstall dep_abc123 --site site-1 --yes
+owlette --json deploy uninstall dep_abc123 --site site-1 --software "VLC media player" --yes
 ```
 
 backing: `POST /api/sites/{siteId}/deployments/{deploymentId}/uninstall`.

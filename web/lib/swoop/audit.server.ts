@@ -100,9 +100,11 @@ function swoopEntry(args: {
 /**
  * A session was granted. Awaited and fails the caller closed: a control session
  * that starts unrecorded is the one case this whole module exists to prevent.
+ * `joined` marks a viewer seated in a session already running on the machine,
+ * which shares its sid: each viewer's grant is a row of its own either way.
  */
 export async function recordSwoopSessionStarted(
-  args: SwoopAuditBase & { sid: string; viewerId: string; ctl: boolean },
+  args: SwoopAuditBase & { sid: string; viewerId: string; ctl: boolean; joined?: boolean },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -111,7 +113,7 @@ export async function recordSwoopSessionStarted(
       event: 'session_started',
       capability: capabilityFor(args.ctl),
       outcome: 'allow',
-      metadata: { viewerId: args.viewerId, ctl: args.ctl },
+      metadata: { viewerId: args.viewerId, ctl: args.ctl, ...(args.joined ? { joined: true } : {}) },
     }),
   );
 }
@@ -172,11 +174,22 @@ export function recordSwoopNetworkCheck(
 }
 
 /**
- * A session stopped. `endReason` distinguishes an operator hanging up from a
- * kill or a revocation, and `durationMs` is how long control was held.
+ * A session stopped, or one viewer left it. `endReason` distinguishes an
+ * operator hanging up from a kill or a revocation, and `durationMs` is how long
+ * control was held. `left` marks a viewer leaving a session that goes on for
+ * the others in it; `viewerId` names the viewer, when one did.
  */
 export async function recordSwoopSessionEnded(
-  args: SwoopAuditBase & { sid: string; endReason: string; viewerReason?: string; durationMs?: number },
+  args: SwoopAuditBase & {
+    sid: string;
+    endReason: string;
+    viewerReason?: string;
+    durationMs?: number;
+    viewerId?: string;
+    left?: boolean;
+    /** the uid a revocation or a kick ended it for. */
+    endedFor?: string;
+  },
 ): Promise<void> {
   await writeAuditEntryBlocking(
     args.siteId,
@@ -189,6 +202,9 @@ export async function recordSwoopSessionEnded(
         endReason: reasonCode(args.endReason),
         ...(args.viewerReason !== undefined ? { viewerReason: reasonCode(args.viewerReason) } : {}),
         ...(args.durationMs !== undefined ? { durationMs: args.durationMs } : {}),
+        ...(args.viewerId !== undefined ? { viewerId: args.viewerId } : {}),
+        ...(args.left ? { left: true } : {}),
+        ...(args.endedFor !== undefined ? { endedFor: args.endedFor } : {}),
       },
     }),
   );

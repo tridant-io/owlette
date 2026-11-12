@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { getSiteAlertRecipients, getSiteLabel } from '@/lib/adminUtils.server';
+import { getSiteAlertRecipients, getSiteLabel, recipientWantsMachine, type SiteRecipient } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
 import { wrapEmailLayout, EMAIL_COLORS, emailTimestamp, escapeHtml, safeEmailSubject } from '@/lib/emailTemplates.server';
 import { generateUnsubscribeToken } from '@/app/api/unsubscribe/route';
@@ -232,11 +232,9 @@ function buildOfflineEmail(
   });
 }
 
-/** Drop muted machines from every section; caller skips a now-empty page trigger. */
-function filterSectionsForRecipient(sections: OfflineSections, mutedMachines: string[]): OfflineSections {
-  if (mutedMachines.length === 0) return sections;
-  const muted = new Set(mutedMachines);
-  const keep = (r: OfflineRow) => !muted.has(r.machineId);
+/** Drop machines the recipient muted or cannot reach from every section; caller skips a now-empty page trigger. */
+function filterSectionsForRecipient(sections: OfflineSections, recipient: SiteRecipient): OfflineSections {
+  const keep = (r: OfflineRow) => recipientWantsMachine(recipient, r.machineId);
   return {
     notResponding: sections.notResponding.filter(keep),
     shuttingDown: sections.shuttingDown.filter(keep),
@@ -497,6 +495,27 @@ export async function GET(request: NextRequest) {
 
   for (const plan of sendPlans) {
     try {
+      // Before the email, which has two early exits below: webhooks and
+      // `machine_offline` talons must fire even with no email recipients. This is
+      // the only dispatcher — an offline machine can't report itself offline.
+      for (const m of plan.webhookMachines) {
+        fireWebhooks(
+          plan.siteId,
+          plan.siteName,
+          'machine.offline',
+          {
+            machine: { id: m.machineId, name: m.machineId, lastSeen: new Date(m.lastHeartbeatMs).toISOString() },
+          },
+          planMemo,
+        ).catch(console.error);
+
+        tapTalonMatcher(db, plan.siteId, {
+          kind: 'event',
+          eventType: 'machine_offline',
+          machineId: m.machineId,
+        }, planMemo);
+      }
+
       const recipients = await getSiteAlertRecipients(plan.siteId, 'healthAlerts', planMemo);
       if (recipients.length === 0) {
         console.warn(`[cron/health-check] No recipients for site ${plan.siteId}`);
@@ -513,8 +532,8 @@ export async function GET(request: NextRequest) {
       // One email per user so each gets their own unsubscribe link.
       for (const recipient of recipients) {
         try {
-          const sections = filterSectionsForRecipient(plan.sections, recipient.mutedMachines);
-          // Muted every triggering machine = opted out, even if context remains.
+          const sections = filterSectionsForRecipient(plan.sections, recipient);
+          // Muted or out of scope on every triggering machine = nothing to page, even if context remains.
           if (sections.notResponding.length === 0) continue;
 
           const total = sections.notResponding.length + sections.shuttingDown.length + sections.stillOffline.length;
@@ -545,28 +564,6 @@ export async function GET(request: NextRequest) {
         `[cron/health-check] Alert sent for site ${plan.siteId}: ` +
           `${plan.sections.notResponding.length} not responding, ${recipients.length} recipient(s)`
       );
-
-      // Fire webhooks for each not-responding machine (non-blocking).
-      for (const m of plan.webhookMachines) {
-        fireWebhooks(
-          plan.siteId,
-          plan.siteName,
-          'machine.offline',
-          {
-            machine: { id: m.machineId, name: m.machineId, lastSeen: new Date(m.lastHeartbeatMs).toISOString() },
-          },
-          planMemo,
-        ).catch(console.error);
-
-        // Deliberately with the webhook fan-out, not the email branch:
-        // `machine_offline` talons must fire even with no email recipients. This
-        // is the only dispatcher — an offline machine can't report itself offline.
-        tapTalonMatcher(db, plan.siteId, {
-          kind: 'event',
-          eventType: 'machine_offline',
-          machineId: m.machineId,
-        }, planMemo);
-      }
     } catch (error) {
       console.error(`[cron/health-check] Failed to send alert for site ${plan.siteId}:`, error);
     }

@@ -23,6 +23,8 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 
 **Prerequisites**: Inno Setup 6 (found via `%ISCC%`, then `iscc.exe` on PATH, then `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`), Node 22 + npm, rustup, MSVC C++ build tools, cmake.
 
+**Signing**: a full build with `OWLETTE_SIGN=1` signs; every release uses it, and `upload-installer.mjs` refuses an unsigned `.exe`. It checks it can sign at step 0, signs our four executables before ISCC at step 9, and Inno signs setup and its uninstaller through `scripts/sign.ps1`. The quick build refuses `OWLETTE_SIGN=1`. Machine setup: "code signing context" in `docs/runbooks/agent-installer-release.md`.
+
 ---
 
 ## Full Build Steps (`build_installer_full.bat`)
@@ -40,6 +42,8 @@ This document covers the complete build-to-installation pipeline on Windows. Rea
 [8/9] Assemble installer_package/ directory
 [9/9] Compile with Inno Setup → Owlette-Installer-v{VERSION}.exe
 ```
+
+CI runs it in two jobs: `payload` stops after step 8, and `compile` runs step 0 then step 9, so only the job that signs gets the Azure token. With no argument it runs every step.
 
 ### Package Structure (what gets bundled)
 ```
@@ -177,7 +181,7 @@ During installation (or from the desktop app) the agent pairs without a browser 
 - dev → project_id: `owlette-dev-3838a`, api_base: `https://dev.owlette.app/api`
 - prod → project_id: `owlette-prod-90a12`, api_base: `https://owlette.app/api`
 
-The old localhost:8765 browser-callback flow and its `POST /api/agent/auth/exchange` were replaced by device-code pairing in 2.4.1; the route and `AuthManager.exchange_registration_code` still exist but no current code path calls them.
+The old localhost:8765 browser-callback flow and its `POST /api/agent/auth/exchange` were replaced by device-code pairing in 2.4.1; the route still exists, but no agent calls it: the agent's half, `AuthManager.exchange_registration_code`, is removed.
 
 ---
 

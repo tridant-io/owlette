@@ -644,10 +644,10 @@ class TestSessionChangeRepair:
         at_login.warning.assert_not_called()
 
 
-def test_follows_console_user_marks_the_token_file_and_the_cortex_queues():
+def test_follows_console_user_marks_the_token_file_the_cortex_queues_and_the_fleet_folder():
     names = sorted(os.path.basename(e.path) for e in ah.specs() if ah.follows_console_user(e))
     assert names == ['.tokens.enc', '.tokens.enc.v1',
-                     'cortex_commands', 'cortex_events', 'cortex_results']
+                     'cortex_commands', 'cortex_events', 'cortex_results', 'fleet']
 
 
 class TestInstalledTreeGate:
@@ -747,6 +747,15 @@ class TestSpecsTable:
             assert entry.app_root is False
             assert entry.aces[-1][0] is ah.CONSOLE_USER
             assert entry.aces[-1][1] == ah._MODIFY
+
+    def test_the_fleet_folder_is_the_services_to_write_and_the_console_users_to_read(self):
+        entry = _find(os.path.join('ipc', 'fleet'))
+        assert entry.path == os.path.join(ah._DATA_ROOT, 'ipc', 'fleet')
+        assert entry.app_root is False
+        assert _sids(entry.aces[:2]) == ['S-1-5-18', 'S-1-5-32-544']
+        assert [mask for _, mask, _ in entry.aces[:2]] == [ah._FULL, ah._FULL]
+        assert entry.aces[2] == (ah.CONSOLE_USER, ah._READ_EXECUTE, ah._INHERIT)
+        assert len(entry.aces) == 3
 
     def test_token_file_lives_under_data_root_with_console_marker(self):
         entry = _find('.tokens.enc')

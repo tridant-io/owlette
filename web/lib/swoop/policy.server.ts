@@ -2,8 +2,9 @@
  * Who may swoop into a machine, and for how long.
  *
  * Three layers, and they are deliberately separate:
- *   - the capability matrix (`lib/capabilities.ts`) says which ROLE may watch
- *     or control at all;
+ *   - the capability matrix (`lib/capabilities.ts`), with a person's swoop
+ *     mode and machine scope, says who may watch or control at all, and on
+ *     which machines;
  *   - the site's `sites/{siteId}/settings/swoop` document says whether the
  *     feature is on here, which machines are excluded, and whether plain
  *     members may watch — `membersMayWatch` is enforced HERE and never in the
@@ -48,7 +49,7 @@
 
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { Capability, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
+import { Capability, explicitSwoopMode, hasCapability, type Actor, type SiteRole } from '@/lib/capabilities';
 import { deriveMfaEnrolled, readMfaFactors } from '@/lib/mfaFactors.server';
 import type { MfaProofOutcome } from '@/lib/mfaProof.server';
 import { networkRecord, type RequestNetwork } from '@/lib/network.server';
@@ -63,6 +64,14 @@ export const SWOOP_LEASE_SECONDS = 300;
 
 /** how long past a lapsed lease the host still serves the viewer before dropping it (PROTOCOL.md §10). */
 export const SWOOP_LEASE_GRACE_SECONDS = 30;
+
+/**
+ * Concurrent viewers of one machine. A bundle field rather than a site setting
+ * because the streamer is what enforces it; it becomes a setting the day an
+ * operator asks for a different number. The session route reads it too, to
+ * turn a person away with a reason rather than leave them on "connecting".
+ */
+export const SWOOP_MAX_VIEWERS = 4;
 
 /**
  * How long one live ceremony authorises control for, measured from the
@@ -218,14 +227,21 @@ export function evaluateSwoopAccess(input: SwoopAccessInput): SwoopDecision {
     return deny(403, 'machine_excluded', 'swoop is excluded on this machine.');
   }
 
+  // the machine rides along so a machine outside the person's scope refuses here,
+  // before step_up_required, so no window is ever written for it
   const capability =
     input.intent === 'control' ? Capability.MACHINE_REMOTE_CONTROL : Capability.MACHINE_REMOTE_VIEW;
-  if (!hasCapability(input.actor, capability, input.siteId)) {
+  if (!hasCapability(input.actor, capability, input.siteId, input.machineId)) {
     return deny(403, 'capability_missing', 'you do not have permission to do this.');
   }
 
-  // The site-level gate the capability matrix deliberately does not carry.
-  if (siteRoleOf(input.actor, input.siteId) === 'member' && !input.settings.membersMayWatch) {
+  // the site's switch is the default for members with no swoop mode of their
+  // own; an explicit mode on the row wins (owner ruling 13).
+  if (
+    siteRoleOf(input.actor, input.siteId) === 'member' &&
+    explicitSwoopMode(input.actor, input.siteId) === null &&
+    !input.settings.membersMayWatch
+  ) {
     return deny(403, 'members_may_not_watch', 'this site does not allow members to watch.');
   }
 

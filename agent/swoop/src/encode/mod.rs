@@ -25,6 +25,10 @@ pub mod videotoolbox;
 // no platform in it, so its tests run on every system.
 pub mod h264_sps;
 
+// The encode-time gate the hardware encoders judge their text settings by.
+// Plain Rust with no platform in it, so its tests run on every system.
+pub mod gate;
+
 // The chain over whichever of the above are built, and the only module that
 // knows their order. Never gated: with no backend compiled in it still answers,
 // with nothing.
@@ -120,11 +124,18 @@ pub trait Encoder: Send {
 
     /// Deliver finished frames through `sink` as they complete instead of
     /// answering them from `encode`, so the next capture overlaps this
-    /// encode. A backend that encodes asynchronously takes it (VideoToolbox);
-    /// the rest answer from `encode`, which is what the default keeps.
+    /// encode. A backend that encodes asynchronously takes it (VideoToolbox
+    /// and `mf-hw`); the rest answer from `encode`, which is what the default
+    /// keeps.
     fn set_sink(&mut self, _sink: Sink) {}
 
     /// Move the CBR target. Called by the rate governor, several times a
     /// second, and must not restart the session.
     fn set_bitrate(&mut self, bitrate_bps: u32) -> anyhow::Result<()>;
+
+    /// How many tiers this encoder's capture pass encodes. The pass encodes
+    /// them one after another, so a backend with a gated setting judges it
+    /// against its share of the pass's encode-time budget,
+    /// [`gate::share`]`(tiers)`; the default has nothing to judge.
+    fn share_encode_time(&mut self, _tiers: usize) {}
 }

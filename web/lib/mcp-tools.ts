@@ -58,6 +58,18 @@ export function withoutActiveHoursOverride(def: McpToolDefinition): McpToolDefin
   return { ...def, parameters: { ...def.parameters, properties } };
 }
 
+/**
+ * A tool's input cut down to the parameters `def` declares. A granted machine's
+ * call, and a turn it started, hand a tool nothing else (ADR 0017).
+ */
+export function declaredParams(def: McpToolDefinition, input: unknown): Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return {};
+  const declared = def.parameters.properties;
+  return Object.fromEntries(
+    Object.entries(input).filter(([key]) => Object.prototype.hasOwnProperty.call(declared, key)),
+  );
+}
+
 // Tier 1: Read-Only Tools
 
 const tier1Tools: McpToolDefinition[] = [
@@ -1272,7 +1284,7 @@ WORKFLOW:
 1. Call get_system_presets first to find presets for the software. Presets provide installer URLs, silent flags, and other configuration.
 2. Gather all parameters and resolve any ambiguity by asking the user.
 3. Present a clear summary of the deployment plan and ASK "Should I proceed?" — wait for explicit confirmation.
-4. Only after the user confirms, call this tool. It returns immediately with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
+4. Only after the user confirms, call this tool. It first pins the installer's SHA-256 checksum: the preset's own when you deploy the preset's installer URL, otherwise the server downloads the installer to compute it, which can take a few minutes for a large one. If that fails, nothing is deployed, no process is closed, and the result says why. Then it returns with a deployment ID. Installation runs in the background (5-40 min). Direct users to the [Deployments page](/deployments) to track progress.
 
 ACTIVE HOURS:
 - On Windows machines running owlette 4.1.21 or later, owlette refuses a deployment while the machine is inside its active hours, and the Deployments page shows the refusal. Tell the user before you deploy during them. On an older Windows agent a deployment installs right away; macOS and Linux can't run one.

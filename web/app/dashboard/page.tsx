@@ -40,8 +40,13 @@ import { useDevicePrefs } from '@/hooks/useDevicePrefs';
 import { useSlidePanel } from '@/hooks/useSlidePanel';
 import { unionIds } from '@/lib/deviceResolvers';
 import { nextDuplicateName } from '@/lib/processNaming';
+import { effectiveLaunchMode, effectiveSchedules } from '@/lib/processLaunch';
 import { AddMachineButton } from './components/AddMachineButton';
 import { SiteTimeConfirmBanner } from './components/SiteTimeConfirmBanner';
+import { MissingPathDialog } from './components/MissingPathDialog';
+import { machinesNotice, NoMachinesForYou, MachinesLoadError } from './components/MachinesNotice';
+import { usePathCheck, type PathWarning } from '@/hooks/usePathCheck';
+import { PATH_FIELDS, withArgs, type PathField } from '@/lib/pathCheck';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
 import { usePlan } from '@/hooks/usePlan';
 import { useSitePlan } from '@/hooks/useSitePlan';
@@ -52,6 +57,7 @@ import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -67,10 +73,6 @@ const DisplayLayoutPanel = dynamic(
 // Closed until asked for, so they stay out of the dashboard's first bundle.
 const AccountSettingsDialog = dynamic(
   () => import('@/components/AccountSettingsDialog').then((m) => ({ default: m.AccountSettingsDialog })),
-  { ssr: false, loading: () => null },
-);
-const ManageSitesDialog = dynamic(
-  () => import('@/components/ManageSitesDialog').then((m) => ({ default: m.ManageSitesDialog })),
   { ssr: false, loading: () => null },
 );
 const CreateSiteDialog = dynamic(
@@ -114,14 +116,14 @@ export default function DashboardPage() {
   const processFormRef = useScrollFade<HTMLDivElement>();
 
   const router = useRouter();
-  const { user, loading, isSuperadmin, isSiteAdmin, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
-  const { sites, loading: sitesLoading, createSite, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
+  const { user, loading, isSuperadmin, isSiteAdmin, machineScope, swoopMode, userSites, lastSiteId, updateLastSite, requiresMfaSetup, userPreferences, updateUserPreferences } = useAuth();
+  const { sites, loading: sitesLoading, createSite, updateSite } = useSites(user?.uid, userSites, isSuperadmin);
   // One fetch per mount (the hook never polls), gated on auth resolving so it doesn't
   // fire a request the session cookie can only 401.
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
+  // null is the whole site; a list is a scoped member's machines there
+  const scope = currentSiteId ? machineScope(currentSiteId) : null;
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [manageDialogOpen, setManageDialogOpen] = useState(false);
-  const [manageEditSiteId, setManageEditSiteId] = useState<string>();
   const [viewType, setViewType] = useState<ViewType>('card');
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
 
@@ -145,8 +147,7 @@ export default function DashboardPage() {
   const handleScheduleApply = (schedules: ScheduleBlock[], presetId: string | null) => {
     if (scheduleEditorTarget) {
       const { machineId, process } = scheduleEditorTarget;
-      const currentMode = (process._optimisticLaunchMode ?? process.launch_mode ?? (process.autolaunch ? 'always' : 'off')) as 'off' | 'always' | 'scheduled';
-      handleSetLaunchMode(machineId, process.id, process.name, currentMode, process.exe_path, schedules, presetId, `Schedule saved for "${process.name}"`);
+      handleSetLaunchMode(machineId, process.id, process.name, effectiveLaunchMode(process), process.exe_path, schedules, presetId, `Schedule saved for "${process.name}"`);
     }
     setScheduleEditorOpen(false);
     setScheduleEditorTarget(null);
@@ -187,6 +188,9 @@ export default function DashboardPage() {
     launch_mode: 'off',
     schedules: null,
   });
+  // the path fields as the editor opened with them: a save asks the machine only about what it changed.
+  const openedPaths = useRef<Record<PathField, string>>({ exe_path: '', file_path: '', cwd: '' });
+  const pathCheck = usePathCheck(currentSiteId);
   // The schedule is editable in every launch mode (matching the desktop app): from
   // off/always this pre-configures windows without changing the mode. In `scheduled` the
   // section is pinned open, so this flag only drives the other two.
@@ -198,7 +202,7 @@ export default function DashboardPage() {
     ? editProcessForm.schedules
     : DEFAULT_SCHEDULE;
 
-  const { machines, loading: machinesLoading, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId);
+  const { machines, loading: machinesLoading, error: machinesError, killProcess, setLaunchMode, updateProcess, deleteProcess, createProcess, restartMachine, shutdownMachine, cancelRestart, dismissRestartPending, captureScreenshot, startLiveView, stopLiveView } = useMachines(currentSiteId, scope);
   const { prefs: devicePrefs, setListPref } = useDevicePrefs();
   const listPref = devicePrefs.listView;
   const deviceUnion = useMemo<DeviceUnion>(() => ({
@@ -214,7 +218,8 @@ export default function DashboardPage() {
     nic:  machines.some(m => (m.devices?.nics?.length  ?? 0) > 1),
   }), [machines]);
   const { presets: schedulePresets, createPreset, deletePreset: deleteSchedulePreset, updatePreset: updateSchedulePreset } = useSchedulePresets(currentSiteId);
-  const { checkMachineHasActiveDeployment } = useDeployments(currentSiteId);
+  // deployments span the site, so a scoped member opens no listener ('' reads nothing)
+  const { checkMachineHasActiveDeployment } = useDeployments(scope === null ? currentSiteId : '');
   const { removeMachineFromSite, removing: isRemovingMachine } = useMachineOperations(currentSiteId);
 
   const [expandedMachineIds, setExpandedMachineIds] = useState<Set<string>>(() => new Set());
@@ -547,6 +552,11 @@ export default function DashboardPage() {
   };
 
   const openEditProcessDialog = (machineId: string, process: Process) => {
+    openedPaths.current = {
+      exe_path: process.exe_path?.trim() ?? '',
+      file_path: process.file_path?.trim() ?? '',
+      cwd: process.cwd?.trim() ?? '',
+    };
     setProcessDialogMode('edit');
     setEditingMachineId(machineId);
     setEditingProcessId(process.id);
@@ -585,6 +595,7 @@ export default function DashboardPage() {
   };
 
   const openCreateProcessDialog = (machineId: string) => {
+    openedPaths.current = { exe_path: '', file_path: '', cwd: '' };
     setProcessDialogMode('create');
     setEditingMachineId(machineId);
     setEditingProcessId(''); // No process ID for new process
@@ -624,7 +635,7 @@ export default function DashboardPage() {
     });
   };
 
-  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf);
+  useAgentAlertToasts(currentSiteId, handleUseSuggestedExePath, launchCopyOf, scope);
 
   const handleSaveProcess = async () => {
     if (!editProcessForm.name || !editProcessForm.name.trim()) {
@@ -638,17 +649,39 @@ export default function DashboardPage() {
     }
 
     try {
+      let savedProcessId = editingProcessId;
       if (processDialogMode === 'create') {
-        await createProcess(editingMachineId, editProcessForm);
+        savedProcessId = await createProcess(editingMachineId, editProcessForm);
         toast.success(`Process "${editProcessForm.name}" created successfully!`);
       } else {
         await updateProcess(editingMachineId, editingProcessId, editProcessForm);
         toast.success(`Process "${editProcessForm.name}" updated successfully!`);
       }
       setProcessDialogOpen(false);
+      pathCheck.check(
+        editingMachineId,
+        savedProcessId,
+        editProcessForm.name,
+        PATH_FIELDS.map((field) => ({ field, value: editProcessForm[field].trim() })).filter(
+          ({ field, value }) => value && value !== openedPaths.current[field],
+        ),
+      );
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : `Failed to ${processDialogMode} process`;
       toast.error(msg);
+    }
+  };
+
+  const handlePickMissingPath = async (warning: PathWarning, picked: string) => {
+    try {
+      await updateProcess(warning.machineId, warning.processId, {
+        [warning.field]: withArgs(picked, warning.rest),
+      });
+      toast.success('path updated');
+      pathCheck.dismiss(warning);
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : 'failed to update the path');
+      throw error;
     }
   };
 
@@ -736,19 +769,6 @@ export default function DashboardPage() {
   // the last viewed site.
   useEffect(() => {
     if (!sitesLoading && sites.length > 0 && !currentSiteId) {
-      // `?settings=<siteId>`, the swoop viewer's way back to the switch: that site,
-      // with its editor open for an admin. read once, then dropped from the url.
-      const settingsFor = new URLSearchParams(window.location.search).get('settings');
-      if (settingsFor) window.history.replaceState(null, '', window.location.pathname);
-      if (settingsFor && sites.some(s => s.id === settingsFor)) {
-        setCurrentSiteId(settingsFor);
-        updateLastSite(settingsFor);
-        if (isSiteAdmin(settingsFor)) {
-          setManageEditSiteId(settingsFor);
-          setManageDialogOpen(true);
-        }
-        return;
-      }
       const savedSite = lastSiteId || localStorage.getItem('owlette_current_site');
       if (savedSite && sites.find(s => s.id === savedSite)) {
         setCurrentSiteId(savedSite);
@@ -756,7 +776,7 @@ export default function DashboardPage() {
         setCurrentSiteId(sites[0].id);
       }
     }
-  }, [sites, sitesLoading, currentSiteId, lastSiteId, updateLastSite, isSiteAdmin]);
+  }, [sites, sitesLoading, currentSiteId, lastSiteId]);
 
   const handleSiteChange = (siteId: string) => {
     setCurrentSiteId(siteId);
@@ -769,12 +789,16 @@ export default function DashboardPage() {
   // `!sitesLoading` gate is what suppresses the one-paint flash.
   // Show the card only for: (a) no sites at all, or (b) a selected site whose machines have
   // finished loading and is empty. Everything else renders null.
+  const scoped = scope !== null;
   const showGettingStarted = useMemo(() => {
     if (sitesLoading) return false;
     if (sites.length === 0) return true;
+    // a scoped member cannot pair a machine, so they get machinesNotice instead
+    if (scoped) return false;
     // Have sites; need a selected one whose machines have finished loading.
     return !!currentSiteId && !machinesLoading && machines.length === 0;
-  }, [sitesLoading, sites.length, currentSiteId, machinesLoading, machines.length]);
+  }, [sitesLoading, sites.length, scoped, currentSiteId, machinesLoading, machines.length]);
+  const notice = machinesNotice({ scoped, loading: machinesLoading, count: machines.length, error: machinesError });
 
   // id + online only, memoized so the heavy panel doesn't re-render on every dashboard paint.
   const switcherMachines = useMemo(
@@ -889,13 +913,13 @@ export default function DashboardPage() {
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
   const onSwoopApp = useStableCallback(openSwoopApp);
-  const onSiteSettings = useStableCallback(() => {
-    setManageEditSiteId(currentSiteId);
-    setManageDialogOpen(true);
-  });
+  const onSiteSettings = useStableCallback(() => router.push(SWOOP_SETTINGS_PATH));
   const swoopSettings = useSwoopSettings(currentSiteId);
   // not while loading: the hook reads off until the snapshot lands.
   const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;
+  // membersMayWatch reads true until the snapshot lands, so while it loads only
+  // an explicit none hides swoop, as swoopOff waits for it too
+  const noSwoop = swoopMode(currentSiteId, swoopSettings.settings.membersMayWatch) === 'none';
   // The online flag is read when the dialog opens, not when the row was bound.
   const onRemoveMachineById = useStableCallback((machineId: string) => {
     const machine = machines.find((m) => m.machineId === machineId);
@@ -980,6 +1004,7 @@ export default function DashboardPage() {
 
   const currentSite = sites.find(s => s.id === currentSiteId);
   const editLaunchCopy = launchCopyOf(editingMachineId);
+  const pathWarning = pathCheck.warning;
 
   return (
     <PageCascade className="relative min-h-screen pb-24">
@@ -989,44 +1014,8 @@ export default function DashboardPage() {
         sites={sites}
         currentSiteId={currentSiteId}
         onSiteChange={handleSiteChange}
-        onManageSites={() => {
-          setManageEditSiteId(undefined);
-          setManageDialogOpen(true);
-        }}
-        onSiteSettings={onSiteSettings}
         onAccountSettings={() => setAccountSettingsOpen(true)}
         actionButton={<DownloadButton />}
-      />
-
-      {/* Site Management Dialogs */}
-      <ManageSitesDialog
-        open={manageDialogOpen}
-        onOpenChange={setManageDialogOpen}
-        editSiteId={manageEditSiteId}
-        sites={sites}
-        currentSiteId={currentSiteId}
-        machineCount={machines.length}
-        currentUserId={user?.uid}
-        isSuperadmin={isSuperadmin}
-        onUpdateSite={updateSite}
-        onDeleteSite={async (siteId) => {
-          await deleteSite(siteId);
-          // Deleting the current site: switch to another, or clear the selection
-          // when that was the last one. Without the else, currentSiteId keeps
-          // pointing at a site that no longer exists and every child query runs
-          // against a dead id — reachable now that deleting your last site is
-          // allowed (the browser-only guard was removed, see
-          // dev/active/per-site-roles/).
-          if (siteId === currentSiteId) {
-            const remainingSites = sites.filter(s => s.id !== siteId);
-            if (remainingSites.length > 0) {
-              handleSiteChange(remainingSites[0].id);
-            } else {
-              setCurrentSiteId('');
-            }
-          }
-        }}
-        onCreateSite={() => setCreateDialogOpen(true)}
       />
 
       <CreateSiteDialog
@@ -1257,6 +1246,7 @@ export default function DashboardPage() {
                   onSwoop={onSwoop}
                   onSwoopApp={onSwoopApp}
                   swoopOff={swoopOff}
+                  noSwoop={noSwoop}
                   onSiteSettings={onSiteSettings}
                   sitePlan={sitePlan}
                 />
@@ -1291,6 +1281,7 @@ export default function DashboardPage() {
                         userPreferences={temperaturePrefs}
                         isSiteAdmin={isSiteAdmin(currentSiteId)}
                         swoopOff={swoopOff}
+                        noSwoop={noSwoop}
                         onSiteSettings={onSiteSettings}
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
@@ -1302,6 +1293,10 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
+        ) : notice === 'load_error' && machinesError ? (
+          <MachinesLoadError error={machinesError} />
+        ) : notice === 'none_for_you' ? (
+          <NoMachinesForYou />
         ) : showGettingStarted ? (
           <Card className="border-border bg-card animate-in fade-in duration-300">
             <CardHeader>
@@ -1688,6 +1683,17 @@ export default function DashboardPage() {
         </DialogContent>
       </Dialog>
 
+      {pathWarning && (
+        <MissingPathDialog
+          key={`${pathWarning.machineId}:${pathWarning.processId}:${pathWarning.field}`}
+          warning={pathWarning}
+          launch={launchCopyOf(pathWarning.machineId)}
+          onOk={() => pathCheck.dismiss(pathWarning)}
+          onPick={(picked) => handlePickMissingPath(pathWarning, picked)}
+          listFolder={pathCheck.listFolder}
+        />
+      )}
+
       {/* Delete Process Confirmation Dialog */}
       <Dialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <DialogContent className="border-border text-foreground">
@@ -1812,7 +1818,7 @@ export default function DashboardPage() {
             setScheduleEditorOpen(open);
             if (!open) setScheduleEditorTarget(null);
           }}
-          schedules={scheduleEditorTarget.process._optimisticSchedules ?? scheduleEditorTarget.process.schedules ?? null}
+          schedules={effectiveSchedules(scheduleEditorTarget.process)}
           initialPresetId={scheduleEditorTarget.process._optimisticPresetId ?? scheduleEditorTarget.process.schedulePresetId}
           onChange={handleScheduleApply}
           siteTimezone={currentSite?.timezone}
@@ -1820,11 +1826,12 @@ export default function DashboardPage() {
           // false into one `=== true`, and the dialog needs all three states.
           schedulesFollowSiteTime={currentSite?.schedulesFollowSiteTime}
           targetMachineAgentVersion={machines.find(m => m.machineId === scheduleEditorTarget.machineId)?.agent_version}
-          currentLaunchMode={(scheduleEditorTarget.process._optimisticLaunchMode ?? scheduleEditorTarget.process.launch_mode ?? (scheduleEditorTarget.process.autolaunch ? 'always' : 'off')) as 'off' | 'always' | 'scheduled'}
+          currentLaunchMode={effectiveLaunchMode(scheduleEditorTarget.process)}
           presets={schedulePresets}
-          onCreatePreset={handleCreatePreset}
-          onDeletePreset={async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); }}
-          onUpdatePreset={async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); }}
+          // presets are site-wide: without the handlers a scoped admin applies them but writes none
+          onCreatePreset={isSiteAdmin(currentSiteId) ? handleCreatePreset : undefined}
+          onDeletePreset={isSiteAdmin(currentSiteId) ? async (id) => { await deleteSchedulePreset(id); toast.success('Preset deleted'); } : undefined}
+          onUpdatePreset={isSiteAdmin(currentSiteId) ? async (id, updates) => { await updateSchedulePreset(id, updates); toast.success('Preset updated'); } : undefined}
         />
       )}
 

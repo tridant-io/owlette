@@ -4,7 +4,7 @@ description: "the logs page is a site's timeline of agent, process, command, dep
 keywords: ["history", "audit trail", "event log", "who did what", "what happened", "crash history", "reboot history", "clear logs", "delete logs", "search logs", "retention", "how long are logs kept", "event feed", "active hours", "override reason", "reboot refused"]
 ---
 
-open **logs** in the dashboard navigation, or go to `/logs`. it shows the current site's events, newest first. every member of the site can read it; clearing it needs a site owner or admin.
+open **logs** in the dashboard navigation, or go to `/logs`. it shows the current site's events, newest first. every member of the site can read it; clearing it needs a site owner or admin whose access is the whole site. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) sees the rows for those machines only, on the page and over the API, and no row that names no machine.
 
 who started a [swoop](/docs/dashboard/swoop) session, and who was refused, is kept in the session's own audit trail, not here; see [what is recorded](/docs/dashboard/swoop#what-is-recorded).
 
@@ -102,7 +102,7 @@ one row per machine when its install, or an agent update sent with a deployment,
 |---|---|---|---|
 | `deployment_completed` | deployment completed | info | the install finished on that machine |
 | `deployment_failed` | deployment failed | error | it failed there; the details carry the agent's result |
-| `deployment_cancelled` | deployment cancelled | warning | listed in the filter, but the current agent does not write it: a cancelled target leaves no row |
+| `deployment_cancelled` | deployment cancelled | warning | a cancel stopped the install on that machine before its installer ran; the details say how far it had got. a target cancelled before its machine picked the install up leaves no row, and neither does any cancel on an agent older than 4.2.0 |
 
 see [deployments](/docs/dashboard/deployments).
 
@@ -136,7 +136,7 @@ see [inside active hours](/docs/dashboard/machine-monitoring#inside-active-hours
 
 ### displays
 
-fifteen actions, from `display_monitor_added` to `display_auto_restore_circuit_breaker_tripped`, described in [displays](/docs/dashboard/displays#events). displays are Windows only, so only Windows machines log them.
+sixteen actions, from `display_monitor_added` to `display_auto_restore_parked`, described in [displays](/docs/dashboard/displays#events). displays are Windows only, so only Windows machines log them.
 
 ### talons
 

@@ -7,6 +7,11 @@
  * reaches it, so the catch-all denies every client, agent and site admin.
  * `__tests__/rules/swoopSessions.test.ts` pins that.
  *
+ * One record is one streamer's time on one machine, and every viewer of the
+ * machine shares it (PROTOCOL.md §6, §11): a viewer is a row in `viewers` with
+ * a lease of its own. A join, a renewal and a departure can land on the same
+ * document at once, so every read-then-write of the rows is a transaction.
+ *
  * The document holds NO key material, NO tokens and NO TURN credentials —
  * `assertNoKeyMaterial` refuses the write rather than trusting the caller, so a
  * later field addition that smuggles a secret in fails a test instead of
@@ -15,9 +20,10 @@
  *
  * This module never writes a command document. That is
  * `lib/actions/requestSwoopSession.server.ts`, and only that. Its one write
- * outside the collection is the machine record's `swoopViewers`, a count
- * recomputed from these documents (`syncMachineSwoopViewers`) so the dashboard
- * can show it without a rule that reaches them.
+ * outside the collection is the machine record's `swoopViewers` and
+ * `swoopSeats`, the count and the seats recomputed from these documents
+ * (`syncMachineSwoopViewers`) so the dashboard can show them without a rule
+ * that reaches them.
  *
  * Documents are removed by the retention sweep (`/api/cron/swoop-retention`)
  * and nowhere else. It takes its pages as REFERENCES from here rather than
@@ -29,15 +35,21 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import type { SwoopMachineFailureReason } from '@/lib/swoop/machineFailure';
-import { SWOOP_LEASE_GRACE_SECONDS, SWOOP_LEASE_SECONDS } from '@/lib/swoop/policy.server';
+import {
+  SWOOP_LEASE_GRACE_SECONDS,
+  SWOOP_LEASE_SECONDS,
+  SWOOP_MAX_VIEWERS,
+} from '@/lib/swoop/policy.server';
+import { viewerNames } from '@/lib/swoop/viewerNames.server';
 
 export type SwoopSessionState = 'pending' | 'live' | 'ended';
 
 /**
- * Why a session stopped. `closed`, `killed` and `revoked` are ours; the rest
- * are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6) as the
- * host reports it, plus `host_exit` for a stop it named no reason for, and
- * the agent's own refusals and exit reasons the page can act on
+ * Why a session stopped. `closed`, `killed`, `revoked`, `kicked` and `machine_removed`
+ * (the machine was removed from the site, `removeMachine.server.ts`) are ours;
+ * the rest are the streamer's own `exiting.reason` vocabulary (PROTOCOL.md §6)
+ * as the host reports it, plus `host_exit` for a stop it named no reason for,
+ * and the agent's own refusals and exit reasons the page can act on
  * (`machineFailure.ts`).
  */
 export type SwoopSessionEndReason =
@@ -49,6 +61,8 @@ export type SwoopSessionEndReason =
   | 'signal_lost'
   | 'host_exit'
   | 'revoked'
+  | 'kicked'
+  | 'machine_removed'
   | 'error'
   | SwoopMachineFailureReason;
 
@@ -59,6 +73,22 @@ export interface SwoopSessionViewer {
   /** Unix ms. */
   joinedAt: number;
   leaseExpiresAt: number;
+  /**
+   * when this viewer last renewed its lease; absent until its first renewal,
+   * which the page makes once it has reached the streamer.
+   */
+  renewedAt?: number;
+}
+
+/**
+ * a control viewer's continuity grant (`lib/swoop/continuity.server.ts`): the
+ * sha-256 of its secret, never the secret, and whose it is.
+ */
+export interface SwoopContinuityGrant {
+  uid: string;
+  hash: string;
+  /** when a later mint inherited it, or its viewer left on purpose; one-shot. */
+  usedAt?: number;
 }
 
 export interface SwoopSession {
@@ -79,13 +109,17 @@ export interface SwoopSession {
   viewerReason?: string;
   endedAt?: number;
   /**
-   * sha-256 of the continuity secret a control grant carried
-   * (`lib/swoop/continuity.server.ts`); never the secret. Absent on a watch
-   * session and on one minted without a satisfied step-up.
+   * the uid a `revoked` or `kicked` end was for (`revokeViewerSessions.server.ts`):
+   * it ends the session for everyone in it, and everyone but the one a kick was
+   * for comes back on their own as what the api now lets them be.
    */
-  continuityHash?: string;
-  /** when a later mint inherited this session's step-up; one-shot. */
-  continuityUsedAt?: number;
+  endedFor?: string;
+  /**
+   * each control viewer's continuity grant, by viewer id. A grant outlives its
+   * viewer's row, which is what lets the tab's next session inherit it after a
+   * drop; a watch viewer has none.
+   */
+  continuity?: Record<string, SwoopContinuityGrant>;
 }
 
 /** Write refusal. Its message names the offending FIELD, never its value. */
@@ -143,18 +177,46 @@ function sessionRef(siteId: string, machineId: string, sid: string) {
   return sessionsRef(siteId, machineId).doc(sid);
 }
 
-/** Every session write in this module goes through here — that is the whole guard. */
+/**
+ * Every session write in this module goes through here — that is the whole
+ * guard. It shapes the payload; the write is a merge, by `writeSession` or
+ * inside a transaction.
+ */
+function guardedWrite(data: Record<string, unknown>): Record<string, unknown> {
+  assertNoKeyMaterial(data);
+  return { ...data, updatedAt: FieldValue.serverTimestamp() };
+}
+
 async function writeSession(
   siteId: string,
   machineId: string,
   sid: string,
   data: Record<string, unknown>,
 ): Promise<void> {
-  assertNoKeyMaterial(data);
-  await sessionRef(siteId, machineId, sid).set(
-    { ...data, updatedAt: FieldValue.serverTimestamp() },
-    { merge: true },
-  );
+  await sessionRef(siteId, machineId, sid).set(guardedWrite(data), { merge: true });
+}
+
+/**
+ * Read one session and write it back in a single transaction. `decide` sees the
+ * session as it stands, or null when there is none, and returns what to write,
+ * if anything, and the answer. It may run more than once, so it only computes.
+ * A missing record is never written here: the store merges, so a write would
+ * create one.
+ */
+async function inTransaction<T>(
+  siteId: string,
+  machineId: string,
+  sid: string,
+  decide: (session: SwoopSession | null) => { data?: Record<string, unknown>; result: T },
+): Promise<T> {
+  const ref = sessionRef(siteId, machineId, sid);
+  return getAdminDb().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const session = snap.exists ? parseSession(snap.data() ?? {}, siteId, machineId, sid) : null;
+    const { data, result } = decide(session);
+    if (session && data) tx.set(ref, guardedWrite(data), { merge: true });
+    return result;
+  });
 }
 
 function parseViewers(value: unknown): SwoopSessionViewer[] {
@@ -165,38 +227,39 @@ function parseViewers(value: unknown): SwoopSessionViewer[] {
     ctl: v.ctl === true,
     joinedAt: typeof v.joinedAt === 'number' ? v.joinedAt : 0,
     leaseExpiresAt: typeof v.leaseExpiresAt === 'number' ? v.leaseExpiresAt : 0,
+    ...(typeof v.renewedAt === 'number' ? { renewedAt: v.renewedAt } : {}),
   }));
 }
 
-export async function createSwoopSession(args: {
-  siteId: string;
-  machineId: string;
-  sid: string;
-  createdBy: string;
-  startedAt: number;
-  continuityHash?: string;
-}): Promise<void> {
-  await writeSession(args.siteId, args.machineId, args.sid, {
-    sid: args.sid,
-    siteId: args.siteId,
-    machineId: args.machineId,
-    state: 'pending' satisfies SwoopSessionState,
-    createdBy: args.createdBy,
-    startedAt: args.startedAt,
-    viewers: [],
-    createdAt: FieldValue.serverTimestamp(),
-    ...(args.continuityHash ? { continuityHash: args.continuityHash } : {}),
-  });
+function parseGrants(value: unknown): Record<string, SwoopContinuityGrant> {
+  const grants: Record<string, SwoopContinuityGrant> = {};
+  if (!isPlainObject(value)) return grants;
+  for (const [viewerId, grant] of Object.entries(value)) {
+    if (!isPlainObject(grant) || typeof grant.uid !== 'string' || typeof grant.hash !== 'string') continue;
+    grants[viewerId] = {
+      uid: grant.uid,
+      hash: grant.hash,
+      ...(typeof grant.usedAt === 'number' ? { usedAt: grant.usedAt } : {}),
+    };
+  }
+  return grants;
 }
 
-/** The one-shot mark: a session's step-up has been carried to a new one. */
+/** a new viewer's grant, as the continuity map takes it. */
+function grantFor(viewer: SwoopSessionViewer, continuityHash: string | undefined): Record<string, unknown> {
+  return continuityHash ? { continuity: { [viewer.viewerId]: { uid: viewer.uid, hash: continuityHash } } } : {};
+}
+
+/** The one-shot mark: a viewer's step-up has been carried to a new one. */
 export async function markSwoopContinuityUsed(
   siteId: string,
   machineId: string,
   sid: string,
+  viewerId: string,
   nowMs: number,
 ): Promise<void> {
-  await writeSession(siteId, machineId, sid, { continuityUsedAt: nowMs });
+  // a merge into the map: the other viewers' grants are left as they are.
+  await writeSession(siteId, machineId, sid, { continuity: { [viewerId]: { usedAt: nowMs } } });
 }
 
 function parseSession(
@@ -205,6 +268,7 @@ function parseSession(
   machineId: string,
   sid: string,
 ): SwoopSession {
+  const continuity = parseGrants(data.continuity);
   return {
     sid,
     siteId,
@@ -216,8 +280,8 @@ function parseSession(
     ...(data.endReason ? { endReason: data.endReason as SwoopSessionEndReason } : {}),
     ...(typeof data.viewerReason === 'string' ? { viewerReason: data.viewerReason } : {}),
     ...(typeof data.endedAt === 'number' ? { endedAt: data.endedAt } : {}),
-    ...(typeof data.continuityHash === 'string' ? { continuityHash: data.continuityHash } : {}),
-    ...(typeof data.continuityUsedAt === 'number' ? { continuityUsedAt: data.continuityUsedAt } : {}),
+    ...(typeof data.endedFor === 'string' ? { endedFor: data.endedFor } : {}),
+    ...(Object.keys(continuity).length > 0 ? { continuity } : {}),
   };
 }
 
@@ -233,6 +297,23 @@ export async function getSwoopSession(
 
 /** A session that has not ended yet, whichever of the two live states it is in. */
 const UNENDED_STATES: SwoopSessionState[] = ['pending', 'live'];
+
+/**
+ * one machine's unended sessions: filtered on `state` alone, which is one field
+ * and needs no composite index, and scoped to the machine's own subcollection.
+ */
+function unendedSessionsOf(siteId: string, machineId: string) {
+  return sessionsRef(siteId, machineId).where('state', 'in', UNENDED_STATES);
+}
+
+/** a query's documents, as sessions of the one machine it read. */
+function machineSessions(
+  docs: ReadonlyArray<{ id: string; data: () => unknown }>,
+  siteId: string,
+  machineId: string,
+): SwoopSession[] {
+  return docs.map((doc) => parseSession((doc.data() ?? {}) as Record<string, unknown>, siteId, machineId, doc.id));
+}
 
 /**
  * every unended session in this site, on whichever machine. collection-group
@@ -288,26 +369,13 @@ export async function listLiveSwoopSessionsForSite(args: {
   return sessions.filter((session) => !leaseLapsed(session, nowMs));
 }
 
-/**
- * Every unended session on ONE machine — what a kill with no sid stops, and so
- * what it has to close. Filtered on `state` alone, which is one field and needs
- * no composite index, and scoped to the machine's own subcollection.
- */
+/** Every unended session on ONE machine — what a kill with no sid stops, and so what it has to close. */
 export async function listUnendedSwoopSessionsForMachine(args: {
   siteId: string;
   machineId: string;
 }): Promise<SwoopSession[]> {
-  const snap = await sessionsRef(args.siteId, args.machineId)
-    .where('state', 'in', UNENDED_STATES)
-    .get();
-  return snap.docs.map((doc) =>
-    parseSession(
-      (doc.data() ?? {}) as Record<string, unknown>,
-      args.siteId,
-      args.machineId,
-      doc.id,
-    ),
-  );
+  const snap = await unendedSessionsOf(args.siteId, args.machineId).get();
+  return machineSessions(snap.docs, args.siteId, args.machineId);
 }
 
 /**
@@ -321,6 +389,58 @@ function leaseLapsed(session: SwoopSession, nowMs: number): boolean {
       ? Math.max(...session.viewers.map((viewer) => viewer.leaseExpiresAt))
       : session.startedAt + SWOOP_LEASE_SECONDS * 1000;
   return lastLease + SWOOP_LEASE_GRACE_SECONDS * 1000 < nowMs;
+}
+
+/** whether the host can still be serving this viewer: its lease, with the grace, has not run out. */
+function viewerPresent(viewer: SwoopSessionViewer, nowMs: number): boolean {
+  return viewer.leaseExpiresAt + SWOOP_LEASE_GRACE_SECONDS * 1000 >= nowMs;
+}
+
+/** how many people other than `uid` hold a seat among `viewers`; a second tab is not a second person. */
+function othersSeated(viewers: readonly SwoopSessionViewer[], uid: string): number {
+  return new Set(viewers.map((viewer) => viewer.uid).filter((other) => other !== uid)).size;
+}
+
+/**
+ * How long a new session counts as starting. The machine spawns its streamer
+ * and the first viewer reaches it and renews in seconds; the page itself gives
+ * a silent machine 20 s before it asks again.
+ */
+const SWOOP_STARTING_MS = 60_000;
+
+/**
+ * The session on a machine that a new viewer joins, or null to start one.
+ *
+ * One streamer per machine serves every viewer, and later viewers attach to the
+ * live sid (PROTOCOL.md §6, §11): the agent replaces the session it serves with
+ * any new sid, so a second sid ends it for everyone already in it.
+ * Joining a sid whose streamer is gone is worse, though: the agent ignores a
+ * request for a sid it already ran, and the viewer waits on "connecting". The
+ * record cannot see the streamer, so it goes by what only a working one leaves:
+ * a viewer renewing its lease. The page renews first once it has reached the
+ * streamer, and goes on only while its session is up.
+ *
+ * So a session is joined when it has not ended and someone in it still holds a
+ * lease they have renewed — or it is under a minute old, its first viewer still
+ * on the way. A row that never renewed proves nothing, so a page left waiting
+ * on a dead sid cannot keep it joinable for the next one: the worst a stale
+ * record costs is one lease. The newest, when more than one qualifies: the
+ * agent runs the session it was asked for last.
+ */
+export function liveSessionToJoin(
+  sessions: readonly SwoopSession[],
+  nowMs: number,
+): SwoopSession | null {
+  let newest: SwoopSession | null = null;
+  for (const session of sessions) {
+    if (session.state === 'ended') continue;
+    const starting = nowMs - session.startedAt < SWOOP_STARTING_MS;
+    const held = session.viewers.some(
+      (viewer) => viewerPresent(viewer, nowMs) && (starting || viewer.renewedAt !== undefined),
+    );
+    if (held && (newest === null || session.startedAt > newest.startedAt)) newest = session;
+  }
+  return newest;
 }
 
 /**
@@ -340,19 +460,8 @@ export async function listLapsedUnendedSwoopSessions(args: {
   nowMs: number;
   limit: number;
 }): Promise<SwoopSession[]> {
-  const snap = await sessionsRef(args.siteId, args.machineId)
-    .where('state', 'in', UNENDED_STATES)
-    .limit(args.limit)
-    .get();
-  return snap.docs
-    .map((doc) =>
-      parseSession(
-        (doc.data() ?? {}) as Record<string, unknown>,
-        args.siteId,
-        args.machineId,
-        doc.id,
-      ),
-    )
+  const snap = await unendedSessionsOf(args.siteId, args.machineId).limit(args.limit).get();
+  return machineSessions(snap.docs, args.siteId, args.machineId)
     .filter((session) => leaseLapsed(session, args.nowMs));
 }
 
@@ -390,11 +499,23 @@ export async function listSwoopSessionRefsStartedBefore(args: {
   return { refs, scanned: snap.docs.length };
 }
 
+/** one seat as the machine's record mirrors it, in `swoopSeats`. */
+export interface SwoopSeatMirror {
+  uid: string;
+  /** null when the account has no name, or is gone. */
+  displayName: string | null;
+  ctl: boolean;
+}
+
 /**
- * mirror the machine's viewer count onto its record as `swoopViewers`: the
- * viewers of its live sessions whose lease has not lapsed. the dashboard reads
- * the machine, never a session, so this is how the count reaches it. every
- * mutator that changes who is watching calls it after its own write.
+ * mirror the machine's viewers onto its record: `swoopViewers`, the count of
+ * the seats in its live sessions whose lease has not lapsed, and `swoopSeats`,
+ * those seats. the dashboard reads the machine, never a session, so this is
+ * how they reach it. every mutator that changes who is watching calls it after
+ * its own write.
+ *
+ * a seat carries its person's display name, for the picker's cards, and never
+ * an email: every member of the site reads the machine's record.
  *
  * a full recount every time, never an increment, so a write lost to a race is
  * healed by the next one. `update`, not `set`: a machine that is gone must not
@@ -408,12 +529,18 @@ export async function syncMachineSwoopViewers(
 ): Promise<void> {
   try {
     const sessions = await listUnendedSwoopSessionsForMachine({ siteId, machineId });
-    const swoopViewers = sessions
-      .filter((session) => session.state === 'live' && !leaseLapsed(session, nowMs))
-      .reduce((sum, session) => sum + session.viewers.length, 0);
-    await machineRef(siteId, machineId).update({ swoopViewers });
+    const live = sessions.filter((session) => session.state === 'live' && !leaseLapsed(session, nowMs));
+    const names = await viewerNames(live);
+    const swoopSeats: SwoopSeatMirror[] = live.flatMap((session) =>
+      session.viewers.map((viewer) => ({
+        uid: viewer.uid,
+        displayName: names.get(viewer.uid)?.displayName ?? null,
+        ctl: viewer.ctl,
+      })),
+    );
+    await machineRef(siteId, machineId).update({ swoopViewers: swoopSeats.length, swoopSeats });
   } catch (err) {
-    logger.warn('[swoop/store] machine viewer count could not be mirrored', {
+    logger.warn('[swoop/store] machine viewer count and seats could not be mirrored', {
       context: 'swoop/store',
       data: { siteId, machineId, err: err instanceof Error ? err.message : String(err) },
     });
@@ -437,55 +564,161 @@ export async function setSwoopSessionState(
   await syncMachineSwoopViewers(siteId, machineId);
 }
 
-/** Idempotent per viewer: a rejoin replaces the row rather than duplicating it. */
-export async function upsertSwoopViewer(args: {
-  siteId: string;
-  machineId: string;
+/**
+ * where a viewer came into the machine's session: a seat in the one running,
+ * a new one, or none, `SWOOP_MAX_VIEWERS` other people being in it already.
+ */
+export interface SwoopEntry {
+  outcome: 'joined' | 'created' | 'full';
   sid: string;
-  viewer: SwoopSessionViewer;
-}): Promise<void> {
-  const current = await getSwoopSession(args.siteId, args.machineId, args.sid);
-  const others = (current?.viewers ?? []).filter((v) => v.viewerId !== args.viewer.viewerId);
-  await writeSession(args.siteId, args.machineId, args.sid, {
-    viewers: [...others, args.viewer],
-  });
-  await syncMachineSwoopViewers(args.siteId, args.machineId);
 }
 
 /**
- * Drop one viewer, on the host's `viewer_left`. Only the streamer sees a viewer
- * go, so without that event the row outlives the person it names.
+ * Join the session running on the machine, or start one, in one transaction
+ * over the machine's unended sessions (`liveSessionToJoin` picks the one to
+ * join). Two first viewers at once used to start two, and the agent ended the
+ * earlier one's for the later sid; in one transaction the second runs after
+ * the first and joins its session.
+ *
+ * A join seats the viewer beside the viewers still in it, and a seat whose
+ * lease ran out past the grace goes with the write: the host has already
+ * dropped that viewer. The cap counts people, not seats. A browser tab that
+ * closes or reloads sends no DELETE, and no agent forwards the host's
+ * `viewer_left`, so its row stays until its lease runs out: counting rows would
+ * turn people away from a machine with room, the person who reloaded a few
+ * times included. What that costs: one person's several tabs count once here,
+ * and the host's own four viewers can still turn the next tab away.
+ *
+ * `continuityHash` gives a control viewer's grant for whichever session it
+ * lands in. The decision may run more than once, so it only computes.
  */
-export async function removeSwoopViewer(args: {
+export async function enterSwoopSession(args: {
+  siteId: string;
+  machineId: string;
+  viewer: SwoopSessionViewer;
+  /** `user:<uid>`, for a new session. */
+  createdBy: string;
+  /** the id a new session takes, when there is none to join. */
+  newSid: string;
+  continuityHash?: (sid: string) => string;
+  nowMs: number;
+}): Promise<SwoopEntry> {
+  const { siteId, machineId, viewer, nowMs } = args;
+  const entry = await getAdminDb().runTransaction(async (tx): Promise<SwoopEntry> => {
+    const snap = await tx.get(unendedSessionsOf(siteId, machineId));
+    const live = liveSessionToJoin(machineSessions(snap.docs, siteId, machineId), nowMs);
+    if (live) {
+      const seated = live.viewers.filter(
+        (other) => other.viewerId !== viewer.viewerId && viewerPresent(other, nowMs),
+      );
+      if (othersSeated(seated, viewer.uid) >= SWOOP_MAX_VIEWERS) return { outcome: 'full', sid: live.sid };
+      tx.set(
+        sessionRef(siteId, machineId, live.sid),
+        guardedWrite({ viewers: [...seated, viewer], ...grantFor(viewer, args.continuityHash?.(live.sid)) }),
+        { merge: true },
+      );
+      return { outcome: 'joined', sid: live.sid };
+    }
+    tx.set(
+      sessionRef(siteId, machineId, args.newSid),
+      guardedWrite({
+        sid: args.newSid,
+        siteId,
+        machineId,
+        state: 'pending' satisfies SwoopSessionState,
+        createdBy: args.createdBy,
+        startedAt: nowMs,
+        viewers: [viewer],
+        createdAt: FieldValue.serverTimestamp(),
+        ...grantFor(viewer, args.continuityHash?.(args.newSid)),
+      }),
+      { merge: true },
+    );
+    return { outcome: 'created', sid: args.newSid };
+  });
+  if (entry.outcome !== 'full') await syncMachineSwoopViewers(siteId, machineId);
+  return entry;
+}
+
+/**
+ * Take viewers out of a session and answer who is still in it: the rows whose
+ * lease, with the grace, has not run out. The host's `viewer_left` and a viewer
+ * leaving its own seat both come through here; a revocation ends the whole
+ * session instead (`revokeViewerSessions.server.ts`). `spendContinuity` is for
+ * a departure that was a decision, a leave: as a deliberate close always did,
+ * it voids the departing viewers' continuity. `endWhenEmpty` ends the record
+ * in the same write when nobody is left, so no join can land between the last
+ * one out and the end; a record already ended keeps the reason it ended for.
+ * Null when there is no such session.
+ */
+export async function removeSwoopViewers(args: {
   siteId: string;
   machineId: string;
   sid: string;
-  viewerId: string;
-}): Promise<void> {
-  const current = await getSwoopSession(args.siteId, args.machineId, args.sid);
-  await writeSession(args.siteId, args.machineId, args.sid, {
-    viewers: (current?.viewers ?? []).filter((v) => v.viewerId !== args.viewerId),
+  viewerIds: readonly string[];
+  spendContinuity?: boolean;
+  endWhenEmpty?: { endReason: SwoopSessionEndReason; viewerReason?: string };
+  nowMs?: number;
+}): Promise<SwoopSessionViewer[] | null> {
+  const nowMs = args.nowMs ?? Date.now();
+  const leaving = new Set(args.viewerIds);
+  const stillIn = await inTransaction(args.siteId, args.machineId, args.sid, (session) => {
+    if (!session) return { result: null };
+    const viewers = session.viewers.filter(
+      (viewer) => !leaving.has(viewer.viewerId) && viewerPresent(viewer, nowMs),
+    );
+    const spent = args.spendContinuity
+      ? [...leaving].filter((viewerId) => session.continuity?.[viewerId] !== undefined)
+      : [];
+    const end = viewers.length === 0 && session.state !== 'ended' ? args.endWhenEmpty : undefined;
+    if (!end && viewers.length === session.viewers.length && spent.length === 0) return { result: viewers };
+    return {
+      data: {
+        viewers,
+        ...(spent.length > 0
+          ? { continuity: Object.fromEntries(spent.map((viewerId) => [viewerId, { usedAt: nowMs }])) }
+          : {}),
+        ...(end
+          ? {
+              state: 'ended' satisfies SwoopSessionState,
+              endReason: end.endReason,
+              ...(end.viewerReason !== undefined ? { viewerReason: end.viewerReason } : {}),
+              endedAt: nowMs,
+            }
+          : {}),
+      },
+      result: viewers,
+    };
   });
-  await syncMachineSwoopViewers(args.siteId, args.machineId);
+  if (stillIn !== null) await syncMachineSwoopViewers(args.siteId, args.machineId);
+  return stillIn;
 }
 
-/** Push one viewer's lease out. */
+/** Push one viewer's lease out, and drop the seats that lapsed past the grace on the way. */
 export async function renewSwoopViewerLease(args: {
   siteId: string;
   machineId: string;
   sid: string;
   viewerId: string;
   leaseExpiresAt: number;
+  nowMs?: number;
 }): Promise<boolean> {
-  const current = await getSwoopSession(args.siteId, args.machineId, args.sid);
-  const viewer = current?.viewers.find((v) => v.viewerId === args.viewerId);
-  if (!current || !viewer) return false;
-  await writeSession(args.siteId, args.machineId, args.sid, {
-    viewers: current.viewers.map((v) =>
-      v.viewerId === args.viewerId ? { ...v, leaseExpiresAt: args.leaseExpiresAt } : v,
-    ),
+  const nowMs = args.nowMs ?? Date.now();
+  return inTransaction(args.siteId, args.machineId, args.sid, (session) => {
+    if (!session?.viewers.some((viewer) => viewer.viewerId === args.viewerId)) return { result: false };
+    return {
+      data: {
+        viewers: session.viewers
+          .map((viewer) =>
+            viewer.viewerId === args.viewerId
+              ? { ...viewer, leaseExpiresAt: args.leaseExpiresAt, renewedAt: nowMs }
+              : viewer,
+          )
+          .filter((viewer) => viewer.viewerId === args.viewerId || viewerPresent(viewer, nowMs)),
+      },
+      result: true,
+    };
   });
-  return true;
 }
 
 /** `endReason` is recorded so the audit trail says WHY a session stopped. */
@@ -496,11 +729,13 @@ export async function endSwoopSession(args: {
   endReason: SwoopSessionEndReason;
   viewerReason?: string;
   endedAt?: number;
+  endedFor?: string;
 }): Promise<void> {
   await writeSession(args.siteId, args.machineId, args.sid, {
     state: 'ended' satisfies SwoopSessionState,
     endReason: args.endReason,
     ...(args.viewerReason !== undefined ? { viewerReason: args.viewerReason } : {}),
+    ...(args.endedFor !== undefined ? { endedFor: args.endedFor } : {}),
     endedAt: args.endedAt ?? Date.now(),
     viewers: [],
   });

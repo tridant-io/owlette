@@ -22,13 +22,6 @@ const KEEPALIVE_EVENT = 'keepalive';
 const CONNECTED_EVENT = 'connected';
 
 export function registerListenCommand(program: Command): void {
-  const existing = program.commands.find((c) => c.name() === 'listen');
-  if (existing) {
-    const list = program.commands as Command[];
-    const idx = list.indexOf(existing);
-    if (idx >= 0) list.splice(idx, 1);
-  }
-
   program
     .command('listen')
     .description('forward the scoped SSE liveness stream from the owlette api to a local url')

@@ -3,11 +3,9 @@
 //! Desktop Duplication never blends the pointer into the desktop image: the
 //! adapter draws it, and what `AcquireNextFrame` hands back is the desktop
 //! without it. So the encoded frames carry no cursor at all and the viewer has
-//! to composite one from the messages this module emits — which is what
-//! [`CursorMetadata::pointer_in_frame`] says on the wire, and why it is `false`
-//! and stays `false` for this backend. The one exception is a window move or
-//! resize, when the system paints the pointer into the picture itself: see
-//! [`with_painted`].
+//! to composite one from the messages this module emits. The one exception is
+//! a window move or resize, when the system paints the pointer into the picture
+//! itself: see [`with_painted`].
 //!
 //! Every number below is a measurement from spike 0.8 (Windows 11 23H2
 //! 22631.6199, two attached outputs), over 500 frames / 25 s:
@@ -60,7 +58,6 @@
 //! at least one shape decoded, and fewer distinct shapes than shape updates.
 
 use base64::prelude::{Engine as _, BASE64_STANDARD};
-use serde::Serialize;
 
 use crate::capture::{OutputInfo, Rect, Rotation};
 use crate::input::PointerSpace;
@@ -68,12 +65,6 @@ use crate::signal::messages::channel::Cursor;
 
 /// 96 dpi is 100% scaling — `USER_DEFAULT_SCREEN_DPI`.
 pub const DEFAULT_DPI: u32 = 96;
-
-/// §5: the viewer puts a shape up to this many css pixels on its own pointer
-/// and presents anything larger as an overlay (browsers ignore a css cursor
-/// above 128x128 outright). Advertised in [`CursorMetadata`]; nothing here
-/// shrinks to it.
-pub const MAX_CSS_SIZE: u32 = 32;
 
 /// Hard ceiling on the emitted bitmap, in image pixels: a 128x128 pointer is
 /// 65 KiB of RGBA and — with the stored deflate blocks [`encode_png`] writes —
@@ -91,29 +82,6 @@ const MAX_SHAPE_DIM: u32 = 512;
 /// eviction — a viewer's cache is its own, and a duplicate bitmap is cheaper
 /// than an id that means two things.
 const MAX_CACHED_SHAPES: usize = 64;
-
-/// What the viewer needs to know about how the pointer is delivered, for the
-/// `swoop-meta` channel. Neither `cpos` nor `cshape` has anywhere to say it and
-/// PROTOCOL.md §5 does not define either field, so it travels as metadata
-/// rather than as a new message type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CursorMetadata {
-    /// False for Desktop Duplication: the video carries no pointer and the
-    /// viewer must draw the shape itself at the last `cpos`.
-    pub pointer_in_frame: bool,
-    /// The largest shape the viewer will be sent, in css pixels.
-    pub max_css_size: u32,
-}
-
-impl Default for CursorMetadata {
-    fn default() -> Self {
-        Self {
-            pointer_in_frame: false,
-            max_css_size: MAX_CSS_SIZE,
-        }
-    }
-}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CursorError {
@@ -203,7 +171,11 @@ pub struct CursorImage {
 /// Where the pointer is, when the frame said anything about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PointerPosition {
-    /// Output-local, un-rotated texture coordinates.
+    /// Output-local, in the desktop's orientation: Desktop Duplication
+    /// reports a rotated output's pointer as displayed (Microsoft's
+    /// duplication sample adds it to the output's desktop origin as it is;
+    /// spike 0.8 read it on an unrotated output only), which is the upright
+    /// frame's space.
     pub x: i32,
     pub y: i32,
     pub visible: bool,
@@ -256,27 +228,31 @@ pub fn with_painted(
 
 /// One output's geometry, as the cursor path needs it.
 ///
-/// The three spaces Desktop Duplication hands out are not interchangeable
-/// (see [`crate::capture::Rect`]): pointer positions are output-local and
-/// un-rotated, `desktop_rect` is virtual-desktop and rotated, and the virtual
-/// desktop's origin is negative in both axes on a normal two-monitor box.
+/// The spaces Desktop Duplication hands out are not interchangeable (see
+/// [`crate::capture::Rect`]): pointer positions are output-local,
+/// `desktop_rect` is virtual-desktop, and the virtual desktop's origin is
+/// negative in both axes on a normal two-monitor box.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OutputGeometry {
     pub desktop_rect: Rect,
+    /// How far the picture is turned from the desktop: see
+    /// [`PointerSpace`]'s.
     pub rotation: Rotation,
-    /// The acquired texture's size, un-rotated — never the mode's.
+    /// The size of the frames capture hands out: the desktop rect's, since a
+    /// rotated output's are turned upright.
     pub texture: (u32, u32),
     /// Effective dpi of this output. 96 is 100%.
     pub dpi: u32,
 }
 
 impl OutputGeometry {
-    /// `texture` is the acquired texture's size, which on a rotated output
-    /// is not the mode's — see [`crate::capture::Rotation::swap_axes`].
+    /// `texture` is the size of the frames capture hands out. They are
+    /// upright, so the pointer is tracked as the desktop shows it, with
+    /// [`Rotation::Identity`].
     pub fn for_output(output: &OutputInfo, texture: (u32, u32)) -> Self {
         Self {
             desktop_rect: output.desktop_rect,
-            rotation: output.rotation,
+            rotation: Rotation::Identity,
             texture,
             dpi: crate::platform::dpi_for_rect(&output.desktop_rect),
         }
@@ -327,9 +303,11 @@ impl OutputGeometry {
     /// [`OutputGeometry::normalise`]'s output puts a pointer position in
     /// virtual-desktop pixels.
     ///
-    /// Task 4.3 owns it: rotation and a virtual-desktop origin that is negative
-    /// in both axes are the two things a second implementation would drift on,
+    /// Injection's own transform rather than a second one: a virtual-desktop
+    /// origin that is negative in both axes is what a copy would drift on,
     /// and the cursor the viewer draws has to agree with where its click lands.
+    /// The rotation is [`OutputGeometry::for_output`]'s Identity, because
+    /// capture hands the picture over upright.
     pub fn pointer_space(&self) -> PointerSpace {
         PointerSpace {
             rect: self.desktop_rect,
@@ -1103,28 +1081,45 @@ mod tests {
         assert_eq!(round_trip(&standard, (1919, 1079)), (1919, 1079));
     }
 
+    /// Every rotated output is streamed upright, so the cursor's space is
+    /// built with no rotation over the displayed size, and a pointer at the
+    /// desktop rect's top-left is at the picture's.
     #[test]
-    fn a_rotated_output_normalises_in_texture_space_and_lands_rotated() {
-        // The 0.8 box's rotate270 4K panel: a 3840x2160 texture behind a
-        // 2160x3840 desktop rect, whose top-left texel is displayed at the
-        // bottom-left of the desktop.
-        let geometry = OutputGeometry {
-            desktop_rect: Rect {
-                left: -2160,
-                top: -1138,
-                right: 0,
-                bottom: 2702,
-            },
-            rotation: Rotation::Rotate270,
-            texture: (3840, 2160),
-            dpi: 96,
+    fn a_rotated_output_is_tracked_as_it_is_displayed() {
+        let portrait = Rect {
+            left: -2160,
+            top: -1138,
+            right: 0,
+            bottom: 2702,
         };
-        assert_eq!(round_trip(&geometry, (0, 0)), (-2160, 2701));
-        assert_eq!(round_trip(&geometry, (3839, 0)), (-2160, -1138));
-        assert_eq!(round_trip(&geometry, (0, 2159)), (-1, 2701));
+        let landscape = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        for (rect, rotation) in [
+            (portrait, Rotation::Rotate90),
+            (landscape, Rotation::Rotate180),
+            (portrait, Rotation::Rotate270),
+        ] {
+            let output = OutputInfo {
+                device_name: r"\\.\DISPLAY2".to_owned(),
+                desktop_rect: rect,
+                rotation,
+            };
+            let shown = (rect.width() as u32, rect.height() as u32);
+            let geometry = OutputGeometry::for_output(&output, shown);
+            assert_eq!((geometry.rotation, geometry.texture), (Rotation::Identity, shown), "{rotation:?}");
+            let far = (rect.width() - 1, rect.height() - 1);
+            assert_eq!(geometry.normalise((0, 0)), (0.0, 0.0), "{rotation:?}");
+            assert_eq!(geometry.normalise(far), (1.0, 1.0), "{rotation:?}");
+            assert_eq!(round_trip(&geometry, (0, 0)), (rect.left, rect.top), "{rotation:?}");
+            assert_eq!(round_trip(&geometry, far), (rect.right - 1, rect.bottom - 1), "{rotation:?}");
+        }
     }
 
-    /// The rotate270 4K panel of the test above.
+    /// The 0.8 box's rotate270 4K panel, as capture streams it: upright.
     fn portrait_panel() -> OutputGeometry {
         OutputGeometry {
             desktop_rect: Rect {
@@ -1133,8 +1128,8 @@ mod tests {
                 right: 0,
                 bottom: 2702,
             },
-            rotation: Rotation::Rotate270,
-            texture: (3840, 2160),
+            rotation: Rotation::Identity,
+            texture: (2160, 3840),
             dpi: 96,
         }
     }
@@ -1142,7 +1137,7 @@ mod tests {
     #[test]
     fn a_desktop_pixel_maps_back_to_the_texel_that_drew_it() {
         let geometry = portrait_panel();
-        for texel in [(0, 0), (3839, 0), (0, 2159), (3839, 2159), (1200, 700)] {
+        for texel in [(0, 0), (2159, 0), (0, 3839), (2159, 3839), (1200, 700)] {
             let desktop = round_trip(&geometry, texel);
             assert_eq!(
                 geometry.texture_from_desktop(desktop),

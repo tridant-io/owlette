@@ -1,7 +1,10 @@
 'use client';
 
 /**
- * who else is in this session, who holds control, and where their pointers are.
+ * where the others in control are pointing, each pointer in the colour of that
+ * person's pill. who is in the session is the bar's to say (`SwoopToolbar`);
+ * a pointer carries no name (owner, 2026-11-04: the bar already says it), so
+ * in fullscreen, where the bar is hidden, its colour is the only cue.
  *
  * the roster is the host's: `ctl` on a line is the host's own verdict from that
  * viewer's verified jwt, so this is a read-out and not a control — there is no
@@ -17,7 +20,7 @@
  */
 
 import { useSyncExternalStore } from 'react';
-import { MousePointer2, Eye } from 'lucide-react';
+import { MousePointer2 } from 'lucide-react';
 import { NO_PRESENCE, swoopPresence } from '@/lib/swoop/presence';
 import { toPixel, useSwoopPictureBox } from '@/hooks/useSwoopPictureBox';
 import type { SwoopSession } from '@/lib/swoop/features';
@@ -54,53 +57,26 @@ export function SwoopPresence({ session }: SwoopPresenceProps) {
   );
   const box = useSwoopPictureBox(session);
 
-  // alone in the session, which is the usual case: nothing to say about who
-  // else is here, and no pointer but the real one.
-  if (state.viewers.length < 2) return null;
+  // alone in the session, which is the usual case, there is no pointer but the
+  // real one; and before the first frame there is no picture to put one on.
+  if (state.viewers.length < 2 || !box) return null;
 
   return (
     <>
-      <ul
-        aria-label="viewers"
-        className="pointer-events-none absolute left-3 top-3 space-y-1 rounded-md border border-border bg-card/90 p-2 text-xs text-muted-foreground shadow-sm"
-      >
-        {state.viewers.map((viewer) => (
-          <li key={viewer.id} className="flex items-center gap-1.5">
-            {viewer.ctl ? (
-              <MousePointer2
-                aria-hidden
-                className={`size-3 ${viewer.id === session?.viewerId ? 'text-foreground' : tintOf(viewer.id)}`}
-              />
-            ) : (
-              <Eye aria-hidden className="size-3" />
-            )}
-            <span className={viewer.id === session?.viewerId ? 'text-foreground' : undefined}>
-              {viewer.name}
-              {viewer.id === session?.viewerId && ' (you)'}
-            </span>
-            {!viewer.ctl && <span>· view only</span>}
-          </li>
-        ))}
-      </ul>
-
-      {box &&
-        state.cursors.map((cursor) => (
-          <div
-            key={cursor.viewer}
-            aria-hidden
-            // above the panels, as the machine's pointer is
-            className={`pointer-events-none absolute z-10 flex items-start gap-0.5 ${tintOf(cursor.viewer)}`}
-            style={{
-              left: toPixel(cursor.x, box.left, box.width),
-              top: toPixel(cursor.y, box.top, box.height),
-            }}
-          >
-            <MousePointer2 className="size-4 fill-current" />
-            <span className="rounded-sm bg-card/90 px-1 text-[10px] leading-4">
-              {state.viewers.find((viewer) => viewer.id === cursor.viewer)?.name ?? cursor.viewer}
-            </span>
-          </div>
-        ))}
+      {state.cursors.map((cursor) => (
+        <div
+          key={cursor.viewer}
+          aria-hidden
+          // above the panels, as the machine's pointer is
+          className={`pointer-events-none absolute z-10 ${tintOf(cursor.viewer)}`}
+          style={{
+            left: toPixel(cursor.x, box.left, box.width),
+            top: toPixel(cursor.y, box.top, box.height),
+          }}
+        >
+          <MousePointer2 className="size-4 fill-current" />
+        </div>
+      ))}
     </>
   );
 }

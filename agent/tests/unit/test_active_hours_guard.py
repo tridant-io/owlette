@@ -272,7 +272,7 @@ def downloads(monkeypatch, tmp_path):
     monkeypatch.setattr(owlette_service.installer_utils, 'get_temp_installer_path',
                         lambda name: str(tmp_path / name))
     monkeypatch.setattr(owlette_service.installer_utils, 'download_file',
-                        lambda url, path: asked.append(url) or (False, path))
+                        lambda url, path, should_stop=None: asked.append(url) or (False, path))
     monkeypatch.setattr(owlette_service.installer_utils, 'cleanup_installer',
                         lambda path, force=False: True)
     return asked
@@ -292,7 +292,7 @@ def test_a_deployment_inside_active_hours_stops_nothing(machine, downloads):
     assert client.actions() == ['active_hours_refused']
 
 
-def test_a_deployment_with_an_override_closes_its_processes_and_proceeds(machine, downloads):
+def test_a_deployment_with_an_override_proceeds(machine, downloads):
     machine(WORKDAY)
     client = RecordingClient()
     service = make_service(client)
@@ -300,7 +300,8 @@ def test_a_deployment_with_an_override_closes_its_processes_and_proceeds(machine
 
     service.handle_firebase_command('cmd-1', install(activeHoursOverride=OVERRIDE))
 
-    service._terminate_processes_for_install.assert_called_once()
+    # the download is what it proceeds to; it fails here, so nothing is closed
+    service._terminate_processes_for_install.assert_not_called()
     assert downloads == ['https://example.invalid/app.exe']
     assert client.actions() == ['active_hours_override']
 

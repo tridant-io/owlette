@@ -15,16 +15,27 @@ name: agent tests
 #     (versitygw, test/infra/docker-compose.yml). That is the only place the
 #     manifest-fetch -> chunk-download -> assemble pipeline is exercised
 #     against real S3-compatible storage.
+#
+# agent/host and agent/swoop are rust, tested by rust-build.yml. pytest reads
+# only the swoop protocol vectors from there, plus one web routing table.
 on:
   pull_request:
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
   push:
     branches: [main, dev]
     paths:
       - 'agent/**'
+      - '!agent/host/**'
+      - '!agent/swoop/**'
+      - 'agent/swoop/testdata/protocol/**'
+      - 'web/lib/alerts/displayEventRouting.ts'
       - 'test/infra/**'
       - '.github/workflows/agent-tests.yml'
 
@@ -99,17 +110,15 @@ jobs:
     # pythonnet wheels) on a cold cache.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # 3.11 mirrors production: build_installer_full.bat embeds
       # python-3.11.8-embed-amd64 and build-installer.yml pins the same
       # toolchain version. It is also the floor — agent/requirements.txt no
-      # longer resolves on 3.10 (Pillow 13.0.0 requires >=3.11), so the
-      # "Python 3.9+" line in the docs and pytest.ini's `minversion = 3.9`
-      # are both stale.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      # longer resolves on 3.10 (Pillow 13.0.0 requires >=3.11).
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
           cache: pip
@@ -124,7 +133,7 @@ jobs:
           # imports pytest-mock / pytest-asyncio / responses / freezegun, and
           # black + flake8 are a lint toolchain this job does not run. The
           # version matches the requirements-dev.txt pin.
-          python -m pip install pytest==9.1.1
+          python -m pip install pytest==9.2.0
 
       # Mirrors the local invocation. Run from the repo root so pytest's
       # rootdir resolves to agent/ and agent/pytest.ini applies (strict
@@ -161,11 +170,11 @@ jobs:
       contents: read # checkout
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.11'
           cache: pip

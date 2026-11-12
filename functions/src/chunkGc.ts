@@ -28,8 +28,8 @@
  *
  * CONFIG PREREQUISITE. The functions codebase needs its own R2 credentials:
  * R2_S3_ENDPOINT, R2_S3_ACCESS_KEY_ID, R2_S3_SECRET_ACCESS_KEY and ROOST_ENV
- * (dev|prod) in `functions/.env.<projectId>`. They are currently set on railway/vercel
- * only. Without them every run aborts before touching storage.
+ * (dev|prod) in `functions/.env.<projectId>`. Without them every run aborts before
+ * touching storage.
  *
  * TODO: denormalised chunk refcount doc, to avoid fetching every version body — without
  * it sites with thousands of versions will be slow.

@@ -321,6 +321,48 @@ describe('swoop receiver — what the stall watchdog reads', () => {
     expect(receiver.diagnostics().rvfcCallbacks).toBe(2);
   });
 
+  it('hands every rvfc callback to onPresent, joined or not, once each', async () => {
+    const v = fakeVideo();
+    const presents: VideoFrameCallbackMetadata[] = [];
+    const frames: FrameObservation[] = [];
+    const receiver = new SwoopReceiver({
+      video: v.video,
+      onFrame: (o) => frames.push(o),
+      onPresent: (metadata) => presents.push(metadata),
+    });
+    receiver.attachTrack(fakeTrackEvent(fakeStream(), { jitterBufferTarget: null }));
+    await receiver.start();
+    receiver.handleMeta(readVector(KEY_VECTOR));
+
+    v.present({ rtpTimestamp: 123456789, presentedFrames: 1 });
+    v.present({ presentedFrames: 2 });
+    v.present({ rtpTimestamp: 7, presentedFrames: 3 });
+
+    expect(presents.map((metadata) => metadata.presentedFrames)).toEqual([1, 2, 3]);
+    expect(frames).toHaveLength(1);
+    expect(receiver.diagnostics().rvfcCallbacks).toBe(3);
+  });
+
+  it('keeps the rvfc chain alive when onPresent throws', async () => {
+    const v = fakeVideo();
+    let presents = 0;
+    const receiver = new SwoopReceiver({
+      video: v.video,
+      onPresent: () => {
+        presents += 1;
+        if (presents === 1) throw new Error('a draw bug');
+      },
+    });
+    receiver.attachTrack(fakeTrackEvent(fakeStream(), { jitterBufferTarget: null }));
+    await receiver.start();
+
+    expect(() => v.present({})).toThrow('a draw bug');
+    expect(v.armed()).toBe(true);
+    v.present({});
+    expect(presents).toBe(2);
+    expect(receiver.diagnostics().rvfcCallbacks).toBe(2);
+  });
+
   it('reattaches the same stream to the same element, plays it and replaces the pending rvfc request', async () => {
     const h = await started();
     const cancel = jest.fn();

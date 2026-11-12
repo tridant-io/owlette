@@ -15,6 +15,21 @@
 //! under D3D11 multithread protection when a session opens, and a ring slot is
 //! reused only once the input that used it last has come out.
 //!
+//! # Quality vs speed, under the encode-time gate
+//!
+//! Sessions open at `CODECAPI_AVEncCommonQualityVsSpeed` 50, the balanced
+//! value in each vendor's MFT mapping and NVENC P4's counterpart
+//! (swoop-clarity C10). The MFT's own value is read and logged once, before it
+//! is set, so the logs say what each vendor's default is. What 50 costs in
+//! encode time depends on the GPU, and Intel and AMD MFTs are not measured,
+//! which is what the gate is for (`encode::gate`): the pump times each output
+//! from its submit, and the gate judges the steady ones against this encoder's
+//! share of the pass's encode-time budget. Over it, the encoder logs the
+//! verdict and drops its session, so the next frame opens one without the
+//! setting, its first frame an IDR; every mf-hw encoder this streamer opens
+//! after that starts without it. Swoop-clarity task 4.1 writes the numbers
+//! with and without it on this box.
+//!
 //! # Hardware test
 //!
 //! ```text
@@ -26,16 +41,40 @@
 //! numbers a shipped streamer sees.
 //!
 //! Measured on the spike 6.7 box, through NVIDIA's own MFT (RTX 2080 Ti, driver
-//! 591.86), release, three runs: 1080p60 at 20 Mbps, submit to sink 4.98-5.71
-//! ms p50 and 5.38-11.64 ms p95, a forced IDR 5.10-7.45 ms; 4K60 at 40 Mbps
-//! 12.06 / 29.31 ms; 60 s at 1080p60 held 18.92 Mbps (-5.4 %) with never more
-//! than one input in flight and no rise in latency. Intel and AMD are not
-//! measured. The rest, and the method, are in
+//! 591.86), at the MFT's own quality vs speed, release, three runs: 1080p60 at
+//! 20 Mbps, submit to sink 4.98-5.71 ms p50 and 5.38-11.64 ms p95, a forced IDR
+//! 5.10-7.45 ms; 4K60 at 40 Mbps 12.06 / 29.31 ms; 60 s at 1080p60 held 18.92
+//! Mbps (-5.4 %) with never more than one input in flight and no rise in
+//! latency. Intel and AMD are not measured. The rest, and the method, are in
 //! `dev/active/swoop/spikes/6.7-encoder-breadth.md`.
+//!
+//! Quality vs speed 50 against the MFT's own value, swoop-clarity task 4.1,
+//! 2026-11-11, the same RTX 2080 Ti on driver 610.88, release, three runs of
+//! `mf_hw_encode_times_with_and_without_quality_vs_speed` at 1080p60 and 20
+//! Mbps, 300 steady frames each, submit to sink, during another app's two 4K
+//! ffmpeg exports (TouchDesigner on about a fifth of the GPU throughout):
+//!
+//! ```text
+//! the mft's own   p50 4.45 / 4.98 / 4.60 ms   p95 27.33 / 32.51 / 34.40 ms
+//! 50              p50 15.64 / 4.14 / 4.68 ms  p95 61.83 / 32.81 / 40.46 ms
+//! ```
+//!
+//! and two runs once the exports had finished (CPU 30-58%), all provisional
+//! until a run on a quiet box:
+//!
+//! ```text
+//! the mft's own   p50 9.30 / 9.57 ms          p95 11.80 / 13.18 ms
+//! 50              p50 9.65 / 10.20 ms         p95 12.09 / 12.08 ms
+//! ```
+//!
+//! The gate kept 50 in every run, and 50 costs at most about 0.6 ms of p50
+//! against the MFT's own, but for the first run. The p50s move with the GPU's
+//! clocks, which the exports held up; the spike measured 4.98-5.71 ms.
 
 use std::collections::VecDeque;
 use std::ffi::c_void;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -43,26 +82,42 @@ use windows::core::Interface;
 use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11Multithread};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Media::MediaFoundation::{
-    eAVEncH264VProfile_High, ICodecAPI, IMF2DBuffer, IMFActivate, IMFMediaEventGenerator,
-    IMFShutdown, IMFTransform, MEError, METransformHaveOutput, METransformNeedInput,
-    MFVideoFormat_H264, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS, MFT_ENUM_ADAPTER_LUID,
-    MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER, MFT_MESSAGE_COMMAND_FLUSH,
-    MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, MFT_MESSAGE_NOTIFY_START_OF_STREAM,
-    MFT_MESSAGE_SET_D3D_MANAGER, MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_SET_TYPE_TEST_ONLY,
-    MF_EVENT_TYPE, MF_E_SHUTDOWN, MF_MT_AVG_BITRATE, MF_MT_MPEG2_PROFILE, MF_TRANSFORM_ASYNC,
-    MF_TRANSFORM_ASYNC_UNLOCK,
+    eAVEncH264VProfile_High, CODECAPI_AVEncCommonQualityVsSpeed, ICodecAPI, IMF2DBuffer,
+    IMFActivate, IMFMediaEventGenerator, IMFShutdown, IMFTransform, MEError, METransformHaveOutput,
+    METransformNeedInput, MFVideoFormat_H264, MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS,
+    MFT_ENUM_ADAPTER_LUID, MFT_ENUM_FLAG_HARDWARE, MFT_ENUM_FLAG_SORTANDFILTER,
+    MFT_MESSAGE_COMMAND_FLUSH, MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+    MFT_MESSAGE_NOTIFY_START_OF_STREAM, MFT_MESSAGE_SET_D3D_MANAGER,
+    MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFT_SET_TYPE_TEST_ONLY, MF_EVENT_TYPE, MF_E_SHUTDOWN,
+    MF_MT_AVG_BITRATE, MF_MT_MPEG2_PROFILE, MF_TRANSFORM_ASYNC, MF_TRANSFORM_ASYNC_UNLOCK,
 };
+use windows::Win32::System::Variant::VARIANT;
 
 use super::{
     api, assemble, configure, force_keyframe, mfplat, process_output, qpc_now, read_sample,
     retarget, sample_time, sequence_header, set_types, texture_of, video_type, Apartment, MfError,
     Mfplat,
 };
+use crate::encode::gate::{self, EncodeTimeGate, GateVerdict};
 use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig, Sink};
 use crate::gpu::scale::Downscaler;
 use crate::gpu::Frame;
 
 const BACKEND: &str = "mf-hw";
+
+/// `CODECAPI_AVEncCommonQualityVsSpeed`, 0 (fastest) to 100 (best): the
+/// balanced value, kept only while the gate allows it (module doc).
+const QUALITY_VS_SPEED: u32 = 50;
+
+/// Set once a gate has dropped quality vs speed, so every mf-hw encoder this
+/// streamer opens after it starts without the setting. A streamer process is
+/// one session: the next session measures again.
+static QUALITY_DROPPED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+fn reset_quality_fallback() {
+    QUALITY_DROPPED.store(false, Ordering::Relaxed);
+}
 
 /// H.264's own ceiling. The MFT may take less, which `probe` reports.
 const H264_MAX_DIMENSION: u32 = 4096;
@@ -194,20 +249,83 @@ pub fn create(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
 }
 
 impl HwEncoder {
+    /// Quality vs speed on, judged against the whole encode-time budget,
+    /// unless a gate in this streamer has already dropped it.
     fn new(cfg: &EncoderConfig) -> Result<Self, MfError> {
+        let quality = (!QUALITY_DROPPED.load(Ordering::Relaxed)).then_some(QUALITY_VS_SPEED);
+        Self::open(cfg, quality, gate::ENCODE_TIME_P50)
+    }
+
+    /// Sessions open at `quality`, gated against the encode-time budget
+    /// `encode_time` while it is set.
+    fn open(
+        cfg: &EncoderConfig,
+        quality: Option<u32>,
+        encode_time: Duration,
+    ) -> Result<Self, MfError> {
         super::admit(cfg, H264_MAX_DIMENSION, H264_MAX_DIMENSION)?;
         let mf = mfplat()?;
         let apartment = Apartment::enter();
         if mf.encoders(hardware(), None)?.is_empty() {
             return Err(MfError::NoEncoder(BACKEND));
         }
+        let shared = Arc::new(Shared::default());
+        shared.lock().gate = quality.map(|_| EncodeTimeGate::new(encode_time, cfg.fps));
         Ok(Self {
             cfg: cfg.clone(),
-            shared: Arc::new(Shared::default()),
+            shared,
             session: None,
             frame_id: 0,
+            quality,
+            encode_time,
+            share: encode_time,
+            logged: GateVerdict::Measuring,
             _apartment: apartment,
         })
+    }
+
+    /// Log the gate's verdict once it has one, and drop the setting when it
+    /// is over budget.
+    fn heed(&mut self) {
+        let Some(quality) = self.quality else {
+            return;
+        };
+        let (verdict, samples) = match &self.shared.lock().gate {
+            Some(gate) => (gate.verdict(), gate.samples()),
+            None => return,
+        };
+        if verdict == self.logged {
+            return;
+        }
+        self.logged = verdict;
+        if let Some(line) = gate::verdict_line(
+            BACKEND,
+            &format!("quality vs speed {quality}"),
+            (self.cfg.width, self.cfg.height),
+            verdict,
+            samples,
+            self.cfg.fps,
+            self.share,
+        ) {
+            ::log::info!("{line}");
+        }
+        if matches!(verdict, GateVerdict::Exceeded { .. }) {
+            QUALITY_DROPPED.store(true, Ordering::Relaxed);
+            self.quality = None;
+            // its Drop flushes the encoder and stops the pump; the next frame
+            // opens a session without the setting, whose first frame is an IDR
+            self.session = None;
+            // the new session gets a state of its own, so a pump that did not
+            // stop cannot reach it; only what is the encoder's moves over
+            let fresh = Arc::new(Shared::default());
+            {
+                let mut old = self.shared.lock();
+                let mut new = fresh.lock();
+                new.sink = old.sink.take();
+                new.ready = std::mem::take(&mut old.ready);
+            }
+            self.shared = fresh;
+        }
     }
 }
 
@@ -216,6 +334,15 @@ struct HwEncoder {
     shared: Arc<Shared>,
     session: Option<Session>,
     frame_id: u64,
+    /// The quality vs speed the next session opens at; `None` once a gate has
+    /// dropped it.
+    quality: Option<u32>,
+    /// The encode-time budget this encoder opened with, and its current share
+    /// of it, which the gate does not report.
+    encode_time: Duration,
+    share: Duration,
+    /// The verdict last logged, so each is logged once.
+    logged: GateVerdict,
     /// Last, so it drops after the session it holds COM for.
     _apartment: Apartment,
 }
@@ -237,6 +364,7 @@ impl Encoder for HwEncoder {
             }
             .into());
         }
+        self.heed();
         let raw = frame.handle as *mut c_void;
         let texture = texture_of(&raw)?;
         // SAFETY: the device that owns the borrowed texture.
@@ -246,10 +374,12 @@ impl Encoder for HwEncoder {
                 return Err(MfError::DeviceChanged.into())
             }
             Some(session) => session,
-            None => {
-                self.session
-                    .insert(Session::open(device, &self.cfg, Arc::clone(&self.shared))?)
-            }
+            None => self.session.insert(Session::open(
+                device,
+                &self.cfg,
+                self.quality,
+                Arc::clone(&self.shared),
+            )?),
         };
         session.submit(frame, force_irap, self.frame_id, &self.shared)?;
         self.frame_id += 1;
@@ -282,6 +412,13 @@ impl Encoder for HwEncoder {
         }
         Ok(())
     }
+
+    fn share_encode_time(&mut self, tiers: usize) {
+        self.share = self.encode_time / u32::try_from(tiers.max(1)).unwrap_or(u32::MAX);
+        if let Some(gate) = &mut self.shared.lock().gate {
+            gate.set_budget(self.share);
+        }
+    }
 }
 
 /// One submitted input, until its output names it.
@@ -289,6 +426,8 @@ struct Pending {
     time: i64,
     frame_id: u64,
     captured_qpc: i64,
+    /// When it went to the encoder: the gate times its output from here.
+    submitted: Instant,
 }
 
 #[derive(Default)]
@@ -308,6 +447,8 @@ struct State {
     failed: Option<String>,
     /// The pump thread has returned.
     pump_done: bool,
+    /// Judges quality vs speed while the session runs with it.
+    gate: Option<EncodeTimeGate>,
 }
 
 #[derive(Default)]
@@ -369,6 +510,7 @@ impl Session {
     fn open(
         device: ID3D11Device,
         cfg: &EncoderConfig,
+        quality: Option<u32>,
         shared: Arc<Shared>,
     ) -> Result<Self, MfError> {
         let mf = mfplat()?;
@@ -388,7 +530,15 @@ impl Session {
         // SAFETY: the activation lives in the session and is shut down in Drop.
         let transform: IMFTransform =
             unsafe { activate.ActivateObject() }.map_err(api("ActivateObject"))?;
-        let session = match Self::start(mf, device, activate.clone(), transform, cfg, shared) {
+        let session = match Self::start(
+            mf,
+            device,
+            activate.clone(),
+            transform,
+            cfg,
+            quality,
+            shared,
+        ) {
             Ok(session) => session,
             Err(e) => {
                 // no session owns the activation yet, so it is released here
@@ -419,6 +569,7 @@ impl Session {
         activate: IMFActivate,
         transform: IMFTransform,
         cfg: &EncoderConfig,
+        quality: Option<u32>,
         shared: Arc<Shared>,
     ) -> Result<Self, MfError> {
         unlock(&transform)?;
@@ -434,7 +585,18 @@ impl Session {
                 .map_err(api("MFT_MESSAGE_SET_D3D_MANAGER"))?;
         }
         let codec: ICodecAPI = transform.cast().map_err(api("QueryInterface(ICodecAPI)"))?;
-        configure(&codec, cfg, cfg.fps, BACKEND, Vec::new());
+        log_own_quality(&codec);
+        let extra = quality
+            .map(|value| {
+                (
+                    CODECAPI_AVEncCommonQualityVsSpeed,
+                    VARIANT::from(value),
+                    "quality vs speed",
+                )
+            })
+            .into_iter()
+            .collect();
+        configure(&codec, cfg, cfg.fps, BACKEND, extra);
         set_types(
             mf,
             &transform,
@@ -554,6 +716,7 @@ impl Session {
             time,
             frame_id,
             captured_qpc: frame.captured_qpc,
+            submitted: Instant::now(),
         });
         drop(state);
         // SAFETY: the sample is alive for the call and the encoder asked for it.
@@ -593,6 +756,21 @@ impl Drop for Session {
         // SAFETY: the activation this session owns, released once.
         let _ = unsafe { self.activate.ShutdownObject() };
     }
+}
+
+/// Log the MFT's own quality vs speed, read before it is set, once per
+/// streamer: each vendor's default, for the record.
+fn log_own_quality(codec: &ICodecAPI) {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: a query into a local; nothing is set.
+        let own = match unsafe { codec.GetValue(&CODECAPI_AVEncCommonQualityVsSpeed) } {
+            Ok(value) => u32::try_from(&value)
+                .map_or_else(|_| format!("a {:?}", value.vt()), |v| v.to_string()),
+            Err(e) => format!("not reported ({:?})", e.code()),
+        };
+        ::log::info!("swoop: {BACKEND}'s own quality vs speed: {own}");
+    });
 }
 
 /// The hardware encoder for `device`'s adapter, best first.
@@ -677,6 +855,7 @@ impl Pump {
         let (data, time) = read_sample(&sample)?;
         let (data, is_irap) = assemble(&data, &self.header);
         let encoded_qpc = qpc_now();
+        let done = Instant::now();
 
         let mut state = shared.lock();
         while state.pending.front().is_some_and(|p| p.time < time) {
@@ -685,6 +864,13 @@ impl Pump {
         let Some(input) = state.pending.pop_front() else {
             return Ok(());
         };
+        if let Some(gate) = &mut state.gate {
+            gate.observe(
+                input.submitted,
+                done.saturating_duration_since(input.submitted),
+                is_irap,
+            );
+        }
         let frame = EncodedFrame {
             data,
             is_irap,
@@ -736,6 +922,9 @@ mod tests {
         latency: Vec<(u64, Duration)>,
         units: Vec<(u64, EncodedFrame)>,
         max_in_flight: usize,
+        /// The quality vs speed of the session that took each frame, in
+        /// frame order.
+        setting: Vec<Option<u32>>,
     }
 
     /// Feed `count` frames at `cfg.fps`, as capture would, forcing an IDR at
@@ -755,6 +944,7 @@ mod tests {
         let interval = Duration::from_secs_f64(1.0 / f64::from(encoder.cfg.fps));
         let mut submitted = HashMap::new();
         let mut max_in_flight = 0;
+        let mut setting = Vec::new();
         let start = Instant::now();
         for i in 0..count {
             let due = start + interval * i as u32;
@@ -782,6 +972,7 @@ mod tests {
                 "with a sink nothing is answered from encode"
             );
             max_in_flight = max_in_flight.max(encoder.shared.lock().pending.len());
+            setting.push(encoder.quality);
         }
         let mut units = Vec::new();
         let mut latency = Vec::new();
@@ -796,7 +987,16 @@ mod tests {
             latency,
             units,
             max_in_flight,
+            setting,
         }
+    }
+
+    fn iraps(run: &Run) -> Vec<u64> {
+        run.units
+            .iter()
+            .filter(|(_, f)| f.is_irap)
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     /// Needs a hardware encoder MFT. Prints how long it took and what it found.
@@ -820,6 +1020,7 @@ mod tests {
     #[test]
     #[ignore = "needs a gpu with a hardware h.264 encoder mft"]
     fn mf_hw_encodes_1080p60_with_what_chrome_needs() {
+        reset_quality_fallback();
         let device = device();
         let textures = frames(&device, 1920, 1080, 8);
         let mut encoder = HwEncoder::new(&cfg()).expect("the encoder opens");
@@ -842,12 +1043,7 @@ mod tests {
             own_sps.as_deref().map(hex::encode).unwrap_or_default()
         );
 
-        let iraps: Vec<u64> = run
-            .units
-            .iter()
-            .filter(|(_, f)| f.is_irap)
-            .map(|(id, _)| *id)
-            .collect();
+        let iraps = iraps(&run);
         let mut max_slices = 0;
         let mut wire_sps = None;
         for (_, frame) in &run.units {
@@ -912,6 +1108,10 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
 
+        assert!(
+            run.setting.iter().all(|s| *s == Some(QUALITY_VS_SPEED)),
+            "every frame at quality vs speed {QUALITY_VS_SPEED}"
+        );
         assert_eq!(
             iraps,
             vec![0, 300],
@@ -922,8 +1122,106 @@ mod tests {
         assert!(run.max_in_flight <= RING);
     }
 
+    /// Needs a hardware encoder MFT. A 1 µs budget no encode meets, so the
+    /// gate drops quality vs speed at its early verdict, once.
+    #[test]
+    #[ignore = "needs a gpu with a hardware h.264 encoder mft"]
+    fn mf_hw_drops_quality_vs_speed_once_over_budget() {
+        reset_quality_fallback();
+        let device = device();
+        let textures = frames(&device, 1920, 1080, 8);
+        let mut encoder = HwEncoder::open(&cfg(), Some(QUALITY_VS_SPEED), Duration::from_micros(1))
+            .expect("the encoder opens");
+        let run = drive(&mut encoder, &textures, 120, &[], None);
+        let iraps = iraps(&run);
+        let dropped_at = run
+            .setting
+            .iter()
+            .position(Option::is_none)
+            .expect("the gate dropped the setting") as u64;
+        println!(
+            "mf-hw fell back at frame {dropped_at}; iraps at {iraps:?}; {} of 120 frames came out",
+            run.units.len()
+        );
+        assert!(
+            run.setting[..dropped_at as usize]
+                .iter()
+                .all(|s| *s == Some(QUALITY_VS_SPEED)),
+            "the setting was on until the fallback"
+        );
+        assert!(
+            run.setting[dropped_at as usize..]
+                .iter()
+                .all(Option::is_none),
+            "and never back"
+        );
+        assert_eq!(
+            iraps,
+            vec![0, dropped_at],
+            "the first session's first frame, the new session's first frame, and deltas after it"
+        );
+        assert!(
+            run.units.iter().any(|(id, _)| *id > dropped_at),
+            "the new session goes on encoding"
+        );
+        assert!(encoder.shared.lock().gate.is_none());
+        assert!(QUALITY_DROPPED.load(Ordering::Relaxed));
+
+        let mut second = HwEncoder::new(&cfg()).expect("a second encoder opens");
+        let run = drive(&mut second, &textures, 10, &[], None);
+        assert_eq!(run.units.len(), 10, "every frame came out");
+        assert!(
+            run.setting.iter().all(Option::is_none),
+            "a later encoder opens without the setting"
+        );
+        assert!(second.shared.lock().gate.is_none());
+        reset_quality_fallback();
+    }
+
+    /// Needs a hardware encoder MFT. Prints submit to sink with and without
+    /// quality vs speed, for swoop-clarity task 4.1 to record (not from a run
+    /// the gate dropped it in); asserts nothing about time.
+    #[test]
+    #[ignore = "needs a gpu with a hardware h.264 encoder mft"]
+    fn mf_hw_encode_times_with_and_without_quality_vs_speed() {
+        reset_quality_fallback();
+        let device = device();
+        let textures = frames(&device, 1920, 1080, 8);
+        for quality in [None, Some(QUALITY_VS_SPEED)] {
+            let mut encoder =
+                HwEncoder::open(&cfg(), quality, gate::ENCODE_TIME_P50).expect("the encoder opens");
+            // 60 frames while the clocks ramp, then 300
+            let run = drive(&mut encoder, &textures, 360, &[], None);
+            let steady: Vec<Duration> = run
+                .latency
+                .iter()
+                .filter(|(id, _)| *id >= 60)
+                .map(|(_, d)| *d)
+                .collect();
+            println!(
+                "mf-hw 1080p60 at 20 mbps, quality vs speed {}: submit-to-sink p50 {:.2} ms p95 {:.2} ms over {} frames; the gate {}",
+                quality.map_or("the mft's own".to_string(), |q| q.to_string()),
+                percentile(&steady, 0.5),
+                percentile(&steady, 0.95),
+                steady.len(),
+                match (quality, encoder.quality) {
+                    (None, _) => "had nothing to judge",
+                    (Some(_), Some(_)) => "kept it",
+                    (Some(_), None) => "dropped it mid-run",
+                },
+            );
+        }
+        reset_quality_fallback();
+    }
+
     /// Needs a hardware encoder MFT that does 4K. The chain only hands
     /// `mf-hw` a 4K desktop when NVENC is absent, which here it never is.
+    ///
+    /// Quality vs speed is on, under a budget of a second: the 12 ms share can
+    /// drop it at 4K60 (it did here, in a debug build), and the gate is not
+    /// what this measures (`mf_hw_drops_quality_vs_speed_once_over_budget`
+    /// is). The early verdict still applies: a median past one frame interval
+    /// drops it under any budget.
     #[test]
     #[ignore = "needs a gpu with a hardware h.264 encoder mft"]
     fn mf_hw_encodes_4k60() {
@@ -935,9 +1233,14 @@ mod tests {
             bitrate_bps: 40_000_000,
             ..cfg()
         };
-        let mut encoder = HwEncoder::new(&cfg).expect("the encoder opens");
+        let mut encoder = HwEncoder::open(&cfg, Some(QUALITY_VS_SPEED), Duration::from_secs(1))
+            .expect("the encoder opens");
         let run = drive(&mut encoder, &textures, 300, &[150], None);
         assert_eq!(run.units.len(), 300, "every frame came out");
+        assert!(
+            run.setting.iter().all(|s| *s == Some(QUALITY_VS_SPEED)),
+            "every frame at quality vs speed {QUALITY_VS_SPEED}"
+        );
         let steady: Vec<Duration> = run
             .latency
             .iter()
@@ -980,12 +1283,17 @@ mod tests {
     #[test]
     #[ignore = "needs a gpu with a hardware h.264 encoder mft"]
     fn mf_hw_holds_its_bitrate_for_a_minute() {
+        reset_quality_fallback();
         let device = device();
         let textures = frames(&device, 1920, 1080, 8);
         let mut encoder = HwEncoder::new(&cfg()).expect("the encoder opens");
         let count = 60 * 60;
         let run = drive(&mut encoder, &textures, count, &[], None);
         assert_eq!(run.units.len() as u64, count, "every frame came out");
+        assert!(
+            run.setting.iter().all(|s| *s == Some(QUALITY_VS_SPEED)),
+            "every frame at quality vs speed {QUALITY_VS_SPEED}"
+        );
         // seconds 5 to 60: the first keyframe and the rate controller settling
         // are not what is being held
         let bits: usize = run

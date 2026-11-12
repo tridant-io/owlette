@@ -1429,6 +1429,8 @@ def ensure_data_directories():
             get_data_path('ipc/cortex_commands'),
             get_data_path('ipc/cortex_results'),
             get_data_path('ipc/cortex_events'),
+            # hoot is the console user, who cannot write logs/ itself
+            get_data_path('logs/cortex'),
         ]
 
     try:
@@ -1829,6 +1831,12 @@ CORTEX_PID_PATH = get_data_path('tmp/cortex.pid')
 CORTEX_IPC_CMD_DIR = get_data_path('ipc/cortex_commands')
 CORTEX_IPC_RESULT_DIR = get_data_path('ipc/cortex_results')
 CORTEX_IPC_EVENTS_DIR = get_data_path('ipc/cortex_events')
+# off windows logs/ is the daemon's alone, so hoot logs into a directory the
+# data-root mode table opens to the group
+CORTEX_LOG_DIR = get_data_path('logs' if _IS_WINDOWS else 'logs/cortex')
+# off windows the token store is the daemon's alone too: it publishes its
+# access token here for hoot (auth_manager.PublishedToken)
+CORTEX_TOKEN_PATH = get_data_path('ipc/cortex_token.json')
 
 
 def is_cortex_enabled(config=None):
@@ -2363,7 +2371,7 @@ def is_within_schedule(schedules, timezone_str=None):
     """True if now falls in ANY schedule block's window, or if schedules is
     empty (safety fallback). timezone_str is IANA; local time when None.
     """
-    if not schedules:
+    if not schedules or not isinstance(schedules, (list, tuple)):
         return True  # No schedules = always active (safety fallback)
 
     from datetime import datetime, time as dt_time
@@ -2384,16 +2392,24 @@ def is_within_schedule(schedules, timezone_str=None):
 
     prev_day = day_names[(day_names.index(current_day) - 1) % 7]
 
+    # a malformed block or range is skipped, never raised: a raise here leaves
+    # the main loop, and owlette-host (launchd, systemd) relaunches the agent
+    # into the same config
     for block in schedules:
+        if not isinstance(block, dict):
+            continue
         days = block.get('days', day_names)
-        for time_range in block.get('ranges', []):
+        ranges = block.get('ranges', [])
+        if not isinstance(days, (list, tuple)) or not isinstance(ranges, (list, tuple)):
+            continue
+        for time_range in ranges:
             try:
                 start_h, start_m = map(int, time_range['start'].split(':'))
                 stop_h, stop_m = map(int, time_range['stop'].split(':'))
-            except (ValueError, KeyError):
+                start = dt_time(start_h, start_m)
+                stop = dt_time(stop_h, stop_m)
+            except (ValueError, KeyError, TypeError, AttributeError):
                 continue
-            start = dt_time(start_h, start_m)
-            stop = dt_time(stop_h, stop_m)
             if start <= stop:
                 if current_day in days and start <= current_time <= stop:
                     return True
@@ -2870,8 +2886,18 @@ def write_config(keys, value):
 
     Raises ValueError when an intermediate exists but is not a dict: overwriting
     a scalar with a dict to make room would destroy whatever it held.
+
+    Raises OSError when config.json exists but could not be read: a lock or a
+    torn write reads as {}, and writing that back would drop every other
+    section, `firebase` with it, and unpair the machine (upgrade_config guards
+    the same way).
     """
     config = read_json_from_file(CONFIG_PATH)
+    if not config and os.path.exists(CONFIG_PATH):
+        raise OSError(
+            f"Cannot write config path {'.'.join(map(str, keys))}: "
+            f"{CONFIG_PATH} exists but could not be read"
+        )
 
     item = config
     for depth, key in enumerate(keys[:-1]):
@@ -3252,9 +3278,15 @@ def update_process_status_in_json(pid, new_status, firebase_client=None, process
         return
     write_json_to_file(data, RESULT_FILE_PATH)
 
+def _cmdline_key(text):
+    # argv parsing consumes quotes, so a configured `--name "a b"` runs as
+    # `--name a b` and a live command line never shows them.
+    return normalize_exe_path(text).replace('"', '')
+
+
 def _normalized_cmdline(proc):
     """A live command line in the spelling the configured paths compare in."""
-    return normalize_exe_path(' '.join(proc.cmdline()))
+    return _cmdline_key(' '.join(proc.cmdline()))
 
 def find_running_process_by_exe(exe_path, file_path=None, strict=False,
                                 expected_cmdline=None):
@@ -3301,10 +3333,10 @@ def find_running_process_by_exe(exe_path, file_path=None, strict=False,
     try:
         exe_key = normalize_exe_path(resolve_exec_target(exe_path))
         exe_basename = os.path.basename(exe_key)
-        file_path_key = normalize_exe_path(file_path) if file_path else None
+        file_path_key = _cmdline_key(file_path) if file_path else None
         # Same normalisation as the live cmdlines below, so recorded evidence
         # compares exactly regardless of slash direction or case.
-        expected_key = (normalize_exe_path(expected_cmdline)
+        expected_key = (_cmdline_key(expected_cmdline)
                         if expected_cmdline else None)
         is_script = exe_key.endswith(('.bat', '.cmd'))
         candidates = []      # (pid, full_match, cmdline-or-None) -- exe targets
@@ -3426,6 +3458,26 @@ def fetch_process_id_by_name(name, data):
     process = next((process for process in data['processes'] if process['name'] == name), None)
     return process['id'] if process else None
 
+
+def state_rows_by_process(runtime_state):
+    """The app_states row that speaks for each process, as {process id: (pid, row)}.
+
+    The last row in the file wins: a restart leaves the terminated pid's row there
+    until the next cleanup_stale_tracking_data, ahead of the relaunch's row.
+    The dashboard's metrics and hoot's get_process_list both ask here, so they
+    cannot disagree about which row that is.
+    """
+    rows = {}
+    for pid, row in (runtime_state or {}).items():
+        # "None" keys come from failed launches.
+        try:
+            pid_int = int(pid)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(row, dict) and row.get('id'):
+            rows[row['id']] = (pid_int, row)
+    return rows
+
 # METRICS
 def get_system_info():
     cpu_info = get_cpu_name()
@@ -3545,22 +3597,15 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
             runtime_state = read_json_from_file(RESULT_FILE_PATH)
 
             if config and 'processes' in config:
-                pid_to_runtime = {}
-                if runtime_state:
-                    for pid, state_info in runtime_state.items():
-                        # "None" keys come from failed launches.
-                        try:
-                            pid_int = int(pid)
-                        except (ValueError, TypeError):
-                            continue
-                        process_id = state_info.get('id')
-                        if process_id:
-                            pid_to_runtime[process_id] = {
-                                'pid': pid_int,
-                                'status': state_info.get('status', 'UNKNOWN'),
-                                'responsive': state_info.get('responsive', True),
-                                'timestamp': state_info.get('timestamp', 0)
-                            }
+                pid_to_runtime = {
+                    process_id: {
+                        'pid': pid,
+                        'status': state_info.get('status', 'UNKNOWN'),
+                        'responsive': state_info.get('responsive', True),
+                        'timestamp': state_info.get('timestamp', 0)
+                    }
+                    for process_id, (pid, state_info) in state_rows_by_process(runtime_state).items()
+                }
 
                 for index, process in enumerate(config['processes']):
                     process_id = process.get('id')
