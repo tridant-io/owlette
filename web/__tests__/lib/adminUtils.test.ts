@@ -53,9 +53,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: () => ({ getUserByEmail: mockGetUserByEmail }),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 const mockLoggerWarn = jest.fn();
@@ -90,7 +90,7 @@ beforeEach(() => {
     .mockResolvedValue({ data: () => ({ email: ADMIN_EMAIL, preferences: { mutedMachines: ['TEC-A4D'] } }) });
   mockGetUserByEmail.mockReset().mockResolvedValue({ uid: 'admin-uid' });
   mockUsersDoc.mockClear(); // keep impl, clear recorded calls
-  mockGetEntitlements.mockReset();
+  mockGetSiteEntitlements.mockReset();
   mockLoggerWarn.mockReset();
 });
 
@@ -121,12 +121,12 @@ describe('getSiteAlertRecipients — plan pause', () => {
     delete process.env.OWLETTE_E2E;
   });
 
-  it('returns no one, and never the ADMIN_EMAIL fallback, when the payer has no control', async () => {
-    mockGetEntitlements.mockResolvedValue(ent('0'));
+  it('returns no one, and never the ADMIN_EMAIL fallback, when the site has no control', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(ent('0'));
 
     expect(await getSiteAlertRecipients('site-1', 'healthAlerts')).toEqual([]);
-    expect(mockGetEntitlements).toHaveBeenCalledWith('owner-uid');
-    // the site read is reused for the payer; nobody is enumerated.
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
+    // the site read is reused for the plan; nobody is enumerated.
     expect(mockSiteDocGet).toHaveBeenCalledTimes(1);
     expect(mockUsersWhereGet).not.toHaveBeenCalled();
     expect(mockMembersGet).not.toHaveBeenCalled();
@@ -137,8 +137,8 @@ describe('getSiteAlertRecipients — plan pause', () => {
     );
   });
 
-  it('enumerates as before when the payer has control', async () => {
-    mockGetEntitlements.mockResolvedValue(ent('1'));
+  it('enumerates as before when the site has control', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(ent('1'));
 
     const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
     expect(recipients.map((r) => r.userId)).toEqual(['u1', 'owner-uid']);
@@ -151,20 +151,20 @@ describe('getSiteAlertRecipients — plan pause', () => {
 
     const recipients = await getSiteAlertRecipients('site-1', 'healthAlerts');
     expect(recipients.map((r) => r.userId)).toEqual(['u1']);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockSiteDocGet).toHaveBeenCalledTimes(1);
     expect(mockUsersDoc).not.toHaveBeenCalled();
   });
 
-  it('resolves the payer once across a batch sharing a memo', async () => {
-    mockGetEntitlements.mockResolvedValue(ent('0'));
+  it('resolves each site once across a batch sharing a memo', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(ent('0'));
     const memo = createPlanMemo();
 
     await getSiteAlertRecipients('site-1', 'healthAlerts', memo);
+    await getSiteAlertRecipients('site-1', 'processAlerts', memo);
     await getSiteAlertRecipients('site-2', 'healthAlerts', memo);
 
-    expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
-    expect(mockUsersDoc).toHaveBeenCalledTimes(1);
+    expect(mockGetSiteEntitlements.mock.calls.map(([siteId]) => siteId)).toEqual(['site-1', 'site-2']);
   });
 });
 

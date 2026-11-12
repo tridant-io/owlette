@@ -96,7 +96,7 @@ export const GET = withRateLimit(
       const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
       const machineLimit = body.limits.machines;
       const [activeMachines, owned, live] = await Promise.all([
-        activeMachinesBetween(uid, monthStart, now),
+        activeMachinesBetween(uid, monthStart.getTime(), now.getTime()),
         getAdminDb().collection('sites').where('owner', '==', uid).limit(1).select().get(),
         machineLimit === null ? undefined : liveMachines(uid, machineLimit),
       ]);

@@ -23,9 +23,9 @@ jest.mock('firebase-admin/firestore', () => ({
   FieldValue: { serverTimestamp: () => 'SERVER_TIMESTAMP' },
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
@@ -172,13 +172,13 @@ function enforceFree() {
   process.env.PLAN_ENFORCEMENT = 'on';
   process.env.TRIDANT_API_URL = 'https://id.tridant.test';
   process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
-  mockGetEntitlements.mockResolvedValue(FREE);
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
 }
 
 describe('POST /api/agent/auth/exchange', () => {
   it('pairs, claims the code and records the pairing, never reading the plan with enforcement off', async () => {
     mockDocs['sites/site-1/machines/other-pc'] = {};
-    mockGetEntitlements.mockResolvedValue(FREE);
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
 
     const res = await exchange('new-pc');
 
@@ -188,7 +188,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(pairedAtWrite('new-pc')?.slice(1)).toEqual([{ pairedAt: 'SERVER_TIMESTAMP' }, { merge: true }]);
     expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
     expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: 'new-pc' });
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockPlanRead).not.toHaveBeenCalled();
   });
 
@@ -200,7 +200,7 @@ describe('POST /api/agent/auth/exchange', () => {
 
     expect(res.status).toBe(402);
     expect(await res.json()).toEqual({ error: MACHINE_LIMIT_ERROR });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('owner-1');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
     expect(mockCreateCustomToken).not.toHaveBeenCalled();
     expect(global.fetch).not.toHaveBeenCalled();
     expect(mockSet).not.toHaveBeenCalled();
@@ -208,7 +208,7 @@ describe('POST /api/agent/auth/exchange', () => {
     expect(mockTxSet).not.toHaveBeenCalled();
   });
 
-  it("lets a machine already in the payer's sites re-pair, keeping its first pairedAt and its grants", async () => {
+  it("lets a machine already on the owner's sites re-pair, keeping its first pairedAt and its grants", async () => {
     enforceFree();
     mockDocs['sites/site-1/machines/home-pc'] = { pairedAt: 'FIRST' };
 

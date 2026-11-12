@@ -39,6 +39,7 @@ import {
   markLinkRequired,
   recordCheckout,
   recordOrg,
+  recordSubscribed,
   recordTrial,
   recordTrialError,
 } from '@/lib/planAccounts.server';
@@ -74,6 +75,13 @@ describe('plan_accounts', () => {
     expect((await getPlanAccount('u1'))?.linkRequired).toBe(true);
     await clearLinkRequired('u1');
     expect(await claimTrialStart('u1', 1000)).toBe(true);
+  });
+
+  it('settles an account that already pays, keeping its org', async () => {
+    await recordOrg('u1', 'org_9');
+    await recordSubscribed('u1');
+    expect(await getPlanAccount('u1')).toMatchObject({ orgId: 'org_9', trialEndsAt: null, trialError: null });
+    expect(await claimTrialStart('u1', Date.now() + 10 * TRIAL_CLAIM_WINDOW_MS)).toBe(false);
   });
 
   it('records an org without starting a trial', async () => {

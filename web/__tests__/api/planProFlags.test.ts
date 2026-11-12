@@ -2,7 +2,7 @@
  * @jest-environment node
  *
  * plan.md decision 8 in the `_shared` resolvers: creating roosts and webhooks
- * needs the payer's flag, an api-key request needs the site payer's
+ * needs the site's flag, an api-key request needs the site's
  * `owlette.api_keys`, minting a key needs the minter's own, and agent tokens are
  * never plan-gated. the real plan resolver runs; only tridant and firestore are faked.
  */
@@ -17,8 +17,11 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
+// the site read gates requests; the account read is only the mint gate's.
+const mockGetSiteEntitlements = jest.fn();
 const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
@@ -116,6 +119,7 @@ async function expectPlanRequired(response: Response | null, entitlement: string
 }
 
 function expectNoPlanLookup() {
+  expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   expect(mockGetEntitlements).not.toHaveBeenCalled();
   expect(mockCollection).not.toHaveBeenCalled();
 }
@@ -124,6 +128,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   enforcePlans();
   mockUsers = {};
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
   mockGetEntitlements.mockResolvedValue(FREE);
   mockResolveAuth.mockResolvedValue(SESSION);
   mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA, machineIds: null });
@@ -136,7 +141,7 @@ beforeEach(() => {
 
 afterAll(stopEnforcingPlans);
 
-describe('api-key requests need the site payer’s owlette.api_keys', () => {
+describe('api-key requests need the site’s owlette.api_keys', () => {
   const resolvers = {
     site: () => requireSiteAuthAndScope(request(), SITE, 'write'),
     machine: () => requireMachineAuthAndScope(request(), SITE, MACHINE, 'write'),
@@ -145,17 +150,17 @@ describe('api-key requests need the site payer’s owlette.api_keys', () => {
     'agent-or-site (operator)': () => requireAgentOrSiteAuthAndScope(request(), SITE, 'read'),
   };
 
-  it.each(Object.entries(resolvers))('%s: refuses a key on free, asking the payer, not the key holder', async (_, run) => {
+  it.each(Object.entries(resolvers))('%s: refuses a key on free, asking about the site, not the key holder', async (_, run) => {
     mockResolveAuth.mockResolvedValue(API_KEY);
 
     await expectPlanRequired(refusalOf(await run()), 'owlette.api_keys');
-    expect(mockGetEntitlements).toHaveBeenCalledWith(PAYER);
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     expect(mockEmitApiKeyUsed).not.toHaveBeenCalled();
   });
 
   it.each(Object.entries(resolvers))('%s: lets a key through on pro', async (_, run) => {
     mockResolveAuth.mockResolvedValue(API_KEY);
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
 
     expect((await run()).ok).toBe(true);
   });
@@ -223,7 +228,7 @@ describe('roost writes need owlette.roost', () => {
   });
 
   it('allows a deploy on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
     expect((await requireRoostAuthAndScope(request(), SITE, ROOST, 'deploy')).ok).toBe(true);
   });
 
@@ -248,11 +253,11 @@ describe('roost writes need owlette.roost', () => {
   describe('requireDistributionManageCapability (roost create, chunk upload and mount)', () => {
     it('refuses on free', async () => {
       await expectPlanRequired(await requireDistributionManageCapability(SESSION, SITE), 'owlette.roost');
-      expect(mockGetEntitlements).toHaveBeenCalledWith(PAYER);
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     });
 
     it('allows on pro', async () => {
-      mockGetEntitlements.mockResolvedValue(PRO);
+      mockGetSiteEntitlements.mockResolvedValue(PRO);
       expect(await requireDistributionManageCapability(SESSION, SITE)).toBeNull();
     });
 
@@ -278,7 +283,7 @@ describe('webhook create needs owlette.webhooks', () => {
   });
 
   it('allows a create on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
+    mockGetSiteEntitlements.mockResolvedValue(PRO);
     expect(await requireWebhookManageCapability(SESSION, SITE, { create: true })).toBeNull();
   });
 

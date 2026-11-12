@@ -37,8 +37,11 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
+// site creation counts the owner's free sites by each site's plan; transfer still reads the successor's account plan.
+const mockGetSiteEntitlements = jest.fn();
 const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
   getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
@@ -714,6 +717,7 @@ describe('plan limits on sites', () => {
     process.env.PLAN_ENFORCEMENT = 'on';
     process.env.TRIDANT_API_URL = 'https://tridant.test';
     process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+    mockGetSiteEntitlements.mockResolvedValue(FREE);
     mockGetEntitlements.mockResolvedValue(FREE);
   });
 
@@ -744,7 +748,7 @@ describe('plan limits on sites', () => {
     syncCollection(parts, machineId, { online: true });
   }
 
-  it("refuses a free payer's second site with 402 plan_required, writing nothing", async () => {
+  it("refuses an account's second free site with 402 plan_required, writing nothing", async () => {
     seedSite('site-a', { owner: 'free-uid' });
     authedSession('free-uid', 'member', ['site-a']);
 
@@ -758,12 +762,12 @@ describe('plan limits on sites', () => {
       entitlement: 'owlette.sites',
       upgradeUrl: '/settings/plan',
     });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('free-uid');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
     expect(docStore['sites/site-b']).toBeUndefined();
     expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 
-  it("POSITIVE CONTROL: a free payer's first site is created", async () => {
+  it("POSITIVE CONTROL: an account's first free site is created", async () => {
     authedSession('free-uid', 'member');
 
     const res = await sitesPOST(createRequest('site-b'));
@@ -780,6 +784,7 @@ describe('plan limits on sites', () => {
     const res = await sitesPOST(createRequest('site-b'));
 
     expect(res.status).toBe(201);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 

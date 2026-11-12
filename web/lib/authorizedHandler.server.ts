@@ -87,9 +87,8 @@ import {
 import { securityConfig } from '@/lib/securityConfig.server';
 import {
   entitled,
-  payerForSite,
   PLAN_REQUIRED_DETAIL,
-  resolvePlan,
+  resolveSitePlan,
   type PlanFlag,
 } from '@/lib/plan.server';
 import { getAdminDb } from '@/lib/firebase-admin';
@@ -815,8 +814,8 @@ export function authorizedSiteHandler<TParams extends Record<string, string | un
         ...(capabilityPlanKey ? [capabilityPlanKey] : []),
       ];
       if (planKeys.length > 0) {
-        // site data in hand, so the payer costs no read and enforcement off costs none at all.
-        const plan = await resolvePlan(await payerForSite(siteId, outcome.facts.siteData));
+        // site data in hand, so the owner costs no read and enforcement off costs none at all.
+        const plan = await resolveSitePlan(siteId, outcome.facts.siteData);
         const missing = planKeys.find((key) => !entitled(plan, key));
         if (missing) {
           denyAudit(siteId, {

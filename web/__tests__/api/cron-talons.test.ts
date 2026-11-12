@@ -182,7 +182,7 @@ jest.mock('@/lib/hoot/followupSweep.server', () => ({
 }));
 
 jest.mock('@/lib/planPause.server', () => ({
-  createPlanMemo: () => ({ sites: new Map(), payers: new Map() }),
+  createPlanMemo: () => ({ sites: new Map() }),
   pausedByPlan: (...args: unknown[]) => pausedByPlanMock(...args),
 }));
 

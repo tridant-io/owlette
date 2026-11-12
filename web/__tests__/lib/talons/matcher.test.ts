@@ -51,9 +51,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   getAdminAuth: jest.fn(),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
@@ -837,7 +837,7 @@ describe('POST /api/talons/internal/match', () => {
 });
 
 /**
- * Plans (plan.md decision 8): matching pauses when the site's payer has no
+ * Plans (adr 0018): matching pauses when the site's plan has no
  * `owlette.talons`. Runs the real resolver against the fake; only tridant's
  * answer is mocked.
  */
@@ -857,7 +857,7 @@ describe('plan pause', () => {
     process.env.OWLETTE_E2E = '1';
     fake.docs.set(`sites/${SITE}`, { owner: 'payer' });
     fake.docs.set('users/payer', {});
-    mockGetEntitlements.mockResolvedValue(ent('0'));
+    mockGetSiteEntitlements.mockResolvedValue(ent('0'));
   });
 
   afterEach(() => {
@@ -865,11 +865,11 @@ describe('plan pause', () => {
     delete process.env.OWLETTE_E2E;
   });
 
-  it('runs nothing when the payer has no talons, and says so', async () => {
+  it('runs nothing when the site has no talons, and says so', async () => {
     seedTalon('t1');
 
     expect(await matchAndRunTalons(db, SITE, breach())).toEqual({ matched: 0, runs: [] });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('payer');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE);
     expect(mockRunTalon).not.toHaveBeenCalled();
     expect(mockLoggerWarn).toHaveBeenCalledWith(
       "Talon matching paused: the site's plan has no talons",
@@ -887,8 +887,8 @@ describe('plan pause', () => {
     expect(writtenRuns()).toHaveLength(0);
   });
 
-  it('runs as before when the payer has talons', async () => {
-    mockGetEntitlements.mockResolvedValue(ent('1'));
+  it('runs as before when the site has talons', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(ent('1'));
     seedTalon('t1');
 
     expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
@@ -901,7 +901,7 @@ describe('plan pause', () => {
     await matchAndRunTalons(db, SITE, breach());
 
     expect(fake.docReads).toEqual([]);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('makes no plan read when enforcement is off', async () => {
@@ -910,19 +910,19 @@ describe('plan pause', () => {
 
     expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
     expect(fake.docReads).toEqual([]);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 
   it('proceeds when the lookup fails', async () => {
     seedTalon('t1');
     fake.docs.delete('users/payer');
-    mockGetEntitlements.mockRejectedValue(new Error('tridant exploded'));
+    mockGetSiteEntitlements.mockRejectedValue(new Error('tridant exploded'));
 
     expect((await matchAndRunTalons(db, SITE, breach())).matched).toBe(1);
     expect(mockRunTalon).toHaveBeenCalledTimes(1);
   });
 
-  it('resolves the payer once across taps sharing a memo', async () => {
+  it("resolves the site's plan once across taps sharing a memo", async () => {
     seedTalon('t1', { trigger: { type: 'event', eventTypes: ['machine_offline'] } });
     const memo = createPlanMemo();
 
@@ -932,7 +932,7 @@ describe('plan pause', () => {
     await settle();
 
     expect(fake.docReads).toEqual([`sites/${SITE}`, 'users/payer']);
-    expect(mockGetEntitlements).toHaveBeenCalledTimes(1);
+    expect(mockGetSiteEntitlements).toHaveBeenCalledTimes(1);
     expect(mockRunTalon).not.toHaveBeenCalled();
   });
 

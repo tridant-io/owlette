@@ -72,9 +72,9 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 const mockResolveAuth = jest.fn();
@@ -1024,7 +1024,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
       process.env.PLAN_ENFORCEMENT = 'on';
       process.env.TRIDANT_API_URL = 'https://tridant.test';
       process.env.TRIDANT_LICENSE_KEY = 'test-key';
-      mockGetEntitlements.mockResolvedValue({
+      mockGetSiteEntitlements.mockResolvedValue({
         ok: true,
         resolved: false,
         standing: 'expired',
@@ -1041,7 +1041,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
       }
     });
 
-    /** a superadmin payer is unrestricted, so the caller (and site owner) is a plain member here. */
+    /** a site owned by a superadmin is unrestricted, so the caller (and site owner) is a plain member here. */
     function asMemberOwner(): void {
       mocks.userDocs.set('user-1', { role: 'member', sites: [SITE] });
     }

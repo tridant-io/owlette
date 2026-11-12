@@ -228,22 +228,22 @@
       "authHeader": "X-Cron-Secret",
       "authScheme": "raw",
       "authEnvVar": "CRON_SECRET",
-      "schedule": "0 3 * * *",
-      "cadenceLabel": "daily at 03:00",
+      "schedule": "30 23 * * *",
+      "cadenceLabel": "daily at 23:30 UTC",
       "minTimeoutSeconds": 60,
       "environments": ["dev", "prod"],
       "urls": {
         "dev": "https://dev.owlette.app/api/cron/plan-daily",
         "prod": "https://owlette.app/api/cron/plan-daily"
       },
-      "purpose": "Pages through every site and, for each site with an owner (the payer), unions the machines whose lastHeartbeat falls in the last 26 hours (ACTIVE_WINDOW_MS, web/lib/planUsage.server.ts) into billing_usage/{payerUid}/days/{YYYY-MM-DD} as an array union. The 03:00 run stamps the previous UTC day; a billing period's active machines are the union of its days. Then writes plan_snapshot/{payerUid} = {enforced, control, roost, resolvedAt} from the plan resolver for every payer, which rolloutScheduler reads before firing a scheduled rollout (only rollouts started before the snapshot are blocked), and deletes day documents older than 100 days (USAGE_RETENTION_DAYS). With PLAN_ENFORCEMENT off, every snapshot is enforced:false with control and roost true. Nothing is reported to tridant id yet.",
+      "purpose": "Stamps active machines per site and reports billed sites to tridant id. Pages through every site and unions the machines whose lastHeartbeat falls in the last 26 hours (ACTIVE_WINDOW_MS, web/lib/planUsage.server.ts) into billing_usage/{siteId}/days/{YYYY-MM-DD} as an array union, each machine on the UTC day of its own heartbeat; a billing period's active machines are the union of its days. Then writes plan_snapshot/{siteId} = {enforced, control, roost, resolvedAt} from the site's tridant id entitlements, which rolloutScheduler reads before firing a scheduled rollout (only rollouts started before the snapshot are blocked). With PLAN_ENFORCEMENT on, every site tridant id bills is then reported in one POST /v1/usage: its distinct active machines since the billing period's start, a Pro site as at least 3, counted as of the run. tridant id bills what it holds when the month ends and a report that arrives after the 1st, 00:00 UTC counts for nothing, so the last run of a month is the one that bills. Last, deletes day documents older than 100 days (USAGE_RETENTION_DAYS). With PLAN_ENFORCEMENT off, tridant id is not called at all: every snapshot is enforced:false with control and roost true, and nothing is reported.",
       "failureMode": {
         "silent": true,
-        "description": "Active machines are never recorded, so a billing period reads as zero active machines, or short by every day the job missed. plan_snapshot is never refreshed: a payer who lapses keeps whatever their last snapshot allowed, so scheduled rollouts and roost fan-out in Cloud Functions keep writing commands for them, and a payer who upgrades stays blocked there if their last snapshot said no. A payer with no snapshot at all is allowed. Day documents past 100 days are never pruned."
+        "description": "Active machines are never recorded and nothing is reported, so tridant id bills a site on the last report it holds: short by every machine first seen since, and zero for a site never reported in the period. Missing the last run of a month under-bills that month for good. plan_snapshot is never refreshed: a site whose plan lapses keeps whatever its last snapshot allowed, so scheduled rollouts in Cloud Functions keep firing for it, and a site that upgrades stays blocked there if its last snapshot said no. A site with no snapshot at all is allowed. Day documents past 100 days are never pruned."
       },
-      "detectedBy": "nothing — no status component covers this route. Read the response body: snapshots should equal payers, errors should be 0, and machines is non-zero on any fleet with a machine online in the last day.",
+      "detectedBy": "nothing — no status component covers this route. Read the response body: snapshots should equal sites, errors should be 0, machines is non-zero on any fleet with a machine online in the last day, and with enforcement on recorded should equal reported (a site that is not recorded is logged at warn with its status; site_not_billed during a Stripe trial and period_rolled_over are expected, and the next run reports again).",
       "sourceFile": "web/app/api/cron/plan-daily/route.ts",
-      "note": "Rerun-safe: the day stamp is an array union and the snapshot an overwrite, so a retry or a double registration changes nothing. Keep the 03:00 slot: the run labels its window with the previous UTC day, and the 26-hour window overlaps the previous run by two hours, so a run up to two hours late still misses nothing. Runtime scales with the fleet: one machines read per site, and with enforcement on one plan lookup per payer, ten at a time, each bounded by the 5-second tridant id timeout."
+      "note": "Set the job's timezone to UTC on cron-job.org. Rerun-safe, and safe to trigger by hand after a missed run: the day stamp is an array union, the snapshot an overwrite, and tridant id keeps the report with the newest as_of, so a retry or a double registration changes nothing. Keep the 23:30 UTC slot: it is the last run before a month ends, and the half hour is the margin for the report to reach tridant id before the 1st. The 26-hour window overlaps the previous run by two hours, so a run up to two hours late still misses nothing. Runtime scales with the fleet: one machines read per site, and with enforcement on one tridant id lookup per site, ten at a time, each bounded by the 5-second tridant id timeout."
     },
     {
       "id": "hoot-escalation",

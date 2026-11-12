@@ -61,9 +61,9 @@ jest.mock('@/lib/apiAuth.server', () => {
   };
 });
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 const mockPrune = jest.fn(async (..._a: unknown[]) => 0);
@@ -169,12 +169,12 @@ const FREE = {
   epoch: 0,
 };
 
-/** enforcement on, tridant configured, and every payer on owlette free. */
+/** enforcement on, tridant configured, and every site on owlette free. */
 function enforceFree() {
   process.env.PLAN_ENFORCEMENT = 'on';
   process.env.TRIDANT_API_URL = 'https://id.tridant.test';
   process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
-  mockGetEntitlements.mockResolvedValue(FREE);
+  mockGetSiteEntitlements.mockResolvedValue(FREE);
 }
 
 afterEach(() => {
@@ -767,7 +767,7 @@ describe('POST /api/agent/auth/device-code/poll', () => {
 
       expect(status).toBe(402);
       expect(body).toEqual({ error: MACHINE_LIMIT_ERROR });
-      expect(mockGetEntitlements).toHaveBeenCalledWith('owner-1');
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
       expect(mockCreateCustomToken).not.toHaveBeenCalled();
       expect(mockSetCustomUserClaims).not.toHaveBeenCalled();
       expect(global.fetch).not.toHaveBeenCalled();
@@ -775,7 +775,7 @@ describe('POST /api/agent/auth/device-code/poll', () => {
       expect(mockTransactionDelete).not.toHaveBeenCalled();
     });
 
-    it("lets a machine already in the payer's sites re-pair", async () => {
+    it("lets a machine already on the owner's sites re-pair", async () => {
       enforceFree();
       mockSites = {
         'site-1': { owner: 'owner-1', machines: {} },
@@ -791,12 +791,12 @@ describe('POST /api/agent/auth/device-code/poll', () => {
 
     it('mints past the limit with enforcement off, never reading the plan', async () => {
       mockSites = { 'site-1': { owner: 'owner-1', machines: { 'OTHER-PC': {} } } };
-      mockGetEntitlements.mockResolvedValue(FREE);
+      mockGetSiteEntitlements.mockResolvedValue(FREE);
 
       const { status } = await parseResponse(await pollPOST(deferredPhrase('NEW-PC')));
 
       expect(status).toBe(200);
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
       expect(mockPlanRead).not.toHaveBeenCalled();
     });
 
@@ -1108,7 +1108,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
     expect(global.fetch).not.toHaveBeenCalled();
   });
 
-  /** an interactive code for `machineId`, authorised onto site-1, which owner-1 pays for. */
+  /** an interactive code for `machineId`, authorised onto site-1, which owner-1 owns. */
   function interactiveCode(machineId: string) {
     mockAssertUserHasSiteAccess.mockResolvedValue({ siteId: 'site-1', siteData: { owner: 'owner-1' }, machineIds: null });
     mockTransactionGet.mockResolvedValue({
@@ -1163,8 +1163,8 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
         expect.objectContaining({ collectionPath: 'device_codes', id: 'test-pair-phrase' }),
         { status: 'refused', refusedReason: MACHINE_LIMIT_ERROR },
       );
-      expect(mockGetEntitlements).toHaveBeenCalledWith('owner-1');
-      // the payer comes from the site data the access check already read
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-1');
+      // the owner comes from the site data the access check already read
       expect(mockPlanRead).not.toHaveBeenCalledWith('sites', 'site-1');
       expect(mockCreateCustomToken).not.toHaveBeenCalled();
       expect(global.fetch).not.toHaveBeenCalled();
@@ -1172,7 +1172,7 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
       expect(mockEmitMutation).not.toHaveBeenCalled();
     });
 
-    it("lets a machine already in the payer's sites re-pair", async () => {
+    it("lets a machine already on the owner's sites re-pair", async () => {
       enforceFree();
       mockSites = { 'site-1': { owner: 'owner-1', machines: { 'test-machine': {} } } };
 
@@ -1185,12 +1185,12 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
 
     it('pairs past the limit with enforcement off, never reading the plan', async () => {
       mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
-      mockGetEntitlements.mockResolvedValue(FREE);
+      mockGetSiteEntitlements.mockResolvedValue(FREE);
 
       const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
 
       expect(status).toBe(200);
-      expect(mockGetEntitlements).not.toHaveBeenCalled();
+      expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
       expect(mockPlanRead).not.toHaveBeenCalled();
     });
   });

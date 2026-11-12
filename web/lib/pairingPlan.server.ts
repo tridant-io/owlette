@@ -16,20 +16,18 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
-import { machineSlotAvailable, payerForSite, plansEnforced } from '@/lib/plan.server';
+import { machineSlotAvailable } from '@/lib/plan.server';
 
 export const MACHINE_LIMIT_ERROR =
   'owlette free covers one machine. upgrade to add more, or remove a machine first.';
 
-/** the refusal message when the site's payer has no slot for `machineId`, else null. */
+/** the refusal message when a free site's owner has no free slot for `machineId`, else null. */
 export async function machineLimitRefusal(
   siteId: string,
   machineId: string,
   siteData?: Record<string, unknown> | null,
 ): Promise<string | null> {
-  if (!plansEnforced()) return null;
-  const payer = await payerForSite(siteId, siteData);
-  return (await machineSlotAvailable(payer, machineId)) ? null : MACHINE_LIMIT_ERROR;
+  return (await machineSlotAvailable(siteId, machineId, siteData)) ? null : MACHINE_LIMIT_ERROR;
 }
 
 /**

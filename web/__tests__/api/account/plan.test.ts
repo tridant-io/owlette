@@ -248,8 +248,8 @@ describe('GET /api/account/plan', () => {
     });
     expect(mockActiveMachinesBetween).toHaveBeenCalledWith(
       'u1',
-      new Date('2026-10-01T00:00:00Z'),
-      new Date('2026-10-07T12:00:00Z'),
+      new Date('2026-10-01T00:00:00Z').getTime(),
+      new Date('2026-10-07T12:00:00Z').getTime(),
     );
     expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', 1);
     expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1');

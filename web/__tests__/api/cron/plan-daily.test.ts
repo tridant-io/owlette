@@ -17,11 +17,12 @@ function request(secret?: string) {
 
 const SUMMARY = {
   ok: true,
-  day: '2026-10-07',
+  day: '2026-10-08',
   sites: 2,
-  payers: 1,
   machines: 3,
-  snapshots: 1,
+  snapshots: 2,
+  reported: 1,
+  recorded: 1,
   pruned: 0,
   errors: 0,
 };

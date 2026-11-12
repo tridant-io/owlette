@@ -72,16 +72,16 @@ jest.mock('@/lib/hoot/categorizeChat.server', () => ({
   categorizeNewChat: jest.fn(),
 }));
 
-// the plan gate reads the payer through the admin sdk; it lands on the same in-memory store.
+// the plan gate reads the site and its owner through the admin sdk; it lands on the same in-memory store.
 jest.mock('@/lib/firebase-admin', () => ({
   __esModule: true,
   getAdminDb: () => fakeDb,
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   __esModule: true,
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import * as turnStore from '@/lib/hoot/turnStore.server';
@@ -1178,16 +1178,16 @@ describe('startTurn — error paths', () => {
   });
 });
 
-describe('startTurn — the payer plan', () => {
+describe("startTurn — the site's plan", () => {
   const PLAN_ENV = {
     PLAN_ENFORCEMENT: 'on',
     TRIDANT_API_URL: 'https://tridant.example.invalid',
     TRIDANT_LICENSE_KEY: 'test-license-key',
   };
 
-  /** a core payer has control but not hoot; pro has both. */
-  function payerHoot(value: '0' | '1') {
-    mockGetEntitlements.mockResolvedValue({
+  /** a core site has control but not hoot; pro has both. */
+  function siteHoot(value: '0' | '1') {
+    mockGetSiteEntitlements.mockResolvedValue({
       ok: true,
       resolved: true,
       standing: 'active',
@@ -1198,7 +1198,7 @@ describe('startTurn — the payer plan', () => {
   }
 
   beforeEach(() => {
-    mockGetEntitlements.mockReset();
+    mockGetSiteEntitlements.mockReset();
     Object.assign(process.env, PLAN_ENV);
     store[`sites/${SITE_ID}`] = { owner: 'payer-1' };
   });
@@ -1207,8 +1207,8 @@ describe('startTurn — the payer plan', () => {
     for (const key of Object.keys(PLAN_ENV)) delete process.env[key];
   });
 
-  it('ends a core payer turn with the plan refusal before any model or machine work', async () => {
-    payerHoot('0');
+  it("ends a core site's turn with the plan refusal before any model or machine work", async () => {
+    siteHoot('0');
 
     const chunks = await collectChunks(startTurn(fakeDb, baseParams({ source: 'followup' })));
     await flushAsync();
@@ -1216,14 +1216,14 @@ describe('startTurn — the payer plan', () => {
     const detail = PLAN_REQUIRED_DETAIL['owlette.hoot'];
     expect(chunks.some((c) => c.type === 'error' && c.errorText === detail)).toBe(true);
     expect(turnStore.finishTurn).toHaveBeenCalledWith(fakeDb, CHAT_ID, TURN_ID, 'error', detail, []);
-    expect(mockGetEntitlements).toHaveBeenCalledWith('payer-1');
+    expect(mockGetSiteEntitlements).toHaveBeenCalledWith(SITE_ID);
     expect(llm.createModel).not.toHaveBeenCalled();
     expect(hootUtils.listSiteMachines).not.toHaveBeenCalled();
     expect(hootUtils.buildExecutableTools).not.toHaveBeenCalled();
   });
 
-  it('runs the turn for a pro payer', async () => {
-    payerHoot('1');
+  it('runs the turn for a pro site', async () => {
+    siteHoot('1');
 
     const chunks = await collectChunks(startTurn(fakeDb, baseParams()));
     await flushAsync();
@@ -1239,7 +1239,7 @@ describe('startTurn — the payer plan', () => {
     await flushAsync();
 
     expect(chunks.some((c) => c.type === 'text-delta')).toBe(true);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });
 });
 

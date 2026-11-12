@@ -83,6 +83,18 @@ export async function recordTrial(uid: string, { orgId, endsAtMs }: { orgId: str
   );
 }
 
+/**
+ * tridant refused a trial because the account already pays (`already_subscribed`): there is
+ * no trial to start, ever. settles the claim so nothing retries, and leaves the org id a
+ * purchase recorded alone.
+ */
+export async function recordSubscribed(uid: string): Promise<void> {
+  await accountRef(uid).set(
+    { trialStartedAt: Date.now(), trialError: null, updatedAt: FieldValue.serverTimestamp() },
+    { merge: true },
+  );
+}
+
 /** a purchase or a link with no trial. */
 export async function recordOrg(uid: string, orgId: string): Promise<void> {
   await accountRef(uid).set(

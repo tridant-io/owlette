@@ -221,7 +221,7 @@ const FREE_SNAPSHOT: PlanSnapshot = {
   roost: false,
   resolvedAt: { toMillis: () => NOW - HOUR },
 };
-const ROOST_BLOCK = "the site owner's plan doesn't include roost";
+const ROOST_BLOCK = "this site's plan doesn't include roost";
 
 /** a due rollout the deploy route parked before (or after) the snapshot. */
 const scheduledBefore = (overrides: Partial<RolloutDocData> = {}) =>
@@ -361,7 +361,7 @@ describe('applyScheduledRolloutClaim', () => {
     });
     assert.deepEqual(decision, {
       action: 'write_off',
-      reason: "the site owner's plan doesn't include remote control",
+      reason: "this site's plan doesn't include remote control",
     });
   });
 
@@ -401,7 +401,7 @@ interface FakeStoreOptions {
   due?: ScheduledRolloutRef[];
   enabled?: Record<string, unknown>;
   enabledThrows?: boolean;
-  /** each site payer's plan snapshot; absent means none. */
+  /** each site's plan snapshot; absent means none. */
   snapshots?: Record<string, PlanSnapshot>;
   claimThrowsFor?: string[];
 }

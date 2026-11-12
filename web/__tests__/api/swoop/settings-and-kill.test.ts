@@ -97,9 +97,9 @@ jest.mock('@/lib/swoop/turn.server', () => ({
   mintTurnCredentials: jest.fn(async () => ({ ok: false, reason: 'not_configured' })),
 }));
 
-const mockGetEntitlements = jest.fn();
+const mockGetSiteEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
 import { GET, PATCH } from '@/app/api/sites/[siteId]/swoop-settings/route';
@@ -603,7 +603,7 @@ describe('POST swoop/kill', () => {
     process.env.PLAN_ENFORCEMENT = 'on';
     process.env.TRIDANT_API_URL = 'https://tridant.test';
     process.env.TRIDANT_LICENSE_KEY = 'test-key';
-    mockGetEntitlements.mockResolvedValue({
+    mockGetSiteEntitlements.mockResolvedValue({
       ok: true,
       resolved: false,
       standing: 'expired',
