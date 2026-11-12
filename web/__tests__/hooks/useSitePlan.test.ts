@@ -57,6 +57,7 @@ const FREE: SitePlanResponse = {
   billing: null,
   period: null,
   isOwner: true,
+  billedByPreviousOwner: false,
 };
 const CORE: SitePlanResponse = {
   ...FREE,
@@ -83,6 +84,7 @@ const OFF: SitePlanResponse = {
   billing: null,
   period: null,
   isOwner: true,
+  billedByPreviousOwner: false,
 };
 
 // an account whose free sites hold two machines, one over the limit.
@@ -100,6 +102,7 @@ const ACCOUNT: AccountPlanOn = {
   },
   foundersRemaining: null,
   linkAvailable: false,
+  portalUrl: null,
 };
 const ACCOUNT_OFF: AccountPlanResponse = { enforced: false, reason: 'enforcement_off' };
 const UNLIMITED: AccountPlanOn = { ...ACCOUNT, free: { ...ACCOUNT.free, machinesLimit: null } };

@@ -23,6 +23,8 @@ import {
 } from '@/components/ui/dialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { toast } from '@/lib/toast';
+import type { PlanSite } from '@/components/plan/MachinePlanNotice';
+import { ASK_OWNER, siteBillingPath } from '@/components/plan/UpgradeGate';
 import { cn } from '@/lib/utils';
 import { hootMachineHref } from '@/lib/hoot/machineLink';
 import { useAuth } from '@/contexts/AuthContext';
@@ -110,35 +112,55 @@ interface MachineContextMenuProps {
   onViewDisplays?: () => void;
   rebootSchedule?: RestartSchedule;
   /**
-   * the machine falls outside the viewer's plan (see `useSitePlan`): the menu
+   * the machine falls outside owlette free's limit (see `useSitePlan`): the menu
    * keeps only alerts, the token and removal, which no plan gates.
    */
   planLocked?: boolean;
   /**
-   * the viewer's plan leaves out control: restart and shutdown collapse into
-   * one row linking to the plan page, and live view and screenshot go.
+   * the site's plan leaves out control: restart and shutdown collapse into
+   * one row linking to the site's billing section (the owner) or telling the
+   * viewer to ask the owner, and live view and screenshot go.
    * cancelling and scheduling restarts stay, as every plan may.
    */
   controlLocked?: boolean;
-  /** the viewer's plan leaves out swoop: its row links to the plan page instead. */
+  /** the site's plan leaves out swoop: its row links to the site's billing section instead. */
   swoopLocked?: boolean;
+  /** who may upgrade the site, for the locked rows (`useSitePlan`). */
+  planSite?: PlanSite;
 }
 
-/** a feature the viewer's plan leaves out: its row links to the plan page instead. */
+/** a feature the site's plan leaves out: the owner's row links to the site's billing section, anyone else's says to ask the owner. */
 function UpgradeMenuItem({
   icon: Icon,
   label,
   tier,
   testId,
+  planSite,
 }: {
   icon: LucideIcon;
   label: string;
   tier: 'core' | 'pro';
   testId: string;
+  planSite?: PlanSite;
 }) {
+  if (!planSite?.isOwner) {
+    return (
+      <DropdownMenuItem
+        onSelect={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        data-testid={testId}
+        className="cursor-default flex-wrap"
+      >
+        <Icon className="mr-2 h-4 w-4" />
+        {label}
+        <span className="ml-auto text-xs text-muted-foreground">part of {tier}</span>
+        <span className="basis-full pl-6 text-xs text-muted-foreground">{ASK_OWNER}</span>
+      </DropdownMenuItem>
+    );
+  }
   return (
     <DropdownMenuItem asChild onClick={(e) => e.stopPropagation()} data-testid={testId} className="cursor-pointer">
-      <Link href="/settings/plan">
+      <Link href={siteBillingPath(planSite.siteId)}>
         <Icon className="mr-2 h-4 w-4" />
         {label}
         <span className="ml-auto text-xs text-muted-foreground">part of {tier}</span>
@@ -177,6 +199,7 @@ export function MachineContextMenu({
   planLocked,
   controlLocked,
   swoopLocked,
+  planSite,
 }: MachineContextMenuProps) {
   const [showRevokeDialog, setShowRevokeDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
@@ -370,6 +393,7 @@ export function MachineContextMenu({
                     label="remote control"
                     tier="core"
                     testId="machine-context-menu-control-upgrade"
+                    planSite={planSite}
                   />
                   {scheduleRestartsItem}
                 </>
@@ -476,6 +500,7 @@ export function MachineContextMenu({
                   label="swoop"
                   tier="pro"
                   testId="machine-context-menu-swoop-upgrade"
+                  planSite={planSite}
                 />
               ) : offersSwoop && !swoopOff ? (
                 // a split row, as restart's: swoop in this browser, or in the desktop app

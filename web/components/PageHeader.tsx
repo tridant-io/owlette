@@ -16,7 +16,7 @@ import { OwletteEyeIcon } from '@/components/landing/OwletteEye';
 import { ReportBugDialog } from '@/components/ReportBugDialog';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
-import { TrialBanner } from '@/components/plan/TrialBanner';
+import { TrialBanner, planBannerKind } from '@/components/plan/TrialBanner';
 import { usePlan } from '@/hooks/usePlan';
 import { createSite } from '@/hooks/useFirestore';
 
@@ -476,7 +476,9 @@ export function PageHeader({
         </div>
       </div>
     </header>
-    <VerifyEmailBanner />
+    {/* the plan banner's unverified state is the same prompt with its reason, so it stands alone. once
+        dismissed, TrialBanner itself puts VerifyEmailBanner back. */}
+    {planBannerKind(plan) !== 'unverified' && <VerifyEmailBanner />}
     <TrialBanner />
 
     {/* Mobile nav drawer — carries the site + page switchers that the `md`

@@ -10,7 +10,7 @@
  */
 import React from 'react';
 import { render, renderHook, screen } from '@testing-library/react';
-import { UpgradeGate, siteBillingPath, usePlanGated } from '@/components/plan/UpgradeGate';
+import { ASK_OWNER, UpgradeGate, siteBillingPath, usePlanGated } from '@/components/plan/UpgradeGate';
 import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 
 // keyed by site id, as the real store is; a site with no entry is loading or failed.
@@ -50,6 +50,7 @@ const FREE: SitePlanResponse = {
   billing: null,
   period: null,
   isOwner: true,
+  billedByPreviousOwner: false,
 };
 const CORE: SitePlanResponse = {
   ...FREE,
@@ -70,6 +71,7 @@ const OFF: SitePlanResponse = {
   billing: null,
   period: null,
   isOwner: true,
+  billedByPreviousOwner: false,
 };
 const member = (plan: SitePlanResponse): SitePlanResponse => ({ ...plan, isOwner: false });
 
@@ -144,6 +146,10 @@ describe('UpgradeGate', () => {
     expect(gate).toHaveTextContent('ask the site owner to upgrade this site.');
     expect(gate).not.toHaveTextContent('upgrade to pro');
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
+  });
+
+  it('exports the one ask-the-owner line the machine views share, with no full stop', () => {
+    expect(ASK_OWNER).toBe('ask the site owner to upgrade this site');
   });
 
   it('gates on the named flag only', () => {

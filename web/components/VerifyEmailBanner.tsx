@@ -11,14 +11,14 @@
 import { useEffect, useState } from 'react';
 import { Mail } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSendVerification } from '@/hooks/useSendVerification';
 import { auth } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
-import { toast } from '@/lib/toast';
 
 export function VerifyEmailBanner() {
   const { user } = useAuth();
   const [verified, setVerified] = useState(false);
-  const [sending, setSending] = useState(false);
+  const { send, sending } = useSendVerification();
 
   const pending =
     !!user &&
@@ -50,25 +50,6 @@ export function VerifyEmailBanner() {
 
   if (!pending) return null;
 
-  const resend = async () => {
-    setSending(true);
-    try {
-      const res = await fetch('/api/auth/verify-email', { method: 'POST' });
-      if (res.ok) {
-        toast.success('verification email sent', { description: `check ${user.email}` });
-        return;
-      }
-      const data = await res.json().catch(() => ({}));
-      toast.error('could not send the email', {
-        description: typeof data.detail === 'string' ? data.detail : 'please try again later.',
-      });
-    } catch {
-      toast.error('could not send the email', { description: 'please try again later.' });
-    } finally {
-      setSending(false);
-    }
-  };
-
   return (
     <div
       data-testid="verify-email-banner"
@@ -85,7 +66,7 @@ export function VerifyEmailBanner() {
           type="button"
           variant="link"
           size="sm"
-          onClick={resend}
+          onClick={send}
           disabled={sending}
           aria-label="send verification email"
         >

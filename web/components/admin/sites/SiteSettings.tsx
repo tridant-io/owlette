@@ -4,11 +4,13 @@ import { useState } from 'react';
 import { SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSites, type Site } from '@/hooks/useFirestore';
+import { usePlan } from '@/hooks/usePlan';
 import { SITE_SECTIONS, SITE_SECTION_LABELS, type SiteSection } from '@/lib/siteSettingsPath';
 import { DetailSkeleton } from '@/components/admin/DetailSkeleton';
 import { Panel } from '@/components/admin/Panel';
 import { SegmentedControl } from '@/components/admin/SegmentedControl';
 import { CopySiteIdButton } from '@/components/admin/sites/CopySiteIdButton';
+import { SiteBillingSection } from '@/components/admin/sites/SiteBillingSection';
 import { SiteDangerZone } from '@/components/admin/sites/SiteDangerZone';
 import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
@@ -33,6 +35,7 @@ export function SiteSettings({
 }) {
   const { user, userSites, isSuperadmin, isSiteAdmin, isSiteOwner, machineScope } = useAuth();
   const { sites, loading, updateSite, deleteSite } = useSites(user?.uid, userSites, isSuperadmin);
+  const { plan, loading: planLoading } = usePlan();
   // a delete's cascade drops the site from `sites`, and the caller's row on it,
   // before the request answers: the site is held till then, so its confirm dialog stays up
   const [deleting, setDeleting] = useState<Site | null>(null);
@@ -82,7 +85,10 @@ export function SiteSettings({
 
   // only an owner reaches the delete that holds a site, and a superadmin's isSiteOwner is true everywhere
   const owner = held !== null || isSiteOwner(site.id);
-  const visible = SITE_SECTIONS.filter((s) => s !== 'danger' || owner);
+  // billing is the owner's too, and only where plans are enforced. the account plan loads after the
+  // page, so a link to billing (the return from checkout) waits for it instead of opening general
+  const billing = owner && (plan?.enforced || (planLoading && section === 'billing'));
+  const visible = SITE_SECTIONS.filter((s) => (s !== 'danger' || owner) && (s !== 'billing' || billing));
   const effective = visible.includes(section) ? section : 'general';
 
   return (
@@ -120,6 +126,7 @@ export function SiteSettings({
         </Panel>
       )}
       {effective === 'swoop' && <SiteSwitches siteId={site.id} />}
+      {effective === 'billing' && <SiteBillingSection key={site.id} site={site} />}
       {effective === 'danger' && (
         <SiteDangerZone
           key={site.id}

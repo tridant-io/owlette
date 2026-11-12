@@ -42,6 +42,7 @@ const FREE: AccountPlanOn = {
   },
   foundersRemaining: null,
   linkAvailable: false,
+  portalUrl: null,
 };
 const PRO: AccountPlanOn = {
   ...FREE,

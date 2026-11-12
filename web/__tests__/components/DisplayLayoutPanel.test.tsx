@@ -288,7 +288,7 @@ function setup(options: SetupOptions = {}): SetupResult {
 }
 
 // Mirrors layout.tsx: without TooltipProvider every render throws on the panel's Radix tooltips.
-function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1', controlLocked?: boolean) {
+function panelElement(capabilities?: Record<string, number>, machineId = 'machine-1', controlLocked?: boolean, isOwner = false) {
   return (
     <TooltipProvider>
       <DisplayLayoutPanel
@@ -297,6 +297,7 @@ function panelElement(capabilities?: Record<string, number>, machineId = 'machin
         siteId="site-a"
         capabilities={capabilities}
         controlLocked={controlLocked}
+        planSite={{ siteId: 'site-a', isOwner }}
         onClose={jest.fn()}
       />
     </TooltipProvider>
@@ -640,17 +641,27 @@ describe('DisplayLayoutPanel — drift dot persistence', () => {
   });
 });
 
-// the viewer's plan leaves out control (useSitePlan): what sends a command
-// gives way to a "part of core" link; configuration stays.
+// the site's plan leaves out control (useSitePlan): what sends a command
+// gives way to a "part of core" row; configuration stays.
 describe('DisplayLayoutPanel — without control', () => {
-  it('trades restore for a part-of-core link to the plan page', () => {
+  it("trades restore for a part-of-core link to the site's billing section for its owner", () => {
+    setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
+    render(panelElement({ displayRemoteApply: 1 }, 'machine-1', true, true));
+
+    expect(screen.queryByTestId('display-recall-button')).not.toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'restore is part of core' });
+    expect(link).toHaveAttribute('href', '/admin/sites/site-a?section=billing');
+    expect(link).toHaveTextContent('part of core');
+    expect(screen.getByTestId('display-store-button')).toBeInTheDocument();
+  });
+
+  it('tells anyone else to ask the owner, with no link', () => {
     setup({ access: SITE_ADMIN, hasAssignedLayout: true, remoteApplyEnabled: true });
     render(panelElement({ displayRemoteApply: 1 }, 'machine-1', true));
 
     expect(screen.queryByTestId('display-recall-button')).not.toBeInTheDocument();
-    const link = screen.getByRole('link', { name: 'restore is part of core' });
-    expect(link).toHaveAttribute('href', '/settings/plan');
-    expect(link).toHaveTextContent('part of core');
+    expect(screen.queryByRole('link', { name: /part of core/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('control-upgrade')).toHaveTextContent('part of core. ask the site owner to upgrade this site');
     expect(screen.getByTestId('display-store-button')).toBeInTheDocument();
   });
 

@@ -39,6 +39,7 @@ const FREE: SitePlanResponse = {
   billing: null,
   period: null,
   isOwner: false,
+  billedByPreviousOwner: false,
 };
 
 function jsonResponse(body: unknown): Response {

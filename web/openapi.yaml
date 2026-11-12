@@ -14410,8 +14410,8 @@ components:
       description: |
         With `enforced: false`, only `enforced` and `reason` are sent. With
         `enforced: true`, `reason` is absent and `emailVerified`, `trial`,
-        `sites`, `free`, `foundersRemaining` and `linkAvailable` are always
-        sent.
+        `sites`, `free`, `foundersRemaining`, `linkAvailable` and `portalUrl`
+        are always sent.
       example:
         enforced: true
         emailVerified: true
@@ -14441,6 +14441,7 @@ components:
           liveMachines: [{ siteId: my-other-site, machineId: KIOSK-01 }]
         foundersRemaining: { core: 42, pro: 17 }
         linkAvailable: true
+        portalUrl: https://id.tridant.io
       properties:
         enforced:
           type: boolean
@@ -14574,6 +14575,14 @@ components:
         linkAvailable:
           type: boolean
           description: Whether linking an existing tridant account is set up on this server.
+        portalUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: |
+            The origin of the tridant portal, with no trailing slash. The
+            card and invoices are at `{portalUrl}/billing`. `null` when this
+            server does not know it.
         missingKeys:
           type: array
           items: { type: string }

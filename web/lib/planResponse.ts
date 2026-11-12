@@ -114,6 +114,8 @@ export interface AccountPlanOn {
   foundersRemaining: AccountPlanFounders | null;
   /** whether "link your tridant account" can be offered on this deployment. */
   linkAvailable: boolean;
+  /** the origin of the tridant portal, where the card and invoices are. null when this deployment does not know it. */
+  portalUrl: string | null;
   /** entitlement keys a site's answer left out, which read as unrestricted. sent only when there are any. */
   missingKeys?: string[];
 }

@@ -83,6 +83,17 @@ function freeLimit(plan: Plan | undefined, key: PlanLimit): number | null {
   return limit === Infinity ? null : limit;
 }
 
+/** the tridant portal is tridant id's oidc issuer, so its origin needs no env var of its own. */
+function portalUrl(): string | null {
+  const issuer = process.env.TRIDANT_OIDC_ISSUER?.trim();
+  if (!issuer) return null;
+  try {
+    return new URL(issuer).protocol === 'https:' ? issuer.replace(/\/+$/, '') : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readOwnedSite(
   site: FirebaseFirestore.QueryDocumentSnapshot,
   monthStart: number,
@@ -198,6 +209,7 @@ export const GET = withRateLimit(
         },
         foundersRemaining: founders.ok ? { core: founders.core, pro: founders.pro } : null,
         linkAvailable: oidcConfigured(),
+        portalUrl: portalUrl(),
         ...(missingKeys.length > 0 && { missingKeys }),
       };
       return NextResponse.json(body);

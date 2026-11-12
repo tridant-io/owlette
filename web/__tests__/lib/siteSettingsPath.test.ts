@@ -12,6 +12,7 @@ describe('siteSettingsPath', () => {
     expect(siteSettingsPath('elm-gate', 'members')).toBe('/admin/sites/elm-gate?section=members');
     expect(siteSettingsPath('elm-gate', 'machines')).toBe('/admin/sites/elm-gate?section=machines');
     expect(siteSettingsPath('elm-gate', 'swoop')).toBe('/admin/sites/elm-gate?section=swoop');
+    expect(siteSettingsPath('elm-gate', 'billing')).toBe('/admin/sites/elm-gate?section=billing');
     expect(siteSettingsPath('elm-gate', 'danger')).toBe('/admin/sites/elm-gate?section=danger');
   });
 
@@ -29,7 +30,7 @@ describe('parseSiteSection', () => {
   });
 
   it('falls back to general for a missing or unknown section', () => {
-    for (const raw of [null, '', 'billing', 'SWOOP', 'constructor']) {
+    for (const raw of [null, '', 'plan', 'SWOOP', 'constructor']) {
       expect(parseSiteSection(raw)).toBe('general');
     }
   });

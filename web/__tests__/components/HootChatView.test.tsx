@@ -700,6 +700,7 @@ const CORE_PLAN: SitePlanResponse = {
   billing: { tier: 'core', founders: false, endsAt: null },
   period: null,
   isOwner: false,
+  billedByPreviousOwner: false,
 };
 
 describe('HootChatView plan', () => {

@@ -276,6 +276,7 @@ describe('GET /api/account/plan', () => {
       free: FREE_ONE_OF_ONE,
       foundersRemaining: { core: 40, pro: null },
       linkAvailable: false,
+      portalUrl: null,
     });
     expect(mockEnsureTrial).toHaveBeenCalledWith('u1');
     expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', ['name', 'owner', 'billing']);
@@ -297,6 +298,7 @@ describe('GET /api/account/plan', () => {
       free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
       foundersRemaining: { core: 40, pro: null },
       linkAvailable: false,
+      portalUrl: null,
     });
     expect(mockEnsureTrial.mock.invocationCallOrder[0]).toBeLessThan(
       mockGetSiteEntitlements.mock.invocationCallOrder[0],
@@ -464,6 +466,27 @@ describe('GET /api/account/plan', () => {
     expect(res.body.linkAvailable).toBe(false);
   });
 
+  // the portal is the oidc issuer, which the link flow already needs: no env var of its own
+  it.each([
+    ['the issuer', 'https://id-staging.tridant.io', 'https://id-staging.tridant.io'],
+    ['the issuer less its trailing slash', ' https://id-staging.tridant.io/ ', 'https://id-staging.tridant.io'],
+    ['nothing for an issuer that is not https', 'http://id-staging.tridant.io', null],
+    ['nothing for an issuer that is not a url', 'id-staging.tridant.io', null],
+    ['nothing for a blank issuer', ' ', null],
+  ])('answers %s as the portal url', async (_case, issuer, portalUrl) => {
+    process.env.TRIDANT_OIDC_ISSUER = issuer;
+
+    const res = await getPlan();
+
+    expect(res.body.portalUrl).toBe(portalUrl);
+  });
+
+  it('answers no portal url without an issuer', async () => {
+    const res = await getPlan();
+
+    expect(res.body.portalUrl).toBeNull();
+  });
+
   it('answers ended with no end for an account that paid before it ever had a trial', async () => {
     mockEnsureTrial.mockResolvedValue({ status: 'subscribed' });
     mockGetPlanAccount.mockResolvedValue(account({ trialStartedAt: MONTH_START, orgId: 'org_1' }));
@@ -500,6 +523,7 @@ describe('GET /api/account/plan', () => {
       free: FREE_ONE_OF_ONE,
       foundersRemaining: null,
       linkAvailable: false,
+      portalUrl: null,
     });
   });
 

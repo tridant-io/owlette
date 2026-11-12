@@ -32,4 +32,9 @@ export interface SitePlanResponse {
   period: { start: number; end: number } | null;
   /** whether the caller owns the site, so may change its billing. */
   isOwner: boolean;
+  /**
+   * after an ownership transfer the outgoing owner pays until the billing ends:
+   * the new owner can stop it, and upgrade or switch only once it has ended.
+   */
+  billedByPreviousOwner: boolean;
 }

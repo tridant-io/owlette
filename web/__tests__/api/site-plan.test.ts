@@ -163,6 +163,7 @@ describe('what the plan says', () => {
       billing: { tier: 'pro', founders: true, endsAt: null },
       period: { start: Date.UTC(2026, 10, 1), end: Date.UTC(2026, 11, 1) },
       isOwner: false,
+      billedByPreviousOwner: false,
     });
   });
 
@@ -170,6 +171,27 @@ describe('what the plan says', () => {
     stageSite({ billing: { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: null } });
 
     expect(JSON.stringify((await parseResponse(await get())).body)).not.toContain('payerUid');
+  });
+
+  // after a transfer the pointer still names the outgoing owner, until the billing it stopped has ended
+  it.each([
+    ['a stop that has not landed', null, true],
+    ['billing that ends later', Date.now() + 86_400_000, true],
+    ['billing that has ended', Date.now() - 1, false],
+  ])('says whether the previous owner still pays, with %s', async (_case, endsAt, billedByPreviousOwner) => {
+    stageSite({ billing: { tier: 'pro', founders: false, payerUid: 'user-previous-owner', endsAt } });
+    signIn(SITE_OWNER);
+
+    const { body } = await parseResponse(await get());
+
+    expect(body.billedByPreviousOwner).toBe(billedByPreviousOwner);
+    expect(body.isOwner).toBe(true);
+  });
+
+  it('does not say so while the owner is the one who pays', async () => {
+    stageSite({ billing: { tier: 'pro', founders: false, payerUid: SITE_OWNER, endsAt: ENDS_AT } });
+
+    expect((await parseResponse(await get())).body.billedByPreviousOwner).toBe(false);
   });
 
   it('shows when a stopped site\'s billing ends', async () => {
@@ -213,6 +235,7 @@ describe('what the plan says', () => {
       billing: null,
       period: null,
       isOwner: false,
+      billedByPreviousOwner: false,
     });
   });
 
@@ -238,6 +261,7 @@ describe('what the plan says', () => {
       billing: null,
       period: null,
       isOwner: false,
+      billedByPreviousOwner: false,
     });
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
   });

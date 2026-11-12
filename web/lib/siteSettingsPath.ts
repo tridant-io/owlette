@@ -4,7 +4,7 @@
  * viewer.
  */
 
-export const SITE_SECTIONS = ['general', 'members', 'machines', 'swoop', 'danger'] as const;
+export const SITE_SECTIONS = ['general', 'members', 'machines', 'swoop', 'billing', 'danger'] as const;
 
 export type SiteSection = (typeof SITE_SECTIONS)[number];
 
@@ -13,6 +13,7 @@ export const SITE_SECTION_LABELS: Record<SiteSection, string> = {
   members: 'members',
   machines: 'machines',
   swoop: 'swoop & screens',
+  billing: 'billing',
   danger: 'danger zone',
 };
 

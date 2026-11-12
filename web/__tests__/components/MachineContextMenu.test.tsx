@@ -61,6 +61,9 @@ jest.mock('@/lib/toast', () => ({
 
 /** a whole-site admin, who is admin on every machine of the site too. */
 const ADMIN = { isSiteAdmin: true, isMachineAdmin: true };
+const OWNER = { siteId: 'site-A', isOwner: true };
+const MEMBER_OF_SITE = { siteId: 'site-A', isOwner: false };
+const BILLING = '/admin/sites/site-A?section=billing';
 
 async function openMenu(props: {
   isOnline?: boolean;
@@ -78,6 +81,7 @@ async function openMenu(props: {
   planLocked?: boolean;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  planSite?: { siteId: string; isOwner: boolean };
   swoopOff?: boolean;
   noSwoop?: boolean;
   onSiteSettings?: () => void;
@@ -348,15 +352,24 @@ describe('MachineContextMenu — swoop viewer count', () => {
   });
 });
 
-// the viewer's own plan on a site they own (useSitePlan): server gates every
+// the site's plan (useSitePlan): server gates every
 // action regardless, so these only keep the menu from offering what would fail.
 describe('MachineContextMenu — plan', () => {
-  it('links a locked swoop to the plan page instead of opening a session', async () => {
-    await openMenu({ swoopCapable: true, swoopLocked: true });
+  it("links a locked swoop to the site's billing section for its owner instead of opening a session", async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true, planSite: OWNER });
 
     const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
     expect(item).toHaveTextContent('swooppart of pro');
-    expect(item).toHaveAttribute('href', '/settings/plan');
+    expect(item).toHaveAttribute('href', BILLING);
+    expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+  });
+
+  it('tells anyone else to ask the owner, with no link', async () => {
+    await openMenu({ swoopCapable: true, swoopLocked: true, planSite: MEMBER_OF_SITE });
+
+    const item = screen.getByTestId('machine-context-menu-swoop-upgrade');
+    expect(item).toHaveTextContent('swooppart of proask the site owner to upgrade this site');
+    expect(item).not.toHaveAttribute('href');
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
   });
 
@@ -392,12 +405,12 @@ describe('MachineContextMenu — plan', () => {
     ]);
   });
 
-  it('collapses restart and shutdown into one row linking to the plan page, keeping schedule restarts', async () => {
-    await openMenu({ controlLocked: true, ...ADMIN, swoopCapable: true, swoopLocked: true, onViewDisplays: jest.fn() });
+  it("collapses restart and shutdown into one row linking to the site's billing section, keeping schedule restarts", async () => {
+    await openMenu({ controlLocked: true, ...ADMIN, swoopCapable: true, swoopLocked: true, onViewDisplays: jest.fn(), planSite: OWNER });
 
     const row = screen.getByTestId('machine-context-menu-control-upgrade');
     expect(row).toHaveTextContent('remote controlpart of core');
-    expect(row).toHaveAttribute('href', '/settings/plan');
+    expect(row).toHaveAttribute('href', BILLING);
     expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
       'remote controlpart of core',
       'schedule restarts',
@@ -408,6 +421,14 @@ describe('MachineContextMenu — plan', () => {
       'revoke token',
       'remove machine',
     ]);
+  });
+
+  it('shows a member the same control row with no link, asking the owner', async () => {
+    await openMenu({ controlLocked: true, ...ADMIN, planSite: MEMBER_OF_SITE });
+
+    const row = screen.getByTestId('machine-context-menu-control-upgrade');
+    expect(row).toHaveTextContent('remote controlpart of coreask the site owner to upgrade this site');
+    expect(row).not.toHaveAttribute('href');
   });
 
   it('still offers cancelling a restart without control, which every plan may', async () => {

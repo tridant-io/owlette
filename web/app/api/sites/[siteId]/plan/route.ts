@@ -54,6 +54,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
       billing: pointer ? billingSummary(pointer) : null,
       period: periodOf(plan),
       isOwner: siteData.owner === auth.userId,
+      // the same test the billing routes refuse an upgrade on, so the ui can say it before the owner asks.
+      billedByPreviousOwner:
+        !!pointer && pointer.payerUid !== siteData.owner && (pointer.endsAt === null || pointer.endsAt > Date.now()),
     };
     return applyAuthDeprecations(NextResponse.json(body), auth.scopeCheck);
   } catch (err) {

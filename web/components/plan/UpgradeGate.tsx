@@ -36,11 +36,12 @@ const FEATURES: Record<UpgradeFlag, { name: string; tier: 'core' | 'pro' }> = {
   api_keys: { name: 'API keys', tier: 'pro' },
 };
 
-const ASK_OWNER = 'ask the site owner to upgrade this site.';
+/** no full stop: it is also a label and the start of a longer sentence. */
+export const ASK_OWNER = 'ask the site owner to upgrade this site';
 
 /** the billing section of a site's settings, where its owner changes its plan. */
 export function siteBillingPath(siteId: string): string {
-  return `${siteSettingsPath(siteId)}?section=billing`;
+  return siteSettingsPath(siteId, 'billing');
 }
 
 function leftOut(plan: SitePlanResponse | undefined, flag: UpgradeFlag): plan is SitePlanResponse {
@@ -87,7 +88,7 @@ export function UpgradeGate({ flag, siteId, feature, variant = 'card', className
         {/* dropped on a phone, where the note then fits on one row */}
         <Sparkles className="hidden h-4 w-4 shrink-0 text-accent-cyan sm:block" aria-hidden />
         <span className="text-sm text-muted-foreground">
-          this site&apos;s plan doesn&apos;t include {name}.{!plan.isOwner && ` ${ASK_OWNER}`}
+          this site&apos;s plan doesn&apos;t include {name}.{!plan.isOwner && ` ${ASK_OWNER}.`}
         </span>
         {upgrade}
       </div>
@@ -105,7 +106,7 @@ export function UpgradeGate({ flag, siteId, feature, variant = 'card', className
         </div>
         <h2 className="text-lg font-semibold text-foreground">this site&apos;s plan doesn&apos;t include {name}</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          {plan.isOwner ? `upgrade to ${tier} to use it.` : ASK_OWNER}
+          {plan.isOwner ? `upgrade to ${tier} to use it.` : `${ASK_OWNER}.`}
         </p>
         {upgrade && <div className="mt-6">{upgrade}</div>}
       </div>

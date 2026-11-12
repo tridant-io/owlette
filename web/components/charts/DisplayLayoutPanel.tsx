@@ -49,7 +49,7 @@ import { DisplayCanvas } from './DisplayCanvas';
 import { DisplayMonitorTable } from './DisplayMonitorTable';
 import { DisplayEditorDialog } from './DisplayEditorDialog';
 import ConfirmDialog from '@/components/ConfirmDialog';
-import { ControlUpgradeLink } from '@/components/plan/MachinePlanNotice';
+import { ControlUpgradeLink, type PlanSite } from '@/components/plan/MachinePlanNotice';
 import {
   Tooltip,
   TooltipContent,
@@ -64,11 +64,13 @@ interface DisplayLayoutPanelProps {
    * machines subscription; `displayRemoteApply` gates restore. */
   capabilities?: Record<string, number>;
   /**
-   * the viewer's plan leaves out control (`useSitePlan`): restore and the apply
-   * self-test send commands, so they give way to a "part of core" link. viewing,
+   * the site's plan leaves out control (`useSitePlan`): restore and the apply
+   * self-test send commands, so they give way to a "part of core" row. viewing,
    * storing, editing and the restore settings are configuration, and stay.
    */
   controlLocked?: boolean;
+  /** who may upgrade the site, for that row (`useSitePlan`). */
+  planSite?: PlanSite;
   onClose: () => void;
 }
 
@@ -217,6 +219,7 @@ export function DisplayLayoutPanel({
   siteId,
   capabilities,
   controlLocked,
+  planSite,
   onClose,
 }: DisplayLayoutPanelProps) {
   const { isMachineAdmin, user } = useAuth();
@@ -1265,7 +1268,7 @@ export function DisplayLayoutPanel({
                   </TooltipContent>
                 </Tooltip>
               ) : controlLocked ? (
-                <ControlUpgradeLink label="restore is part of core" className="h-8 px-3 text-xs" />
+                <ControlUpgradeLink label="restore is part of core" planSite={planSite} className="h-8 px-3 text-xs" />
               ) : (
                 <Tooltip>
                   <TooltipTrigger asChild>

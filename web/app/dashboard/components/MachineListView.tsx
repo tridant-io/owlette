@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
 import { MachineStatusPill } from '@/components/MachineStatusPill';
-import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice } from '@/components/plan/MachinePlanNotice';
+import { ControlUpgradeLink, MachinePlanLock, MachinePlanNotice, type PlanSite } from '@/components/plan/MachinePlanNotice';
 import { useDemoContext } from '@/contexts/DemoContext';
 import { SparklineChart } from '@/components/charts';
 import { ChevronDown, Pencil, Copy, Square, Plus, Clock, Monitor, Cog, Settings2, MoreVertical, BellOff, RotateCcw } from 'lucide-react';
@@ -272,10 +272,12 @@ interface MachineRowProps {
   /** Column-dropdown selection (cpu/disk/gpu/nic). Unset kinds fall back to the machine's
    * reported primary device, which is also what "auto (most active)" selects. */
   listPref?: DeviceSelection;
-  /** set when the machine falls outside the viewer's plan (`useSitePlan`): the machines it covers. */
+  /** set when the machine falls outside owlette free's limit (`useSitePlan`): the machines it covers. */
   planLimit?: number | null;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  /** who may upgrade the site, for the lock rows (`useSitePlan`). */
+  planSite?: PlanSite;
 }
 
 // Memoized: the dashboard hands every row stable props, so a heartbeat
@@ -314,6 +316,7 @@ export const MachineRow = memo(function MachineRow({
   planLimit,
   controlLocked,
   swoopLocked,
+  planSite,
 }: MachineRowProps) {
   const planLocked = planLimit != null;
   // Held keeps the row mounted through the close animation.
@@ -441,7 +444,7 @@ export const MachineRow = memo(function MachineRow({
           <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2">
               {planLocked ? (
-                <MachinePlanLock />
+                <MachinePlanLock planSite={planSite} />
               ) : (
                 <div className="relative flex-shrink-0">
                   <Tooltip>
@@ -540,7 +543,7 @@ export const MachineRow = memo(function MachineRow({
             clipped button never takes focus. */}
         {planLimit != null ? (
           <TableCell colSpan={5} className="p-0 overflow-hidden">
-            <MachinePlanNotice limit={planLimit} className="px-3 py-2" />
+            <MachinePlanNotice limit={planLimit} planSite={planSite} className="px-3 py-2" />
           </TableCell>
         ) : (
           <>
@@ -786,6 +789,7 @@ export const MachineRow = memo(function MachineRow({
               planLocked={planLocked}
               controlLocked={controlLocked}
               swoopLocked={swoopLocked}
+              planSite={planSite}
             />
           )}
         </TableCell>
@@ -955,7 +959,7 @@ export const MachineRow = memo(function MachineRow({
                                   </Button>
                                   )}
                                   {controlLocked ? (
-                                    <ControlUpgradeLink label="restart and kill are part of core" />
+                                    <ControlUpgradeLink label="restart and kill are part of core" planSite={planSite} />
                                   ) : (
                                     <>
                                       <Button
@@ -1059,7 +1063,7 @@ export const MachineRow = memo(function MachineRow({
                                     </DropdownMenuContent>
                                   </DropdownMenu>
                                   {controlLocked ? (
-                                    <ControlUpgradeLink label="restart and kill are part of core" />
+                                    <ControlUpgradeLink label="restart and kill are part of core" planSite={planSite} />
                                   ) : (
                                     <>
                                       <Tooltip>

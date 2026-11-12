@@ -962,6 +962,8 @@ export default function DashboardPage() {
 
   // cosmetic: the server gates every action on the site's plan regardless.
   const sitePlan = useSitePlan(currentSiteId, machinesLoading ? null : machineIdsKey);
+  const isSiteOwner = sitePlan.plan?.isOwner ?? false;
+  const planSite = useMemo(() => ({ siteId: currentSiteId, isOwner: isSiteOwner }), [currentSiteId, isSiteOwner]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -1106,6 +1108,7 @@ export default function DashboardPage() {
                   siteId={currentSiteId}
                   capabilities={machines.find((m) => m.machineId === heldDetailPanel.machineId)?.capabilities}
                   controlLocked={sitePlan.controlLocked}
+                  planSite={planSite}
                   onClose={handleCloseDetailPanel}
                 />
               ) : (
@@ -1241,6 +1244,7 @@ export default function DashboardPage() {
                   noSwoop={noSwoop}
                   onSiteSettings={onSiteSettings}
                   sitePlan={sitePlan}
+                  planSite={planSite}
                 />
               </div>
             )}
@@ -1278,6 +1282,7 @@ export default function DashboardPage() {
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
                         swoopLocked={sitePlan.swoopLocked}
+                        planSite={planSite}
                       />
                     ))}
                   </TableBody>

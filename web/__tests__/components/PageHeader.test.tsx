@@ -40,8 +40,13 @@ jest.mock('@/hooks/usePlan', () => ({
   usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
 }));
 
+let mockBannerKind: string | null = null;
 jest.mock('@/components/plan/TrialBanner', () => ({
   TrialBanner: () => <div data-testid="trial-banner-mount" />,
+  planBannerKind: () => mockBannerKind,
+}));
+jest.mock('@/components/VerifyEmailBanner', () => ({
+  VerifyEmailBanner: () => <div data-testid="verify-email-mount" />,
 }));
 
 interface MockAuth {
@@ -502,10 +507,12 @@ describe('PageHeader plan entry', () => {
     free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
     foundersRemaining: null,
     linkAvailable: false,
+    portalUrl: null,
   };
 
   afterEach(() => {
     mockPlan = undefined;
+    mockBannerKind = null;
     mockPush.mockReset();
   });
 
@@ -532,9 +539,25 @@ describe('PageHeader plan entry', () => {
     expect(mockPush).toHaveBeenCalledWith('/settings/plan');
   });
 
-  it('mounts the plan banner under the header', () => {
+  it('mounts the verify-email and plan banners under the header', () => {
     renderHeader();
 
+    expect(screen.getByTestId('verify-email-mount')).toBeInTheDocument();
+    expect(screen.getByTestId('trial-banner-mount')).toBeInTheDocument();
+  });
+
+  it.each(['link', 'trial', 'free'])('keeps the verify-email banner beside a plan banner in its %s state', (kind) => {
+    mockBannerKind = kind;
+    renderHeader();
+
+    expect(screen.getByTestId('verify-email-mount')).toBeInTheDocument();
+  });
+
+  it('leaves the verify-email banner out while the plan banner asks for the same thing', () => {
+    mockBannerKind = 'unverified';
+    renderHeader();
+
+    expect(screen.queryByTestId('verify-email-mount')).not.toBeInTheDocument();
     expect(screen.getByTestId('trial-banner-mount')).toBeInTheDocument();
   });
 });

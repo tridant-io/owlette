@@ -18,7 +18,7 @@
  */
 
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { MachineCardView } from '@/app/dashboard/components/MachineCardView';
 import { MachineRow } from '@/app/dashboard/components/MachineListView';
 import type { Machine } from '@/hooks/useFirestore';
@@ -71,6 +71,10 @@ jest.mock('@/components/MachineContextMenu', () => ({
 }));
 
 const SITE_ID = 'site-A';
+const OWNER = { siteId: SITE_ID, isOwner: true };
+const MEMBER = { siteId: SITE_ID, isOwner: false };
+const BILLING = '/admin/sites/site-A?section=billing';
+const ASK = 'ask the site owner to upgrade this site';
 
 function machine(machineId: string): Machine {
   return {
@@ -98,6 +102,7 @@ function renderCards(sitePlan?: SitePlan, props: Partial<React.ComponentProps<ty
       processesExpanded
       currentSiteId={SITE_ID}
       sitePlan={sitePlan}
+      planSite={OWNER}
       onToggleStats={jest.fn()}
       onToggleProcesses={jest.fn()}
       onEditProcess={jest.fn()}
@@ -125,15 +130,15 @@ beforeEach(() => {
 });
 
 describe('machine card outside the plan', () => {
-  it('shows the notice instead of everything below the header, with an upgrade link', () => {
+  it("shows the notice instead of everything below the header, with a link to the site's billing", () => {
     renderCards(FREE_SITE);
     const locked = card('kiosk-2');
 
     expect(locked.getByTestId('machine-plan-notice')).toHaveTextContent(
-      'your plan covers 1 machine. upgrade to see this one.',
+      'owlette free covers 1 machine. upgrade to see this one.',
     );
-    expect(locked.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
-    expect(locked.getByTestId('machine-plan-lock')).toHaveAttribute('href', '/settings/plan');
+    expect(locked.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', BILLING);
+    expect(locked.getByTestId('machine-plan-lock')).toHaveAttribute('href', BILLING);
     expect(locked.queryByTestId('open-display-panel')).toBeNull();
     expect(locked.queryByTestId('reboot-pending-banner')).toBeNull();
     expect(locked.queryByText('show.exe')).toBeNull();
@@ -160,7 +165,7 @@ describe('machine card outside the plan', () => {
     const live = card('kiosk-1');
 
     const link = live.getByTestId('control-upgrade');
-    expect(link).toHaveAttribute('href', '/settings/plan');
+    expect(link).toHaveAttribute('href', BILLING);
     expect(link).toHaveAccessibleName('restart and kill are part of core');
     expect(link).toHaveTextContent('part of core');
     expect(live.queryByRole('button', { name: 'restart show.exe' })).toBeNull();
@@ -170,6 +175,16 @@ describe('machine card outside the plan', () => {
     expect(live.getByRole('button', { name: /add process/ })).toBeInTheDocument();
     expect(live.queryByTestId('reboot-pending-approve')).toBeNull();
     expect(live.getByTestId('reboot-pending-dismiss')).toBeInTheDocument();
+  });
+
+  it('shows a member the same control row with no link, asking the owner', () => {
+    renderCards(FREE_SITE, { planSite: MEMBER });
+    const live = card('kiosk-1');
+
+    const row = live.getByTestId('control-upgrade');
+    expect(row).not.toHaveAttribute('href');
+    expect(row).toHaveTextContent(`part of core. ${ASK}`);
+    expect(live.queryByRole('button', { name: 'restart show.exe' })).toBeNull();
   });
 
   it('renders every card as before with no plan', () => {
@@ -190,7 +205,7 @@ describe('machine card outside the plan', () => {
   it('counts machines in the copy past one', () => {
     renderCards({ ...FREE_SITE, machineLimitFor: (id) => (id === 'kiosk-1' ? null : 3) });
 
-    expect(card('kiosk-2').getByTestId('machine-plan-notice')).toHaveTextContent('your plan covers 3 machines.');
+    expect(card('kiosk-2').getByTestId('machine-plan-notice')).toHaveTextContent('owlette free covers 3 machines.');
   });
 });
 
@@ -248,6 +263,23 @@ describe('machine row outside the plan', () => {
     expect(screen.queryByRole('button', { name: /^kill/ })).toBeNull();
     expect(screen.getByRole('button', { name: 'edit' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'more options for show.exe' })).toBeInTheDocument();
+  });
+
+  it("links the lock and the control row to the site's billing for its owner, and to nothing for anyone else", () => {
+    renderRow({ planLimit: 1, planSite: OWNER });
+    expect(screen.getByTestId('machine-plan-lock')).toHaveAttribute('href', BILLING);
+    expect(screen.getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', BILLING);
+    cleanup();
+
+    renderRow({ controlLocked: true, planSite: OWNER });
+    for (const link of screen.getAllByTestId('control-upgrade')) expect(link).toHaveAttribute('href', BILLING);
+    cleanup();
+
+    renderRow({ controlLocked: true, planSite: MEMBER });
+    for (const row of screen.getAllByTestId('control-upgrade')) {
+      expect(row).not.toHaveAttribute('href');
+      expect(row).toHaveTextContent(ASK);
+    }
   });
 
   it('renders as before with no plan', () => {
