@@ -175,6 +175,16 @@ now arrives as the stream's error line, which `owlette chat send` and the SDKs
 already report as an error, and nothing is saved for that turn. Nothing to
 update on the machine.
 
+### fixed — hoot sees a restarted process as running
+
+For up to five minutes after a process was restarted, hoot's `get_process_list`
+tool reported it as killed and not running while the dashboard showed it
+running: the tool read the record of the instance that had been stopped, not
+the new one's. A hoot chat, a talon and hoot mcp all read that tool, so each
+could report a healthy process as down. The tool now reads the record the
+dashboard reads, and a launch that failed outright can no longer make the tool
+fail. Takes an agent update.
+
 ### fixed — hoot's deployments install instead of closing the show and failing
 
 A deployment hoot started carried no installer checksum, so every machine closed

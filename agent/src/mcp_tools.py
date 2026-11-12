@@ -405,7 +405,8 @@ def _get_process_list(params, config):
         config = shared_utils.read_config()
 
     processes = config.get('processes', [])
-    runtime_state = shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH)
+    state_rows = shared_utils.state_rows_by_process(
+        shared_utils.read_json_from_file(shared_utils.RESULT_FILE_PATH))
 
     result = []
     for proc in processes:
@@ -415,17 +416,7 @@ def _get_process_list(params, config):
         launch_mode = proc.get('launch_mode', 'always' if autolaunch else 'off')
         schedules = proc.get('schedules', None)
 
-        state_info = {}
-        if runtime_state:
-            for key, val in runtime_state.items():
-                if isinstance(val, dict) and val.get('id') == proc_id:
-                    state_info = val
-                    state_info['_pid'] = key
-                    break
-
-        # PID is the dict key in app_states.json, stored as _pid during lookup
-        pid_str = state_info.get('_pid')
-        pid = int(pid_str) if pid_str else None
+        pid, state_info = state_rows.get(proc_id, (None, {}))
         is_running = False
         if pid:
             try:
