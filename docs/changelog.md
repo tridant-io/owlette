@@ -124,13 +124,22 @@ can now use hoot's tools on the other machines of its site. The owlette agent
 on that machine is the MCP server and the machine's pairing is the credential:
 there is no API key and nothing to sign in to. It is off until a site owner or
 admin turns it on, in the admin panel under hoot, and says for each machine how
-far it may go (read, bounded changes or privileged) and on which machines. A
-machine can also hand hoot a task in words and read the answer back; that runs
-on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
-is in the audit log under the machine. Update the machine the AI agent runs on
-to use it; the machines it acts on need no update. The desktop app's menu has
-a new item, connect an ai agent, that shows the command to run. See the
-[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+far it may go (read, bounded changes or privileged) and on which machines.
+Beside hoot's own machine tools it can read a machine's metrics history,
+installed software, recent screenshots (as pictures), saved display layout and
+reboot schedule; set that schedule; list, start and cancel software
+deployments; update owlette on a machine; and list, deploy and roll back
+roosts. A call that names several machines is refused whole unless every one
+of them is a machine it may act on, and what belongs to the whole site (alert
+rules, the audit log, display settings) is read only by a machine allowed on
+the whole site. A machine can also hand hoot a task in words and read the
+answer back; that runs on the site owner's LLM key, at tier 2 at most, six
+times an hour. What a machine changes is in the audit log under the machine.
+Update the machine the AI agent runs on to use it; the machines it acts on
+need no update. The desktop app's menu has a new item, connect an ai agent,
+that shows the command to run. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp) and the
+[tool reference](https://owlette.app/docs/reference/hoot-mcp-tools).
 
 ### changed — hoot's site settings have their own page in the admin panel
 
