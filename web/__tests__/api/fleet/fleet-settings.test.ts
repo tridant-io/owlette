@@ -429,7 +429,7 @@ describe('PATCH fleet-settings: what is stored', () => {
     });
   });
 
-  it('emits one site mutation carrying ids, not grants', async () => {
+  it('emits one site mutation saying how far each sender may go and on which machines', async () => {
     staged.set(SETTINGS_PATH, {
       enabled: true,
       senders: { [M2]: { maxTier: 2 }, [M3]: { maxTier: 2 }, 'machine-gone': { maxTier: 2 } },
@@ -449,9 +449,12 @@ describe('PATCH fleet-settings: what is stored', () => {
         method: 'PATCH',
         enabled: true,
         senderIds: [M1, M3],
+        // the sender this write added; M3's grant is as it was
+        changedSenders: { [M1]: { maxTier: 2, machineIds: [M3] } },
         revokedForSite: false,
         revokedSenderIds: [M2, 'machine-gone'],
-        refreshedSenderIds: [M1],
+        // the new sender and the one cut; the machine that left the site has no agent to tell
+        refreshedSenderIds: [M1, M2],
         droppedMachineIds: ['machine-gone'],
       },
     });
@@ -510,8 +513,62 @@ describe('PATCH fleet-settings: a machine that has left the site', () => {
   });
 });
 
+describe('PATCH fleet-settings: telling a machine it was cut', () => {
+  it('queues site_settings_refresh to a sender removed from an enabled site, so its agent drops its session file', async () => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 2 }, [M2]: { maxTier: 2 } } });
+
+    await patch({ senders: { [M1]: {} } });
+
+    expect(refreshedMachines()).toEqual([M2]);
+  });
+
+  it('queues it to every sender when the write turns the site off', async () => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 2 }, [M2]: { maxTier: 2 } } });
+
+    await patch({ enabled: false });
+
+    expect(refreshedMachines()).toEqual([M1, M2]);
+  });
+
+  it('queues nothing for a sender removed while the site is off: it held no session', async () => {
+    staged.set(SETTINGS_PATH, { enabled: false, senders: { [M1]: { maxTier: 2 } } });
+
+    await patch({ senders: {} });
+
+    expect(refreshes()).toHaveLength(0);
+  });
+
+  it('queues nothing for a sender that has left the site', async () => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { 'machine-gone': { maxTier: 2 } } });
+
+    await patch({ senders: { 'machine-gone': {} } });
+
+    expect(refreshes()).toHaveLength(0);
+  });
+
+  it.each([
+    ['the write turns the site off', { enabled: false }],
+    ['the write leaves it out of the senders', { senders: { [M1]: {} } }],
+  ])('queues nothing under a stored sender that has left the site when %s', async (_case, body) => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 2 }, [M2]: { maxTier: 2 }, 'machine-gone': { maxTier: 2 } } });
+
+    await patch(body);
+
+    expect(refreshedMachines()).not.toContain('machine-gone');
+    expect(refreshedMachines()).toContain(M2);
+  });
+
+  it('says in the audit row which sender changed, and how', async () => {
+    staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 1, machineIds: [M2] }, [M3]: { maxTier: 2, wholeSite: true } } });
+
+    await patch({ senders: { [M1]: { maxTier: 2, machineIds: [M2] }, [M3]: { wholeSite: true } } });
+
+    expect(mockEmitMutation.mock.calls[0][0].attributes.changedSenders).toEqual({ [M1]: { maxTier: 2, machineIds: [M2] } });
+  });
+});
+
 describe('PATCH fleet-settings: telling a newly granted machine', () => {
-  it('queues site_settings_refresh to a sender added on an enabled site, and nobody else', async () => {
+  it('queues site_settings_refresh to a sender added on an enabled site, and to none whose grant stays', async () => {
     staged.set(SETTINGS_PATH, { enabled: true, senders: { [M1]: { maxTier: 2, machineIds: [M3] } } });
 
     await patch({ senders: { [M1]: { maxTier: 3, machineIds: [M3] }, [M2]: { machineIds: [M3] } } });
