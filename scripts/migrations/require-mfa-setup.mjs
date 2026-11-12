@@ -33,10 +33,9 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..', '..');
 
-// firebase-admin lives in web/node_modules; modular entry points only.
+// firebase-admin lives in web/node_modules; modular entry points only. loaded in
+// main, so the tests, which run without web's install, can import the rest.
 const require = createRequire(join(ROOT, 'web', 'package.json'));
-const { initializeApp, cert } = require('firebase-admin/app');
-const { getFirestore, FieldPath } = require('firebase-admin/firestore');
 
 /** --project allowlist → credential suffix; prod also needs --confirm-project to write. */
 const PROJECTS = new Map([
@@ -86,7 +85,8 @@ export async function planRequireMfaSetup(db) {
     let query = db
       .collection('users')
       .select('email', 'mfaEnrolled', 'mfaFactors', 'requiresMfaSetup', 'deletedAt')
-      .orderBy(FieldPath.documentId())
+      // the document id, as FieldPath.documentId() names it
+      .orderBy('__name__')
       .limit(SCAN_PAGE_SIZE);
     if (cursor) query = query.startAfter(cursor);
     const page = await query.get();
@@ -196,6 +196,8 @@ async function main() {
     process.exit(1);
   }
 
+  const { initializeApp, cert } = require('firebase-admin/app');
+  const { getFirestore } = require('firebase-admin/firestore');
   initializeApp({ credential: cert({ projectId, clientEmail, privateKey }), projectId });
   console.log(`\n[${apply ? 'APPLY' : 'DRY RUN'}] require a second factor — project=${projectId}\n`);
   await runRequireMfaSetup({ db: getFirestore(), apply });
