@@ -22,6 +22,7 @@ import { FormError } from '@/components/ui/form-error';
 import { useFieldError } from '@/hooks/useFieldError';
 import { HootIcon } from '@/components/icons/HootIcon';
 import { ApiKeysManager } from '@/components/ApiKeysManager';
+import { CopyButton } from '@/components/CopyButton';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useHeightTransition } from '@/hooks/useHeightTransition';
 import { AVAILABLE_MODELS, preselectedModel } from '@/lib/llmModels';
@@ -36,6 +37,18 @@ const SECTIONS: { id: SettingsSection; label: string; icon: React.ElementType }[
   { id: 'security', label: 'security', icon: Shield },
   { id: 'api', label: 'api', icon: Code },
   { id: 'danger', label: 'danger zone', icon: Trash2 },
+];
+
+// the install paths are fixed per platform (docs/agent/hoot-mcp.mdx)
+const HOOT_MCP_COMMANDS = [
+  {
+    os: 'Windows',
+    command: 'claude mcp add hoot -- "C:\\ProgramData\\Owlette\\python\\python.exe" "C:\\ProgramData\\Owlette\\agent\\src\\fleet_mcp.py"',
+  },
+  {
+    os: 'macOS',
+    command: "claude mcp add hoot -- '/Library/Application Support/Owlette/runtime/python/bin/python3' '/Library/Application Support/Owlette/runtime/agent/src/fleet_mcp.py'",
+  },
 ];
 
 interface AccountSettingsDialogProps {
@@ -812,147 +825,218 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
               {activeSection === 'hoot' && (
                 <div className="space-y-5">
                   <div>
-                    <h3 className="text-base font-medium text-foreground flex items-center gap-2">
-                      hoot
-                      {llmConfigured && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-success-surface text-success flex items-center gap-1 font-normal">
-                          <Check className="h-3 w-3" /> connected
-                        </span>
-                      )}
-                    </h3>
+                    <h3 className="text-base font-medium text-foreground">hoot</h3>
                     <p className="text-xs text-muted-foreground mt-1">
-                      connect an LLM provider to power owlette&apos;s intelligence layer. query machines,
-                      run diagnostics, and manage your fleet through natural language.
+                      two ways to use hoot: in the dashboard on your own LLM key, or from an AI agent
+                      running on one of your machines.
                     </p>
                   </div>
 
-                  <div className="space-y-4 rounded-md border border-border bg-card/50 p-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="llmProvider" className="text-foreground">provider</Label>
-                      <Select
-                        value={llmProvider}
-                        onValueChange={(value: 'anthropic' | 'openai') => {
-                          setLlmProvider(value);
-                          setLlmModel('');
-                          setLlmModels([]);
-                          if (llmConfigured) fetchLlmModels(value);
-                        }}
-                        disabled={llmSaving}
-                      >
-                        <SelectTrigger id="llmProvider" className="border-border bg-background text-foreground hover:bg-secondary w-64">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent className="border-border dark:bg-secondary text-foreground">
-                          <SelectItem value="anthropic" className="cursor-pointer hover:bg-muted">Anthropic (Claude)</SelectItem>
-                          <SelectItem value="openai" className="cursor-pointer hover:bg-muted">OpenAI</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="llmModel" className="text-foreground">model</Label>
-                      <Select
-                        value={llmChosenModel}
-                        onValueChange={setLlmModel}
-                        disabled={llmSaving || llmModelsLoading}
-                      >
-                        <SelectTrigger id="llmModel" className="border-border bg-background text-foreground hover:bg-secondary w-64">
-                          {llmModelsLoading ? (
-                            <span className="flex items-center gap-2 text-muted-foreground">
-                              <Loader2 className="h-3 w-3 animate-spin" /> loading models…
-                            </span>
-                          ) : (
-                            <SelectValue />
-                          )}
-                        </SelectTrigger>
-                        <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
-                          {llmModelList.map((m) => (
-                            <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
-                              {m.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="llmApiKey" className="text-foreground flex items-center gap-2">
-                        <Key className="h-3.5 w-3.5" />
-                        api key
-                      </Label>
-                      <div className="relative">
-                        <Input
-                          id="llmApiKey"
-                          type={showLlmKey ? 'text' : 'password'}
-                          placeholder={llmConfigured ? '••••••••••••••••••••••••' : llmProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
-                          value={llmApiKey}
-                          onChange={(e) => setLlmApiKey(e.target.value)}
-                          className="border-border bg-background pr-10 text-foreground"
-                          disabled={llmSaving}
-                        />
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              type="button"
-                              onClick={() => setShowLlmKey(!showLlmKey)}
-                              aria-label={showLlmKey ? 'hide key' : 'show key'}
-                              className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
-                            >
-                              {showLlmKey ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>{showLlmKey ? 'hide key' : 'show key'}</p>
-                          </TooltipContent>
-                        </Tooltip>
-                      </div>
-                      <p className="text-[11px] text-muted-foreground">
-                        your key is encrypted with AES-256 and never leaves the server.
+                  <section aria-labelledby="hoot-api-heading" className="space-y-3">
+                    <div>
+                      <h4 id="hoot-api-heading" className="text-sm font-medium text-foreground flex items-center gap-2">
+                        hoot api
+                        {llmConfigured && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-success-surface text-success flex items-center gap-1 font-normal">
+                            <Check className="h-3 w-3" /> connected
+                          </span>
+                        )}
+                      </h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        connect an LLM provider to power hoot in the dashboard. query machines,
+                        run diagnostics, and manage your fleet through natural language.
                       </p>
                     </div>
 
-                    <div className="flex gap-2 pt-1">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={saveLlm}
-                        disabled={llmSaving || (!llmApiKey && !llmModelOnly)}
-                        className="cursor-pointer h-8"
-                      >
-                        {llmSaving ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : llmApiKey || !llmConfigured ? (
-                          'save key'
-                        ) : (
-                          'save model'
-                        )}
-                      </Button>
-                      {llmConfigured && (
+                    <div className="space-y-4 rounded-md border border-border bg-card/50 p-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="llmProvider" className="text-foreground">provider</Label>
+                        <Select
+                          value={llmProvider}
+                          onValueChange={(value: 'anthropic' | 'openai') => {
+                            setLlmProvider(value);
+                            setLlmModel('');
+                            setLlmModels([]);
+                            if (llmConfigured) fetchLlmModels(value);
+                          }}
+                          disabled={llmSaving}
+                        >
+                          <SelectTrigger id="llmProvider" className="border-border bg-background text-foreground hover:bg-secondary w-64">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="border-border dark:bg-secondary text-foreground">
+                            <SelectItem value="anthropic" className="cursor-pointer hover:bg-muted">Anthropic (Claude)</SelectItem>
+                            <SelectItem value="openai" className="cursor-pointer hover:bg-muted">OpenAI</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="llmModel" className="text-foreground">model</Label>
+                        <Select
+                          value={llmChosenModel}
+                          onValueChange={setLlmModel}
+                          disabled={llmSaving || llmModelsLoading}
+                        >
+                          <SelectTrigger id="llmModel" className="border-border bg-background text-foreground hover:bg-secondary w-64">
+                            {llmModelsLoading ? (
+                              <span className="flex items-center gap-2 text-muted-foreground">
+                                <Loader2 className="h-3 w-3 animate-spin" /> loading models…
+                              </span>
+                            ) : (
+                              <SelectValue />
+                            )}
+                          </SelectTrigger>
+                          <SelectContent className="border-border dark:bg-secondary text-foreground max-h-64">
+                            {llmModelList.map((m) => (
+                              <SelectItem key={m.id} value={m.id} className="cursor-pointer hover:bg-muted">
+                                {m.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label htmlFor="llmApiKey" className="text-foreground flex items-center gap-2">
+                          <Key className="h-3.5 w-3.5" />
+                          api key
+                        </Label>
+                        <div className="relative">
+                          <Input
+                            id="llmApiKey"
+                            type={showLlmKey ? 'text' : 'password'}
+                            placeholder={llmConfigured ? 'a key is saved: paste a new one to replace it' : llmProvider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
+                            value={llmApiKey}
+                            onChange={(e) => {
+                              setLlmApiKey(e.target.value);
+                              if (!e.target.value) setShowLlmKey(false);
+                            }}
+                            className="border-border bg-background pr-10 text-foreground"
+                            disabled={llmSaving}
+                          />
+                          {/* the saved key never leaves the server, so only a key being typed can be shown */}
+                          {llmApiKey && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowLlmKey(!showLlmKey)}
+                                  aria-label={showLlmKey ? 'hide key' : 'show key'}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer text-muted-foreground hover:text-foreground"
+                                >
+                                  {showLlmKey ? <EyeOffIcon className="h-4 w-4" /> : <EyeIcon className="h-4 w-4" />}
+                                </button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>{showLlmKey ? 'hide key' : 'show key'}</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          your key is encrypted with AES-256 and never leaves the server.
+                        </p>
+                      </div>
+
+                      <div className="flex gap-2 pt-1">
                         <Button
                           type="button"
                           size="sm"
-                          variant="outline"
-                          onClick={async () => {
-                            setLlmSaving(true);
-                            try {
-                              await fetch('/api/settings/llm-key', { method: 'DELETE' });
-                              setLlmConfigured(false);
-                              setLlmSaved(null);
-                              setLlmApiKey('');
-                              toast.success('API key removed');
-                            } catch {
-                              toast.error('Failed to remove API key');
-                            }
-                            setLlmSaving(false);
-                          }}
-                          disabled={llmSaving}
-                          className="cursor-pointer border-border text-destructive hover:bg-muted h-8"
+                          onClick={saveLlm}
+                          disabled={llmSaving || (!llmApiKey && !llmModelOnly)}
+                          className="cursor-pointer h-8"
                         >
-                          remove key
+                          {llmSaving ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : llmApiKey || !llmConfigured ? (
+                            'save key'
+                          ) : (
+                            'save model'
+                          )}
                         </Button>
-                      )}
+                        {llmConfigured && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={async () => {
+                              setLlmSaving(true);
+                              try {
+                                await fetch('/api/settings/llm-key', { method: 'DELETE' });
+                                setLlmConfigured(false);
+                                setLlmSaved(null);
+                                setLlmApiKey('');
+                                toast.success('API key removed');
+                              } catch {
+                                toast.error('Failed to remove API key');
+                              }
+                              setLlmSaving(false);
+                            }}
+                            disabled={llmSaving}
+                            className="cursor-pointer border-border text-destructive hover:bg-muted h-8"
+                          >
+                            remove key
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  </section>
+
+                  <section aria-labelledby="hoot-mcp-heading" className="space-y-3">
+                    <div>
+                      <h4 id="hoot-mcp-heading" className="text-sm font-medium text-foreground">hoot mcp</h4>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        for developers: an AI agent such as Claude Code, running on one of your machines,
+                        gets hoot&apos;s tools for the other machines in its site. the owlette agent there
+                        is the MCP server, and the machine&apos;s pairing is the credential: no API key.
+                      </p>
+                    </div>
+
+                    <ol className="list-decimal space-y-3 rounded-md border border-border bg-card/50 py-4 pl-8 pr-4 text-xs text-muted-foreground">
+                      <li>
+                        a site owner or admin turns it on: in the admin panel, open{' '}
+                        <span className="text-foreground">hoot</span> under fleet, turn on{' '}
+                        <span className="text-foreground">let machines act on other machines</span>, then turn on
+                        that machine and set how far it may go and on which machines.
+                      </li>
+                      <li className="space-y-2">
+                        <p>
+                          on that machine, add the server to Claude Code. the owlette desktop app&apos;s menu
+                          shows the same command under <span className="text-foreground">connect an ai agent</span>.
+                        </p>
+                        {HOOT_MCP_COMMANDS.map(({ os, command }) => (
+                          <div key={os} className="space-y-1">
+                            <p>{os}</p>
+                            <div className="flex items-center gap-2">
+                              <code className="block min-w-0 flex-1 break-all rounded border border-border bg-background px-2 py-1.5 font-mono text-[11px] text-foreground">
+                                {command}
+                              </code>
+                              <CopyButton value={command} tooltipLabel={`copy the ${os} command`} className="h-8 shrink-0" />
+                            </div>
+                          </div>
+                        ))}
+                      </li>
+                      <li>
+                        ask the agent to run <code className="font-mono text-foreground">fleet_status</code>: it
+                        names the site and the machine, or says why it can&apos;t act.
+                      </li>
+                    </ol>
+
+                    <p className="text-[11px] text-muted-foreground">
+                      runs on Windows and macOS, with owlette 4.2.0 or later. other MCP clients, and what each
+                      machine may do:{' '}
+                      <a
+                        href="/docs/agent/hoot-mcp"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-foreground underline underline-offset-2 hover:text-accent-cyan"
+                      >
+                        the hoot mcp guide
+                      </a>
+                      .
+                    </p>
+                  </section>
                 </div>
               )}
 

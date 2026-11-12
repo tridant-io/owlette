@@ -61,6 +61,15 @@ In the admin panel's issues list, each row shows the issue's description beside
 its title. Opening a new issue marks it triaged, since someone has now looked at
 it; its status can still be set back to new.
 
+### changed — settings › hoot shows hoot mcp beside hoot api
+
+Account settings › hoot now names both ways to use hoot. **hoot api** is the
+provider, model and key that run hoot in the dashboard, as before. **hoot mcp**,
+for developers, sets out how an AI agent on one of your machines gets hoot's
+tools: an admin turns the machine on, then the Claude Code command for Windows
+or macOS, ready to copy. The show-key button appears only while you type a new
+key: a saved key never leaves the server, so there was nothing for it to show.
+
 ### changed — swoop's text stays clear at any window size
 
 Small text on a machine shown smaller than its own screen could look
