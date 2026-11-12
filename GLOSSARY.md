@@ -261,6 +261,36 @@ _Avoid_: "cortex CLI" in prose
 A talon condition in which hoot judges a screenshot of the machine against a plain-language expectation.
 _Avoid_: screenshot check, AI check
 
+### Plans and billing
+
+**Plan**:
+What one site may do: `free`, `core` or `pro`, or `trial` while a trial covers it. tridant id decides it per site and owlette reads it there; nothing is enforced unless `PLAN_ENFORCEMENT` is on (ADR 0018).
+_Avoid_: tier alone, subscription, license, "the owner's plan"
+
+**owlette free**:
+The plan of a site nobody pays for: live status, metrics, the agent's own crash-restart and updates. It is counted per account, not per site: an account's free sites are at most one, with at most one machine between them.
+_Avoid_: lite, basic, free tier
+
+**Trial**:
+14 days of pro with no card, once per tridant organization, started when an account with a verified email first opens owlette. It covers every site the owner has registered with tridant id, and those sites become free when it ends unless they are billed.
+_Avoid_: beta, demo
+
+**Billed site**:
+A site on its owner's tridant id subscription: one line on the monthly invoice, active machines times the site's price. Its billing runs to the end of the month after it is stopped.
+_Avoid_: paid site (a site in a trial is paid for nothing), licensed site, seat
+
+**Active machine**:
+A machine that was online at any point in the billing period. It is what a billed site is charged for; pro bills at least three.
+_Avoid_: seat, paired machine (pairing alone costs nothing)
+
+**Billing period**:
+One calendar month from the 1st, 00:00 UTC. A site's first period is the rest of the month it started in, charged by the day.
+_Avoid_: cycle, term
+
+**tridant organization**:
+The billing account in tridant id that pays for an owner's sites and holds the card and invoices. An owlette account is linked to one, never by email alone. It is not a site, and owlette shows it only as "your tridant account".
+_Avoid_: org or organization for anything inside owlette, customer, tenant
+
 ## Flagged ambiguities
 
 - **cortex is hoot.** "cortex" was the AI feature's name until 3.0.0. It survives only in internal identifiers: the `/api/cortex/*` routes kept for old CLI and SDK clients, `owlette_cortex.py`, `cortex_cli_fetch.py`, `scripts/upload-cortex-cli.mjs`, `installer_metadata/cortex_cli*`, `sites/{siteId}/settings/cortex`, the `cortex_*` system actors and old screenshot file names. Say hoot. Name a cortex identifier only when someone has to type or open it.
@@ -270,7 +300,7 @@ _Avoid_: screenshot check, AI check
 - **deploy and deployment.** A deployment is a software install from the deploy page. Sending a roost version to its targets is a rollout, even though its route is `/deploy`. API keys carry both a `deploy` resource and a `deploy` permission, and the permission is what roost rollouts and re-syncs need.
 - **manifest is version.** roost's snapshot was renamed from manifest to version in 2.10.0 on every API, field, event and CLI flag. "manifest" survives only in the spec's file name (`docs/internal/manifest-format.md`) and an R2 key prefix (`project-manifests/`).
 - **v2 and v3 in roost docs.** These are generations of project distribution (v1 was the single-URL ZIP), not agent versions. "Deferred to v3" means a later roost generation, not agent 3.x.
-- **tier.** hoot's tool tiers (risk), swoop's encoder tiers (one encoder per codec class), and the core/pro site tiers that 3.0.0 removed. Say which.
+- **tier.** hoot's tool tiers (risk), swoop's encoder tiers (one encoder per codec class), and a site's plan, which the API calls its `tier` (`core` or `pro`). Say which, and say plan for the last.
 - **rung.** Not a domain term on its own: the code uses it for one step of any ladder, including swoop's quality ladder, the encoder preference order, API-key expiry notices (14, 3 and 0 days) and reconnect backoff. Name the ladder.
 - **admin.** The global `admin` role grants nothing since roles moved onto sites. "admin" means site admin unless it says superadmin.
 - **provisioning.** It means two different things: publishing hoot CLI pins (`scripts/upload-cortex-cli.mjs`) and pushing a user's LLM key to a machine's local hoot (`/api/hoot/provision-key`). Name which.
