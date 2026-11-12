@@ -451,3 +451,9 @@ Read first: `plan.md` (decisions C1–C16) and `context.md` (files, commands, en
   - The software-renderer claim is worded for Chrome and Edge only, given WebKit's masked renderer.
   - **3.5's changelog line stands only if 3.5's hardware proof passes** (DISPLAY2). If it fails, reword it before the cut.
   - docsSearchRank and mdx-components: 9/9.
+- 2026-11-11, 3.5's rig proof on DISPLAY2 (back, Rotate270, 2160x3840 at (-2160,-1138)). Owed items 1 and 2 are done; 3 and 4 still stand.
+  - Red: the two tests spliced onto 3567ab97^ (568c16d0 predates them; scratchpad tree, not a stash). `a_rotated_display_streams_upright` fails: the frame is 3840x2160, not 2160x3840. `a_tap_on_a_rotated_display_lands_where_it_was_tapped` puts (0.25, 0.75) at (-541, 1741), not (-1620, 1741), which is the old un-rotated mapping exactly: the taps that did nothing landed elsewhere on the panel.
+  - Green on the release branch: `frame 2160x3840, fed 2160x3840, the popup at its top-left`, and both taps land exactly, (-1620, 1741) and (-217, -754).
+  - The upright test had a bug of its own: it opened the popup after `Duplication::open`, whose `follow_input_desktop` moves the thread onto the input desktop with read and write rights only, so `CreateWindowExW` was refused ("Access is denied") in every context. The popup now opens first; nothing else changed.
+  - The tap test needs nobody else moving the pointer: with a Parsec and a swoop session live on the box, its reads were noise. The owner ran it with both idle.
+  - Claude's shell sandbox refuses the popup and the injected input; the green tap run came from the owner's own window, the upright runs from Claude's shell after the fix.
