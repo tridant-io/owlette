@@ -8,6 +8,7 @@
  *   3. Cancel pending commands the user issued — background sweep, so a slow command scan doesn't
  *      gate the response. Bounded to the user's assigned + owned sites.
  *   4. Set `users/{uid}.deletedAt`. Doc is preserved for audit, excluded from default list reads.
+ *      Then unlink the account from its tridant organization, best effort.
  *   5. Revoke Firebase Auth refresh tokens and disable the Auth record. No `deleteUser()` —
  *      keeping the record preserves the email→uid mapping for forensics; hard delete belongs to
  *      the self-delete path.
@@ -17,6 +18,8 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MIN_SUPERADMINS } from '@/lib/actions/setUserRole.server';
 import { transferSiteOwnership } from '@/lib/actions/transferSiteOwnership.server';
+import { plansEnforced } from '@/lib/plan.server';
+import { unlinkAccount } from '@/lib/tridantBilling.server';
 
 function asRole(raw: unknown): string | null {
   return typeof raw === 'string' ? raw : null;
@@ -345,6 +348,18 @@ export async function performUserDeleteCascade(
     deletedAt,
     deletedBy: 'superadmin', // route handler doesn't pass actor here; auditLog has it
   });
+
+  // forget the account's link to its tridant organization (adr 0018); the organization,
+  // its sites and their billing stay. after the stamp, so an account whose delete
+  // failed keeps its link. best effort: unlinkAccount never throws.
+  if (plansEnforced()) {
+    const unlinked = await unlinkAccount(uid);
+    if (!unlinked.ok) {
+      console.warn(
+        `[userDeleteCascade] tridant unlink failed for ${uid}: ${unlinked.code ?? unlinked.reason}`,
+      );
+    }
+  }
 
   // Rules (`isNotDeletedUser`) gate on `deletedAt`, but outstanding ID tokens stay valid for ~1h
   // unless revoked; `disabled: true` also blocks new sign-ins and custom-token mints. Best-effort:

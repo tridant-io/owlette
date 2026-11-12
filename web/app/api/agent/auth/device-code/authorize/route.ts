@@ -64,6 +64,18 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const adminDb = getAdminDb();
     const docRef = adminDb.collection('device_codes').doc(pairPhrase);
 
+    // the plan check calls tridant, which a transaction must not wait on: read the
+    // machine the code names first, check it here, and let the transaction apply it.
+    const pending = await docRef.get();
+    const pendingData = pending.exists ? pending.data() : undefined;
+    const checkedMachineId =
+      pendingData?.status === 'pending' && pendingData.preauthorizedIntent !== true
+        ? (pendingData.machineId as string | undefined)
+        : undefined;
+    const refusal = checkedMachineId
+      ? await machineLimitRefusal(siteId, checkedMachineId, siteData)
+      : null;
+
     const result = await adminDb.runTransaction(async (transaction) => {
       const doc = await transaction.get(docRef);
 
@@ -111,8 +123,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         return { error: 'Invalid device code state for authorization.', status: 400 } as const;
       }
 
-      const refusal = await machineLimitRefusal(siteId, machineId, siteData);
-      if (refusal) {
+      if (refusal && machineId === checkedMachineId) {
         transaction.update(docRef, { status: 'refused', refusedReason: refusal });
         return { error: refusal, status: 402 } as const;
       }

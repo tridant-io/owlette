@@ -206,7 +206,7 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
 }
 
 /** bills another site on the payer's running subscription; no checkout, the card is on file. */
-export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean }>> {
+export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean; sites: BilledSite[] }>> {
   if (e2e()) return fake.addSite(input);
   return request(
     '/v1/billing/sites',
@@ -217,7 +217,8 @@ export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: b
       product: PRODUCT[input.tier],
       founders: input.founders,
     },
-    (json) => ({ already: json.already === true }),
+    // a site whose removal was pending comes back at the plan it had, whatever was asked for.
+    (json) => ({ already: json.already === true, sites: parseSites(json.sites) ?? [] }),
   );
 }
 

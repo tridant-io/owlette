@@ -12,6 +12,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { PRICING_FACTS } from '@/lib/product-facts';
 import type {
   AddSiteInput,
+  BilledSite,
   BillingFailure,
   BillingResult,
   BillingTier,
@@ -125,10 +126,16 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
   });
 }
 
-export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean }>> {
+export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean; sites: BilledSite[] }>> {
   return guarded(async () => {
     await siteDoc(input.siteId).set(billedSite(input.tier, orgFor(input.uid)));
-    return { ok: true, already: false };
+    return {
+      ok: true,
+      already: false,
+      sites: [
+        { siteId: input.siteId, productId: productId(input.tier), founders: input.founders, status: 'active', endsAt: null },
+      ],
+    };
   });
 }
 

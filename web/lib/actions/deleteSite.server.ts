@@ -10,7 +10,9 @@
  *   1. audit to the PLATFORM sink, blocking and fail-closed. The site's own
  *      audit_log is a subcollection of the doc below, so a row written there dies
  *      with the evidence of who destroyed it.
- *   2. tombstone the id, so the slug cannot be re-registered mid-cascade.
+ *   2. tombstone the id, so the slug cannot be re-registered mid-cascade. then
+ *      stop the site's billing with tridant id (adr 0018), best effort: the
+ *      delete goes on when tridant id cannot be reached.
  *   3. revoke `agent_refresh_tokens` for the site. FIRST among the destructive
  *      steps: a refresh token outlives the site document, so revoking last leaves
  *      a window where the site is gone and an agent can still mint access tokens
@@ -49,6 +51,8 @@ import {
 } from '@/lib/auditLog.server';
 import { deleteFleetCalls } from '@/lib/fleet/calls.server';
 import { revokeFleetSessions } from '@/lib/fleet/session.server';
+import logger from '@/lib/logger';
+import { stopSite } from '@/lib/tridantBilling.server';
 
 export interface DeleteSiteInput {
   siteId: string;
@@ -139,6 +143,21 @@ export async function deleteSite(
   await db.collection('site_ids').doc(input.siteId).set({
     deletedAt: FieldValue.serverTimestamp(),
   });
+
+  // stop billing before anything is destroyed. nothing retries once the site is
+  // gone, but a stop that did not land costs no more than one that did: with no
+  // usage reported for it, tridant id writes no line for the site after this period.
+  // it is logged at error so the leftover item can be closed by hand.
+  const billing = existing.data()?.billing;
+  if (typeof billing === 'object' && billing !== null) {
+    const stopped = await stopSite(input.siteId);
+    if (!stopped.ok && stopped.code !== 'site_not_billed') {
+      logger.error('[plan] billing not stopped for a deleted site', {
+        context: 'plan',
+        data: { siteId: input.siteId, reason: stopped.reason, status: stopped.status, code: stopped.code },
+      });
+    }
+  }
 
   // 3. Agent credentials first — see the ordering note above.
   const tokenSnap = await db

@@ -300,7 +300,7 @@ describe('addSite', () => {
   it('posts the payer by subject only', async () => {
     mockTridantFetch.mockResolvedValue(answer({ subscription: SUBSCRIPTION, sites: [BILLED_SITE] }, 201));
 
-    expect(await addSite(INPUT)).toEqual({ ok: true, already: false });
+    expect(await addSite(INPUT)).toMatchObject({ ok: true, already: false });
     expectCall('POST', '/v1/billing/sites', {
       payer: { subject: 'owlette:u1' },
       site: { ref: 'owlette:site-8', name: 'Venue B' },
@@ -311,7 +311,10 @@ describe('addSite', () => {
 
   it('says when the site was billed already', async () => {
     mockTridantFetch.mockResolvedValue(answer({ subscription: SUBSCRIPTION, sites: [BILLED_SITE], already: true }));
-    expect(await addSite(INPUT)).toEqual({ ok: true, already: true });
+    const result = await addSite(INPUT);
+    expect(result).toMatchObject({ ok: true, already: true });
+    // what tridant bills now, so the caller can see a resumed site kept its old plan
+    expect(result.ok && result.sites.length).toBe(1);
   });
 
   it('maps a refusal', async () => {
@@ -778,6 +781,7 @@ describe('the e2e fake', () => {
     expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false })).toEqual({
       ok: true,
       already: false,
+      sites: [{ siteId: 'site-8', productId: 'prd_owlette_core', founders: false, status: 'active', endsAt: null }],
     });
     expect(mockStore.get('e2e_entitlements/site:site-8')).toEqual({
       resolved: true,

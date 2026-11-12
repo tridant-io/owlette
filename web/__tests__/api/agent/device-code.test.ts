@@ -834,6 +834,8 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // the pre-transaction read sees the same code the transaction does
+    mockDocGet.mockImplementation(() => mockTransactionGet());
     mockRequireSession.mockResolvedValue('user-123');
     mockAssertUserHasSiteAccess.mockResolvedValue({
       siteId: 'site-1',
@@ -1170,6 +1172,46 @@ describe('POST /api/agent/auth/device-code/authorize', () => {
       expect(global.fetch).not.toHaveBeenCalled();
       expect(mockTransactionSet).not.toHaveBeenCalled();
       expect(mockEmitMutation).not.toHaveBeenCalled();
+    });
+
+    it('checks the plan before the transaction opens, never inside it', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+      let inTransaction = false;
+      let calledInside = false;
+      mockGetSiteEntitlements.mockImplementation(async () => {
+        calledInside ||= inTransaction;
+        return FREE;
+      });
+      mockRunTransaction.mockImplementation(async (fn: (tx: unknown) => unknown) => {
+        inTransaction = true;
+        try {
+          return await fn(mockTransaction);
+        } finally {
+          inTransaction = false;
+        }
+      });
+
+      const { status } = await parseResponse(await authorizePOST(interactiveCode('test-machine')));
+
+      expect(status).toBe(402);
+      expect(mockGetSiteEntitlements).toHaveBeenCalled();
+      expect(calledInside).toBe(false);
+    });
+
+    it('still answers an expired code with 404, not the limit', async () => {
+      enforceFree();
+      mockSites = { 'site-1': { owner: 'owner-1', machines: { 'other-machine': {} } } };
+      const req = interactiveCode('test-machine');
+      mockTransactionGet.mockResolvedValue({
+        exists: true,
+        data: () => ({ status: 'pending', machineId: 'test-machine', expiresAt: { toMillis: () => Date.now() - 1000 } }),
+      });
+
+      const { status } = await parseResponse(await authorizePOST(req));
+
+      expect(status).toBe(404);
+      expect(mockTransactionUpdate).not.toHaveBeenCalled();
     });
 
     it("lets a machine already on the owner's sites re-pair", async () => {

@@ -24,9 +24,22 @@ jest.mock('@/lib/logger', () => ({
 
 // the resolver has its own suite; here it only matters what createSite does with the answer.
 const mockSiteSlotAvailable = jest.fn();
+const mockPlansEnforced = jest.fn();
 jest.mock('@/lib/plan.server', () => ({
   ...jest.requireActual('@/lib/plan.server'),
   siteSlotAvailable: (uid: string) => mockSiteSlotAvailable(uid),
+  plansEnforced: () => mockPlansEnforced(),
+}));
+
+// the billing hooks of createSite and deleteSite; tridant's side has its own suites.
+const mockRegisterSite = jest.fn();
+jest.mock('@/lib/planTrial.server', () => ({
+  registerSite: (...args: unknown[]) => mockRegisterSite(...args),
+}));
+
+const mockStopSite = jest.fn();
+jest.mock('@/lib/tridantBilling.server', () => ({
+  stopSite: (siteId: string) => mockStopSite(siteId),
 }));
 
 jest.mock('firebase-admin/firestore', () => ({
@@ -40,6 +53,7 @@ jest.mock('firebase-admin/firestore', () => ({
 }));
 
 import type { Firestore } from 'firebase-admin/firestore';
+import logger from '@/lib/logger';
 import { setUserRole } from '@/lib/actions/setUserRole.server';
 import { assignSiteToUser } from '@/lib/actions/assignSiteToUser.server';
 import { removeSiteFromUser } from '@/lib/actions/removeSiteFromUser.server';
@@ -690,6 +704,9 @@ describe('site CRUD actions', () => {
 
   beforeEach(() => {
     mockSiteSlotAvailable.mockResolvedValue(true);
+    mockPlansEnforced.mockReturnValue(false);
+    mockRegisterSite.mockResolvedValue(null);
+    mockStopSite.mockResolvedValue({ ok: true, endsAt: 1793600000000 });
   });
 
   /** Run createSite against `db` with the fixed clock and stable inputs. */
@@ -765,6 +782,46 @@ describe('site CRUD actions', () => {
     expect(await runCreateSite(db)).toEqual({ kind: 'already_exists' });
     expect(await runCreateSite(db, 'Not A Valid Id!')).toMatchObject({ kind: 'invalid_site_id' });
     expect(mockSiteSlotAvailable).not.toHaveBeenCalled();
+  });
+
+  it('createSite registers the new site with tridant once it exists, when plans are enforced', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockPlansEnforced.mockReturnValue(true);
+    let committedAtRegistration = false;
+    mockRegisterSite.mockImplementation(async () => {
+      committedAtRegistration = Boolean(db.docs.get('sites/site-a'));
+      return { ok: true, created: true, moved: false };
+    });
+
+    await runCreateSite(db);
+
+    expect(mockRegisterSite).toHaveBeenCalledTimes(1);
+    expect(mockRegisterSite).toHaveBeenCalledWith('owner-1', 'site-a', 'Main Gallery');
+    expect(committedAtRegistration).toBe(true);
+  });
+
+  it('createSite still creates the site when tridant refuses the registration', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+    mockPlansEnforced.mockReturnValue(true);
+    mockRegisterSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    expect(await runCreateSite(db)).toMatchObject({ kind: 'created', siteId: 'site-a' });
+    expect(db.docs.get('sites/site-a')).toMatchObject({ owner: 'owner-1' });
+  });
+
+  it('createSite registers nothing while plans are not enforced, or when the site is refused', async () => {
+    const db = new FakeDb();
+    db.seed('users/owner-1', { sites: [] });
+
+    await runCreateSite(db);
+
+    mockPlansEnforced.mockReturnValue(true);
+    mockSiteSlotAvailable.mockResolvedValue(false);
+    expect(await runCreateSite(db, 'site-b')).toEqual({ kind: 'plan_limit' });
+
+    expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 
   it('createSite preserves memberships the creator already had', async () => {
@@ -1138,5 +1195,76 @@ describe('site CRUD actions', () => {
     // site-first would leave config behind with no site left to delete it through
     expect(db.docs.get('config/site-a/machines/machine-1')).toBeNull();
     expect(db.docs.get('sites/site-a')).toEqual({ name: 'a' });
+  });
+
+  describe('deleteSite billing', () => {
+    const POINTER = { tier: 'pro', founders: false, payerUid: 'alice', endsAt: null, updatedAt: 1 };
+
+    function billedSite(): FakeDb {
+      const db = new FakeDb();
+      db.seed('sites/site-a', { name: 'a', owner: 'alice', billing: POINTER });
+      db.seed('agent_refresh_tokens/tok-1', { siteId: 'site-a' });
+      return db;
+    }
+
+    beforeEach(() => {
+      mockPlansEnforced.mockReturnValue(true);
+    });
+
+    it('stops billing before anything is destroyed', async () => {
+      const db = billedSite();
+      let intactAtStop = false;
+      mockStopSite.mockImplementation(async () => {
+        intactAtStop = Boolean(db.docs.get('agent_refresh_tokens/tok-1')) && Boolean(db.docs.get('sites/site-a'));
+        return { ok: true, endsAt: 1793600000000 };
+      });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(mockStopSite).toHaveBeenCalledTimes(1);
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
+      expect(intactAtStop).toBe(true);
+    });
+
+    it('deletes the site when tridant cannot be reached, and logs the stop that did not land', async () => {
+      const db = billedSite();
+      mockStopSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(db.docs.get('sites/site-a')).toBeNull();
+      expect(db.docs.get('agent_refresh_tokens/tok-1')).toBeNull();
+      expect(logger.error).toHaveBeenCalledWith(
+        '[plan] billing not stopped for a deleted site',
+        expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', reason: 'unreachable' }) }),
+      );
+    });
+
+    it('ignores a site tridant does not bill', async () => {
+      const db = billedSite();
+      mockStopSite.mockResolvedValue({ ok: false, reason: 'rejected', status: 404, code: 'site_not_billed' });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('asks tridant nothing for a site with no billing pointer', async () => {
+      const unbilled = new FakeDb();
+      unbilled.seed('sites/site-a', { name: 'a', owner: 'alice' });
+      await deleteSite(ctx, { siteId: 'site-a', db: unbilled.asFirestore() });
+
+      expect(mockStopSite).not.toHaveBeenCalled();
+    });
+
+    it('stops a billed site even while plans are not enforced', async () => {
+      mockPlansEnforced.mockReturnValue(false);
+      await deleteSite(ctx, { siteId: 'site-a', db: billedSite().asFirestore() });
+
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
+    });
   });
 });

@@ -1,14 +1,15 @@
 /**
  * the trial and site registration with tridant id (plan.md, "trial"). tridant
  * owns the trial; owlette starts it the first time a verified account reads its
- * plan, then registers the account's sites under the organization it created.
+ * plan, then registers the account's sites under the organization it created;
+ * new sites are registered at creation, and the daily job repairs the rest.
  * nothing here throws, and no email is logged.
  */
 
 import 'server-only';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
-import { plansEnforced } from '@/lib/plan.server';
+import { plansEnforced, type Plan } from '@/lib/plan.server';
 import {
   claimTrialStart,
   getPlanAccount,
@@ -89,6 +90,40 @@ export async function registerSite(ownerUid: string, siteId: string, name: strin
   } catch (error) {
     logger.warn('[plan] site registration failed', { context: 'plan', data: { siteId, error: errorText(error) } });
     return { ok: false, reason: 'unreachable' };
+  }
+}
+
+/** why tridant will never move a site on its own. `site_running` is not one: its period only has to end. */
+const STUCK_REASONS = ['site_is_default', 'subject_not_of_provider'];
+
+/**
+ * the daily job's repair for a site tridant holds under an organization that is
+ * not its owner's: one handed over (adr 0018), or one whose registration never
+ * landed. a billed site stays where it is paid for, and tridant moves an idle one.
+ */
+export async function reconcileSiteRegistration(
+  siteId: string,
+  siteData: Record<string, unknown>,
+  answer: Pick<Extract<Plan, { enforced: true }>, 'resolved' | 'orgId' | 'billing'>,
+): Promise<void> {
+  try {
+    const { owner, name } = siteData;
+    if (answer.billing || typeof owner !== 'string' || !owner) return;
+    const account = await getPlanAccount(owner);
+    if (!account?.orgId || (answer.resolved && answer.orgId === account.orgId)) return;
+
+    // pushOne, not registerSite: the owner's organization is already read.
+    const result = await pushOne(owner, siteId, typeof name === 'string' && name ? name : siteId);
+    if (result.ok) {
+      if (result.moved) logger.info('[plan] site moved to its owner organization', { context: 'plan', data: { siteId } });
+    } else if (result.detail && STUCK_REASONS.includes(result.detail)) {
+      logger.error('[plan] site cannot move to its owner organization', {
+        context: 'plan',
+        data: { siteId, detail: result.detail },
+      });
+    }
+  } catch (error) {
+    logger.warn('[plan] site registration failed', { context: 'plan', data: { siteId, error: errorText(error) } });
   }
 }
 

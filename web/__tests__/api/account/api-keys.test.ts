@@ -337,24 +337,12 @@ describe('/api/account/api-keys plan gate', () => {
   });
   afterEach(stopEnforcingPlans);
 
-  it('402s plan_required on the minting user’s free plan, and mints nothing', async () => {
+  it('mints on the minting user’s free plan: the site’s plan gates each request, not the mint', async () => {
     store.set('users/test-admin', { role: 'user' });
 
-    const res = await create();
-
-    expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({
-      code: 'plan_required',
-      entitlement: 'owlette.api_keys',
-    });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('test-admin');
-    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(false);
-  });
-
-  it('mints for a superadmin, whatever tridant says', async () => {
-    store.set('users/test-admin', { role: 'superadmin' });
-
     expect((await create()).status).toBe(200);
+    expect(Array.from(store.keys()).some((p) => p.startsWith('api_keys/'))).toBe(true);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });
 

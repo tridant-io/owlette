@@ -19,7 +19,8 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import { validateSiteId } from '@/lib/validators';
 import { addOwnerToBatch } from '@/lib/membership.server';
-import { siteSlotAvailable } from '@/lib/plan.server';
+import { plansEnforced, siteSlotAvailable } from '@/lib/plan.server';
+import { registerSite } from '@/lib/planTrial.server';
 
 const NAME_MAX_LENGTH = 200;
 
@@ -171,6 +172,10 @@ export async function createSite(
       schedulesFollowSiteTime: schedulesFollowSiteTime ?? null,
     },
   });
+
+  // the owner's trial covers only the sites registered under their organization.
+  // best effort: registerSite never throws, and the daily job registers what this missed.
+  if (plansEnforced()) await registerSite(input.ownerUid, input.siteId, trimmedName);
 
   return {
     kind: 'created',

@@ -3,7 +3,7 @@
  *
  * plan.md decision 8 in the `_shared` resolvers: creating roosts and webhooks
  * needs the site's flag, an api-key request needs the site's
- * `owlette.api_keys`, minting a key needs the minter's own, and agent tokens are
+ * `owlette.api_keys` (minting one is not gated), and agent tokens are
  * never plan-gated. the real plan resolver runs; only tridant and firestore are faked.
  */
 import { NextRequest } from 'next/server';
@@ -17,18 +17,14 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-// the site read gates requests; the account read is only the mint gate's.
 const mockGetSiteEntitlements = jest.fn();
-const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
 }));
 
-let mockUsers: Record<string, Record<string, unknown>> = {};
 const mockCollection = jest.fn((name: string) => {
   if (name !== 'users') throw new Error(`unexpected collection ${name}`);
-  return { doc: (uid: string) => ({ get: async () => ({ data: () => mockUsers[uid] }) }) };
+  return { doc: () => ({ get: async () => ({ data: () => undefined }) }) };
 });
 const mockVerifyIdToken = jest.fn();
 jest.mock('@/lib/firebase-admin', () => ({
@@ -58,7 +54,6 @@ jest.mock('@/lib/sitePolicy.server', () => ({
 
 import {
   requireAgentOrSiteAuthAndScope,
-  requireApiKeyMintPlan,
   requireChatAuthAndScope,
   requireDistributionManageCapability,
   requireMachineAuthAndScope,
@@ -120,16 +115,13 @@ async function expectPlanRequired(response: Response | null, entitlement: string
 
 function expectNoPlanLookup() {
   expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
-  expect(mockGetEntitlements).not.toHaveBeenCalled();
   expect(mockCollection).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
   enforcePlans();
-  mockUsers = {};
   mockGetSiteEntitlements.mockResolvedValue(FREE);
-  mockGetEntitlements.mockResolvedValue(FREE);
   mockResolveAuth.mockResolvedValue(SESSION);
   mockAssertSite.mockResolvedValue({ siteId: SITE, siteData: SITE_DATA, machineIds: null });
   mockResolveSiteAccess.mockResolvedValue({
@@ -290,29 +282,6 @@ describe('webhook create needs owlette.webhooks', () => {
   it('allows a create with enforcement off, before any read', async () => {
     delete process.env.PLAN_ENFORCEMENT;
     expect(await requireWebhookManageCapability(SESSION, SITE, { create: true })).toBeNull();
-    expectNoPlanLookup();
-  });
-});
-
-describe('requireApiKeyMintPlan', () => {
-  it('refuses on the minting user’s own free plan', async () => {
-    await expectPlanRequired(await requireApiKeyMintPlan(CALLER), 'owlette.api_keys');
-    expect(mockGetEntitlements).toHaveBeenCalledWith(CALLER);
-  });
-
-  it('allows on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO);
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
-  });
-
-  it('allows a superadmin on free', async () => {
-    mockUsers = { [CALLER]: { role: 'superadmin' } };
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
-  });
-
-  it('allows with enforcement off, before any read', async () => {
-    delete process.env.PLAN_ENFORCEMENT;
-    expect(await requireApiKeyMintPlan(CALLER)).toBeNull();
     expectNoPlanLookup();
   });
 });

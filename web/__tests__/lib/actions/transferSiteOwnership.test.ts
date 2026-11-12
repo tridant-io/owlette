@@ -15,6 +15,7 @@ jest.mock('firebase-admin/firestore', () => ({
   FieldValue: {
     arrayUnion: (...v: unknown[]) => ({ __arrayUnion: v }),
     arrayRemove: (...v: unknown[]) => ({ __arrayRemove: v }),
+    serverTimestamp: () => '__SERVER_TS__',
   },
 }));
 
@@ -39,7 +40,7 @@ function query(colPath: string, field?: string, value?: unknown) {
   return { docs: ids };
 }
 
-// the plan check counts the successor's sites and machines outside the transaction.
+// the plan check lists the successor's sites outside the transaction.
 function collection(colPath: string) {
   return {
     doc: (id: string) => ref(`${colPath}/${id}`),
@@ -56,6 +57,16 @@ function ref(path: string) {
     get: async () => {
       const data = docs.get(path) ?? null;
       return { exists: data !== null, data: () => data ?? undefined };
+    },
+    // the billing hand-over's write, after the transaction. one level of field path is all it uses.
+    update: async (patch: Record<string, unknown>) => {
+      const next: Record<string, unknown> = { ...(docs.get(path) ?? {}) };
+      for (const [key, value] of Object.entries(patch)) {
+        const [head, field] = key.split('.');
+        next[head] = field ? { ...(next[head] as object), [field]: value } : value;
+      }
+      docs.set(path, next);
+      versions.set(path, versionOf(path) + 1);
     },
     collection: (sub: string) => collection(`${path}/${sub}`),
   };
@@ -116,11 +127,25 @@ jest.mock('@/lib/logger', () => ({
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
 }));
 
-const mockGetEntitlements = jest.fn();
+// the real resolver runs over tridant's answer per site.
+const mockGetSiteEntitlements = jest.fn();
+const mockInvalidate = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
-  getEntitlements: (uid: string) => mockGetEntitlements(uid),
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+  invalidateSiteEntitlements: (siteId: string) => mockInvalidate(siteId),
 }));
 
+const mockStopSite = jest.fn();
+jest.mock('@/lib/tridantBilling.server', () => ({
+  stopSite: (siteId: string) => mockStopSite(siteId),
+}));
+
+const mockRegisterSite = jest.fn();
+jest.mock('@/lib/planTrial.server', () => ({
+  registerSite: (...args: unknown[]) => mockRegisterSite(...args),
+}));
+
+import logger from '@/lib/logger';
 import { transferSiteOwnership } from '@/lib/actions/transferSiteOwnership.server';
 
 const SITE = 'site-a';
@@ -141,6 +166,42 @@ beforeEach(() => {
 });
 
 const base = { siteId: SITE, now: () => NOW };
+
+const FREE = {
+  ok: true,
+  resolved: false,
+  standing: 'expired',
+  inGoodStanding: false,
+  graceUntil: null,
+  ent: { 'owlette.sites': '1', 'owlette.machines': '1' },
+  epoch: null,
+  orgId: null,
+  billing: null,
+};
+// billed or trialing: either way the site is in good standing.
+const PAID = { ...FREE, resolved: true, standing: 'active', inGoodStanding: true, orgId: 'org_owner' };
+
+/** plans enforced, with tridant's answer per site; a site not named is free. */
+function enforcePlans(bySite: Record<string, unknown> = {}) {
+  process.env.PLAN_ENFORCEMENT = 'on';
+  process.env.TRIDANT_API_URL = 'https://tridant.test';
+  process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
+  mockGetSiteEntitlements.mockImplementation(async (siteId: string) => bySite[siteId] ?? FREE);
+}
+
+beforeEach(() => {
+  mockGetSiteEntitlements.mockReset();
+  mockInvalidate.mockReset();
+  mockStopSite.mockReset().mockResolvedValue({ ok: true, endsAt: 1793600000000 });
+  mockRegisterSite.mockReset().mockResolvedValue(null);
+  jest.mocked(logger.error).mockClear();
+});
+
+afterEach(() => {
+  delete process.env.PLAN_ENFORCEMENT;
+  delete process.env.TRIDANT_API_URL;
+  delete process.env.TRIDANT_LICENSE_KEY;
+});
 
 describe('transferSiteOwnership — the happy path', () => {
   it('moves ownership in BOTH shapes and demotes the outgoing owner to admin', async () => {
@@ -247,105 +308,196 @@ describe('transferSiteOwnership — refusals', () => {
   });
 });
 
-describe("transferSiteOwnership — the successor's plan", () => {
-  const FREE = {
-    ok: true,
-    resolved: false,
-    standing: 'expired',
-    inGoodStanding: false,
-    ent: { 'owlette.sites': '1', 'owlette.machines': '1' },
-    epoch: 0,
-  };
-  const machine = (siteId: string, machineId: string) =>
-    docs.set(`sites/${siteId}/machines/${machineId}`, { online: true });
+describe("transferSiteOwnership — the successor's free site slot", () => {
+  const transferToAlice = (over: Record<string, unknown> = {}) =>
+    transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false, ...over });
 
   beforeEach(() => {
-    process.env.PLAN_ENFORCEMENT = 'on';
-    process.env.TRIDANT_API_URL = 'https://tridant.test';
-    process.env.TRIDANT_LICENSE_KEY = 'test-license-key';
-    mockGetEntitlements.mockReset().mockResolvedValue(FREE);
-  });
-
-  afterEach(() => {
-    delete process.env.PLAN_ENFORCEMENT;
-    delete process.env.TRIDANT_API_URL;
-    delete process.env.TRIDANT_LICENSE_KEY;
-  });
-
-  it('refuses a free successor who already owns a site, and writes nothing', async () => {
+    // the successor already owns one site.
     docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+  });
+
+  it('refuses a free site when the successor already owns a free one, and writes nothing', async () => {
+    enforcePlans();
     const before = new Map(docs);
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+    const res = await transferToAlice();
 
     expect(res).toEqual({ ok: false, failure: { kind: 'plan_limit', entitlement: 'owlette.sites' } });
-    expect(mockGetEntitlements).toHaveBeenCalledWith(ALICE);
     expect([...docs.entries()]).toEqual([...before.entries()]);
+    expect(mockStopSite).not.toHaveBeenCalled();
+    expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 
-  it("refuses a free successor when the site brings more machines than the plan covers", async () => {
-    machine(SITE, 'm1');
-    machine(SITE, 'm2');
+  it('lets a billed or trialing site through: it never counts toward the free limit', async () => {
+    enforcePlans({ [SITE]: PAID });
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
-
-    expect(res).toEqual({ ok: false, failure: { kind: 'plan_limit', entitlement: 'owlette.machines' } });
-    expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(OWNER);
+    expect(await transferToAlice()).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
   });
 
-  it('POSITIVE CONTROL: a free successor takes a first site with one machine', async () => {
-    machine(SITE, 'm1');
+  it("does not count the successor's paid sites against a free one", async () => {
+    enforcePlans({ 'site-b': PAID });
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
-
-    expect(res).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
+    expect((await transferToAlice()).ok).toBe(true);
   });
 
-  it('does not count a machine the successor already pays for', async () => {
-    // already over a one-machine limit; a site bringing only m1 adds nothing to bill.
-    mockGetEntitlements.mockResolvedValue({
-      ...FREE,
-      ent: { 'owlette.sites': 'unlimited', 'owlette.machines': '1' },
-    });
-    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
-    machine('site-b', 'm1');
-    machine('site-b', 'm2');
-    machine(SITE, 'm1');
+  it('POSITIVE CONTROL: a successor with no site takes a free one, whatever machines it holds', async () => {
+    enforcePlans();
+    docs.delete('sites/site-b');
+    docs.set(`sites/${SITE}/machines/m1`, { online: true });
+    docs.set(`sites/${SITE}/machines/m2`, { online: true });
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
-
-    expect(res.ok).toBe(true);
+    expect((await transferToAlice()).ok).toBe(true);
   });
 
   it('leaves a superadmin successor unrestricted', async () => {
+    enforcePlans();
     docs.set(`users/${ALICE}`, { role: 'superadmin', sites: [] });
-    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
-    machine(SITE, 'm1');
-    machine(SITE, 'm2');
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+    expect((await transferToAlice()).ok).toBe(true);
+  });
 
-    expect(res.ok).toBe(true);
+  it('fails open when tridant cannot be read', async () => {
+    enforcePlans({ [SITE]: { ok: false, reason: 'unreachable' } });
+
+    expect((await transferToAlice()).ok).toBe(true);
   });
 
   it("answers every other refusal first, so a non-owner learns nothing of the successor's plan", async () => {
-    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
+    enforcePlans();
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: BOB, actorIsSuperadmin: false });
+    const res = await transferToAlice({ actorUid: BOB });
 
     expect(res).toEqual({ ok: false, failure: { kind: 'not_owner' } });
   });
 
-  it('asks tridant nothing while enforcement is off', async () => {
-    delete process.env.PLAN_ENFORCEMENT;
-    docs.set('sites/site-b', { owner: ALICE, name: 'Site B' });
-    machine(SITE, 'm1');
-    machine(SITE, 'm2');
+  it('skips the check for an account deletion, and reads no plan for it', async () => {
+    enforcePlans();
 
-    const res = await transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false });
+    expect((await transferToAlice({ skipPlanCheck: true })).ok).toBe(true);
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+
+  it('asks tridant nothing while enforcement is off', async () => {
+    const res = await transferToAlice();
 
     expect(res.ok).toBe(true);
-    expect(mockGetEntitlements).not.toHaveBeenCalled();
+    expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    expect(mockStopSite).not.toHaveBeenCalled();
+    expect(mockRegisterSite).not.toHaveBeenCalled();
+  });
+});
+
+describe('transferSiteOwnership — billing follows the transfer', () => {
+  const ENDS_AT = 1793600000000;
+  const pointer = (endsAt: number | null) => ({ tier: 'pro', founders: false, payerUid: OWNER, endsAt, updatedAt: 1 });
+  const billed = (endsAt: number | null) =>
+    docs.set(`sites/${SITE}`, { owner: OWNER, name: 'Site A', billing: pointer(endsAt) });
+  const siteBilling = () => (docs.get(`sites/${SITE}`) as { billing?: unknown }).billing;
+  const transferToAlice = (over: Record<string, unknown> = {}) =>
+    transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false, ...over });
+
+  beforeEach(() => {
+    enforcePlans({ [SITE]: PAID });
+  });
+
+  it('stops a running site at the period end, records it on the pointer, then offers the site to the successor', async () => {
+    billed(null);
+
+    const res = await transferToAlice();
+
+    expect(res.ok).toBe(true);
+    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(docs.get(`sites/${SITE}`)).toMatchObject({
+      owner: ALICE,
+      billing: { ...pointer(ENDS_AT), updatedAt: '__SERVER_TS__' },
+    });
+    expect(mockInvalidate).toHaveBeenCalledWith(SITE);
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+    expect(mockStopSite.mock.invocationCallOrder[0]).toBeLessThan(mockRegisterSite.mock.invocationCallOrder[0]);
+  });
+
+  it('leaves a site that is already stopping alone, and still registers it', async () => {
+    billed(ENDS_AT);
+
+    await transferToAlice();
+
+    expect(mockStopSite).not.toHaveBeenCalled();
+    expect(siteBilling()).toEqual(pointer(ENDS_AT));
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('only registers a site nobody bills', async () => {
+    await transferToAlice();
+
+    expect(mockStopSite).not.toHaveBeenCalled();
+    expect(siteBilling()).toBeUndefined();
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('runs for an account deletion too: the departing owner must not keep paying', async () => {
+    billed(null);
+
+    await transferToAlice({ skipPlanCheck: true });
+
+    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('keeps the transfer when tridant does not take the stop, and logs it without the pointer changing', async () => {
+    billed(null);
+    mockStopSite.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    const res = await transferToAlice();
+
+    expect(res).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
+    expect(siteBilling()).toEqual(pointer(null));
+    expect(logger.error).toHaveBeenCalledWith(
+      '[plan] billing not stopped for a transferred site',
+      expect.objectContaining({ data: expect.objectContaining({ siteId: SITE, reason: 'unreachable' }) }),
+    );
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('treats a site tridant does not bill as nothing to stop', async () => {
+    billed(null);
+    mockStopSite.mockResolvedValue({ ok: false, reason: 'rejected', status: 404, code: 'site_not_billed' });
+
+    expect((await transferToAlice()).ok).toBe(true);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('never throws once the transfer has landed', async () => {
+    billed(null);
+    mockStopSite.mockRejectedValue(new Error('boom'));
+
+    expect((await transferToAlice()).ok).toBe(true);
+    expect((docs.get(`sites/${SITE}`) as { owner: string }).owner).toBe(ALICE);
+
+    billed(ENDS_AT);
+    mockRegisterSite.mockRejectedValue(new Error('boom'));
+
+    expect((await transferToAlice({ successorUid: BOB })).ok).toBe(true);
+  });
+
+  it('does nothing after a refused transfer', async () => {
+    billed(null);
+
+    const res = await transferToAlice({ actorUid: BOB });
+
+    expect(res.ok).toBe(false);
+    expect(mockStopSite).not.toHaveBeenCalled();
+    expect(mockRegisterSite).not.toHaveBeenCalled();
+  });
+
+  it('still stops a billed site while plans are not enforced, and registers nothing', async () => {
+    billed(null);
+    delete process.env.PLAN_ENFORCEMENT;
+
+    expect((await transferToAlice()).ok).toBe(true);
+    // the old owner is being charged whatever the switch says.
+    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 });
 

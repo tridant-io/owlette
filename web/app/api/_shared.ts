@@ -12,7 +12,6 @@ import {
   problemUnauthorized,
   problemForbidden,
   problemNotFound,
-  problemPlanRequired,
   problemScopeInsufficient,
   problemTokenExpired,
   ProblemType,
@@ -39,10 +38,7 @@ import { scopeCovers } from '@/lib/machineAccess';
 import { checkRoostVersion } from '@/lib/versionHeader';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import {
-  entitled,
-  PLAN_REQUIRED_DETAIL,
   requireEntitlement,
-  resolvePlan,
   type PlanFlag,
 } from '@/lib/plan.server';
 import { SITE_ID_RE, resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
@@ -458,15 +454,6 @@ export async function requireWebhookManageCapability(
     siteId,
     create ? 'owlette.webhooks' : undefined,
   );
-}
-
-/**
- * a 402 unless `uid` may mint api keys (plan.md decision 8). the minting user's
- * own plan decides, whichever sites the key is scoped to.
- */
-export async function requireApiKeyMintPlan(uid: string): Promise<NextResponse | null> {
-  if (entitled(await resolvePlan(uid), 'owlette.api_keys')) return null;
-  return problemPlanRequired(PLAN_REQUIRED_DETAIL['owlette.api_keys'], 'owlette.api_keys');
 }
 
 /**

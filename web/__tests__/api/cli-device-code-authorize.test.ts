@@ -92,7 +92,6 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 import {
   enforcePlans,
   FREE_ENTITLEMENTS,
-  PRO_ENTITLEMENTS,
   stopEnforcingPlans,
 } from './helpers/planEnforcement';
 import { POST } from '@/app/api/cli/device-code/authorize/route';
@@ -341,26 +340,11 @@ describe('POST /api/cli/device-code/authorize plan gate', () => {
   beforeEach(enforcePlans);
   afterEach(stopEnforcingPlans);
 
-  it('402s plan_required on the authorizing user’s free plan, and mints nothing', async () => {
+  it('authorizes on the authorizing user’s free plan: the site’s plan gates each request, not the mint', async () => {
     mockGetEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
-
-    const res = await authorize();
-
-    expect(res.status).toBe(402);
-    expect(await res.json()).toMatchObject({
-      code: 'plan_required',
-      entitlement: 'owlette.api_keys',
-    });
-    expect(mockGetEntitlements).toHaveBeenCalledWith('user-1');
-    expect(mockTxGet).not.toHaveBeenCalled();
-    expect(mockTxSet).not.toHaveBeenCalled();
-    expect(mockEmitMutation).not.toHaveBeenCalled();
-  });
-
-  it('authorizes on pro', async () => {
-    mockGetEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
 
     expect((await authorize()).status).toBe(200);
     expect(mockTxSet).toHaveBeenCalledTimes(2);
+    expect(mockGetEntitlements).not.toHaveBeenCalled();
   });
 });

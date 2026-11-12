@@ -32,13 +32,28 @@ jest.mock('@/lib/tridantBilling.server', () => ({
   reportUsage: (...args: unknown[]) => mockReportUsage(...args),
 }));
 
+const mockStopStranded = jest.fn();
+const mockAdopt = jest.fn();
+jest.mock('@/lib/siteBilling.server', () => ({
+  stopStrandedBilling: (...args: unknown[]) => mockStopStranded(...args),
+  adoptBilling: (...args: unknown[]) => mockAdopt(...args),
+}));
+
+// the reconcile has its own suite; here it only matters which sites reach it, and with what.
+const mockReconcile = jest.fn();
+jest.mock('@/lib/planTrial.server', () => ({
+  reconcileSiteRegistration: (...args: unknown[]) => mockReconcile(...args),
+}));
+
 type Doc = Record<string, unknown>;
-type FakeSite = { id: string; machines: Record<string, Doc> | 'fail' };
+type FakeSite = { id: string; machines: Record<string, Doc> | 'fail'; data?: Doc };
 
 let mockSites: FakeSite[] = [];
 /** billing_usage and plan_snapshot, by document path. */
 let mockStore = new Map<string, Doc>();
 let mockSitePages = 0;
+/** the fields the sites query projects. */
+let mockSiteFields: string[] = [];
 
 function mockApplySet(path: string, data: Doc, options?: { merge?: boolean }) {
   const prev = options?.merge ? mockStore.get(path) ?? {} : {};
@@ -105,7 +120,7 @@ function mockCollectionRef(path: string): Record<string, unknown> {
 function mockSiteSnap(site: FakeSite) {
   return {
     id: site.id,
-    data: () => ({}),
+    data: () => site.data ?? {},
     ref: {
       collection: (name: string) => {
         if (name !== 'machines') throw new Error(`unexpected subcollection ${name}`);
@@ -131,7 +146,10 @@ function mockSitesQuery() {
       if (field !== '__name__') throw new Error('sites must page by document id');
       return query;
     },
-    select: () => query,
+    select: (...fields: string[]) => {
+      mockSiteFields = fields;
+      return query;
+    },
     limit: (n: number) => {
       state.limit = n;
       return query;
@@ -216,6 +234,8 @@ beforeEach(() => {
   mockSites = [];
   mockStore = new Map();
   mockSitePages = 0;
+  mockSiteFields = [];
+  mockReconcile.mockReset();
   mockEnforced = false;
   mockGetSiteEntitlements.mockReset();
   mockReportUsage.mockReset();
@@ -442,6 +462,52 @@ describe('runPlanDaily: enforcement off', () => {
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
     expect(mockReportUsage).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ machines: 1, snapshots: 2, reported: 0, recorded: 0, errors: 0 });
+  });
+});
+
+describe('runPlanDaily: site registration', () => {
+  beforeEach(() => {
+    mockSites = [
+      { id: 'billed', machines: {}, data: { owner: 'u2', name: 'stage' } },
+      { id: 'trial', machines: {}, data: { owner: 'u1', name: 'lobby' } },
+      { id: 'unread', machines: {}, data: { owner: 'u3', name: 'foyer' } },
+    ];
+  });
+
+  it('hands every site whose plan it read to the reconcile, with the owner and name it registers under', async () => {
+    plans({ billed: CORE, trial: TRIAL, unread: UNREACHABLE });
+
+    const summary = await runPlanDaily(NOW);
+
+    expect(mockSiteFields).toEqual(['owner', 'name', 'billing']);
+    expect(mockReconcile).toHaveBeenCalledTimes(2);
+    // and to the pointer adoption, with the same plan
+    expect(mockAdopt.mock.calls.map(([siteId]) => siteId).sort()).toEqual(['billed', 'trial']);
+    expect(mockReconcile).toHaveBeenCalledWith(
+      'trial',
+      { owner: 'u1', name: 'lobby' },
+      expect.objectContaining({ enforced: true, resolved: true, orgId: 'org_1', billing: null }),
+    );
+    expect(mockReconcile).toHaveBeenCalledWith(
+      'billed',
+      { owner: 'u2', name: 'stage' },
+      expect.objectContaining({ billing: BILLING }),
+    );
+    expect(summary.errors).toBe(0);
+  });
+
+  it('offers every site for a stranded-billing stop, whatever the enforcement switch says', async () => {
+    mockEnforced = false;
+
+    await runPlanDaily(NOW);
+
+    expect(mockStopStranded.mock.calls.map(([siteId]) => siteId).sort()).toEqual(['billed', 'trial', 'unread']);
+  });
+
+  it('asks for nothing while plans are not enforced', async () => {
+    await runPlanDaily(NOW);
+
+    expect(mockReconcile).not.toHaveBeenCalled();
   });
 });
 

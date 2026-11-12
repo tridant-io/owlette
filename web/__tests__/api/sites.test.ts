@@ -37,7 +37,7 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
-// site creation counts the owner's free sites by each site's plan; transfer still reads the successor's account plan.
+// site creation and transfer count an account's free sites by each site's plan.
 const mockGetSiteEntitlements = jest.fn();
 const mockGetEntitlements = jest.fn();
 jest.mock('@/lib/tridantEntitlements.server', () => ({
@@ -806,23 +806,19 @@ describe('plan limits on sites', () => {
     expect(docStore['sites/site-x']?.data?.owner).toBe('owner-uid');
   });
 
-  it("refuses a transfer that would put a free payer past their machines", async () => {
+  it('transfers a billed site to a free payer who already owns a free one', async () => {
     seedSite('site-x', { owner: 'owner-uid' });
-    seedMachine('site-x', 'machine-1');
-    seedMachine('site-x', 'machine-2');
-    seedUser('free-uid');
+    seedSite('site-a', { owner: 'free-uid' });
+    seedUser('free-uid', { sites: ['site-a'] });
     authedSession('owner-uid', 'member', ['site-x']);
+    mockGetSiteEntitlements.mockImplementation(async (siteId: string) =>
+      siteId === 'site-x' ? { ...FREE, resolved: true, standing: 'active', inGoodStanding: true } : FREE,
+    );
 
     const res = await transferRequest('site-x', 'free-uid');
-    const body = await res.json();
 
-    expect(res.status).toBe(402);
-    expect(body).toMatchObject({
-      code: 'plan_required',
-      detail: "the new owner's plan doesn't cover this site's machines. they need to upgrade before taking this one.",
-      entitlement: 'owlette.machines',
-    });
-    expect(docStore['sites/site-x']?.data?.owner).toBe('owner-uid');
+    expect(res.status).toBe(200);
+    expect(docStore['sites/site-x']?.data?.owner).toBe('free-uid');
   });
 
   it('POSITIVE CONTROL: a free payer with room takes the site', async () => {

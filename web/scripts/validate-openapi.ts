@@ -75,6 +75,16 @@ const INTERNAL_ROUTES = new Set([
   '/api/sites/{siteId}/cortex-settings',
   // the process editor's check_path, session only: it refuses every api key (ADR 0014).
   '/api/sites/{siteId}/machines/{machineId}/path-check',
+  // the owner's billing actions on a site, session only: it refuses every api key (ADR 0018).
+  '/api/sites/{siteId}/billing',
+  // the site's plan for the dashboard's gates; its shape follows the ui, not a public contract.
+  '/api/sites/{siteId}/plan',
+  // the return from stripe checkout, session only.
+  '/api/billing/checkout/{sessionId}',
+  // linking a tridant account: a browser redirect out to tridant id, session only.
+  '/api/auth/tridant/link',
+  // where tridant id sends the browser back; it answers with a redirect, never json.
+  '/api/auth/tridant/callback',
   '/api/cron/display-alerts',
   '/api/cron/status-ping',
   '/api/settings/llm-key',

@@ -49,7 +49,7 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 }));
 
 import logger from '@/lib/logger';
-import { ensureTrial, registerOwnedSites, registerSite } from '@/lib/planTrial.server';
+import { ensureTrial, reconcileSiteRegistration, registerOwnedSites, registerSite } from '@/lib/planTrial.server';
 
 const account = (over: Record<string, unknown> = {}) => ({
   trialStartedAt: null,
@@ -202,5 +202,98 @@ describe('registerSite', () => {
   it('does not throw', async () => {
     mockGetAccount.mockRejectedValue(new Error('firestore down'));
     expect(await registerSite('u1', 's1', 'one')).toEqual({ ok: false, reason: 'unreachable' });
+  });
+});
+
+describe('reconcileSiteRegistration', () => {
+  const SITE = { owner: 'u1', name: 'lobby' };
+  const BILLING = { periodStart: 1, periodEnd: 2, endsAt: null, cancelAtPeriodEnd: false };
+  // tridant holds the site under the previous owner's organization, with nothing billed on it.
+  const ELSEWHERE = { resolved: true, orgId: 'org_old', billing: null };
+  const refusal = (detail: string) => ({
+    ok: false,
+    reason: 'rejected',
+    status: 409,
+    code: 'site_belongs_to_another_org',
+    detail,
+  });
+
+  beforeEach(() => {
+    mockGetAccount.mockResolvedValue(account({ orgId: 'org_1' }));
+  });
+
+  it('registers a site tridant holds under another organization than its owner’s', async () => {
+    mockPushSite.mockResolvedValue({ ok: true, created: false, moved: true });
+
+    await reconcileSiteRegistration('s1', SITE, ELSEWHERE);
+
+    expect(mockGetAccount).toHaveBeenCalledWith('u1');
+    expect(mockPushSite).toHaveBeenCalledWith({ uid: 'u1', siteId: 's1', name: 'lobby' });
+    expect(mockInvalidate).toHaveBeenCalledWith('s1');
+    expect(logger.info).toHaveBeenCalledWith(
+      '[plan] site moved to its owner organization',
+      expect.objectContaining({ data: { siteId: 's1' } }),
+    );
+  });
+
+  it('registers a site tridant does not know, named by its id when it has no name', async () => {
+    await reconcileSiteRegistration('s1', { owner: 'u1' }, { resolved: false, orgId: null, billing: null });
+
+    expect(mockPushSite).toHaveBeenCalledWith({ uid: 'u1', siteId: 's1', name: 's1' });
+  });
+
+  it('leaves a site already under its owner’s organization alone', async () => {
+    await reconcileSiteRegistration('s1', SITE, { resolved: true, orgId: 'org_1', billing: null });
+
+    expect(mockPushSite).not.toHaveBeenCalled();
+  });
+
+  it('leaves a billed site where it is paid for, without reading the account', async () => {
+    await reconcileSiteRegistration('s1', SITE, { ...ELSEWHERE, billing: BILLING });
+
+    expect(mockGetAccount).not.toHaveBeenCalled();
+    expect(mockPushSite).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for an owner with no organization, or a site with no owner', async () => {
+    mockGetAccount.mockResolvedValue(account());
+    await reconcileSiteRegistration('s1', SITE, ELSEWHERE);
+    mockGetAccount.mockResolvedValue(null);
+    await reconcileSiteRegistration('s1', SITE, ELSEWHERE);
+    await reconcileSiteRegistration('s1', { name: 'lobby' }, ELSEWHERE);
+
+    expect(mockPushSite).not.toHaveBeenCalled();
+  });
+
+  it('waits for the next run while the old period still runs', async () => {
+    mockPushSite.mockResolvedValue(refusal('site_running'));
+
+    await reconcileSiteRegistration('s1', SITE, ELSEWHERE);
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[plan] site registration refused',
+      expect.objectContaining({ data: expect.objectContaining({ siteId: 's1', detail: 'site_running' }) }),
+    );
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it.each(['site_is_default', 'subject_not_of_provider'])('logs %s at error: the site will never move on its own', async (detail) => {
+    mockPushSite.mockResolvedValue(refusal(detail));
+
+    await reconcileSiteRegistration('s1', SITE, ELSEWHERE);
+
+    expect(logger.error).toHaveBeenCalledWith(
+      '[plan] site cannot move to its owner organization',
+      expect.objectContaining({ data: { siteId: 's1', detail } }),
+    );
+  });
+
+  it('does not throw', async () => {
+    mockGetAccount.mockRejectedValue(new Error('firestore down'));
+    await expect(reconcileSiteRegistration('s1', SITE, ELSEWHERE)).resolves.toBeUndefined();
+
+    mockGetAccount.mockResolvedValue(account({ orgId: 'org_1' }));
+    mockPushSite.mockRejectedValue(new Error('boom'));
+    await expect(reconcileSiteRegistration('s1', SITE, ELSEWHERE)).resolves.toBeUndefined();
   });
 });

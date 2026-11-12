@@ -19,7 +19,9 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
 import { plansEnforced, resolveSitePlan, type Plan } from '@/lib/plan.server';
+import { reconcileSiteRegistration } from '@/lib/planTrial.server';
 import { PRICING_FACTS } from '@/lib/product-facts';
+import { adoptBilling, stopStrandedBilling } from '@/lib/siteBilling.server';
 import { reportUsage, type UsageEntry } from '@/lib/tridantBilling.server';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -109,7 +111,7 @@ async function stampSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot
   );
 }
 
-/** stamps and snapshots one site; answers its usage entry when tridant id bills it. */
+/** stamps, snapshots and re-registers one site; answers its usage entry when tridant id bills it. */
 async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot): Promise<UsageEntry | null> {
   const { db, summary } = run;
   try {
@@ -117,6 +119,9 @@ async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot):
   } catch (error) {
     fail(summary, `usage of site ${site.id}`, error);
   }
+
+  // whatever the enforcement switch says: someone is being billed for a site that is no longer theirs.
+  await stopStrandedBilling(site.id, site.data());
 
   // with enforcement off nothing is asked of tridant. the web's own resolver, so functions gate a
   // site exactly as the web does: a superadmin's or ownerless site and a failed read all allow.
@@ -146,6 +151,11 @@ async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot):
   } catch (error) {
     fail(summary, `snapshot of site ${site.id}`, error);
   }
+
+  // a site tridant id holds under another organization than its owner's (a transfer) moves once it is idle there.
+  if (plan) await reconcileSiteRegistration(site.id, site.data(), plan);
+  // a site billed with no pointer on it: its checkout was paid and the return never loaded.
+  if (plan) await adoptBilling(site.id, site.data(), plan);
 
   // a site under a trial, or on free, has no billing period and nothing to report.
   const periodStart = plan?.billing?.periodStart ?? null;
@@ -224,7 +234,8 @@ export async function runPlanDaily(now: Date = new Date()): Promise<PlanDailySum
   const entries: UsageEntry[] = [];
   let last: FirebaseFirestore.QueryDocumentSnapshot | undefined;
   for (;;) {
-    let query = db.collection('sites').orderBy(FieldPath.documentId()).select('owner').limit(SITE_PAGE_SIZE);
+    // owner for the plan, name for the registration.
+    let query = db.collection('sites').orderBy(FieldPath.documentId()).select('owner', 'name', 'billing').limit(SITE_PAGE_SIZE);
     if (last) query = query.startAfter(last);
     const page = await query.get();
     summary.sites += page.size;
