@@ -13,10 +13,10 @@ hoot offers the model the same 52 tools on every machine. the tier decides wheth
 | tier | type | approval | count |
 |------|------|----------|-------|
 | **1** | read-only | auto-approved | 17 |
-| **2** | process and machine management | auto-approved | 24 |
-| **3** | privileged | in-chat approval while the site's approval gate is on (the default) | 11 |
+| **2** | process and machine management | auto-approved, except a call that [changes what a machine launches](/docs/dashboard/hoot#changing-what-a-machine-launches), which always asks | 24 |
+| **3** | privileged | in-chat approval. the tools that run code always ask; the rest ask while the site's approval gate is on (the default) | 11 |
 
-members and chat-scoped API keys are capped at tier 1. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tier on those machines, without the site-level tools below. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
+members and chat-scoped API keys are capped at tier 1. on the API's machine commands route, a key runs a tool as `mcp_tool_call` up to its own `maxToolTier`, where a call that changes what a machine launches counts as tier 3 (see [tool tiers](/docs/api/authentication#tool-tiers)). someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tier on those machines, without the site-level tools below. see [approving privileged (tier-3) actions](/docs/dashboard/hoot#approving-privileged-tier-3-actions).
 
 > **server-side tools** (`get_site_logs`, `get_system_presets`, `deploy_software`, `update_process`, `add_process`, `delete_process`, `create_talon`, `list_talons`, `set_talon_enabled`, `schedule_followup`, `cancel_followup`) run in the Next.js server process and never go through the agent's command queue. talons are site-level records and follow-ups are chat records, so neither is ever relayed to a machine. five of them span the site, `get_site_logs`, `deploy_software`, `create_talon`, `list_talons` and `set_talon_enabled`, so hoot never offers them to someone limited to some machines, whatever their role.
 
@@ -100,7 +100,7 @@ web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts
 | `restart_process` | 2 | legacy command-mapped | yes, IPC | yes |
 | `kill_process` | 2 | legacy command-mapped | yes, IPC | yes |
 | `start_process` | 2 | legacy command-mapped | yes, IPC | yes |
-| `set_launch_mode` | 2 | legacy command-mapped | yes, IPC | yes |
+| `set_launch_mode` | 2 | legacy command-mapped | not exposed | yes |
 | `update_process` | 2 | server-side | not exposed | n/a (server) |
 | `add_process` | 2 | server-side | not exposed | n/a (server) |
 | `delete_process` | 2 | server-side | not exposed | n/a (server) |
@@ -121,19 +121,19 @@ web hoot chooses an execution path by tool name in `web/lib/hoot-utils.server.ts
 | `show_notification` | 2 | Firestore `mcp_tool_call` | not exposed | differs |
 | `create_talon` | 2 | server-side | not exposed | n/a (server) |
 | `set_talon_enabled` | 2 | server-side | not exposed | n/a (server) |
-| `run_command` | 3 | Firestore `mcp_tool_call` | yes, direct | differs; `user_session` Windows only |
-| `run_powershell` | 3 | Firestore `mcp_tool_call` | yes, direct | Windows only |
+| `run_command` | 3 | Firestore `mcp_tool_call` | not exposed | differs; `user_session` Windows only |
+| `run_powershell` | 3 | Firestore `mcp_tool_call` | not exposed | Windows only |
 | `run_python` | 3 | Firestore `mcp_tool_call` | not exposed | Windows only |
 | `read_file` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
-| `write_file` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
+| `write_file` | 3 | Firestore `mcp_tool_call` | not exposed | yes |
 | `list_directory` | 3 | Firestore `mcp_tool_call` | yes, direct | yes |
-| `execute_script` | 3 | Firestore `mcp_tool_call` | yes, direct | Windows only |
+| `execute_script` | 3 | Firestore `mcp_tool_call` | not exposed | Windows only |
 | `deploy_software` | 3 | server-side | not exposed | Windows only in practice, see [`deploy_software`](#deploy_software) |
 | `reboot_machine` | 3 | legacy command-mapped | not exposed | yes |
 | `shutdown_machine` | 3 | legacy command-mapped | not exposed | yes |
 | `cancel_reboot` | 3 | legacy command-mapped | not exposed | yes |
 
-local hoot offers fewer tools than the web registry: 21 at its highest tier, and 15 at the default `max_tier=2`. local hoot does not offer `get_gpu_processes`.
+local hoot offers fewer tools than the web registry: 16 at its highest tier, and 14 at the default `max_tier=2`. nobody can approve a call there, so from owlette 4.2.0 it offers nothing that changes what a machine launches or runs code. local hoot does not offer `get_gpu_processes`.
 
 ---
 
@@ -354,7 +354,7 @@ tier 1, since it only reads: every site member can already read the site's talon
 
 ## tier 2: process and machine management tools
 
-these run immediately, without confirmation, unless a call overrides active hours. the owlette process controls (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. the process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated actions as the dashboard, and the talon tools (`create_talon`, `set_talon_enabled`) run server-side through the same store as the talon editor. the rest are purpose-built, with validated parameters and a narrower blast radius than a raw shell script.
+these run immediately, without confirmation, unless a call overrides active hours or [changes what a machine launches](/docs/dashboard/hoot#changing-what-a-machine-launches). the owlette process controls (`restart_process`, `kill_process`, `start_process`, `set_launch_mode`) wrap existing commands. the process config tools (`update_process`, `add_process`, `delete_process`) run server-side through the same validated actions as the dashboard, and the talon tools (`create_talon`, `set_talon_enabled`) run server-side through the same store as the talon editor. the rest are purpose-built, with validated parameters and a narrower blast radius than a raw shell script.
 
 ### restart_process
 
@@ -388,7 +388,7 @@ start a stopped owlette-configured process. it is sent as a `restart_process` co
 
 ### set_launch_mode
 
-set the launch mode for a process.
+set the launch mode for a process. always waits for approval.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -411,7 +411,7 @@ set the launch mode for a process.
 
 ### update_process
 
-update an owlette-configured process by name. only the fields in the call change. runs server-side through `updateProcess`; the agent picks the change up through its config listener and launch-mode diff.
+update an owlette-configured process by name. only the fields in the call change. runs server-side through `updateProcess`; the agent picks the change up through its config listener and launch-mode diff. changing any field but `name`, `priority` and `visibility` waits for approval.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -491,7 +491,7 @@ kill, suspend or resume OS processes by name pattern. works on **any** process, 
 
 ### manage_windows_service
 
-service control in one call. on Windows it has `services.msc` parity: start, stop, restart, pause/continue, set the startup type, configure failure recovery, or get full details. `set_recovery` configures auto-restart on crash (critical for unattended media installations); `get_details` returns status, startup type, binary path, dependencies and recovery config at once.
+service control in one call. on Windows it has `services.msc` parity: start, stop, restart, pause/continue, set the startup type, configure failure recovery, or get full details. `set_recovery` configures auto-restart on crash (critical for unattended media installations); `set_startup` and `set_recovery` wait for approval, and autonomous hoot, talons and follow-ups aren't offered this tool. `get_details` returns status, startup type, binary path, dependencies and recovery config at once.
 
 on macOS (`launchctl`) and Linux (`systemctl`) the name stays the same and the tool gains those backends, with `start`, `stop`, `restart`, `set_startup` and `get_details` only; `pause`, `continue` and `set_recovery` are refused. macOS knows only `auto` and `disabled` startup types. on Linux `manual` disables the unit and `disabled` masks it.
 
@@ -523,7 +523,7 @@ on macOS (`launchctl`) and Linux (`systemctl`) the name stays the same and the t
 
 ### manage_windows_update
 
-**Windows only.** read and change how Windows Update installs updates and restarts the machine. Windows Update is the biggest threat to unattended 24/7 installations.
+**Windows only.** read and change how Windows Update installs updates and restarts the machine. Windows Update is the biggest threat to unattended 24/7 installations. `set_scheduled_install` waits for approval, and is refused where nobody can approve it.
 
 active hours hold Windows' own update restarts back only until an update deadline passes, and owlette refuses reboots, shutdowns and deployments inside them. to stop Windows restarting a machine on its own, hoot uses `limit_auto_restart`: updates keep installing, and Windows restarts for them only outside active hours, so a nightly restart can still happen. `disable_auto_install` is for an operator who wants no update restarts at all: nothing installs on its own, so security updates wait for a person. `limit_auto_restart`, `disable_auto_install` and `enable_auto_install` need owlette 4.1.21 or later; an older agent answers that the action is unknown.
 
@@ -597,7 +597,7 @@ owlette never sets `NoAutoRebootWithLoggedOnUsers`. Microsoft lists it under leg
 
 ### manage_scheduled_task
 
-**Windows only.** Task Scheduler parity: list, enable, disable, delete, `run_now`, stop, create new tasks, get details, and get run history. use `create` for weekly memory-flush reboots, boot-time media app launches, or event-triggered restarts.
+**Windows only.** Task Scheduler parity: list, enable, disable, delete, `run_now`, stop, create new tasks, get details, and get run history. use `create` for weekly memory-flush reboots, boot-time media app launches, or event-triggered restarts. everything but `list`, `get_details`, `get_history` and `stop` waits for approval, and autonomous hoot, talons and follow-ups aren't offered this tool.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -625,7 +625,9 @@ owlette never sets `NoAutoRebootWithLoggedOnUsers`. Microsoft lists it under leg
 
 ### registry_operation
 
-**Windows only.** read, write or delete Windows registry values. restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services and others); the SAM, SECURITY and Cryptography hives are blocked.
+**Windows only.** read, write or delete Windows registry values. restricted to an allowlist of safe registry paths (Winlogon, GraphicsDrivers, WindowsUpdate, Notifications, Power, Services and others); the SAM, SECURITY and Cryptography hives are blocked. `write` and `delete` wait for approval, and autonomous hoot, talons and follow-ups aren't offered this tool.
+
+under Winlogon it reaches only `AutoAdminLogon`, `DefaultUserName`, `DefaultDomainName`, `ForceAutoLogon` and `AutoLogonCount`, each by name: never `DefaultPassword`, `Shell` or `Userinit`, so setting up auto-login's password takes `execute_script`. under a service it can read anything, but only change values in that service's `Parameters` key, never `WinSock2`'s, never a value whose name or data can say what the service runs (`ServiceDll`, `Application`, `LibraryPath`, a path, a binary value and the like); use `manage_windows_service` for how a service starts and recovers. any read leaves out a value whose name looks like a secret. the server applies these rules too, so they hold on an agent older than 4.2.0.
 
 it never writes or deletes the values active hours come from, in any letter case: `ActiveHoursStart`, `ActiveHoursEnd`, `SetActiveHours`, `ActiveHoursMaxRange` and `SetActiveHoursMaxRange` under `HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate`, and `ActiveHoursStart`, `ActiveHoursEnd`, `SmartActiveHoursState` and `IsActiveHoursEnabled` under `HKLM\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings`. the error points to `manage_windows_update` `set_active_hours` or `limit_auto_restart` instead, which won't move the machine out of its active hours without an approved [override](#overriding-active-hours). reading them still works, and the MDM keys are outside the allowlist.
 
@@ -669,7 +671,7 @@ it never writes or deletes the values active hours come from, in any letter case
 
 ### manage_windows_feature
 
-**Windows only.** add, remove or list Windows Optional Features (DISM, e.g. `NetFx3`, `OpenSSH-Server`), Windows Capabilities (features on demand, e.g. `OpenSSH.Client`), or AppX packages (Store apps like OneDrive, Xbox Game Bar, Cortana and Teams). features owlette itself depends on are blocklisted and cannot be removed. installing an AppX package is not supported.
+`install` and `remove` wait for approval, and are refused where nobody can approve them. **Windows only.** add, remove or list Windows Optional Features (DISM, e.g. `NetFx3`, `OpenSSH-Server`), Windows Capabilities (features on demand, e.g. `OpenSSH.Client`), or AppX packages (Store apps like OneDrive, Xbox Game Bar, Cortana and Teams). features owlette itself depends on are blocklisted and cannot be removed. installing an AppX package is not supported.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -699,6 +701,8 @@ on Windows, `toast` is a subtle corner notification and `modal` uses `msg.exe` t
 ### create_talon
 
 create a talon on this site — a saved automation of trigger, optional condition and outputs. see [talons](/docs/dashboard/talons) for the product-level picture. **server-side**: talons are site-level records written through the same store as the dashboard editor, never relayed to a machine.
+
+**approval.** a talon with a `command` output or a hoot output with `allowActions` waits for approval, whatever the site's setting; one that only emails, calls a webhook or looks doesn't.
 
 **confirm before calling.** a talon runs unattended against real machines, so hoot is told never to call this from a vague request: it states back the exact talon it intends to create — trigger, condition, every output, the machines in scope, the cooldown — and waits for the operator to confirm.
 
@@ -746,13 +750,13 @@ create a talon on this site — a saved automation of trigger, optional conditio
 
 **returns**: `talon_id`, `name`, `enabled`, `next_run_at`.
 
-unattended hoot cannot call this tool. authoring a talon is standing fleet policy that outlives the incident, so `create_talon` is left out of the autonomous investigator's tool list regardless of tier.
+unattended hoot cannot call this tool. authoring a talon is standing fleet policy that outlives the incident, so `create_talon` is left out of the tool list of autonomous hoot, talons and follow-ups regardless of tier.
 
 ---
 
 ### set_talon_enabled
 
-arm or disarm an existing talon. disabling leaves the talon in place; it does not delete it.
+arm or disarm an existing talon. disabling leaves the talon in place; it does not delete it. arming one waits for approval.
 
 | parameter | type | required | description |
 |-----------|------|----------|-------------|
@@ -767,7 +771,7 @@ enabling recomputes `nextRunAt` from now in the site's timezone, so a talon that
 
 ## tier 3: privileged tools
 
-these wait for an explicit approve or deny in the chat while the site's approval gate is on, which is the default.
+these wait for an explicit approve or deny in the chat. `run_command`, `run_powershell`, `run_python`, `execute_script`, `write_file` and `deploy_software` always do; the rest do while the site's approval gate is on, which is the default.
 
 ### run_command
 
@@ -950,9 +954,13 @@ cancel a pending reboot or shutdown: one in its countdown, which it has to reach
 ```
 LLM decides to call a tool
   |
-  +-- tier 3: pause for in-chat approval (when the per-site approval gate is on)
+  +-- tier 3 that doesn't run code: pause for in-chat approval (when the per-site approval gate is on)
   |     +-- user approves: continue to the tool-name execution path
   |     +-- user denies: return "denied by user"
+  |
+  +-- changes what a machine launches or runs code, any tier, gate on or off
+  |     +-- a person's chat or a follow-up: pause for approval
+  |     +-- anywhere else: error, nothing queued or changed
   |
   +-- override_active_hours set, any tier, gate on or off
   |     +-- no person in the turn, several machines, or no reason: error, nothing queued
@@ -982,6 +990,10 @@ LLM decides to call a tool
 
 the turn runs server-side, **detached from the browser connection**: it keeps running and its results still land in the chat if the connection drops or the page reloads, and the client reattaches to stream it. long-running shell tools (`run_command`, `run_powershell`, `execute_script`) can be **cancelled** from their tool card mid-flight: the agent kills the process tree and the card resolves to "cancelled by user". the whole turn can be **stopped** server-side from the chat.
 
+### parameter checks
+
+the web server checks every call's parameters against the tool's definition before it runs or is queued: an unknown parameter, a missing required one, or a value the tool doesn't take is refused with `tool_params_invalid`, naming the parameter and never repeating the value, and nothing runs. a call refused this way raises no approval card. `mcp_tool_call` on the API's machine commands route is checked the same way and answers `400 tool_params_invalid`, an unknown tool included.
+
 ### command allowlists
 
 `run_command` enforces its allow-list on the **agent side**: even if a command reaches the machine through Firestore, the agent rejects it unless the first word is on the list. `run_powershell` has **no** allow-list — it accepts arbitrary PowerShell, with accountability from mandatory audit logging (site events feed and local `[MCP-AUDIT]` log). `run_python` enforces its sandbox on the agent side; the model cannot lift the import gate or restore blocked builtins.
@@ -991,11 +1003,11 @@ the turn runs server-side, **detached from the browser connection**: it keeps ru
 tier-2 tools carry per-tool blocklists so hoot cannot cause its own outage:
 
 - `manage_process`: critical processes cannot be killed. on Windows that is lsass, winlogon, csrss, services, dwm, svchost and the other session processes, plus owlette's own service, host and Python processes. on macOS and Linux it is `init`, `systemd`, `systemd-logind`, `systemd-journald`, `dbus-daemon`, `sshd`, `launchd`, `loginwindow`, `WindowServer`, `SystemUIServer`, and owlette's own `owlette-desktop`, `owlette-host`, `python` and `python3`
-- `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted, and the active hours values can't be written or deleted
+- `registry_operation`: the SAM, SECURITY and Cryptography hives are unreachable; only an allowlist of safe key prefixes is permitted, the active hours values can't be written or deleted, and Winlogon and service keys are narrowed to what can't change what runs
 - `manage_windows_feature`: core Windows features owlette depends on (NetFx4, WMI-\*, PowerShell\*) cannot be removed
 - `create_talon`: `command` outputs are site-admin only, and webhook URLs that resolve to private, loopback or link-local addresses are rejected
 
-agent-run tier-2 tools write a structured `[MCP-AUDIT]` log entry for each call. server-side process config tools use the process mutation audit path with actor `cortex:user_<userId>`. talon tools write `talon_mutated` rows with the same actor, `via: "cortex"`, and the originating chat ID. the follow-up tools write no mutation row of their own — the follow-up document is the record, and the `DELETE /api/hoot/followups/{followupId}` route behind the composer chip audits its own cancels as `chat_mutated` / verb `cancel_followup`.
+agent-run tier-2 tools write a structured `[MCP-AUDIT]` log entry for each call. every command a chat tool queues also writes one `machine_command_dispatched` row on the web side once it is queued, with the tool, its parameter names and a hash of the call, never the values; autonomous hoot's allow row carries the same two fields. an approved launch change first writes an allow row to the site's audit log with `launchChanges`, its old and new values, and doesn't run if that row can't be written. only names and settings as single values, and bare paths, are written as they are; free-form values such as arguments and scripts are a keyed hash and a length. both hashes need `CORTEX_INTERNAL_SECRET`: with it unset, a row carries no hash, only the length. server-side process config tools use the process mutation audit path with actor `cortex:user_<userId>`. talon tools write `talon_mutated` rows with the same actor, `via: "cortex"`, and the originating chat ID. the follow-up tools write no mutation row of their own — the follow-up document is the record, and the `DELETE /api/hoot/followups/{followupId}` route behind the composer chip audits its own cancels as `chat_mutated` / verb `cancel_followup`.
 
 ### agent-side limits
 

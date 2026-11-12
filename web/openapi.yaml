@@ -14,7 +14,9 @@ info:
     `owk_live_`; existing `owk_test_` keys still authenticate identically.
     Create API keys from the Owlette dashboard under Settings > API Keys.
     Scripted `POST /api/keys` creation requires a user session or Firebase ID
-    token, so a key cannot mint a broader replacement for itself.
+    token, so a key cannot mint a broader replacement for itself. On an
+    account that holds a second factor, a session must have passed it and an
+    ID token is refused, both with `403 mfa_challenge_required`.
     `POST /api/account/api-keys` (superadmin) also accepts an API key holding
     `user=*:admin`, and then mints a copy of that key's scopes — never broader.
 
@@ -22,8 +24,8 @@ info:
 
     - **Header** (recommended): `Authorization: Bearer owk_your_key_here`
     - **Header**: `x-api-key: owk_your_key_here`
-    - **Deprecated query parameter**: `?api_key=owk_your_key_here` — it leaks
-      through logs and referrers; use it only where a client cannot set headers
+
+    A key in the query string (`?api_key=`) is not accepted.
 
     Every protected operation includes an Authentication and scopes note. API-key
     callers must hold every listed scope (permissions are exact — `admin` does
@@ -31,9 +33,9 @@ info:
     membership, role, and capability checks. A site the caller cannot access
     answers `404`, not `403`. A machine outside the caller's machine scope
     answers `404` the same way; a caller with a machine scope gets `403` from
-    every site-wide operation. If several credentials are sent, `?api_key=` wins,
-    then `x-api-key`, then `Authorization: Bearer`; a bearer that is not an
-    `owk_` key is treated as a Firebase ID token.
+    every site-wide operation. If several credentials are sent, `x-api-key` wins
+    over `Authorization: Bearer`; a bearer that is not an `owk_` key is treated
+    as a Firebase ID token.
 
     ## Versioning
 
@@ -93,9 +95,9 @@ info:
     | Code | Meaning |
     |------|---------|
     | 400  | Bad request - missing or invalid parameters (`validation_failed`) |
-    | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`) |
+    | 401  | Unauthorized - missing, invalid, or expired credential (`unauthorized`, `token_expired`), including a dashboard session started before the account's password was reset or changed, or before a second factor was added or removed |
     | 402  | Plan required - the site's plan does not include the feature (`plan_required`). Not enforced during the beta |
-    | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), or an operation that refuses API keys (`api_key_not_permitted`) |
+    | 403  | Forbidden - scope, role, or capability missing (`scope_insufficient`, `forbidden`), an operation that refuses API keys (`api_key_not_permitted`), a session or ID token that has not passed the account's second factor (`mfa_challenge_required`), or a dashboard session or Firebase ID token whose account has to set up a second factor first (`mfa_setup_required`) |
     | 404  | Not found - including a site that exists but the caller cannot access |
     | 409  | Conflict - resource is in an incompatible state |
     | 410  | Gone - an upload window or pairing phrase expired |
@@ -261,7 +263,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [id, name, keyPrefix, environment, scopes, expiresAt, createdAt, lastUsedAt]
+                      required: [id, name, keyPrefix, environment, scopes, maxToolTier, expiresAt, createdAt, lastUsedAt]
                       properties:
                         id: { type: string }
                         name: { type: string }
@@ -274,6 +276,7 @@ paths:
                           type: array
                           nullable: true
                           items: { $ref: '#/components/schemas/Scope' }
+                        maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
                         expiresAt:
                           type: integer
                           format: int64
@@ -2030,7 +2033,10 @@ paths:
         already has this platform's file there is refused
         (`409 installer_published`): bump the version instead.
 
-        Superadmin-only; API-key callers need `installer=*:write`.
+        Superadmin-only; API-key callers need `installer=*:write`, plus
+        `installer=*:admin` when `setAsLatest` is true (the default), the same
+        permission `POST /api/installer/{version}/set-latest` takes. A key
+        without `admin` sends `setAsLatest: false`.
         `Idempotency-Key` is required.
       security:
         - apiKey: []
@@ -2070,7 +2076,7 @@ paths:
                 setAsLatest:
                   type: boolean
                   default: true
-                  description: Point `latest` at this version when step 2 finalizes this upload.
+                  description: Point `latest` at this version when step 2 finalizes this upload. An API-key caller needs `installer=*:admin` for `true`.
       responses:
         '200':
           description: Signed upload URL + opaque uploadId
@@ -2101,7 +2107,7 @@ paths:
                 $ref: '#/components/schemas/ProblemDetails'
         '401': { $ref: '#/components/responses/Problem401' }
         '403':
-          description: Forbidden — superadmin required
+          description: 'Forbidden: superadmin required, or the API key lacks `installer=*:write`, or `installer=*:admin` with `setAsLatest` true (`code: scope_insufficient`).'
           content:
             application/problem+json:
               schema:
@@ -2134,7 +2140,9 @@ paths:
         refuses a public name that already serves other bytes
         (`409 installer_published`), and an upload whose bytes differ from the
         version's file published elsewhere (`409 installer_differs`).
-        Superadmin-only; API-key callers need `installer=*:write`.
+        Superadmin-only; API-key callers need `installer=*:write`, plus
+        `installer=*:admin` to finalize an upload requested with `setAsLatest`
+        true.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -2777,7 +2785,8 @@ paths:
         lines (`text-delta` parts carry `delta`, an `error` part carries
         `errorText`) ending with `data: [DONE]`. Local hoot turns (session or
         Firebase ID token, site admin, single-machine conversation, tier-3
-        approval off) stream line-prefixed frames: `0:"delta"`,
+        approval off, the machine on owlette 4.2.0 or later) stream
+        line-prefixed frames: `0:"delta"`,
         `d:{"finishReason":"stop"}`, `3:"err"`. A failure before the model
         starts, such as no saved LLM key, arrives as one `3:"message"` line.
 
@@ -3648,7 +3657,9 @@ paths:
         **exactly once** — store it in a secrets manager immediately.
         Requires a user session or Firebase ID token. Non-superadmin
         callers cannot create `user`, `installer` or `issue` scopes;
-        those platform resources must use `id: "*"`.
+        those platform resources must use `id: "*"`. A `maxToolTier` above
+        1 needs a dashboard session that passed a second factor, else 403
+        `verified_session_required`.
         See [authentication.md](/docs/api/authentication#creating-keys).
       security:
         - firebaseIdToken: []
@@ -3682,7 +3693,7 @@ paths:
       tags: [API Keys]
       summary: edit api key scopes
       description: |
-        Edits an existing key's `scopes` and/or `name` in place. The raw
+        Edits an existing key's `scopes`, `name` and/or `maxToolTier` in place. The raw
         key value is **not** reissued — holders of the credential keep
         using it and pick up the new scopes on their next request.
         `scopes` is a full replacement, not a merge.
@@ -3690,7 +3701,8 @@ paths:
         Scopes are validated with the same rules `POST /api/keys` uses, so
         a key can never be edited into a scope its owner could not have
         been issued. `environment` and `ttlDays` are rejected: rotate to
-        extend expiry.
+        extend expiry. Raising `maxToolTier` needs a dashboard session that
+        passed a second factor, else 403 `verified_session_required`.
 
         Returns 409 for a revoked key, and for one inside a rotation grace
         window — edit its successor instead.
@@ -3763,8 +3775,10 @@ paths:
       description: |
         Mints a new raw key value; the old key remains valid for a
         fixed 24-hour grace window so running jobs can pick up the new
-        value without downtime. The new key keeps the old key's scopes
-        and environment.
+        value without downtime. The new key keeps the old key's scopes,
+        `maxToolTier` and environment. Rotating a key above tier 1 needs a
+        dashboard session that passed a second factor, else 403
+        `verified_session_required`.
       security:
         - firebaseIdToken: []
       requestBody:
@@ -6353,8 +6367,8 @@ paths:
       summary: list audit records for a site
       description: |
         Paginated hash-chained audit log, newest first by `recordedAt`.
-        Requires `site=<siteId>:read` scope. Any whole-site member may read;
-        a caller with a machine scope gets `403`. Record kinds match the audit
+        Requires `site=<siteId>:read` scope and admin or owner of this site;
+        a member, or a caller with a machine scope, gets `403`. Record kinds match the audit
         sink taxonomy:
         `signed_url_issued`, `distribution_started`,
         `version_pointer_changed`, `api_key_used`, `gc_run`,
@@ -6438,7 +6452,7 @@ paths:
         Returns a single audit record and the hash-chain verification
         result for the record hash plus its immediate predecessor link.
         Non-genesis records report `ok: false` if the predecessor is
-        missing or malformed.
+        missing or malformed. Who may read is as for the list.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6469,8 +6483,8 @@ paths:
       tags: [Webhooks]
       summary: list webhook subscriptions
       description: |
-        Lists webhook subscriptions on a site. Any whole-site member may
-        read; a caller with a machine scope gets `403`.
+        Lists webhook subscriptions on a site. Requires admin or owner of
+        this site; a member, or a caller with a machine scope, gets `403`.
         Use `page_size` and `page_token`; legacy `limit` and `cursor`
         are accepted for existing clients.
         See [webhooks.md](/docs/api/webhooks).
@@ -6520,9 +6534,8 @@ paths:
         Creates a webhook subscription. The `signingSecret` is returned
         **once** on creation.
 
-        Requires `site=<siteId>:write` scope and admin of this site.
-        Listing and reading subscriptions is open to any whole-site member
-        of the site; creating, updating, deleting and rotating are not.
+        Requires `site=<siteId>:write` scope and admin of this site, as
+        every webhook route does.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6791,8 +6804,8 @@ paths:
         with the subscription's current secret and given a fresh 10-attempt
         budget; the dispatcher sends it on its next run. It goes to the url
         stored on the original delivery. Works on a delivery in any state.
-        Returns 202 Accepted. Requires `site=<siteId>:write`; any site
-        member may retry.
+        Returns 202 Accepted. Requires `site=<siteId>:write` and admin or
+        owner of this site.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6836,7 +6849,9 @@ paths:
         verification and reachability. No subscription is created; the
         probe is not retried, not stored in delivery history, and
         `Idempotency-Key` is ignored. Answers 200 whatever the receiver
-        returned; inspect `status` and `networkError`.
+        returned, a redirect included, which is reported and not followed;
+        inspect `status` and `networkError`. Requires `site=<siteId>:write`
+        and admin or owner of this site; 60 probes an hour per user.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6878,6 +6893,7 @@ paths:
         '401': { $ref: '#/components/responses/Problem401' }
         '403': { $ref: '#/components/responses/Problem403' }
         '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
 
   # ──────────────────────────────────────────────────────────────────────
@@ -6937,8 +6953,7 @@ paths:
         lifetime ends. `events` must name valid webhook event types (`400`
         otherwise) and is only echoed in `connected`. Any whole-site member of
         the site may connect, and a caller with a machine scope gets `403`;
-        API keys need `site=<siteId>:read` and may be passed as
-        `api_key` for EventSource clients that cannot set headers.
+        API keys need `site=<siteId>:read`.
       security:
         - apiKey: []
         - bearerApiKey: []
@@ -6950,11 +6965,6 @@ paths:
           required: false
           schema: { type: string }
           description: Comma-separated event type filter.
-        - name: api_key
-          in: query
-          required: false
-          schema: { type: string }
-          description: API key query-param auth for EventSource clients that cannot set headers.
       responses:
         '200':
           description: SSE stream.
@@ -7025,6 +7035,24 @@ paths:
         `cancel_mcp_tool` needs the site's plan to include remote
         control, else 402 `plan_required` (`entitlement: owlette.control`);
         `mcp_tool_call` needs hoot instead (`entitlement: owlette.hoot`).
+
+        **Tool tiers.** `mcp_tool_call` runs a hoot tool, and each tool has a tier
+        (see [hoot tools](/docs/reference/hoot-tools)); a name that is not a
+        known tool counts as tier 3. A call that changes what the machine
+        launches (see [hoot](/docs/dashboard/hoot#changing-what-a-machine-launches))
+        counts as tier 3 whatever its tool's tier; the other command types have
+        no tier. An API key runs calls up to its own `maxToolTier`, which is 1
+        unless its owner raised it, else 403 `max_tool_tier_exceeded`. A session
+        or ID token runs tier 1 and 2, and tier 3 only from a session with an
+        open step-up window on this machine, else 401 `step_up_required`.
+        `tool_params` is then checked against the tool's definition, else 400
+        `tool_params_invalid`. Returns 423 `hoot_disabled` while hoot is
+        switched off on the machine.
+
+        **Updates.** `update_owlette` takes only a published installer, for every
+        caller: `installer_url` and `checksum_sha256` must match a file of
+        `target_version`, or of the latest version when none is named, else 403
+        `installer_not_published`.
 
         **Active hours (breaking for daytime scripts).** On Windows, an agent
         with the active-hours guard (`capabilities.activeHoursGuard` on the
@@ -7152,13 +7180,31 @@ paths:
         '400':
           description: |
             Validation failure. Stable code `unsupported_command_type`
-            indicates the requested type is outside the public allowlist.
+            indicates the requested type is outside the public allowlist;
+            `tool_params_invalid` — an `mcp_tool_call` whose tool or parameters
+            don't match the tool's definition, named in `detail`. Nothing is queued.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
-        '401': { $ref: '#/components/responses/Problem401' }
+        '401':
+          description: |
+            Unauthenticated, or `code: step_up_required` — a tier-3 `mcp_tool_call`,
+            a launch change included, from a session with no open step-up window on
+            this machine, or from an ID token.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '402': { $ref: '#/components/responses/PlanRequired' }
-        '403': { $ref: '#/components/responses/Problem403' }
+        '403':
+          description: |
+            `scope_insufficient`, `forbidden`, `mfa_challenge_required`,
+            `max_tool_tier_exceeded` — the call's tier is above the API key's
+            `maxToolTier` — `registry_value_refused` — a `registry_operation` on a
+            value hoot's tools never read or change — or `installer_not_published` —
+            `update_owlette` with a url and hash that no installer version publishes.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '404': { $ref: '#/components/responses/Problem404' }
         '409':
           description: |
@@ -7170,6 +7216,12 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
         '422': { $ref: '#/components/responses/Problem422' }
+        '423':
+          description: |
+            `hoot_disabled` — `mcp_tool_call` while hoot is switched off on the machine; nothing is queued.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
@@ -7384,23 +7436,18 @@ paths:
         Agent-internal last step of `capture_screenshot`, after the agent PUTs
         the image to the signed URL from `screenshots/upload-url`. Verifies the
         object exists at `storagePath` and that the path belongs to this site and
-        machine, makes it public-read, writes it as the machine's
-        `lastScreenshot`, and appends a history entry; the newest 20 are kept and
-        older entries are pruned with their storage objects. Not rate limited
-        (each call needs a path from an already-counted `upload-url` call) and
-        takes no `Idempotency-Key`.
+        machine, writes it as the machine's `lastScreenshot`, and appends a
+        history entry; the newest 20 are kept and older entries are pruned with
+        their storage objects. The object stays private: records carry its path
+        and a `screenshots/image` url. Not rate limited (each call needs a path
+        from an already-counted `upload-url` call) and takes no `Idempotency-Key`.
 
         ### Authentication and scopes
 
-        Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
-        `x-api-key`), or a first-party Firebase/session credential.
-
-        Required scope: `machine=<machineId>:write`. Sessions need only site
-        membership (any role). The agent's own Firebase ID token is accepted when
-        its site and machine claims match the path.
+        Only the machine's own agent: its Firebase ID token, with site and
+        machine claims matching the path. Site members' sessions and API keys
+        get 403.
       security:
-        - apiKey: []
-        - bearerApiKey: []
         - firebaseIdToken: []
       requestBody:
         required: true
@@ -7440,7 +7487,9 @@ paths:
                     type: object
                     required: [url, storagePath, sizeKB, monitor]
                     properties:
-                      url: { type: string, format: uri, description: Public-read URL with a `?t=` cache-buster. }
+                      url:
+                        type: string
+                        description: The `screenshots/image` url for `storagePath`, relative to this API's origin.
                       storagePath: { type: string }
                       sizeKB: { type: integer, minimum: 1 }
                       monitor: { type: integer, minimum: 0 }
@@ -7452,6 +7501,48 @@ paths:
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '500': { $ref: '#/components/responses/Problem500' }
+
+  /api/sites/{siteId}/machines/{machineId}/screenshots/image:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+      - $ref: '#/components/parameters/MachineIdSitePath'
+      - name: path
+        in: query
+        required: true
+        description: The screenshot's storage path, `screenshots/{siteId}/{machineId}/{name}` for this url's site and machine.
+        schema: { type: string }
+    get:
+      operationId: readScreenshotImage
+      tags: [Machines]
+      summary: open one of a machine's screenshots
+      description: |
+        Redirects to a 1-hour signed read url for one of this machine's
+        screenshots. This is the `url` that `lastScreenshot` and each history
+        entry carry, so a stored link keeps working while each signature
+        expires. A path outside this machine's screenshots answers 400.
+
+        ### Authentication and scopes
+
+        Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
+        `x-api-key`), or a first-party Firebase/session credential.
+
+        Required scope: `machine=<machineId>:read`. Sessions need site
+        membership that covers the machine.
+      security:
+        - apiKey: []
+        - bearerApiKey: []
+        - firebaseIdToken: []
+      responses:
+        '302':
+          description: Redirect to the signed read url.
+          headers:
+            Location:
+              schema: { type: string, format: uri }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403': { $ref: '#/components/responses/Problem403' }
+        '404': { $ref: '#/components/responses/Problem404' }
         '500': { $ref: '#/components/responses/Problem500' }
 
   # Public API Wave 1.1 coverage additions.
@@ -8280,7 +8371,9 @@ paths:
             object). A rejected `mfaProof` answers plain `{ error, code }` JSON with
             `code` one of mfa_proof_required, invalid_totp_code, invalid_passkey_proof,
             totp_not_enrolled, invalid_mfa_proof, challenge_not_found,
-            invalid_challenge_type, passkey_not_found, assertion_failed.
+            invalid_challenge_type, passkey_not_found, assertion_failed. An authenticator
+            code passes once; past 10 code attempts in 15 minutes on the account the
+            answer is 429 with `code: mfa_attempts_exceeded`.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -8989,7 +9082,9 @@ paths:
             `validation_failed` (bad JSON). A missing or rejected `mfaProof` answers plain
             `{ error, code }` JSON with `code` one of mfa_proof_required, invalid_totp_code,
             invalid_passkey_proof, totp_not_enrolled, invalid_mfa_proof, challenge_not_found,
-            invalid_challenge_type, passkey_not_found, assertion_failed.
+            invalid_challenge_type, passkey_not_found, assertion_failed. An authenticator
+            code passes once; past 10 code attempts in 15 minutes on the account the answer
+            is 429 with `code: mfa_attempts_exceeded`.
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -9244,7 +9339,9 @@ paths:
         to a sender's list, must be a machine of the site; one already
         granted that has since left the site is dropped from what is written.
         Requires `site=<siteId>:write` and a site owner or site admin, 30/min
-        per caller.
+        per caller. A change that raises any sender's `maxTier`, counting a
+        new sender from 1, needs a dashboard session that passed a second
+        factor, else 403 `verified_session_required`.
 
         **API keys cannot call this operation** — `403`, `code:
         api_key_not_permitted`.
@@ -9282,8 +9379,10 @@ paths:
         '403':
           description: |
             `code`, in check order: `scope_insufficient`, `capability_missing`
-            (a site owner or admin is needed), or `api_key_not_permitted` (an
-            api key called this route).
+            (a site owner or admin is needed), `api_key_not_permitted` (an
+            api key called this route), or `verified_session_required` (the
+            change raises a sender's tier without a session that passed a
+            second factor).
           content:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -10235,7 +10334,8 @@ paths:
         intentionally does not use the platform superadmin handler because a
         new caller has no user document yet. Creating the document for an
         unverified password account also emails it a verification link; a
-        failed send does not fail the call.
+        failed send does not fail the call. Unlike other routes, it takes a
+        session or ID token that has not passed the account's second factor.
       security:
         - firebaseIdToken: []
       parameters:
@@ -10852,7 +10952,10 @@ paths:
         Identify the target by **exactly one** of `uid` or `email`.
         `email` is trimmed and lowercased, then resolved to a uid through
         Firebase Auth; supplying both, or neither, is a `400`, and an
-        address with no auth user is the same `404` as an unknown uid.
+        address with no auth user is the same `404` as an unknown uid. A
+        password account that has not verified its address is
+        `409 email_unverified`; accounts that sign in with Google are not
+        affected.
 
         Requires SITE_MEMBER_MANAGE on the site. API keys need BOTH
         `site=<siteId>:write` and `site=<siteId>:admin`.
@@ -10907,7 +11010,7 @@ paths:
         '401': { description: Unauthorized }
         '403': { description: "Forbidden (not site admin — `site_member_manage_required`), or `machineIds` sent for your own row — `cannot_modify_own_membership`" }
         '404': { description: User or site not found }
-        '409': { description: "`target_is_owner` — the target already owns this site" }
+        '409': { description: "`target_is_owner` — the target already owns this site, or `email_unverified` — the account behind `email` has not verified it" }
         '503': { $ref: '#/components/responses/Problem503' }
 
   /api/sites/{siteId}/member-candidates:
@@ -11266,7 +11369,11 @@ components:
         `Authorization: Bearer <id token>`. Every operation that lists this
         scheme also accepts the dashboard's `__session` cookie. First-party
         clients only — external integrations use `apiKey` / `bearerApiKey`.
-        An operation that lists only this scheme refuses API keys.
+        An operation that lists only this scheme refuses API keys. On an
+        account that holds a second factor, the session must have passed it,
+        and a user's ID token is refused: both answer 403
+        `mfa_challenge_required`. An agent's token is not a user's and is
+        unaffected.
 
   parameters:
     SiteIdQuery:
@@ -11579,9 +11686,10 @@ components:
     Problem403:
       description: |
         Forbidden — an inactive account or a missing role capability
-        (`code: forbidden`), or an api key without the required scope
-        (`code: scope_insufficient`). A site the caller cannot access is
-        404, not 403.
+        (`code: forbidden`), an api key without the required scope
+        (`code: scope_insufficient`), or a session or ID token that has not
+        passed the account's second factor (`code: mfa_challenge_required`).
+        A site the caller cannot access is 404, not 403.
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/ProblemDetails' }
@@ -12986,7 +13094,9 @@ components:
         maxTier:
           type: integer
           enum: [1, 2, 3]
-          description: The highest hoot tool tier it may use.
+          description: |
+            The highest hoot tool tier it may use. A call that changes what a
+            machine launches counts as tier 3, else 403 `max_tool_tier_exceeded`.
         machineIds:
           type: array
           items: { type: string }
@@ -13383,7 +13493,7 @@ components:
     # api keys
     ApiKey:
       type: object
-      required: [id, name, environment, keyPrefix, scopes, lastUsedAt, expiresAt, createdAt, revokedAt, rotatedAt, rotatedFromKeyId, retiresAt, expiredMarkedAt, expired, retired, revoked]
+      required: [id, name, environment, keyPrefix, scopes, maxToolTier, lastUsedAt, expiresAt, createdAt, revokedAt, rotatedAt, rotatedFromKeyId, retiresAt, expiredMarkedAt, expired, retired, revoked]
       properties:
         id:            { type: string }
         name:          { type: string, nullable: true, maxLength: 100 }
@@ -13403,6 +13513,7 @@ components:
           type: array
           nullable: true
           items: { $ref: '#/components/schemas/Scope' }
+        maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
         lastUsedAt:
           type: integer
           format: int64
@@ -13464,7 +13575,7 @@ components:
             `expired` and `retired`, matching the order the API checks them in.
     ApiKeyCreateResponse:
       type: object
-      required: [success, key, keyId, name, environment, scopes, expiresAt, keyPrefix]
+      required: [success, key, keyId, name, environment, scopes, maxToolTier, expiresAt, keyPrefix]
       properties:
         success: { type: boolean }
         key:
@@ -13478,11 +13589,22 @@ components:
         scopes:
           type: array
           items: { $ref: '#/components/schemas/Scope' }
+        maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
         expiresAt:
           type: integer
           format: int64
           description: Unix timestamp in milliseconds.
         keyPrefix: { type: string }
+    MaxToolTier:
+      type: integer
+      enum: [1, 2, 3]
+      default: 1
+      description: |
+        The highest tool tier this key may run through `mcp_tool_call` on the
+        machine commands route, where a call that changes what the machine
+        launches counts as tier 3. A key with no stored value reads 1. Above 1
+        needs a dashboard session that passed a second factor. Hoot
+        conversations through a key stay read only, whatever this says.
     ApiKeyRotateResponse:
       allOf:
         - $ref: '#/components/schemas/ApiKeyCreateResponse'
@@ -13525,13 +13647,14 @@ components:
           minimum: 1
           maximum: 365
           default: 90
+        maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
     PatchApiKeyRequest:
       type: object
       minProperties: 1
       description: |
-        At least one of `name` and `scopes` is required; sending neither
-        returns 400. `scopes` replaces the key's scope list outright — it
-        is not merged with what is already there.
+        At least one of `name`, `scopes` and `maxToolTier` is required;
+        sending none returns 400. `scopes` replaces the key's scope list
+        outright — it is not merged with what is already there.
 
         Scopes may be broadened as well as narrowed, subject to the same
         grant rules as key creation: `user`, `installer` and `issue`
@@ -13547,6 +13670,7 @@ components:
           minItems: 1
           maxItems: 50
           items: { $ref: '#/components/schemas/Scope' }
+        maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
     RotateApiKeyRequest:
       type: object
       properties:
@@ -14706,8 +14830,11 @@ components:
           nullable: true
         screenshotUrl:
           type: string
-          format: uri
+          format: uri-reference
           nullable: true
+          description: |
+            A crash screenshot: the machine's `screenshots/image` url, relative to
+            this API's origin. Older entries hold an absolute storage url.
 
     # audit log
     AuditRecord:
@@ -15063,7 +15190,7 @@ components:
           type: object
           nullable: true
           description: Populated when the request authenticated with an API key.
-          required: [keyId, name, keyPrefix, scopes, environment, expiresAt, lastUsedAt, isLegacy]
+          required: [keyId, name, keyPrefix, scopes, maxToolTier, environment, expiresAt, lastUsedAt, isLegacy]
           properties:
             keyId:
               type: string
@@ -15078,6 +15205,7 @@ components:
               type: array
               nullable: true
               items: { $ref: '#/components/schemas/Scope' }
+            maxToolTier: { $ref: '#/components/schemas/MaxToolTier' }
             environment:
               type: string
               enum: [live, test]

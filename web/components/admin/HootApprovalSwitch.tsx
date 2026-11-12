@@ -8,8 +8,9 @@ import { useHootApprovalSetting } from '@/hooks/useHootApprovalSetting';
 import { toast } from '@/lib/toast';
 
 /**
- * the site's tier 3 approval gate. on, which is the default, a privileged tool
- * call waits in the chat for an approve or deny. turning it off drops that for
+ * the site's tier 3 approval gate. on, which is the default, reboot, shutdown and
+ * file reads wait in the chat for an approve or deny; the tools that run code or
+ * change a launch always do (lib/hoot/launchChange). turning it off drops that for
  * everyone on the site, so it asks first; turning it on is one click. off also
  * re-opens the local hoot path on the public conversations api
  * (`lib/hootStream.server.ts`); the dashboard chat runs on the server either way.
@@ -51,8 +52,8 @@ export function HootApprovalSwitch({ siteId }: { siteId: string }) {
             require approval for privileged tools
           </Label>
           <p className="text-xs text-muted-foreground">
-            hoot stops before a privileged (tier 3) tool, such as a shell command, a script or a restart, and waits
-            for an approve or deny in the chat. on unless you turn it off.
+            hoot stops before a reboot, a shutdown or reading a file, and waits for an approve or deny in the chat.
+            shell commands, scripts and changes to what a machine launches always ask. on unless you turn it off.
           </p>
         </div>
         <Switch
@@ -71,7 +72,7 @@ export function HootApprovalSwitch({ siteId }: { siteId: string }) {
         onOpenChange={setConfirmOpen}
         title="disable tier-3 approval site-wide?"
         description={
-          'privileged tool calls (run_powershell, execute_script, restart, etc.) will run immediately without in-chat approval for everyone on this site. the lower-latency local hoot path also becomes available again on the public conversations API; the dashboard chat is unaffected. only turn this off if the approval prompts are getting in the way.'
+          'reboot, shutdown and reading files on a machine will run immediately without in-chat approval for everyone on this site. shell commands, scripts, file writes, deployments and changes to what a machine launches still ask, every time. the lower-latency local hoot path also becomes available again on the public conversations API; the dashboard chat is unaffected. only turn this off if the approval prompts are getting in the way.'
         }
         confirmText="disable approval"
         cancelText="cancel"

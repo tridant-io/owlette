@@ -765,7 +765,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
           type: 'mcp_tool_call',
           params: {
             tool_name: 'get_system_info',
-            tool_params: { verbose: true },
+            tool_params: {},
             chat_id: 'chat-1',
           },
         },
@@ -778,7 +778,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     const cmd = lastMergedCommand();
     expect(cmd.type).toBe('mcp_tool_call');
     expect(cmd.tool_name).toBe('get_system_info');
-    expect(cmd.tool_params).toEqual({ verbose: true });
+    expect(cmd.tool_params).toEqual({});
     expect(cmd.chat_id).toBe('chat-1');
   });
 
@@ -1093,7 +1093,16 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     });
 
     it('202 for update_owlette, which every plan keeps', async () => {
-      queueIdemAndMachine({ online: true });
+      const published = {
+        version: '4.1.7',
+        files: { windows_x64: { download_url: 'https://example.test/i.exe', checksum_sha256: 'a'.repeat(64) } },
+      };
+      mocks.get.mockReset();
+      mocks.get
+        .mockResolvedValueOnce(docSnapshot('idem', null))
+        .mockResolvedValueOnce(docSnapshot(MACHINE, { online: true }))
+        .mockResolvedValueOnce(docSnapshot('latest', published))
+        .mockResolvedValueOnce(docSnapshot('4.1.7', published));
       asMemberOwner();
       const req = createMockRequest(
         `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
@@ -1111,6 +1120,35 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
       });
       expect(res.status).toBe(202);
       expect(lastMergedCommand().type).toBe('update_owlette');
+    });
+
+    it('403 installer_not_published for an installer nobody published, and nothing is queued', async () => {
+      mocks.get.mockReset();
+      mocks.get
+        .mockResolvedValueOnce(docSnapshot('idem', null))
+        .mockResolvedValueOnce(docSnapshot(MACHINE, { online: true }))
+        .mockImplementation(() => Promise.resolve(docSnapshot('any', null)));
+      asMemberOwner();
+      const req = createMockRequest(
+        `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands`,
+        {
+          method: 'POST',
+          headers: { 'Idempotency-Key': 'idem-free-update-bad' },
+          body: {
+            type: 'update_owlette',
+            params: { installer_url: 'https://example.test/other.exe', target_version: '4.1.7', checksum_sha256: 'a'.repeat(64) },
+          },
+        },
+      );
+      const res = await commandsPOST(req, {
+        params: Promise.resolve({ siteId: SITE, machineId: MACHINE }),
+      });
+      expect(res.status).toBe(403);
+      expect((await res.json()).code).toBe('installer_not_published');
+      const mergeCalls = mocks.set.mock.calls.filter(
+        (c: unknown[]) => (c[1] as { merge?: boolean })?.merge === true,
+      );
+      expect(mergeCalls).toHaveLength(0);
     });
   });
 });
@@ -1246,6 +1284,28 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}', ()
   });
 
   it.each([
+    ['another site', `screenshots/site-other/${MACHINE}/1700000000000-aabbccdd.png`],
+    ['another machine', `screenshots/${SITE}/mach_other/1700000000000-aabbccdd.png`],
+    ['another folder', 'chat-images/user-2/chat-1/1700000000000.jpg'],
+  ])('200 completed capture_screenshot signs no screenshot_path in %s', async (_label, storagePath) => {
+    queueGetSnapshots(null, {
+      [CID]: { type: 'capture_screenshot', status: 'completed', screenshot_path: storagePath },
+    });
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands/${CID}`,
+    );
+    const res = await commandStatusGET(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE, commandId: CID }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.status).toBe('completed');
+    expect(body.data.result?.screenshot_url).toBeUndefined();
+    expect(signedUrlCalls).toEqual([]);
+  });
+
+  it.each([
     ['reboot_machine', 'Reboot deferred until 17:00 (machine time)'],
     ['shutdown_machine', 'Shutdown scheduled in 60 seconds'],
     ['cancel_reboot', 'Reboot/shutdown cancelled'],
@@ -1262,6 +1322,33 @@ describe('GET /api/sites/{siteId}/machines/{machineId}/commands/{commandId}', ()
     expect(body.data.status).toBe('completed');
     expect(body.data.result).toBe(result);
     expect(body.data.error).toBeUndefined();
+  });
+
+  it('200 completed registry read leaves out a value whose name looks like a secret', async () => {
+    queueGetSnapshots(null, {
+      [CID]: {
+        type: 'mcp_tool_call',
+        status: 'completed',
+        result: JSON.stringify({
+          hive: 'HKLM',
+          key_path: 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon',
+          values: [
+            { name: 'DefaultPassword', type: 1, value: 'hunter2' },
+            { name: 'AutoAdminLogon', type: 1, value: '1' },
+          ],
+        }),
+      },
+    });
+    const req = createMockRequest(
+      `http://localhost/api/sites/${SITE}/machines/${MACHINE}/commands/${CID}`,
+    );
+    const res = await commandStatusGET(req, {
+      params: Promise.resolve({ siteId: SITE, machineId: MACHINE, commandId: CID }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.result).not.toContain('hunter2');
+    expect(JSON.parse(body.data.result).values).toEqual([{ name: 'AutoAdminLogon', type: 1, value: '1' }]);
   });
 
   it('200 completed with an empty-string result carries no result', async () => {

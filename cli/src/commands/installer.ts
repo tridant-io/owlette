@@ -203,7 +203,8 @@ export function registerInstallerCommands(program: Command): void {
       `platform key (${INSTALLER_PLATFORMS.join(' | ')}); derived from the file extension by default`,
     )
     .option('--release-notes <text>', 'release notes shown on the dashboard')
-    .option('--set-latest', 'mark this version as the latest after upload (default: true)')
+    .option('--set-latest', 'mark this version as the latest after upload (the default; needs installer=*:admin)')
+    .option('--no-set-latest', 'upload without marking this version as the latest')
     .option(
       '--idempotency-key <key>',
       'optional Idempotency-Key header (auto-generated if omitted)',
@@ -256,13 +257,14 @@ export function registerInstallerCommands(program: Command): void {
       }
 
       // step 1: request the signed upload url
+      const setAsLatest = opts.setLatest !== false;
       const startBody: Record<string, unknown> = {
         version: opts.version,
         fileName,
         platform,
+        setAsLatest,
       };
       if (opts.releaseNotes !== undefined) startBody.releaseNotes = opts.releaseNotes;
-      if (opts.setLatest !== undefined) startBody.setAsLatest = Boolean(opts.setLatest);
 
       let startRes: Response;
       try {
@@ -296,7 +298,10 @@ export function registerInstallerCommands(program: Command): void {
         if (startRes.status === 403 && startData.code === 'scope_insufficient') {
           fatal(
             `POST /api/installer/upload failed (403, scope_insufficient): ${startData.detail ?? 'superadmin scope required'}` +
-              `\n  hint: installer upload requires an installer=*:write api key (superadmin-only at minting) or a superadmin user session`,
+              `\n  hint: installer upload requires an installer=*:write api key (superadmin-only at minting) or a superadmin user session` +
+              (setAsLatest
+                ? '; marking it latest also needs installer=*:admin, or pass --no-set-latest'
+                : ''),
           );
           return;
         }

@@ -51,7 +51,7 @@ owlette listen \
   --signing-secret whsec_local_test
 ```
 
-backing: `GET /api/events/stream?siteId=<siteId>&api_key=<token>[&events=<csv>]` with `Accept: text/event-stream` and `Authorization: Bearer <token>`.
+backing: `GET /api/events/stream?siteId=<siteId>[&events=<csv>]` with `Accept: text/event-stream` and `Authorization: Bearer <token>`.
 
 ---
 
@@ -120,6 +120,6 @@ owlette: listener stopped. connected=1 events=3 forwarded=3 forwardErrors=0 keep
 ## notes
 
 - **scope**: the key needs `site=<id>:read`
-- **auth**: the token goes both in the `api_key` query parameter and in the `Authorization` header, so a proxy that strips headers from long-lived requests does not drop it
+- **auth**: the token goes in the `Authorization` header, never in the URL
 - **reconnects**: there are none — wrap the command in a loop if you need it to outlive the 30-minute stream
 - **related**: [`trigger`](/docs/cli/reference/trigger) to send one synthetic event, [webhooks](/docs/api/webhooks) for the event catalog and signature format, [webhook](/docs/cli/reference/webhook) for the subscription routes

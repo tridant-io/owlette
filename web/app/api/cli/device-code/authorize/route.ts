@@ -42,6 +42,7 @@ import {
 } from '@/lib/apiKeyTypes';
 import {
   problem,
+  mfaChallengeProblem,
   problemForbidden,
   problemFromError,
   problemNotFound,
@@ -368,7 +369,7 @@ export const POST = withRateLimit(
           return problemUnauthorized(error.message);
         }
         if (error.status === 403) {
-          return problemForbidden(error.message);
+          return mfaChallengeProblem(error) ?? problemForbidden(error.message);
         }
         if (error.status === 404) {
           return problemNotFound(error.message);

@@ -77,7 +77,7 @@ joining shows a pairing phrase to approve from any device — the same device-co
 
 ![the join a site dialog showing a pairing phrase](/docs-screens/agent-join-site.png)
 
-leaving is the one destructive local action, and pairing the machine again needs a fresh phrase. on Windows the service is stopped while the machine is deregistered and then started again, and Windows asks you to approve that stop. on macOS and Linux the service carries out the leave itself — it takes the machine off the dashboard, then restarts — with nothing to approve.
+leaving is the one destructive local action, and pairing the machine again needs a fresh phrase. on Windows the service is stopped while the machine is deregistered and then started again, and Windows asks you to approve that stop. on macOS and Linux the service carries out the leave itself — it takes the machine off the dashboard, then restarts — with nothing to approve, but only for an administrator account on the machine: anyone else is told that only an administrator can change the site this machine belongs to, and nothing changes.
 
 ![the leave site dialog, warning that the service is stopped while the machine is deregistered and that pairing again needs a new phrase](/docs-screens/agent-leave-site.png)
 
@@ -147,7 +147,7 @@ if the agent regenerates a config and an existing `firebase` section is present,
 | field | type | editable | description |
 |-------|------|----------|-------------|
 | `version` | string | no | config schema version. the agent upgrades older configs to the current schema. |
-| `environment` | string | yes | `production` uses owlette.app; `development` uses dev.owlette.app. it stays on this machine and is never synced. |
+| `environment` | string | yes | `production` uses owlette.app; `development` uses dev.owlette.app. it stays on this machine and is never synced. from 4.2.0 a paired macOS or Linux machine uses the server that paired it, whatever this says; pair again to move it. |
 | `processes` | array | yes | monitored process entries. the generator starts with an empty array. |
 | `logging` | object | yes | local log level, retention, and optional Firebase log shipping. |
 | `sentry` | object | yes | optional Sentry reporting settings. local to this machine. |

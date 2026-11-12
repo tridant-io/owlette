@@ -14,6 +14,7 @@ import {
   type ScopeSelection,
   validateScopeSelection,
 } from '@/components/ApiKeyScopeFields';
+import { ApiKeyToolTierField } from '@/components/ApiKeyToolTierField';
 import type { ApiKeyListItem, ApiKeyScope } from '@/lib/apiKeyTypes';
 
 /**
@@ -43,6 +44,7 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       ? apiKey.scopes.map((s) => ({ ...s, permissions: [...s.permissions] }))
       : [{ resource: 'site', id: '*', permissions: ['read'] }],
   );
+  const [maxToolTier, setMaxToolTier] = useState(apiKey.maxToolTier);
   const [saving, setSaving] = useState(false);
   // Pre-scoped-auth keys store no scopes and authenticate as full access, so
   // editing one is a narrowing, not an adjustment.
@@ -64,6 +66,8 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
       await onSubmit({
         name: name.trim(),
         scopes: resolveScopes(preset, customScopes),
+        // only when it moved: a raise asks the server for more than the rest of an edit does
+        ...(maxToolTier !== apiKey.maxToolTier ? { maxToolTier } : {}),
       });
     } finally {
       setSaving(false);
@@ -115,6 +119,8 @@ export function ApiKeyScopeEditor({ apiKey, onSubmit, onCancel }: Props) {
         onCustomScopesChange={setCustomScopes}
         disabled={saving}
       />
+
+      <ApiKeyToolTierField value={maxToolTier} onChange={setMaxToolTier} disabled={saving} />
 
       <div className="flex justify-end gap-2">
         <Button

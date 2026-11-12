@@ -85,6 +85,64 @@ const WHOLE_SITE_ADMIN = {
   isSiteOwner: false,
 };
 
+/** The one way into local hoot: the gate off, an admin, and its heartbeat fresh. */
+describe('local hoot takes a conversation only from an agent that cannot change a launch', () => {
+  function machineDb(machine: Record<string, unknown>) {
+    const doc: Record<string, unknown> = {
+      get: async () => ({ exists: true, data: () => machine }),
+      set: jest.fn(async () => undefined),
+      onSnapshot: jest.fn(() => jest.fn()),
+    };
+    doc.collection = () => ({ doc: () => doc });
+    return { collection: () => ({ doc: () => doc }) } as unknown as Firestore;
+  }
+
+  const cortexStatus = { online: true, lastHeartbeat: new Date() };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockVerifyUserSiteAccess.mockResolvedValue(WHOLE_SITE_ADMIN);
+    mockIsMachineOnline.mockResolvedValue(true);
+    mockIsHootEnabled.mockResolvedValue(true);
+    mockGetHootRequireTier3Approval.mockResolvedValue(false);
+    mockResolveLlmConfig.mockResolvedValue({ provider: 'anthropic', apiKey: 'k', model: 'm' });
+    mockGetMachineSummary.mockResolvedValue(null);
+    mockBuildExecutableTools.mockReturnValue({});
+  });
+
+  async function run(machine: Record<string, unknown>) {
+    const result = await runHootStream({
+      db: machineDb(machine),
+      userId: 'u1',
+      siteId: 'site-a',
+      machineId: 'kiosk-01',
+      machineName: 'Lobby',
+      messages: [{ role: 'user', content: 'hi' }],
+      chatId: 'conv-1',
+    });
+    expect(result.ok).toBe(true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    return (result as { response: Response }).response;
+  }
+
+  it.each([
+    ['a fielded agent with no capability', { cortexStatus, agent_version: '4.1.25' }],
+    ['a rollback that left the capability behind', { cortexStatus, agent_version: '4.1.25', capabilities: { localHootLaunchGate: 1 } }],
+    ['an unknown version', { cortexStatus, capabilities: { localHootLaunchGate: 1 } }],
+  ])('%s runs on the server, where the gate holds', async (_label, machine) => {
+    await run(machine);
+
+    expect(mockBuildExecutableTools).toHaveBeenCalledTimes(1);
+    expect(mockBuildExecutableTools.mock.calls[0][7]).not.toHaveProperty('launchChangeApprovable');
+  });
+
+  it('an agent with the gate keeps the local path', async () => {
+    await run({ cortexStatus, agent_version: '4.2.0', capabilities: { localHootLaunchGate: 1 } });
+
+    expect(mockBuildExecutableTools).not.toHaveBeenCalled();
+  });
+});
+
 describe('conversationsToolDefs', () => {
   it.each([1, 2, 3] as const)('withholds the follow-up tools at tier %d', (tier) => {
     const names = conversationsToolDefs(tier).map((def) => def.name);
@@ -389,11 +447,18 @@ describe('runHootStream on local hoot', () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[index].value);
   }
 
-  /** the machine doc, with local hoot alive, and the agent's active-chat doc under it. */
+  /** the machine doc, with local hoot alive on an agent that takes conversations, and its active-chat doc under it. */
   const doc: Record<string, unknown> = {
     collection: () => doc,
     doc: () => doc,
-    get: async () => ({ exists: true, data: () => ({ cortexStatus: { online: true, lastHeartbeat: new Date() } }) }),
+    get: async () => ({
+      exists: true,
+      data: () => ({
+        cortexStatus: { online: true, lastHeartbeat: new Date() },
+        agent_version: '4.2.0',
+        capabilities: { localHootLaunchGate: 1 },
+      }),
+    }),
     set: async () => undefined,
     onSnapshot: (next: (snapshot: { data: () => unknown }) => void) => {
       pushSnapshot = (data) => next({ data: () => data });

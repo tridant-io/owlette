@@ -10,6 +10,7 @@ import {
   problem,
   problemValidation,
   problemUnauthorized,
+  mfaChallengeProblem,
   problemForbidden,
   problemNotFound,
   problemScopeInsufficient,
@@ -58,7 +59,7 @@ export async function requireAuthOrProblem(
     return { ok: true, userId };
   } catch (err) {
     if (err instanceof ApiAuthError) {
-      if (err.status === 403) return { ok: false, response: problemForbidden() };
+      if (err.status === 403) return { ok: false, response: mfaChallengeProblem(err) ?? problemForbidden() };
       if (err.status === 404) return { ok: false, response: problemNotFound() };
       return { ok: false, response: problemUnauthorized() };
     }
@@ -343,7 +344,7 @@ async function resolveAuthOrProblem(
           typeof err.details?.expiredAt === 'number' ? err.details.expiredAt : undefined;
         return { ok: false, response: problemTokenExpired(expiredAt) };
       }
-      if (err.status === 403) return { ok: false, response: problemForbidden() };
+      if (err.status === 403) return { ok: false, response: mfaChallengeProblem(err) ?? problemForbidden() };
       if (err.status === 404) return { ok: false, response: problemNotFound() };
       return { ok: false, response: problemUnauthorized() };
     }
@@ -351,7 +352,7 @@ async function resolveAuthOrProblem(
   }
 }
 
-function runScopeCheck(
+export function runScopeCheck(
   auth: ResolvedAuth,
   resource: ApiKeyResource,
   id: string,
@@ -436,9 +437,9 @@ export async function requireDistributionManageCapability(
 }
 
 /**
- * WEBHOOK_MANAGE gate for the mutating `/api/webhooks/**` handlers (create,
- * update, delete, rotate-secret, test). Read paths — list, detail, deliveries,
- * probe — stay at member level.
+ * WEBHOOK_MANAGE gate for every `/api/webhooks/**` handler but `user-created`:
+ * create, update, delete, rotate-secret, test, probe, delivery retry, and the
+ * reads, since the rules give subscription documents to site admins only.
  *
  * `create` also requires `owlette.webhooks` on the site's plan (docs/adr/0018). the
  * rest stay open, so a site whose plan lapsed can still be tidied up.
@@ -454,6 +455,18 @@ export async function requireWebhookManageCapability(
     siteId,
     create ? 'owlette.webhooks' : undefined,
   );
+}
+
+/**
+ * the site audit log, which the rules give site admins and owners only. there is
+ * no audit capability; SITE_LOGS_MANAGE is the site's log capability, held by
+ * exactly those roles.
+ */
+export async function requireAuditLogCapability(
+  auth: ResolvedAuth,
+  siteId: string,
+): Promise<NextResponse | null> {
+  return requireSiteCapability(auth, Capability.SITE_LOGS_MANAGE, siteId);
 }
 
 /**
@@ -530,9 +543,9 @@ async function assertSiteAccessOrProblem(
  * outside `authorizedSiteHandler`.
  *
  * a scoped member is refused by default with 403 'capability not granted'. the
- * default keeps every site-wide read closed to them: the audit log, quota,
- * roosts, chunks, webhooks and the events stream all sit on this gate and check
- * no capability of their own. a route that passes `machineScope: 'admit'` gets
+ * default keeps every site-wide read closed to them: quota, roosts, chunks and
+ * the events stream all sit on this gate and check no capability of their own.
+ * a route that passes `machineScope: 'admit'` gets
  * the caller's `machineIds` back and must filter its results to them, or check
  * the one machine it serves (`requireSiteMachineAuthAndScope`).
  */

@@ -315,6 +315,30 @@ describe('repairDanglingToolParts', () => {
   });
 });
 
+describe('a denied call', () => {
+  const denied = {
+    type: 'tool-set_launch_mode',
+    toolCallId: 'denied_1',
+    state: 'output-denied',
+    input: { process_name: 'P', mode: 'always' },
+  };
+  const history = [
+    { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'x' }] },
+    { id: 'a1', role: 'assistant', parts: [denied] },
+    { id: 'u2', role: 'user', parts: [{ type: 'text', text: 'why not?' }] },
+  ] as unknown as UIMessage[];
+
+  it('stays denied on the next turn, and asks no resolver', async () => {
+    const resolveLostResult = jest.fn();
+
+    const { messages, repairedToolCallIds } = await repairDanglingToolParts(history, { resolveLostResult });
+
+    expect(messages[1].parts[0]).toEqual(denied);
+    expect(repairedToolCallIds).toEqual([]);
+    expect(resolveLostResult).not.toHaveBeenCalled();
+  });
+});
+
 describe('repairDanglingToolParts with resolveLostResult (async overload)', () => {
   function brokenHistory(): UIMessage[] {
     return [

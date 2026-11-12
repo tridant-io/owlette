@@ -1,12 +1,13 @@
 rules_version = '2';
 
 // Owlette Firebase Storage Security Rules
-// Version: 2.0.0
-// Last Updated: 2026-04-24
+// Version: 2.1.0 - chat images are read only by the user who uploaded them
+// Last Updated: 2026-11-11
 //
 // Security Model:
 // - Public read access for agent installer downloads
 // - Superadmin-only write access for uploading installers (platform-wide op)
+// - Chat images: the uploading user reads and writes their own
 // - Authenticated access for other storage (if needed in future)
 
 service firebase.storage {
@@ -32,12 +33,13 @@ service firebase.storage {
     }
 
     // ============================================
-    // Chat Images - Authenticated Read, Owner Write
+    // Chat Images - Owner Read, Owner Write
     // ============================================
 
     match /chat-images/{userId}/{allPaths=**} {
-      // Any authenticated user can view chat images (needed for shared sites)
-      allow read: if request.auth != null;
+      // Only the chat's owner, who uploaded under their own uid, reads its images.
+      // The model and the chat view load them through the upload's download url.
+      allow read: if request.auth != null && request.auth.uid == userId;
 
       // Only the owning user can upload; max 5 MB, images only
       allow write: if request.auth != null

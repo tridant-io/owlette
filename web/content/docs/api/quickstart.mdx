@@ -31,7 +31,7 @@ open **settings → api keys** (`/settings/api-keys`), choose **create key**, an
 
 copy the raw key immediately — owlette shows it once.
 
-scripted creation is available through `POST /api/keys`, but it needs a signed-in user session or Firebase ID token; an existing API key cannot create keys.
+scripted creation is available through `POST /api/keys`, but it needs a signed-in user session or Firebase ID token, and on an account with a second factor an ID token is refused (see [sessions and ID tokens](/docs/api/authentication#sessions-and-id-tokens)); an existing API key cannot create keys.
 
 ## 2. export your environment
 

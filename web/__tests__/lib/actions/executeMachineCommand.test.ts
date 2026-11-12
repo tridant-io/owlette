@@ -42,6 +42,10 @@ import { emitMutation } from '@/lib/auditLogClient';
 import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import type { Actor } from '@/lib/capabilities';
 import { PLAN_REQUIRED_DETAIL } from '@/lib/plan.server';
+import { toolCallHash } from '@/lib/hoot/launchAudit.server';
+
+// the key audit rows hash with
+process.env.CORTEX_INTERNAL_SECRET = 'test-secret';
 
 const mockedEmit = emitMutation as jest.MockedFunction<typeof emitMutation>;
 
@@ -60,7 +64,24 @@ interface FakeDb {
   db: any;
 }
 
-function buildFakeDb(initialMachine: Record<string, unknown> | null = { online: true }): FakeDb {
+const PUBLISHED_UPDATE = {
+  installer_url: 'https://example.com/x.exe',
+  checksum_sha256: 'abc',
+  target_version: '2.11.0',
+};
+
+const PUBLISHED_INSTALLER = {
+  version: '2.11.0',
+  files: { windows_x64: { download_url: 'https://example.com/x.exe', checksum_sha256: 'abc' } },
+};
+
+function buildFakeDb(
+  initialMachine: Record<string, unknown> | null = { online: true },
+  installerDocs: Record<string, Record<string, unknown>> = {
+    'installer_metadata/latest': PUBLISHED_INSTALLER,
+    'installer_metadata/data/versions/2.11.0': PUBLISHED_INSTALLER,
+  },
+): FakeDb {
   const setCalls: SetCall[] = [];
   let machineData: Record<string, unknown> | null = initialMachine;
 
@@ -78,6 +99,8 @@ function buildFakeDb(initialMachine: Record<string, unknown> | null = { online: 
           if (machineData === null) return { exists: false, data: () => undefined };
           return { exists: true, data: () => machineData };
         }
+        const installerDoc = installerDocs[docPath];
+        if (installerDoc) return { exists: true, data: () => installerDoc };
         return { exists: false, data: () => undefined };
       },
       set: async (
@@ -239,7 +262,13 @@ describe('executeMachineCommand — allowlist', () => {
       const fake = buildFakeDb();
       const result = await executeMachineCommand(
         ctxFor(),
-        { type, payload: {} },
+        {
+          type,
+          payload:
+            type === 'update_owlette' ? PUBLISHED_UPDATE
+              : type === 'mcp_tool_call' ? { tool_name: 'get_system_info' }
+                : {},
+        },
         { db: fake.db, now: () => 1_700_000_000_000 },
       );
       expect(result.commandId).toMatch(/^cmd_/);
@@ -572,12 +601,7 @@ describe('executeMachineCommand — per-type payload pass-through', () => {
       ctxFor(),
       {
         type: 'update_owlette',
-        payload: {
-          installer_url: 'https://example.com/x.exe',
-          checksum_sha256: 'abc',
-          target_version: '2.11.0',
-          deployment_id: 'dep_1',
-        },
+        payload: { ...PUBLISHED_UPDATE, deployment_id: 'dep_1' },
       },
       { db: fake.db, now: () => 1 },
     );
@@ -631,7 +655,7 @@ describe('executeMachineCommand — per-type payload pass-through', () => {
         type: 'mcp_tool_call',
         payload: {
           tool_name: 'get_system_info',
-          tool_params: { verbose: true },
+          tool_params: {},
           chat_id: 'chat_1',
           timeout_seconds: 45,
         },
@@ -640,7 +664,7 @@ describe('executeMachineCommand — per-type payload pass-through', () => {
     );
     const entry = Object.values(fake.setCalls[0].payload)[0] as Record<string, unknown>;
     expect(entry.tool_name).toBe('get_system_info');
-    expect(entry.tool_params).toEqual({ verbose: true });
+    expect(entry.tool_params).toEqual({});
     expect(entry.chat_id).toBe('chat_1');
     expect(entry.timeout_seconds).toBe(45);
   });
@@ -950,7 +974,8 @@ describe('executeMachineCommand — plan gate', () => {
     it(`free: still queues ${type}`, async () => {
       enforce();
       const fake = buildFakeDb();
-      const result = await executeMachineCommand(ctxFor(), { type, payload: {} }, { db: fake.db });
+      const payload = type === 'update_owlette' ? PUBLISHED_UPDATE : {};
+      const result = await executeMachineCommand(ctxFor(), { type, payload }, { db: fake.db });
       expect(result.commandId).toMatch(/^cmd_/);
       expect(fake.setCalls).toHaveLength(1);
       expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
@@ -979,7 +1004,7 @@ describe('executeMachineCommand — plan gate', () => {
     enforce();
     mockGetSiteEntitlements.mockResolvedValue({ ...CORE, ent: { ...CORE.ent, 'owlette.hoot': '1' } });
     const fake = buildFakeDb();
-    await executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: {} }, { db: fake.db });
+    await executeMachineCommand(ctxFor(), { type: 'mcp_tool_call', payload: { tool_name: 'get_system_info' } }, { db: fake.db });
     expect(fake.setCalls).toHaveLength(1);
   });
 
@@ -998,5 +1023,202 @@ describe('executeMachineCommand — plan gate', () => {
       executeMachineCommand(ctxFor(), { type: 'format_drive', payload: {} }, { db: fake.db }),
     ).rejects.toMatchObject({ status: 400, code: 'unsupported_command_type' });
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeMachineCommand — update_owlette takes only a published installer', () => {
+  const ACTORS = ['user:user_42', 'apiKey:key_1', 'system:talon_runner'];
+  const OLD_VERSION = {
+    version: '2.10.0',
+    files: { macos_arm64: { download_url: 'https://example.com/old.pkg', checksum_sha256: 'DEF' } },
+  };
+
+  function update(payload: Record<string, unknown>, auditActor: string, fake: FakeDb) {
+    return executeMachineCommand(
+      ctxFor({ auditActor }),
+      { type: 'update_owlette', payload },
+      { db: fake.db, now: () => 1 },
+    );
+  }
+
+  describe.each(ACTORS)('as %s', (auditActor) => {
+    it('queues the latest version', async () => {
+      const fake = buildFakeDb();
+      await update(PUBLISHED_UPDATE, auditActor, fake);
+      expect(fake.setCalls).toHaveLength(1);
+    });
+
+    it.each([
+      ['another url', { ...PUBLISHED_UPDATE, installer_url: 'https://other.example/x.exe' }],
+      ['another hash', { ...PUBLISHED_UPDATE, checksum_sha256: 'f'.repeat(64) }],
+      ['no url', { checksum_sha256: 'abc', target_version: '2.11.0' }],
+      ['no hash', { installer_url: 'https://example.com/x.exe', target_version: '2.11.0' }],
+      ['a version nobody published', { ...PUBLISHED_UPDATE, target_version: '9.9.9' }],
+      ['a malformed version', { ...PUBLISHED_UPDATE, target_version: '../../latest' }],
+    ])('refuses %s and queues nothing', async (_label, payload) => {
+      const fake = buildFakeDb();
+      await expect(update(payload, auditActor, fake)).rejects.toMatchObject({
+        status: 403,
+        code: 'installer_not_published',
+      });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    });
+  });
+
+  it('with no target_version, compares against latest', async () => {
+    const fake = buildFakeDb();
+    await update(
+      { installer_url: PUBLISHED_UPDATE.installer_url, checksum_sha256: PUBLISHED_UPDATE.checksum_sha256 },
+      'user:user_42',
+      fake,
+    );
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('accepts an older published version on any platform, in either hash case', async () => {
+    const fake = buildFakeDb(
+      { online: true },
+      {
+        'installer_metadata/latest': PUBLISHED_INSTALLER,
+        'installer_metadata/data/versions/2.10.0': OLD_VERSION,
+      },
+    );
+    await update(
+      { installer_url: 'https://example.com/old.pkg', checksum_sha256: 'def', target_version: '2.10.0' },
+      'user:user_42',
+      fake,
+    );
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('refuses a deleted version', async () => {
+    const fake = buildFakeDb(
+      { online: true },
+      {
+        'installer_metadata/latest': PUBLISHED_INSTALLER,
+        'installer_metadata/data/versions/2.10.0': { ...OLD_VERSION, deletedAt: 5 },
+      },
+    );
+    await expect(
+      update(
+        { installer_url: 'https://example.com/old.pkg', checksum_sha256: 'def', target_version: '2.10.0' },
+        'user:user_42',
+        fake,
+      ),
+    ).rejects.toMatchObject({ status: 403, code: 'installer_not_published' });
+  });
+
+  it('refuses a file another version published, named under the wrong version', async () => {
+    const fake = buildFakeDb(
+      { online: true },
+      {
+        'installer_metadata/latest': PUBLISHED_INSTALLER,
+        'installer_metadata/data/versions/2.11.0': PUBLISHED_INSTALLER,
+        'installer_metadata/data/versions/2.10.0': OLD_VERSION,
+      },
+    );
+    await expect(
+      update({ ...PUBLISHED_UPDATE, target_version: '2.10.0' }, 'user:user_42', fake),
+    ).rejects.toMatchObject({ code: 'installer_not_published' });
+  });
+
+  it('a legacy record with flat windows fields still matches', async () => {
+    const legacy = { version: '2.11.0', download_url: PUBLISHED_UPDATE.installer_url, checksum_sha256: 'abc' };
+    const fake = buildFakeDb(
+      { online: true },
+      {
+        'installer_metadata/latest': legacy,
+        'installer_metadata/data/versions/2.11.0': legacy,
+      },
+    );
+    await update(PUBLISHED_UPDATE, 'user:user_42', fake);
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('an unrelated command reads no installer metadata', async () => {
+    const fake = buildFakeDb({ online: true }, {});
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+});
+
+describe("executeMachineCommand — the machine's hoot switch", () => {
+  it.each(['user:user_42', 'apiKey:key_1', 'system:hoot_autonomous'])(
+    'refuses a tool call from %s while hoot is off on the machine',
+    async (auditActor) => {
+      const fake = buildFakeDb({ online: true, cortexEnabled: false });
+      await expect(
+        executeMachineCommand(
+          ctxFor({ auditActor }),
+          { type: 'mcp_tool_call', payload: { tool_name: 'get_system_info' } },
+          { db: fake.db },
+        ),
+      ).rejects.toMatchObject({ status: 423, code: 'hoot_disabled' });
+      expect(fake.setCalls).toHaveLength(0);
+      expect(mockedEmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['cancel_mcp_tool', { target_command_id: 'cmd_1' }],
+    ['reboot_machine', {}],
+  ])('still queues %s, which is not a tool call', async (type, payload) => {
+    const fake = buildFakeDb({ online: true, cortexEnabled: false });
+    await executeMachineCommand(ctxFor(), { type, payload }, { db: fake.db });
+    expect(fake.setCalls).toHaveLength(1);
+  });
+
+  it('runs the call when the field is absent or true', async () => {
+    for (const machine of [{ online: true }, { online: true, cortexEnabled: true }]) {
+      const fake = buildFakeDb(machine);
+      await executeMachineCommand(
+        ctxFor(),
+        { type: 'mcp_tool_call', payload: { tool_name: 'get_system_info' } },
+        { db: fake.db },
+      );
+      expect(fake.setCalls).toHaveLength(1);
+    }
+  });
+});
+
+describe('executeMachineCommand — tool call audit', () => {
+  it('records the tool name, parameter names and a keyed hash for any actor, never the values', async () => {
+    const fake = buildFakeDb();
+    const params = { command: 'not-for-the-log' };
+    await executeMachineCommand(
+      ctxFor({ auditActor: 'system:hoot_autonomous' }),
+      { type: 'mcp_tool_call', payload: { tool_name: 'run_command', tool_params: params } },
+      { db: fake.db },
+    );
+    const row = mockedEmit.mock.calls[0][0];
+    expect(row.attributes).toMatchObject({
+      toolName: 'run_command',
+      paramNames: ['command'],
+      paramsHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    // a site admin reads the row, so a plain hash of a short value could be guessed back
+    expect(row.attributes?.paramsHash).not.toBe(toolCallHash('run_command', params));
+    expect(JSON.stringify(row)).not.toContain('not-for-the-log');
+  });
+
+  it('refuses an unknown tool name before it writes a row or queues anything', async () => {
+    const fake = buildFakeDb();
+    await expect(
+      executeMachineCommand(
+        ctxFor(),
+        { type: 'mcp_tool_call', payload: { tool_name: 'x'.repeat(500) } },
+        { db: fake.db },
+      ),
+    ).rejects.toMatchObject({ status: 400, code: 'tool_params_invalid' });
+    expect(mockedEmit).not.toHaveBeenCalled();
+    expect(fake.setCalls).toHaveLength(0);
+  });
+
+  it('adds neither field to any other command', async () => {
+    const fake = buildFakeDb();
+    await executeMachineCommand(ctxFor(), { type: 'reboot_machine', payload: {} }, { db: fake.db });
+    expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('toolName');
+    expect(mockedEmit.mock.calls[0][0].attributes).not.toHaveProperty('paramsHash');
   });
 });

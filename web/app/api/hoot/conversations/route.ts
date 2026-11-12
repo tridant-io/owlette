@@ -19,6 +19,7 @@ import {
   problemFromError,
   problemNotFound,
   problemUnauthorized,
+  mfaChallengeProblem,
   problemValidation,
 } from '@/lib/apiErrors';
 import { ApiAuthError, resolveAuth } from '@/lib/apiAuth.server';
@@ -51,7 +52,7 @@ export async function GET(request: NextRequest) {
     try {
       auth = await resolveAuth(request);
     } catch (err) {
-      if (err instanceof ApiAuthError) return problemUnauthorized();
+      if (err instanceof ApiAuthError) return mfaChallengeProblem(err) ?? problemUnauthorized();
       throw err;
     }
 

@@ -8,8 +8,10 @@ module, so a write pointed at the wrong key fails here: owlette's deferral and
 restart-deadline writes once went under AU, where Windows never reads them.
 """
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -872,6 +874,89 @@ def test_registry_operation_cannot_delete_the_key_that_holds_them(registry, regi
     assert registry.ops == []
 
 
+WINLOGON = r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+SERVICES = r'SYSTEM\CurrentControlSet\Services'
+
+
+@pytest.mark.parametrize('name', ['Shell', 'Userinit', 'shell', 'VMApplet', 'DefaultPassword'])
+@pytest.mark.parametrize('action', ['read', 'write', 'delete'])
+@pytest.mark.parametrize('key', [WINLOGON, WINLOGON + '\\', WINLOGON.lower()])
+def test_registry_operation_cannot_reach_what_winlogon_runs_or_its_password(
+        registry, registry_op, key, action, name):
+    registry.set(key, **{name: 'secret-or-program'})
+
+    result = registry_op(action, key, name, value_type='string', value_data='evil.exe')
+
+    assert 'error' in result
+    assert 'secret-or-program' not in str(result)
+    assert registry.ops == []
+
+
+def test_registry_operation_will_not_list_winlogon(registry, registry_op):
+    registry.set(WINLOGON, AutoAdminLogon='1', DefaultUserName='kiosk', DefaultPassword='hunter2',
+                 Shell='explorer.exe')
+
+    result = registry_op('read', WINLOGON)
+
+    assert 'error' in result
+    assert 'hunter2' not in str(result)
+
+
+@pytest.mark.parametrize('name', ['AutoAdminLogon', 'DefaultUserName', 'DefaultDomainName', 'ForceAutoLogon'])
+def test_registry_operation_still_configures_auto_login(registry, registry_op, name):
+    result = registry_op('write', WINLOGON, name, value_type='string', value_data='1')
+
+    assert result['status'] == 'ok'
+    assert registry.writes(WINLOGON) == [(name, '1', 1)]
+
+
+def test_registry_operation_stays_out_of_winlogon_subkeys(registry, registry_op):
+    key = WINLOGON + r'\Notify'
+    registry.set(key, DllName='x')
+
+    assert 'error' in registry_op('read', key)
+    assert 'error' in registry_op('write', key, 'DllName', value_type='string', value_data='evil.dll')
+    assert registry.ops == []
+
+
+@pytest.mark.parametrize('key, name', [
+    (SERVICES + r'\Spooler', 'ImagePath'),
+    (SERVICES + r'\spooler', 'imagepath'),
+    (SERVICES + r'\Spooler', 'FailureCommand'),
+    (SERVICES + r'\Spooler', 'Start'),
+    (SERVICES + r'\Evil', 'ImagePath'),
+    (SERVICES + r'\Spooler\Parameters', 'ServiceDll'),
+    (SERVICES + r'\Wrapper\Parameters', 'Application'),
+    (SERVICES + r'\WinSock2\Parameters\NameSpace_Catalog5', 'LibraryPath'),
+])
+@pytest.mark.parametrize('action', ['write', 'delete'])
+def test_registry_operation_cannot_change_what_a_service_runs(registry, registry_op, action, key, name):
+    registry.set(key, **{name: 'old'})
+
+    result = registry_op(action, key, name, value_type='string', value_data='C:\\evil.exe')
+
+    assert 'error' in result
+    assert registry.ops == []
+
+
+def test_registry_operation_still_tunes_a_service_parameter_and_reads_a_service(registry, registry_op):
+    key = SERVICES + r'\Tcpip\Parameters'
+    registry.set(SERVICES + r'\Spooler', ImagePath='spoolsv.exe')
+
+    result = registry_op('write', key, 'TcpTimedWaitDelay', value_type='dword', value_data='30')
+
+    assert result['status'] == 'ok'
+    assert registry_op('read', SERVICES + r'\Spooler', 'ImagePath')['value'] == 'spoolsv.exe'
+
+
+def test_registry_operation_keeps_a_secret_looking_value_out_of_any_read(registry, registry_op):
+    key = SERVICES + r'\Vendor\Parameters'
+    registry.set(key, ApiToken='abc', Port=80)
+
+    assert 'error' in registry_op('read', key, 'ApiToken')
+    assert [value['name'] for value in registry_op('read', key)['values']] == ['Port']
+
+
 @pytest.mark.parametrize('key, name', [
     (MDM, 'ActiveHoursStart'), (MDM, 'ActiveHoursMaxRange'),
     (MDM, 'IgnoreWindowsUpdateGroupPolicies'), (MDM_CONFLICT, 'MDMWinsOverGP'),
@@ -968,3 +1053,41 @@ def test_windows_10_still_reads_the_reboot_task(build, ran, tools_windows):
         'task': r'\Microsoft\Windows\UpdateOrchestrator\Reboot',
         'next_run': '10/22/2026 3:00:00 AM',
     }
+
+
+# ─── registry_operation: the table the server's copy reads too ─────────────────
+
+_REGISTRY_CASES = json.loads(
+    (Path(__file__).parent.parent / 'fixtures' / 'registry_refusals.json').read_text(encoding='utf-8'))
+
+
+def _registry_verdict(tools_windows, call):
+    """Why this call stops, or None. Stops at the allowlist or at the refusal, as the tool does."""
+    if tools_windows._registry_key_path_unprintable(call['key_path']):
+        return 'unprintable'
+    ok, err = tools_windows._validate_registry_path('HKLM', call['key_path'].strip())
+    if not ok:
+        return err
+    return tools_windows._registry_refusal(
+        call['action'], call['key_path'].strip(), call.get('value_name', ''),
+        call.get('value_type', 'string'), call.get('value_data'))
+
+
+@pytest.mark.parametrize('call', _REGISTRY_CASES['refused'])
+def test_registry_operation_refuses_what_the_server_refuses(tools_windows, call):
+    assert _registry_verdict(tools_windows, call) is not None
+
+
+@pytest.mark.parametrize('call', _REGISTRY_CASES['allowed'])
+def test_registry_operation_allows_what_the_server_allows(tools_windows, call):
+    assert _registry_verdict(tools_windows, call) is None
+
+
+@pytest.mark.parametrize('call', [c for c in _REGISTRY_CASES['refused'] if c['action'] == 'write'])
+def test_a_refused_write_changes_nothing(registry, registry_op, call):
+    result = registry_op(
+        'write', call['key_path'], call.get('value_name', ''),
+        value_type=call.get('value_type', 'string'), value_data=call.get('value_data'))
+
+    assert 'error' in result
+    assert registry.ops == []

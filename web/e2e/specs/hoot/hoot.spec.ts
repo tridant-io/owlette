@@ -97,6 +97,41 @@ test.describe('hoot conversations and controls', () => {
     await expect(page.getByText('Deployment RCA')).toHaveCount(0);
   });
 
+  test('categorize sends only your own unsorted conversations, never an autonomous one', async ({ page }) => {
+    const db = getAdminDb();
+    const own = db.collection('chats').doc(`e2e-cortex-unsorted-${TEST_USERS.admin.uid}`);
+    const auto = db.collection('chats').doc(`e2e-cortex-auto-unsorted-${SITE_ID}`);
+    const chat = {
+      siteId: SITE_ID,
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      messages: [],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+    await own.set({ ...chat, userId: TEST_USERS.admin.uid, title: 'Projector flicker', source: 'user' });
+    await auto.set({ ...chat, title: 'Auto: TouchDesigner crashed', source: 'autonomous' });
+
+    try {
+      let sent: { chatIds?: string[]; siteId?: string } | undefined;
+      await page.route('**/api/hoot/categorize', async (route) => {
+        sent = route.request().postDataJSON();
+        await route.fulfill({ json: { results: {} } });
+      });
+      await page.goto('/hoot');
+      await expect(page.getByText('Projector flicker')).toBeVisible();
+      await expect(page.getByText('Auto: TouchDesigner crashed')).toBeVisible();
+
+      await page.getByRole('button', { name: /^categorize \d+ unsorted$/ }).click();
+      await expect.poll(() => sent?.siteId).toBe(SITE_ID);
+      expect(sent?.chatIds).toContain(own.id);
+      expect(sent?.chatIds).not.toContain(auto.id);
+    } finally {
+      await Promise.all([own.delete(), auto.delete()]);
+    }
+  });
+
   test('a group collapsed last visit opens collapsed, never expanded first', async ({ page }) => {
     const prefs = getAdminDb().collection('users').doc(TEST_USERS.admin.uid).collection('devicePrefs').doc('global');
     await prefs.set({ cortexCollapsedGroups: ['Operations'] }, { merge: true });
@@ -335,6 +370,64 @@ test.describe('hoot conversations and controls', () => {
       // Still collapsed: the input block mounts only once the card is expanded.
       await expect(approvalCard.getByText('input', { exact: true })).toHaveCount(0);
       await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
+    } finally {
+      await chat.delete();
+    }
+  });
+
+  test('a tier-2 call that changes what a machine runs asks, and shows the new path without expanding', async ({ page }) => {
+    const chat = getAdminDb().collection('chats').doc(`e2e-cortex-launch-${TEST_USERS.admin.uid}`);
+    await chat.set({
+      userId: TEST_USERS.admin.uid,
+      siteId: SITE_ID,
+      title: 'New launch target',
+      category: 'Operations',
+      targetType: 'machine',
+      targetMachineId: HOOT_FIXTURE_MACHINE_ID,
+      machineName: HOOT_FIXTURE_MACHINE_ID,
+      source: 'user',
+      messages: [
+        { id: 'm-launch-user-1', role: 'user', parts: [{ type: 'text', text: 'point it at the new build' }] },
+        {
+          id: 'm-launch-assistant-1',
+          role: 'assistant',
+          metadata: {
+            hoot: {
+              turnId: 'e2e-cortex-launch-turn-1',
+              machineIds: [HOOT_FIXTURE_MACHINE_ID],
+              via: 'chat',
+              skipped: { offline: [], disabled: [] },
+            },
+          },
+          parts: [
+            {
+              type: 'tool-update_process',
+              toolCallId: 'tool-launch-1',
+              state: 'approval-requested',
+              approval: { id: 'approval-launch-1' },
+              input: { process_name: 'Lobby Wall', name: 'Front Desk', exe_path: 'C:/builds/wall-2.exe' },
+            },
+          ],
+        },
+      ],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+
+      const approvalCard = page
+        .locator('div.rounded-lg.border.overflow-hidden')
+        .filter({ hasText: 'this changes what the machine runs' })
+        .first();
+      await expect(approvalCard).toContainText('process_name: Lobby Wall');
+      await expect(approvalCard).toContainText('exe_path: C:/builds/wall-2.exe');
+      // the rename stays in the collapsed input: only what changes what runs is spelled out.
+      await expect(approvalCard).not.toContainText('Front Desk');
+      await expect(approvalCard.getByText('input', { exact: true })).toHaveCount(0);
+      await expect(approvalCard.getByRole('button', { name: /^approve$/i })).toBeVisible();
+      await expect(approvalCard.getByRole('button', { name: /^deny$/i })).toBeVisible();
     } finally {
       await chat.delete();
     }

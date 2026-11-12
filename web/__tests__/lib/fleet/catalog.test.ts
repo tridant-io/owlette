@@ -19,6 +19,7 @@ import {
 import { LIST_MACHINES_TOOL } from '@/lib/fleet/tools/machines.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
+  LAUNCH_APPROVAL_NOTE,
   allTools,
   takesActiveHoursOverride,
   withoutActiveHoursOverride,
@@ -26,8 +27,14 @@ import {
 } from '@/lib/mcp-tools';
 import { SERVER_SIDE_TOOLS } from '@/lib/hoot-utils.server';
 import { ACTIVE_HOURS_OVERRIDE_KEYS } from '@/lib/actions/executeMachineCommand.server';
+import { callTier, isClassifiedTool } from '@/lib/hoot/launchChange';
 
 const TIERS: ToolTier[] = [1, 2, 3];
+
+const SENDER_LAUNCH_NOTE = 'Changing what a machine launches needs a tier 3 grant.';
+
+/** a hoot tool's description as a granted machine reads it. */
+const forSender = (description: string) => description.replace(LAUNCH_APPROVAL_NOTE, SENDER_LAUNCH_NOTE);
 
 /** the tools the server answers itself, in catalog order, with the tier each needs. */
 const SERVER_TOOLS: Array<[name: string, tier: ToolTier, target: 'site' | 'machine' | 'machines']> = [
@@ -166,9 +173,19 @@ describe('fleetCatalog', () => {
       const { [MACHINE_PARAM]: _machine, ...own } = def.parameters.properties;
       expect(own).toEqual(source.parameters.properties);
       expect(def.parameters.required).toEqual([MACHINE_PARAM, ...(source.parameters.required ?? [])]);
-      expect(def.description).toBe(source.description);
+      expect(def.description).toBe(forSender(source.description));
       expect(def.tier).toBe(source.tier);
     }
+  });
+
+  it("tells a granted machine what a launch change needs, never hoot's approval card", () => {
+    const changed = fleetCatalog(3).filter((def) => def.description.includes(SENDER_LAUNCH_NOTE));
+    expect(changed.map((def) => def.name)).toEqual(
+      expect.arrayContaining(['update_process', 'add_process', 'delete_process', 'set_launch_mode', 'manage_scheduled_task']),
+    );
+    for (const def of fleetCatalog(3)) expect(def.description).not.toContain(LAUNCH_APPROVAL_NOTE);
+    // hoot's own tools keep the card
+    expect(allTools.find((tool) => tool.name === 'set_launch_mode')!.description).toContain(LAUNCH_APPROVAL_NOTE);
   });
 
   it('never lets a hoot tool define its own machine parameter', () => {
@@ -281,5 +298,20 @@ describe('toMcpTool', () => {
       description: def.description,
       inputSchema: def.parameters,
     });
+  });
+});
+
+describe('every fleet tool is classified for launch changes', () => {
+  // ask_hoot never reaches the check: each call hoot makes is classified on its own
+  const tools = fleetCatalog(3).filter((def) => def.name !== ASK_HOOT_TOOL);
+
+  it.each(tools.map((def) => def.name))('%s', (name) => {
+    expect(isClassifiedTool(name)).toBe(true);
+  });
+
+  // adding or removing a process always changes what a machine launches, so it is tier 3
+  const launchChanges = new Set(['add_process', 'delete_process']);
+  it.each(SERVER_TOOLS.filter(([name, tier]) => tier < 3 && !launchChanges.has(name)))('%s stays at tier %i', (name, tier) => {
+    expect(callTier(name, {}, tier)).toBe(tier);
   });
 });

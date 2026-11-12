@@ -8,7 +8,7 @@ import { fireWebhooks } from '@/lib/webhookSender.server';
 import { tapTalonMatcher } from '@/lib/talons/matcher.server';
 import { apiError } from '@/lib/apiErrorResponse';
 import { publicOrigin } from '@/lib/publicOrigin.server';
-import { hootInternalSecret } from '@/lib/hootInternalSecret';
+import { hootInternalSecretMatches } from '@/lib/hootInternalSecret';
 import { sanitizeForLog } from '@/lib/logSanitize';
 
 /**
@@ -23,10 +23,7 @@ import { sanitizeForLog } from '@/lib/logSanitize';
  */
 export async function POST(request: NextRequest) {
   try {
-    const secret = request.headers.get('x-internal-secret');
-    const expectedSecret = hootInternalSecret();
-
-    if (!expectedSecret || secret !== expectedSecret) {
+    if (!hootInternalSecretMatches(request.headers.get('x-internal-secret'))) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

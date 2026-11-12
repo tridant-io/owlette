@@ -416,7 +416,7 @@ export interface Machine {
     } | null;
   };
   lastScreenshot?: {
-    url: string;       // Firebase Storage public URL
+    url: string;       // image route: redirects a signed-in viewer to a short-lived read url
     timestamp: FirestoreTs;
     sizeKB: number;
   };

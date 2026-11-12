@@ -6,7 +6,17 @@ describe('safeNextPath', () => {
     expect(safeNextPath('/roost?x=1', '/dashboard')).toBe('/roost?x=1');
   });
 
-  it.each([null, '', 'swoop', 'https://evil.example', '//evil.example', '/\\evil.example'])(
+  it.each([
+    null,
+    '',
+    'swoop',
+    'https://evil.example',
+    '//evil.example',
+    '/\\evil.example',
+    '/\t/evil.example',
+    '/\n/evil.example',
+    '/\r/evil.example',
+  ])(
     'falls back for %p',
     (value) => {
       expect(safeNextPath(value)).toBe('/swoop');

@@ -6,6 +6,7 @@ import { getToolByName, namedCallMachines } from '@/lib/mcp-tools';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { CopyButton } from './CopyButton';
+import { launchChangeInputs } from '@/lib/hoot/launchChange';
 
 /**
  * How many machines an approval prompt spells out before it collapses the rest
@@ -50,9 +51,9 @@ interface ToolCallCardProps {
   result?: unknown;
   isLoading?: boolean;
   /**
-   * Tier-3 human-in-the-loop gate; absent for tier-1/2 and executed calls.
-   * 'expired' is an approval a later message left behind: the server would
-   * refuse it, so nothing is offered to press.
+   * Human-in-the-loop gate; absent for calls that need no approval and for
+   * executed calls. 'expired' is an approval a later message left behind: the
+   * server would refuse it, so nothing is offered to press.
    */
   approvalState?: 'requested' | 'denied' | 'expired';
   /**
@@ -127,6 +128,8 @@ export function ToolCallCard({
   const overrideReason = args.override_active_hours === true
     ? (typeof args.reason === 'string' && args.reason.trim()) || 'no reason given'
     : null;
+  // What this approval would make the machine run belongs on the card itself.
+  const launchInputs = awaitingApproval ? launchChangeInputs(toolName, args) : [];
 
   // Prefer the uploaded Firebase URL; fall back to inline base64 if upload failed.
   let screenshotSrc: string | null = null;
@@ -226,6 +229,16 @@ export function ToolCallCard({
             <p className="text-xs text-foreground break-words">
               <span className="font-medium text-warning">override active hours:</span> {overrideReason}
             </p>
+          )}
+          {launchInputs.length > 0 && (
+            <div className="text-xs text-foreground space-y-0.5">
+              <p className="font-medium text-warning">this changes what the machine runs:</p>
+              {launchInputs.map(([field, value]) => (
+                <p key={field} className="font-mono break-all">
+                  {field}: {value}
+                </p>
+              ))}
+            </div>
           )}
           <div className="flex items-center gap-2">
             <Button

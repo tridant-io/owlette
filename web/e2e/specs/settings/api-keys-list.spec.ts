@@ -135,7 +135,7 @@ test('switching to custom carries the selected preset in, rather than resetting 
 
   // While a preset is selected the scope <Select> is the only combobox; the
   // per-row pickers appear with the custom builder, so pick operator first.
-  await dialog.getByRole('combobox').click();
+  await dialog.getByRole('combobox').first().click();
   await page.getByRole('option', { name: 'operator' }).click();
   // Must commit first: on a cold server, re-opening the select mid-commit
   // silently carries the DEFAULT preset into custom (1 row, not 4).

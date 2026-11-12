@@ -35,6 +35,8 @@ const PROTECTED_PATHS = [
   // needs both. `/app-link` itself is public (the app exchanges a code there) and is not
   // matched: prefixes compare with startsWith.
   '/app-link/approve',
+  // mints an api key for the cli, so it needs what /settings/api-keys needs.
+  '/cli/authorize',
 ] as const;
 
 // Must stay reachable while MFA is pending, or the challenge could never be completed.

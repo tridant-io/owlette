@@ -92,6 +92,8 @@ routes wrapped in the rate-limit wrapper count against one of these buckets:
 | `tokenExchange` | 60/hour (200 in development) | client IP | agent and CLI pairing |
 | `tokenRefresh` | 120/hour | client IP | agent token refresh |
 
+second-factor codes have their own ceiling of 10 attempts in 15 minutes per account, keyed to the account rather than an IP, and counted together at sign-in, `/api/mfa/disable`, backup-code regeneration and swoop's step-up. see [sign-in with 2FA](/docs/reference/authentication#sign-in-with-2fa).
+
 machine screenshot upload URLs have their own ceiling of 1,000 an hour per machine, keyed to the machine rather than an IP, because every machine behind a site's NAT shares one address.
 
 if the shared limiter store is unreachable, these buckets fall back to a per-process limit of 15 requests a minute per identifier. that fallback is a guardrail local to one server, not a distributed quota.

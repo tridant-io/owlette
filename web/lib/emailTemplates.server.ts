@@ -618,3 +618,36 @@ export function buildNewNetworkEmail(args: {
   `;
   return wrapEmailLayout(content, { preheader: 'new network verified for swoop control' });
 }
+
+export interface MfaFactorNotice {
+  change: 'added' | 'removed' | 'reset';
+  factor: 'passkey' | 'authenticator app' | 'backup codes' | 'second factors';
+}
+
+/**
+ * security notice: the second factors on this account changed. sent by
+ * `lib/mfaNotice.server.ts`. transactional, like the password reset: no
+ * unsubscribe, because a security notice is not an alert anyone opts out of.
+ */
+export function buildMfaFactorNoticeEmail(args: MfaFactorNotice & { at: Date }): {
+  subject: string;
+  html: string;
+} {
+  const subject = `${args.factor} ${args.change === 'added' ? 'added to' : 'removed from'} your owlette account`;
+  const body = {
+    added: 'this was just added to your owlette account, and can be used to sign in from now on.',
+    removed: "this was just removed from your owlette account, and can't be used to sign in any more.",
+    reset:
+      "an owlette administrator just removed every second factor from your account. you'll be asked to set up a new one the next time you sign in.",
+  }[args.change];
+  const content = `
+    <h2 style="color:${EMAIL_COLORS.cyan};margin:0 0 12px;font-size:18px;font-weight:700;text-transform:lowercase;">${subject}</h2>
+    <p style="margin:0 0 20px;color:${EMAIL_COLORS.muted};">${body}</p>
+    ${emailDataTable([
+      { label: 'factor', value: args.factor },
+      { label: 'when', value: emailTimestamp(args.at) },
+    ])}
+    <p style="margin:20px 0 0;color:${EMAIL_COLORS.muted};font-size:13px;">if this wasn't you, change your password, remove any factor you don't recognise under account settings &#8594; security, and email support@tridant.io if you can't get back in.</p>
+  `;
+  return { subject, html: wrapEmailLayout(content, { preheader: subject }) };
+}

@@ -63,6 +63,8 @@ jest.mock('firebase-admin/firestore', () => {
   };
 });
 
+process.env.CORTEX_INTERNAL_SECRET = 'test-secret';
+
 jest.mock('@/lib/hoot-utils.server', () => ({
   __esModule: true,
   COMMAND_POLL_INTERVAL_MS: 0,
@@ -222,6 +224,7 @@ describe('dispatchToolCallAsSystem', () => {
       cortexEventId: EVENT_ID,
       toolName: 'get_system_info',
       commandType: 'mcp_tool_call',
+      paramsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
 
     // The pending command was written with the audit correlation id and
@@ -425,6 +428,7 @@ describe('dispatchExistingCommandAsSystem', () => {
       cortexEventId: EVENT_ID,
       commandType: 'restart_process',
       processName: 'MyApp.exe',
+      paramsHash: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
 
     const pendingSet = sets.find((s) => s.path[s.path.length - 1] === 'pending')!;

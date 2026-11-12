@@ -53,7 +53,17 @@ jest.mock('@/lib/webhookUrl', () => ({
   }),
 }));
 
+const mockCheckRateLimit = jest.fn();
+jest.mock('@/lib/rateLimit', () => ({
+  ...jest.requireActual('@/lib/rateLimit'),
+  checkRateLimit: (...a: unknown[]) => mockCheckRateLimit(...a),
+}));
+
+import { validateWebhookUrl } from '@/lib/webhookUrl';
+import { webhookProbeRateLimit } from '@/lib/rateLimit';
+import { startRedirectTrap } from './helpers/redirectTrap';
 import { POST as createPOST, GET as listGET } from '@/app/api/webhooks/route';
+import { POST as probePOST } from '@/app/api/webhooks/probe/route';
 import {
   GET as detailGET,
   PATCH as detailPATCH,
@@ -130,6 +140,7 @@ beforeEach(() => {
   mocks.update.mockResolvedValue(undefined);
   mocks.get.mockImplementation(() => Promise.resolve(docSnapshot('any', {})));
   mocks.collectionGet.mockResolvedValue(querySnapshot([]));
+  mockCheckRateLimit.mockResolvedValue({ success: true });
   authed();
 });
 
@@ -1067,47 +1078,130 @@ describe('WEBHOOK_MANAGE enforcement', () => {
     expect(mocks.set).not.toHaveBeenCalled();
   });
 
-  it('still lets a member list subscriptions (read paths are unchanged)', async () => {
+  // the rules give subscription documents to site admins only, and deliveries to
+  // nobody client-side; the api answers a plain member the same way.
+  it('403s a member of the site on list, and reads nothing', async () => {
     authedAsNonOwner('member-uid', 'member', [SITE]);
+
+    const res = await listGET(createMockRequest(`http://localhost/api/webhooks?siteId=${SITE}`));
+
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { detail?: string }).detail).toBe('capability not granted');
+    expect(mocks.collectionGet).not.toHaveBeenCalled();
+  });
+
+  it('403s a member of the site on a subscription, its deliveries and one delivery', async () => {
+    authedAsNonOwner('member-uid', 'member', [SITE]);
+    const params = { params: Promise.resolve({ webhookId: WEBHOOK, deliveryId: DELIVERY }) };
+
+    const detailRes = await detailGET(
+      createMockRequest(`http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`),
+      params,
+    );
+    const deliveriesRes = await deliveriesGET(
+      createMockRequest(`http://localhost/api/webhooks/${WEBHOOK}/deliveries?siteId=${SITE}`),
+      params,
+    );
+    const deliveryRes = await deliveryDetailGET(
+      createMockRequest(
+        `http://localhost/api/webhooks/${WEBHOOK}/deliveries/${DELIVERY}?siteId=${SITE}`,
+      ),
+      params,
+    );
+
+    expect([detailRes.status, deliveriesRes.status, deliveryRes.status]).toEqual([403, 403, 403]);
+    expect(mocks.collectionGet).not.toHaveBeenCalled();
+  });
+
+  it('403s a member of the site on delivery retry, and queues nothing', async () => {
+    authedAsNonOwner('member-uid', 'member', [SITE]);
+
+    const res = await retryPOST(
+      createMockRequest(
+        `http://localhost/api/webhooks/${WEBHOOK}/deliveries/${DELIVERY}/retry?siteId=${SITE}`,
+        { method: 'POST' },
+      ),
+      { params: Promise.resolve({ webhookId: WEBHOOK, deliveryId: DELIVERY }) },
+    );
+
+    expect(res.status).toBe(403);
+    expect(mocks.set).not.toHaveBeenCalled();
+  });
+
+  it('403s a member of the site on probe, and sends nothing', async () => {
+    authedAsNonOwner('member-uid', 'member', [SITE]);
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    const res = await probePOST(
+      createMockRequest(`http://localhost/api/webhooks/probe?siteId=${SITE}`, {
+        method: 'POST',
+        body: { url: 'https://example.com/hook', event: 'version.published' },
+      }),
+    );
+
+    expect(res.status).toBe(403);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('lets an admin of the site list subscriptions', async () => {
+    authedAsNonOwner('admin-uid', 'admin', [SITE]);
     mocks.collectionGet.mockResolvedValueOnce(
       querySnapshot([
         {
           id: 'wh_alive_0000000001',
-          data: {
-            url: 'https://example.com/a',
-            events: ['version.published'],
-            paused: false,
-          },
+          data: { url: 'https://example.com/a', events: ['version.published'], paused: false },
         },
       ]),
     );
 
-    const req = createMockRequest(`http://localhost/api/webhooks?siteId=${SITE}`);
-    const res = await listGET(req);
+    const res = await listGET(createMockRequest(`http://localhost/api/webhooks?siteId=${SITE}`));
 
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { webhooks: Array<{ id: string }> };
-    expect(body.webhooks).toHaveLength(1);
+    expect(((await res.json()) as { webhooks: unknown[] }).webhooks).toHaveLength(1);
+  });
+});
+
+// POST /api/webhooks/probe
+
+describe('POST /api/webhooks/probe', () => {
+  const probe = (url: string) =>
+    probePOST(
+      createMockRequest(`http://localhost/api/webhooks/probe?siteId=${SITE}`, {
+        method: 'POST',
+        body: { url, event: 'version.published' },
+      }),
+    );
+
+  it('does not follow a redirect from the probed url', async () => {
+    const trap = await startRedirectTrap();
+    // the probed host is public; where it redirects to is not
+    (validateWebhookUrl as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      url: trap.url,
+      hostname: 'hooks.example.com',
+    });
+    try {
+      const res = await probe(trap.url);
+
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { status: number }).status).toBe(302);
+      expect(trap.hits()).toBe(0);
+    } finally {
+      await trap.close();
+    }
   });
 
-  it('still lets a member read a subscription and its deliveries', async () => {
-    authedAsNonOwner('member-uid', 'member', [SITE]);
+  it('is rate limited per caller, and a limited call sends nothing', async () => {
+    mockCheckRateLimit.mockResolvedValueOnce({ success: false, retryAfter: 60 });
+    const fetchSpy = jest.spyOn(global, 'fetch');
 
-    const detailReq = createMockRequest(
-      `http://localhost/api/webhooks/${WEBHOOK}?siteId=${SITE}`,
-    );
-    const detailRes = await detailGET(detailReq, {
-      params: Promise.resolve({ webhookId: WEBHOOK }),
-    });
-    expect(detailRes.status).toBe(200);
+    const res = await probe('https://example.com/hook');
 
-    const deliveriesReq = createMockRequest(
-      `http://localhost/api/webhooks/${WEBHOOK}/deliveries?siteId=${SITE}`,
-    );
-    const deliveriesRes = await deliveriesGET(deliveriesReq, {
-      params: Promise.resolve({ webhookId: WEBHOOK }),
-    });
-    expect(deliveriesRes.status).toBe(200);
+    expect(res.status).toBe(429);
+    expect(mockCheckRateLimit).toHaveBeenCalledWith(webhookProbeRateLimit, 'webhook_probe:user-1');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
 

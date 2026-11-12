@@ -74,7 +74,7 @@ eight aligned key/value lines on stdout:
 }
 ```
 
-`whoami` is the raw `GET /api/whoami` body: `userId`, `email`, `role`, `key` (`keyId`, `name`, `keyPrefix`, `scopes`, `environment`, `expiresAt`, `lastUsedAt`, `isLegacy`, or `null` for session auth), `rateLimit`, `quota` and `primarySiteId`. `credentialPath` is the `credentials.json` path when the profile's stored credential was read from that file, otherwise `null`. there is no `{ ok, data }` wrapper — see [JSON output shapes](/docs/cli/overview#json-output-shapes).
+`whoami` is the raw `GET /api/whoami` body: `userId`, `email`, `role`, `key` (`keyId`, `name`, `keyPrefix`, `scopes`, `maxToolTier`, `environment`, `expiresAt`, `lastUsedAt`, `isLegacy`, or `null` for session auth), `rateLimit`, `quota` and `primarySiteId`. `credentialPath` is the `credentials.json` path when the profile's stored credential was read from that file, otherwise `null`. there is no `{ ok, data }` wrapper — see [JSON output shapes](/docs/cli/overview#json-output-shapes).
 
 ---
 

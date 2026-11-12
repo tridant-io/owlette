@@ -74,12 +74,12 @@ const STATES: [string, CardProps][] = [
   ],
   [
     'a denied tier-3 call',
-    { toolName: 'run_powershell', args: { path: INPUT_MARKER }, approvalState: 'denied' },
+    { toolName: 'read_file', args: { path: INPUT_MARKER }, approvalState: 'denied' },
   ],
   [
     'a tier-3 call awaiting approval',
     {
-      toolName: 'run_powershell',
+      toolName: 'read_file',
       args: { path: INPUT_MARKER },
       approvalState: 'requested',
       onApprove: () => {},
@@ -155,7 +155,7 @@ describe('ToolCallCard', () => {
       const onApprove = jest.fn();
       const onDeny = jest.fn();
       const view = renderCard({
-        toolName: 'run_powershell',
+        toolName: 'read_file',
         args: { command: 'hostname' },
         approvalState: 'requested',
         approvalTargetLabel: 'STUDIO-01',
@@ -167,11 +167,11 @@ describe('ToolCallCard', () => {
 
     it('keeps the approval banner outside the collapse, open or shut', async () => {
       const { user } = renderAwaiting();
-      const toggle = toggleFor('run_powershell');
+      const toggle = toggleFor('read_file');
       expect(toggle).toHaveTextContent('tier 3');
       expect(toggle).toHaveTextContent('awaiting approval');
       expect(screen.getByText(/hoot wants to run the privileged/)).toHaveTextContent(
-        'hoot wants to run the privileged run_powershell tool on STUDIO-01.',
+        'hoot wants to run the privileged read_file tool on STUDIO-01.',
       );
       expect(screen.getByRole('button', { name: 'approve' })).toBeEnabled();
       expect(screen.getByRole('button', { name: 'deny' })).toBeEnabled();
@@ -187,7 +187,7 @@ describe('ToolCallCard', () => {
 
     it('approves once, then locks both buttons', async () => {
       const { user, onApprove, onDeny } = renderAwaiting();
-      await user.click(toggleFor('run_powershell'));
+      await user.click(toggleFor('read_file'));
 
       await user.click(screen.getByRole('button', { name: 'approve' }));
       expect(onApprove).toHaveBeenCalledTimes(1);
@@ -259,6 +259,20 @@ describe('ToolCallCard', () => {
     });
   });
 
+  it('spells out what a launch change would run, without expanding', () => {
+    renderCard({
+      toolName: 'update_process',
+      args: { process_name: 'Lobby Wall', name: 'Lobby', exe_path: 'C:/builds/wall-2.exe' },
+      approvalState: 'requested',
+      onApprove: jest.fn(),
+      onDeny: jest.fn(),
+    });
+
+    expect(screen.getByText('process_name: Lobby Wall')).toBeInTheDocument();
+    expect(screen.getByText('exe_path: C:/builds/wall-2.exe')).toBeInTheDocument();
+    expect(screen.queryByText('name: Lobby')).toBeNull();
+  });
+
   describe('an approval that overrides active hours', () => {
     function renderOverride(args: Record<string, unknown>) {
       return renderCard({
@@ -292,7 +306,7 @@ describe('ToolCallCard', () => {
     /** The banner sentence; the target rides in a span, so read the whole line. */
     function banner(props: Partial<CardProps>) {
       renderCard({
-        toolName: 'run_powershell',
+        toolName: 'read_file',
         args: { command: 'hostname' },
         approvalState: 'requested',
         onApprove: () => {},
@@ -375,7 +389,7 @@ describe('ToolCallCard', () => {
     });
 
     it('names no target at all when neither is given', () => {
-      expect(banner({})).toHaveTextContent('hoot wants to run the privileged run_powershell tool.');
+      expect(banner({})).toHaveTextContent('hoot wants to run the privileged read_file tool.');
     });
 
     describe('for a call that names its own machines, in a turn on several', () => {

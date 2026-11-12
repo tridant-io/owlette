@@ -2,7 +2,8 @@
  * Action core: queue a remote command on a machine. Shared by the public route
  * and server-side callers (hoot tool dispatch via `invokeAsSystem`, jobs).
  *
- * Owns allowlist enforcement, the plan gate, the offline check, the command-id mint, the
+ * Owns allowlist enforcement, the plan gate, the offline check, the machine's hoot
+ * switch, the published-installer check, the command-id mint, the
  * `stampCommand` lifecycle write and the audit emission. Auth, capability,
  * rate-limit and idempotency belong to the wrapper — this ASSUMES it runs
  * inside an `authorizedSiteHandler` / `invokeAsSystem` frame with the actor's
@@ -17,7 +18,10 @@ import { stampCommand } from '@/lib/commandLifecycle';
 import { emitMutation } from '@/lib/auditLogClient';
 import { hasActiveHoursGuard, HELD_RESTART_UNSUPPORTED_REASON, OVERRIDE_REASON_MAX } from '@/lib/activeHours';
 import type { Actor } from '@/lib/capabilities';
+import { keyedHash, toolCallHash } from '@/lib/hoot/launchAudit.server';
+import { isPublishedInstaller } from '@/lib/latestInstaller.server';
 import { PLAN_REQUIRED_DETAIL, requireEntitlement, type PlanFlag } from '@/lib/plan.server';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { FieldValue } from 'firebase-admin/firestore';
 
 /**
@@ -233,6 +237,21 @@ function stripReservedKeys(payload: Record<string, unknown>): Record<string, unk
   return out;
 }
 
+/**
+ * what a tool call adds to its audit row: which tool, its parameter names, and a keyed hash
+ * of the call, never the values, the same fields hoot's own rows carry.
+ * the parameter check has already refused any name no tool has, so the name is short and known.
+ */
+function toolCallAuditAttributes(payload: Record<string, unknown>): Record<string, unknown> {
+  const toolName = String(payload.tool_name);
+  const toolParams = (payload.tool_params ?? {}) as Record<string, unknown>;
+  return {
+    toolName,
+    paramNames: Object.keys(toolParams),
+    paramsHash: keyedHash(toolCallHash(toolName, toolParams)),
+  };
+}
+
 export interface ExecuteMachineCommandOptions {
   /** Injected Firestore for tests; production omits it. */
   db?: ReturnType<typeof getAdminDb>;
@@ -305,6 +324,10 @@ export async function executeMachineCommand(
   }
 
   const safePayload = stripReservedKeys(input.payload);
+  if (cmdType === 'mcp_tool_call') {
+    const refusal = toolParamRefusal(String(safePayload.tool_name), safePayload.tool_params ?? {});
+    if (refusal) throw new ExecuteMachineCommandError(400, 'tool_params_invalid', refusal);
+  }
   const { siteId, machineId } = ctx;
   const now = options.now ? options.now() : Date.now();
 
@@ -335,6 +358,29 @@ export async function executeMachineCommand(
   if (cmdType === 'reboot_machine' && safePayload.when === 'after_active_hours' && !hasActiveHoursGuard(machineData)) {
     throw new ExecuteMachineCommandError(409, 'held_restart_unsupported', HELD_RESTART_UNSUPPORTED_REASON);
   }
+  if (cmdType === 'mcp_tool_call' && machineData.cortexEnabled === false) {
+    throw new ExecuteMachineCommandError(
+      423,
+      'hoot_disabled',
+      `hoot is switched off on machine ${machineId}, so its tools can't run there`,
+    );
+  }
+  if (
+    cmdType === 'update_owlette' &&
+    !(await isPublishedInstaller(db, {
+      url: safePayload.installer_url,
+      checksum: safePayload.checksum_sha256,
+      version: safePayload.target_version,
+    }))
+  ) {
+    throw new ExecuteMachineCommandError(
+      403,
+      'installer_not_published',
+      'update_owlette takes only a published installer: installer_url and checksum_sha256 must match a file of target_version, or of the latest version when none is named',
+    );
+  }
+  // ahead of the write: a command that can't be audited is never queued
+  const toolCallAudit = cmdType === 'mcp_tool_call' ? toolCallAuditAttributes(safePayload) : {};
 
   // ── write command to pending queue ──────────────────────────────────────
   const commandId = `cmd_${now.toString(36)}_${Math.random()
@@ -378,6 +424,7 @@ export async function executeMachineCommand(
       ...(activeHoursOverride
         ? { activeHoursOverride: true, activeHoursOverrideReason: activeHoursOverride.reason }
         : {}),
+      ...toolCallAudit,
       ...input.auditAttributes,
     },
   });

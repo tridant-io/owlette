@@ -9,6 +9,7 @@ import {
 import { emitMutation } from '@/lib/auditLogClient';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
+  mfaChallengeProblem,
   problem,
   problemFromError,
   problemTokenExpired,
@@ -21,10 +22,13 @@ import {
   type ApiKeyEnvironment,
   type ApiKeyLookup,
   type ApiKeyRecord,
+  DEFAULT_MAX_TOOL_TIER,
   DEFAULT_TTL_DAYS,
   MAX_TTL_DAYS,
+  normalizeMaxToolTier,
   ROTATION_GRACE_MS,
 } from '@/lib/apiKeyTypes';
+import { requireVerifiedSessionForToolTier } from '../../_shared';
 
 interface RouteParams {
   params: Promise<{ keyId: string }>;
@@ -37,7 +41,7 @@ interface RotateBody {
 /**
  * POST /api/keys/{keyId}/rotate — { ttlDays?: 1-365, default 90 }
  *
- * Issues a new raw key with the same scopes and environment. The old key stays
+ * Issues a new raw key with the same scopes, tool tier and environment. The old key stays
  * valid for a 24-hour grace window, after which the `retiresAt` check in
  * resolveApiKeyContext rejects it. Response matches POST /api/keys.
  */
@@ -114,6 +118,12 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         );
       }
 
+      const maxToolTier = normalizeMaxToolTier(oldKey.maxToolTier);
+      if (maxToolTier > DEFAULT_MAX_TOOL_TIER) {
+        const unverified = await requireVerifiedSessionForToolTier(request, userId);
+        if (unverified) return unverified;
+      }
+
       // Legacy pre-scoping keys carry no scopes/environment; scopes are
       // preserved verbatim and an empty scopes[] keeps the legacy bypass path.
       //
@@ -147,6 +157,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         keyPrefix,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
         createdAt: FieldValue.serverTimestamp(),
         lastUsedAt: null,
@@ -166,6 +177,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         keyId: newKeyId,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
       };
       batch.set(db.collection('api_keys').doc(keyHash), newLookup);
@@ -196,6 +208,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
           rotatedFromKeyId: keyId,
           previousKeyRetiresAt: retiresAt,
           scopeCount: scopes.length,
+          maxToolTier,
           ttlDays,
         },
       });
@@ -207,6 +220,7 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         name,
         environment,
         scopes,
+        maxToolTier,
         expiresAt,
         keyPrefix,
         rotatedFromKeyId: keyId,
@@ -217,6 +231,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
+        const refused = mfaChallengeProblem(error);
+        if (refused) return refused;
         if (error.code === 'token_expired') {
           const expiredAt =
             typeof error.details?.expiredAt === 'number' ? error.details.expiredAt : undefined;

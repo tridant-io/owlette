@@ -13,9 +13,9 @@ keywords: ["callback", "slack", "discord", "pagerduty", "integration", "notify",
 | surface | who uses it | controls |
 |---|---|---|
 | admin panel → webhooks | site owners and admins | site selector, **add webhook**, an on/off switch, **test**, edit, delete |
-| settings → webhooks | anyone on the site | everyone: the list, **recent deliveries** and retrying a delivery. owners and admins also get **create webhook**, pause and resume, rotating the secret, and delete |
+| settings → webhooks | site owners and admins | the list, **recent deliveries**, retrying a delivery, **create webhook**, pause and resume, rotating the secret, and delete |
 
-creating, editing, testing, pausing, deleting and rotating a secret need `WEBHOOK_MANAGE` on the site, which owners and admins hold. a member on settings → webhooks gets no create button and no card actions, and the API refuses those calls. the admin panel page opens only for someone who is an owner or admin on at least one site.
+every webhook action, reading the list and its deliveries included, needs `WEBHOOK_MANAGE` on the site, which owners and admins hold. a member who opens settings → webhooks is told the site's admins manage them, and the API refuses their calls. the admin panel page opens only for someone who is an owner or admin on at least one site.
 
 the probe, `POST /api/webhooks/probe`, has no button: call it from the API or with [`owlette trigger --via-api`](/docs/cli/reference/trigger#server-probe-mode).
 

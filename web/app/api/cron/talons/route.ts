@@ -25,6 +25,7 @@
  * leftovers are reported as `deferred`, not dropped.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { FieldValue, type DocumentReference, type Firestore } from 'firebase-admin/firestore';
 import { apiError } from '@/lib/apiErrorResponse';
 import { generateCorrelationId } from '@/lib/auditLog.server';
@@ -353,8 +354,7 @@ async function recoverStaleRuns(db: Firestore, now: Date): Promise<number> {
 }
 
 export async function GET(request: NextRequest) {
-  const cronSecret = request.headers.get('x-cron-secret');
-  if (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretMatches(request.headers.get('x-cron-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

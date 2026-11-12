@@ -82,7 +82,7 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
     setSteppingUp(true);
     try {
       await stepUpWithPasskey();
-      toast.success('verified — you can add another factor now');
+      toast.success('verified — you can change your factors now');
     } catch (err) {
       if (err instanceof Error && err.name === 'NotAllowedError') {
         toast.error('passkey verification was cancelled');
@@ -172,9 +172,9 @@ export function MfaFactorsSection({ userId, onNavigateAway }: MfaFactorsSectionP
               <div className="flex items-start gap-2">
                 <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent-cyan" />
                 <p className="text-xs text-muted-foreground">
-                  verify a factor you already have before adding another. this stops
-                  someone with your signed-in browser from quietly attaching one of
-                  their own.
+                  verify a factor you already have before adding or changing one. this
+                  stops someone with your signed-in browser from quietly swapping in one
+                  of their own.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 pl-6">

@@ -1,9 +1,12 @@
 """
 MCP Tool wrappers for Owlette Cortex (Agent SDK).
 
-Wraps the 19 existing tools from mcp_tools.py as Agent SDK @tool() decorated
-functions. Tier 1 and Tier 3 tools execute directly. Tier 2 tools use file-based
-IPC to the service (Cortex runs in user session, service runs as SYSTEM).
+Wraps tools from mcp_tools.py as Agent SDK @tool() decorated functions. Tier 1
+and Tier 3 tools execute directly. Tier 2 tools use file-based IPC to the service
+(Cortex runs in user session, service runs as SYSTEM).
+
+Nobody can approve a call here, so no tool changes what the machine launches or
+runs code: those wait for a person in a dashboard chat.
 
 IPC protocol:
   Cortex writes -> ipc/cortex_commands/{cmd_id}.json
@@ -268,12 +271,6 @@ def _make_tier2_tools() -> list:
     async def start_process(args: dict[str, Any]) -> dict[str, Any]:
         return await _execute_via_ipc('start_process', args)
 
-    @tool("set_launch_mode",
-          "Set launch mode for an Owlette-configured process: off, always, or scheduled.",
-          {"process_name": str, "mode": str})
-    async def set_launch_mode(args: dict[str, Any]) -> dict[str, Any]:
-        return await _execute_via_ipc('set_launch_mode', args)
-
     @tool("capture_screenshot",
           "Capture a screenshot of this machine's desktop. Returns the captured "
           "image for you to analyze visually — use this to see what is actually "
@@ -308,37 +305,14 @@ def _make_tier2_tools() -> list:
                 })
         return {"content": content}
 
-    return [restart_process, kill_process, start_process, set_launch_mode,
-            capture_screenshot]
+    return [restart_process, kill_process, start_process, capture_screenshot]
 
 
-# Tier 3: privileged tools, executed directly
+# Tier 3: privileged reads, executed directly
 
 
 def _make_tier3_tools(config: dict) -> list:
     """Create Tier 3 tool functions with config bound."""
-
-    @tool("run_command",
-          "Execute a shell command (must start with an allowed command from the allow-list).",
-          {"command": str})
-    async def run_command(args: dict[str, Any]) -> dict[str, Any]:
-        return await _execute_direct('run_command', args, config)
-
-    @tool("run_powershell",
-          "Execute a PowerShell command (first cmdlet must be in the allow-list).",
-          {"script": str})
-    async def run_powershell(args: dict[str, Any]) -> dict[str, Any]:
-        return await _execute_direct('run_powershell', args, config)
-
-    @tool("execute_script",
-          "Execute a PowerShell script on this machine with NO command restrictions. "
-          "Use for: installing software (winget, choco), running diagnostics/stress tests, "
-          "managing Windows services, editing the registry, configuring network/firewall, "
-          "downloading files, managing scheduled tasks, or ANY system administration task. "
-          "Scripts run in the user session. Set timeout_seconds for long operations.",
-          {"script": str, "timeout_seconds": int, "working_directory": str})
-    async def execute_script(args: dict[str, Any]) -> dict[str, Any]:
-        return await _execute_direct('execute_script', args, config)
 
     @tool("read_file",
           "Read the contents of a file (max 100KB).",
@@ -346,19 +320,13 @@ def _make_tier3_tools(config: dict) -> list:
     async def read_file(args: dict[str, Any]) -> dict[str, Any]:
         return await _execute_direct('read_file', args, config)
 
-    @tool("write_file",
-          "Write content to a file. Creates the file if it does not exist.",
-          {"path": str, "content": str})
-    async def write_file(args: dict[str, Any]) -> dict[str, Any]:
-        return await _execute_direct('write_file', args, config)
-
     @tool("list_directory",
           "List directory contents with file sizes and modification dates.",
           {"path": str})
     async def list_directory(args: dict[str, Any]) -> dict[str, Any]:
         return await _execute_direct('list_directory', args, config)
 
-    return [run_command, run_powershell, execute_script, read_file, write_file, list_directory]
+    return [read_file, list_directory]
 
 
 # Server factory

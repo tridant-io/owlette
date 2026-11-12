@@ -53,7 +53,7 @@ _WINDOWS_ALLOWED_COMMANDS = [
 # the tool is Tier 3 (dashboard-audited) on both.
 _POSIX_ALLOWED_COMMANDS = [
     'hostname', 'whoami', 'id', 'uname', 'uptime', 'date', 'sw_vers',
-    'ls', 'cat', 'echo', 'env', 'df', 'du', 'free', 'ps', 'lsof',
+    'ls', 'cat', 'echo', 'df', 'du', 'free', 'ps', 'lsof',
     'ip', 'ifconfig', 'netstat', 'ss', 'ping', 'traceroute', 'dig', 'nslookup',
     'host', 'systemctl', 'journalctl', 'launchctl', 'system_profiler',
     'lsb_release', 'lspci', 'lscpu', 'lsblk', 'dmesg', 'nvidia-smi',

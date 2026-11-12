@@ -10,6 +10,7 @@ import { WEBHOOK_SECRETS_COLLECTION } from '@/lib/webhookSecrets.server';
 import logger from '@/lib/logger';
 import { pausedByPlan, type PlanMemo } from '@/lib/planPause.server';
 import { DISPLAY_EVENT_ROUTING } from '@/lib/alerts/displayEventRouting';
+import { validateWebhookUrl } from '@/lib/webhookUrl';
 import crypto from 'crypto';
 
 export type WebhookPlatform = 'slack' | 'discord' | 'generic';
@@ -317,7 +318,17 @@ export async function fireWebhooks(
   const deliveries = liveDocs.map(async (doc) => {
     const webhook = doc.data();
     try {
-      const platform = detectPlatform(webhook.url);
+      // checked at send, not only at save: the address behind a saved url can change
+      const urlCheck = await validateWebhookUrl(webhook.url);
+      if (!urlCheck.ok) {
+        logger.warn('webhook url refused at send; counted as a failed delivery', {
+          context: 'webhookSender',
+          data: { siteId, webhookId: doc.id, eventType, reason: urlCheck.reason },
+        });
+        throw new Error(urlCheck.reason);
+      }
+
+      const platform = detectPlatform(urlCheck.url);
       const body = formatForPlatform(platform, payload);
 
       // Skip HMAC for Slack/Discord — they don't use it.
@@ -346,10 +357,11 @@ export async function fireWebhooks(
         headers['X-owlette-Event'] = eventType;
       }
 
-      const response = await fetch(webhook.url, {
+      const response = await fetch(urlCheck.url, {
         method: 'POST',
         headers,
         body,
+        redirect: 'manual',
         signal: AbortSignal.timeout(5000),
       });
 
@@ -392,7 +404,10 @@ export async function testWebhook(
   url: string,
   secret: string
 ): Promise<{ status: number; error?: string }> {
-  const platform = detectPlatform(url);
+  const urlCheck = await validateWebhookUrl(url);
+  if (!urlCheck.ok) return { status: 0, error: urlCheck.detail ?? urlCheck.reason };
+
+  const platform = detectPlatform(urlCheck.url);
 
   // Realistic payload so Slack/Discord render a proper preview.
   const payload: WebhookPayload = {
@@ -424,10 +439,11 @@ export async function testWebhook(
   }
 
   try {
-    const response = await fetch(url, {
+    const response = await fetch(urlCheck.url, {
       method: 'POST',
       headers,
       body,
+      redirect: 'manual',
       signal: AbortSignal.timeout(10000),
     });
 

@@ -28,13 +28,31 @@ test.describe('public routes', () => {
     await expect(page.getByRole('link', { name: /privacy policy/i })).toHaveAttribute('href', '/privacy');
   });
 
-  test('unsubscribe success and failure states render', async ({ page }) => {
-    await page.goto('/unsubscribe?success=true');
+  test('unsubscribe asks first, then turns alerts off with one click', async ({ page }) => {
+    // the POST itself is the route's unit test; this is the page around it
+    const posted: unknown[] = [];
+    await page.route('**/api/unsubscribe', async (route) => {
+      posted.push(route.request().postDataJSON());
+      await route.fulfill({ status: 200, json: { unsubscribed: true } });
+    });
+
+    await page.goto('/unsubscribe?token=e2e-token');
+    await expect(page.getByRole('heading', { name: /^unsubscribe$/i })).toBeVisible();
+    expect(posted).toEqual([]);
+
+    await page.getByRole('button', { name: 'turn off alert emails', exact: true }).click();
     await expect(page.getByRole('heading', { name: /unsubscribed/i })).toBeVisible();
     await expect(page.getByText(/all alert emails, including offline notifications, have been turned off/i)).toBeVisible();
+    expect(posted).toEqual([{ token: 'e2e-token' }]);
+  });
 
+  test('unsubscribe says so when the link is missing or refused', async ({ page }) => {
     await page.goto('/unsubscribe');
     await expect(page.getByRole('heading', { name: /^unsubscribe$/i })).toBeVisible();
+    await expect(page.getByText(/something went wrong/i)).toBeVisible();
+
+    await page.goto('/unsubscribe?token=not-valid');
+    await page.getByRole('button', { name: 'turn off alert emails', exact: true }).click();
     await expect(page.getByText(/something went wrong/i)).toBeVisible();
   });
 

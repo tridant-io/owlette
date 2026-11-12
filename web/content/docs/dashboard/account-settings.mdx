@@ -102,7 +102,7 @@ for developers: an AI agent such as Claude Code, running on one of your machines
 
 ## security
 
-- **two-factor authentication** lists every second factor on the account in one place: the **authenticator app** (six-digit codes from an app like 1Password or Authy — **set up**, or **remove**, which asks for a current code or a backup code) and your **passkeys**, which you add and remove here. when a factor already exists, adding another first asks you to verify one you have, so someone at your signed-in browser cannot quietly attach their own. see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication).
+- **two-factor authentication** lists every second factor on the account in one place: the **authenticator app** (six-digit codes from an app like 1Password or Authy — **set up**, or **remove**, which asks for a current code or a backup code) and your **passkeys**, which you add, rename and remove here. when a factor already exists, adding another, or renaming or removing a passkey, first asks you to verify one you have, so someone at your signed-in browser cannot quietly swap in their own. every factor added to or removed from the account is emailed to your address. see [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication).
 - **change password** — **update password** opens the fields: current password, then the new one twice. **save changes** applies it.
 
 backup codes are issued during [two-factor setup](/docs/dashboard/getting-started#set-up-two-factor-authentication), not here.
@@ -111,7 +111,7 @@ backup codes are issued during [two-factor setup](/docs/dashboard/getting-starte
 
 ## api
 
-your personal scoped API keys — the same manager as `/settings/api-keys`, with expiry, custom scopes and rotation. a key goes in the `x-api-key` header. scopes, rotation and expiry are covered in [API authentication](/docs/api/authentication).
+your personal scoped API keys — the same manager as `/settings/api-keys`, with expiry, custom scopes, [tool tier](/docs/api/authentication#tool-tiers) and rotation. a key goes in the `x-api-key` header. scopes, rotation and expiry are covered in [API authentication](/docs/api/authentication).
 
 ---
 

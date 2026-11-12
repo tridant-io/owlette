@@ -310,7 +310,7 @@ the 1.0.0rc0 stream parser understands only line-prefixed `0:"…"` / `3:"…"` 
 
 ### keys
 
-`client.keys` wraps `/api/keys`, which takes a signed-in session or a Firebase ID token as the bearer token — an API key cannot create, list, edit, rotate, or revoke keys. open a separate `Roost` with that token for these calls.
+`client.keys` wraps `/api/keys`, which takes a signed-in session or a Firebase ID token as the bearer token — an API key cannot create, list, edit, rotate, or revoke keys. open a separate `Roost` with that token for these calls. an ID token works only for an account with no second factor; any other gets `403 mfa_challenge_required` (see [sessions and ID tokens](/docs/api/authentication#sessions-and-id-tokens)), so manage its keys in the dashboard. a key made here is [tool tier](/docs/api/authentication#tool-tiers) 1, and rotating a key above tier 1 needs the dashboard too.
 
 ```python
 from roost import ApiKeyScope, Roost
@@ -475,14 +475,14 @@ switch on `RoostApiError.code` for the stable failures: `cannot_change_owner_rol
 ### installer and installer deployments
 
 ```python
-# installer versions — superadmin only
+# installer versions — superadmin only. promoting to latest needs installer=*:admin
 latest = await client.installer.latest()     # InstallerVersion
 await client.installer.upload(
     "./Owlette-Installer-v4.1.5.exe",        # .exe, .pkg or .deb
     version="4.1.5",
-    set_as_latest=False,                     # default True
+    set_as_latest=False,                     # default True, which promotes; a write-only key passes False
 )
-await client.installer.set_latest("4.1.5")
+await client.installer.set_latest("4.1.5")   # installer=*:admin
 
 # push a third-party installer to machines on a site
 created = await client.installer_deployments.create(

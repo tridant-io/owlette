@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getSiteLabel, recipientWantsMachine, type SiteRecipient } from '@/lib/adminUtils.server';
@@ -270,8 +271,7 @@ async function writeSiteOfflineState(
 }
 
 export async function GET(request: NextRequest) {
-  const cronSecret = request.headers.get('x-cron-secret');
-  if (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretMatches(request.headers.get('x-cron-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

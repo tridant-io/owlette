@@ -199,14 +199,19 @@ import { POST as registerPOST } from '@/app/api/installer/[version]/register/rou
 
 // Fixtures
 
-function authedAsSuperadminWithKey(perm: 'read' | 'write' | 'admin', userId = 'user-superadmin'): void {
+type InstallerPermission = 'read' | 'write' | 'admin';
+
+function authedAsSuperadminWithKey(
+  perm: InstallerPermission | InstallerPermission[],
+  userId = 'user-superadmin',
+): void {
   mockResolveAuth.mockResolvedValue({
     userId,
     keyContext: {
       keyId: 'key_test',
       environment: 'live',
       isLegacy: false,
-      scopes: [{ resource: 'installer', id: '*', permissions: [perm] }],
+      scopes: [{ resource: 'installer', id: '*', permissions: [perm].flat() }],
       expiresAt: null,
     },
   });
@@ -300,7 +305,7 @@ function seedUpload(uploadId: string, overrides: Partial<Record<string, unknown>
       storagePath: 'agent-installers/versions/3.0.0/Owlette-Installer-v3.0.0.exe',
       userId: 'user-superadmin',
       releaseNotes: 'a release',
-      setAsLatest: true,
+      setAsLatest: false,
       status: 'pending',
       expiresAt: { toMillis: () => Date.now() + 600000 },
       ...overrides,
@@ -506,7 +511,7 @@ describe('POST /api/installer/upload', () => {
     const req = createMockRequest('http://localhost/api/installer/upload', {
       method: 'POST',
       headers: { 'Idempotency-Key': 'installer-upload-happy' },
-      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', setAsLatest: false },
     });
     const res = await uploadPOST(req);
     const body = await res.json();
@@ -572,7 +577,7 @@ describe('POST /api/installer/upload', () => {
     const idemKey = 'dup-key-abc';
     const req1 = createMockRequest('http://localhost/api/installer/upload', {
       method: 'POST',
-      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', setAsLatest: false },
       headers: { 'Idempotency-Key': idemKey },
     });
     const res1 = await uploadPOST(req1);
@@ -582,7 +587,7 @@ describe('POST /api/installer/upload', () => {
     mockEmitMutation.mockClear();
     const req2 = createMockRequest('http://localhost/api/installer/upload', {
       method: 'POST',
-      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', setAsLatest: false },
       headers: { 'Idempotency-Key': idemKey },
     });
     const res2 = await uploadPOST(req2);
@@ -597,7 +602,7 @@ describe('POST /api/installer/upload', () => {
     const req = createMockRequest('http://localhost/api/installer/upload', {
       method: 'POST',
       headers: { 'Idempotency-Key': 'installer-upload-pkg' },
-      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.pkg' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.pkg', setAsLatest: false },
     });
     const res = await uploadPOST(req);
     const body = await res.json();
@@ -658,6 +663,100 @@ describe('POST /api/installer/upload', () => {
 
     expect(res.status).toBe(400);
     expect(body.detail).toContain('.exe, .pkg or .deb');
+  });
+
+  it.each([
+    ['omits setAsLatest', {}],
+    ['sends setAsLatest: true', { setAsLatest: true }],
+  ])('refuses a key without installer admin when the upload %s, before reserving anything', async (_how, extra) => {
+    authedAsSuperadminWithKey('write');
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': `installer-upload-promote-${JSON.stringify(extra)}` },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', ...extra },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.code).toBe('scope_insufficient');
+    expect(Object.keys(docStore).some((path) => path.startsWith('installer_uploads/'))).toBe(false);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('records a promoting upload for a key with installer write and admin', async () => {
+    authedAsSuperadminWithKey(['write', 'admin']);
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-admin-promote' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(docStore[`installer_uploads/${body.uploadId}`]?.data?.setAsLatest).toBe(true);
+  });
+
+  it('records a promoting upload for a superadmin session', async () => {
+    authedAsSuperadminSession();
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': 'installer-upload-session-promote' },
+      body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe' },
+    });
+    const res = await uploadPOST(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(docStore[`installer_uploads/${body.uploadId}`]?.data?.setAsLatest).toBe(true);
+  });
+});
+
+describe('installer upload and promotion, end to end', () => {
+  async function uploadAndFinalize(body: Record<string, unknown>, tag: string) {
+    const started = await uploadPOST(
+      createMockRequest('http://localhost/api/installer/upload', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': `e2e-start-${tag}` },
+        body: { version: '3.0.0', fileName: 'Owlette-Installer-v3.0.0.exe', ...body },
+      }),
+    );
+    expect(started.status).toBe(200);
+    const { uploadId } = await started.json();
+    return uploadPUT(
+      createMockRequest('http://localhost/api/installer/upload', {
+        method: 'PUT',
+        headers: { 'Idempotency-Key': `e2e-finalize-${tag}` },
+        body: { uploadId, checksum_sha256: STORAGE_SHA256 },
+      }),
+    );
+  }
+
+  it('a write-only key uploads a version without moving latest', async () => {
+    authedAsSuperadminWithKey('write');
+    seedLatest('2.9.0');
+
+    const res = await uploadAndFinalize({ setAsLatest: false }, 'write-only');
+
+    expect(res.status).toBe(200);
+    expect(docStore['installer_metadata/data/versions/3.0.0']?.data?.version).toBe('3.0.0');
+    expect(docStore['installer_metadata/latest']?.data?.version).toBe('2.9.0');
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('a key with write and admin uploads and promotes', async () => {
+    authedAsSuperadminWithKey(['write', 'admin']);
+    seedLatest('2.9.0');
+
+    const res = await uploadAndFinalize({}, 'admin');
+
+    expect(res.status).toBe(200);
+    expect(docStore['installer_metadata/latest']?.data?.version).toBe('3.0.0');
+    expect(mockSyncInstallerRelease).toHaveBeenCalledWith('3.0.0');
   });
 });
 
@@ -823,8 +922,29 @@ describe('PUT /api/installer/upload', () => {
     expect(files.macos_arm64).toEqual(MAC_FILE);
   });
 
-  it('writes latest with every platform after a mac upload with setAsLatest', async () => {
+  it('refuses to finalize a promoting upload for a key without installer admin, and leaves it pending', async () => {
     authedAsSuperadminWithKey('write');
+    seedLatest('2.9.0');
+    seedUpload('upload-1', { setAsLatest: true });
+
+    const req = createMockRequest('http://localhost/api/installer/upload', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': 'installer-finalize-promote-write-only' },
+      body: { uploadId: 'upload-1', checksum_sha256: STORAGE_SHA256 },
+    });
+    const res = await uploadPUT(req);
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.code).toBe('scope_insufficient');
+    expect(docStore['installer_metadata/data/versions/3.0.0']).toBeUndefined();
+    expect(docStore['installer_metadata/latest']?.data?.version).toBe('2.9.0');
+    expect(docStore['installer_uploads/upload-1']?.data?.status).toBe('pending');
+    expect(mockSyncInstallerRelease).not.toHaveBeenCalled();
+  });
+
+  it('writes latest with every platform after a mac upload with setAsLatest', async () => {
+    authedAsSuperadminWithKey(['write', 'admin']);
     seedVersion('3.0.0', {
       files: { windows_x64: WINDOWS_FILE },
       release_date: { toDate: () => new Date('2026-04-28T00:00:00.000Z') },
@@ -1406,7 +1526,7 @@ describe('installer uploads on R2', () => {
       createMockRequest('http://localhost/api/installer/upload', {
         method: 'POST',
         headers: { 'Idempotency-Key': key },
-        body: { version: '3.0.0', fileName: 'owlette-setup.exe' },
+        body: { version: '3.0.0', fileName: 'owlette-setup.exe', setAsLatest: false },
       }),
     );
   }
@@ -1620,7 +1740,7 @@ describe('installer uploads on R2', () => {
   });
 
   it('registers on a promoting finalize, and keeps the registration state off the latest pointer', async () => {
-    authedAsSuperadminWithKey('write');
+    authedAsSuperadminWithKey(['write', 'admin']);
     // a mac-only version: no flat windows fields, so the windows upload is its first
     seedVersion('3.0.0', {
       download_url: undefined,

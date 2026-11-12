@@ -94,6 +94,7 @@ for someone who has lost every second factor and their backup codes. `reset 2FA.
 - removes the authenticator app, every passkey and the backup codes
 - revokes their trusted devices, so no browser skips the second-factor step any more. a session they already hold stays signed in until it expires
 - has them set up 2FA again at their next sign-in
+- emails them that their second factors were removed
 
 you cannot reset your own (`403`); remove your own factors from account settings instead. confirm who you are talking to first: as the dialog says, a reset hands the account to whoever signs in next. see [superadmin factor reset](/docs/reference/authentication#superadmin-factor-reset).
 

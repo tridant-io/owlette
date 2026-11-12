@@ -33,6 +33,21 @@ jest.mock('@/lib/actions/computeInstallerChecksum.server', () => ({
   computeInstallerChecksum: (...args: unknown[]) => mockComputeInstallerChecksum(...args),
 }));
 
+jest.mock('@/lib/auditLog.server', () => ({
+  generateCorrelationId: () => 'corr-1',
+  writeAuditEntryBlocking: async () => undefined,
+}));
+
+// a stored screenshot url signs to a fresh read url for the machine it came from; a forged one signs to nothing.
+jest.mock('@/lib/screenshotStorage.server', () => ({
+  screenshotUrlForModel: async (url: string, siteId: string, machineId: string) =>
+    url.includes('forged')
+      ? null
+      : url.startsWith('/api/')
+        ? `https://signed.example/${siteId}/${machineId}${url}`
+        : url,
+}));
+
 const mockCreateProcess = jest.fn();
 const mockUpdateProcess = jest.fn();
 const mockDeleteProcess = jest.fn();
@@ -219,6 +234,8 @@ import {
 } from '@/lib/hoot-utils.server';
 
 import { allTools } from '@/lib/mcp-tools';
+import { changesWhatMachineLaunches } from '@/lib/hoot/launchChange';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { decryptApiKey } from '@/lib/llm-encryption.server';
 import { MAX_TARGET_MACHINES } from '@/lib/hoot/target';
 import { InstallerChecksumError } from '@/lib/actions/computeInstallerChecksum.server';
@@ -551,16 +568,22 @@ describe('executeExistingCommand', () => {
 });
 
 describe('deploy_software', () => {
-  /** Records every doc write by path, in order; `presets` is the system_presets collection. */
+  /**
+   * Records every doc write by path, in order; `presets` is the system_presets collection.
+   * A chat's approval records are kept apart and read back, so a turn can be approved.
+   */
   function createDeployDb(presets: Record<string, Record<string, unknown>> = {}) {
     const writes: { path: string; data: Record<string, unknown>; options?: unknown }[] = [];
+    const chatDocs = new Map<string, Record<string, unknown>>();
     const doc = (path: string): unknown => ({
       get: jest.fn(async () => {
+        if (path.startsWith('chats/')) return { exists: chatDocs.has(path), data: () => chatDocs.get(path) };
         const preset = presets[path.replace(/^system_presets\//, '')];
         return { exists: path.startsWith('system_presets/') && !!preset, data: () => preset };
       }),
       set: jest.fn(async (data: Record<string, unknown>, options?: unknown) => {
-        writes.push({ path, data, options });
+        if (path.startsWith('chats/')) chatDocs.set(path, data);
+        else writes.push({ path, data, options });
       }),
       collection: (name: string) => col(`${path}/${name}`),
     });
@@ -745,9 +768,15 @@ describe('deploy_software', () => {
       stopDuringDownload(stop, false);
       const def = allTools.find((t) => t.name === 'deploy_software')!;
       const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [def], false, [], {
+        userId: 'u1',
         machineScope: null,
+        launchChangeApprovable: true,
+        turnId: 'turn-1',
         toolCallbacks: { abortSignal: stop.signal },
       });
+      // a deployment always asks a person: the card is recorded, then the turn claims the answer
+      expect(await tools.deploy_software.needsApproval(PLAYER, { toolCallId: 'call_1' })).toBe(true);
+      await db.collection('chats').doc('c1').collection('approvals').doc('call_1').set({ turnId: 'turn-1' });
 
       const result = await tools.deploy_software.execute(PLAYER, { toolCallId: 'call_1' });
 
@@ -1376,6 +1405,53 @@ describe('resolveHootTargets', () => {
   });
 });
 
+/** Path-keyed docs; every queued command completes on its first poll. */
+function createStoreDb() {
+  const docs = new Map<string, Record<string, unknown>>();
+  const doc = (path: string): unknown => ({
+    get: async () => {
+      if (path.endsWith('/commands/completed')) {
+        const pending = docs.get(path.replace(/completed$/, 'pending')) ?? {};
+        const done = Object.fromEntries(
+          Object.keys(pending).map((id) => [id, { status: 'completed', result: 'ok' }]),
+        );
+        return { exists: true, data: () => done };
+      }
+      return { exists: docs.has(path), data: () => docs.get(path) };
+    },
+    set: async (data: Record<string, unknown>, opts?: { merge?: boolean }) => {
+      docs.set(path, opts?.merge ? { ...(docs.get(path) ?? {}), ...data } : data);
+    },
+    update: async () => {},
+    collection: (name: string) => col(`${path}/${name}`),
+  });
+  const col = (path: string): unknown => ({
+    doc: (id: string) => doc(`${path}/${id}`),
+    get: async () => ({ docs: [] }),
+  });
+  return { db: { collection: (name: string) => col(name) } as unknown as FirebaseFirestore.Firestore, docs };
+}
+
+/** What a dashboard turn passes: a person is there to answer a launch change's card. */
+const DASHBOARD_TURN = { launchChangeApprovable: true, turnId: 'turn-1' } as const;
+
+/** What the runner does for a turn that answers a card: its one claim on the call. */
+function claim(db: FirebaseFirestore.Firestore, toolCallId = 'call_1') {
+  return db.collection('chats').doc('c1').collection('approvals').doc(toolCallId).set({ turnId: 'turn-1' });
+}
+
+/** A dashboard turn's call: it raises a card, the person approves, and the turn that claims the answer runs it. */
+async function runApproved(
+  db: FirebaseFirestore.Firestore,
+  tool: ReturnType<typeof buildExecutableTools>[string],
+  input: Record<string, unknown>,
+  toolCallId = 'call_1',
+): Promise<unknown> {
+  expect(await tool.needsApproval(input, { toolCallId, messages: [] })).toBe(true);
+  await claim(db, toolCallId);
+  return tool.execute(input, { toolCallId });
+}
+
 describe('buildExecutableTools', () => {
   const WHOLE_SITE: BuildExecutableToolsOptions = { machineScope: null };
 
@@ -1434,13 +1510,22 @@ describe('buildExecutableTools', () => {
   });
 
   it('asks for approval on tier-3 calls and lets tier-1/2 calls run', async () => {
-    const tools = buildExecutableTools({} as unknown as FirebaseFirestore.Firestore, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
+    const recordsCards = {
+      collection: () => ({
+        doc: () => ({ collection: () => ({ doc: () => ({ set: async () => undefined }) }) }),
+      }),
+    } as unknown as FirebaseFirestore.Firestore;
+    const tools = buildExecutableTools(recordsCards, 's1', 'm1', 'c1', allTools, false, [], WHOLE_SITE);
+    // A call without an override: the tier alone decides, for a call that could run at all.
+    const asks = (name: string, tier: number) =>
+      tier >= 3 && !changesWhatMachineLaunches(name, {}) && toolParamRefusal(name, {}) === null;
     for (const def of allTools) {
-      // A call without an override: the tier alone decides.
-      expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(def.tier >= 3);
+      expect(await tools[def.name].needsApproval({}, { toolCallId: 'call_1', messages: [] })).toBe(
+        asks(def.name, def.tier),
+      );
     }
     // Sanity: the fixture actually exercises both sides of the gate.
-    expect(allTools.some((t) => t.tier >= 3)).toBe(true);
+    expect(allTools.some((t) => asks(t.name, t.tier))).toBe(true);
     expect(allTools.some((t) => t.tier < 3)).toBe(true);
   });
 
@@ -1476,7 +1561,7 @@ describe('buildExecutableTools', () => {
 
     const result = await tools.update_process.execute({
       process_name: 'TouchDesigner',
-      launch_mode: 'always',
+      name: 'Renamed',
     });
 
     expect(result).toEqual({
@@ -1492,7 +1577,7 @@ describe('buildExecutableTools', () => {
       {
         machineId: 'm1',
         processId: 'proc-1',
-        patch: { launch_mode: 'always' },
+        patch: { name: 'Renamed' },
       },
     );
   });
@@ -1500,23 +1585,26 @@ describe('buildExecutableTools', () => {
   it('adds a process to the machine the turn is on, whatever machine the tool input names', async () => {
     // the input is the model's, and a person can ask a model to send anything
     mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const { db } = createStoreDb();
     const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
     const tools = buildExecutableTools(
-      {} as unknown as FirebaseFirestore.Firestore,
+      db,
       's1',
       'm1',
       'c1',
       [toolDef],
       false,
       [],
-      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'] },
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1'], ...DASHBOARD_TURN },
     );
+    const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
 
-    const result = await tools.add_process.execute({
-      name: 'Notepad',
-      exe_path: 'C:/Windows/notepad.exe',
-      machineId: 'm2',
+    // the tool has no machine parameter, so a call that names one is refused before anything runs
+    expect(await tools.add_process.execute({ ...notepad, machineId: 'm2' }, { toolCallId: 'call_m2' })).toMatchObject({
+      ok: false,
+      error: 'tool_params_invalid',
     });
+    const result = await runApproved(db, tools.add_process, notepad);
 
     expect(result).toEqual({ ok: true, processId: 'proc-2', name: 'Notepad' });
     expect(mockCreateProcess).toHaveBeenCalledTimes(1);
@@ -1525,21 +1613,25 @@ describe('buildExecutableTools', () => {
 
   it('adds a process to each machine of a fan-out and to no other', async () => {
     mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+    const { db } = createStoreDb();
     const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
     const tools = buildExecutableTools(
-      {} as unknown as FirebaseFirestore.Firestore,
+      db,
       's1',
       '__site__',
       'c1',
       [toolDef],
       true,
       ['m1', 'm3'],
-      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'] },
+      { userId: 'uid_alice', userRole: 'admin', machineScope: ['m1', 'm3'], ...DASHBOARD_TURN },
     );
+    const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
 
-    await tools.add_process.execute({
-      name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machineId: 'm2', machines: ['*'],
-    });
+    // the tool has no machine parameter, so a call that names one is refused before anything runs
+    expect(
+      await tools.add_process.execute({ ...notepad, machineId: 'm2', machines: ['*'] }, { toolCallId: 'call_m2' }),
+    ).toMatchObject({ ok: false, error: 'tool_params_invalid' });
+    await runApproved(db, tools.add_process, { ...notepad, machines: ['*'] });
 
     expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId).sort()).toEqual(['m1', 'm3']);
   });
@@ -1722,7 +1814,8 @@ describe('a call names its machines in a turn on several', () => {
   it('keeps the list out of what the agent is sent', async () => {
     const { db, docs } = createStoreDb();
 
-    await toolFor(db, 'run_command').execute({ command: 'hostname', machines: ['m2'] }, { toolCallId: 'call_1' });
+    const tool = toolFor(db, 'run_command', TURN, { machineScope: null, ...DASHBOARD_TURN });
+    await runApproved(db, tool, { command: 'hostname', machines: ['m2'] });
 
     const [command] = queuedAt(docs, 'sites/s1/machines/m2/commands/pending');
     expect(command.tool_params).toEqual({ command: 'hostname' });
@@ -1806,15 +1899,25 @@ describe('a call names its machines in a turn on several', () => {
     // no list: execute refuses at once, so there is no card to show
     expect(await tool.needsApproval({}, { toolCallId: 'call_2', messages: [] })).toBe(false);
     expect(await tool.execute({}, { toolCallId: 'call_2' })).toMatchObject({ ok: false, error: 'machines_not_named' });
-    expect(docs.size).toBe(0);
+    expect(docs.get('chats/c1/approvalRequests/call_1')).toMatchObject({ machineIds: ['m2'] });
+    expect(docs.has('chats/c1/approvalRequests/call_2')).toBe(false);
+    expect(queuedMachines(docs)).toEqual([]);
   });
 
   describe('an approved call, resumed after a machine it named left the turn', () => {
-    const RESUMED = { machineScope: null, resumedToolCallIds: ['call_1'] };
+    const ASKED = { machineScope: null, ...DASHBOARD_TURN };
+    const RESUMED = { ...ASKED, incomingToolCallIds: ['call_1'] };
     const input = { machines: ['m1', 'm2'] };
+
+    /** The card the turn that asked recorded, and the person's answer claimed by the turn that resumes it. */
+    async function asked(db: FirebaseFirestore.Firestore, call: Record<string, unknown>) {
+      expect(await toolFor(db, 'reboot_machine', TURN, ASKED).needsApproval(call, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
+    }
 
     it('runs on the machines it named that are still there, and on no other', async () => {
       const { db, docs } = createStoreDb();
+      await asked(db, input);
       // m2 went offline while the card waited; m3 was never named
       const tool = toolFor(db, 'reboot_machine', ['m1', 'm3'], RESUMED);
 
@@ -1823,6 +1926,17 @@ describe('a call names its machines in a turn on several', () => {
 
       expect(queuedMachines(docs)).toEqual(['m1']);
     }, 15000);
+
+    it('is refused when it names more machines than its card did, and sends nothing', async () => {
+      const { db, docs } = createStoreDb();
+      await asked(db, { machines: ['m1'] });
+      const tool = toolFor(db, 'reboot_machine', TURN, RESUMED);
+
+      expect(await tool.execute(input, { toolCallId: 'call_1' })).toMatchObject({
+        ok: false, error: 'approval_does_not_match',
+      });
+      expect(queuedMachines(docs)).toEqual([]);
+    });
 
     it('is refused when none of them is left', async () => {
       const { db, docs } = createStoreDb();
@@ -1849,9 +1963,11 @@ describe('a call names its machines in a turn on several', () => {
     mockCreateProcess.mockClear();
     mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
 
-    await toolFor({} as unknown as FirebaseFirestore.Firestore, 'add_process', TURN, {
-      userId: 'uid_alice', userRole: 'admin', machineScope: null,
-    }).execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machines: ['m3'] });
+    const { db } = createStoreDb();
+    const tool = toolFor(db, 'add_process', TURN, {
+      userId: 'uid_alice', userRole: 'admin', machineScope: null, ...DASHBOARD_TURN,
+    });
+    await runApproved(db, tool, { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe', machines: ['m3'] });
 
     expect(mockCreateProcess.mock.calls.map((call) => call[1].machineId)).toEqual(['m3']);
   });
@@ -1881,8 +1997,12 @@ describe('active-hours override', () => {
     userStanding: { role: 'admin', swoopMode: null, machineIds: null },
     machineScope: null,
     allowActiveHoursOverride: true,
+    launchChangeApprovable: true,
+    turnId: 'turn-1',
   };
+
   const REBOOT_NOW = { override_active_hours: true, reason: 'the show ended early' };
+
 
   function toolFor(
     db: FirebaseFirestore.Firestore,
@@ -1917,7 +2037,8 @@ describe('active-hours override', () => {
     input: Record<string, unknown>,
     toolCallId: string,
   ): Promise<unknown> {
-    const tool = toolFor(db, toolName, { ...PERSON, resumedToolCallIds: [toolCallId] });
+    const tool = toolFor(db, toolName, { ...PERSON, incomingToolCallIds: [toolCallId] });
+    await claim(db, toolCallId);
     await tool.needsApproval(input, { toolCallId, messages: [] });
     return tool.execute(input, { toolCallId });
   }
@@ -1938,9 +2059,9 @@ describe('active-hours override', () => {
     ).toBe(true);
     // The same calls without the override run straight away.
     expect(await ask(db, 'reboot_machine', {}, 'call_plain', toggleOff)).toBe(false);
-    expect(docs.get('chats/c1/activeHoursOverrides/call_reboot')).toMatchObject({ toolName: 'reboot_machine' });
-    expect(docs.get('chats/c1/activeHoursOverrides/call_wu')).toMatchObject({ toolName: 'manage_windows_update' });
-    expect(docs.has('chats/c1/activeHoursOverrides/call_plain')).toBe(false);
+    expect(docs.get('chats/c1/approvalRequests/call_reboot')).toMatchObject({ toolName: 'reboot_machine' });
+    expect(docs.get('chats/c1/approvalRequests/call_wu')).toMatchObject({ toolName: 'manage_windows_update' });
+    expect(docs.has('chats/c1/approvalRequests/call_plain')).toBe(false);
     expect(queuedAt(docs)).toEqual([]);
   });
 
@@ -1977,11 +2098,12 @@ describe('active-hours override', () => {
 
     // The card the person answered showed a plain reboot (tier 3 asks anyway).
     expect(await ask(db, 'reboot_machine', {}, 'call_1')).toBe(true);
+    const asked = docs.get('chats/c1/approvalRequests/call_1');
     // The resume comes back carrying an override nobody was shown.
     const result = await resume(db, 'reboot_machine', REBOOT_NOW, 'call_1');
 
     expect(result).toMatchObject({ ok: false, error: 'active_hours_override_not_approved' });
-    expect(docs.has('chats/c1/activeHoursOverrides/call_1')).toBe(false);
+    expect(docs.get('chats/c1/approvalRequests/call_1')).toEqual(asked);
     expect(queuedAt(docs)).toEqual([]);
   });
 
@@ -2205,6 +2327,7 @@ describe('active-hours override', () => {
       const tool = toolFor(db, 'reboot_machine', { ...PERSON, activeHoursGuardIds: ['m1'] });
 
       expect(await tool.needsApproval(HELD, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
       await tool.execute(HELD, { toolCallId: 'call_1' });
 
       expect(queuedAt(docs)).toEqual([
@@ -2228,6 +2351,7 @@ describe('active-hours override', () => {
 
       // m1 can hold it, so the card still asks.
       expect(await tool.needsApproval(HELD_EVERYWHERE, { toolCallId: 'call_1', messages: [] })).toBe(true);
+      await claim(db);
       const result = (await tool.execute(HELD_EVERYWHERE, { toolCallId: 'call_1' })) as {
         machines: Record<string, unknown>[];
       };
@@ -3007,7 +3131,8 @@ describe('the hoot actor', () => {
       userStanding: access.standing,
       machineScope: access.standing.machineIds,
     });
-    await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+    // a field that leaves what runs alone, so the call needs no person's approval
+    await tools.update_process.execute({ process_name: 'TouchDesigner', priority: 'High' });
     return mockUpdateProcess.mock.calls[0][0].actor;
   }
 
@@ -3059,7 +3184,7 @@ describe('the hoot actor', () => {
       userRole: 'admin',
       machineScope: null,
     });
-    await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
+    await tools.update_process.execute({ process_name: 'TouchDesigner', priority: 'High' });
     const actor: UserActor = mockUpdateProcess.mock.calls[0][0].actor;
 
     expect(actor.siteRoles).toEqual({});
@@ -3083,20 +3208,39 @@ describe('the hoot actor', () => {
       machineIds: ['m1'],
     };
 
-    /** the context each process tool hands its action. */
-    async function contextsFor(options: BuildExecutableToolsOptions) {
+    const PROCESSES = [{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }];
+    const PROCESS_TOOLS = allTools.filter((tool) =>
+      ['update_process', 'add_process', 'delete_process'].includes(tool.name),
+    );
+    /** one call to each process tool, each a launch change. */
+    const PROCESS_CALLS: [string, Record<string, unknown>][] = [
+      ['update_process', { process_name: 'TouchDesigner', launch_mode: 'always' }],
+      ['add_process', { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' }],
+      ['delete_process', { process_name: 'TouchDesigner' }],
+    ];
+
+    function mockProcessActions() {
       mockUpdateProcess.mockResolvedValue({ processId: 'proc-1' });
       mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
       mockDeleteProcess.mockResolvedValue({ processId: 'proc-1', alreadyDeleted: false });
-      const { db } = createProcessConfigDb([{ id: 'proc-1', processId: 'proc-1', name: 'TouchDesigner' }]);
-      const toolDefs = allTools.filter((tool) =>
-        ['update_process', 'add_process', 'delete_process'].includes(tool.name),
-      );
-      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', toolDefs, false, [], options);
-      await tools.update_process.execute({ process_name: 'TouchDesigner', launch_mode: 'always' });
-      await tools.add_process.execute({ name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' });
-      await tools.delete_process.execute({ process_name: 'TouchDesigner' });
+    }
+
+    /** the context each process tool handed its action. */
+    function processContexts() {
       return [mockUpdateProcess, mockCreateProcess, mockDeleteProcess].map((mock) => mock.mock.calls[0][0]);
+    }
+
+    /**
+     * the context each process tool hands its action, called straight as the
+     * fleet calls it: a turn a machine started can't approve a launch change.
+     */
+    async function contextsFor(options: BuildExecutableToolsOptions) {
+      mockProcessActions();
+      const { db } = createProcessConfigDb(PROCESSES);
+      for (const [name, params] of PROCESS_CALLS) {
+        await executeServerSideTool(db, 's1', ['m1'], name, params, options);
+      }
+      return processContexts();
     }
 
     it('hands every process tool the machine as its actor and its audit name, over the key owner', async () => {
@@ -3114,24 +3258,47 @@ describe('the hoot actor', () => {
       }
     });
 
-    it('hands a tool only the parameters it declares', async () => {
-      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
-      const { db } = createProcessConfigDb([]);
-      const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
-      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+    it('refuses a launch change on a turn it started, as nobody there can approve it', async () => {
+      mockProcessActions();
+      const { db } = createProcessConfigDb(PROCESSES);
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', PROCESS_TOOLS, false, [], {
         ...KEY_OWNER,
-        machineScope: ['m1'],
         machineActor: LOBBY,
       });
 
-      await tools.add_process.execute({
-        name: 'Notepad',
-        exe_path: 'C:/Windows/notepad.exe',
-        not_a_field: 'x',
-        override_active_hours: true,
+      for (const [name, params] of PROCESS_CALLS) {
+        expect(await tools[name].execute(params, { toolCallId: 'call_1' })).toMatchObject({
+          ok: false,
+          error: 'launch_change_needs_approval',
+        });
+      }
+      for (const mock of [mockUpdateProcess, mockCreateProcess, mockDeleteProcess]) expect(mock).not.toHaveBeenCalled();
+    });
+
+    it('hands a tool only the parameters it declares', async () => {
+      mockCreateProcess.mockResolvedValue({ processId: 'proc-2' });
+      const { db } = createStoreDb();
+      const toolDef = allTools.find((tool) => tool.name === 'add_process')!;
+      // approvable, so the launch-change gate lets each call through to the parameter check
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', [toolDef], false, [], {
+        ...KEY_OWNER,
+        ...DASHBOARD_TURN,
+        machineScope: ['m1'],
+        machineActor: LOBBY,
       });
+      const notepad = { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' };
+
+      // a parameter the tool doesn't declare refuses the call, so no tool is handed one
+      expect(
+        await tools.add_process.execute(
+          { ...notepad, not_a_field: 'x', override_active_hours: true },
+          { toolCallId: 'call_extra' },
+        ),
+      ).toMatchObject({ ok: false, error: 'tool_params_invalid' });
+      await runApproved(db, tools.add_process, notepad);
 
       // the whole input: the turn's machine, and what the tool declares
+      expect(mockCreateProcess).toHaveBeenCalledTimes(1);
       expect(mockCreateProcess.mock.calls[0][1]).toEqual({
         machineId: 'm1',
         name: 'Notepad',
@@ -3156,7 +3323,18 @@ describe('the hoot actor', () => {
     });
 
     it('names the person when no machine asked', async () => {
-      for (const ctx of await contextsFor(KEY_OWNER)) {
+      mockProcessActions();
+      const { db, docs } = createStoreDb();
+      docs.set('config/s1/machines/m1', { processes: PROCESSES });
+      const tools = buildExecutableTools(db, 's1', 'm1', 'c1', PROCESS_TOOLS, false, [], {
+        ...KEY_OWNER,
+        ...DASHBOARD_TURN,
+      });
+
+      for (const [i, [name, params]] of PROCESS_CALLS.entries()) {
+        await runApproved(db, tools[name], params, `call_${i}`);
+      }
+      for (const ctx of processContexts()) {
         expect(ctx.auditActor).toBe('cortex:user_u1');
         expect(ctx.actor).toMatchObject({ type: 'user', userId: 'u1', siteRoles: { s1: 'admin' } });
       }
@@ -3256,14 +3434,14 @@ describe('capture_screenshot toModelOutput', () => {
       's1', siteMode ? '' : 'm1', 'c1', [def], siteMode, siteMode ? ['m1', 'm2'] : [],
       { machineScope: null },
     );
-    return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => {
+    return tools.capture_screenshot.toModelOutput as (a: { output: unknown }) => Promise<{
       type: string;
       value: unknown;
-    };
+    }>;
   }
 
-  it('projects a single-machine screenshot url as an image-url block', () => {
-    const out = screenshotToModelOutput(false)({ output: { url: 'https://x/s.jpg', message: 'shot' } });
+  it('projects a single-machine screenshot url as an image-url block', async () => {
+    const out = await screenshotToModelOutput(false)({ output: { url: 'https://x/s.jpg', message: 'shot' } });
     expect(out).toEqual({
       type: 'content',
       value: [
@@ -3273,8 +3451,8 @@ describe('capture_screenshot toModelOutput', () => {
     });
   });
 
-  it('projects each machine url in site-wide aggregated output', () => {
-    const out = screenshotToModelOutput(true)({
+  it('projects each machine url in site-wide aggregated output', async () => {
+    const out = await screenshotToModelOutput(true)({
       output: { machines: [
         { machine: 'm1', url: 'https://x/m1.jpg' },
         { machine: 'm2', error: 'offline' },
@@ -3290,8 +3468,42 @@ describe('capture_screenshot toModelOutput', () => {
     });
   });
 
-  it('falls back to text when there is no url', () => {
-    const out = screenshotToModelOutput(false)({ output: { error: 'capture failed' } });
+  it('falls back to text when there is no url', async () => {
+    const out = await screenshotToModelOutput(false)({ output: { error: 'capture failed' } });
     expect(out).toEqual({ type: 'text', value: 'capture failed' });
+  });
+
+  it('hands the model a signed read url for a stored screenshot', async () => {
+    const stored = '/api/sites/s1/machines/m1/screenshots/image?path=screenshots%2Fs1%2Fm1%2F1.jpg';
+    const single = await screenshotToModelOutput(false)({ output: { url: stored, message: 'shot' } });
+    expect(single).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: 'shot' },
+        { type: 'image-url', url: `https://signed.example/s1/m1${stored}` },
+      ],
+    });
+
+    const siteWide = await screenshotToModelOutput(true)({
+      output: { machines: [{ machine: 'm2', url: stored }] },
+    });
+    expect(siteWide).toEqual({
+      type: 'content',
+      value: [
+        { type: 'text', text: 'm2:' },
+        { type: 'image-url', url: `https://signed.example/s1/m2${stored}` },
+      ],
+    });
+  });
+
+  it('leaves out an image it cannot sign', async () => {
+    const forged = '/api/sites/s1/machines/m1/screenshots/image?path=forged';
+    const single = await screenshotToModelOutput(false)({ output: { url: forged, message: 'shot' } });
+    expect(single).toEqual({ type: 'text', value: 'shot' });
+
+    const siteWide = await screenshotToModelOutput(true)({
+      output: { machines: [{ machine: 'm1', url: forged, message: 'shot' }] },
+    });
+    expect(siteWide).toEqual({ type: 'content', value: [{ type: 'text', text: 'm1: shot' }] });
   });
 });

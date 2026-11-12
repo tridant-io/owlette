@@ -1,6 +1,6 @@
 ---
 title: "installer"
-description: "installer manages the platform-wide catalog of owlette agent installers that new machines download. superadmin only: installer=*:read for list and latest, installer=*:write for upload, installer=*:admin for set-latest and delete."
+description: "installer manages the platform-wide catalog of owlette agent installers that new machines download. superadmin only: installer=*:read for list and latest, installer=*:write for upload, installer=*:admin for set-latest, delete and an upload that marks the version latest."
 keywords: ["agent release", "publish agent"]
 ---
 
@@ -93,7 +93,7 @@ uploads one installer file and records it under `--version`. run it once per pla
 </Callout>
 
 ```bash
-owlette installer upload <file> --version=<X.Y.Z> [--platform <key>] [--release-notes <text>] [--set-latest] [--idempotency-key <key>] [--json]
+owlette installer upload <file> --version=<X.Y.Z> [--platform <key>] [--release-notes <text>] [--set-latest | --no-set-latest] [--idempotency-key <key>] [--json]
 ```
 
 | flag | type | required | description |
@@ -103,6 +103,7 @@ owlette installer upload <file> --version=<X.Y.Z> [--platform <key>] [--release-
 | `--platform <key>` | `windows_x64`, `macos_arm64` or `linux_x64` | no | defaults to the platform for the file's extension |
 | `--release-notes <text>` | string | no | release notes shown in the dashboard |
 | `--set-latest` | boolean | no | mark the version latest after upload — already the default |
+| `--no-set-latest` | boolean | no | upload without moving the latest pointer |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` for both server calls (default `cli-installer-upload-<uuid>`) |
 
 a file name without one of the three extensions fails before upload unless `--platform` names a platform, and the server still rejects any file name that does not end in `.exe`, `.pkg` or `.deb`, or whose extension does not match `--platform`.
@@ -111,20 +112,20 @@ the CLI runs three steps:
 
 1. `POST /api/installer/upload` reserves the version and platform and returns a signed upload URL
 2. `PUT <signed url>` uploads the bytes straight to storage
-3. `PUT /api/installer/upload` finalises: the server recomputes the SHA-256 from storage, compares it with the CLI's, writes the metadata, and moves the latest pointer
+3. `PUT /api/installer/upload` finalises: the server recomputes the SHA-256 from storage, compares it with the CLI's, writes the metadata, and moves the latest pointer unless you passed `--no-set-latest`
 
 both server calls carry the same `Idempotency-Key`, so a retry replays them while the signed URL is still valid.
 
-the server marks the version latest unless the request sets `setAsLatest: false`. the CLI sends `setAsLatest` only when you pass `--set-latest`, and has no flag to send `false` — to upload without moving the latest pointer, call the upload API directly.
+the CLI always sends `setAsLatest`: `true` by default, `false` with `--no-set-latest`. marking the version latest needs `installer=*:admin` as well as `installer=*:write`, the same permission as [`set-latest`](#set-latest); a key with `write` alone uploads with `--no-set-latest`, and is otherwise refused with `403 scope_insufficient` before anything is uploaded. for a version with several platform files, upload all but the last with `--no-set-latest`, so the latest pointer carries every file.
 
 human mode prints the platform and size before uploading, then the finalised version, SHA-256 and download URL. `--json` prints only the finalise response: `version`, `platform`, `download_url`, `checksum_sha256`, `file_size` and `files`.
 
 ### examples
 
 ```bash
-# one file per platform, all under 2.11.0
-owlette installer upload ./Owlette-Installer-v2.11.0.exe --version=2.11.0 --release-notes "fixes display-manager flicker"
-owlette installer upload ./Owlette-Installer-v2.11.0.pkg --version=2.11.0
+# one file per platform, all under 2.11.0; the last one marks the version latest
+owlette installer upload ./Owlette-Installer-v2.11.0.exe --version=2.11.0 --no-set-latest --release-notes "fixes display-manager flicker"
+owlette installer upload ./Owlette-Installer-v2.11.0.pkg --version=2.11.0 --no-set-latest
 owlette installer upload ./Owlette-Installer-v2.11.0.deb --version=2.11.0
 ```
 
@@ -200,6 +201,6 @@ backing: `DELETE /api/installer/{version}`.
 
 ## notes
 
-- **scope**: platform-wide, superadmin only — a superadmin session, or an API key with `installer=*:read` (`list`, `latest`), `installer=*:write` (`upload`) or `installer=*:admin` (`set-latest`, `delete`). on `403 scope_insufficient` the CLI adds a hint naming the scope
+- **scope**: platform-wide, superadmin only — a superadmin session, or an API key with `installer=*:read` (`list`, `latest`), `installer=*:write` (`upload`) or `installer=*:admin` (`set-latest`, `delete`, and `upload` without `--no-set-latest`). on `403 scope_insufficient` the CLI adds a hint naming the scope
 - **JSON**: raw objects with no `{ ok, data }` wrapper
 - **related**: [`deploy`](/docs/cli/reference/deploy) to run other software installers on a site's machines

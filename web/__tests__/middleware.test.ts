@@ -312,6 +312,18 @@ describe('proxy — mandatory 2FA setup gate', () => {
     );
   });
 
+  it('sends a pending session on /cli/authorize to the challenge, phrase intact', async () => {
+    mockEvaluateSessionMfa.mockResolvedValue({
+      outcome: 'challenge',
+      userId: 'user-1',
+      requiresSetup: false,
+    });
+    const response = await proxy(makeRequest('/cli/authorize?code=a-b-c'));
+    const location = new URL(response.headers.get('location') as string);
+    expect(location.pathname).toBe('/verify-2fa');
+    expect(location.searchParams.get('redirect')).toBe('/cli/authorize?code=a-b-c');
+  });
+
   it('leaves an enrolled, verified session untouched', async () => {
     mockEvaluateSessionMfa.mockResolvedValue({
       outcome: 'pass',

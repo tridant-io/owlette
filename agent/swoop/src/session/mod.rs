@@ -194,6 +194,7 @@ use crate::gpu::scale::Limits;
 use crate::ipc::{AudioState, Desktop, DisplayState, HostEventKind};
 use crate::signal::messages::channel::{Channel, DisplayInfo};
 use crate::transport::rtc::OUT_QUEUE_FEATURE_BYTES;
+use crate::viewers::lease::LEASE_GRACE;
 
 /// A capture source's answer when the person at the machine stopped the
 /// capture with the system's own control, which on macOS is the menu bar's
@@ -919,6 +920,66 @@ impl SasSlot {
     }
 }
 
+/// A viewer's first lease, which is what it is served on.
+///
+/// The room's admission is the word of a relay this host does not trust
+/// (`signal/client.rs`), and a connected peer is only a network path. The
+/// host's own check of the viewer's token, and of the dtls fingerprint §11
+/// binds it to, is §10's `lease`, so nothing of the machine goes out before
+/// one verifies: not the picture, the audio, the cursor, the roster, the
+/// features' records or `hello-host`.
+///
+/// The browser presents its first lease as `swoop-control` opens
+/// (`web/lib/swoop/peer.ts`), so a peer that connected and presented none
+/// within a late renewal's grace never will, and is ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FirstLease {
+    /// No peer connected yet, so nothing can have been presented.
+    #[default]
+    Awaited,
+    /// Connected, and owes its first lease by then.
+    Due(Instant),
+    /// Verified. Served from here; the lease ledger keeps the clock.
+    Verified,
+    /// Past its deadline with none, and on its way out.
+    Missed,
+}
+
+impl FirstLease {
+    /// The peer connected: the clock starts, once.
+    pub fn connected(&mut self, now: Instant) {
+        if *self == Self::Awaited {
+            *self = Self::Due(now + LEASE_GRACE);
+        }
+    }
+
+    /// A lease verified. `true` the first time, which is when serving starts.
+    pub fn verified(&mut self) -> bool {
+        match self {
+            Self::Awaited | Self::Due(_) => {
+                *self = Self::Verified;
+                true
+            }
+            Self::Verified | Self::Missed => false,
+        }
+    }
+
+    pub fn served(self) -> bool {
+        self == Self::Verified
+    }
+
+    /// `true` once, when the deadline passed with no lease verified.
+    pub fn missed(&mut self, now: Instant) -> bool {
+        match *self {
+            Self::Due(by) if now >= by => {
+                *self = Self::Missed;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
 /// Capture runs only while somebody is watching.
 ///
 /// §6 keeps the process alive for the linger after the last viewer leaves, but
@@ -1112,9 +1173,9 @@ mod host {
 
     use super::{
         codec_wire_name, feature_room, feeds, limits_for, moved, pick_codec, settles, tier_encodes,
-        tiers, CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FloorTimer,
-        Joining, MuteVotes, Outbox, RateGate, SasSlot, SessionHandle, TierEncode, ViewerRate,
-        HOST_UPLINK_ESTIMATE_BPS,
+        tiers, CaptureGate, Denials, Feature, FeatureRequest, FeatureStatus, FeedbackWatch, FirstLease,
+        FloorTimer, Joining, MuteVotes, Outbox, RateGate, SasSlot, SessionHandle, TierEncode,
+        ViewerRate, HOST_UPLINK_ESTIMATE_BPS,
     };
     use crate::bundle::{Bundle, Indicator, TimeAnchor, TokenError};
     use crate::capture::{OutputInfo, RebuildSignal, Source, ACQUIRE_TIMEOUT_MS};
@@ -2014,8 +2075,8 @@ mod host {
         /// viewer's payload type cannot be renegotiated afterwards.
         codec: Codec,
         announced: bool,
-        hello_sent: bool,
         peer: Option<RtcPeer>,
+        lease: FirstLease,
         /// Per viewer, because N viewers on one machine are N independent
         /// controllers. `UplinkBudget` is what stops them each probing the whole
         /// of one bottleneck.
@@ -2046,8 +2107,8 @@ mod host {
                 // one: a viewer counted before that can never invent a tier.
                 codec: Codec::H264,
                 announced: false,
-                hello_sent: false,
                 peer: None,
+                lease: FirstLease::default(),
                 governor: Governor::new(GovernorConfig::new(auto_bps)),
                 ice: IcePolicy::new(),
                 relayed: false,
@@ -2062,6 +2123,11 @@ mod host {
             self.peer
                 .as_ref()
                 .is_some_and(|peer| peer.state() == PeerState::Connected)
+        }
+
+        /// Whether anything of the machine goes to this viewer.
+        fn served(&self) -> bool {
+            self.lease.served() && self.connected()
         }
     }
 
@@ -2383,13 +2449,15 @@ mod host {
             self.broadcast(None, Channel::SwoopControl, &presence);
         }
 
-        /// One host → viewer record to every connected viewer, optionally
+        /// One host → viewer record to every served viewer, optionally
         /// skipping one — §5's `vpos` is never sent back to the controller it
         /// came from, which has its own cursor.
         ///
-        /// Connected only: a record queued against a peer that is still
-        /// negotiating sits in that peer's out-queue behind nothing, and the
-        /// state it carries is re-sent whole when that viewer's channel opens.
+        /// Served only: a record queued against a peer that is still
+        /// negotiating sits in that peer's out-queue behind nothing, one for a
+        /// viewer whose first lease has not verified goes to a browser the host
+        /// has not checked, and the state it carries is re-sent whole when that
+        /// viewer's first lease verifies.
         fn broadcast<T: serde::Serialize>(
             &mut self,
             skip: Option<&str>,
@@ -2397,7 +2465,7 @@ mod host {
             message: &T,
         ) {
             for at in 0..self.viewers.len() {
-                if !self.viewers[at].connected() || skip == Some(self.viewers[at].id.as_str()) {
+                if !self.viewers[at].served() || skip == Some(self.viewers[at].id.as_str()) {
                     continue;
                 }
                 self.write_json_to(at, channel, message);
@@ -2469,9 +2537,9 @@ mod host {
             self.turn_server.clone()
         }
 
-        /// This viewer's first offer: pick its codec, bind its peer, and put the
-        /// tier it lands on in front of the capture thread. `false` means the
-        /// viewer was refused and is already on its way out.
+        /// This viewer's first offer: pick its codec and bind its peer. Its tier
+        /// waits for its first lease (`start_serving`). `false` means
+        /// the viewer was refused and is already on its way out.
         fn bind_peer(&mut self, at: usize, sdp: &str) -> bool {
             let viewer = self.viewers[at].id.clone();
             let Some(codec) = pick_codec(sdp, &self.codecs) else {
@@ -2529,16 +2597,6 @@ mod host {
             };
             self.viewers[at].peer = Some(peer);
             self.viewers[at].codec = codec;
-            // §3's audio is a second RTP track, so it cannot ride the feature
-            // outbox: the track is subscribed here, once per peer, and written
-            // by the peer itself. A machine with no endpoint simply never puts
-            // a packet on it.
-            #[cfg(feature = "audio-opus")]
-            self.viewers[at]
-                .peer
-                .as_mut()
-                .expect("just bound")
-                .set_audio_source(crate::audio::subscribe());
             let fingerprint = self.viewers[at]
                 .peer
                 .as_mut()
@@ -2549,7 +2607,6 @@ mod host {
                 return false;
             }
             self.roster.set_codec(&viewer, codec);
-            self.retier();
             ::log::info!(
                 "swoop: {}x{} captured, viewer {viewer} on the {} tier",
                 self.source.0,
@@ -2715,10 +2772,11 @@ mod host {
         /// downgraded because another viewer's browser cannot decode HEVC — and
         /// it holds without this file choosing anything.
         fn retier(&mut self) {
-            // Only viewers that have a peer: one admitted but still to offer has
+            // Only viewers whose first lease verified: one still to offer has
             // negotiated nothing, and planning it would open an encoder for the
-            // baseline codec it may not end up on.
-            let served = || self.viewers.iter().filter(|v| v.peer.is_some());
+            // baseline codec it may not end up on; one still to lease is sent
+            // no frame, and must not size or pace a tier somebody else watches.
+            let served = || self.viewers.iter().filter(|v| v.lease.served());
             let planned: Vec<TierViewer> = served()
                 .map(|v| TierViewer {
                     viewer_id: v.id.clone(),
@@ -3107,12 +3165,12 @@ mod host {
 
         /// Every feature's turn to produce, then the one write.
         ///
-        /// Only while at least one peer is connected: a feature's outbound is
+        /// Only while at least one viewer is served: a feature's outbound is
         /// for the viewers, and there is nothing to hold it in before one
         /// arrives. Whatever a feature must keep across that gap, it keeps
         /// itself. What it produces is host → viewer, so it goes to all of them.
         fn pump_features(&mut self) {
-            if !self.viewers.iter().any(Viewer::connected) {
+            if !self.viewers.iter().any(Viewer::served) {
                 return;
             }
             let now = Instant::now();
@@ -3122,7 +3180,7 @@ mod host {
             self.outbox.limit_to(feature_room(
                 self.viewers
                     .iter()
-                    .filter(|v| v.connected())
+                    .filter(|v| v.served())
                     .filter_map(|v| {
                         let peer = v.peer.as_ref()?;
                         Some((peer.queued_bytes(), v.ice.down_for(now).is_none()))
@@ -3142,12 +3200,12 @@ mod host {
                         .map(|request| (name, request)),
                 );
             }
-            // Host → viewer, so it goes to every connected one. A feature that
+            // Host → viewer, so it goes to every served one. A feature that
             // wanted to answer a single viewer would need an id on the trait,
             // which §5's shared `swoop-control` does not give it.
             for record in self.outbox.take() {
                 for at in 0..self.viewers.len() {
-                    if !self.viewers[at].connected() {
+                    if !self.viewers[at].served() {
                         continue;
                     }
                     if let Some(peer) = self.viewers[at].peer.as_mut() {
@@ -3292,19 +3350,8 @@ mod host {
                 PeerEvent::Connected => {
                     ::log::info!("swoop: viewer {viewer} peer connected");
                     self.bind_dtls_session(viewer);
-                    // A viewer joining a tier somebody else is already watching
-                    // has no recovery point, and the running encoder is emitting
-                    // deltas. Through the tier's own policy, so a second joiner
-                    // inside the cooldown is served by the first's IRAP. A tier
-                    // this viewer opened needs nothing: its encoder's first
-                    // frame is an IRAP by construction, and asking would put a
-                    // keyframe on `status.idrs` that nothing paid for.
-                    let shared = self
-                        .plan
-                        .tier_of(viewer)
-                        .is_some_and(|tier| tier.viewers.len() > 1);
-                    if shared {
-                        self.request_idr(codec);
+                    if let Some(v) = self.viewer_mut(viewer) {
+                        v.lease.connected(Instant::now());
                     }
                 }
                 PeerEvent::Closed => {
@@ -3340,7 +3387,6 @@ mod host {
                     self.window.keyframes_requested += 1;
                     self.request_idr(codec);
                 }
-                PeerEvent::ChannelOpen(Channel::SwoopControl) => self.send_hello_host(viewer),
                 PeerEvent::ChannelOpen(channel) => ::log::debug!("swoop: {channel:?} open"),
                 // The browser owns the five and never re-opens one it did
                 // not close, so from here the peer drops that channel's
@@ -3480,6 +3526,9 @@ mod host {
                             // that a full membership re-check every 36 seconds.
                             let expires_at = self.leases.renew(viewer);
                             self.roster.set_lease(viewer, expires_at);
+                            if self.viewer_mut(viewer).is_some_and(|v| v.lease.verified()) {
+                                self.start_serving(viewer);
+                            }
                             let ok = ControlMessage::LeaseOk { expires_at };
                             self.write_json(viewer, Channel::SwoopControl, &ok);
                             // `ctl` is on every roster line, so a grant or a
@@ -3706,14 +3755,42 @@ mod host {
             }
         }
 
+        /// A viewer's first verified lease: everything withheld until now
+        /// starts, its tier first, so `hello-host` names the size it will get.
+        fn start_serving(&mut self, viewer: &str) {
+            let Some(codec) = self.viewer(viewer).map(|v| v.codec) else {
+                return;
+            };
+            // §3's audio is a second RTP track, so it cannot ride the feature
+            // outbox: the track is subscribed here, once per peer, and written
+            // by the peer itself. A machine with no endpoint simply never puts
+            // a packet on it.
+            #[cfg(feature = "audio-opus")]
+            if let Some(peer) = self.viewer_mut(viewer).and_then(|v| v.peer.as_mut()) {
+                peer.set_audio_source(crate::audio::subscribe());
+            }
+            self.retier();
+            // A viewer joining a tier somebody else is already watching has no
+            // recovery point, and the running encoder is emitting deltas.
+            // Through the tier's own policy, so a second joiner inside the
+            // cooldown is served by the first's IRAP. A tier this viewer opened
+            // needs nothing: its encoder's first frame is an IRAP by
+            // construction, and asking would put a keyframe on `status.idrs`
+            // that nothing paid for.
+            let shared = self
+                .plan
+                .tier_of(viewer)
+                .is_some_and(|tier| tier.viewers.len() > 1);
+            if shared {
+                self.request_idr(codec);
+            }
+            self.send_hello_host(viewer);
+        }
+
         fn send_hello_host(&mut self, viewer: &str) {
             let Some(at) = self.viewers.iter().position(|v| v.id == viewer) else {
                 return;
             };
-            if self.viewers[at].hello_sent {
-                return;
-            }
-            self.viewers[at].hello_sent = true;
             let codec = self.viewers[at].codec;
             // This viewer's own tier, not the session's: two tiers can be two
             // sizes, and the browser sizes its canvas from this.
@@ -3745,7 +3822,7 @@ mod host {
                 clipboard_reads: self.feature_status().clipboard.unwrap_or(true),
             };
             self.write_json_to(at, Channel::SwoopControl, &hello);
-            // Who else is here, to the browser that has just opened its channel.
+            // Who else is here, to the browser the host has just verified.
             let presence = self.roster.presence(self.clock.now_us() as i64);
             self.write_json_to(at, Channel::SwoopControl, &presence);
             // This viewer's shape cache is empty and the tracker only emits on
@@ -4033,6 +4110,7 @@ mod host {
                 return Some(self.teardown(Exit::Ok, ExitReason::SessionCap, LeftReason::Timeout));
             }
             self.sweep_leases();
+            self.sweep_first_leases(now);
             if self
                 .idle_since
                 .is_some_and(|since| now.duration_since(since) >= LINGER)
@@ -4059,6 +4137,27 @@ mod host {
                 // all, so an entry left here would be swept again on every turn
                 // of the loop and written to the audit trail each time.
                 self.leases.forget(&viewer);
+                self.host_event(
+                    HostEventKind::LeaseExpired,
+                    Some(viewer.clone()),
+                    Some("lease_expired".to_owned()),
+                );
+                let effects = self.client.end_viewer(&viewer, LeftReason::LeaseExpired);
+                // Never an exit: `end_viewer` produces a bye and a departure.
+                let _ = self.apply(effects);
+            }
+        }
+
+        /// A connected viewer whose first lease never verified: it was sent
+        /// nothing of the machine, and it goes the way a lapsed lease does.
+        fn sweep_first_leases(&mut self, now: Instant) {
+            let missed: Vec<String> = self
+                .viewers
+                .iter_mut()
+                .filter_map(|v| v.lease.missed(now).then(|| v.id.clone()))
+                .collect();
+            for viewer in missed {
+                ::log::warn!("swoop: viewer {viewer} presented no lease in time, dropping it");
                 self.host_event(
                     HostEventKind::LeaseExpired,
                     Some(viewer.clone()),
@@ -6588,6 +6687,36 @@ mod tests {
         assert!(sas.ask("securedesk", "viewer_a", t0 + SasSlot::ANSWER_TIMEOUT));
         assert_eq!(sas.answer(), Some(("securedesk", "viewer_a".to_owned())));
         assert_eq!(sas.answer(), None, "one answer per request");
+    }
+
+    /// The room admitting a viewer, and its peer connecting, are the relay's
+    /// word and the network's: neither is the host's own check of the token
+    /// and the fingerprint it is bound to. That check is the first lease, and
+    /// nothing of the machine goes out before it. A browser presents its first
+    /// lease as `swoop-control` opens, so a connected viewer that presents none
+    /// in a renewal's grace is ended, once, rather than left holding a seat.
+    #[test]
+    fn a_viewer_is_served_nothing_until_its_first_lease_and_is_ended_without_one() {
+        let t0 = Instant::now();
+        let mut lease = FirstLease::default();
+        assert!(!lease.served(), "admitted is not verified");
+        lease.connected(t0);
+        assert!(!lease.served(), "connected is not verified either");
+        assert!(!lease.missed(t0 + LEASE_GRACE - Duration::from_millis(1)));
+        assert!(lease.missed(t0 + LEASE_GRACE), "no lease in a renewal's grace");
+        assert!(!lease.missed(t0 + LEASE_GRACE * 2), "ended once, not on every turn");
+        assert!(!lease.verified(), "a lease after the end serves nothing");
+        assert!(!lease.served());
+
+        // the browser's road: the lease follows the channel opening.
+        let mut lease = FirstLease::default();
+        lease.connected(t0);
+        assert!(lease.verified(), "the first verified lease starts serving");
+        assert!(lease.served());
+        assert!(!lease.verified(), "a renewal is not a second start");
+        lease.connected(t0 + Duration::from_secs(60));
+        assert!(!lease.missed(t0 + Duration::from_secs(600)), "a verified viewer owes no first lease");
+        assert!(lease.served());
     }
 
     /// §6 keeps the process alive for the linger after the last viewer leaves,

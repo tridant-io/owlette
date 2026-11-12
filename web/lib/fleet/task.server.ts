@@ -150,7 +150,7 @@ function noMachines(failure: ResolveTargetsFailure): FleetCallStart {
       problem({
         type: ProblemType.Conflict,
         title: 'hoot disabled',
-        status: 409,
+        status: 423,
         detail: `hoot is turned off on every machine this task names${named}`,
         code: 'hoot_disabled',
       }),

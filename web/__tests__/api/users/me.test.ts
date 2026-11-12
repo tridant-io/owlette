@@ -153,6 +153,27 @@ beforeEach(() => {
 });
 
 describe('DELETE /api/users/me', () => {
+  it('refuses a session or id token still owing its second factor, and deletes nothing', async () => {
+    const { ApiAuthError } = jest.requireMock('@/lib/apiAuth.server') as {
+      ApiAuthError: new (status: number, message: string) => Error;
+    };
+    mockRequireSessionOrIdToken.mockRejectedValueOnce(
+      Object.assign(new ApiAuthError(403, 'complete two-factor verification first'), {
+        code: 'mfa_challenge_required',
+      }),
+    );
+    const res = await DELETE(
+      request('http://localhost/api/users/me', {
+        headers: { 'Idempotency-Key': 'idem-mfa' },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(mockDeleteOwnAccount).not.toHaveBeenCalled();
+    // no second argument: nothing here opts in to the pre-mfa path
+    expect(mockRequireSessionOrIdToken).toHaveBeenCalledWith(expect.anything());
+  });
+
   it('runs a dry-run self-delete and audits per-path counts', async () => {
     const res = await DELETE(
       request('http://localhost/api/users/me?dryRun=true', {

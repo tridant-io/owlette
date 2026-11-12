@@ -26,7 +26,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { apiError } from '@/lib/apiErrorResponse';
-import { ApiAuthError, assertActiveUser, requireSession } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, requirePreMfaSession } from '@/lib/apiAuth.server';
 import { markSessionMfaVerified } from '@/lib/sessionManager.server';
 import { signInCeremonyNetwork } from '@/lib/swoop/networks.server';
 import {
@@ -36,7 +36,7 @@ import {
 
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
-    const userId = await requireSession(request);
+    const userId = await requirePreMfaSession(request);
     await assertActiveUser(userId);
 
     const body = await request.json();

@@ -1581,6 +1581,9 @@ class FirebaseClient:
                 # this agent refuses reboots, shutdowns and deployments inside
                 # activeHours unless a person overrode it; an older one doesn't
                 **({'capabilities.activeHoursGuard': 1} if sys.platform == 'win32' else {}),
+                # local hoot here can't change what a machine launches, so the
+                # server may send it a conversation; an older one gets none
+                'capabilities.localHootLaunchGate': 1,
                 'activeHours': self._active_hours_field(),
                 'metrics.schemaVersion': 2,
                 'metrics.profileHash': profile_hash,

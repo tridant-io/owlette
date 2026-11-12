@@ -44,9 +44,10 @@ import type { NextRequest } from 'next/server';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
-import { ApiAuthError, assertActiveUser } from '@/lib/apiAuth.server';
+import { ApiAuthError, assertActiveUser, assertSessionCurrent } from '@/lib/apiAuth.server';
 import { MFA_CHALLENGE_REQUIRED } from '@/lib/mfaEnrollmentGate.server';
 import { getSessionFromRequest, type MfaSatisfiedBy } from '@/lib/sessionManager.server';
+import { tokensRevokedAt } from '@/lib/sessionCutoff.server';
 
 export const APP_LINKS_COLLECTION = 'app_links';
 export const APP_LINK_APPROVED_TTL_MS = 60 * 1000;
@@ -107,7 +108,11 @@ export async function requireAppLinkApprover(request: NextRequest): Promise<AppL
       code: MFA_CHALLENGE_REQUIRED,
     });
   }
-  await assertActiveUser(session.userId);
+  const [account, revokedAt] = await Promise.all([
+    assertActiveUser(session.userId),
+    tokensRevokedAt(session.userId),
+  ]);
+  assertSessionCurrent(session, account, revokedAt);
   return {
     uid: session.userId,
     mfaSatisfiedBy: isMfaSatisfiedBy(session.mfaSatisfiedBy) ? session.mfaSatisfiedBy : undefined,

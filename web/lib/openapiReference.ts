@@ -12,7 +12,7 @@ const REFERENCE_DESCRIPTION = `the owlette API manages sites, machines, processe
 
 ## authentication
 
-send a scoped API key as \`Authorization: Bearer owk_live_...\` (preferred) or in the \`x-api-key\` header. dashboard and first-party flows may use Firebase ID tokens. see [/docs/api/authentication](/docs/api/authentication).
+send a scoped API key as \`Authorization: Bearer owk_live_...\` (preferred) or in the \`x-api-key\` header. the dashboard uses its session, and first-party flows may use Firebase ID tokens; on an account with a second factor the session must have passed it and an ID token is refused with \`mfa_challenge_required\`. see [/docs/api/authentication](/docs/api/authentication).
 
 every protected operation below has an **Authentication and scopes** note. when it lists several scopes the key needs all of them, and the call must also pass site membership, role and capability checks. swoop sessions refuse API keys outright.
 
@@ -203,7 +203,7 @@ function inferAuthScopeNotes(path: string, method: string, operation: JsonRecord
 
   if (operationUsesOnlyFirebaseSecurity(operation)) {
     return {
-      auth: 'Requires a signed-in user session or Firebase ID token. API keys cannot call this operation.',
+      auth: 'Requires a signed-in user session or Firebase ID token. On an account with a second factor, the session must have passed it and an ID token is refused (`mfa_challenge_required`). API keys cannot call this operation.',
       scope: 'No API-key scope applies; access is controlled by the user session, Firebase token, role, and route-specific authorization checks.',
       scopes: ['session-or-firebase'],
     };
@@ -280,7 +280,7 @@ function inferAuthScopeNotes(path: string, method: string, operation: JsonRecord
 
 function protectedNotes(scopes: string[], scope: string): AuthScopeNotes {
   return {
-    auth: 'Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY`; compatible routes may also accept `x-api-key`, `api_key`, or first-party Firebase/session credentials.',
+    auth: 'Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY`; compatible routes may also accept `x-api-key`, or first-party Firebase/session credentials, which on an account with a second factor must be a session that passed it.',
     scope,
     scopes,
   };

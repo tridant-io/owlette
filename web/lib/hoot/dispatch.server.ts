@@ -21,10 +21,8 @@ import {
   executeMachineCommand,
   type ExecuteMachineCommandContext,
 } from '@/lib/actions/executeMachineCommand.server';
-import {
-  COMMAND_POLL_INTERVAL_MS,
-  COMMAND_TIMEOUT_MS,
-} from '@/lib/hoot-utils.server';
+import { COMMAND_POLL_INTERVAL_MS, COMMAND_TIMEOUT_MS } from '@/lib/hoot-utils.server';
+import { keyedHash, toolCallHash } from '@/lib/hoot/launchAudit.server';
 
 // types
 
@@ -169,6 +167,8 @@ export async function dispatchToolCallAsSystem(
     metadata: metadataFor(ctx, {
       toolName,
       commandType: 'mcp_tool_call',
+      paramNames: Object.keys(toolParams),
+      paramsHash: keyedHash(toolCallHash(toolName, toolParams)),
     }),
     action: async (systemCtx) =>
       executeMachineCommand(
@@ -248,6 +248,8 @@ export async function dispatchExistingCommandAsSystem(
     metadata: metadataFor(ctx, {
       commandType,
       ...(processName ? { processName } : {}),
+      paramNames: Object.keys(payload),
+      paramsHash: keyedHash(toolCallHash(commandType, payload)),
     }),
     action: async (systemCtx) =>
       executeMachineCommand(

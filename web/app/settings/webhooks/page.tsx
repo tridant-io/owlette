@@ -49,11 +49,12 @@ export default function WebhooksSettingsPage() {
     : lastSiteId && siteIds.includes(lastSiteId)
       ? lastSiteId
       : (siteIds[0] ?? '');
-  // Mutating `/api/webhooks/**` routes require WEBHOOK_MANAGE, which the server
-  // grants to superadmins, site admins — and, via an explicit short-circuit, the
-  // site's owner (self-serve owners carry global role `member`). `isSiteAdmin`
-  // knows nothing about ownership, so the owner leg is resolved here from the
-  // site docs. The picker above deliberately keeps listing raw site ids.
+  // Every `/api/webhooks/**` route, the list included, requires WEBHOOK_MANAGE,
+  // which the server grants to superadmins, site admins — and, via an explicit
+  // short-circuit, the site's owner (self-serve owners carry global role
+  // `member`). `isSiteAdmin` knows nothing about ownership, so the owner leg is
+  // resolved here from the site docs. The picker above deliberately keeps
+  // listing raw site ids.
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
   const site = sites.find((s) => s.id === selectedSite);
   const canManage =
@@ -99,10 +100,10 @@ export default function WebhooksSettingsPage() {
       router.push('/login');
       return;
     }
-    if (!selectedSite) return;
+    if (!selectedSite || !canManage) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch + site-change fetch; state is managed in refresh().
     refresh(selectedSite).catch(() => {});
-  }, [user, authLoading, router, refresh, selectedSite]);
+  }, [user, authLoading, router, refresh, selectedSite, canManage]);
 
   if (authLoading || (!user && loading)) {
     return (
@@ -211,41 +212,44 @@ export default function WebhooksSettingsPage() {
                 you need site access to manage webhooks. ask a site admin to add you.
               </p>
             </Card>
-          ) : loading || sitesLoading ? (
+          ) : sitesLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : !canManage ? (
+            <Card className="border-border bg-card/50 p-8 text-center space-y-3">
+              <Webhook className="h-8 w-8 text-muted-foreground mx-auto" />
+              <div>
+                <p className="text-sm text-foreground">this site&apos;s webhooks are managed by its admins</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ask a site admin or the owner about them.
+                </p>
+              </div>
+            </Card>
+          ) : loading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
             </div>
           ) : webhooks.length === 0 ? (
             <Card className="border-border bg-card/50 p-8 text-center space-y-3">
               <Webhook className="h-8 w-8 text-muted-foreground mx-auto" />
-              {canManage ? (
-                <>
-                  <div>
-                    <p className="text-sm text-foreground">no webhooks yet</p>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      subscribe to events so your ci/cd, slack bot, or monitoring can react to
-                      roost activity.
-                    </p>
-                  </div>
-                  {/* the header already carries the upgrade note */}
-                  {!webhooksGated && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      onClick={() => setCreateOpen(true)}
-                      className="cursor-pointer"
-                    >
-                      <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
-                    </Button>
-                  )}
-                </>
-              ) : (
-                <div>
-                  <p className="text-sm text-foreground">no webhooks configured for this site</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    a site admin can add webhooks.
-                  </p>
-                </div>
+              <div>
+                <p className="text-sm text-foreground">no webhooks yet</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  subscribe to events so your ci/cd, slack bot, or monitoring can react to
+                  roost activity.
+                </p>
+              </div>
+              {/* the header already carries the upgrade note */}
+              {!webhooksGated && (
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setCreateOpen(true)}
+                  className="cursor-pointer"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> create your first webhook
+                </Button>
               )}
             </Card>
           ) : (
@@ -255,7 +259,6 @@ export default function WebhooksSettingsPage() {
                   key={w.id}
                   webhook={w}
                   siteId={selectedSite}
-                  canManage={canManage}
                   onChanged={() => void refresh(selectedSite)}
                   onSecretRotated={setRevealedSecret}
                 />

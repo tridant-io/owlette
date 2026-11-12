@@ -17,8 +17,8 @@ hoot's tools are grouped by risk:
 | tier | type | approval |
 |------|------|----------|
 | **tier 1** | read-only diagnostics and site context | auto-approved |
-| **tier 2** | process and machine management with validated parameters | auto-approved |
-| **tier 3** | privileged shell, file, deployment, reboot and shutdown actions | in-chat approval (on by default, per site) |
+| **tier 2** | process and machine management with validated parameters | auto-approved, except a call that [changes what a machine launches](#changing-what-a-machine-launches) |
+| **tier 3** | privileged shell, file, deployment, reboot and shutdown actions | in-chat approval. the tools that run code always ask; for the rest it's on by default, per site |
 
 what you can use depends on who you are. site admins, owners and superadmins get the full tool set. members are limited to read-only tools, and so are chat API keys, even when the key's owner is an admin. someone [limited to some machines](/docs/dashboard/admin/member-management#machine-scope) of a site keeps their role's tools on those machines, but is never offered the tools that span the site: `get_site_logs`, `deploy_software` and the three talon tools.
 
@@ -155,8 +155,8 @@ the column beside the chat lists your conversations on the selected site, plus t
 after its first reply, a conversation is titled and put in a category automatically: **performance**, **crashes**, **network**, **display**, **processes**, **system info**, **configuration** or **general**. the list groups conversations by category, each group with its count:
 
 - groups holding the most recent conversations come first, then **general**, then **unsorted** last.
-- **unsorted** holds conversations that were never categorized — older ones, or ones whose categorizing failed. it is a group of its own, not part of general, because general is a category hoot assigns.
-- **categorize N unsorted**, at the foot of the list, sorts them in one go. it titles and categorizes from what each conversation already says, with the cheapest model on your key.
+- **unsorted** holds conversations that were never categorized — older ones, ones whose categorizing failed, and autonomous investigations. it is a group of its own, not part of general, because general is a category hoot assigns.
+- **categorize N unsorted**, at the foot of the list, sorts your own in one go. it titles and categorizes from what each conversation already says, with the cheapest model on your key. autonomous investigations have no author, so they stay in unsorted.
 
 click a group's heading to collapse or expand it. the button beside **new hoot** collapses or expands every group at once. a collapsed group that holds the open conversation marks its heading with a dot. which groups you collapsed is remembered per device and restored when the list opens.
 
@@ -187,12 +187,41 @@ a hoot turn — the model's reasoning plus any tool calls it makes — runs on t
 
 ## approving privileged (tier-3) actions
 
-tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site setting, **require approval for privileged tools**. a site owner or admin finds it in the admin panel, under **fleet** → **hoot**:
+tier-3 tools that can run code (`run_command`, `run_powershell`, `run_python`, `execute_script`, `write_file`, `deploy_software`) always ask, with this setting on or off. the rest (reboot, shutdown, reading files, listing a folder) are governed by a per-site setting, **require approval for privileged tools**. a site owner or admin finds it in the admin panel, under **fleet** → **hoot**:
 
-- **on** (the default) — privileged tool calls pause in the chat for an explicit approve or deny before they run.
-- **off** — privileged tool calls run at once, with no prompt. turning the gate off weakens safety, so the switch asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
+- **on** (the default) — reboot, shutdown and file reads pause in the chat for an explicit approve or deny before they run.
+- **off** — reboot, shutdown and file reads run at once, with no prompt. turning the gate off weakens safety, so the switch asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.
 
 the setting is stored per site at `sites/{siteId}/settings/cortex.requireTier3Approval`.
+
+### changing what a machine launches
+
+a call that changes what a machine runs, or when, always waits for your approval in the chat, at any tier and whatever the setting above says. the card spells out the values you are approving. these are the calls:
+
+- `update_process` with any field but `name`, `priority` and `visibility`, which leave what runs and when alone. that covers `time_delay`, `time_to_init` and `relaunch_attempts`, which decide when a crash relaunch happens and when it turns into a reboot. `add_process`, `delete_process` and `set_launch_mode` always ask. `start_process`, `restart_process` and `kill_process` don't: they act on what is already configured, and unattended restarts depend on them.
+- `manage_scheduled_task`, except `list`, `get_details`, `get_history` and `stop`.
+- `manage_windows_service` `set_startup` and `set_recovery`, which can name a program to run. the other actions don't ask.
+- `manage_windows_feature` `install` and `remove`, and `manage_windows_update` `set_scheduled_install`. their other actions don't ask.
+- `registry_operation` `write` and `delete`. `read` doesn't ask.
+- `create_talon` with a `command` output or a hoot output with **let hoot act**, and `set_talon_enabled` when it arms a talon. a talon that only emails, calls a webhook or looks doesn't ask.
+
+where nobody can answer a card, the change doesn't run:
+
+| where | what happens |
+|---|---|
+| dashboard chat | waits for your approval |
+| scheduled follow-up | waits until you come back to the chat. `manage_scheduled_task`, `manage_windows_service`, `registry_operation` and the two talon tools aren't offered at all |
+| talon with **let hoot act** | refused, and the same tools aren't offered. the run's chat shows why |
+| autonomous hoot | refused, and the same tools aren't offered |
+| a machine's `ask_hoot` task ([hoot mcp](/docs/agent/hoot-mcp#handing-hoot-a-task)) | refused, and the same tools aren't offered |
+| public conversations API | refused: this path has no card. ask in a dashboard chat |
+| local hoot | has no tool that can do it |
+
+the tools that can run anything (`run_command`, `run_powershell`, `run_python`, `execute_script`, `write_file`, `deploy_software`) count as these calls too, because a script can't be read for what it launches. they always ask, and autonomous hoot refuses them whatever `maxTier` says.
+
+an approval runs only the call the card showed: the same tool and input, on the machines it named or fewer, once. a card is recorded when the model's own call raises it, and nothing a browser sends can create one. a card can be answered for 24 hours; after that, approving it makes hoot ask again. if owlette can't record an approved change, it doesn't make it, and says so.
+
+this covers hoot only: editing a process in the dashboard, or through the API with your own key, isn't hoot. two paths overlap, and on both a call that changes what a machine launches counts as tier 3. a hoot tool call through the API's [machine commands route](/docs/api/authentication#tool-tiers) needs a key with `maxToolTier` 3, or a person with an open step-up window on that machine. a machine's call through [hoot mcp](/docs/agent/hoot-mcp#how-far) needs that machine set to **privileged**.
 
 ### an approval belongs to the turn that asked for it
 
@@ -263,9 +292,9 @@ every link you have created for a conversation is listed in the same dialog unde
 
 tier-1 tools read machine or site state: system info, logs, process lists, disk usage, GPU state, agent health, site deployment presets and the site's talons.
 
-tier-2 tools perform bounded management actions with validated parameters: restarting configured processes, adding, editing and deleting process config, capturing screenshots, managing services or Windows Update settings, and changing safe machine configuration.
+tier-2 tools perform bounded management actions with validated parameters: restarting configured processes, adding, editing and deleting process config, capturing screenshots, managing services or Windows Update settings, and changing safe machine configuration. a call that [changes what a machine launches](#changing-what-a-machine-launches) waits for your approval.
 
-tier-3 tools can make broader changes: shell execution, file writes, deployment orchestration, reboots and shutdowns. these are governed by the per-site tier-3 approval setting (on by default): while it is on, they pause for an explicit approve or deny before running. see [approving privileged (tier-3) actions](#approving-privileged-tier-3-actions).
+tier-3 tools can make broader changes: shell execution, file writes, deployment orchestration, reboots and shutdowns. the ones that run code always pause for an explicit approve or deny; the others do while the per-site tier-3 approval setting is on, which is the default. see [approving privileged (tier-3) actions](#approving-privileged-tier-3-actions).
 
 the [hoot tools reference](/docs/reference/hoot-tools) has the current tool list and parameter schemas.
 
@@ -321,7 +350,7 @@ server-side tools such as site logs, system presets, deployment orchestration an
 
 ### local hoot (public conversations API only)
 
-there is a third path, where the model loop and tools run on the agent itself, closer to the machine, for lower latency — at the cost of the approval gate and the tier caps, which the web server cannot enforce inside the agent. it is reached only through the [public conversations API](/docs/api/hoot), for a single-machine conversation, when the caller is a site admin, the site's tier-3 approval gate is **off**, and local hoot is healthy on that machine. on macOS and Linux local hoot runs as the signed-in user, so it needs someone signed in at the machine.
+there is a third path, where the model loop and tools run on the agent itself, closer to the machine, for lower latency — at the cost of the approval gate and the tier caps, which the web server cannot enforce inside the agent. nobody can approve a call there, so from owlette 4.2.0 local hoot has no tool that changes what a machine launches or runs code. it is reached only through the [public conversations API](/docs/api/hoot), for a single-machine conversation, when the caller is a site admin, the site's tier-3 approval gate is **off**, the machine runs owlette 4.2.0 or later, and local hoot is healthy on that machine. an older agent gets the turn on the server instead, which spends the caller's own LLM key. the agent's own crash events can also start it, when `cortex.autonomousEnabled` is set in that machine's config; nothing in owlette sets that for you. on macOS and Linux local hoot runs as the signed-in user, so it needs someone signed in at the machine.
 
 ```text
 POST /api/hoot/conversations/{conversationId}
@@ -373,7 +402,7 @@ a custom directive can be set in Firestore at `sites/{siteId}/settings/cortex`, 
 |---------|---------|-------------|
 | `autonomousEnabled` | `false` | master switch for autonomous investigations |
 | `directive` | default directive | site-specific mission text for autonomous hoot |
-| `maxTier` | `2` | highest tool tier an investigation may use |
+| `maxTier` | `2` | highest tool tier an investigation may use. at `3` it gains reboot and read tools, never the tools that run code |
 | `cooldownMinutes` | `15` | deduplication window for the same machine and process |
 | `escalationEmail` | `true` | sends an escalation email when hoot cannot resolve the issue |
 
@@ -384,7 +413,7 @@ a custom directive can be set in Firestore at `sites/{siteId}/settings/cortex`, 
 - duplicate nonces are rejected.
 - a site runs at most three autonomous investigations at once.
 - each investigation is limited to 15 steps.
-- the default tier cap rules out shell commands unless the site raises `maxTier`.
+- it never changes what a machine launches and never runs a shell command, at any `maxTier`: [nobody is there to approve it](#changing-what-a-machine-launches).
 - it can never override active hours, at any tier: its tools carry no `override_active_hours`. it can still ask for a restart once they end, on a machine whose agent can hold one.
 - the per-machine hoot toggle blocks tool execution for that machine on every path: single-machine chats, multi-machine fan-out, scheduled follow-ups, talons, autonomous investigations, and the public conversations API.
 - offline machines escalate instead of spending LLM calls.

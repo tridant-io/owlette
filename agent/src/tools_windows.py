@@ -225,11 +225,27 @@ def _default_profile_hive():
         return os.path.join(os.environ.get('SystemDrive', 'C:') + os.sep, 'Users', 'Default', 'NTUSER.DAT')
 
 
-def _ps_escape(s):
-    """Escape a string for embedding in a PowerShell double-quoted string."""
-    if s is None:
-        return ''
-    return str(s).replace('`', '``').replace('"', '`"').replace('$', '`$')
+def _ps_literal(value):
+    """`value` as one PowerShell single-quoted literal. Nothing expands inside one:
+    only a quote ends it, in any of the five forms the tokenizer reads as one, and
+    doubling a quote keeps it as text.
+    """
+    return "'" + re.sub('[\'\u2018\u2019\u201a\u201b]', lambda m: m.group(0) * 2, str(value)) + "'"
+
+
+def _is_match(pattern, value):
+    return isinstance(value, str) and pattern.fullmatch(value) is not None
+
+
+# What these parameters can legitimately be, so anything else never reaches a script.
+_EVENT_LOG_NAMES = {'application': 'Application', 'system': 'System', 'security': 'Security'}
+_EVENT_LOG_LEVELS = {name.lower(): name for name in _ENTRY_TYPES.values()}
+_PROVIDER_NAME = re.compile(r'[\w .()/+\-]{1,128}')
+_FEATURE_NAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._~\-]{0,255}')
+_FEATURE_FILTER = re.compile(r'[A-Za-z0-9._~\-*? ]{1,128}')
+_TASK_USER = re.compile(r'[\w .\-\\@]{1,128}')
+_TASK_TIME = re.compile(r'[0-9A-Za-z:.+/\- ]{1,40}')
+_EVENT_CHANNEL = re.compile(r'[\w .\-/]{1,128}')
 
 
 def _run_powershell_script(script, timeout=60, bypass=True):
@@ -249,7 +265,7 @@ def _run_powershell_script(script, timeout=60, bypass=True):
 # Key path prefixes registry_operation may touch (case-insensitive). Mirrors the
 # _validate_file_path() allowlist pattern.
 _SAFE_REGISTRY_PREFIXES = (
-    # Auto-login configuration
+    # Auto-login configuration: only _WINLOGON_VALUES
     r'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon',
     # GPU / TDR settings
     r'SYSTEM\CurrentControlSet\Control\GraphicsDrivers',
@@ -262,7 +278,7 @@ _SAFE_REGISTRY_PREFIXES = (
     r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced',
     # Power policy
     r'SYSTEM\CurrentControlSet\Control\Power',
-    # Service parameters (specific services)
+    # Service parameters (specific services): writes only under <service>\Parameters
     r'SYSTEM\CurrentControlSet\Services',
     # Owlette-managed keys (safe by definition)
     r'SOFTWARE\Owlette',
@@ -298,9 +314,103 @@ def _changes_active_hours(hive, key_path, value_name):
     """Whether writing or deleting this value would change the machine's active hours."""
     if hive != 'HKLM' or not isinstance(value_name, str):
         return False
-    # the registry ignores case, and a doubled or trailing backslash opens the same key
-    key = '\\'.join(part for part in key_path.lower().split('\\') if part)
-    return value_name.lower() in _ACTIVE_HOURS_VALUES.get(key, ())
+    return value_name.lower() in _ACTIVE_HOURS_VALUES.get(_registry_key(key_path), ())
+
+
+_WINLOGON_KEY = r'software\microsoft\windows nt\currentversion\winlogon'
+_SERVICES_KEY = r'system\currentcontrolset\services'
+_REGISTRY_ROOTS = frozenset({
+    'computer', 'hklm', 'hkcu', 'hkey_local_machine', 'hkey_current_user',
+})
+# web/lib/hoot/launchChange.ts holds a copy of these rules, for agents older than
+# this one. both are tested on tests/fixtures/registry_refusals.json: change them
+# together.
+# everything else in that key runs at sign-in (Shell, Userinit) or is a password.
+_WINLOGON_VALUES = frozenset({
+    'autoadminlogon', 'defaultusername', 'defaultdomainname', 'forceautologon',
+    'autologoncount',
+})
+_SECRET_VALUE_NAME = re.compile(
+    r'passw|passphrase|(?<![a-z])pass(?![a-z])|secret|token|credential|api.?key'
+    r'|access.?key|private.?key|auth',
+    re.IGNORECASE,
+)
+# under Parameters these name what a service loads: ServiceDll, a wrapper's
+# Application and its App* hooks, a winsock LibraryPath, and their like.
+_SERVICE_VALUE_THAT_RUNS = re.compile(
+    r'dll|path|image|^app|application|command|program|library|exe|script|catalog'
+    r'|module|driver|handler',
+    re.IGNORECASE,
+)
+# and whatever a value is called, data shaped like a program is one.
+_SERVICE_DATA_THAT_RUNS = re.compile(
+    r'\.(?:exe|dll|sys|bat|cmd|ps1|vbs|js|scr|msi|cpl|ocx)\b|[a-z]:[\\/]|\\\\|%\w+%',
+    re.IGNORECASE,
+)
+
+
+def _registry_key_path_unprintable(key_path):
+    """JS trim and Python strip disagree on what is whitespace, so a key path holding
+    anything outside printable ASCII stops here, before either of them runs."""
+    return isinstance(key_path, str) and re.search(r'[^\x20-\x7e]', key_path) is not None
+
+
+def _registry_key(key_path):
+    """A key path as the rules compare it: lowercase, one spelling of the separators
+    and of the views of a key that all open the same place."""
+    parts = [
+        part.strip() for part in key_path.strip().lower().replace('/', '\\').split('\\')
+        if part.strip()
+    ]
+    while parts and parts[0] in _REGISTRY_ROOTS:
+        parts.pop(0)
+    return '\\'.join(
+        'currentcontrolset' if re.fullmatch(r'controlset\d+', part) else part
+        for part in parts if part != 'wow6432node'
+    )
+
+
+def _registry_value_hidden(key_path, value_name):
+    """Whether a read must not return this value."""
+    if _SECRET_VALUE_NAME.search(value_name):
+        return True
+    return _registry_key(key_path) == _WINLOGON_KEY and value_name.lower() not in _WINLOGON_VALUES
+
+
+def _service_write_refusal(key, value_name, value_type, value_data):
+    """Why this write or delete under a service stays out of reach, or None."""
+    service, parameters, *below = (key.split('\\')[3:] + ['', ''])[:2] + key.split('\\')[5:]
+    if parameters != 'parameters' or service == 'winsock2':
+        return "only a service's Parameters key can be changed: use manage_windows_service"
+    data = value_data if isinstance(value_data, str) else json.dumps(value_data or '')
+    if (any(part.startswith('app') for part in below)
+            or _SERVICE_VALUE_THAT_RUNS.search(value_name or '')
+            or _SERVICE_DATA_THAT_RUNS.search(data)
+            or str(value_type or '').lower() == 'binary'):
+        return f'{value_name} can say what a service runs, so this tool will not change it'
+    return None
+
+
+def _registry_refusal(action, key_path, value_name, value_type=None, value_data=None):
+    """Why this read, write or delete is out of reach whoever approved it, or None.
+
+    The allowlist admits whole keys, and these two hold what a machine runs as
+    SYSTEM or at sign-in.
+    """
+    key = _registry_key(key_path)
+    if value_name and not isinstance(value_name, str):
+        return 'value_name is not a string'
+    if key.startswith(_WINLOGON_KEY + '\\'):
+        return 'only the auto-login values of Winlogon itself can be reached'
+    if key == _WINLOGON_KEY and not value_name:
+        return 'only the auto-login values of Winlogon itself can be reached, each by name'
+    if value_name and _registry_value_hidden(key_path, value_name):
+        return f'{value_name} is out of reach of this tool'
+    if action not in ('write', 'delete'):
+        return None
+    if key.startswith(_SERVICES_KEY + '\\'):
+        return _service_write_refusal(key, value_name, value_type, value_data)
+    return None
 
 
 def _validate_registry_path(hive, key_path):
@@ -419,13 +529,23 @@ def get_gpu_processes(params, config):
 
 def get_event_logs(params, config):
     """Get Windows event logs (Application, System, or Security)."""
-    log_name = params.get('log_name', 'Application')
-    max_events = min(params.get('max_events', 20), 100)
+    log_name = _EVENT_LOG_NAMES.get(str(params.get('log_name', 'Application')).lower())
+    if log_name is None:
+        return {'error': 'Invalid log_name. Use: Application/System/Security'}
+    try:
+        max_events = min(int(params.get('max_events', 20)), 100)
+    except (TypeError, ValueError, OverflowError):
+        return {'error': 'max_events must be an integer'}
+    if max_events < 1:
+        return {'error': 'max_events must be at least 1'}
     level_filter = params.get('level', None)  # 'Error', 'Warning', 'Information'
 
     ps_cmd = f'Get-EventLog -LogName {log_name} -Newest {max_events * 2}'
     if level_filter:
-        ps_cmd += f' -EntryType {level_filter}'
+        entry_type = _EVENT_LOG_LEVELS.get(str(level_filter).lower())
+        if entry_type is None:
+            return {'error': f"Invalid level. Use: {'/'.join(_EVENT_LOG_LEVELS.values())}"}
+        ps_cmd += f' -EntryType {entry_type}'
     ps_cmd += ' | Select-Object -First ' + str(max_events) + ' TimeGenerated, EntryType, Source, Message | ConvertTo-Json -Depth 2'
 
     rc, out, err = _run_powershell_script(ps_cmd, timeout=mcp_tools.SUBPROCESS_TIMEOUT, bypass=False)
@@ -1498,7 +1618,7 @@ def manage_scheduled_task(params, config):
 
     if action == 'get_history':
         ps = (
-            f'$info = Get-ScheduledTaskInfo -TaskName "{_ps_escape(task_name)}"; '
+            f'$info = Get-ScheduledTaskInfo -TaskName {_ps_literal(task_name)}; '
             '$info | Select-Object LastRunTime,LastTaskResult,NextRunTime,NumberOfMissedRuns | ConvertTo-Json'
         )
         rc, out, err = _run_powershell_script(ps)
@@ -1510,7 +1630,7 @@ def manage_scheduled_task(params, config):
             return {'error': f'parse failed: {e}', 'raw': out}
 
     if action == 'get_details':
-        ps = f'Export-ScheduledTask -TaskName "{_ps_escape(task_name)}"'
+        ps = f'Export-ScheduledTask -TaskName {_ps_literal(task_name)}'
         rc, out, err = _run_powershell_script(ps)
         if rc != 0:
             return {'error': f'get_details failed: {err or out}'}
@@ -1545,19 +1665,27 @@ def _create_scheduled_task(params):
         trigger_ps = 'New-ScheduledTaskTrigger -AtStartup'
     elif t_type == 'logon':
         user = trigger.get('user')
-        user_part = (' -User "' + _ps_escape(user) + '"') if user else ''
+        if user and not _is_match(_TASK_USER, user):
+            return {'error': 'Invalid trigger.user'}
+        user_part = f' -User {_ps_literal(user)}' if user else ''
         trigger_ps = 'New-ScheduledTaskTrigger -AtLogOn' + user_part
     elif t_type == 'once':
         dt = trigger.get('start_datetime', '')
         if not dt:
             return {'error': 'trigger.start_datetime required for once'}
-        trigger_ps = f'New-ScheduledTaskTrigger -Once -At "{_ps_escape(dt)}"'
+        if not _is_match(_TASK_TIME, dt):
+            return {'error': 'Invalid trigger.start_datetime'}
+        trigger_ps = f'New-ScheduledTaskTrigger -Once -At {_ps_literal(dt)}'
     elif t_type == 'daily':
         st = trigger.get('start_time', '04:00')
+        if not _is_match(_TASK_TIME, st):
+            return {'error': 'Invalid trigger.start_time'}
         interval = int(trigger.get('days_interval', 1))
-        trigger_ps = f'New-ScheduledTaskTrigger -Daily -At "{_ps_escape(st)}" -DaysInterval {interval}'
+        trigger_ps = f'New-ScheduledTaskTrigger -Daily -At {_ps_literal(st)} -DaysInterval {interval}'
     elif t_type == 'weekly':
         st = trigger.get('start_time', '04:00')
+        if not _is_match(_TASK_TIME, st):
+            return {'error': 'Invalid trigger.start_time'}
         days = trigger.get('days_of_week') or ['sun']
         day_map = {'mon': 'Monday', 'tue': 'Tuesday', 'wed': 'Wednesday', 'thu': 'Thursday',
                    'fri': 'Friday', 'sat': 'Saturday', 'sun': 'Sunday'}
@@ -1565,7 +1693,7 @@ def _create_scheduled_task(params):
             ps_days = ','.join(day_map[d.lower()] for d in days)
         except KeyError:
             return {'error': f'invalid day in days_of_week: {days}'}
-        trigger_ps = f'New-ScheduledTaskTrigger -Weekly -At "{_ps_escape(st)}" -DaysOfWeek {ps_days}'
+        trigger_ps = f'New-ScheduledTaskTrigger -Weekly -At {_ps_literal(st)} -DaysOfWeek {ps_days}'
     elif t_type == 'monthly':
         # Use schtasks since New-ScheduledTaskTrigger doesn't have Monthly (requires MSFT_TaskMonthlyTrigger via CIM)
         return {'error': 'monthly trigger: use New-ScheduledTaskTrigger is limited; please use create with a daily/weekly approximation or execute_script for complex monthly schedules'}
@@ -1573,14 +1701,21 @@ def _create_scheduled_task(params):
         log_name = trigger.get('log_name', 'Application')
         event_id = trigger.get('event_id')
         source = trigger.get('source', '')
-        xpath = f"*[System[Provider[@Name='{_ps_escape(source)}'] and EventID={int(event_id)}]]" if source else f"*[System[EventID={int(event_id)}]]"
+        if not _is_match(_EVENT_CHANNEL, log_name):
+            return {'error': 'Invalid trigger.log_name'}
+        if source and not _is_match(_PROVIDER_NAME, source):
+            return {'error': 'Invalid trigger.source'}
+        xpath = f"*[System[Provider[@Name='{source}'] and EventID={int(event_id)}]]" if source else f"*[System[EventID={int(event_id)}]]"
+        subscription = (
+            f'<QueryList><Query Id="0" Path="{log_name}">'
+            f'<Select Path="{log_name}">{xpath}</Select></Query></QueryList>'
+        )
         # Use CIM class for event trigger
         trigger_ps = (
             f'$class = Get-CimClass -ClassName MSFT_TaskEventTrigger '
             f'-Namespace Root/Microsoft/Windows/TaskScheduler; '
             f'$t = New-CimInstance -CimClass $class -ClientOnly; '
-            f'$t.Enabled = $true; $t.Subscription = \'<QueryList><Query Id="0" Path="{_ps_escape(log_name)}">'
-            f'<Select Path="{_ps_escape(log_name)}">{xpath}</Select></Query></QueryList>\'; $t'
+            f'$t.Enabled = $true; $t.Subscription = {_ps_literal(subscription)}; $t'
         )
     elif t_type == 'on_idle':
         mins = int(trigger.get('idle_minutes', 10))
@@ -1599,9 +1734,9 @@ def _create_scheduled_task(params):
         return {'error': 'action.program is required'}
     arguments = action_def.get('arguments', '')
     working_dir = action_def.get('working_directory', '')
-    args_part = f' -Argument "{_ps_escape(arguments)}"' if arguments else ''
-    wd_part = f' -WorkingDirectory "{_ps_escape(working_dir)}"' if working_dir else ''
-    action_ps = f'New-ScheduledTaskAction -Execute "{_ps_escape(program)}"{args_part}{wd_part}'
+    args_part = f' -Argument {_ps_literal(arguments)}' if arguments else ''
+    wd_part = f' -WorkingDirectory {_ps_literal(working_dir)}' if working_dir else ''
+    action_ps = f'New-ScheduledTaskAction -Execute {_ps_literal(program)}{args_part}{wd_part}'
 
     # Build principal
     run_as = (principal.get('run_as') or 'SYSTEM').upper()
@@ -1653,13 +1788,13 @@ def _create_scheduled_task(params):
     settings_ps = 'New-ScheduledTaskSettingsSet ' + ' '.join(settings_parts) if settings_parts else 'New-ScheduledTaskSettingsSet'
 
     # Assemble full script
-    desc_part = f' -Description "{_ps_escape(description)}"' if description else ''
+    desc_part = f' -Description {_ps_literal(description)}' if description else ''
     ps_script = (
         f'$trigger = {trigger_ps}; '
         f'$action = {action_ps}; '
         f'$principal = {principal_ps}; '
         f'$settings = {settings_ps}; '
-        f'Register-ScheduledTask -TaskName "{_ps_escape(task_name)}" '
+        f'Register-ScheduledTask -TaskName {_ps_literal(task_name)} '
         f'-Trigger $trigger -Action $action -Principal $principal -Settings $settings{desc_part} -Force | Out-Null; '
         f'Write-Output "OK"'
     )
@@ -1707,6 +1842,8 @@ def registry_operation(params, config):
     """Allowlisted registry read / write / delete."""
     action = (params.get('action') or '').lower()
     hive = (params.get('hive') or '').upper()
+    if _registry_key_path_unprintable(params.get('key_path')):
+        return {'error': 'key_path holds a control character or unusual whitespace'}
     key_path = (params.get('key_path') or '').strip()
     value_name = params.get('value_name', '')
 
@@ -1715,6 +1852,10 @@ def registry_operation(params, config):
     ok, err = _validate_registry_path(hive, key_path)
     if not ok:
         return {'error': err}
+    refusal = _registry_refusal(
+        action, key_path, value_name, params.get('value_type'), params.get('value_data'))
+    if refusal:
+        return {'error': refusal}
     if action in ('write', 'delete') and _changes_active_hours(hive, key_path, value_name):
         return {'error': (
             f"{value_name} is part of this machine's active hours, which owlette checks before "
@@ -1744,9 +1885,11 @@ def registry_operation(params, config):
                 while True:
                     try:
                         n, v, t = winreg.EnumValue(key, i)
+                        i += 1
+                        if _registry_value_hidden(key_path, n):
+                            continue
                         values.append({'name': n, 'type': t,
                                        'value': v if not isinstance(v, bytes) else v.hex()})
-                        i += 1
                     except OSError:
                         break
                 return {'hive': hive, 'key_path': key_path, 'values': values}
@@ -1892,8 +2035,9 @@ def get_event_logs_filtered(params, config):
     if level and level in level_map:
         filter_parts.append(f'Level={level_map[level]}')
     if process_name:
-        pn = _ps_escape(process_name)
-        filter_parts.append(f"ProviderName='{pn}'")
+        if not _is_match(_PROVIDER_NAME, process_name):
+            return {'error': 'Invalid process_name: an event provider name is letters, digits, spaces and . ( ) / + - _'}
+        filter_parts.append(f'ProviderName={_ps_literal(process_name)}')
 
     hash_table = '@{' + '; '.join(filter_parts) + '}'
     # Wrap Get-WinEvent in try/catch so "no matching events" returns [] instead of
@@ -1931,6 +2075,12 @@ def manage_windows_feature(params, config):
 
     logger.info(f"[MCP-AUDIT] manage_windows_feature: type={ftype} action={action} name={name}")
 
+    # no wildcards in a name: a removal would widen past the critical checks below
+    if name and not _is_match(_FEATURE_NAME, name):
+        return {'error': 'Invalid name: a feature name is letters, digits and . _ ~ -'}
+    if name_filter and not _is_match(_FEATURE_FILTER, name_filter):
+        return {'error': 'Invalid name_filter: use letters, digits, spaces and . _ ~ - * ?'}
+
     # Critical-feature blocklist — can't be disabled regardless of params
     CRITICAL_FEATURES = frozenset({
         'netfx4', 'netfx4-advsrvs', 'netfx3', 'windows-defender-default-definitions',
@@ -1950,15 +2100,15 @@ def manage_windows_feature(params, config):
         if action == 'list':
             ps = 'Get-WindowsOptionalFeature -Online | Select-Object FeatureName,State | ConvertTo-Json -Compress'
             if name_filter:
-                ps = f'Get-WindowsOptionalFeature -Online | Where-Object {{ $_.FeatureName -like "*{_ps_escape(name_filter)}*" }} | Select-Object FeatureName,State | ConvertTo-Json -Compress'
+                ps = f'Get-WindowsOptionalFeature -Online | Where-Object {{ $_.FeatureName -like {_ps_literal(f"*{name_filter}*")} }} | Select-Object FeatureName,State | ConvertTo-Json -Compress'
         elif action == 'install':
             if not name:
                 return {'error': 'name is required for install'}
-            ps = f'Enable-WindowsOptionalFeature -Online -FeatureName "{_ps_escape(name)}" -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Enable-WindowsOptionalFeature -Online -FeatureName {_ps_literal(name)} -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         elif action == 'remove':
             if not name:
                 return {'error': 'name is required for remove'}
-            ps = f'Disable-WindowsOptionalFeature -Online -FeatureName "{_ps_escape(name)}" -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Disable-WindowsOptionalFeature -Online -FeatureName {_ps_literal(name)} -NoRestart -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         else:
             return {'error': f"Invalid action '{action}'"}
 
@@ -1966,22 +2116,22 @@ def manage_windows_feature(params, config):
         if action == 'list':
             ps = 'Get-WindowsCapability -Online | Where-Object { $_.State -ne "NotPresent" } | Select-Object Name,State | ConvertTo-Json -Compress'
             if name_filter:
-                ps = f'Get-WindowsCapability -Online | Where-Object {{ $_.Name -like "*{_ps_escape(name_filter)}*" }} | Select-Object Name,State | ConvertTo-Json -Compress'
+                ps = f'Get-WindowsCapability -Online | Where-Object {{ $_.Name -like {_ps_literal(f"*{name_filter}*")} }} | Select-Object Name,State | ConvertTo-Json -Compress'
         elif action == 'install':
             if not name:
                 return {'error': 'name is required'}
-            ps = f'Add-WindowsCapability -Online -Name "{_ps_escape(name)}" -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Add-WindowsCapability -Online -Name {_ps_literal(name)} -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         elif action == 'remove':
             if not name:
                 return {'error': 'name is required'}
-            ps = f'Remove-WindowsCapability -Online -Name "{_ps_escape(name)}" -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
+            ps = f'Remove-WindowsCapability -Online -Name {_ps_literal(name)} -ErrorAction Stop | Select-Object RestartNeeded | ConvertTo-Json -Compress'
         else:
             return {'error': f"Invalid action '{action}'"}
 
     elif ftype == 'appx_package':
         if action == 'list':
             scope = '-AllUsers' if all_users else ''
-            filter_clause = f' | Where-Object {{ $_.Name -like "*{_ps_escape(name_filter)}*" }}' if name_filter else ''
+            filter_clause = f' | Where-Object {{ $_.Name -like {_ps_literal(f"*{name_filter}*")} }}' if name_filter else ''
             ps = f'Get-AppxPackage {scope}{filter_clause} | Select-Object Name,PackageFullName,Version | ConvertTo-Json -Compress'
         elif action == 'install':
             return {'error': 'AppX install via this tool is not supported — use the Microsoft Store or execute_script.'}
@@ -1990,12 +2140,12 @@ def manage_windows_feature(params, config):
                 return {'error': 'name is required for remove'}
             if all_users:
                 ps = (
-                    f'Get-AppxPackage -AllUsers -Name "{_ps_escape(name)}" | Remove-AppxPackage -AllUsers; '
-                    f'Get-AppxProvisionedPackage -Online | Where-Object {{ $_.DisplayName -like "*{_ps_escape(name)}*" }} | Remove-AppxProvisionedPackage -Online; '
+                    f'Get-AppxPackage -AllUsers -Name {_ps_literal(name)} | Remove-AppxPackage -AllUsers; '
+                    f'Get-AppxProvisionedPackage -Online | Where-Object {{ $_.DisplayName -like {_ps_literal(f"*{name}*")} }} | Remove-AppxProvisionedPackage -Online; '
                     'Write-Output "OK"'
                 )
             else:
-                ps = f'Get-AppxPackage -Name "{_ps_escape(name)}" | Remove-AppxPackage; Write-Output "OK"'
+                ps = f'Get-AppxPackage -Name {_ps_literal(name)} | Remove-AppxPackage; Write-Output "OK"'
         else:
             return {'error': f"Invalid action '{action}'"}
 
@@ -2015,6 +2165,16 @@ def manage_windows_feature(params, config):
         'type': ftype, 'action': action, 'name': name or None,
         'result': data if data is not None else out.strip()[:2000],
     }
+
+
+def _toast_text(value):
+    """`value` for the toast's XML: anything but ASCII letters, digits and spaces as a
+    numeric reference, so what reaches the script holds no character PowerShell or
+    XML reads as syntax, in a field that has to take any text."""
+    return ''.join(
+        c if (c.isascii() and c.isalnum()) or c == ' ' else f'&#{ord(c)};'
+        for c in str(value)
+    )
 
 
 def show_notification(params, config):
@@ -2046,7 +2206,7 @@ def show_notification(params, config):
     ps = (
         '[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null; '
         '[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null; '
-        f'$xml = \'<toast><visual><binding template="ToastText02"><text id="1">{_ps_escape(title)}</text><text id="2">{_ps_escape(message)}</text></binding></visual></toast>\'; '
+        f'$xml = \'<toast><visual><binding template="ToastText02"><text id="1">{_toast_text(title)}</text><text id="2">{_toast_text(message)}</text></binding></visual></toast>\'; '
         '$doc = New-Object Windows.Data.Xml.Dom.XmlDocument; $doc.LoadXml($xml); '
         '$toast = New-Object Windows.UI.Notifications.ToastNotification $doc; '
         '[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Owlette").Show($toast); '

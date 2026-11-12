@@ -31,7 +31,7 @@ firestore/
 │   │   ├── metrics: { schemaVersion: 2, cpus, memory, disks, gpus, nics, processes, ... }
 │   │   ├── rebooting, shuttingDown          # Set before remote reboot / shutdown
 │   │   ├── rebootPending: { active, processName, reason, timestamp }  # When relaunch limit exceeded
-│   │   ├── lastScreenshot: { url, timestamp, sizeKB }   # Written by the screenshots/finalize route
+│   │   ├── lastScreenshot: { url, path, timestamp, sizeKB }   # Written by the screenshots/finalize route; url is the image route
 │   │   ├── commands/pending       # ONE doc, one map field per command id (Web → Agent)
 │   │   ├── commands/completed     # ONE doc: { [cmdId]: { status, result|error, completedAt, type } } (Agent → Web)
 │   │   └── screenshots/, installed_software/, hardware/, logs/, metrics_history/, cortex/
@@ -51,8 +51,8 @@ firestore/
 │   # `sites[]` is LEGACY: no rule reads it and it grants nothing, but it is still written
 │   # (site create, ownership transfer) and read server-side — alert recipients in
 │   # lib/adminUtils.server.ts still add it beside the member rows. Never gate access on it.
-│   └── api_keys/{keyId}/          # API key metadata (name, keyHash, keyPrefix, environment, scopes, createdAt, expiresAt, lastUsedAt)
-├── api_keys/{keyHash}/            # Top-level API key lookup (userId, keyId, environment, scopes, expiresAt) — O(1) resolution
+│   └── api_keys/{keyId}/          # API key metadata (name, keyHash, keyPrefix, environment, scopes, maxToolTier, createdAt, expiresAt, lastUsedAt)
+├── api_keys/{keyHash}/            # Top-level API key lookup (userId, keyId, environment, scopes, maxToolTier, expiresAt) — O(1) resolution
 └── installer_metadata/, system_presets/, chats/, agent_tokens/, agent_refresh_tokens/, device_codes/, ...
 ```
 

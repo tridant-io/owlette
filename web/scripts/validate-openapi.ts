@@ -37,14 +37,13 @@ const INTERNAL_ROUTES = new Set([
   '/api/passkeys/authenticate/verify',
   '/api/passkeys/list',
   '/api/passkeys/{credentialId}',
-  '/api/agent/auth/exchange',
   '/api/agent/auth/refresh',
   '/api/agent/auth/device-code',
   '/api/agent/auth/device-code/authorize',
   '/api/agent/auth/device-code/poll',
   '/api/agent/alert',
+  '/api/agent/hoot/key',
   '/api/agent/screenshot',
-  '/api/agent/generate-installer',
   // a granted machine's own routes (ADR 0017): the agent and its local script call them, never an api key.
   '/api/agent/fleet/session',
   '/api/agent/fleet/tools',
@@ -100,7 +99,6 @@ const INTERNAL_ROUTES = new Set([
   // E2E-only issue file PUT sink, same posture as /api/chunks/e2e-put.
   '/api/issue-attachments/e2e-put',
   '/api/legal/dmca',
-  '/api/setup/generate-token',
   '/api/test-email',
   '/api/unsubscribe',
   '/api/webhooks/test',

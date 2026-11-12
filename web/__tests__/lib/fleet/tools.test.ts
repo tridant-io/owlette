@@ -63,11 +63,12 @@ import { startFleetCall, type FleetCallStart } from '@/lib/fleet/dispatch.server
 
 const configPath = (machine: string) => `config/${SITE}/machines/${machine}`;
 
+// these calls change what a machine launches, which takes tier 3
 const ctx: FleetContext = {
-  actor: { type: 'machine', siteId: SITE, machineId: SENDER, maxTier: 2, machineIds: [M1] },
+  actor: { type: 'machine', siteId: SITE, machineId: SENDER, maxTier: 3, machineIds: [M1] },
   siteId: SITE,
   machineId: SENDER,
-  grant: { maxTier: 2, machineIds: [M1] },
+  grant: { maxTier: 3, machineIds: [M1] },
   correlationId: 'corr-1',
   db,
 };

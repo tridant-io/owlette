@@ -11,6 +11,7 @@ import type { DecodedIdToken } from 'firebase-admin/auth';
 
 interface MockSession {
   userId?: string;
+  issuedAt?: number;
   expiresAt?: number;
   mfaVerified?: boolean;
   mfaSatisfiedBy?: string;
@@ -19,6 +20,8 @@ interface MockSession {
 }
 
 const mockStore = new Map<string, Record<string, unknown>>();
+/** Firebase user records by uid; none means no token revocation on record. */
+const mockAuthUsers = new Map<string, { tokensValidAfterTime: string }>();
 let mockSession: MockSession = {};
 const mockCreateCustomToken = jest.fn();
 
@@ -64,6 +67,7 @@ jest.mock('@/lib/firebase-admin', () => {
   return {
     getAdminAuth: () => ({
       createCustomToken: (...args: unknown[]) => mockCreateCustomToken(...args),
+      getUser: async (uid: string) => mockAuthUsers.get(uid) ?? {},
     }),
     getAdminDb: () => ({
       collection: (collection: string) => ({ doc: (id: string) => docRef(collection, id) }),
@@ -191,6 +195,28 @@ describe('POST /api/auth/app-link (mint)', () => {
     mockStore.set('users/user-1', { deletedAt: BASE });
     const res = await mint(post('/api/auth/app-link'));
     expect(res.status).toBe(403);
+  });
+
+  it('refuses a login cookie minted before the account cutoff', async () => {
+    mockStore.set('users/user-1', { role: 'member', sessionsValidAfter: BASE - 1_000 });
+    signedIn({ issuedAt: BASE - 2_000 });
+    const res = await mint(post('/api/auth/app-link'));
+    expect(res.status).toBe(401);
+    expect(mockStore.size).toBe(1);
+
+    signedIn({ issuedAt: BASE - 500 });
+    expect((await mint(post('/api/auth/app-link'))).status).toBe(201);
+  });
+
+  it('refuses a login cookie minted before a password reset', async () => {
+    // its own account: an earlier test's lookup of user-1 is still cached
+    mockStore.set('users/user-reset', { role: 'member' });
+    mockAuthUsers.set('user-reset', { tokensValidAfterTime: new Date(BASE - 60_000).toUTCString() });
+    signedIn({ userId: 'user-reset', issuedAt: BASE - 120_000 });
+    expect((await mint(post('/api/auth/app-link'))).status).toBe(401);
+
+    signedIn({ userId: 'user-reset', issuedAt: BASE - 30_000 });
+    expect((await mint(post('/api/auth/app-link'))).status).toBe(201);
   });
 });
 

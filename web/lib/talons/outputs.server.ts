@@ -312,6 +312,7 @@ async function executeWebhookOutput(
         'Roost-Signature': signPayload(body, secret, ctx.now.getTime()),
       },
       body,
+      redirect: 'manual',
       signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
     });
 

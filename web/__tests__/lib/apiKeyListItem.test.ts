@@ -172,6 +172,18 @@ describe('buildApiKeyListItem', () => {
     });
   });
 
+  it.each([
+    [undefined, 1],
+    [1, 1],
+    [2, 2],
+    [3, 3],
+    ['3', 1],
+    [99, 1],
+  ])('reads a stored maxToolTier of %p as %i', (stored, expected) => {
+    const item = buildApiKeyListItem('k1', { ...base, maxToolTier: stored }, NOW);
+    expect(item.maxToolTier).toBe(expected);
+  });
+
   it('rejects an unrecognised environment rather than passing it through', () => {
     const item = buildApiKeyListItem('k1', { ...base, environment: 'staging' }, NOW);
     expect(item.environment).toBeNull();

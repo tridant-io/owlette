@@ -36,9 +36,10 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 
 const push = jest.fn();
+let search = 'redirect=/dashboard';
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push, replace: jest.fn(), back: jest.fn(), prefetch: jest.fn() }),
-  useSearchParams: () => new URLSearchParams('redirect=/dashboard'),
+  useSearchParams: () => new URLSearchParams(search),
 }));
 
 jest.mock('@/lib/toast', () => ({
@@ -81,6 +82,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  search = 'redirect=/dashboard';
 });
 
 const renderPage = async () => {
@@ -123,6 +125,35 @@ it('code verification leaves with a document load, not a client-side push', asyn
 
   await waitFor(() => expect(assign).toHaveBeenCalledWith('/dashboard'));
   expect(push).not.toHaveBeenCalled();
+});
+
+describe('where a passed challenge goes', () => {
+  async function passWith(query: string) {
+    search = query;
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ success: true, deviceTrusted: false }),
+    })) as unknown as typeof fetch;
+    const user = await renderPage();
+    await user.type(screen.getByPlaceholderText('000000'), '123456');
+    await user.click(screen.getByRole('button', { name: /^verify$/i }));
+    await waitFor(() => expect(assign).toHaveBeenCalled());
+    return assign.mock.calls[0][0];
+  }
+
+  it('keeps a path on this site', async () => {
+    expect(await passWith('redirect=%2Fadmin%3Ftab%3D1')).toBe('/admin?tab=1');
+  });
+
+  it.each([
+    ['a backslash', 'redirect=%2F%5Cevil.example'],
+    ['a tab', 'redirect=%2F%09%2Fevil.example'],
+    ['a newline', 'return=%2F%0A%2Fevil.example'],
+    ['two slashes', 'redirect=%2F%2Fevil.example'],
+    ['another origin', 'redirect=https%3A%2F%2Fevil.example'],
+  ])('goes to the dashboard instead of a path that leaves the site with %s', async (_name, query) => {
+    expect(await passWith(query)).toBe('/dashboard');
+  });
 });
 
 // the proxy also answers /login with a redirect here while the challenge is

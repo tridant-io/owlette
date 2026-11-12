@@ -33,12 +33,21 @@ sessions are [iron-session](https://github.com/vvo/iron-session) cookies: sealed
 | property | value |
 |----------|-------|
 | **name** | `__session` |
-| **holds** | the user ID, the session's expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `mfaNetwork`, `requiresMfaSetup`). no role |
+| **holds** | the user ID, when the session was minted (`issuedAt`), its expiry and its 2FA state (`mfaRequired`, `mfaVerified`, `mfaCompletedAt`, `mfaSatisfiedBy`, `mfaNetwork`, `requiresMfaSetup`). no role |
 | **sealing** | iron-session v8's defaults: AES-256-CBC with an HMAC-SHA256 integrity check, keyed by `SESSION_SECRET`. the secret must be at least 32 characters; the server throws on load without it |
 | **flags** | `HttpOnly`, `SameSite=Lax`, path `/`, and `Secure` in production |
 | **lifetime** | `POST /api/auth/session` takes `durationDays`, 1 to 30 (default 7), for the session's own expiry, but the cookie's max age is fixed at 7 days, so a longer session still ends with the cookie |
 
 `POST /api/auth/session` is limited to 10 requests a minute per IP. `GET` reports the session's state and `DELETE` signs out.
+
+### ending sessions
+
+a session ends before its expiry when the account changes what proves it. every API request compares the session's `issuedAt` with two times, and refuses an older session with `401`:
+
+- `users/{uid}.sessionsValidAfter`, set whenever a second factor is added or removed, a [superadmin reset](#superadmin-factor-reset) included. the browser that made the change keeps its session; every other one ends at once
+- Firebase Auth's `tokensValidAfterTime` for the account, which a password reset or change moves. each server reads it at most once a minute per account, so a session started before the reset ends within a minute, the one that changed the password included
+
+a browser whose session ended signs in again, and is asked for its second factor again even if the old session had passed it. a cookie minted before `issuedAt` existed is dated by its 7-day expiry. an account that changed none of these keeps every session it has.
 
 ### remembering a device
 
@@ -76,6 +85,11 @@ an agent holds a one-hour Firebase ID token for its Firestore and API calls, and
 2. someone authorizes the phrase: POST /api/agent/auth/device-code/authorize
    ├── body: pairPhrase, siteId. needs a dashboard session holding
    │     MACHINE_ENROLL on that site: a site owner or admin, or a superadmin
+   ├── preview: true answers machineId and whether that machine is already
+   │     on the site, and changes nothing
+   ├── a machine already on the site needs replaceMachineId naming it; without
+   │     it the answer is 409 { code: "machine_exists", machineId } and the
+   │     phrase stays pending
    ├── mints the agent's Firebase custom token and ID token
    ├── creates a random refresh token, kept only as its SHA-256 hash in
    │     agent_refresh_tokens/{hash}
@@ -95,14 +109,17 @@ an agent holds a one-hour Firebase ID token for its Firestore and API calls, and
 
 the phrase alone cannot fetch those credentials: once an interactive phrase is authorized, a poll by phrase is refused with `403`.
 
-the agent no longer opens a browser on the machine. the owlette app, the installer console or `configure_site.py` shows the phrase and its link, and you authorize from any device: **join a site** in the app, `owlette.app/add`, or the dashboard. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted and change nothing. the agent's machine ID, which the tokens are bound to, is kept in `config/machine_id`, seeded from the hostname the first time it is read.
+the agent no longer opens a browser on the machine. the owlette app, the installer console or `configure_site.py` shows the phrase and its link, and you authorize from any device: **join a site** in the app, `owlette.app/add`, or the dashboard. `owlette.app/add` and the dashboard show the machine's name before you authorize it, and every surface asks you to confirm before it pairs a machine that is already on the site, which is what reinstalling one looks like. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted and change nothing. the agent's machine ID, which the tokens are bound to, is kept in `config/machine_id`, seeded from the hostname the first time it is read. from owlette 4.2.0, on a paired macOS or Linux machine, the service reads its machine ID and its server from the token it holds; the file and `config.json` decide them only until the machine pairs.
+
+on macOS and Linux the app asks the root service to pair or leave. from owlette 4.2.0, on a machine that already belongs to a site, the service does either only for an administrator account (root, or a member of `admin`, `sudo` or `wheel`) and refuses anyone else with nothing changed; a machine with no site pairs for whoever is signed in.
 
 ### pre-authorized phrases
 
 for a machine nobody is standing at, an admin makes the phrase first:
 
-- **generate code** in the dashboard calls the device-code route from a signed-in session, which marks the document `preauthorizedIntent` and stores no device code, then authorizes it at once. that authorization only records the site and who approved it, with `deferTokenMint: true`; no token exists yet
+- **generate code** in the dashboard calls the device-code route from a signed-in session, which marks the document `preauthorizedIntent` and stores no device code, then authorizes it at once. that authorization only records the site and who approved it, with `deferTokenMint: true`, plus `replaceMachineId` when the code is made to reinstall one machine already on the site, or `replaceAnyMachine: true` when the admin chose to let it reinstall any; no token exists yet
 - the machine polls with the phrase, its `machineId` and `version`. the first poll after authorization claims the phrase for that machine ID for 60 seconds, mints tokens bound to it, deletes the document and returns `accessToken`, `refreshToken`, `expiresIn: 3600` and `siteId` over TLS. another machine polling the same phrase meanwhile gets `202`, and `404` once it is spent: one phrase pairs one machine
+- a machine already on the site pairs only with a code that names it or allows any machine, and a machine that acts on others through [hoot mcp](/docs/agent/hoot-mcp) only with one that names it. any other gets `409` with an `error` the agent prints, and the phrase stays unspent. the mint's audit row records `existingMachine` and `replaceAnyMachine`
 - a document from an older server that still holds plaintext tokens is redeemed by phrase too; nothing writes one now
 
 how the phrase reaches the machine depends on its platform:
@@ -118,8 +135,8 @@ the **generate code** dialog shows both: the Windows command, and the preseed's 
 
 the **+** (**add machine**) button on the dashboard opens two tabs, both for the site you have selected:
 
-- **enter code**: type the phrase a machine is showing and **authorize**. the dialog posts it to the authorize route with the site ID, and the machine's next poll completes the pairing
-- **generate code**: makes a pre-authorized phrase, as above, and shows it with the Windows silent install command and the macOS and Linux pairing preseed. it expires 10 minutes after it was made
+- **enter code**: type the phrase a machine is showing and **continue**. the dialog looks the phrase up with `preview: true` and shows the machine's name, then **authorize machine** posts it to the authorize route with the site ID, and the machine's next poll completes the pairing. for a machine already on the site it asks you to **replace machine** instead. the getting-started card on a site with no machines does the same
+- **generate code**: makes a pre-authorized phrase, as above, and shows it with the Windows silent install command and the macOS and Linux pairing preseed. it expires 10 minutes after it was made. to reinstall a machine already on the site, enter its name before you generate, or tick **let this code reinstall any machine already on this site**, which is off by default
 
 every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a plain member's attempt is refused. generating a phrase spends two requests from the budget below.
 
@@ -138,7 +155,7 @@ every site member sees the button, but authorizing needs `MACHINE_ENROLL`, so a 
 
 **losing the token.** a `401` or `403` answer to a refresh makes the agent wipe its token store, and the machine has to pair again. a revocation therefore lands at the machine's next refresh: the access token it already holds keeps working until then, for up to an hour.
 
-**rate limits**, per IP, with the shared Redis limiter configured: device-code, authorize and the legacy exchange share 60 requests an hour (200 on dev), polling counts against the general 300 an hour, and refresh allows 120 an hour. without Redis every endpoint falls back to 15 a minute per process.
+**rate limits**, per IP, with the shared Redis limiter configured: device-code and authorize share 60 requests an hour (200 on dev), polling counts against the general 300 an hour, and refresh allows 120 an hour. without Redis every endpoint falls back to 15 a minute per process.
 
 ### custom token claims
 
@@ -164,10 +181,6 @@ the refresh token, the cached access token and its expiry, and the site ID are k
 | **file protection** | hidden, with a protected DACL: SYSTEM and Administrators, plus modify for the account that wrote it or the console user | mode `0600`, owned by root and opened without following links, inside a `0750` data root owned by group `_owlette` | the same, group `owlette` |
 
 the file is Fernet-encrypted (AES-128-CBC with HMAC-SHA256) under `base64url(SHA-256(key material + ":owlette-agent"))`, so it is useless on any other machine. an earlier derivation also mixed in the hostname, which a rename moved out from under the store; the agent re-encrypts such a file the first time it reads it and keeps the old copy as `.tokens.enc.v1`. setting `OWLETTE_DATA_ROOT` moves the whole data root, the token file included, for the Python agent; the owlette app reads it only from its own environment, and `owlette-host` ignores it.
-
-### legacy registration codes
-
-`POST /api/agent/auth/exchange` still trades a one-time registration code, from `agent_tokens/{code}`, for the same pair of tokens. the codes last 24 hours and are written by `/api/setup/generate-token` and `/api/agent/generate-installer`. no current agent calls the exchange.
 
 ---
 
@@ -224,7 +237,7 @@ passkeys use the Web Authentication API (FIDO2) for passwordless sign-in. one pa
 - rename: `PATCH /api/passkeys/{credentialId}` with `userId` and `friendlyName` (50 characters at most)
 - delete: `DELETE /api/passkeys/{credentialId}?userId=...`
 
-each needs the signed-in session of that `userId`.
+each needs the signed-in session of that `userId`. rename and delete also go through [the enrollment gate](#the-enrollment-gate): while the account holds a factor, the session must have cleared a challenge.
 
 ### security
 
@@ -260,7 +273,7 @@ users/{userId}.requiresMfaSetup = !mfaEnrolled
 
 `mfaFactors` is a running tally, so the session path answers "does this account hold a second factor?" with one document read instead of counting the `passkeys` subcollection. documents written before the field existed are recounted from the subcollection and healed on their next write.
 
-an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors` and `mfaVerified`, with no secrets in it.
+an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` sends that session to `/setup-2fa` from any protected path. the API refuses its session and its Firebase ID token with `403` and `code: "mfa_setup_required"`, except on the routes that set up a factor; its API keys keep working. `GET /api/mfa/factors` returns the signed-in account's inventory for the security panel, `totp`, `passkeys`, `totalFactors` and `mfaVerified`, with no secrets in it.
 
 ### setup flow
 
@@ -288,12 +301,16 @@ an account with no factors carries `requiresMfaSetup: true`, and `proxy.ts` send
 
 ### the enrollment gate
 
-`lib/mfaEnrollmentGate.server.ts` guards `/api/mfa/setup`, `/api/mfa/verify-setup` and the two `/api/passkeys/register/` routes:
+`lib/mfaEnrollmentGate.server.ts` guards `/api/mfa/setup`, `/api/mfa/verify-setup` and the two `/api/passkeys/register/` routes, and renaming and deleting a passkey:
 
 - **no factors**: enrollment is open. this is the mandatory-setup path; a user who has never enrolled cannot hold `mfaVerified`, so gating it would deadlock
-- **one or more factors**: the session must already be MFA-verified, or the route answers `403` with `code: "mfa_challenge_required"` and the client sends the user to `/verify-2fa`. without this, a stolen session cookie could attach an attacker's factor and clear the gate with it
+- **one or more factors**: the session must already have cleared a challenge, or the route answers `403` with `code: "mfa_challenge_required"` and the client sends the user to `/verify-2fa`. without this, a stolen session cookie could attach an attacker's factor and clear the gate with it
 
-removal is deliberately outside the gate; see [removing a factor](#removing-a-factor).
+see [removing a factor](#removing-a-factor) for how removal works.
+
+### the API and the second factor
+
+on an account that holds a factor, the API admits a session only once its sign-in has passed the second factor, and refuses a user's Firebase ID token, which carries none: both answer `403` with `code: "mfa_challenge_required"`. an account with no factor passes, and so does an agent's token. the routes that complete a challenge, list factors, enroll one or take live proof to remove one (`/api/mfa/verify-login`, `/api/mfa/setup`, `/api/mfa/verify-setup`, `/api/mfa/factors`, `/api/mfa/disable`, `/api/passkeys/list` and the `/api/passkeys/step-up/` and `/api/passkeys/register/` routes) take a session that has not passed it yet, each behind its own gate or proof, and `/api/users/bootstrap` and `/api/webhooks/user-created` take either credential before it. see [sessions and ID tokens](/docs/api/authentication#sessions-and-id-tokens).
 
 ### sign-in with 2FA
 
@@ -312,6 +329,8 @@ removal is deliberately outside the gate; see [removing a factor](#removing-a-fa
 
 a user who holds a passkey can answer that prompt with it instead of a code, through the `/api/passkeys/step-up/` routes.
 
+an authenticator code is accepted once: a second sign-in in the same 30 seconds waits for the next code. each account gets 10 code attempts, authenticator or backup code, in any 15 minutes, counted together at sign-in, `/api/mfa/disable`, `POST /api/mfa/backup-codes` and swoop's step-up, from any address. past that every one of them answers `429` with `code: "mfa_attempts_exceeded"`; a passkey is not counted.
+
 ### backup codes
 
 - 10 single-use codes, stored as hashes; the plaintext is shown exactly once
@@ -323,16 +342,18 @@ a user who holds a passkey can answer that prompt with it instead of a code, thr
 
 removing your last factor is **allowed**. on a drop to zero factors the inventory module re-arms `requiresMfaSetup`, so the account goes straight back into mandatory setup and must enroll a new factor before it can use the dashboard again. dropping to zero also revokes every trusted-device record: 30-day device trust must not outlive the factor it was granted against.
 
-the two removal routes are gated differently, both on purpose:
+the two removal routes:
 
 - `POST /api/mfa/disable` (authenticator app) demands live proof of possession every time: a current TOTP code or an unused backup code
-- `DELETE /api/passkeys/{credentialId}?userId=...` needs only the session that owns the credential. it is **not** behind the enrollment gate: that gate stops an unchallenged session from *adding* a factor it could then step up with, and refusing a removal would hold an account hostage to a credential its owner no longer has
+- `DELETE /api/passkeys/{credentialId}?userId=...` needs the session that owns the credential, and goes through [the enrollment gate](#the-enrollment-gate): while the account holds a factor, that session must have cleared a challenge. someone who no longer has the passkey clears it with another factor or a backup code at `/verify-2fa`; with none of those left, [a superadmin reset](#superadmin-factor-reset) is the way back
+
+adding or removing a factor emails the account's own address, naming the factor and the time, and so does a superadmin reset. the email is best effort: a failed send never fails the change.
 
 ### superadmin factor reset
 
-`POST /api/users/{uid}/mfa-reset`, the **reset 2FA** item on a row's menu at `/admin/users`, is the recovery path for a user who has lost their last factor *and* their backup codes. it deletes every passkey credential, clears the TOTP secret and backup codes, re-arms mandatory setup, and revokes the target's trusted-device records.
+`POST /api/users/{uid}/mfa-reset`, the **reset 2FA** item on a row's menu at `/admin/users`, is the recovery path for a user who has lost their last factor *and* their backup codes. it deletes every passkey credential, clears the TOTP secret and backup codes, re-arms mandatory setup, revokes the target's trusted-device records, and emails the target when it removed anything.
 
-it does **not** revoke Firebase refresh tokens: a session the target already holds stays signed in until it expires on its own. self-reset is refused: a superadmin uses account settings for their own factors, or asks another superadmin.
+it also [ends every session](#ending-sessions) the target holds: their next sign-in lands in mandatory setup. it does not revoke their Firebase refresh tokens. self-reset is refused: a superadmin uses account settings for their own factors, or asks another superadmin.
 
 ---
 
@@ -396,7 +417,7 @@ narrowing someone's scope ends every swoop session they sit in on a machine it d
 ### enforcement layers
 
 1. **Firestore security rules**, for what a browser or an agent reads and writes directly. helpers include `isSuperadmin()`, `isActiveMember(siteId)`, `canAccessSite(siteId)`, `isSiteAdmin(siteId)` and `agentCanAccessMachine(siteId, machineId)`; see [the key functions](/docs/setup/firestore-rules#key-functions). for machine scope, a block under one machine takes `canAccessMachine(siteId, machineId)`, a block that spans machines takes `canAccessWholeSite(siteId)`, and `isSiteAdmin` needs a whole-site row. `canAccessSite` admits a scoped member, so it is kept for the few documents that say nothing about other machines. the server's Admin SDK bypasses the rules, so every route checks for itself
-2. **API routes.** most run through `authorizedSiteHandler` or `authorizedPlatformHandler` (`lib/authorizedHandler.server.ts`): resolve the caller from a session, a Firebase ID token or an `owk_*` key, resolve their standing on the site, check their machine scope, check the API key's scope, check the capability, apply the rate limit, write a blocking audit row, then run the handler. the scope step reads the route's `machineId`: off the scope it answers `404` (audited `machine_out_of_scope`); on a route with no machine, or a site-wide capability, it answers `403` (audited `machine_scope_site_wide`). other routes use the `require*AuthAndScope` helpers in `app/api/_shared.ts` (site, machine, roost, chat, platform). `requireSiteAuthAndScope` refuses a scoped caller unless the route opts in and filters (the machines list, the site's logs, one log entry and the site itself); `requireSiteMachineAuthAndScope` and `requireMachineAuthAndScope` answer `404` off the scope; the roost gate refuses a scoped caller; the chat gate admits one and hands the route their scope. session-only routes, such as 2FA, passkeys and pairing authorization, use `requireSession` with an explicit capability check
+2. **API routes.** most run through `authorizedSiteHandler` or `authorizedPlatformHandler` (`lib/authorizedHandler.server.ts`): resolve the caller from a session, a Firebase ID token or an `owk_*` key, resolve their standing on the site, check their machine scope, check the API key's scope, check the capability, apply the rate limit, write a blocking audit row, then run the handler. the scope step reads the route's `machineId`: off the scope it answers `404` (audited `machine_out_of_scope`); on a route with no machine, or a site-wide capability, it answers `403` (audited `machine_scope_site_wide`). other routes use the `require*AuthAndScope` helpers in `app/api/_shared.ts` (site, machine, roost, chat, platform). `requireSiteAuthAndScope` refuses a scoped caller unless the route opts in and filters (the machines list, the site's logs, one log entry and the site itself); `requireSiteMachineAuthAndScope` and `requireMachineAuthAndScope` answer `404` off the scope; the roost gate refuses a scoped caller; the chat gate admits one and hands the route their scope. session-only routes, such as pairing authorization, use `requireSession` with an explicit capability check, and the routes that complete a challenge or enroll a factor `requirePreMfaSession` (see [the API and the second factor](#the-api-and-the-second-factor))
 3. **the dashboard**, for what it shows: `RequireAdminAccess` gates the admin panel, where `minRole: "admin"` admits anyone who administers at least one site with whole-site standing and `minRole: "superadmin"` only superadmins. `useAuth().isSiteAdmin(siteId)` means a whole-site owner or admin and gates site-wide controls (site settings, members, remove machine, revoke token); `useAuth().isMachineAdmin(siteId, machineId)` gates commands, process config and displays on one machine; `useAuth().machineScope(siteId)` is the scope the dashboard's queries list; and `useAuth().swoopMode(siteId, membersMayWatch)` hides swoop from someone whose mode is `none`. these only hide things; the server decides
 
 the `capability_enforcement` kill switch in `global/security_config` can turn capability checks off so a misfire cannot lock operators out of their fleet. it never turns off `MACHINE_REMOTE_CONTROL`, `MACHINE_REMOTE_VIEW`, `SWOOP_SETTINGS_MANAGE`, `FLEET_SETTINGS_MANAGE` or `SITE_BILLING_MANAGE`, nor API-key scope checks, nor machine scope, which is checked with site access before the switch is read; and every bypass is written to the audit row.

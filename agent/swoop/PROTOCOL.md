@@ -79,8 +79,9 @@ refusals, each an `error` frame carrying a code and nothing else:
 
 - a client sending a server-only type → `forbidden_type`. a client cannot forge a ring or a kill.
 - a client sending a type it is not the right role for → `wrong_role`.
-- an unrecognised type → `unknown_type`; non-string frame → `binary_unsupported`; over 64 KiB →
-  `message_too_large`; unparseable → `malformed_message`.
+- an unrecognised type → `unknown_type`; non-string frame → `binary_unsupported`; over 64 KiB, as sent
+  or as forwarded (utf-8 bytes, with `from`, `fromRole` and `serverTimeMs` on it) → `message_too_large`;
+  unparseable → `malformed_message`.
 
 **a viewer never reaches another viewer.** the fan-out rule is directional: viewer traffic goes to the agent
 side only, agent traffic goes to a named viewer or broadcasts to viewers.
@@ -646,6 +647,11 @@ anchor plus monotonic elapsed — never the wall clock. at `expiry + 30 s` grace
   `viewer_left` with `reason: "lease_expired"`;
 - reports the drop to `POST /api/agent/swoop/events` so the audit trail records why the session ended;
 - keeps serving every other viewer — one expired lease never ends anyone else's session.
+
+**the first lease.** the browser presents its connect token as the first `lease`, the moment `swoop-control`
+opens. the host sends that viewer nothing of the machine — no picture, audio, cursor, roster, clipboard or
+`hello-host` — until one has verified, and a viewer whose peer connected and that presents none within the same
+30 s grace is dropped the way a missed renewal is.
 
 when the last viewer is gone the streamer lingers about 60 s and exits 0 with `reason: "idle"`.
 

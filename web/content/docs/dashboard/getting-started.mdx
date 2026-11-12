@@ -108,7 +108,7 @@ over the API, `PATCH /api/sites/{siteId}/display-settings` with `{ "keepAwake": 
 1. click the `+` (**add machine**) button on the dashboard.
 2. on the **enter code** tab, download or copy the agent installer link and run it on the target machine. the button detects the platform you are browsing from — Windows, macOS on Apple silicon, or Linux — and offers the other two in a menu.
 3. enter the 3-word **pairing phrase** shown on that machine. Windows shows it when the installer finishes; on macOS and Linux, open the owlette app from the menu bar or top bar and choose **join site**.
-4. click **authorize**. the success state reads **machine authorized**, and the machine appears on the dashboard shortly.
+4. click **continue**. the dialog shows the name of the machine the phrase belongs to; check it is the one in front of you, then click **authorize machine**. a machine already on the site asks you to **replace machine** instead, which is what reinstalling one looks like. the success state reads **machine authorized**, and the machine appears on the dashboard shortly.
 
 for a machine nobody is standing in front of, use the **generate code** tab instead. click **generate code**, then copy the **windows silent install command**, which passes the phrase to the installer as `/ADD=`, or the **macos / linux pairing preseed**, which you save as `config/pairing.json` before installing; both are in [installation](/docs/agent/installation#method-2-silent-install-with-add). a generated phrase pairs one machine and expires in 10 minutes, so generate one per machine.
 

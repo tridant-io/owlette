@@ -30,19 +30,13 @@ import {
 import { ApiAuthError } from '@/lib/apiAuth.server';
 import { authorizedSiteHandler, type SiteRouteHandler } from '@/lib/authorizedHandler.server';
 import { Capability } from '@/lib/capabilities';
+import { evaluateSwoopAccess } from '@/lib/swoop/policy.server';
 import {
-  evaluateSwoopAccess,
-  freshCeremonyCovers,
-  hasOpenStepUpWindow,
-} from '@/lib/swoop/policy.server';
-import { openStepUpFromProof, requestSignInCeremony } from '@/lib/swoop/stepUp.server';
-import {
-  bindingNetwork,
-  controlNetwork,
-  networkAdmitsFreshCeremony,
-  networkAdmitsWindow,
-  networkBindingMode,
-} from '@/lib/swoop/networks.server';
+  openStepUpFromProof,
+  requestSignInCeremony,
+  stepUpReadsOpen,
+} from '@/lib/swoop/stepUp.server';
+import { bindingNetwork } from '@/lib/swoop/networks.server';
 import { recordSwoopDenied } from '@/lib/swoop/audit.server';
 import {
   apiKeyRefusal,
@@ -138,13 +132,7 @@ export async function GET(
     if (keyRefusal) return keyRefusal;
 
     const ceremony = await requestSignInCeremony(request, auth.userId);
-    const binding = networkBindingMode() === 'enforce' ? await controlNetwork(request, auth.userId) : null;
-    const target = { userId: auth.userId, siteId, machineId };
-    const open =
-      ((binding === null || networkAdmitsWindow(binding)) &&
-        (await hasOpenStepUpWindow({ ...target, sessionPassedCeremony: ceremony.sessionPassedCeremony }))) ||
-      ((binding === null || networkAdmitsFreshCeremony(binding, ceremony.ceremonyNetwork)) &&
-        (await freshCeremonyCovers({ ...target, ...ceremony })));
+    const open = await stepUpReadsOpen(request, { userId: auth.userId, siteId, machineId }, ceremony);
     return applyAuthDeprecations(
       NextResponse.json({
         ok: true,

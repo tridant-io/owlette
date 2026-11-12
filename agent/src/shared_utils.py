@@ -431,9 +431,14 @@ def get_machine_id():
     Only a persisted identity is cached. A file that exists but could not be
     read yields the hostname for that call alone, so a scanner holding it open
     for a few seconds cannot pin the process to an identity the machine's token
-    does not cover.
+    does not cover. A token in a store only root can write outranks the file, which
+    off Windows sits in a directory the console user can write.
     """
     global _machine_id
+    issued = _issued_claims().get('machine_id')
+    if issued:
+        return issued
+
     if _machine_id is not None:
         return _machine_id
 
@@ -1486,8 +1491,46 @@ def _create_cortex_ipc_dirs():
         except Exception as e:
             logging.error(f"Cortex IPC: could not create {path}: {e}")
 
+def _store_is_authoritative():
+    """Whether this process is the daemon off Windows: root, reading a token store
+    only root can write, beside a config.json the console user can."""
+    return not _IS_WINDOWS and os.geteuid() == 0
+
+
+def _issued_claims():
+    """What the server last issued this machine, where that outranks config.json.
+
+    The console user can edit config.json and replace config/machine_id, and a
+    server refusing a refresh token clears it: a paired machine asking the other
+    server, or under another id, would be talked out of its site. Nothing is
+    written for this, so a store from any earlier version already answers. Empty
+    with no store or no readable token, which leaves the files deciding, as they
+    must on a machine that has not paired.
+    """
+    if not _store_is_authoritative():
+        return {}
+    try:
+        import secure_storage
+        return secure_storage.get_storage().issued_claims()
+    except Exception as e:
+        logging.debug(f"Could not read the token store's claims: {e}")
+        return {}
+
+
+def _issued_environment():
+    """The environment whose project issued this machine's token, or None."""
+    audience = _issued_claims().get('aud')
+    for environment in ('production', 'development'):
+        if audience == get_project_id(environment):
+            return environment
+    return None
+
+
 def get_environment():
     """'production' or 'development' from config; 'production' by default."""
+    issued = _issued_environment()
+    if issued:
+        return issued
     config = read_config()
     if config:
         return config.get('environment', 'production')
@@ -1522,6 +1565,9 @@ def get_configured_api_base(config=None):
     Local users can edit config.json, so any other host there would receive this
     machine's refresh token. Reads from disk when config is None.
     """
+    issued = _issued_environment()
+    if issued:
+        return get_api_base_url(issued)
     if config is None:
         config = read_config()
     configured = (config.get('firebase') or {}).get('api_base')
@@ -1542,6 +1588,15 @@ def get_project_id(environment=None):
         return 'owlette-dev-3838a'
     else:
         return 'owlette-prod-90a12'
+
+def get_configured_project_id():
+    """firebase.project_id, else the environment's: the project the cloud client
+    reads its commands from, so it follows the token where the token decides."""
+    issued = _issued_environment()
+    if issued:
+        return get_project_id(issued)
+    return read_config(['firebase', 'project_id']) or get_project_id()
+
 
 def get_web_host(environment=None):
     """Bare web host, e.g. 'owlette.app'. environment defaults to config."""

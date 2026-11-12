@@ -12,9 +12,12 @@
  *   - site mode (`SITE_TARGET_ID`): server-side llm + fan-out tools, over the
  *     machines that are online AND have the hoot kill switch on (D-A), within
  *     the caller's machine scope
- *   - single machine, local hoot + site-admin caller: the agent runs the llm and
- *     streams via firestore onSnapshot
+ *   - single machine, local hoot + site-admin caller, on an agent whose local hoot
+ *     can't change a launch: the agent runs the llm and streams via firestore onSnapshot
  *   - single machine, fallback: server-side llm + tool relay
+ *
+ * None of them has an approval card a caller can answer, so a launch change is
+ * refused on the server-side paths (`launchChangeApprovable` stays off).
  */
 
 import { streamText, stepCountIs, type ModelMessage, type UIMessageChunk } from 'ai';
@@ -25,6 +28,7 @@ import { createModel, buildSystemPrompt, type ProcessSummary } from '@/lib/llm';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
 import { getSiteTimezone } from '@/lib/talons/store.server';
 import { scopeCovers } from '@/lib/machineAccess';
+import { compareVersions, LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION } from '@/lib/versionUtils';
 import {
   resolveLlmConfig,
   verifyUserSiteAccess,
@@ -218,6 +222,12 @@ async function isHootLocal(
     if (!machineDoc.exists) return false;
 
     const data = machineDoc.data();
+    // A fielded agent's local hoot can still set a launch mode with nobody to ask,
+    // so it gets no conversation from here: the turn runs on the server, gated.
+    if (data?.capabilities?.localHootLaunchGate !== 1) return false;
+    const version = typeof data.agent_version === 'string' ? data.agent_version : null;
+    if ((compareVersions(version, LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION) ?? -1) < 0) return false;
+
     // Wire field keeps the legacy `cortex` spelling — the agent writes it.
     const hootStatus = data?.cortexStatus;
     if (!hootStatus?.online) return false;

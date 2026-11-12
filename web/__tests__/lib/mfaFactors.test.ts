@@ -488,10 +488,19 @@ describe('applyMfaFactorChange — the write', () => {
       mfaFactors: { totp: false, passkeys: 0 },
       mfaEnrolled: false,
       requiresMfaSetup: true,
+      sessionsValidAfter: expect.any(Number),
       mfaSecret: null,
       backupCodes: [],
       mfaDisabledAt: 1234,
     });
+  });
+
+  it('ends every login session minted before the change, in the same write', async () => {
+    users.set('u1', { mfaFactors: { totp: false, passkeys: 0 } });
+    const before = Date.now();
+    await applyMfaFactorChange('u1', { totp: true });
+    expect(setCalls[0].payload.sessionsValidAfter).toBeGreaterThanOrEqual(before);
+    expect(setCalls[0].payload.sessionsValidAfter).toBeLessThanOrEqual(Date.now());
   });
 
   it('opens its own transaction when no ctx.tx is supplied', async () => {
@@ -531,6 +540,7 @@ describe('applyMfaFactorChange — the write', () => {
       mfaFactors: { totp: false, passkeys: 0 },
       mfaEnrolled: false,
       requiresMfaSetup: true,
+      sessionsValidAfter: expect.any(Number),
       mfaSecret: null,
     });
   });

@@ -13,8 +13,10 @@
  *     must not author automations)
  *   - the Opus 5 advisor is offered with its per-reply cap, or not at all
  *   - a payer without hoot is skipped with a quiet 200, before anything starts
+ *   - the internal secret is compared in constant time, and refused when unset
  */
 
+import crypto from 'crypto';
 import { NextRequest } from 'next/server';
 
 jest.mock('@sentry/nextjs', () => ({
@@ -52,6 +54,7 @@ const mockBuildAutonomousSystemPrompt = jest.fn((..._args: unknown[]) => 'system
 jest.mock('@/lib/llm', () => ({
   createModel: jest.fn(() => ({ id: 'test-model' })),
   buildAutonomousSystemPrompt: (...args: unknown[]) => mockBuildAutonomousSystemPrompt(...args),
+  buildAutonomousEventMessage: jest.requireActual('@/lib/llm').buildAutonomousEventMessage,
 }));
 
 const mockExecuteServerSideTool = jest.fn();
@@ -186,10 +189,13 @@ interface ExecutableTool {
   execute: (params: Record<string, unknown>) => Promise<unknown>;
 }
 
-function request(): NextRequest {
+function request(secret: string | null = 'test-secret'): NextRequest {
   return new NextRequest('http://localhost/api/hoot/autonomous', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-cortex-secret': 'test-secret' },
+    headers: {
+      'content-type': 'application/json',
+      ...(secret === null ? {} : { 'x-cortex-secret': secret }),
+    },
     body: JSON.stringify({
       siteId: SITE,
       machineId: MACHINE,
@@ -202,6 +208,8 @@ function request(): NextRequest {
 }
 
 interface GenerateTextArgs {
+  system: string;
+  messages: Array<{ role: string; content: string }>;
   tools: Record<string, ExecutableTool>;
   prepareStep?: unknown;
 }
@@ -260,6 +268,39 @@ afterEach(() => {
 });
 
 /* tests */
+
+describe('autonomous and the internal secret', () => {
+  it.each([
+    ['a wrong secret', 'test-secreT'],
+    ['a longer one', 'test-secret-and-more'],
+    ['a prefix of it', 'test-'],
+    ['an empty one', ''],
+    ['none', null],
+  ])('refuses %s with a 401, before anything starts', async (_label, secret) => {
+    const res = await POST(request(secret));
+
+    expect(res.status).toBe(401);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+    expect([...docStore.keys()]).toEqual([`sites/${SITE}/settings/cortex`]);
+  });
+
+  it('refuses everyone when the secret is not configured', async () => {
+    delete process.env.CORTEX_INTERNAL_SECRET;
+
+    expect((await POST(request(''))).status).toBe(401);
+    expect((await POST(request(null))).status).toBe(401);
+  });
+
+  it('compares the secret in constant time', async () => {
+    const compare = jest.spyOn(crypto, 'timingSafeEqual');
+    try {
+      expect((await POST(request('test-secreT'))).status).toBe(401);
+      expect(compare).toHaveBeenCalledTimes(1);
+    } finally {
+      compare.mockRestore();
+    }
+  });
+});
 
 describe('autonomous and the payer plan', () => {
   it('skips quietly with a 200 when the payer lacks hoot', async () => {
@@ -340,11 +381,13 @@ describe('autonomous tool dispatch routing', () => {
       expect.arrayContaining(['get_site_logs', 'update_process', 'add_process', 'delete_process']),
     );
 
-    for (const name of serverSideNames) {
+    // add and delete always change what the machine launches, so they stop at the gate.
+    const runnable = serverSideNames.filter((name) => name !== 'add_process' && name !== 'delete_process');
+    for (const name of runnable) {
       await tools[name].execute({});
     }
 
-    expect(mockExecuteServerSideTool).toHaveBeenCalledTimes(serverSideNames.length);
+    expect(mockExecuteServerSideTool).toHaveBeenCalledTimes(runnable.length);
     expect(mockDispatchToolCall).not.toHaveBeenCalled();
     expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
   });
@@ -360,6 +403,24 @@ describe('autonomous tool dispatch routing', () => {
     );
     expect(mockDispatchToolCall).not.toHaveBeenCalled();
     expect(mockExecuteServerSideTool).not.toHaveBeenCalled();
+  });
+
+  it('refuses a value out of its tool schema before any dispatch', async () => {
+    const tools = await buildTools();
+
+    await expect(tools.get_event_logs.execute({ log_name: 'Application; Get-Date' })).resolves.toMatchObject({
+      ok: false,
+      error: 'tool_params_invalid',
+      detail: expect.stringContaining('log_name'),
+    });
+    await expect(tools.restart_process.execute({ process_name: 'x', evil: true })).resolves.toMatchObject({
+      ok: false,
+      error: 'tool_params_invalid',
+      detail: expect.stringContaining('evil'),
+    });
+
+    expect(mockDispatchToolCall).not.toHaveBeenCalled();
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
   });
 
   it('routes a plain agent tool through dispatchToolCallAsSystem', async () => {
@@ -412,6 +473,79 @@ describe('autonomous tool set exclusions', () => {
   });
 });
 
+describe('autonomous and what a machine launches', () => {
+  const expectNothingSent = () => {
+    expect(mockExecuteServerSideTool).not.toHaveBeenCalled();
+    expect(mockDispatchToolCall).not.toHaveBeenCalled();
+    expect(mockDispatchExistingCommand).not.toHaveBeenCalled();
+  };
+
+  it.each([
+    ['update_process', { process_name: 'TouchDesigner', exe_path: 'C:\\evil.exe' }],
+    ['update_process', { process_name: 'TouchDesigner', file_path: '--load evil.toe' }],
+    ['update_process', { process_name: 'TouchDesigner', cwd: 'C:\\evil' }],
+    ['add_process', { name: 'evil', exe_path: 'C:\\evil.exe' }],
+    ['delete_process', { process_name: 'TouchDesigner' }],
+    ['set_launch_mode', { process_name: 'TouchDesigner', mode: 'always' }],
+  ] as Array<[string, Record<string, unknown>]>)(
+    'refuses a prompt-injected %s %j, and sends nothing',
+    async (name, input) => {
+      const tools = await buildTools();
+
+      const result = await tools[name].execute(input);
+
+      expect(result).toMatchObject({ ok: false, error: 'launch_change_needs_approval', status: 403 });
+      expectNothingSent();
+    },
+  );
+
+  it('is not offered the tools whose job is what runs, at any maxTier', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+
+    const names = Object.keys(await buildTools());
+
+    for (const name of ['manage_scheduled_task', 'manage_windows_service', 'registry_operation', 'create_talon', 'set_talon_enabled']) {
+      expect(names).not.toContain(name);
+    }
+  });
+
+  it.each(['run_command', 'run_powershell', 'run_python', 'execute_script', 'write_file', 'deploy_software'])(
+    'refuses %s on a site that raised maxTier to 3, and sends nothing',
+    async (name) => {
+      docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+      const tools = await buildTools();
+
+      const result = await tools[name].execute({ command: 'calc.exe', script: 'calc', code: 'x', path: 'x', software_name: 'x' });
+
+      expect(result).toMatchObject({ ok: false, error: 'launch_change_needs_approval' });
+      expectNothingSent();
+    },
+  );
+
+  it('still reboots on a site that raised maxTier to 3', async () => {
+    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+    const tools = await buildTools();
+
+    await tools.reboot_machine.execute({});
+
+    expect(mockDispatchExistingCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ machineId: MACHINE }),
+      'reboot_machine',
+      {},
+    );
+  });
+
+  it('a rename and a restart still run', async () => {
+    const tools = await buildTools();
+
+    await tools.update_process.execute({ process_name: 'TouchDesigner', name: 'TD' });
+    await tools.restart_process.execute({ process_name: 'TouchDesigner' });
+
+    expect(mockExecuteServerSideTool).toHaveBeenCalledTimes(1);
+    expect(mockDispatchExistingCommand).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('autonomous and active hours', () => {
   const OVERRIDE_TOOLS = ['reboot_machine', 'shutdown_machine', 'deploy_software', 'manage_windows_update'];
 
@@ -427,13 +561,24 @@ describe('autonomous and active hours', () => {
 
     expect(mockGetMachineSummary).toHaveBeenCalledTimes(1);
     expect(mockGetMachineSummary).toHaveBeenCalledWith(mockDb, SITE, MACHINE);
-    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
-      'Lobby PC',
-      '',
-      expect.stringContaining('TouchDesigner'),
-      'America/New_York',
-      true,
-    );
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith('', 'America/New_York', true);
+  });
+
+  it("hands the model the agent's report only as fenced data in the first message", async () => {
+    const { system, messages } = await captureGenerateText();
+
+    // nothing the agent sent is an argument to the system prompt.
+    expect(JSON.stringify(mockBuildAutonomousSystemPrompt.mock.calls)).not.toMatch(/TouchDesigner|Lobby PC|exited/);
+    expect(system).toBe('system prompt');
+    expect(messages).toEqual([
+      {
+        role: 'user',
+        content:
+          'A process crashed. The agent\'s report:\n<untrusted-data source="agent event">\n' +
+          '{"event":"crashed","process":"TouchDesigner","machine":"Lobby PC","error":"exited with code 1"}\n' +
+          '</untrusted-data>',
+      },
+    ]);
   });
 
   it.each([
@@ -444,13 +589,7 @@ describe('autonomous and active hours', () => {
     mockGetMachineSummary.mockImplementation(summary);
     await buildTools();
 
-    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith(
-      'Lobby PC',
-      '',
-      expect.any(String),
-      undefined,
-      false,
-    );
+    expect(mockBuildAutonomousSystemPrompt).toHaveBeenCalledWith('', undefined, false);
   });
 
   it('refuses a held restart its agent cannot hold, and sends nothing', async () => {
@@ -531,18 +670,26 @@ describe('autonomous and active hours', () => {
     expect(offered.reboot_machine).toHaveProperty('when');
   });
 
-  it('runs a deployment with no envelope option, so it can never carry an override', async () => {
-    docStore.set(`sites/${SITE}/settings/cortex`, { autonomousEnabled: true, maxTier: 3 });
+  it('refuses override names on a tool that never takes one, before it runs', async () => {
     const tools = await buildTools();
 
-    await tools.deploy_software.execute({ software_name: 'Player', override_active_hours: true, reason: 'now' });
+    const result = await tools.get_site_logs.execute({ override_active_hours: true, reason: 'now' });
+
+    expect(result).toMatchObject({ ok: false, error: 'tool_params_invalid', detail: expect.stringContaining('override_active_hours') });
+    expect(mockExecuteServerSideTool).not.toHaveBeenCalled();
+  });
+
+  it('hands a server-side tool no envelope option, so it can never carry an override', async () => {
+    const tools = await buildTools();
+
+    await tools.get_site_logs.execute({ limit: 10 });
 
     // The system actor and nothing else: no command envelope argument at all.
     expect(mockExecuteServerSideTool).toHaveBeenCalledWith(
       mockDb,
       SITE,
       [MACHINE],
-      'deploy_software',
+      'get_site_logs',
       expect.any(Object),
       { systemActor: 'cortex_autonomous' },
     );

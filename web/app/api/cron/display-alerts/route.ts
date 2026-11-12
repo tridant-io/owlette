@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cronSecretMatches } from '@/lib/secretMatches.server';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { getSiteAlertRecipients, getMachineTimezone, getSiteLabel, recipientWantsMachine } from '@/lib/adminUtils.server';
 import { getResend, FROM_EMAIL } from '@/lib/resendClient.server';
@@ -35,8 +36,7 @@ import { publicOrigin } from '@/lib/publicOrigin.server';
 const ACCUMULATION_WINDOW_MS = 2 * 60 * 1000; // 2 minutes
 
 export async function GET(request: NextRequest) {
-  const cronSecret = request.headers.get('x-cron-secret');
-  if (!process.env.CRON_SECRET || cronSecret !== process.env.CRON_SECRET) {
+  if (!cronSecretMatches(request.headers.get('x-cron-secret'))) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 

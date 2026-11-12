@@ -146,10 +146,10 @@ class TestStartupRepair:
         assert svc._pending_anomaly_event == classified
 
 
-def test_console_user_entries_are_the_token_file_the_cortex_queues_and_the_fleet_folder():
+def test_console_user_entries_are_the_token_file_the_cortex_queues_the_cli_cache_and_the_fleet_folder():
     import owlette_service
     names = sorted(os.path.basename(p) for p in owlette_service._console_user_acl_paths())
-    assert names == ['.tokens.enc', '.tokens.enc.v1',
+    assert names == ['.tokens.enc', '.tokens.enc.v1', 'claude-cli',
                      'cortex_commands', 'cortex_events', 'cortex_results', 'fleet']
 
 
@@ -490,6 +490,52 @@ class TestStopSentinel:
         assert target.read_text() == 'log line'
 
 
+# ----- restart flag ----------------------------------------------------------
+
+class TestRestartFlag:
+    """tmp\\restart.flag is the desktop app's unelevated restart, so it is the
+    console user's to write; any local account can create files in tmp\\."""
+
+    @pytest.fixture
+    def flag(self, tmp_path, monkeypatch):
+        import owlette_service
+        monkeypatch.setattr(owlette_service.acl_hardening, 'console_user_sid', lambda: _HELPER_SID)
+        path = tmp_path / 'restart.flag'
+        path.write_text('restart_requested')
+        return path
+
+    @staticmethod
+    def _requested(flag):
+        from owlette_service import OwletteService
+        return object.__new__(OwletteService)._restart_requested(str(flag))
+
+    def test_a_flag_another_account_wrote_is_ignored_and_deleted(self, flag, monkeypatch, caplog):
+        _owned_by(monkeypatch, _OTHER_SID_STR)
+
+        with caplog.at_level(logging.WARNING):
+            assert self._requested(flag) is False
+        assert not flag.exists()
+        assert 'restart flag' in caplog.text
+
+    def test_the_console_users_flag_restarts_the_agent(self, flag, monkeypatch):
+        _owned_by(monkeypatch, _HELPER_SID_STR)
+
+        assert self._requested(flag) is True
+        assert flag.exists()
+
+    def test_a_hard_link_to_a_console_user_file_is_not_a_restart(
+            self, flag, tmp_path, monkeypatch):
+        _owned_by(monkeypatch, _HELPER_SID_STR)
+        flag.unlink()
+        log = tmp_path / 'desktop.log'
+        log.write_text('log line')
+        os.link(log, flag)
+
+        assert self._requested(flag) is False
+        assert not flag.exists()
+        assert log.read_text() == 'log line'
+
+
 # ----- update marker ---------------------------------------------------------
 
 @pytest.fixture
@@ -791,15 +837,6 @@ _NAMES = {'touchdesigner'}
      'process_name is not a configured process'),
     ({**_RESTART, 'tool_params': {'process_name': 7}},
      'process_name is not a configured process'),
-    ({**_RESTART, 'tool_name': 'set_launch_mode',
-      'tool_params': {'process_name': 'TouchDesigner', 'mode': 'on'}},
-     'mode is not one of off, always, scheduled'),
-    ({**_RESTART, 'tool_name': 'set_launch_mode',
-      'tool_params': {'process_name': 'TouchDesigner', 'mode': ['off']}},
-     'mode is not one of off, always, scheduled'),
-    ({**_RESTART, 'tool_name': 'set_launch_mode',
-      'tool_params': {'process_name': 'TouchDesigner', 'schedules': 'daily'}},
-     'schedules is not a list'),
     ({**_RESTART, 'tool_name': 'capture_screenshot', 'tool_params': {'monitor': True}},
      'monitor is not a non-negative integer'),
     ({**_RESTART, 'tool_name': 'capture_screenshot', 'tool_params': {'monitor': -1}},
@@ -813,8 +850,6 @@ def test_anything_but_a_cortex_tool_call_is_refused(cmd, reason):
 @pytest.mark.parametrize('cmd', [
     {**_RESTART, 'tool_params': {'process_name': 'touchdesigner'}},
     {'id': 'c1', 'tool_name': 'start_process', 'tool_params': {'process_name': 'TouchDesigner'}},
-    {'id': 'c1', 'tool_name': 'set_launch_mode',
-     'tool_params': {'process_name': 'TouchDesigner', 'mode': 'scheduled', 'schedules': []}},
     {'id': 'c1', 'tool_name': 'capture_screenshot', 'tool_params': {}},
     {'id': 'c1', 'tool_name': 'capture_screenshot', 'tool_params': {'monitor': 2}},
 ])

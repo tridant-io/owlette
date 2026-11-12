@@ -42,13 +42,19 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
+    requirePreMfaSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
   };
 });
 
 jest.mock('@/lib/totp', () => ({
   verifyTOTP: (...a: unknown[]) => mockVerifyTOTP(...a),
   verifyBackupCode: (...a: unknown[]) => mockVerifyBackupCode(...a),
+}));
+
+// the attempt budget and the spent-step record are covered in code-attempts.test.ts
+jest.mock('@/lib/mfaAttempts.server', () => ({
+  spendMfaAttempt: async () => ({ success: true }),
+  consumeTotpCode: async (_uid: string, code: string, secret: string) => mockVerifyTOTP(code, secret),
 }));
 
 jest.mock('@/lib/encryption.server', () => ({

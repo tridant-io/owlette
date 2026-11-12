@@ -73,9 +73,9 @@ export const Capability = {
   // can already destroy its credential. This exposes the narrower action
   // without handing out GLOBAL_SETTINGS_WRITE.
   AGENT_TOKEN_REVOKE: 'AGENT_TOKEN_REVOKE',
-  // Enrolling a machine: setup tokens, installer generation, and authorising a
-  // device-code pairing phrase. The MIRROR of AGENT_TOKEN_REVOKE — all three mint
-  // an agent identity plus a refresh token that never expires, and revoking one
+  // Enrolling a machine: authorising a device-code pairing phrase. The MIRROR of
+  // AGENT_TOKEN_REVOKE — it mints an agent identity plus a refresh token that
+  // never expires, and revoking one
   // is site-admin, so issuing one cannot be less. It was site MEMBERSHIP until
   // the per-site-roles migration made `member` read-only, at which point a
   // read-only user could mint credentials it could not then revoke.

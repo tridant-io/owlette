@@ -732,9 +732,10 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
     return () => cancelAnimationFrame(raf);
   }, [chat.chatId, isDesktop, mobileConversationsOpen]);
 
-  // Skip "new conversation" entries — the API requires a title or first message to categorize
+  // Skip "new conversation" entries — the API requires a title or first message to categorize —
+  // and autonomous ones, which have no owner, and only a chat's owner can categorize it
   const uncategorizedIds = chat.conversations
-    .filter((c) => !c.category && !isUntitledChat(c.title))
+    .filter((c) => !c.category && !isUntitledChat(c.title) && c.source !== 'autonomous')
     .map((c) => c.id);
 
   // Drive collapse-all/expand-all off the *actual* visible group labels so the

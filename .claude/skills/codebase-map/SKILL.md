@@ -33,7 +33,7 @@ The contract is `web/openapi.yaml`, served at `GET /api/openapi` and rendered at
 - **API keys**: `/api/keys` (per user), `/api/account/api-keys` (superadmin account keys). **Webhooks**: `/api/webhooks`, `/api/webhooks/[webhookId]`, `/api/webhooks/test`, `/api/webhooks/probe`.
 - **Auth**: `/api/auth/session` (iron-session), `/api/mfa/*`, `/api/passkeys/*`.
 - **Products**: roost `/api/roosts/*` + `/api/chunks/*`; hoot `/api/hoot/*` + `/api/cortex/*`; installers `/api/installer/*`.
-- **Called by the agent**: `/api/agent/auth/device-code` + `/poll` (pairing), `/api/agent/auth/refresh`, `/api/agent/alert`, `/api/agent/site`, `/api/agent/swoop/*`, `/api/bug-report`, plus roost and hoot routes. `/api/agent/auth/exchange` (registration-code exchange) still exists, but no agent code path calls it.
+- **Called by the agent**: `/api/agent/auth/device-code` + `/poll` (pairing), `/api/agent/auth/refresh`, `/api/agent/alert`, `/api/agent/site`, `/api/agent/swoop/*`, `/api/bug-report`, plus roost and hoot routes.
 
 ---
 

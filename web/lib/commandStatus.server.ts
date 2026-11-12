@@ -7,11 +7,13 @@
  * `completed` doc as non-terminal and surface as `in_progress`; only a status
  * `isTerminalCommandStatus` accepts resolves the command. a finished
  * screenshot gets a fresh 1-hour signed read url in `result.screenshot_url` on
- * every read; the url itself is never persisted.
+ * every read; the url itself is never persisted. a registry read's values whose
+ * names look like secrets are left out, as hoot leaves them out.
  */
 import type { DocumentSnapshot, Firestore } from 'firebase-admin/firestore';
 import { isTerminalCommandStatus } from '@/lib/commandLifecycle';
-import { issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
+import { withoutSecretRegistryValues } from '@/lib/hoot/launchChange';
+import { isMachineScreenshotPath, issueScreenshotReadUrl } from '@/lib/screenshotStorage.server';
 
 export const COMMAND_ID_RE = /^cmd_[A-Za-z0-9_-]{1,80}$/;
 
@@ -59,8 +61,9 @@ export async function lookupCommandStatus(
   // path, so urls always carry a current expiry.
   let result: Record<string, unknown> | string | undefined;
   if (lookup.status === 'completed' && typeof cmd.result === 'string') {
-    // reboot, shutdown and cancel answer with a sentence, not an object
-    result = cmd.result;
+    // reboot, shutdown and cancel answer with a sentence, not an object; a tool
+    // call answers with its json
+    result = cmd.type === 'mcp_tool_call' ? withoutSecretValues(cmd.result) : cmd.result;
   } else if (lookup.status === 'completed') {
     const baseResult = (cmd.result && typeof cmd.result === 'object'
       ? (cmd.result as Record<string, unknown>)
@@ -76,7 +79,8 @@ export async function lookupCommandStatus(
             : typeof cmd.storage_path === 'string'
               ? cmd.storage_path
               : null;
-    if (storagePath) {
+    // the agent writes this path, so only this machine's own screenshots are signed
+    if (isMachineScreenshotPath(storagePath, siteId, machineId)) {
       const signed = await issueScreenshotReadUrl(storagePath);
       if (signed) {
         result.screenshot_url = signed.url;
@@ -100,6 +104,22 @@ export async function lookupCommandStatus(
     ...(result && (typeof result === 'string' || Object.keys(result).length > 0) ? { result } : {}),
     ...(error ? { error } : {}),
   };
+}
+
+/**
+ * a fielded agent lists a registry key's values, secrets included. the
+ * completed entry doesn't name its tool, and `values` is only ever a registry
+ * read's, so a tool call's json is read as one.
+ */
+function withoutSecretValues(json: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return json;
+  }
+  const kept = withoutSecretRegistryValues('registry_operation', parsed);
+  return kept === parsed ? json : JSON.stringify(kept);
 }
 
 /**

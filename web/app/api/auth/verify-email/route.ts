@@ -14,7 +14,7 @@ import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { getAdminAuth } from '@/lib/firebase-admin';
 import { ApiAuthError, requireSession } from '@/lib/apiAuth.server';
-import { problemFromError, problemUnauthorized } from '@/lib/apiErrors';
+import { mfaChallengeProblem, problemFromError, problemUnauthorized } from '@/lib/apiErrors';
 import { checkRateLimit, verifyEmailRateLimit } from '@/lib/rateLimit';
 import { applyRateLimitCounters, rateLimitedResponse } from '@/lib/withRateLimit';
 import { needsEmailVerification, sendVerificationEmail } from '@/lib/emailVerification.server';
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     try {
       userId = await requireSession(request);
     } catch (err) {
-      if (err instanceof ApiAuthError) return problemUnauthorized(err.message);
+      if (err instanceof ApiAuthError) return mfaChallengeProblem(err) ?? problemUnauthorized(err.message);
       throw err;
     }
 

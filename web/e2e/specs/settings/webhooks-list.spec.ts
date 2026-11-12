@@ -148,3 +148,21 @@ test('create webhook reveals whsec_* once, copies to clipboard, then list shows 
   await expect(page.locator('code', { hasText: WEBHOOK_URL })).toBeVisible();
   await expect(page.getByText(rawSecret, { exact: true })).toHaveCount(0);
 });
+
+test.describe('as a member', () => {
+  test.use(roleState('member'));
+
+  test('the page says who manages webhooks, and asks the api for none', async ({ page }) => {
+    const listCalls: string[] = [];
+    page.on('request', (req) => {
+      if (req.url().includes('/api/webhooks')) listCalls.push(req.url());
+    });
+
+    await page.goto('/settings/webhooks');
+    await expect(page.getByText("this site's webhooks are managed by its admins")).toBeVisible({
+      timeout: 10_000,
+    });
+    await expect(page.getByRole('button', { name: /create webhook/i })).toHaveCount(0);
+    expect(listCalls).toEqual([]);
+  });
+});

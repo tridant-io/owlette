@@ -63,6 +63,8 @@ these can come from almost any route.
 | `forbidden` | 403 | the caller lacks the role or capability, or their account is deactivated | use a different caller, or change access in the dashboard |
 | `scope_insufficient` | 403 | the API key lacks the resource, ID, and permission needed | add the scope named in `required` |
 | `api_key_not_permitted` | 403 | the operation refuses API keys whatever their scopes | use a dashboard session |
+| `mfa_challenge_required` | 403 | a session that has not passed its second factor, or an ID token for an account that holds one | pass the second factor at sign-in, or use an API key |
+| `mfa_setup_required` | 403 | the account has to set up a second factor before its dashboard session or Firebase ID token is answered | set one up at `/setup-2fa` |
 | `not_found` | 404 | absent, or hidden from this caller. a machine outside the caller's machine scope says `machine not found or no access` | check the ID and the caller's access |
 | `validation_failed` | 400 | body, query, path, or header validation failed | fix the request using `detail` and `errors` |
 | `forbidden_field` | 400 | the body has a field this operation does not accept | remove it |
@@ -80,6 +82,8 @@ these can come from almost any route.
 ### unauthorized
 
 the request carried no usable credential: missing, malformed, unknown, revoked, or a rotated key past its 24-hour grace window. send a valid API key, session, or Firebase ID token.
+
+a dashboard session ends here too once the account's password is reset or changed (within a minute), or a second factor is added or removed, if the session started before that. sign in again. see [ending sessions](/docs/reference/authentication#ending-sessions).
 
 ### token_expired
 
@@ -147,6 +151,14 @@ the API key is valid but has no scope entry matching the operation. `required` n
 ### api_key_not_permitted
 
 the operation never accepts an API key, whatever its scopes: every swoop session route, swoop settings, and display settings. use a dashboard session. see [what an API key cannot do](/docs/api/authentication#what-an-api-key-cannot-do).
+
+### mfa_challenge_required
+
+the account holds a second factor, and the credential hasn't passed it: a session whose sign-in is still at `/verify-2fa`, or a Firebase ID token, which never carries one. pass the factor at sign-in and retry, or call the API with a key. see [sessions and ID tokens](/docs/api/authentication#sessions-and-id-tokens).
+
+### mfa_setup_required
+
+`403`: the account has no second factor and has to set one up (`requiresMfaSetup`), so its dashboard session and its Firebase ID token are refused everywhere except the routes that set one up. set up a passkey or an authenticator app at `/setup-2fa`. the account's API keys are not affected. see [the factor inventory](/docs/reference/authentication#the-factor-inventory).
 
 ### not_found
 
@@ -269,6 +281,12 @@ hoot could not start a reply: `503` when the pinned machine is offline or no mac
 | <span id="missing_schedules" />`missing_schedules` | 400 | `launch_mode: scheduled` without a non-empty `schedules` array |
 | <span id="software_not_found" />`software_not_found` | 404 | the program to uninstall is not in the machine's software inventory |
 | <span id="software_record_invalid" />`software_record_invalid` | 409 | the inventory entry has no uninstall command |
+| <span id="tool_params_invalid" />`tool_params_invalid` | 400 | a tool call's `tool_name` or `tool_params` doesn't match the tool's definition: an unknown tool or parameter, a missing required one, or a value the tool doesn't take. `detail` names the parameter; nothing was queued. hoot refuses such a call with the same code |
+| <span id="max_tool_tier_exceeded" />`max_tool_tier_exceeded` | 403 | the call's tier is above the API key's `maxToolTier`, or above a [hoot mcp](/docs/agent/hoot-mcp#how-far) machine's grant. a call that changes what a machine launches counts as tier 3; see [tool tiers](/docs/api/authentication#tool-tiers) |
+| <span id="registry_value_refused" />`registry_value_refused` | 403 | a `registry_operation` call names a value that hoot's tools never read or change, at any tier: Winlogon's password, Shell or Userinit, or what a service runs. `detail` says which |
+| <span id="verified_session_required" />`verified_session_required` | 403 | creating, raising or rotating a key above tool tier 1, or raising a hoot mcp machine's tier, needs a dashboard session that passed a second factor |
+| <span id="hoot_disabled" />`hoot_disabled` | 423 | a tool call to a machine with hoot switched off; nothing was queued |
+| <span id="installer_not_published" />`installer_not_published` | 403 | `update_owlette` with a url and hash that no installer version publishes; nothing was queued |
 
 ---
 
@@ -276,7 +294,8 @@ hoot could not start a reply: `503` when the pinned machine is offline or no mac
 
 | code | status | meaning |
 |---|---:|---|
-| <span id="step_up_required" />`step_up_required` | 401 | control needs a live second factor: send `mfaProof`, or this tab's `continuity` token |
+| <span id="step_up_required" />`step_up_required` | 401 | control needs a live second factor: send `mfaProof`, or this tab's `continuity` token. a tier-3 tool call from a session or ID token, a launch change included, answers the same, until a session's step-up window on that machine is open |
+| <span id="mfa_attempts_exceeded" />`mfa_attempts_exceeded` | 429 | the account has used its 10 second-factor code attempts for the last 15 minutes, counted together at sign-in, removing the authenticator app, backup-code regeneration and swoop's step-up; wait and try again, or use a passkey |
 | <span id="swoop_disabled" />`swoop_disabled` | 403 | swoop is off for this site |
 | <span id="machine_excluded" />`machine_excluded` | 403 | the site's swoop policy excludes this machine |
 | <span id="members_may_not_watch" />`members_may_not_watch` | 403 | the site does not let plain members watch |

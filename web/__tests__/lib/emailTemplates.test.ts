@@ -22,6 +22,7 @@ import {
   buildDisplayDigestEmail,
   buildEmailVerificationEmail,
   buildIssueEmail,
+  buildMfaFactorNoticeEmail,
   buildPasswordResetEmail,
   type IssueEmailInput,
   type PendingDisplayAlert,
@@ -231,6 +232,36 @@ describe('buildIssueEmail', () => {
     expect(html).not.toContain('>machine<');
     expect(html).not.toContain('>site<');
     expect(html).toContain('dashboard · 4.1.13');
+  });
+});
+
+describe('buildMfaFactorNoticeEmail', () => {
+  const at = new Date('2026-11-01T12:00:00Z');
+
+  it.each([
+    ['added', 'passkey', 'passkey added to your owlette account'],
+    ['removed', 'passkey', 'passkey removed from your owlette account'],
+    ['added', 'authenticator app', 'authenticator app added to your owlette account'],
+    ['removed', 'authenticator app', 'authenticator app removed from your owlette account'],
+    ['removed', 'backup codes', 'backup codes removed from your owlette account'],
+    ['reset', 'second factors', 'second factors removed from your owlette account'],
+  ] as const)('%s %s: subject and lowercase copy', (change, factor, subject) => {
+    const email = buildMfaFactorNoticeEmail({ change, factor, at });
+    expect(email.subject).toBe(subject);
+    expect(email.html).toContain(subject);
+    expect(email.html).toContain('account settings');
+    expect(email.html).toContain('support@tridant.io');
+  });
+
+  it('says an administrator did a reset', () => {
+    const { html } = buildMfaFactorNoticeEmail({ change: 'reset', factor: 'second factors', at });
+    expect(html).toContain('an owlette administrator');
+  });
+
+  it('is transactional: no alert footer to opt out of', () => {
+    const { html } = buildMfaFactorNoticeEmail({ change: 'added', factor: 'passkey', at });
+    expect(html).not.toContain('manage alerts');
+    expect(html).not.toContain('unsubscribe');
   });
 });
 

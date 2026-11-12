@@ -37,8 +37,8 @@
  *     (components/DownloadButton.tsx:58-60), so b02 has literally nothing on
  *     screen if this is missing.
  *   - A SECOND site. /add auto-selects when the user has exactly one site and
- *     the authorize button is not rendered until something is picked
- *     (app/add/page.tsx:102-115, :273) — with one site there is no b07. A site
+ *     the continue button is not rendered until something is picked
+ *     (app/add/page.tsx) — with one site there is no b07. A site
  *     this scene creates and deletes, rather than renaming the shared baseline
  *     `site-B`, so nothing has to be restored by hand.
  *   - A pending `device_codes/{phrase}` doc with `preauthorizedIntent: true`,
@@ -51,11 +51,11 @@
  * :148) — a real outbound call that 400s on the emulator's `demo-api-key` and
  * puts a red toast on camera. So the seeded doc carries `preauthorizedIntent`
  * and no `deviceCode`, exactly as the dashboard's own "generate code" flow mints
- * it (device-code/route.ts:97-102). Consequence on screen: the success card
- * reads "the machine will appear on your dashboard shortly." rather than naming
- * the machine (add/page.tsx:205-212). That is real product copy, and it is the
- * honest one for this flow — the machine id genuinely is not known until the
- * agent polls.
+ * it (device-code/route.ts:97-102). Consequence on screen: the machine line
+ * after **continue** reads "named when it pairs", and the success card reads
+ * "the machine will appear on your dashboard shortly.", rather than naming the
+ * machine. That is real product copy, and it is the honest one for this flow —
+ * the machine id genuinely is not known until the agent polls.
  *
  * ── THE PAIRING PHRASE IS SHARED WITH THE DESKTOP TAKE ─────────────────────
  * b05/b06 film the phrase on the machine and this scene authorizes THAT phrase
@@ -288,16 +288,18 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         await expect(page.getByLabel(/pairing phrase/i)).toHaveValue(EP03_PAIR_PHRASE);
         // Both assertions together prove the sites fetch finished AND that two
         // sites arrived: the trigger still shows its placeholder, and the
-        // authorize button only mounts once something is picked. The fetch
-        // swallows unreadable sites (`catch {}`, add/page.tsx:95-97), so a rules
+        // continue button only mounts once something is picked. The fetch
+        // swallows unreadable sites (`catch {}` in add/page.tsx), so a rules
         // failure would degrade to a silent one-site auto-select rather than an
         // error — this is where that would surface.
         const siteSelect = page.locator('#site-select');
         await expect(siteSelect).toContainText('choose a site');
-        await expect(page.getByRole('button', { name: /authorize machine/i })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: /^continue$/i })).toHaveCount(0);
 
         // Budget: authorize is clicked at ~t+14s so ~2s of the success card
-        // lands inside the 17.006s window and the rest is b08's lead-in.
+        // lands inside the 17.006s window and the rest is b08's lead-in. The
+        // continue click and its lookup (~1.5s) are paid for by the 2.5s site
+        // hold (was 3.5s) and the 1.5s authorize hold (was 2s).
         await narrate(page, 'b07 the add page — the phrase came across', 3);
         await highlight(page, page.getByLabel(/pairing phrase/i), 1600);
         await narrate(page, 'b07 now pick a site', 2.5);
@@ -307,17 +309,26 @@ test('episode 3 — install owlette & pair your first machine', async ({ browser
         // (components/ui/select.tsx:52-60) — it is not inside the card.
         const gallery = page.getByRole('option', { name: 'main gallery', exact: true });
         await expect(gallery).toBeVisible();
-        await narrate(page, 'b07 a site is just a group of machines', 3.5);
+        await narrate(page, 'b07 a site is just a group of machines', 2.5);
         await clickWithCursor(page, gallery);
 
+        // Each button MOUNTS as the flow advances, which grows the card inside a
+        // vertically-centred <main> (AuthShell.tsx) and shifts the whole card up.
+        // Let the layout settle or the glide lands on stale geometry.
+        const proceed = page.getByRole('button', { name: /^continue$/i });
+        await expect(proceed).toBeVisible();
+        await page.waitForTimeout(500);
+        await clickWithCursor(page, proceed);
+
+        // the page names the machine before anything is approved. this code was
+        // generated, so no machine is known yet and the line reads "named when it
+        // pairs" — real product copy, like the success card below.
+        await expect(page.getByTestId('add-machine-name')).toHaveText('named when it pairs');
         const authorize = page.getByRole('button', { name: /authorize machine/i });
         await expect(authorize).toBeVisible();
-        // The button MOUNTS on selection, which grows the card inside a
-        // vertically-centred <main> (AuthShell.tsx) and shifts the whole card up
-        // ~30px. Let the layout settle or the glide lands on stale geometry.
         await page.waitForTimeout(500);
-        await highlight(page, authorize, 1800);
-        await narrate(page, 'b07 the authorize button lights up', 2);
+        await highlight(page, authorize, 1500);
+        await narrate(page, 'b07 the authorize button lights up', 1.5);
 
         await clickWithCursor(page, authorize);
         await expect(

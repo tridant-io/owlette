@@ -270,6 +270,8 @@ export async function POST(request: NextRequest) {
       const resumeMessageId = messages[messages.length - 1]?.id;
       const prior = await readTurnRecord(db, chatId);
       if (
+        // The ownership guard above needs the chat doc: without one, any site admin could answer.
+        !existingChatSnap.exists ||
         prior === null ||
         typeof resumeMessageId !== 'string' ||
         prior.messageId !== resumeMessageId ||

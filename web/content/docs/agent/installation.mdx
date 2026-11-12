@@ -111,7 +111,7 @@ use this path for machines nobody is standing in front of. an admin generates a 
 ### generate a phrase
 
 1. in the dashboard, click the `+` (**add machine**) button next to the view toggle.
-2. open **generate code**, and click **generate code**.
+2. open **generate code**, and click **generate code**. to reinstall a machine that is already on the site, enter its name first, or tick **let this code reinstall any machine already on this site** to skip naming it; each phrase still pairs one machine. by default a phrase refuses a machine already on the site, and one that names a machine refuses any other.
 3. copy the **windows silent install command**, or for macOS and Linux the **macos / linux pairing preseed**, the contents of the `pairing.json` [below](#the-pairing-preseed-macos-and-linux). both already carry the phrase, for example `silver-compass-drift`, and the server: generated on dev.owlette.app, the command has `/SERVER=dev` and the preseed `"server": "dev"`.
 
 ### Windows: `/ADD=`
@@ -224,7 +224,7 @@ to re-run pairing, open the owlette window on the machine and choose **join site
 leaving is not the mirror of joining, and it differs by platform:
 
 - **Windows:** the app stops `OwletteService` before anything is deregistered, and since it runs as the signed-in user, Windows raises an administrator prompt for that stop — decline it and the leave is cancelled with nothing on this machine changed, and the dialog offers **try again**. with the service down the machine is deregistered, then the service is started again; the dialog narrates each step and the whole sequence takes a few seconds. if the service does not come back, the dialog says so and **start service** appears in the status bar.
-- **macOS and Linux:** the service carries out the whole leave itself — it takes the machine off the dashboard, then restarts. there is no prompt, and nothing to approve.
+- **macOS and Linux:** the service carries out the whole leave itself — it takes the machine off the dashboard, then restarts. there is no prompt, and nothing to approve, but the account signed in must be an administrator: root, or a member of `admin` (macOS), `sudo` or `wheel`. anyone else gets "only an administrator can change the site this machine belongs to", and nothing changes. the service holds pairing a machine that already belongs to a site to the same rule.
 
 the console equivalent of join, on Windows:
 

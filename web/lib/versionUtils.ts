@@ -177,3 +177,15 @@ export const SWOOP_MIN_AGENT_VERSION = '3.3.7';
  * clears it, so a machine rolled back below this keeps a stale 1.
  */
 export const ACTIVE_HOURS_GUARD_MIN_AGENT_VERSION = '4.1.21';
+
+/**
+ * The first agent whose local hoot has no tool that changes a launch or runs code.
+ * The capability alone can't say so: a rollback leaves it on the machine doc.
+ */
+export const LOCAL_HOOT_LAUNCH_GATE_MIN_AGENT_VERSION = '4.2.0';
+
+/**
+ * the first agent that fetches the LLM key `/api/hoot/provision-key` queues for it
+ * from `/api/agent/hoot/key`. an older one reads the key from the command itself.
+ */
+export const HOOT_KEY_FETCH_MIN_AGENT_VERSION = '4.2.0';

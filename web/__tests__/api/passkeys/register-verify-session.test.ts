@@ -28,10 +28,17 @@ const mockRequireSessionUser = jest.fn();
 const mockAssertActiveUser = jest.fn();
 const mockGetSessionData = jest.fn();
 const mockMarkSessionMfaVerified = jest.fn();
+const mockKeepSessionPastCutoff = jest.fn();
 const mockGetAndDeleteChallenge = jest.fn();
 const mockStorePasskey = jest.fn();
 const mockVerifyRegistrationResponse = jest.fn();
 const mockEmitMutation = jest.fn();
+
+const mockSendEmail = jest.fn();
+jest.mock('@/lib/resendClient.server', () => ({
+  ...jest.requireActual('@/lib/resendClient.server'),
+  getResend: () => ({ emails: { send: (...a: unknown[]) => mockSendEmail(...a) } }),
+}));
 
 jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
@@ -54,13 +61,14 @@ jest.mock('@/lib/apiAuth.server', () => {
   return {
     ApiAuthError,
     assertActiveUser: (...a: unknown[]) => mockAssertActiveUser(...a),
-    requireSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
+    requirePreMfaSessionUser: (...a: unknown[]) => mockRequireSessionUser(...a),
   };
 });
 
 jest.mock('@/lib/sessionManager.server', () => ({
   getSessionData: (...a: unknown[]) => mockGetSessionData(...a),
   markSessionMfaVerified: (...a: unknown[]) => mockMarkSessionMfaVerified(...a),
+  keepSessionPastCutoff: (...a: unknown[]) => mockKeepSessionPastCutoff(...a),
 }));
 
 jest.mock('@/lib/webauthn.server', () => ({
@@ -139,11 +147,13 @@ import { POST } from '@/app/api/passkeys/register/verify/route';
 import { createMockRequest } from '../helpers/utils';
 
 const UID = 'user-1';
+const VERIFIED_SESSION = { userId: UID, mfaRequired: true, mfaVerified: true, mfaCompletedAt: 1 };
 const NEW_CREDENTIAL_ID = 'cred-new';
 
 beforeEach(() => {
   jest.clearAllMocks();
-  users = new Map([[UID, {}]]);
+  users = new Map([[UID, { email: 'owner@example.test' }]]);
+  mockSendEmail.mockResolvedValue({ error: null });
   passkeys = new Map([[UID, []]]);
   setCalls.length = 0;
 
@@ -216,11 +226,30 @@ describe('POST /api/passkeys/register/verify — first factor', () => {
     });
   });
 
+  it("tells the account's own address a passkey was added", async () => {
+    const res = await POST(registerReq());
+    expect(res.status).toBe(200);
+
+    expect(mockSendEmail).toHaveBeenCalledTimes(1);
+    expect(mockSendEmail.mock.calls[0][0]).toMatchObject({
+      to: 'owner@example.test',
+      subject: 'passkey added to your owlette account',
+    });
+  });
+
+  it('still succeeds when the send fails', async () => {
+    mockSendEmail.mockRejectedValue(new Error('resend down'));
+
+    const res = await POST(registerReq());
+    expect(res.status).toBe(200);
+    expect(mockStorePasskey).toHaveBeenCalledTimes(1);
+  });
+
   it('counts the subcollection rather than trusting a stale stored tally', async () => {
     // Doc claims zero passkeys while one exists: recount must yield 2.
     users.set(UID, { mfaFactors: { totp: false, passkeys: 0 } });
     passkeys.set(UID, ['cred-old']);
-    mockGetSessionData.mockResolvedValue({ userId: UID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await POST(registerReq());
     expect(res.status).toBe(200);
@@ -239,7 +268,7 @@ describe('POST /api/passkeys/register/verify — subsequent factors', () => {
       requiresMfaSetup: false,
     });
     passkeys.set(UID, ['cred-old']);
-    mockGetSessionData.mockResolvedValue({ userId: UID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await POST(registerReq());
     expect(res.status).toBe(200);
@@ -248,8 +277,11 @@ describe('POST /api/passkeys/register/verify — subsequent factors', () => {
       mfaFactors: { totp: false, passkeys: 2 },
       mfaEnrolled: true,
       requiresMfaSetup: false,
+      sessionsValidAfter: expect.any(Number),
     });
     expect(mockMarkSessionMfaVerified).not.toHaveBeenCalled();
+    // the session that added it outlives the cutoff the change set
+    expect(mockKeepSessionPastCutoff).toHaveBeenCalledWith(UID);
     expect(mockEmitMutation.mock.calls[0][0].attributes.firstFactor).toBe(false);
   });
 
@@ -259,7 +291,7 @@ describe('POST /api/passkeys/register/verify — subsequent factors', () => {
       mfaFactors: { totp: true, passkeys: 0 },
       mfaEnrolled: true,
     });
-    mockGetSessionData.mockResolvedValue({ userId: UID, mfaVerified: true });
+    mockGetSessionData.mockResolvedValue(VERIFIED_SESSION);
 
     const res = await POST(registerReq());
     expect(res.status).toBe(200);
@@ -290,6 +322,17 @@ describe('POST /api/passkeys/register/verify — enrollment gate', () => {
     expect(setCalls).toEqual([]);
     expect(mockMarkSessionMfaVerified).not.toHaveBeenCalled();
     expect(mockEmitMutation).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it('rejects a sign-in from before the account held a factor', async () => {
+    users.set(UID, { mfaFactors: { totp: true, passkeys: 0 }, mfaEnrolled: true });
+    mockGetSessionData.mockResolvedValue({ userId: UID, mfaRequired: false, mfaVerified: true });
+
+    const res = await POST(registerReq());
+    expect(res.status).toBe(403);
+    expect((await res.json()).code).toBe('mfa_challenge_required');
+    expect(mockStorePasskey).not.toHaveBeenCalled();
   });
 
   it('rejects when there is no session data at all', async () => {

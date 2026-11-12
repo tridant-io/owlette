@@ -27,6 +27,7 @@ jest.mock('@/lib/plan.server', () => ({
   requireEntitlement: (...args: unknown[]) => mockRequireEntitlement(...args),
 }));
 jest.mock('@/lib/screenshotStorage.server', () => ({
+  ...jest.requireActual('@/lib/screenshotStorage.server'),
   issueScreenshotReadUrl: jest.fn(async (path: string) => ({
     url: `https://signed.example/${path}`,
     expiresAt: '2026-11-10T13:00:00.000Z',
@@ -185,6 +186,7 @@ function ctxFor(grant: FleetGrant): FleetContext {
 }
 
 const TIER2_TO_M1 = ctxFor({ maxTier: 2, machineIds: [M1] });
+const TIER3_TO_M1 = ctxFor({ maxTier: 3, machineIds: [M1] });
 
 const admit = jest.fn<ReturnType<AdmitFleetCall>, Parameters<AdmitFleetCall>>();
 
@@ -275,12 +277,12 @@ describe('startFleetCall: refusals, in order', () => {
 
   it.each([
     ['no params', undefined],
-    ['no machine', { process_name: 'td.exe' }],
+    ['no machine', {}],
     ['an empty machine', { machine: '' }],
     ['a machine id that is a path', { machine: `${M1}/commands/pending` }],
   ])('400 validation_failed for %s', async (_label, params) => {
-    const res = await refusedWith(startFleetCall(TIER2_TO_M1, { tool: 'restart_process', params }, admit), 400, 'validation_failed');
-    expect(res.deny).toEqual({ reason: 'validation_failed', tool: 'restart_process', machineId: null });
+    const res = await refusedWith(startFleetCall(TIER2_TO_M1, { tool: 'get_system_info', params }, admit), 400, 'validation_failed');
+    expect(res.deny).toEqual({ reason: 'validation_failed', tool: 'get_system_info', machineId: null });
     expect(reads).toEqual([]);
   });
 
@@ -313,11 +315,11 @@ describe('startFleetCall: refusals, in order', () => {
     expect(res.deny).toEqual({ reason: 'not_found', tool: 'get_system_info', machineId: 'ghost' });
   });
 
-  it('409 hoot_disabled when hoot is off on the target', async () => {
+  it('423 hoot_disabled when hoot is off on the target, as the commands route answers', async () => {
     docs.set(machinePath(M1), { online: true, cortexEnabled: false });
     const res = await refusedWith(
       startFleetCall(TIER2_TO_M1, { tool: 'get_system_info', params: { machine: M1 } }, admit),
-      409,
+      423,
       'hoot_disabled',
     );
     expect(res.deny).toEqual({ reason: 'hoot_disabled', tool: 'get_system_info', machineId: M1 });
@@ -359,6 +361,75 @@ describe('startFleetCall: refusals, in order', () => {
     );
     expect(res.deny).toEqual({ reason: 'plan_required', tool: 'get_system_info', machineId: M1 });
     expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.hoot');
+  });
+});
+
+describe('startFleetCall: parameters and launch changes, refused before anything runs', () => {
+  function nothingRan() {
+    expect(admit).not.toHaveBeenCalled();
+    expect(reads).toEqual([]);
+    for (const action of [mockUpdateProcess, mockCreateProcess, mockDeleteProcess]) expect(action).not.toHaveBeenCalled();
+    expect(pendingEntries(M1)).toEqual([]);
+    expect(hasRecords()).toBe(false);
+    expect(emitMutation).not.toHaveBeenCalled();
+  }
+
+  it.each([
+    ['a site server tool', 'get_site_logs', { since: 'yesterday' }],
+    ['a machine server tool', 'update_process', { machine: M1, process_name: 'TouchDesigner', priority: 'Highest' }],
+    ['a mapped command', 'restart_process', { machine: M1, process_name: 'td.exe\nnotepad.exe' }],
+    ['an mcp tool call', 'get_running_processes', { machine: M1, limit: 5000 }],
+  ])('400 tool_params_invalid for %s', async (_label, tool, params) => {
+    const res = await refusedWith(startFleetCall(TIER3_TO_M1, { tool, params }, admit), 400, 'tool_params_invalid');
+    expect(res.deny).toEqual({ reason: 'tool_params_invalid', tool, machineId: 'machine' in params ? M1 : null });
+    nothingRan();
+  });
+
+  it('the deny names no machine when the one given is no machine id', async () => {
+    const res = await refusedWith(
+      startFleetCall(TIER3_TO_M1, { tool: 'restart_process', params: { machine: `${M1}/x`, process_name: 'td.exe\nnotepad.exe' } }, admit),
+      400,
+      'tool_params_invalid',
+    );
+    expect(res.deny).toEqual({ reason: 'tool_params_invalid', tool: 'restart_process', machineId: null });
+  });
+
+  const WINLOGON = 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
+
+  it.each([
+    ['a write of Shell', { action: 'write', value_name: 'Shell', value_data: 'kiosk.exe', value_type: 'string' }],
+    ['a read of DefaultPassword', { action: 'read', value_name: 'DefaultPassword' }],
+  ])('403 registry_value_refused for %s under Winlogon, on a tier 3 grant', async (_label, call) => {
+    const params = { machine: M1, hive: 'HKLM', key_path: WINLOGON, ...call };
+    const res = await refusedWith(
+      startFleetCall(TIER3_TO_M1, { tool: 'registry_operation', params }, admit),
+      403,
+      'registry_value_refused',
+    );
+    expect(res.deny).toEqual({ reason: 'registry_value_refused', tool: 'registry_operation', machineId: M1 });
+    nothingRan();
+  });
+
+  it.each([
+    ['a machine server tool that always does', 'add_process', { name: 'Notepad', exe_path: 'C:/Windows/notepad.exe' }],
+    ['delete_process', 'delete_process', { process_name: 'TouchDesigner' }],
+    ['a mapped command', 'set_launch_mode', { process_name: 'td.exe', mode: 'always' }],
+    ['an mcp tool call decided by its action', 'manage_scheduled_task', { action: 'enable', task_name: 'show' }],
+  ])('403 max_tool_tier_exceeded on a tier 2 grant for %s', async (_label, tool, params) => {
+    const res = await refusedWith(
+      startFleetCall(TIER2_TO_M1, { tool, params: { machine: M1, ...params } }, admit),
+      403,
+      'max_tool_tier_exceeded',
+    );
+    expect(res.deny).toEqual({ reason: 'max_tool_tier_exceeded', tool, machineId: M1 });
+    nothingRan();
+  });
+
+  it('a tier 3 grant may queue a launch change', async () => {
+    started(
+      await startFleetCall(TIER3_TO_M1, { tool: 'set_launch_mode', params: { machine: M1, process_name: 'td.exe', mode: 'always' } }, admit),
+    );
+    expect(onlyPending(M1)).toMatchObject({ type: 'set_launch_mode', process_name: 'td.exe', mode: 'always' });
   });
 });
 
@@ -526,11 +597,12 @@ describe('startFleetCall: the process tools', () => {
   });
 
   const AS_SENDER = { siteId: SITE, actor: TIER2_TO_M1.actor, auditActor: `machine:${SENDER}` };
+  const AS_TIER3_SENDER = { ...AS_SENDER, actor: TIER3_TO_M1.actor };
 
-  it('update_process runs on the server as the calling machine and is answered in the response', async () => {
+  it('update_process with only priority runs on a tier 2 grant, on the server as the calling machine, answered in the response', async () => {
     const res = await startFleetCall(
       TIER2_TO_M1,
-      { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner', launch_mode: 'always' } },
+      { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner', priority: 'High' } },
       admit,
     );
     expect(JSON.parse(completedText(res))).toEqual({ ok: true, processId: 'proc-1', process_name: 'TouchDesigner' });
@@ -538,36 +610,66 @@ describe('startFleetCall: the process tools', () => {
     expect(mockUpdateProcess).toHaveBeenCalledWith(AS_SENDER, {
       machineId: M1,
       processId: 'proc-1',
-      patch: { launch_mode: 'always' },
+      patch: { priority: 'High' },
     });
     // no command to an agent: the config write is the whole call
     expect(pendingEntries(M1)).toEqual([]);
     expect(hasRecords()).toBe(false);
   });
 
+  it('a tier 2 grant calling update_process with launch_mode is refused, and nothing is written', async () => {
+    const res = await startFleetCall(
+      TIER2_TO_M1,
+      { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner', launch_mode: 'always' } },
+      admit,
+    );
+    if (res.ok) throw new Error(`expected a refusal, got ${JSON.stringify(res)}`);
+    expect(res.response.status).toBe(403);
+    expect(await res.response.json()).toMatchObject({
+      code: 'max_tool_tier_exceeded',
+      detail: expect.stringContaining("the site's grant would need tier 3"),
+    });
+    expect(res.deny).toEqual({ reason: 'max_tool_tier_exceeded', tool: 'update_process', machineId: M1 });
+    expect(admit).not.toHaveBeenCalled();
+    expect(mockUpdateProcess).not.toHaveBeenCalled();
+  });
+
+  it('a tier 3 grant may make the launch change', async () => {
+    const res = await startFleetCall(
+      TIER3_TO_M1,
+      { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner', launch_mode: 'always' } },
+      admit,
+    );
+    expect(answered(res).status).toBe('completed');
+    expect(mockUpdateProcess).toHaveBeenCalledWith(AS_TIER3_SENDER, {
+      machineId: M1,
+      processId: 'proc-1',
+      patch: { launch_mode: 'always' },
+    });
+  });
+
   it('delete_process acts on the machine it names, as the calling machine', async () => {
-    const res = await startFleetCall(TIER2_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit);
+    const res = await startFleetCall(TIER3_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit);
     expect(JSON.parse(completedText(res))).toMatchObject({ ok: true, processId: 'proc-1' });
-    expect(mockDeleteProcess).toHaveBeenCalledWith(AS_SENDER, { machineId: M1, processId: 'proc-1' });
+    expect(mockDeleteProcess).toHaveBeenCalledWith(AS_TIER3_SENDER, { machineId: M1, processId: 'proc-1' });
   });
 
   it('add_process is handed only the parameters its definition declares', async () => {
     const res = await startFleetCall(
-      TIER2_TO_M1,
+      TIER3_TO_M1,
       {
         tool: 'add_process',
         params: {
           machine: M1,
           name: 'Notepad',
           exe_path: 'C:/Windows/notepad.exe',
-          not_a_field: 'x',
           override_active_hours: true,
         },
       },
       admit,
     );
     expect(JSON.parse(completedText(res))).toEqual({ ok: true, processId: 'proc-2', name: 'Notepad' });
-    expect(mockCreateProcess).toHaveBeenCalledWith(AS_SENDER, {
+    expect(mockCreateProcess).toHaveBeenCalledWith(AS_TIER3_SENDER, {
       machineId: M1,
       name: 'Notepad',
       exe_path: 'C:/Windows/notepad.exe',
@@ -575,7 +677,7 @@ describe('startFleetCall: the process tools', () => {
   });
 
   it('a failure the tool reports is a failed answer, not a refusal', async () => {
-    const res = await startFleetCall(TIER2_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'Resolume' } }, admit);
+    const res = await startFleetCall(TIER3_TO_M1, { tool: 'delete_process', params: { machine: M1, process_name: 'Resolume' } }, admit);
     expect(answered(res)).toEqual({
       status: 'failed',
       error: `process_not_found: Process "Resolume" was not found on machine ${M1}.`,
@@ -583,11 +685,15 @@ describe('startFleetCall: the process tools', () => {
     expect(mockDeleteProcess).not.toHaveBeenCalled();
   });
 
-  it.each(['update_process', 'add_process', 'delete_process'])(
+  it.each([
+    ['update_process', { process_name: 'TouchDesigner' }],
+    ['add_process', { name: 'n', exe_path: 'x' }],
+    ['delete_process', { process_name: 'TouchDesigner' }],
+  ])(
     '%s is refused on a machine outside the grant, before any read or admission',
-    async (tool) => {
+    async (tool, params) => {
       const res = await refusedWith(
-        startFleetCall(TIER2_TO_M1, { tool, params: { machine: M2, process_name: 'TouchDesigner', name: 'n', exe_path: 'x' } }, admit),
+        startFleetCall(TIER3_TO_M1, { tool, params: { machine: M2, ...params } }, admit),
         403,
         'machine_not_granted',
       );
@@ -611,7 +717,7 @@ describe('startFleetCall: the process tools', () => {
     docs.set(machinePath(M1), { online: true, cortexEnabled: false });
     await refusedWith(
       startFleetCall(TIER2_TO_M1, { tool: 'update_process', params: { machine: M1, process_name: 'TouchDesigner' } }, admit),
-      409,
+      423,
       'hoot_disabled',
     );
     expect(mockUpdateProcess).not.toHaveBeenCalled();
@@ -671,27 +777,35 @@ describe('startFleetCall: the two mappings', () => {
     expect(cmd).not.toHaveProperty('machine');
     const commandId = callId.split(':').pop()!;
     docs.set(completedPath(M1), {
-      [commandId]: { type: 'capture_screenshot', status: 'completed', result: { storage_path: 'screenshots/a.jpg' } },
+      [commandId]: { type: 'capture_screenshot', status: 'completed', result: { storage_path: `screenshots/${SITE}/${M1}/a.jpg` } },
     });
     expect(readBody(await readFleetCall(TIER2_TO_M1, callId)).content).toEqual([
       {
         type: 'image_url',
-        url: 'https://signed.example/screenshots/a.jpg',
-        text: 'screenshot: https://signed.example/screenshots/a.jpg',
+        url: `https://signed.example/screenshots/${SITE}/${M1}/a.jpg`,
+        text: `screenshot: https://signed.example/screenshots/${SITE}/${M1}/a.jpg`,
       },
     ]);
   });
 
-  it.each([
-    ['no monitor', {}],
-    ['a monitor that is a string', { monitor: 'all' }],
-    ['a negative monitor', { monitor: -1 }],
-    ['a fractional monitor', { monitor: 1.5 }],
-  ])('capture_screenshot with %s sends no monitor, so the agent takes its default', async (_label, extra) => {
-    started(await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, ...extra } }, admit));
+  it('capture_screenshot with no monitor sends none, so the agent takes its default', async () => {
+    started(await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1 } }, admit));
     const cmd = onlyPending(M1);
     expect(cmd.type).toBe('capture_screenshot');
     expect(cmd).not.toHaveProperty('monitor');
+  });
+
+  it.each([
+    ['a string', 'all'],
+    ['a negative number', -1],
+    ['a fraction', 1.5],
+  ])('capture_screenshot with a monitor that is %s is refused, and nothing is queued', async (_label, monitor) => {
+    await refusedWith(
+      startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, monitor } }, admit),
+      400,
+      'tool_params_invalid',
+    );
+    expect(docs.get(pendingPath(M1))).toBeUndefined();
   });
 
   it('queues as the calling machine, with the correlation id, and the audit row names it and the tool', async () => {
@@ -827,17 +941,21 @@ describe('startFleetCall: timeoutSeconds', () => {
     expect(await timeoutFor('execute_script', { script: 'x' })).toEqual({ timeoutSeconds: 120, queued: 120 });
   });
 
-  it('never goes under the default, and ignores a timeout that is not a positive number', async () => {
+  it('never goes under the default', async () => {
     expect(await timeoutFor('configure_gpu_tdr', { timeout_seconds: 10 })).toEqual({ timeoutSeconds: 30, queued: 30 });
-    expect(await timeoutFor('execute_script', { script: 'x', timeout_seconds: -5 })).toEqual({ timeoutSeconds: 30, queued: 30 });
   });
 
-  it('does not invent a timeout for a tool that defines none', async () => {
-    expect(await timeoutFor('get_system_info', { timeout_seconds: 900 })).toEqual({ timeoutSeconds: 30, queued: 30 });
+  it.each([
+    ['a timeout that is not a positive number', 'execute_script', { script: 'x', timeout_seconds: -5 }],
+    ['a timeout on a tool that defines none', 'get_system_info', { timeout_seconds: 900 }],
+    ['a timeout on a mapped command', 'reboot_machine', { timeout_seconds: 900 }],
+  ])('refuses %s, queueing nothing', async (_label, tool, params) => {
+    await refusedWith(startFleetCall(TIER3, { tool, params: { machine: M1, ...params } }, admit), 400, 'tool_params_invalid');
+    expect(pendingEntries(M1)).toEqual([]);
   });
 
   it('a mapped command takes the command default', async () => {
-    const body = started(await startFleetCall(TIER3, { tool: 'reboot_machine', params: { machine: M1, timeout_seconds: 900 } }, admit));
+    const body = started(await startFleetCall(TIER3, { tool: 'reboot_machine', params: { machine: M1, when: 'now' } }, admit));
     expect(body.timeoutSeconds).toBe(30);
   });
 });
@@ -962,6 +1080,24 @@ describe('readFleetCall', () => {
     await notFound(readFleetCall(TIER2_TO_M1, callId));
   });
 
+  it("a registry read comes back without a value whose name looks like a secret, as hoot's does", async () => {
+    seedCompleted({
+      type: 'mcp_tool_call',
+      status: 'completed',
+      result: JSON.stringify({
+        hive: 'HKLM',
+        key_path: 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon',
+        values: [
+          { name: 'DefaultPassword', type: 1, value: 'hunter2' },
+          { name: 'AutoAdminLogon', type: 1, value: '1' },
+        ],
+      }),
+    });
+    const [item] = readBody(await readFleetCall(TIER2_TO_M1, CALL)).content;
+    expect(item.text).not.toContain('hunter2');
+    expect(JSON.parse(item.text).values).toEqual([{ name: 'AutoAdminLogon', type: 1, value: '1' }]);
+  });
+
   it('completed with an object result: indented json', async () => {
     seedCompleted({ status: 'completed', result: { restarted: true } });
     expect(readBody(await readFleetCall(TIER2_TO_M1, CALL)).content).toEqual([
@@ -977,12 +1113,13 @@ describe('readFleetCall', () => {
   });
 
   it('a screenshot becomes an image_url item on the signed read url, with text', async () => {
-    seedCompleted({ type: 'capture_screenshot', status: 'completed', result: { storage_path: 'screenshots/a.jpg', size_kb: 80 } });
+    const shot = `screenshots/${SITE}/${M1}/a.jpg`;
+    seedCompleted({ type: 'capture_screenshot', status: 'completed', result: { storage_path: shot, size_kb: 80 } });
     expect(readBody(await readFleetCall(TIER2_TO_M1, CALL)).content).toEqual([
       {
         type: 'image_url',
-        url: 'https://signed.example/screenshots/a.jpg',
-        text: 'screenshot: https://signed.example/screenshots/a.jpg',
+        url: `https://signed.example/${shot}`,
+        text: `screenshot: https://signed.example/${shot}`,
       },
     ]);
   });

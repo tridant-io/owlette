@@ -580,11 +580,12 @@ def verify_installation(path: str) -> bool:
 
 
 def get_temp_installer_path(installer_name: str) -> str:
-    """Full path under the temp dir for downloading ``installer_name``."""
+    """Full path under the temp dir for downloading ``installer_name``, of which
+    only the file name is kept."""
     temp_dir = tempfile.gettempdir()
     owlette_temp = os.path.join(temp_dir, "owlette_installers")
     os.makedirs(owlette_temp, exist_ok=True)
-    return os.path.join(owlette_temp, installer_name)
+    return os.path.join(owlette_temp, os.path.basename(installer_name))
 
 
 def cleanup_installer(installer_path: str, force: bool = False) -> bool:

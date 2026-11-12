@@ -17,6 +17,7 @@ import { withRateLimit } from '@/lib/withRateLimit';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { apiError } from '@/lib/apiErrorResponse';
 import { appLinkMfaFromIdToken, type AppLinkMfa } from '@/lib/appLink.server';
+import { SESSION_LIFETIME_DAYS } from '@/lib/sessionCutoff.server';
 
 /**
  * POST /api/auth/session — create a session after successful Firebase auth.
@@ -25,7 +26,7 @@ import { appLinkMfaFromIdToken, type AppLinkMfa } from '@/lib/appLink.server';
 export const POST = withRateLimit(async (request: NextRequest) => {
   try {
     const body = await request.json();
-    const { userId, durationDays = 7, idToken } = body;
+    const { userId, durationDays = SESSION_LIFETIME_DAYS, idToken } = body;
 
     if (!idToken || typeof idToken !== 'string') {
       return NextResponse.json(
@@ -38,7 +39,9 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     let appLinkMfa: AppLinkMfa | undefined;
     try {
       const adminAuth = getAdminAuth();
-      const decoded = await adminAuth.verifyIdToken(idToken);
+      // checkRevoked: a token signed in before a password reset must not mint a cookie that
+      // postdates the reset, which would pass the session cutoff.
+      const decoded = await adminAuth.verifyIdToken(idToken, true);
       verifiedUserId = decoded.uid;
       appLinkMfa = appLinkMfaFromIdToken(decoded);
     } catch {

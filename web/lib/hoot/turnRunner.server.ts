@@ -55,6 +55,7 @@ import {
 } from '@/lib/llm';
 import type { MachineActor } from '@/lib/capabilities';
 import { getToolsByTier, type ToolTier } from '@/lib/mcp-tools';
+import { UNATTENDED_EXCLUDED_TOOLS } from '@/lib/hoot/launchChange';
 import {
   buildExecutableTools,
   getHootRequireTier3Approval,
@@ -66,13 +67,16 @@ import {
 } from '@/lib/hoot-utils.server';
 import {
   applyApprovalConsumption,
+  incomingToolCallIds,
   reapplyConsumedParts,
+  refuseAnswersWithNoCard,
+  refuseUnissuedApprovals,
   repairDanglingToolParts,
   STILL_RUNNING_ERROR,
   type ApprovalConsumptionResult,
   type LostResultResolution,
 } from '@/lib/hoot/repairMessages';
-import { claimApproval } from '@/lib/hoot/approvalLedger.server';
+import { claimApproval, hasApprovalRequest } from '@/lib/hoot/approvalLedger.server';
 import { advisorCallsIn, modelHistoryFor, withAdvisor } from '@/lib/hoot/advisor';
 import { ADVISOR_TOOL_NAME } from '@/lib/llmModels';
 import {
@@ -85,7 +89,6 @@ import {
 } from '@/lib/hoot/turnStore.server';
 import {
   SITE_TARGET_ID,
-  approvalResponseIds,
   chatTargetFields,
   type HootTarget,
   type HootTurnMetadata,
@@ -112,6 +115,16 @@ const PERSON_TURN_SOURCES: ReadonlySet<TurnTargetSource> = new Set<TurnTargetSou
   'chat',
   'mention',
   'resume',
+]);
+
+/**
+ * Turns whose chat a person answers approval cards on: theirs, and a follow-up,
+ * which parks until they come back. A talon's turn has nobody to come back for it,
+ * so a launch change there is refused.
+ */
+const LAUNCH_APPROVAL_TURN_SOURCES: ReadonlySet<TurnTargetSource> = new Set<TurnTargetSource>([
+  ...PERSON_TURN_SOURCES,
+  'followup',
 ]);
 
 const timing = {
@@ -427,8 +440,10 @@ async function persistChatMessages(
  */
 export function startTurn(
   db: FirebaseFirestore.Firestore,
-  params: StartTurnParams,
+  unchecked: StartTurnParams,
 ): ReadableStream<InferUIMessageChunk<UIMessage>> {
+  // First, for every caller: the history comes from a browser, or from a chat one wrote.
+  const params = { ...unchecked, messages: refuseUnissuedApprovals(unchecked.messages) };
   const { chatId, turnId } = params;
 
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -519,8 +534,11 @@ export function startTurn(
       }
 
       const resolveLostResult = buildResolveLostResult(db, params.siteId, params.priorTurn);
+      const carded = await refuseAnswersWithNoCard(params.messages, (toolCallId, toolName) =>
+        hasApprovalRequest(db, chatId, toolCallId, toolName),
+      );
       const { messages: danglingRepaired, repairedToolCallIds } =
-        await repairDanglingToolParts(params.messages, { resolveLostResult });
+        await repairDanglingToolParts(carded.messages, { resolveLostResult });
       if (repairedToolCallIds.length > 0) {
         console.warn(
           `[hoot] repaired ${repairedToolCallIds.length} dangling tool part(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog(repairedToolCallIds.join(', '))}`,
@@ -535,10 +553,10 @@ export function startTurn(
         claim: (toolCallId) => claimApproval(db, chatId, toolCallId, { turnId }),
         resolveLostResult,
       });
-      consumedParts = consumption.consumedParts;
-      if (consumedParts.size > 0) {
+      consumedParts = new Map([...carded.refused, ...consumption.consumedParts]);
+      if (consumption.consumedParts.size > 0) {
         console.warn(
-          `[hoot] blocked re-execution of ${consumedParts.size} already-consumed approval(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog([...consumedParts.keys()].join(', '))}`,
+          `[hoot] blocked re-execution of ${consumption.consumedParts.size} already-consumed approval(s) in chat ${sanitizeForLog(chatId)}: ${sanitizeForLog([...consumption.consumedParts.keys()].join(', '))}`,
         );
       }
       const repairedMessages = consumption.messages;
@@ -624,7 +642,10 @@ export function startTurn(
         params.maxToolTier === undefined
           ? earnedTier
           : (Math.min(params.maxToolTier, earnedTier) as ToolTier);
-      const toolDefs = getToolsByTier(effectiveTier);
+      // Turns that fire with nobody watching aren't offered these at all.
+      const toolDefs = getToolsByTier(effectiveTier).filter(
+        (def) => PERSON_TURN_SOURCES.has(params.turnTarget.source) || !UNATTENDED_EXCLUDED_TOOLS.has(def.name),
+      );
       const tools = buildExecutableTools(
         db,
         params.siteId,
@@ -641,9 +662,11 @@ export function startTurn(
           machineActor: params.machineActor,
           maxToolTier: effectiveTier,
           requireTier3Approval,
+          launchChangeApprovable: LAUNCH_APPROVAL_TURN_SOURCES.has(params.turnTarget.source),
           allowActiveHoursOverride: PERSON_TURN_SOURCES.has(params.turnTarget.source),
           activeHoursGuardIds,
-          resumedToolCallIds: approvalResponseIds(params.messages),
+          turnId,
+          incomingToolCallIds: incomingToolCallIds(unchecked.messages),
           // A follow-up fires where it was promised (D-D): this turn's target
           // AFTER any mention narrowing, with `null` left as the dynamic "all".
           followupTarget: { machineIds: params.turnTarget.machineIds },

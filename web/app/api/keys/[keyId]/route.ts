@@ -9,11 +9,21 @@ import {
   type ApiKeyRecord,
   type ApiKeyScope,
   buildApiKeyListItem,
+  isToolTier,
+  normalizeMaxToolTier,
 } from '@/lib/apiKeyTypes';
-import { assertScopesGrantable, MAX_NAME_LENGTH, validateScopes } from '../_shared';
+import type { ToolTier } from '@/lib/mcp-tools';
+import {
+  assertScopesGrantable,
+  INVALID_MAX_TOOL_TIER,
+  MAX_NAME_LENGTH,
+  requireVerifiedSessionForToolTier,
+  validateScopes,
+} from '../_shared';
 import { emitMutation, scopeFingerprint } from '@/lib/auditLogClient';
 import { getAdminDb } from '@/lib/firebase-admin';
 import {
+  mfaChallengeProblem,
   problem,
   problemFromError,
   problemNotFound,
@@ -105,6 +115,8 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     return NextResponse.json({ success: true });
   } catch (error: unknown) {
     if (error instanceof ApiAuthError) {
+      const refused = mfaChallengeProblem(error);
+      if (refused) return refused;
       if (error.code === 'token_expired') {
         const expiredAt =
           typeof error.details?.expiredAt === 'number' ? error.details.expiredAt : undefined;
@@ -123,9 +135,10 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 }
 
 /**
- * PATCH /api/keys/{keyId} — edit an existing key's scopes and/or name in place without
- * reissuing the secret. Body `{ scopes?: Scope[], name?: string }`; `scopes` is a full
- * replacement, not a merge.
+ * PATCH /api/keys/{keyId} — edit an existing key's scopes, name and/or tool tier in place
+ * without reissuing the secret. Body `{ scopes?: Scope[], name?: string, maxToolTier?: 1|2|3 }`;
+ * `scopes` is a full replacement, not a merge. Raising `maxToolTier` needs a verified session;
+ * lowering it needs nothing more than the edit does.
  *
  * Both documents are written in one batch, and that is not optional: authorization reads
  * scopes exclusively from the denormalised `api_keys/{keyHash}` lookup
@@ -152,7 +165,13 @@ export const PATCH = withRateLimit(
         return problemValidation('keyId is required');
       }
 
-      let body: { scopes?: unknown; name?: unknown; environment?: unknown; ttlDays?: unknown };
+      let body: {
+        scopes?: unknown;
+        name?: unknown;
+        environment?: unknown;
+        ttlDays?: unknown;
+        maxToolTier?: unknown;
+      };
       try {
         body = (await request.json()) as typeof body;
       } catch {
@@ -168,8 +187,17 @@ export const PATCH = withRateLimit(
 
       const wantsScopes = body.scopes !== undefined;
       const wantsName = body.name !== undefined;
-      if (!wantsScopes && !wantsName) {
-        return problemValidation('nothing to update — provide scopes and/or name');
+      const wantsToolTier = body.maxToolTier !== undefined;
+      if (!wantsScopes && !wantsName && !wantsToolTier) {
+        return problemValidation('nothing to update — provide scopes, name and/or maxToolTier');
+      }
+
+      let maxToolTier: ToolTier | null = null;
+      if (wantsToolTier) {
+        if (!isToolTier(body.maxToolTier)) {
+          return problemValidation(INVALID_MAX_TOOL_TIER);
+        }
+        maxToolTier = body.maxToolTier;
       }
 
       let scopes: ApiKeyScope[] | null = null;
@@ -222,16 +250,26 @@ export const PATCH = withRateLimit(
         );
       }
 
+      const toolTierBefore = normalizeMaxToolTier(existing.maxToolTier);
+      if (maxToolTier !== null && maxToolTier > toolTierBefore) {
+        const unverified = await requireVerifiedSessionForToolTier(request, userId);
+        if (unverified) return unverified;
+      }
+
       const patch: Record<string, unknown> = {};
       if (scopes) patch.scopes = scopes;
       if (name) patch.name = name;
+      if (maxToolTier !== null) patch.maxToolTier = maxToolTier;
 
       const batch = db.batch();
       batch.update(keyRef, patch);
       // The lookup carries only the enforcement-relevant half. `name` is
       // display-only and is not denormalised there.
-      if (scopes) {
-        batch.update(db.collection('api_keys').doc(existing.keyHash), { scopes });
+      const lookupPatch: Record<string, unknown> = {};
+      if (scopes) lookupPatch.scopes = scopes;
+      if (maxToolTier !== null) lookupPatch.maxToolTier = maxToolTier;
+      if (Object.keys(lookupPatch).length > 0) {
+        batch.update(db.collection('api_keys').doc(existing.keyHash), lookupPatch);
       }
       await batch.commit();
 
@@ -256,6 +294,9 @@ export const PATCH = withRateLimit(
                 scopeCountAfter: scopes.length,
               }
             : {}),
+          ...(maxToolTier !== null
+            ? { maxToolTierBefore: toolTierBefore, maxToolTierAfter: maxToolTier }
+            : {}),
         },
       });
 
@@ -267,6 +308,8 @@ export const PATCH = withRateLimit(
       return NextResponse.json({ success: true, key: updated });
     } catch (error: unknown) {
       if (error instanceof ApiAuthError) {
+        const refused = mfaChallengeProblem(error);
+        if (refused) return refused;
         if (error.code === 'token_expired') {
           const expiredAt =
             typeof error.details?.expiredAt === 'number' ? error.details.expiredAt : undefined;

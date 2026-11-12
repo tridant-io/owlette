@@ -325,7 +325,8 @@ impl SignalClient {
             self.drop_viewer(&viewer);
             return vec![
                 Effect::Send(bye(Some(&viewer), DenialReason::OfferFingerprintMissing.reason())),
-                Effect::Denied(Denial::new(viewer, DenialReason::OfferFingerprintMissing)),
+                Effect::Denied(Denial::new(viewer.clone(), DenialReason::OfferFingerprintMissing)),
+                Effect::ViewerGone { viewer, reason: LeftReason::Bye },
             ];
         };
         if let Some(state) = self.viewers.get_mut(&viewer) {
@@ -982,6 +983,9 @@ pub(crate) mod tests {
             Effect::Denied(Denial::new(&viewer, DenialReason::OfferFingerprintMissing))
         );
         assert_eq!(client.viewer_count(), 0);
+        // the session admitted it too, and every later road out goes through
+        // this client, which no longer knows it: this is its one departure.
+        assert_eq!(effects[2], Effect::ViewerGone { viewer, reason: LeftReason::Bye });
     }
 
     /// Every admission refusal is both a `bye` to the browser and a record for

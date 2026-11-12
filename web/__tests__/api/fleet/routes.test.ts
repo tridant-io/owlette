@@ -301,6 +301,8 @@ describe('POST /api/agent/fleet/call', () => {
   });
 
   it('answers a process tool itself: 200 with what the tool said, a failure included, on one allow row and no command', async () => {
+    // deleting a process changes what the machine launches: tier 3
+    seedGrant({ [SENDER]: { maxTier: 3, machineIds: [M1] } });
     // kiosk-1 has no process config here, so the tool fails before it writes
     const res = await startCall(callRequest(token, { tool: 'delete_process', params: { machine: M1, process_name: 'td.exe' } }));
 

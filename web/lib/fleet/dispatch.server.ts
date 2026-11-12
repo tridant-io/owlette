@@ -33,11 +33,14 @@ import {
   MAX_TOOL_TIMEOUT_SECONDS,
   getMachineSummary,
 } from '@/lib/hoot-utils.server';
+import { callTier, registryValueRefusal } from '@/lib/hoot/launchChange';
 import { isValidMachineId } from '@/lib/hoot/target';
 import logger from '@/lib/logger';
 import { EXISTING_COMMAND_MAPPINGS, declaredParams, type McpToolDefinition } from '@/lib/mcp-tools';
+import { toolParamRefusal } from '@/lib/toolParamValidation';
 import { FLEET_CALLS_COLLECTION, type FleetCallRecord } from '@/lib/fleet/calls.server';
 import { ASK_HOOT_TOOL, findFleetServerTool, findFleetTool, splitFleetParams } from '@/lib/fleet/catalog.server';
+import { LIST_MACHINES_TOOL } from '@/lib/fleet/tools/machines.server';
 import type {
   AdmitFleetCall,
   FleetCallRead,
@@ -76,12 +79,6 @@ export function fleetToolCapability(def: McpToolDefinition): Capability {
 
 const SCREENSHOT_TOOL = 'capture_screenshot';
 
-/** the agent reads `monitor` as an index: anything but a whole number from 0 up is left out, so it takes its default. */
-function screenshotPayload(toolParams: Record<string, unknown>): Record<string, unknown> {
-  const { monitor } = toolParams;
-  return Number.isInteger(monitor) && (monitor as number) >= 0 ? { monitor } : {};
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -100,6 +97,69 @@ function callTimeoutSeconds(def: McpToolDefinition, toolParams: Record<string, u
   // value (TdrDelay, 2-300), not how long the call runs, and no call finishes
   // sooner than the agent picks it up.
   return Math.min(Math.max(Math.ceil(asked), DEFAULT_CALL_TIMEOUT_SECONDS), MAX_TOOL_TIMEOUT_SECONDS);
+}
+
+/**
+ * a grant is an admin's deliberate grant, as an api key is: a call's parameters
+ * are checked as hoot's are, a call that changes what a machine launches counts
+ * as tier 3 (ADR 0019), whatever its tool's tier, and the registry values hoot
+ * never reaches are refused here too.
+ */
+function callRefusal(
+  ctx: FleetContext,
+  def: McpToolDefinition,
+  machine: string | null,
+  toolParams: Record<string, unknown>,
+): FleetRefusal | null {
+  // the fleet's own list, which takes no parameters and changes nothing
+  if (def.name === LIST_MACHINES_TOOL) return null;
+  const machineId = machine !== null && isValidMachineId(machine) ? machine : null;
+  const invalidParams = toolParamRefusal(def.name, toolParams, findFleetServerTool(def.name)?.definition);
+  if (invalidParams) {
+    return denied(
+      problem({
+        type: ProblemType.ValidationFailed,
+        title: 'validation failed',
+        status: 400,
+        detail: invalidParams,
+        code: 'tool_params_invalid',
+      }),
+      'tool_params_invalid',
+      def.name,
+      machineId,
+    );
+  }
+  // the catalog offers no tool above the grant, so only a launch change can exceed it
+  if (callTier(def.name, toolParams, def.tier) > ctx.grant.maxTier) {
+    return denied(
+      problem({
+        type: ProblemType.Forbidden,
+        title: 'forbidden',
+        status: 403,
+        detail: `this call changes what the machine launches, so it is tier 3, and this machine's grant is tier ${ctx.grant.maxTier}. the site's grant would need tier 3 for it.`,
+        code: 'max_tool_tier_exceeded',
+      }),
+      'max_tool_tier_exceeded',
+      def.name,
+      machineId,
+    );
+  }
+  const registryRefusal = registryValueRefusal(def.name, toolParams);
+  if (registryRefusal) {
+    return denied(
+      problem({
+        type: ProblemType.Forbidden,
+        title: 'forbidden',
+        status: registryRefusal.status,
+        detail: registryRefusal.detail,
+        code: registryRefusal.error,
+      }),
+      registryRefusal.error,
+      def.name,
+      machineId,
+    );
+  }
+  return null;
 }
 
 /**
@@ -195,7 +255,7 @@ async function machineRefusal(
       problem({
         type: ProblemType.Conflict,
         title: 'hoot disabled',
-        status: 409,
+        status: 423,
         detail: `hoot is turned off on machine ${machine}`,
         code: 'hoot_disabled',
       }),
@@ -231,6 +291,8 @@ export async function startFleetCall(
   const capability = fleetToolCapability(def);
   const { machine, toolParams } = splitFleetParams(input.params);
   if (def.name === ASK_HOOT_TOOL) return startFleetTask(ctx, toolParams, admit);
+  const refusal = callRefusal(ctx, def, machine, toolParams);
+  if (refusal) return refusal;
   if (serverTool?.target === 'site') {
     const refused = await admit({ capability, tool: def.name, machineId: null });
     if (refused) return { ok: false, response: refused };
@@ -259,8 +321,8 @@ export async function startFleetCall(
   }
 
   if (machine === null) return noMachineNamed(def.name);
-  const refusal = await machineRefusal(ctx, capability, def.name, machine);
-  if (refusal) return refusal;
+  const machineRefused = await machineRefusal(ctx, capability, def.name, machine);
+  if (machineRefused) return machineRefused;
 
   const refused = await admit({ capability, tool: def.name, machineId: machine });
   if (refused) return { ok: false, response: refused };
@@ -274,9 +336,9 @@ export async function startFleetCall(
   }
 
   // a screenshot goes as its own command type: only that one stores the picture
-  // and gets a signed read url on the read, which mcp_tool_call never does.
-  const isScreenshot = def.name === SCREENSHOT_TOOL;
-  const commandType = isScreenshot ? SCREENSHOT_TOOL : EXISTING_COMMAND_MAPPINGS[def.name];
+  // and gets a signed read url on the read, which mcp_tool_call never does. its
+  // `monitor` passed the parameter check, so it goes as it is.
+  const commandType = def.name === SCREENSHOT_TOOL ? SCREENSHOT_TOOL : EXISTING_COMMAND_MAPPINGS[def.name];
   const timeoutSeconds = commandType ? DEFAULT_CALL_TIMEOUT_SECONDS : callTimeoutSeconds(def, toolParams);
   let commandId: string;
   try {
@@ -290,7 +352,7 @@ export async function startFleetCall(
       },
       {
         ...(commandType
-          ? { type: commandType, payload: isScreenshot ? screenshotPayload(toolParams) : toolParams }
+          ? { type: commandType, payload: toolParams }
           : {
               type: 'mcp_tool_call',
               payload: { tool_name: def.name, tool_params: toolParams, timeout_seconds: timeoutSeconds },
