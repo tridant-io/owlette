@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Download, Film, ImageIcon, SearchX } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIssue, type Issue } from '@/hooks/useIssues';
@@ -243,6 +243,16 @@ export function IssueDetail({ idOrNumber }: { idOrNumber: string }) {
   const { issue, loading, error, refresh, setStatus } = useIssue(idOrNumber);
   const { userPreferences } = useAuth();
   const timeFormat: TimeFormat = userPreferences?.timeFormat ?? '12h';
+
+  // opening a new issue is looking at it, which is what triaged means (owner, 2026-11-11).
+  // once per issue, so a status set back to new on this page stays new
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!issue || opened.current === issue.id) return;
+    opened.current = issue.id;
+    if (issue.status !== 'new') return;
+    setStatus('triaged').catch((err) => console.error('Error marking issue triaged:', err));
+  }, [issue, setStatus]);
 
   let body: ReactNode;
   if (issue) {

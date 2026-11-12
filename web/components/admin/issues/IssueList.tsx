@@ -29,12 +29,20 @@ function filterLabel(filter: IssueFilter): string {
   return filter === 'all' ? 'all' : ISSUE_STATUS_LABEL[filter];
 }
 
+/** the description on one line, less a title the server took from its first line. */
+function issueSnippet(issue: Issue): string {
+  const text = issue.description.text.replace(/\s+/g, ' ').trim();
+  const title = issue.title.replace(/\s+/g, ' ').trim();
+  return title && text.startsWith(title) ? text.slice(title.length).trim() : text;
+}
+
 // one grid, two shapes. a phone: number, title and age on the first line, the
 // badge and the sender under the title. md up: one row, the badge in its own column.
 // cells are placed by line: a col-span utility would reset the col-start beside it
 function IssueRow({ issue }: { issue: Issue }) {
   const created = issue.createdAt ? Date.parse(issue.createdAt) : NaN;
   const sender = issueSender(issue);
+  const snippet = issueSnippet(issue);
   return (
     <li>
       <Link
@@ -47,8 +55,9 @@ function IssueRow({ issue }: { issue: Issue }) {
         >
           {issue.number === null ? '—' : `#${issue.number}`}
         </span>
-        <span className="col-[2/4] row-[1] truncate text-sm font-medium text-foreground md:col-[2]">
-          {issue.title || 'untitled'}
+        <span className="col-[2/4] row-[1] truncate text-sm md:col-[2]">
+          <span className="font-medium text-foreground">{issue.title || 'untitled'}</span>
+          {snippet && <span className="text-muted-foreground"> — {snippet}</span>}
         </span>
         <span className="col-[2] row-[2] md:col-[3] md:row-[1/3]">
           <IssueStatusBadge status={issue.status} />
