@@ -23,6 +23,33 @@
 //! which scales a two-tone 256x128 buffer to 128x64 and asserts each half kept
 //! its side and its colour, so a mirrored or transposed transfer fails it. It
 //! prints `videotoolbox transfer: 256x128 -> 128x64`.
+//! `videotoolbox_transfer_prints_its_filter_and_its_time_each_way` asserts
+//! nothing: with `kVTPixelTransferPropertyKey_RealTime` on (as shipped) and
+//! off, it prints the luma that two patterns of 1-px stripes come out at,
+//! scaled 3:1 from 768x128 to 256x64, and the p50 of 60 transfers at
+//! 3840x2160 -> 1920x1080.
+//!
+//! Task 3.4 ran it on 2026-11-11 (TEC-MBA, Apple M2, macOS 26.6, debug), with
+//! the file provider, Spotlight and two browsers busy. The times are
+//! provisional until a run on a quiet Mac; the stripes are pixels, not times,
+//! and stand.
+//!
+//! ```text
+//!                                     RealTime on (shipped)   RealTime off
+//! 3840x2160 -> 1920x1080, p50 of 60   5.29 ms                 3.62 ms
+//! alternate columns, 3:1              mean 125.5, 123..128    mean 125.5, 123..128
+//! a line every third column, 3:1      mean 90.0, 90..90       mean 90.0, 90..90
+//! ```
+//!
+//! Neither way aliases, and both use the same filter, one wider than an area
+//! average: alternate columns come out near the flat 125.5 an ideal filter
+//! gives, where an area average gives 89 and 162 in turn, and a line every
+//! third column comes out flat at 90 (the lines' mean is 89), where a filter
+//! that skipped pixels would give 16 or 235. So the Mac needs no scaler of its
+//! own (the plan's Backlog held a Metal or vImage one for this case), and
+//! nothing about the transfer changes: RealTime off read faster in this one
+//! run, which a quiet re-run decides, and the plan ships no change to the
+//! transfer's properties either way (decision C12).
 
 use std::ptr::{self, NonNull};
 
@@ -352,6 +379,8 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use objc2_core_video::{
         kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, CVPixelBufferGetPixelFormatType,
     };
@@ -361,6 +390,23 @@ mod tests {
 
     const SRC: (u32, u32) = (256, 128);
     const DST: (u32, u32) = (128, 64);
+
+    /// `open` asks for real time; this sets either value on an open scaler,
+    /// before its first transfer, so the test can measure both.
+    fn real_time(transfer: &PixelTransfer, on: bool) {
+        // SAFETY: the key is an immutable static and the value a boolean.
+        check(
+            unsafe {
+                VTSessionSetProperty(
+                    &transfer.session,
+                    kVTPixelTransferPropertyKey_RealTime,
+                    Some(CFBoolean::new(on)),
+                )
+            },
+            "VTSessionSetProperty(RealTime)",
+        )
+        .expect("RealTime set");
+    }
 
     #[test]
     fn every_scale_failure_exits_thirteen() {
@@ -454,5 +500,87 @@ mod tests {
         // first
         let again = transfer.scale(&captured).expect("a second scaled frame");
         assert_eq!((again.width, again.height), DST);
+    }
+
+    /// What task 3.4 records in the module doc, with RealTime on (as shipped)
+    /// and off: the luma 1-px stripes come out at, scaled 3:1, and the p50 of
+    /// 60 transfers at 3840x2160 -> 1920x1080. Prints only.
+    #[test]
+    #[ignore = "needs videotoolbox"]
+    fn videotoolbox_transfer_prints_its_filter_and_its_time_each_way() {
+        const BLACK: u8 = 16;
+        const WHITE: u8 = 235;
+        let (from, to) = ((768u32, 128u32), (256u32, 64u32));
+        // alternate columns: an ideal filter gives a flat 125.5, an area
+        // average 89 and 162 in turn, a two-tap filter 16 and 235. a line every
+        // third column: whatever averages each 3-px footprint gives a flat 89,
+        // the lines' mean, and a filter that skips pixels 16 or 235.
+        type Pattern = (&'static str, fn(u32) -> bool);
+        let patterns: [Pattern; 2] = [
+            ("alternate columns", |x| x % 2 == 1),
+            ("a line every third column", |x| x.is_multiple_of(3)),
+        ];
+        let uhd_stripes = nv12(
+            3840,
+            2160,
+            |x, _| if x % 2 == 1 { WHITE } else { BLACK },
+            |_, _| (128, 128),
+        );
+        let uhd = frame(&uhd_stripes, 0);
+        for on in [true, false] {
+            for (name, white) in patterns {
+                let source = nv12(
+                    from.0,
+                    from.1,
+                    |x, _| if white(x) { WHITE } else { BLACK },
+                    |_, _| (128, 128),
+                );
+                let captured = frame(&source, 0);
+                let mut transfer =
+                    PixelTransfer::open(&captured, to.0, to.1).expect("a transfer session");
+                real_time(&transfer, on);
+                let scaled = transfer.scale(&captured).expect("a scaled frame");
+                let (luma, _) = planes(pixel_buffer(&scaled).expect("the scaled buffer"));
+                let luma = &luma;
+                // inside an 8-px border, where a filter's taps run off the picture
+                let inside: Vec<u8> = (8..to.1 - 8)
+                    .flat_map(|y| (8..to.0 - 8).map(move |x| luma[(y * to.0 + x) as usize]))
+                    .collect();
+                let mean = inside.iter().map(|&v| f64::from(v)).sum::<f64>() / inside.len() as f64;
+                let lit = (0..from.0).filter(|&x| white(x)).count() as f64 / f64::from(from.0);
+                let want = f64::from(BLACK) + lit * f64::from(WHITE - BLACK);
+                let (min, max) = inside.iter().fold((u8::MAX, u8::MIN), |(min, max), &v| {
+                    (min.min(v), max.max(v))
+                });
+                println!(
+                    "videotoolbox stripes realtime {on}: {name} {}x{} -> {}x{} luma mean {mean:.1} (source {want:.1}), spread {} ({min}..{max})",
+                    from.0,
+                    from.1,
+                    to.0,
+                    to.1,
+                    max - min
+                );
+            }
+
+            let mut transfer = PixelTransfer::open(&uhd, 1920, 1080).expect("a transfer session");
+            real_time(&transfer, on);
+            // 30 untimed first, so whichever way runs first does not pay for
+            // idle clocks
+            for _ in 0..30 {
+                transfer.scale(&uhd).expect("a transfer");
+            }
+            let mut times: Vec<Duration> = (0..60)
+                .map(|_| {
+                    let start = Instant::now();
+                    transfer.scale(&uhd).expect("a transfer");
+                    start.elapsed()
+                })
+                .collect();
+            times.sort();
+            println!(
+                "videotoolbox transfer realtime {on}: 3840x2160 -> 1920x1080 p50 {:.3} ms over 60",
+                times[times.len() / 2].as_secs_f64() * 1e3
+            );
+        }
     }
 }

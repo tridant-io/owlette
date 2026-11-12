@@ -71,15 +71,15 @@ export interface SwoopSession {
   /** the focusable surface input capture binds to. */
   readonly stage: HTMLElement;
   /**
-   * the PICTURE's box in client coordinates — the letterboxed content area
-   * inside the element, not the element's own rect.
+   * the PICTURE's box in client coordinates: the `<video>` element's own rect,
+   * which `useSwoopView` lays out as the picture's box (`lib/swoop/view.ts`),
+   * the local zoom's transform included.
    *
-   * this exists because arm B presents into a `<video>`, and a `<video>` whose
-   * aspect ratio does not match its box contains black bars. normalising a
-   * pointer position against the element rect makes `0..1` span the bars too,
-   * so every click lands offset and the offset grows with the mismatch — right
-   * on a 16:9 host in a 16:9 window, wrong by a different amount at each edge
-   * on an ultrawide, a rotated panel or a resized window.
+   * the stage around it is bigger wherever the layout leaves bars: a machine
+   * whose shape is not the window's, or a picture snapped or sized down to a
+   * whole fraction. normalising a pointer position against the stage makes
+   * `0..1` span those bars too, so every click lands offset, by a different
+   * amount at each edge.
    *
    * hand this to `attachInputCapture`'s `rect()` and let `input.ts` own the
    * normalisation itself, including its `size - 1` convention, which the rust

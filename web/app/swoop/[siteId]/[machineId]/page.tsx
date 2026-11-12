@@ -56,7 +56,7 @@ export default function SwoopPage({
   params: Promise<{ siteId: string; machineId: string }>;
 }) {
   const { siteId, machineId } = use(params);
-  const { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
+  const { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting } =
     useSwoopSession(siteId, machineId);
   const { isSiteAdmin, isSiteOwner } = useAuth();
   // the keyboard follows the machine's system, read off this one machine's
@@ -161,6 +161,7 @@ export default function SwoopPage({
           stall={stats.stall.recovery}
           stageRef={stageRef}
           videoRef={videoRef}
+          canvasRef={canvasRef}
           onLeave={leaveStage}
         >
           <SwoopCursor session={session} />

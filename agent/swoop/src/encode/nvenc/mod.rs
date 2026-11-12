@@ -5,12 +5,44 @@
 //! absolute path at runtime, so a machine with no NVIDIA driver fails `probe()`
 //! instead of failing to start.
 //!
+//! # The text preset
+//!
+//! Sessions open at a text preset: P4 up to 2560x1440 pixels, P3 above it
+//! (3440x1440 and 4K among them), because a slower preset's cost grows with the
+//! picture. P1, which every session opened at before 4.2.0, costs scrolling
+//! text about 5 QP against P4, and P4 costs about 2.3x P1's encode time
+//! (`dev/active/swoop/research/01-parsec-and-peers.md`, measured on an RTX 5060
+//! Ti at 1440p). ULTRA_LOW_LATENCY tuning and every setting in the next section
+//! are the same at each preset.
+//!
+//! Whether the text preset stays is measured where it runs, by an
+//! [`EncodeTimeGate`]: each session encode is timed from submit through the
+//! completion wait and the lock, what spike 0.9 measured as encode latency.
+//! Only steady frames count, the previous submit within two frame intervals
+//! and past a warm-up of [`gate::WARMUP`], so the floor's repeats on a still
+//! desktop, at idle clocks that read slow, never judge it. The verdict is the
+//! p50 of [`gate::SAMPLES`] steady frames, or exceeded at once when, from
+//! [`gate::EARLY`] samples on, their median is past 1.5x the budget or one
+//! frame interval.
+//! The budget is this encoder's share of the capture pass's
+//! [`gate::ENCODE_TIME_P50`]: the pass encodes its tiers one after another,
+//! and the capture loop says how many through `share_encode_time`.
+//!
+//! Within budget, the encoder logs the gate's line once and keeps the preset.
+//! Over it, the encoder logs the line and drops its session, and the next frame
+//! opens one at P1. That session's first picture is an IDR and the texture
+//! registrations go with the old session, so no viewer is handed a delta it
+//! cannot decode; and every later encoder of that codec in this streamer opens
+//! at P1, with no gate. A streamer process lasts one session, so the next
+//! session measures again.
+//!
 //! # The configuration
 //!
-//! Every setting below was validated on real hardware by spike 0.9 (RTX 2080
-//! Ti, driver 591.86, NVENC header 12.1, Chrome 153) — see
-//! `dev/active/swoop/spikes/0.9-nvenc-config.md`. The five that are easy to get
-//! wrong:
+//! Every setting below was validated at P1 on real hardware by spike 0.9 (RTX
+//! 2080 Ti, driver 591.86, NVENC header 12.1, Chrome 153) — see
+//! `dev/active/swoop/spikes/0.9-nvenc-config.md`; swoop-clarity task 4.1
+//! records P3 and P4's encode times on the same box under "Hardware tests".
+//! The five that are easy to get wrong:
 //!
 //! * `h264VUIParameters.bitstreamRestrictionFlag = 1` is **mandatory**. Without
 //!   it a decoder must assume the largest DPB the SPS level permits, so it
@@ -46,9 +78,10 @@
 //!   keyframes alone), and below ~6 Mbps the scale buys progressively less
 //!   until, at 800 kbps, it changes nothing at all.
 //!
-//! Budget **8–12 ms p50** for encode (8.3 ms at 1080p60, 12.1 ms at 4K60 HEVC,
-//! ±2 ms with whatever else holds the GPU) — not the 1–3 ms in
-//! `research/03-windows-host-stack.md` §2.2.
+//! Budget **8–12 ms p50** for encode at P1 (8.3 ms at 1080p60, 12.1 ms at 4K60
+//! HEVC, ±2 ms with whatever else holds the GPU) — not the 1–3 ms in
+//! `research/03-windows-host-stack.md` §2.2. Its top is the text preset's
+//! encode-time budget for a whole capture pass.
 //!
 //! # Session lifetime
 //!
@@ -61,14 +94,63 @@
 //! session's lifetime, which is sound only because the pinned device keeps
 //! those textures alive.
 //!
-//! # Hardware test
+//! # Hardware tests
 //!
 //! ```text
-//! cargo test -- --ignored nvenc        # working directory agent/swoop
+//! cargo test -- --ignored nvenc --test-threads=1 --nocapture   # in agent/swoop
 //! ```
 //!
-//! Expected: two tests run and pass. On the spike 0.9 dev box (RTX 2080 Ti,
-//! driver 591.86) they print
+//! One thread, because the fallback test sets the process-wide P1 flags the
+//! stream test reads; both clear them first and last. Five tests run:
+//!
+//! * the probe, and the stream at the text preset (with its gate taken away,
+//!   so it is the stream that is tested, not the verdict), which pass;
+//! * the fallback: an encoder with a 1 µs budget, fed frames 16.7 ms apart,
+//!   drops to P1 exactly once, its next picture an IDR from a P1 session and
+//!   every later one a delta, and a later encoder of that codec opens at P1
+//!   with no gate; it passes;
+//! * the still-frame test, swoop-clarity task 3.3's premise: 60 frames of a
+//!   scroll, then the last one 30 times, at P1 and at the text preset. It
+//!   prints each still frame's QP and size and whether the QP fell by 8 and
+//!   the 30 stayed within half a second of the bitrate; it does not fail on it;
+//! * `nvenc_encode_times`: P1, P3 and P4 p50 and p95 at 1080p and 1440p (H.264)
+//!   and 4K (HEVC), paced at 60 fps, and P1 and P4 at 1080p paced at 2 Hz,
+//!   which shows how slow idle clocks read. Only swoop-clarity task 4.1, alone
+//!   on its box, records it here.
+//!
+//! Task 4.1's `nvenc_encode_times`, 2026-11-11, RTX 2080 Ti, driver 610.88,
+//! release build, run after another app's 4K ffmpeg exports had finished
+//! (CPU 30-58%, TouchDesigner still on about a fifth of the GPU), so
+//! provisional until a run on a quiet box:
+//!
+//! ```text
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p1: p50 6.28 ms, p95 10.84 ms
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p3: p50 7.57 ms, p95 14.91 ms
+//! 1920x1080 H264 20 mbps, 300 at 60 fps, p4: p50 3.91 ms, p95 8.52 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p1: p50 9.54 ms, p95 12.62 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p3: p50 5.35 ms, p95 9.11 ms
+//! 2560x1440 H264 40 mbps, 300 at 60 fps, p4: p50 6.54 ms, p95 7.40 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p1: p50 7.73 ms, p95 8.12 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p3: p50 10.50 ms, p95 11.21 ms
+//! 3840x2160 H265 80 mbps, 300 at 60 fps, p4: p50 11.16 ms, p95 12.35 ms
+//! 1920x1080 H264 20 mbps, 20 at 2 Hz, p1: p50 2.90 ms, p95 8.42 ms
+//! 1920x1080 H264 20 mbps, 20 at 2 Hz, p4: p50 11.46 ms, p95 13.50 ms
+//! ```
+//!
+//! A run during the exports read lower p50s at 1080p (P1 3.16, P4 3.66 ms)
+//! and every p95 at 30-35 ms: the other work holds the clocks up and takes
+//! the GPU for whole frame intervals. So read the p50s to within a few ms,
+//! and the order of P1, P3 and P4 at one size as noise.
+//!
+//! What to expect on this GPU: with the whole 12 ms, the text preset keeps
+//! its p50 inside it at every size (P4 3.9 ms at 1080p and 6.5 ms at 1440p,
+//! P3 10.5 ms at 4K HEVC), so the gate keeps it. A 4K pass that shares the
+//! 12 ms with a second tier hands its P3 session 6 ms, so that session drops
+//! to P1 (7.7 ms).
+//!
+//! At P1, before the text preset, the first two printed this on the spike 0.9
+//! dev box (RTX 2080 Ti, driver 591.86); at the text preset the keyframe and
+//! delta sizes differ and the assertions do not:
 //!
 //! ```text
 //! nvenc probe: BackendCaps { backend: "nvenc", codecs: [CodecCaps { codec: H265, max_width: 8192,
@@ -85,13 +167,15 @@
 //! frame 60 and costs no keyframe. The keyframe line is the guard on
 //! `KEYFRAME_VBV_SCALE`: at the 1 that shipped it reads `keyframe 40903 B,
 //! mean delta 38204 B` and the test fails, which is the whole defect in one
-//! line. On a machine with no NVIDIA driver both tests fail at `probe_device`,
-//! which is the honest result — they are not skipped.
+//! line. On a machine with no NVIDIA driver every one of them fails at
+//! `probe_device`, which is the honest result — they are not skipped.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use moq_nvenc::safe::ENCODE_API;
 use moq_nvenc::sys::nvEncodeAPI::{
@@ -107,9 +191,10 @@ use moq_nvenc::sys::nvEncodeAPI::{
     NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS, NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER,
     NV_ENC_OUTPUT_PTR, NV_ENC_PARAMS_RC_MODE, NV_ENC_PIC_FLAGS, NV_ENC_PIC_PARAMS,
     NV_ENC_PIC_PARAMS_VER, NV_ENC_PIC_STRUCT, NV_ENC_PIC_TYPE, NV_ENC_PRESET_CONFIG,
-    NV_ENC_PRESET_CONFIG_VER, NV_ENC_PRESET_P1_GUID, NV_ENC_RECONFIGURE_PARAMS,
-    NV_ENC_RECONFIGURE_PARAMS_VER, NV_ENC_REGISTERED_PTR, NV_ENC_REGISTER_RESOURCE,
-    NV_ENC_REGISTER_RESOURCE_VER, NV_ENC_TUNING_INFO,
+    NV_ENC_PRESET_CONFIG_VER, NV_ENC_PRESET_P1_GUID, NV_ENC_PRESET_P3_GUID,
+    NV_ENC_PRESET_P4_GUID, NV_ENC_RECONFIGURE_PARAMS, NV_ENC_RECONFIGURE_PARAMS_VER,
+    NV_ENC_REGISTERED_PTR, NV_ENC_REGISTER_RESOURCE, NV_ENC_REGISTER_RESOURCE_VER,
+    NV_ENC_TUNING_INFO,
 };
 use thiserror::Error;
 use windows::core::Interface;
@@ -125,6 +210,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::Performance::QueryPerformanceCounter;
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
+use crate::encode::gate::{self, verdict_line, EncodeTimeGate, GateVerdict};
 use crate::encode::{BackendCaps, Codec, CodecCaps, EncodedFrame, Encoder, EncoderConfig};
 use crate::gpu::Frame;
 use crate::ipc::Exit;
@@ -256,6 +342,65 @@ const fn max_dimension(codec: Codec) -> u32 {
         Codec::H264 => H264_MAX_DIMENSION,
         Codec::H265 => HEVC_MAX_DIMENSION,
     }
+}
+
+/// The most pixels the text preset encodes at P4; above it, P3.
+const P4_MAX_PIXELS: u64 = 2560 * 1440;
+
+/// The presets a session opens at, each with ULTRA_LOW_LATENCY tuning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Preset {
+    /// What spike 0.9 validated, and where a text preset over its share of the
+    /// encode-time budget falls back to.
+    P1,
+    P3,
+    P4,
+}
+
+impl Preset {
+    fn guid(self) -> GUID {
+        match self {
+            Self::P1 => NV_ENC_PRESET_P1_GUID,
+            Self::P3 => NV_ENC_PRESET_P3_GUID,
+            Self::P4 => NV_ENC_PRESET_P4_GUID,
+        }
+    }
+
+    /// How the gate's log line names it.
+    fn name(self) -> &'static str {
+        match self {
+            Self::P1 => "p1",
+            Self::P3 => "p3",
+            Self::P4 => "p4",
+        }
+    }
+}
+
+/// The preset text is encoded at for a `width` x `height` session.
+fn text_preset(width: u32, height: u32) -> Preset {
+    if u64::from(width) * u64::from(height) <= P4_MAX_PIXELS {
+        Preset::P4
+    } else {
+        Preset::P3
+    }
+}
+
+/// Set once a codec's text preset went over its share of the encode-time
+/// budget, so every later encoder of that codec in this streamer opens at P1.
+static H264_AT_P1: AtomicBool = AtomicBool::new(false);
+static HEVC_AT_P1: AtomicBool = AtomicBool::new(false);
+
+fn at_p1(codec: Codec) -> &'static AtomicBool {
+    match codec {
+        Codec::H264 => &H264_AT_P1,
+        Codec::H265 => &HEVC_AT_P1,
+    }
+}
+
+#[cfg(test)]
+fn reset_text_fallbacks() {
+    H264_AT_P1.store(false, Ordering::Relaxed);
+    HEVC_AT_P1.store(false, Ordering::Relaxed);
 }
 
 fn qpc_now() -> i64 {
@@ -453,6 +598,13 @@ fn count_sessions(device: &ID3D11Device) -> u32 {
 /// checked without one: that the driver exists, and that the size is inside the
 /// codec's ceiling.
 pub fn create(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
+    Ok(Box::new(open(cfg, gate::ENCODE_TIME_P50)?))
+}
+
+/// [`create`], with the encode-time budget the text preset is judged against
+/// before it is shared among the pass's tiers, so a test can pass one no
+/// encode meets.
+fn open(cfg: &EncoderConfig, budget: Duration) -> anyhow::Result<NvencEncoder> {
     // the size check is first and deliberately needs no driver: it is an
     // argument error, and on a machine with no nvidia gpu the driver load
     // would otherwise mask it. the selector treats either refusal the same
@@ -468,11 +620,23 @@ pub fn create(cfg: &EncoderConfig) -> anyhow::Result<Box<dyn Encoder>> {
         .into());
     }
     ensure_driver()?;
-    Ok(Box::new(NvencEncoder {
+    let (preset, gate) = if at_p1(cfg.codec).load(Ordering::Relaxed) {
+        (Preset::P1, None)
+    } else {
+        (
+            text_preset(cfg.width, cfg.height),
+            Some(EncodeTimeGate::new(budget, cfg.fps)),
+        )
+    };
+    Ok(NvencEncoder {
         cfg: cfg.clone(),
         session: None,
         frame_id: 0,
-    }))
+        preset,
+        gate,
+        budget,
+        share: budget,
+    })
 }
 
 struct NvencEncoder {
@@ -481,6 +645,15 @@ struct NvencEncoder {
     cfg: EncoderConfig,
     session: Option<Session>,
     frame_id: u64,
+    /// What the next session opens at: the text preset, or P1 once its gate
+    /// said it is over budget.
+    preset: Preset,
+    /// Judges the text preset while sessions open at it; `None` at P1.
+    gate: Option<EncodeTimeGate>,
+    /// The whole pass's encode-time budget, which `share_encode_time` divides.
+    budget: Duration,
+    /// This encoder's share of it, which the gate's log line names.
+    share: Duration,
 }
 
 // SAFETY: the session handle, its registrations and its D3D11 device are used
@@ -514,10 +687,15 @@ impl Encoder for NvencEncoder {
                 }
                 session
             }
-            None => self.session.insert(Session::open(device, &self.cfg)?),
+            None => self
+                .session
+                .insert(Session::open(device, &self.cfg, self.preset)?),
         };
 
+        let submitted = Instant::now();
         let encoded = session.encode(texture, raw as usize, force_irap)?;
+        let took = submitted.elapsed();
+        self.judge(|gate| gate.observe(submitted, took, encoded.is_irap));
         let frame_id = self.frame_id;
         self.frame_id += 1;
         // With enablePTD, no B-frames and no lookahead every submitted picture
@@ -542,12 +720,59 @@ impl Encoder for NvencEncoder {
         }
         Ok(())
     }
+
+    fn share_encode_time(&mut self, tiers: usize) {
+        let share = self.budget / u32::try_from(tiers.max(1)).unwrap_or(u32::MAX);
+        self.share = share;
+        self.judge(|gate| gate.set_budget(share));
+    }
+}
+
+impl NvencEncoder {
+    /// Runs `step` on the text preset's gate and acts on a verdict it reaches:
+    /// logs the gate's line, and over budget drops the session so the next
+    /// frame opens one at P1 (see the module doc, "The text preset").
+    fn judge(&mut self, step: impl FnOnce(&mut EncodeTimeGate) -> GateVerdict) {
+        let Some(gate) = &mut self.gate else {
+            return;
+        };
+        let before = gate.verdict();
+        let verdict = step(gate);
+        if verdict == before {
+            return;
+        }
+        if let Some(line) = verdict_line(
+            "nvenc",
+            self.preset.name(),
+            (self.cfg.width, self.cfg.height),
+            verdict,
+            gate.samples(),
+            self.cfg.fps,
+            self.share,
+        ) {
+            ::log::info!("{line}");
+        }
+        if let GateVerdict::Exceeded { .. } = verdict {
+            at_p1(self.cfg.codec).store(true, Ordering::Relaxed);
+            self.session = None;
+            self.preset = Preset::P1;
+            self.gate = None;
+        }
+    }
+
+    #[cfg(test)]
+    fn preset(&self) -> Preset {
+        self.preset
+    }
 }
 
 /// One encoded picture, before it is dressed as an `EncodedFrame`.
 struct Encoded {
     data: Vec<u8>,
     is_irap: bool,
+    /// Only the still-frame test reads it.
+    #[cfg(test)]
+    avg_qp: u32,
 }
 
 struct Session {
@@ -567,11 +792,11 @@ struct Session {
 }
 
 impl Session {
-    fn open(device: ID3D11Device, cfg: &EncoderConfig) -> Result<Self, NvencError> {
+    fn open(device: ID3D11Device, cfg: &EncoderConfig, preset: Preset) -> Result<Self, NvencError> {
         let guid = codec_guid(cfg.codec);
         let encoder = open_session(&device)?;
         // Anything after this point that fails must not leak the session.
-        let session = Self::init(device, encoder, guid, cfg);
+        let session = Self::init(device, encoder, guid, cfg, preset.guid());
         if session.is_err() {
             destroy_session(encoder);
         }
@@ -583,6 +808,7 @@ impl Session {
         encoder: *mut c_void,
         guid: GUID,
         cfg: &EncoderConfig,
+        preset_guid: GUID,
     ) -> Result<Self, NvencError> {
         // Start from the preset's own configuration: a preset plus tuning info
         // auto-configures everything we do not name, which is the SDK's
@@ -601,7 +827,7 @@ impl Session {
                 (ENCODE_API.get_encode_preset_config_ex)(
                     encoder,
                     guid,
-                    NV_ENC_PRESET_P1_GUID,
+                    preset_guid,
                     NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY,
                     &mut preset,
                 )
@@ -625,7 +851,7 @@ impl Session {
         let mut init = NV_ENC_INITIALIZE_PARAMS {
             version: NV_ENC_INITIALIZE_PARAMS_VER,
             encodeGUID: guid,
-            presetGUID: NV_ENC_PRESET_P1_GUID,
+            presetGUID: preset_guid,
             encodeWidth: cfg.width,
             encodeHeight: cfg.height,
             darWidth: cfg.width,
@@ -827,7 +1053,12 @@ impl Session {
             unsafe { (ENCODE_API.unlock_bitstream)(self.encoder, self.bitstream) },
             "nvEncUnlockBitstream",
         )?;
-        Ok(Encoded { data, is_irap })
+        Ok(Encoded {
+            data,
+            is_irap,
+            #[cfg(test)]
+            avg_qp: lock.frameAvgQP,
+        })
     }
 
     /// Move the CBR target without a reset and without a keyframe. The VBV
@@ -1401,6 +1632,14 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_text_preset_is_p4_up_to_1440p_and_p3_above() {
+        assert_eq!(text_preset(1920, 1080), Preset::P4);
+        assert_eq!(text_preset(2560, 1440), Preset::P4);
+        assert_eq!(text_preset(3440, 1440), Preset::P3);
+        assert_eq!(text_preset(3840, 2160), Preset::P3);
+    }
+
     // ------------------------------------------------------- sps parsing ---
 
     #[derive(Deserialize)]
@@ -1566,7 +1805,12 @@ mod tests {
         px
     }
 
-    fn test_texture(device: &ID3D11Device, width: u32, height: u32, phase: u32) -> ID3D11Texture2D {
+    fn test_texture(
+        device: &ID3D11Device,
+        width: u32,
+        height: u32,
+        pixels: &[u8],
+    ) -> ID3D11Texture2D {
         use windows::Win32::Graphics::Direct3D11::{
             D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_SUBRESOURCE_DATA,
             D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
@@ -1575,7 +1819,6 @@ mod tests {
             DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
         };
 
-        let pixels = pattern(width, height, phase);
         let desc = D3D11_TEXTURE2D_DESC {
             Width: width,
             Height: height,
@@ -1603,17 +1846,78 @@ mod tests {
         texture.expect("d3d11 returned a texture")
     }
 
-    /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc`. The expected
-    /// output is in the module doc comment.
+    /// Four phases of [`pattern`], which a test cycles through for motion.
+    fn moving_textures(device: &ID3D11Device, width: u32, height: u32) -> Vec<ID3D11Texture2D> {
+        (0..4)
+            .map(|phase| test_texture(device, width, height, &pattern(width, height, phase)))
+            .collect()
+    }
+
+    /// Four windows onto one taller [`pattern`], each [`SCROLL_ROWS`] below
+    /// the last: cycled, every picture moves against the one before it, as
+    /// scrolling text does, where [`moving_textures`] moves only a block.
+    fn scrolling_textures(device: &ID3D11Device, width: u32, height: u32) -> Vec<ID3D11Texture2D> {
+        let row = width as usize * 4;
+        let tall = pattern(width, height + 3 * SCROLL_ROWS, 0);
+        (0..4)
+            .map(|phase| {
+                let start = phase * SCROLL_ROWS as usize * row;
+                let window = &tall[start..start + height as usize * row];
+                test_texture(device, width, height, window)
+            })
+            .collect()
+    }
+
+    /// Rows a scrolling picture moves per frame.
+    const SCROLL_ROWS: u32 = 7;
+
+    fn frame_of(texture: &ID3D11Texture2D, cfg: &EncoderConfig) -> Frame {
+        Frame {
+            handle: texture.as_raw() as usize,
+            width: cfg.width,
+            height: cfg.height,
+            captured_qpc: qpc_now(),
+        }
+    }
+
+    /// Submits on a fixed cadence, as capture does at a frame rate. A late
+    /// submit moves the cadence instead of bursting to catch up.
+    struct Pace {
+        next: Instant,
+        every: Duration,
+    }
+
+    impl Pace {
+        fn new(every: Duration) -> Self {
+            Self {
+                next: Instant::now() + every,
+                every,
+            }
+        }
+
+        fn wait(&mut self) {
+            let now = Instant::now();
+            if self.next > now {
+                std::thread::sleep(self.next - now);
+            }
+            self.next = self.next.max(now) + self.every;
+        }
+    }
+
+    /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc --test-threads=1`.
+    /// The expected output is in the module doc comment.
     #[test]
     #[ignore = "needs an nvidia gpu"]
     fn nvenc_encodes_and_the_stream_says_what_spike_09_measured() {
+        reset_text_fallbacks();
         let device = probe_device().expect("this machine has an nvenc-capable adapter");
         let cfg = base();
-        let textures: Vec<ID3D11Texture2D> = (0..4)
-            .map(|phase| test_texture(&device, cfg.width, cfg.height, phase))
-            .collect();
-        let mut encoder = create(&cfg).expect("the encoder opens");
+        let textures = moving_textures(&device, cfg.width, cfg.height);
+        let mut encoder = open(&cfg, gate::ENCODE_TIME_P50).expect("the encoder opens");
+        // the stream at the text preset is under test here, not the gate's
+        // verdict on it, which could reopen at p1 with a second idr
+        encoder.gate = None;
+        assert_eq!(encoder.preset(), text_preset(cfg.width, cfg.height));
 
         let mut irap_count = 0usize;
         let mut max_vcl = 0usize;
@@ -1628,13 +1932,7 @@ mod tests {
             if i == 60 {
                 encoder.set_bitrate(10_000_000).expect("the rate moves");
             }
-            let texture = &textures[(i % 4) as usize];
-            let frame = Frame {
-                handle: texture.as_raw() as usize,
-                width: cfg.width,
-                height: cfg.height,
-                captured_qpc: qpc_now(),
-            };
+            let frame = frame_of(&textures[(i % 4) as usize], &cfg);
             let encoded = encoder
                 .encode(&frame, false)
                 .expect("the frame encodes")
@@ -1681,6 +1979,214 @@ mod tests {
         assert!(sps.bitstream_restriction_flag);
         assert_eq!(sps.max_num_reorder_frames, Some(0));
         assert_eq!(sps.max_dec_frame_buffering, Some(4));
+        assert_eq!(encoder.preset(), text_preset(cfg.width, cfg.height));
+        reset_text_fallbacks();
+    }
+
+    /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc --test-threads=1`.
+    /// A budget no encode meets: the gate decides early, the session goes, and
+    /// the next picture opens a P1 session with an IDR.
+    #[test]
+    #[ignore = "needs an nvidia gpu"]
+    fn nvenc_falls_back_to_p1_once_when_the_text_preset_is_over_budget() {
+        reset_text_fallbacks();
+        let device = probe_device().expect("this machine has an nvenc-capable adapter");
+        let cfg = base();
+        let text = text_preset(cfg.width, cfg.height);
+        let textures = moving_textures(&device, cfg.width, cfg.height);
+        let mut encoder = open(&cfg, Duration::from_micros(1)).expect("the encoder opens");
+        assert_eq!(encoder.preset(), text);
+
+        // per frame: the preset its session was opened at, the preset after
+        // it, and whether it was an idr
+        let mut frames = Vec::new();
+        let mut pace = Pace::new(Duration::from_secs(1) / cfg.fps);
+        for i in 0..120 {
+            pace.wait();
+            let at = encoder.preset();
+            let encoded = encoder
+                .encode(&frame_of(&textures[i % 4], &cfg), false)
+                .expect("the frame encodes")
+                .expect("every submitted picture produces output");
+            frames.push((at, encoder.preset(), encoded.is_irap));
+        }
+
+        let falls: Vec<usize> = (0..frames.len())
+            .filter(|&i| frames[i].0 != frames[i].1)
+            .collect();
+        assert_eq!(falls.len(), 1, "exactly one fallback: {frames:?}");
+        let fell = falls[0];
+        println!("nvenc fallback: {} to p1 after frame {fell}", text.name());
+        assert_eq!(frames[fell], (text, Preset::P1, false));
+        assert!(
+            fell >= gate::WARMUP as usize + gate::EARLY,
+            "decided before a warm-up and an early verdict's samples: frame {fell}"
+        );
+        assert!(fell + 1 < frames.len(), "a frame follows the fallback");
+        let idrs: Vec<usize> = (0..frames.len()).filter(|&i| frames[i].2).collect();
+        assert_eq!(
+            idrs,
+            vec![0, fell + 1],
+            "the first picture and the p1 session's first are the only idrs"
+        );
+        assert!(frames[fell + 1..]
+            .iter()
+            .all(|&(at, after, _)| (at, after) == (Preset::P1, Preset::P1)));
+        assert!(encoder.gate.is_none());
+
+        let later = open(&cfg, gate::ENCODE_TIME_P50).expect("a later encoder opens");
+        assert_eq!(later.preset(), Preset::P1);
+        assert!(later.gate.is_none());
+        // the fallback is per codec
+        let hevc = EncoderConfig {
+            codec: Codec::H265,
+            ..base()
+        };
+        let other = open(&hevc, gate::ENCODE_TIME_P50).expect("an hevc encoder opens");
+        assert_eq!(other.preset(), text);
+        assert!(other.gate.is_some());
+        reset_text_fallbacks();
+    }
+
+    /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc --test-threads=1
+    /// --nocapture`. Swoop-clarity task 3.3's premise: once motion stops,
+    /// repeating the still picture lets the CBR encoder win back the detail
+    /// motion crushed. Prints each repeat's QP and size at P1 and at the text
+    /// preset, and whether the premise holds at each; it does not fail on it.
+    #[test]
+    #[ignore = "needs an nvidia gpu"]
+    fn nvenc_still_frames_after_motion() {
+        let device = probe_device().expect("this machine has an nvenc-capable adapter");
+        let cfg = base();
+        // a scroll, not the moving block: the premise is a picture that motion
+        // crushed, and a block over a still background crushes little of it
+        let textures = scrolling_textures(&device, cfg.width, cfg.height);
+        let half_second = cfg.bitrate_bps as usize / 8 / 2;
+        for preset in [Preset::P1, text_preset(cfg.width, cfg.height)] {
+            let mut session =
+                Session::open(device.clone(), &cfg, preset).expect("the session opens");
+            let mut pace = Pace::new(Duration::from_secs(1) / cfg.fps);
+            let mut encode = |texture: &ID3D11Texture2D| {
+                pace.wait();
+                session
+                    .encode(texture, texture.as_raw() as usize, false)
+                    .expect("the frame encodes")
+            };
+            let mut moving_qp = 0;
+            for i in 0..60 {
+                moving_qp = encode(&textures[i % 4]).avg_qp;
+            }
+            // the last moving picture, sent again as the floor would
+            let still = &textures[59 % 4];
+            let (qps, sizes): (Vec<u32>, Vec<usize>) = (0..30)
+                .map(|_| {
+                    let encoded = encode(still);
+                    (encoded.avg_qp, encoded.data.len())
+                })
+                .unzip();
+            let lowest = qps.iter().copied().min().unwrap_or(0);
+            let fell = qps[0].saturating_sub(lowest);
+            let total: usize = sizes.iter().sum();
+            let holds = fell >= 8 && total <= half_second;
+            println!(
+                "nvenc still frames at {}, 1080p h264 20 mbps: last scrolling qp {moving_qp}",
+                preset.name()
+            );
+            println!("  qp    {qps:?}");
+            println!("  bytes {sizes:?}");
+            println!(
+                "  qp fell {fell} across the 30 (first {}, lowest {lowest}); {total} B of the \
+                 {half_second} B half a second carries; premise {}",
+                qps[0],
+                if holds { "holds" } else { "does not hold" }
+            );
+        }
+    }
+
+    /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc_encode_times
+    /// --test-threads=1 --nocapture`. Swoop-clarity task 4.1 runs it alone on
+    /// its box and records the table in the module doc; anywhere else it only
+    /// proves it runs.
+    #[test]
+    #[ignore = "needs an nvidia gpu"]
+    fn nvenc_encode_times() {
+        let device = probe_device().expect("this machine has an nvenc-capable adapter");
+        let sixty = Duration::from_secs(1) / 60;
+        println!("nvenc encode times, submit to unlock, after 60 warm-up frames at 60 fps:");
+        for (codec, width, height, bitrate_bps) in [
+            (Codec::H264, 1920, 1080, 20_000_000),
+            (Codec::H264, 2560, 1440, 40_000_000),
+            (Codec::H265, 3840, 2160, 80_000_000),
+        ] {
+            let cfg = EncoderConfig {
+                codec,
+                width,
+                height,
+                fps: 60,
+                bitrate_bps,
+            };
+            let textures = moving_textures(&device, width, height);
+            for preset in [Preset::P1, Preset::P3, Preset::P4] {
+                let times = encode_times(&device, &cfg, preset, &textures, sixty, 300);
+                print_times(&cfg, preset, "300 at 60 fps", &times);
+            }
+        }
+        let cfg = base();
+        let textures = moving_textures(&device, cfg.width, cfg.height);
+        for preset in [Preset::P1, Preset::P4] {
+            let times =
+                encode_times(&device, &cfg, preset, &textures, Duration::from_millis(500), 20);
+            print_times(&cfg, preset, "20 at 2 Hz", &times);
+        }
+    }
+
+    /// `count` encodes of a moving picture submitted `every` apart, after 60
+    /// at 60 fps, each timed as [`NvencEncoder`] times it for the gate. Sorted.
+    fn encode_times(
+        device: &ID3D11Device,
+        cfg: &EncoderConfig,
+        preset: Preset,
+        textures: &[ID3D11Texture2D],
+        every: Duration,
+        count: usize,
+    ) -> Vec<Duration> {
+        let mut session = Session::open(device.clone(), cfg, preset).expect("the session opens");
+        let mut encode = |phase: usize| {
+            let texture = &textures[phase % textures.len()];
+            let submitted = Instant::now();
+            session
+                .encode(texture, texture.as_raw() as usize, false)
+                .expect("the frame encodes");
+            submitted.elapsed()
+        };
+        let mut pace = Pace::new(Duration::from_secs(1) / 60);
+        for phase in 0..60 {
+            pace.wait();
+            encode(phase);
+        }
+        let mut pace = Pace::new(every);
+        let mut times: Vec<Duration> = (0..count)
+            .map(|phase| {
+                pace.wait();
+                encode(phase)
+            })
+            .collect();
+        times.sort();
+        times
+    }
+
+    fn print_times(cfg: &EncoderConfig, preset: Preset, paced: &str, sorted: &[Duration]) {
+        let ms = |at: usize| sorted[at].as_secs_f64() * 1e3;
+        println!(
+            "  {}x{} {:?} {} mbps, {paced}, {}: p50 {:.2} ms, p95 {:.2} ms",
+            cfg.width,
+            cfg.height,
+            cfg.codec,
+            cfg.bitrate_bps / 1_000_000,
+            preset.name(),
+            ms(sorted.len() / 2),
+            ms(sorted.len() * 95 / 100),
+        );
     }
 
     /// Needs an NVIDIA GPU: `cargo test -- --ignored nvenc`.

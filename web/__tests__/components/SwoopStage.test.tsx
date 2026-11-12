@@ -18,6 +18,7 @@ import React from 'react';
 import { render, screen, cleanup, act, within } from '@testing-library/react';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { setMouseCapture } from '@/lib/swoop/mouseCapture';
+import type { SwoopSession } from '@/lib/swoop/features';
 
 /** the input capture's escape-twice seam, or null for a view-only session. */
 let mockCapture: {
@@ -54,7 +55,17 @@ afterEach(() => {
 function renderStage(props: Partial<React.ComponentProps<typeof SwoopStage>> = {}) {
   const stageRef = React.createRef<HTMLDivElement>();
   const videoRef = React.createRef<HTMLVideoElement>();
-  render(<SwoopStage session={null} state="connected" stageRef={stageRef} videoRef={videoRef} {...props} />);
+  const canvasRef = React.createRef<HTMLCanvasElement>();
+  render(
+    <SwoopStage
+      session={null}
+      state="connected"
+      stageRef={stageRef}
+      videoRef={videoRef}
+      canvasRef={canvasRef}
+      {...props}
+    />,
+  );
   return stageRef;
 }
 
@@ -270,6 +281,43 @@ describe('SwoopStage — leaving with the keyboard', () => {
 
     expect(screen.queryByText(/esc twice/)).toBeNull();
     expect(screen.queryByRole('application')).toBeNull();
+  });
+});
+
+describe('SwoopStage layout', () => {
+  it('names the stage, and lays the video out in an area inside it', () => {
+    const stageRef = renderStage();
+    const stage = screen.getByTestId('swoop-stage');
+    const area = screen.getByTestId('swoop-area');
+    const video = screen.getByLabelText('remote screen', { selector: 'video' });
+    expect(stage).toBe(stageRef.current);
+    expect(area.parentElement).toBe(stage);
+    expect(video.parentElement).toBe(area);
+    // the area in flow, so the phone keyboard's padding on the stage shrinks it
+    expect(area).toHaveClass('relative', 'h-full', 'w-full');
+    // the video's box is the picture's, written by useSwoopView
+    expect(video).toHaveClass('absolute', 'object-fill');
+    expect(video).not.toHaveClass('object-contain');
+  });
+
+  it('lays smooth scaling’s canvas over the video in the area, out of the way of input and screen readers', () => {
+    renderStage();
+    const area = screen.getByTestId('swoop-area');
+    const canvas = area.querySelector('canvas');
+    expect(canvas).not.toBeNull();
+    expect(canvas!.previousElementSibling).toBe(screen.getByLabelText('remote screen', { selector: 'video' }));
+    expect(canvas).toHaveClass('pointer-events-none', 'absolute', 'inset-0', 'size-full');
+    expect(canvas).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('tells the session’s presenter each time it lays the picture out', () => {
+    const invalidate = jest.fn();
+    renderStage({ session: { presenter: { invalidate } } as unknown as SwoopSession });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(invalidate).toHaveBeenCalledTimes(2);
   });
 });
 

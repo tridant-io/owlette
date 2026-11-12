@@ -82,6 +82,7 @@ import {
 } from '@/lib/swoop/video/stall';
 import type { SwoopStepUpAnswer, SwoopStepUpProof } from '@/lib/swoop/stepUp';
 import { isViewerApp } from '@/lib/swoop/viewerApp';
+import { smoothActive } from '@/hooks/useSwoopView';
 
 /**
  * the reconnect ladder: 2 s, 4 s, … 30 s between sessions, reset after one
@@ -196,6 +197,8 @@ export interface UseSwoopSession {
    * track, so this is a `<video>` — not the canvas arm A would have drawn into.
    */
   videoRef: RefObject<HTMLVideoElement | null>;
+  /** smooth scaling's canvas, over the video; the presenter draws on it. */
+  canvasRef: RefObject<HTMLCanvasElement | null>;
   /** the surface input capture binds to; it wraps the video. */
   stageRef: RefObject<HTMLDivElement | null>;
   stepUp: SwoopStepUpControls;
@@ -283,6 +286,8 @@ const EMPTY_STATS: SwoopStats = {
     gaps: 0,
     duplicates: 0,
     displayPhaseMs: null,
+    scaling: 'standard',
+    smoothEstimateMs: null,
   },
   receiver: {
     framesObserved: 0,
@@ -314,29 +319,6 @@ const RECORD_READ_MS = 5_000;
 /** how often the overlay's numbers are resampled. */
 const STATS_INTERVAL_MS = 1000;
 
-/**
- * the letterboxed picture inside the element, in client coordinates.
- *
- * `object-contain` scales the frame to fit and centres what is left over, so
- * the content box is the element box shrunk by the smaller of the two axis
- * ratios. the css in `SwoopStage` and this function are one decision: change
- * the fit or the position there and this is wrong.
- *
- * the size comes from the presenter, which already tracks `videoWidth` /
- * `videoHeight` off the element's own `resize` event — a third listener on the
- * same element would only be a second copy of the same number. before metadata
- * lands both are 0 and the element box is genuinely all anyone knows; it
- * self-corrects on the first frame.
- */
-function contentRect(video: HTMLVideoElement, width: number, height: number): DOMRect {
-  const box = video.getBoundingClientRect();
-  if (width <= 0 || height <= 0) return box;
-  const scale = Math.min(box.width / width, box.height / height);
-  const w = width * scale;
-  const h = height * scale;
-  return new DOMRect(box.x + (box.width - w) / 2, box.y + (box.height - h) / 2, w, h);
-}
-
 export function useSwoopSession(
   siteId: string,
   machineId: string,
@@ -353,6 +335,7 @@ export function useSwoopSession(
   }, [uid]);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   const [state, setState] = useState<SwoopSessionState>('idle');
@@ -843,8 +826,9 @@ export function useSwoopSession(
 
     const run = async () => {
       const video = videoRef.current;
+      const canvas = canvasRef.current;
       const stage = stageRef.current;
-      if (!video || !stage) return;
+      if (!video || !canvas || !stage) return;
 
       setState('authorizing');
       setError(null);
@@ -898,11 +882,12 @@ export function useSwoopSession(
             }
           }
         },
+        onPresent: (metadata) => presenter?.present(metadata),
         onIdrRequest: () => {
           sendOnChannel('swoop-control', encodeControlMessage({ t: 'idr' }));
         },
       });
-      presenter = createPresenter(video);
+      presenter = createPresenter(video, { canvas, smooth: smoothActive });
 
       const signalingOptions = {
         roomUrl: grant.signalUrl,
@@ -1076,10 +1061,10 @@ export function useSwoopSession(
         fingerprint: identity.fingerprint,
         video,
         stage,
-        contentRect: () => {
-          const size = presenter?.stats();
-          return contentRect(video, size?.width ?? 0, size?.height ?? 0);
-        },
+        // the element's own rect: useSwoopView lays the video out as the picture's box,
+        // and the rect includes the local zoom's transform. before the first frame
+        // that box is the whole area, which is all anyone knows then.
+        contentRect: () => video.getBoundingClientRect(),
         peer,
         presenter,
         inboundStats: async () => (await receiver?.inboundStats()) ?? null,
@@ -1131,10 +1116,11 @@ export function useSwoopSession(
       const playbackQuality = (): VideoPlaybackQuality | null =>
         typeof video.getVideoPlaybackQuality === 'function' ? video.getVideoPlaybackQuality() : null;
 
-      const shownFrames = (): number => {
-        const quality = playbackQuality();
-        return quality ? quality.totalVideoFrames - quality.droppedVideoFrames : 0;
-      };
+      const elementShown = (quality = playbackQuality()): number =>
+        quality ? quality.totalVideoFrames - quality.droppedVideoFrames : 0;
+      // under smooth scaling's canvas the video sits at opacity 0, where chromium
+      // counts its every frame dropped, so the canvas's draws count as shown (stall.ts)
+      const drawnFrames = (): number => presenter?.drawnFrames ?? 0;
 
       // anything that changes what the watchdog compares against starts its judgement again.
       const rebaseline = () => detector.reset();
@@ -1182,15 +1168,20 @@ export function useSwoopSession(
         finish('picture_stalled');
       };
 
-      // what the element has shown so far, to tell later frames by.
-      const presentedMark = () => ({ shown: shownFrames(), rvfc: receiver?.diagnostics().rvfcCallbacks ?? 0 });
+      // what has been shown so far, to tell later frames by.
+      const presentedMark = () => ({
+        element: elementShown(),
+        drawn: drawnFrames(),
+        rvfc: receiver?.diagnostics().rvfcCallbacks ?? 0,
+      });
 
-      // whether the reloaded element has shown a frame since `mark`. the
-      // element's counters restart with the reload, so a lower count is all new.
+      // whether the reloaded element has shown a frame since `mark`, itself or
+      // through the canvas. the element's counters restart with the reload, so
+      // a lower count is all new; the canvas's carry on.
       const recoveredSince = (mark: ReturnType<typeof presentedMark>): boolean => {
         if (!elementPlaying()) return false;
-        const shown = shownFrames();
-        const fresh = shown < mark.shown ? shown : shown - mark.shown;
+        const element = elementShown();
+        const fresh = (element < mark.element ? element : element - mark.element) + drawnFrames() - mark.drawn;
         return fresh > 0 || (receiver?.diagnostics().rvfcCallbacks ?? 0) > mark.rvfc;
       };
 
@@ -1270,7 +1261,7 @@ export function useSwoopSession(
         const tick = detector.tick({
           hostFrames: diagnostics.metaRecords,
           totalFrames: quality?.totalVideoFrames ?? 0,
-          droppedFrames: quality?.droppedVideoFrames ?? 0,
+          shownFrames: elementShown(quality) + drawnFrames(),
           rvfcCallbacks: diagnostics.requestVideoFrameCallback ? diagnostics.rvfcCallbacks : null,
           // nothing to judge by without the element's own counters, and a
           // browser that has never counted a frame of this stream may not count
@@ -1328,5 +1319,5 @@ export function useSwoopSession(
     [stepUpRequired, enrolled, submitProof, cancel],
   );
 
-  return { state, error, refusal, stats, session, videoRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting };
+  return { state, error, refusal, stats, session, videoRef, canvasRef, stageRef, stepUp, end, reconnect, retryIn, noPath, restarting };
 }

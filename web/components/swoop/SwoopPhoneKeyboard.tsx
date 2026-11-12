@@ -163,7 +163,7 @@ export function SwoopPhoneKeyboard({ session, osFamily }: { session: SwoopSessio
 
   // the picture fits what the keyboard and the row leave of the stage, centred
   // there: padded out of the covered parts, the stage's content box is the
-  // video's, which `contentRect()`, input and the zoom all measure.
+  // area's, which the picture is laid out in (`useSwoopView`) and the zoom measures.
   useLayoutEffect(() => {
     if (!session || !open || !visible) return;
     const style = session.stage.style;

@@ -1334,6 +1334,13 @@ impl RtcPeer {
             Event::IceConnectionStateChange(IceConnectionState::Disconnected) => {
                 events.push(PeerEvent::Ice(IceEvent::Disconnected))
             }
+            // the first negotiation, or a restart: str0m clears the pairs and
+            // the remote candidates, and an ice agent with no remote candidate
+            // checks for good without ever saying `disconnected`, so the policy
+            // bounds it (TEC-A4D, 2026-11-10).
+            Event::IceConnectionStateChange(IceConnectionState::Checking) => {
+                events.push(PeerEvent::Ice(IceEvent::Checking))
+            }
             // The viewer's end closed DTLS or SCTP. Nothing comes back from that.
             Event::Closed => {
                 self.state = PeerState::Closed;
@@ -1821,10 +1828,14 @@ mod tests {
         }
         assert_eq!(peer.stats().datagrams_dropped, 2);
         assert_ne!(peer.state(), PeerState::Closed);
+        // the first poll also starts ice checking, which the policy is told of
         assert!(
             matches!(
                 ev.as_slice(),
-                [PeerEvent::DatagramDropped { dropped: 1, .. }]
+                [
+                    PeerEvent::Ice(IceEvent::Checking),
+                    PeerEvent::DatagramDropped { dropped: 1, .. }
+                ]
             ),
             "the first drop is reported and the second only counted: {ev:?}"
         );
@@ -1946,7 +1957,15 @@ mod tests {
         assert_eq!(peer.stats().datagrams_dropped, 0);
 
         drop(peer);
-        server.pump();
+        // the release crosses the loopback after the drop, so one pump can run
+        // before it lands: give it the same 40 turns of 5 ms the allocation gets
+        for _ in 0..40 {
+            server.pump();
+            if server.released {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
         assert!(server.released, "the peer did not give its allocation back");
     }
 
@@ -2006,15 +2025,23 @@ mod tests {
         );
     }
 
-    /// The whole point of the allocation: a viewer that can reach nothing of
-    /// the host's but its relayed address still connects. The viewer here is
-    /// a bare `Rtc` whose only candidate is an unroutable public address, and
-    /// whose only knowledge of the host is the relay candidate; every byte
-    /// between them goes through the fake server, which checks permissions
-    /// as a real one does. The host reports the pair as relayed, and once it
-    /// is nominated the host binds a channel for it.
-    #[test]
-    fn two_peers_connect_only_through_the_fake_relay() {
+    /// A host and a viewer that met only through the fake relay, as
+    /// [`connect_through_the_fake_relay`] left them.
+    struct Relayed {
+        host: RtcPeer,
+        server: turn::fake::FakeTurn,
+        viewer: Rtc,
+        viewer_v4: std::net::SocketAddrV4,
+        viewer_connected: bool,
+        /// The host's last pair report: is the nominated pair relayed.
+        host_relayed_pair: Option<bool>,
+    }
+
+    /// The viewer is a bare `Rtc` whose only candidate is an unroutable
+    /// public address, and whose only knowledge of the host is the relay
+    /// candidate; every byte between them goes through the fake server, which
+    /// checks permissions as a real one does.
+    fn connect_through_the_fake_relay() -> Relayed {
         use str0m::media::{Direction, MediaKind};
 
         let (mut host, mut server) = peer_allocating_on_a_fake_relay();
@@ -2112,6 +2139,29 @@ mod tests {
                 break;
             }
         }
+        Relayed {
+            host,
+            server,
+            viewer,
+            viewer_v4,
+            viewer_connected,
+            host_relayed_pair,
+        }
+    }
+
+    /// The whole point of the allocation: a viewer that can reach nothing of
+    /// the host's but its relayed address still connects. The host reports the
+    /// pair as relayed, and once it is nominated the host binds a channel for it.
+    #[test]
+    fn two_peers_connect_only_through_the_fake_relay() {
+        let Relayed {
+            host,
+            server,
+            viewer_v4,
+            viewer_connected,
+            host_relayed_pair,
+            ..
+        } = connect_through_the_fake_relay();
 
         assert!(host.holds_relay(), "the host never allocated");
         assert!(
@@ -2129,6 +2179,108 @@ mod tests {
             server.channel_for(viewer_v4).is_some(),
             "the host never bound a channel for the nominated peer"
         );
+    }
+
+    /// How a relayed viewer goes quiet once the promotion restart is asked for.
+    #[derive(Debug, Clone, Copy)]
+    enum Quiet {
+        /// No re-offer reaches the host.
+        NoRestart,
+        /// A restart offer naming the viewer's candidates, as str0m's own does.
+        RestartWithCandidates,
+        /// A restart offer naming none, as a browser's does: its candidates
+        /// would trickle after it.
+        RestartWithoutCandidates,
+    }
+
+    /// One viewer's share of the session loop, in simulated time: the peer's
+    /// poll, every ice edge into the policy (`on_ice_event`) and the policy's
+    /// timers (`pump_ice`). Whether the session lets the viewer go within
+    /// `horizon` of it going quiet.
+    fn let_go_within(quiet: Quiet, horizon: Duration) -> bool {
+        use crate::transport::ice_policy::{IceAction, IcePolicy, RestartReason, PROMOTION_PROBE};
+
+        let mut link = connect_through_the_fake_relay();
+        assert_eq!(
+            link.host.state(),
+            PeerState::Connected,
+            "no relayed session to start from"
+        );
+        let mut policy = IcePolicy::new();
+        let mut t = Instant::now();
+        policy.observe(t, IceEvent::Connected { relayed: true });
+        t += PROMOTION_PROBE;
+        assert_eq!(
+            policy.poll(t),
+            Some(IceAction::RestartIce(RestartReason::RelayPromotion))
+        );
+        if !matches!(quiet, Quiet::NoRestart) {
+            let mut api = link.viewer.sdp_api();
+            let with_candidates = matches!(quiet, Quiet::RestartWithCandidates);
+            api.ice_restart(with_candidates);
+            let (offer, _) = api.apply().expect("a restart is a change");
+            let sdp = offer.to_sdp_string();
+            assert_eq!(
+                sdp.contains("a=candidate:"),
+                with_candidates,
+                "{quiet:?}'s offer"
+            );
+            link.host
+                .accept_offer(&sdp)
+                .expect("the host answers the restart");
+        }
+        // from here the viewer sends nothing: no candidate, no packet. the
+        // relay stays up, as it did on TEC-A4D.
+        drop(link.viewer);
+        let quiet_at = t;
+        let mut ev = events();
+        while t < quiet_at + horizon {
+            // half-second turns: every timer in play counts in seconds
+            t += Duration::from_millis(500);
+            link.host
+                .poll(t, Duration::from_millis(1), &mut ev)
+                .expect("host poll");
+            link.server.pump();
+            link.server.to_peers.clear();
+            let mut gone = false;
+            for event in ev.drain(..) {
+                match event {
+                    PeerEvent::Ice(edge) => {
+                        gone |= policy.observe(t, edge) == Some(IceAction::GiveUp)
+                    }
+                    PeerEvent::Closed => gone = true,
+                    _ => {}
+                }
+            }
+            gone |= policy.poll(t) == Some(IceAction::GiveUp);
+            if gone {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// TEC-A4D, 2026-11-10: a viewer admitted, connected over the relay and
+    /// asked for the promotion restart, then silent: no verify, no packet. It
+    /// sat on the roster for hours, its records overflowing the queue. Of the
+    /// three ways it can go quiet, a browser's restart offer whose candidates
+    /// never follow is the one that held it for good; every one of them is let
+    /// go within PROTOCOL §10's bound for a lost path: str0m's `disconnected`
+    /// 15–25 s after the last packet, then `DISCONNECTED_LIMIT`.
+    #[test]
+    fn a_relayed_viewer_that_goes_quiet_after_the_promotion_ask_is_let_go() {
+        use crate::transport::ice_policy::DISCONNECTED_LIMIT;
+        let bound = Duration::from_secs(25) + DISCONNECTED_LIMIT;
+        for quiet in [
+            Quiet::NoRestart,
+            Quiet::RestartWithCandidates,
+            Quiet::RestartWithoutCandidates,
+        ] {
+            assert!(
+                let_go_within(quiet, bound),
+                "{quiet:?}: still held {bound:?} after it went quiet"
+            );
+        }
     }
 
     #[test]

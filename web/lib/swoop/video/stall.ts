@@ -10,14 +10,21 @@
  *
  * this file notices. it is a pure state machine, fed once a second by the
  * hook's stats timer with counters it gets for free: the host's frame records
- * on `swoop-meta` (what was sent), the element's `getVideoPlaybackQuality()`
- * totals (what was shown) and the raw rvfc callback count. the host sends at
- * least two frames a second even on a still desktop (`FLOOR_INTERVAL` in
- * `agent/swoop/src/session/mod.rs`), so frames sent and none shown is a dead
- * picture, never a still one.
+ * on `swoop-meta` (what was sent), what was shown and the raw rvfc callback
+ * count. the host sends at least two frames a second even on a still desktop
+ * (`FLOOR_INTERVAL` in `agent/swoop/src/session/mod.rs`), so frames sent and
+ * none shown is a dead picture, never a still one.
  *
- * deliberately not inputs: the presenter's and feedback's counters (both hang
- * off the meta join, which a stall starves too), `freezeCount`,
+ * what was shown is the element's `getVideoPlaybackQuality()` total less its
+ * drops, plus the frames smooth scaling's canvas drew. the canvas hides the
+ * video at opacity 0 while it draws, and chromium counts every frame of a
+ * video it does not composite as dropped, so the drops alone would call a
+ * live picture frozen (dev/active/swoop-clarity, owner's ruling 2026-11-10).
+ * the presenter counts a draw from the rvfc chain, joined or not, so a stall
+ * starves it exactly as it starves the element.
+ *
+ * deliberately not inputs: the presenter's join counters and feedback's (both
+ * hang off the meta join, which a stall starves too), `freezeCount`,
  * `video.currentTime` and transport bytes.
  *
  * time is real elapsed time from `now`, never a count of ticks: a timer that
@@ -51,9 +58,10 @@ const MAX_TICK_GAP_MS = 5000;
 export interface StallSample {
   /** `receiver.diagnostics().metaRecords`: frame records the host sent. */
   hostFrames: number;
-  /** `getVideoPlaybackQuality()`: frames that reached the element, and the ones it dropped. */
+  /** `getVideoPlaybackQuality().totalVideoFrames`: frames that reached the element. it restarts when the element reloads. */
   totalFrames: number;
-  droppedFrames: number;
+  /** the element's frames less its drops, plus the frames smooth scaling's canvas drew. */
+  shownFrames: number;
   /** raw rvfc callbacks; null where the browser has none. */
   rvfcCallbacks: number | null;
   /** connected, link up, tab visible, playing, data in hand and a box on screen. */
@@ -80,11 +88,11 @@ interface Point {
   at: number;
   hostFrames: number;
   total: number;
-  dropped: number;
+  shown: number;
   rvfc: number | null;
 }
 
-const shownBetween = (from: Point, to: Point): number => to.total - from.total - (to.dropped - from.dropped);
+const shownBetween = (from: Point, to: Point): number => to.shown - from.shown;
 
 export function createStallDetector(now: () => number = () => performance.now()): StallDetector {
   let last: Point | null = null;
@@ -117,7 +125,7 @@ export function createStallDetector(now: () => number = () => performance.now())
       at: now(),
       hostFrames: sample.hostFrames,
       total: sample.totalFrames,
-      dropped: sample.droppedFrames,
+      shown: sample.shownFrames,
       rvfc: sample.rvfcCallbacks,
     };
     const previous = last;

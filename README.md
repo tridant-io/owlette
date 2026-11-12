@@ -34,7 +34,7 @@ live CPU, memory, disk, GPU, temperature and network metrics, with history and s
 add an app, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding) and restarts the machine when relaunching is not enough.
 
 **swoop: remote desktop**
-a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs a membership that reaches the machine; control needs a swoop mode of control there (site owners and admins have it unless set otherwise) and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS.
+a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs a membership that reaches the machine; control needs a swoop mode of control there (site owners and admins have it unless set otherwise) and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS. small text stays legible at any window size: the picture lands on whole pixels of your screen, **sharp** shows the machine's pixels whole, and smooth scaling averages it down at any other size.
 
 **remote deployment**
 push software silently to any number of Windows machines: NSIS, Inno Setup, MSI, and custom installers. save deployment templates, track progress in real time, and cancel mid-install. the agent itself updates remotely on all three platforms.

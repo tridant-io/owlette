@@ -464,10 +464,10 @@ somebody is about to call about. `targetKbps` is the sum across all of them, so 
 |---|---|
 | `preset` | the quality ceiling in force, as one word: `auto`, or `<n>mbps/<resolution>/<n>fps`. it is *rendered* from the ceiling's three numbers and never parsed back — section 5's `quality` is the only thing that sets them. |
 | `targetKbps` | what the governor is aiming at, against `bitrateKbps`, which is what actually went out. the pair is the point: a target the link never delivered is invisible from either number alone. |
-| `rungFps` | the quality ladder's current frame-rate rung. it is a **capture-side** cap — the encoder is never told — so it is not the same number as `fps`, which is measured. |
-| `rungResolution` | that rung's resolution cap, in `quality.preset`'s own spelling (`native` \| `1440p` \| `1080p` \| `720p`). |
+| `rungFps` | the quality ladder's current frame-rate rung: the **capture-side** cap the encoder is opened at (each rung is a new encoder at that rate), so it is not the same number as `fps`, which is measured. |
+| `rungResolution` | that rung's resolution cap, in `quality.preset`'s own spelling (`native` \| `1440p` \| `1080p` \| `720p`). from a 4.2.0 streamer it is always the preset's own resolution, because the ladder spends frame rate and never resolution; an older streamer can still report a `1440p`, `1080p` or `720p` rung below its preset. |
 | `rungIndex` | how far down the preset's ladder that rung is. absent means zero, the preset's own rung, which is where a healthy session sits. |
-| `governor` | `ceiling` (at the preset with nothing to answer) \| `holding` (inside the 2 s hold after a cut) \| `climbing` \| `pinned` (at the floor — every further degraded window is answered by the ladder, or by nothing). |
+| `governor` | `ceiling` (at the preset with nothing to answer) \| `holding` (inside the 2 s hold after a cut) \| `climbing` \| `pinned` (at the floor — every further degraded window is answered by a lower frame rate, or by nothing). |
 
 `display` names the output being captured, in the same numbering `hello-host`'s `displays[]` uses.
 
@@ -652,7 +652,9 @@ when the last viewer is gone the streamer lingers about 60 s and exits 0 with `r
 **host behaviour on a lost path.** ice going `disconnected` does not end a viewer. the host asks the viewer for
 an ice restart after 2 s, pauses that viewer's media while the path is down, and asks for a keyframe once it
 is back. a viewer still disconnected 60 s after ice reports the path down (str0m does that 15–25 s after the
-last packet) is let go with `reason: "timeout"`, and a dtls or sctp close ends it at once. the page matches
+last packet) is let go with `reason: "timeout"`, and so is one whose ice is still checking with no working pair
+60 s after checking began (a restart offer that carries no candidates leaves it there for good). a dtls or sctp
+close ends a viewer at once. the page matches
 it: its silence watchdog only judges a live path, and a restart offer's answer is timed only while the page's
 own signalling socket is open. a viewer that is itself offline waits, and a host that stays silent while the
 offer can reach it is given up on 10 s later. the picture comes back with the path; after a long drop the
