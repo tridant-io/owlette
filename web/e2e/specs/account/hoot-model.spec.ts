@@ -49,3 +49,26 @@ test('a stored key keeps working when only the model changes', async ({ page }) 
   expect(stored?.apiKeyEncrypted).toBe(STORED_KEY);
   expect(stored?.provider).toBe('anthropic');
 });
+
+test('the saved key is not offered for showing, and hoot mcp sits under hoot api', async ({ page }) => {
+  await page.goto('/dashboard');
+  await page.getByTestId('user-menu-trigger').click();
+  await page.getByRole('menuitem', { name: /account settings/i }).click();
+  await page.getByRole('button', { name: /^hoot$/i }).first().click();
+
+  await expect(page.getByRole('heading', { name: /^hoot api/ })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'hoot mcp' })).toBeVisible();
+
+  // the stored key never reaches the browser, so there is nothing to show
+  const key = page.locator('#llmApiKey');
+  await expect(key).toHaveAttribute('placeholder', 'a key is saved: paste a new one to replace it');
+  await expect(page.getByRole('button', { name: 'show key' })).toHaveCount(0);
+
+  await key.fill('sk-ant-e2e-typed');
+  await page.getByRole('button', { name: 'show key' }).click();
+  await expect(key).toHaveAttribute('type', 'text');
+
+  await expect(page.getByRole('button', { name: 'copy the Windows command' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'copy the macOS command' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'the hoot mcp guide' })).toHaveAttribute('href', '/docs/agent/hoot-mcp');
+});

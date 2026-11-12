@@ -74,21 +74,29 @@ every alert email ends with **manage alerts**, which opens `/settings/alerts`: t
 
 ## hoot
 
+two ways to use hoot, one under the other: **hoot api** runs it in the dashboard on your own LLM key, and **hoot mcp** lets an AI agent on one of your machines use its tools.
+
+### hoot api
+
 your provider, model and API key for [hoot](/docs/dashboard/hoot). the key is yours, and every hoot feature that runs as you spends it — see [your key](/docs/dashboard/hoot#your-key).
 
 | field | what it takes |
 |---|---|
 | **provider** | **Anthropic (Claude)** or **OpenAI** |
 | **model** | the provider's current models, read live with your saved key; before a key is saved, a built-in list. the default is Claude Sonnet 5 on Anthropic and GPT-4.1 on OpenAI |
-| **api key** | the provider's API key. it is encrypted with AES-256 and never returned to the browser; once one is saved the field shows dots |
+| **api key** | the provider's API key. it is encrypted with AES-256 and never returned to the browser; once one is saved the field says so. the eye button shows a key while you type it, and appears only then |
 
-the section heading shows **connected** once a key is saved. the buttons:
+the **hoot api** heading shows **connected** once a key is saved. the buttons:
 
 - **save key** stores the key you typed, with the model chosen.
 - **save model** appears instead when a key is already saved, the key field is empty and you picked a different model. it changes the model and keeps the stored key, so you do not type the key again.
 - **remove key** deletes the stored key. hoot, and anything it does on your behalf, stops until you save another.
 
 changing the **provider** needs that provider's key: pick it, paste its key, then **save key**.
+
+### hoot mcp
+
+for developers: an AI agent such as Claude Code, running on one of your machines, gets hoot's tools for the other machines in its site, with the machine's pairing as the credential. the section lists the three steps — a site owner or admin turns it on in the admin panel and gives that machine its reach, you add the server to Claude Code with the command shown for Windows or macOS (each with a copy button), and the agent runs `fleet_status` — and links to [hoot mcp](/docs/agent/hoot-mcp), which covers other MCP clients and what each machine may do.
 
 ---
 
