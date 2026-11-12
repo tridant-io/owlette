@@ -9,7 +9,7 @@
  * these stay fast and hermetic.
  */
 
-import { Capability, type Actor } from '@/lib/capabilities';
+import { Capability, hasCapability, type Actor } from '@/lib/capabilities';
 
 interface ShardDoc {
   count: number;
@@ -108,6 +108,7 @@ jest.mock('@/lib/logger', () => ({
 import {
   USER_LIMITS,
   SYSTEM_LIMITS,
+  MACHINE_LIMITS,
   WINDOW_SEC,
   SHARD_COUNT,
   bucketForActor,
@@ -120,6 +121,7 @@ import {
   checkRateLimit,
   pickShardIndex,
   __resetInMemoryBucketsForTests,
+  type Bucket,
 } from '@/lib/rateLimit.server';
 
 const userActor: Actor = {
@@ -158,9 +160,13 @@ const systemActor: Actor = {
   siteId: 'site-1',
 };
 
+function machineActor(machineId: string, siteId = 'site-1'): Actor {
+  return { type: 'machine', siteId, machineId, maxTier: 2, machineIds: null };
+}
+
 function shardPath(
   siteId: string,
-  bucket: 'user' | 'system',
+  bucket: Bucket,
   subjectKey: string,
   capability: Capability,
   shard = '0',
@@ -170,7 +176,7 @@ function shardPath(
 
 function hasRateLimitPath(
   keys: string[],
-  bucket: 'user' | 'system',
+  bucket: Bucket,
   capability: Capability,
 ): boolean {
   return keys.some((key) =>
@@ -723,5 +729,79 @@ describe('checkRateLimit (combined)', () => {
         configuredLimitPerMinute: userLimit,
       },
     });
+  });
+});
+
+describe('the machine bucket (a granted machine on the fleet routes)', () => {
+  const machineA = machineActor('studio-pc-01');
+  const machineB = machineActor('studio-pc-02');
+
+  it('names its own limits for the two capabilities a machine holds, and no others', () => {
+    expect(MACHINE_LIMITS).toEqual({
+      [Capability.MACHINE_EXEC_COMMAND]: { perMinute: 60 },
+      [Capability.MACHINE_VIEW]: { perMinute: 300 },
+    });
+  });
+
+  it('limits every capability a machine can ever hold, from the machine bucket', async () => {
+    // MACHINE_LIMITS is a Partial, so the compiler no longer forces an entry:
+    // an unlisted capability would fail open in checkRateLimit
+    const widest: Actor = { type: 'machine', siteId: 'site-1', machineId: 'm0', maxTier: 3, machineIds: null };
+    const held = Object.values(Capability).filter((cap) => hasCapability(widest, cap, 'site-1', 'm1'));
+    expect(held.length).toBeGreaterThan(0);
+    for (const cap of held) {
+      const limit = MACHINE_LIMITS[cap];
+      expect(limit?.perMinute).toBeGreaterThan(0);
+      expect(await checkRateLimit(widest, cap, 'site-1')).toMatchObject({ ok: true, limit: limit?.perMinute });
+      expect(hasRateLimitPath([...fakeStore.keys()], 'machine', cap)).toBe(true);
+    }
+  });
+
+  it('routes a machine to the machine bucket and names it by machine id', () => {
+    expect(bucketForActor(machineA)).toBe('machine');
+    expect(actorIdentifier(machineA)).toBe('studio-pc-01');
+  });
+
+  it('keys each machine by site and machine id, so a reused hostname on another site is another subject', () => {
+    expect(rateLimitSubjectKey(machineA)).toBe('machine:site-1:studio-pc-01');
+    expect(rateLimitSubjectKey(machineB)).toBe('machine:site-1:studio-pc-02');
+    expect(rateLimitSubjectKey(machineActor('studio-pc-01', 'site-2'))).toBe('machine:site-2:studio-pc-01');
+  });
+
+  it('two machines never share an in-memory bucket, and a machine never drains a user', () => {
+    const limit = MACHINE_LIMITS[Capability.MACHINE_EXEC_COMMAND]!.perMinute;
+    for (let i = 0; i < limit; i++) {
+      expect(checkInMemoryBurst(machineA, Capability.MACHINE_EXEC_COMMAND)).toBe(true);
+    }
+    expect(checkInMemoryBurst(machineA, Capability.MACHINE_EXEC_COMMAND)).toBe(false);
+    expect(checkInMemoryBurst(machineB, Capability.MACHINE_EXEC_COMMAND)).toBe(true);
+    expect(checkInMemoryBurst(machineActor('studio-pc-01', 'site-2'), Capability.MACHINE_EXEC_COMMAND)).toBe(true);
+    expect(checkInMemoryBurst(userActor, Capability.MACHINE_EXEC_COMMAND)).toBe(true);
+  });
+
+  it('counts each machine at its own firestore path under the machine bucket', async () => {
+    await checkRateLimit(machineA, Capability.MACHINE_VIEW, 'site-1');
+    await checkRateLimit(machineB, Capability.MACHINE_VIEW, 'site-1');
+    const keys = [...fakeStore.keys()];
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        shardPath('site-1', 'machine', 'machine:site-1:studio-pc-01', Capability.MACHINE_VIEW),
+        shardPath('site-1', 'machine', 'machine:site-1:studio-pc-02', Capability.MACHINE_VIEW),
+      ]),
+    );
+    expect(hasRateLimitPath(keys, 'user', Capability.MACHINE_VIEW)).toBe(false);
+    expect(hasRateLimitPath(keys, 'system', Capability.MACHINE_VIEW)).toBe(false);
+  });
+
+  it('refuses a machine past its own limit while another machine passes', async () => {
+    const limit = MACHINE_LIMITS[Capability.MACHINE_EXEC_COMMAND]!.perMinute;
+    fakeStore.set(shardPath('site-1', 'machine', rateLimitSubjectKey(machineA), Capability.MACHINE_EXEC_COMMAND), {
+      count: limit,
+      windowStart: Math.floor(Date.now() / 1000),
+    });
+    const refused = await checkRateLimit(machineA, Capability.MACHINE_EXEC_COMMAND, 'site-1');
+    expect(refused).toMatchObject({ ok: false, reason: 'rate_limited', limit });
+    const passed = await checkRateLimit(machineB, Capability.MACHINE_EXEC_COMMAND, 'site-1');
+    expect(passed).toMatchObject({ ok: true, limit });
   });
 });

@@ -106,8 +106,9 @@ export type SiteIdSource = 'path' | 'query';
  * their own fleet — it fails towards availability. Handing every site member
  * live control of a machine's keyboard, or its screen and system audio, is the
  * wrong direction to fail in, so swoop's capabilities keep running
- * `hasCapability` while the switch is off. Everything else still bypasses and
- * still records `enforcement_bypassed` in its allow audit.
+ * `hasCapability` while the switch is off, as FLEET_SETTINGS_MANAGE does for a
+ * reason of its own (below). Everything else still bypasses and still records
+ * `enforcement_bypassed` in its allow audit.
  *
  * SWOOP_SETTINGS_MANAGE is in here for the same reason as the two it guards,
  * not as an afterthought: a member holds MACHINE_REMOTE_VIEW on merit, so if
@@ -119,11 +120,19 @@ export type SiteIdSource = 'path' | 'query';
  * MACHINE_CONFIG_WRITE, which cannot join this set: it gates process,
  * schedule, display and reboot config across the fleet, which is exactly what
  * the kill switch exists to keep reachable.
+ *
+ * FLEET_SETTINGS_MANAGE is not about the window itself: while the switch is off
+ * a member can already run commands through the bypass. It is that a grant
+ * written in the window outlives it: once enforcement is back, the machine it
+ * named still holds commands over the machines it names (ADR 0017) until a site
+ * admin removes the grant. Time-boxed break-glass, permanent grant.
  */
 export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   Capability.MACHINE_REMOTE_CONTROL,
   Capability.MACHINE_REMOTE_VIEW,
   Capability.SWOOP_SETTINGS_MANAGE,
+  // a grant written while the switch is off outlives the window (above)
+  Capability.FLEET_SETTINGS_MANAGE,
 ]);
 
 /**
@@ -454,6 +463,7 @@ const PLATFORM_TARGET_ID = '__platform__';
 
 function auditActorRoleLabel(actor: AuditEntryInput['actor']): string {
   if (actor.type === 'system') return `system:${actor.name}`;
+  if (actor.type === 'machine') return 'machine';
   return actor.apiKeyId ? `api-key:${actor.role}` : actor.role;
 }
 

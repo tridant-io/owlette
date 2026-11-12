@@ -145,6 +145,7 @@ def _service_double(hoot_pid=None):
     calls = []
     double = SimpleNamespace(
         _stop_swoop=lambda: calls.append('stop_swoop'),
+        fleet_session=SimpleNamespace(withdraw=lambda: calls.append('withdraw_fleet_session')),
         _is_cortex_alive=lambda: hoot_pid is not None,
         cortex_pid=hoot_pid,
     )
@@ -152,7 +153,7 @@ def _service_double(hoot_pid=None):
     return double, calls
 
 
-def test_service_unpair_detaches_then_ends_swoop():
+def test_service_unpair_detaches_then_ends_swoop_and_the_fleet_session():
     double, calls = _service_double()
 
     with patch('owlette_service.configure_site.unpair',
@@ -161,8 +162,11 @@ def test_service_unpair_detaches_then_ends_swoop():
 
     detach.assert_called_once_with('the agent token was revoked')
     # the site is left first: a swoop kill that raised must not keep a
-    # revoked machine paired
-    assert calls == [('unpair', 'the agent token was revoked'), 'stop_swoop']
+    # revoked machine paired. the fleet session file is this machine's leave
+    # to act on the site's other machines, so it goes too.
+    assert calls == [
+        ('unpair', 'the agent token was revoked'), 'stop_swoop', 'withdraw_fleet_session',
+    ]
 
 
 def test_service_unpair_ends_a_running_hoot():

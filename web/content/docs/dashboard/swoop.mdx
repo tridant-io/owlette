@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "swoop settings", "turn on swoop", "swoop switch", "live sessions", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers"]
+keywords: ["remote control", "remote desktop", "screen sharing", "swoop settings", "turn on swoop", "swoop switch", "live sessions", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers", "blurry text", "jagged text", "pixelated", "sharp", "scaling", "smooth scaling", "display scaling", "dpi"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -104,9 +104,9 @@ the toolbar carries the session state, an **end** button, and:
 - **back to dashboard**: the arrow at the start of the bar, there in every state. leaving the page ends your session. in owlette swoop it is **back to machines** and leads to the machine picker
 - **capture the mouse in fullscreen**: off unless you turn it on, and remembered by this browser. fullscreen leaves your mouse free, so the pointer moves the moment you do, as it does in a window; turn this on for a game or a 3D view that turns with the mouse, which needs the raw movement only a captured mouse gives. captured, the pointer you see is the machine's, so on a slow connection it lags. press `esc` to let the mouse go, and click the picture to capture it again. not in owlette swoop on a Mac, which never captures the mouse
 - **fullscreen with keyboard capture**: takes `alt+tab`, `ctrl+w` and the rest, which a remote desktop needs. hold `esc` for two seconds to get out; a session that ends or fails for good also lets go of fullscreen. a browser without keyboard lock keeps its own shortcuts, and the toolbar says so. what owlette swoop captures is [below](#fullscreen-and-the-keyboard)
-- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab or window
+- **latency stats**: an overlay, off by default because it covers the picture. its codec row shows what the picture is arriving in, and **frozen pictures** how often the picture [froze](#when-the-picture-freezes) in this tab or window. **shown at** is the picture's size on your screen against the machine's own pixels, zoom included: 100% is one for one. **scaling** says how it is drawn: **exact** on whole pixels of your screen at full size, a half, a third and so on, **smooth** through [smooth scaling](#quality), **standard** with the browser's own filter. while smooth scaling draws, a **smooth scaling** row estimates the time it adds; it is an estimate, and **capture → display** is the picture's own measured figure, without it
 - **display picker**: which of the machine's monitors you are looking at
-- **quality**: see [quality](#quality) below
+- **quality and display**: the sliders icon, **quality** on hover; see [below](#quality)
 - **audio**: off unless you ask for it
 - **special keys**: the combinations your browser, or your own computer, will not let through
 - **bar position**: the bar along the top, down the left or right edge, or **auto**, the default, which puts it wherever the picture comes out bigger in your window and moves it when you resize. a 16:9 picture in a 16:9 window has empty space at its sides, so a side bar gives the picture the height a top bar takes. on a side the machine's name and the people in the session run vertically and the buttons stack at the bottom; a phone keeps the bar on top. the choice is kept in your browser, or in owlette swoop
@@ -139,9 +139,9 @@ on a phone or a tablet, or in any window narrower than a tablet, the bar keeps o
 
 **keyboard** in the menu opens your phone's keyboard, and what you type goes to the machine; while it is up, the picture moves into the space between the bar and the keyboard, in either orientation. a row above it adds **esc**, **tab**, the arrows, and **ctrl**, **alt** and the Windows key (**opt** and **cmd** on a Mac), which stay down for your next key and are lit while they do. you can light more than one, for ctrl+alt and the like; tap a lit one again to let it go, and hiding the keyboard lets them all go. what you type arrives as the keys a US keyboard would press, so on a machine set to a US layout it arrives as you typed it; accented letters and emoji are not sent yet, and the viewer says so when it drops one. on Android the phone buzzes briefly when the magnifier opens and on a right-click.
 
-### quality
+### quality and display [#quality]
 
-the quality menu has one row per setting. it opens once the session has connected, and it sets your view only; other viewers keep their own.
+the **quality and display** menu has one row per setting. it opens once the session has connected, and it sets your view only; other viewers keep their own.
 
 | setting | options | when it applies |
 |---|---|---|
@@ -149,8 +149,19 @@ the quality menu has one row per setting. it opens once the session has connecte
 | resolution | native, 1440p, 1080p, 720p | at once |
 | frame rate | 60 or 30 fps | at once |
 | codec | **auto**, or h264 and, where your browser can decode it in hardware, HEVC (never in owlette swoop on Windows) | at once, by reconnecting; see below |
+| size | **fit** or **sharp** | at once |
+| smooth scaling | on or off | at once |
 
-bandwidth, resolution and frame rate are upper limits: the machine lowers them when the connection needs it. **auto** bandwidth starts a source above 2.5 megapixels, such as a 1440p or 4K-class display, at 80 Mbps, and anything smaller at 20 Mbps. a new session starts back at the defaults: auto, native, 60 fps.
+bandwidth, resolution and frame rate are upper limits: the machine goes below them when the connection needs it. from agent 4.2.0 a slow connection costs frame rate and bitrate and never resolution; an older agent also lowers the resolution, down to 720p, once the frame rate is down. **auto** bandwidth starts a source above 2.5 megapixels, such as a 1440p or 4K-class display, at 80 Mbps, and anything smaller at 20 Mbps. a new session starts back at the defaults: auto, native, 60 fps.
+
+size and smooth scaling only change how the picture is drawn on your screen. they are never sent to the machine, and they stay as you set them in this browser, or in owlette swoop, from one session to the next.
+
+- **size**: **fit** fills the window, and can look soft at any size but full size and half size. a window a little bigger than the machine's screen, or than half of it, shows the picture at exactly that size. **sharp** shows the machine's pixels whole, at full size, a half, a third and so on, the largest that fits, with dark bars around it: the clearest text. a third and smaller need smooth scaling; without it, sharp goes no smaller than a half and fits the window below that
+- **smooth scaling** averages the picture down, so thin text keeps its strokes when the picture is smaller than the machine's screen. it is on by default in Chrome, Edge and other Chromium browsers on a computer, and in owlette swoop on Windows. in Safari, Firefox, owlette swoop on a Mac or Linux, and on a phone it is off, and you can turn it on. turn it off if the picture lags or looks wrong on your computer. it is greyed out, with **not available in this browser** under it, where the browser cannot run it: no WebGL2, or graphics drawn in software, as Chrome and Edge report in a remote desktop session or a virtual machine
+
+### clear text
+
+text is crisp when the latency stats read **shown at** 100% or 50% and **scaling** **exact**: each pixel of your screen is then one of the machine's, or the average of four. **sharp** gets you there at any window size. at any other size, **smooth scaling** keeps small text legible. keep the resolution at **native**: a lower one sends fewer pixels than the machine's screen has, and small text does not survive that. on a fast local network, a higher **bandwidth** keeps a busy screen, a scroll or a video, sharper while it moves. coloured edges on a Windows machine's text are ClearType, which tints the edges of letters for the machine's own screen, meeting a video format that carries colour at half the resolution: turning ClearType off on the machine (**Adjust ClearType text**, in its Start menu) removes them.
 
 the machine settles the codec once, when a session starts: HEVC when your browser offers it and the machine can encode it, otherwise h264. so choosing a codec reconnects: the viewer starts a new session in the same tab or window, without asking for the second factor again. **h264** offers only h264. **HEVC** asks for it first and still gets h264 from a machine that cannot encode it. **auto** lets the machine pick. the choice holds for that machine until the tab or window closes, and the latency stats show the codec in use.
 
@@ -341,6 +352,7 @@ in a mixed fleet, what a session can do depends on the agent of the machine you 
 | win + l locks the machine | 4.1.5 |
 | "you're on this machine" instead of a picture of your own screen | 4.1.6 |
 | host a session on Windows without an NVIDIA GPU | the release after 4.1.8 |
+| keeps its resolution on a slow connection; sharper text on an NVIDIA GPU, where a picture that stops moving also sharpens in about half a second; a cleaner picture when a Windows machine with no GPU, such as a virtual machine, scales its screen down | 4.2.0 |
 
 ---
 

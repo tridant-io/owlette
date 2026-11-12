@@ -3458,6 +3458,26 @@ def fetch_process_id_by_name(name, data):
     process = next((process for process in data['processes'] if process['name'] == name), None)
     return process['id'] if process else None
 
+
+def state_rows_by_process(runtime_state):
+    """The app_states row that speaks for each process, as {process id: (pid, row)}.
+
+    The last row in the file wins: a restart leaves the terminated pid's row there
+    until the next cleanup_stale_tracking_data, ahead of the relaunch's row.
+    The dashboard's metrics and hoot's get_process_list both ask here, so they
+    cannot disagree about which row that is.
+    """
+    rows = {}
+    for pid, row in (runtime_state or {}).items():
+        # "None" keys come from failed launches.
+        try:
+            pid_int = int(pid)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(row, dict) and row.get('id'):
+            rows[row['id']] = (pid_int, row)
+    return rows
+
 # METRICS
 def get_system_info():
     cpu_info = get_cpu_name()
@@ -3577,22 +3597,15 @@ def get_system_metrics_with_config(config=None, skip_gpu=False):
             runtime_state = read_json_from_file(RESULT_FILE_PATH)
 
             if config and 'processes' in config:
-                pid_to_runtime = {}
-                if runtime_state:
-                    for pid, state_info in runtime_state.items():
-                        # "None" keys come from failed launches.
-                        try:
-                            pid_int = int(pid)
-                        except (ValueError, TypeError):
-                            continue
-                        process_id = state_info.get('id')
-                        if process_id:
-                            pid_to_runtime[process_id] = {
-                                'pid': pid_int,
-                                'status': state_info.get('status', 'UNKNOWN'),
-                                'responsive': state_info.get('responsive', True),
-                                'timestamp': state_info.get('timestamp', 0)
-                            }
+                pid_to_runtime = {
+                    process_id: {
+                        'pid': pid,
+                        'status': state_info.get('status', 'UNKNOWN'),
+                        'responsive': state_info.get('responsive', True),
+                        'timestamp': state_info.get('timestamp', 0)
+                    }
+                    for process_id, (pid, state_info) in state_rows_by_process(runtime_state).items()
+                }
 
                 for index, process in enumerate(config['processes']):
                     process_id = process.get('id')

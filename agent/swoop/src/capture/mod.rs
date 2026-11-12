@@ -15,10 +15,16 @@
 //! ```
 //!
 //! Expected on a two-monitor dev box: `frame_from_every_attached_output`
-//! captures a frame from each attached monitor and prints its texture size —
-//! on the 0.8 box 1920x1080 for the landscape panel and 3840x2160 for the
-//! rotate270 4K one, which is the texture size, not the 2160x3840 its mode
-//! reports.
+//! captures a frame from each attached monitor and prints its size — on the
+//! 0.8 box 1920x1080 for the landscape panel and 2160x3840 for the rotate270
+//! 4K one, whose 3840x2160 texture is turned upright.
+//!
+//! # Rotation
+//!
+//! A rotated output's texture is the un-rotated framebuffer. [`Duplication`]
+//! turns its copy upright on the GPU ([`crate::gpu::scale::Downscaler::rotate`])
+//! before handing it out, so every frame and size here is the desktop as it
+//! is displayed, and nothing downstream needs to know the output was turned.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -27,6 +33,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 use crate::cursor::PointerSample;
+#[cfg(windows)]
+use crate::gpu::scale::{Downscaler, ScaleError};
 use crate::gpu::Frame;
 
 // macOS captures through ScreenCaptureKit, behind `platform::macos::CaptureSource`.
@@ -92,8 +100,8 @@ pub trait Source: Send {
 ///
 /// Desktop Duplication hands out three spaces that are easy to confuse and were
 /// measured to be different on the 0.8 box: the texture, output-local
-/// un-rotated coordinates (dirty rects and pointer positions), and the virtual
-/// desktop (`DesktopCoordinates`). They are not interchangeable.
+/// un-rotated coordinates (dirty and move rects), and the virtual desktop
+/// (`DesktopCoordinates`). They are not interchangeable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
     pub left: i32,
@@ -159,13 +167,13 @@ impl Rotation {
         matches!(self, Rotation::Rotate90 | Rotation::Rotate270)
     }
 
-    /// Swap width and height for a rotated output.
+    /// Swap width and height for a rotated output: its texture's size to the
+    /// size it is displayed at.
     ///
     /// `DXGI_OUTDUPL_DESC.ModeDesc` is in rotated desktop orientation while the
     /// texture is not: the 0.8 box's rotate270 output reports a 2160x3840 mode
-    /// and hands back a 3840x2160 texture, so sizing an encoder from the mode
-    /// produces a transposed surface. The swap is its own inverse, so this maps
-    /// either direction.
+    /// and hands back a 3840x2160 texture. The swap is its own inverse, so this
+    /// maps either direction.
     pub fn swap_axes(self, size: (u32, u32)) -> (u32, u32) {
         if self.transposes() {
             (size.1, size.0)
@@ -183,8 +191,8 @@ pub struct OutputInfo {
     pub device_name: String,
     /// Virtual-desktop coordinates, negative in either axis.
     pub desktop_rect: Rect,
-    /// Un-applied. Applying it is the streamer's job (plan.md Task 6.4), not
-    /// this module's.
+    /// As Desktop Duplication reports it. [`Duplication`] applies it, so
+    /// nothing after capture has a rotation to apply.
     pub rotation: Rotation,
 }
 
@@ -441,6 +449,8 @@ struct Live {
     /// duplication in the session behind Desktop Duplication's global lock.
     copy: Option<ID3D11Texture2D>,
     copy_size: (u32, u32),
+    /// A rotated output's copy turned upright, for the copy it was opened on.
+    turn: Option<Downscaler>,
 }
 
 #[cfg(windows)]
@@ -452,6 +462,7 @@ impl Live {
         desc: &D3D11_TEXTURE2D_DESC,
     ) -> windows::core::Result<usize> {
         if self.copy.is_none() || self.copy_size != (desc.Width, desc.Height) {
+            self.turn = None;
             let mut wanted = *desc;
             wanted.MipLevels = 1;
             wanted.ArraySize = 1;
@@ -474,9 +485,25 @@ impl Live {
         unsafe { self.context.CopyResource(dst, src) };
         Ok(dst.as_raw() as usize)
     }
+
+    /// `copy` as the output displays it: a rotated output's turned upright on
+    /// the GPU, at the cost of one blit, once per frame however many tiers
+    /// encode it.
+    fn upright(&mut self, copy: Frame, rotation: Rotation) -> Result<Frame, ScaleError> {
+        if rotation == Rotation::Identity {
+            return Ok(copy);
+        }
+        let mut turn = match self.turn.take() {
+            Some(turn) => turn,
+            None => Downscaler::rotate(&copy, rotation)?,
+        };
+        let frame = turn.scale(&copy)?;
+        self.turn = Some(turn);
+        Ok(frame)
+    }
 }
 
-/// What a duplication was opened at: the texture size and the mode's refresh
+/// What a duplication was opened at: the frame size and the mode's refresh
 /// rate, for the log line every open and rebuild writes.
 #[cfg(windows)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -532,11 +559,11 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, Mode
             let (device, context) = create_device(&adapter)?;
             let dup = duplicate(&output, &device)?;
             let info = output_info(&desc);
-            // `ModeDesc` is in rotated desktop orientation; the texture is not.
-            // Un-rotating it here is what makes `size()` right before the first
-            // frame lands.
+            // `ModeDesc` is in the desktop's orientation, as the frames this
+            // hands out are; the texture is not. Taking it here is what makes
+            // `size()` right before the first frame lands.
             let mode = unsafe { dup.GetDesc() }.ModeDesc;
-            let size = info.rotation.swap_axes((mode.Width, mode.Height));
+            let size = (mode.Width, mode.Height);
             return Ok((
                 Live {
                     device,
@@ -544,6 +571,7 @@ fn open_live(device_name: &str) -> windows::core::Result<(Live, OutputInfo, Mode
                     dup,
                     copy: None,
                     copy_size: (0, 0),
+                    turn: None,
                 },
                 info,
                 Mode {
@@ -734,6 +762,7 @@ impl Duplication {
         observer: &mut dyn FnMut(&PointerSample),
     ) -> anyhow::Result<Step> {
         let Self {
+            output,
             size,
             live,
             recovering,
@@ -743,6 +772,7 @@ impl Duplication {
         let Some(live) = live.as_mut() else {
             return Ok(Step::Lost);
         };
+        let rotation = output.rotation;
 
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource: Option<IDXGIResource> = None;
@@ -792,22 +822,24 @@ impl Duplication {
         let copied = emit.then(|| live.copy_frame(&texture, &desc));
         // Back as early as possible: every duplication in the session is
         // serialised behind Desktop Duplication's lock while a frame is held.
+        // A rotated output's turn reads only the copy, so it comes after.
         let _ = unsafe { live.dup.ReleaseFrame() };
 
         match copied {
             None => Ok(Step::Nothing),
             Some(handle) => {
-                // After the `?`: a failed copy is not a recovery, and the size
-                // it would have reported is the one we could not take.
-                let handle = handle?;
-                *size = (desc.Width, desc.Height);
-                *recovering = None;
-                Ok(Step::Frame(Frame {
-                    handle,
+                // After the `?`s: a failed copy or turn is not a recovery, and
+                // the size it would have reported is the one we could not take.
+                let copy = Frame {
+                    handle: handle?,
                     width: desc.Width,
                     height: desc.Height,
                     captured_qpc: if stale { qpc_now() } else { info.LastPresentTime },
-                }))
+                };
+                let frame = live.upright(copy, rotation)?;
+                *size = (frame.width, frame.height);
+                *recovering = None;
+                Ok(Step::Frame(frame))
             }
         }
     }
@@ -822,8 +854,8 @@ impl Source for Duplication {
         self.next_frame_with(timeout_ms, &mut |_| {})
     }
 
-    /// The acquired texture's size, never the mode's: they differ on a rotated
-    /// output.
+    /// The frame's size: the desktop rect's, a rotated output's texture turned
+    /// upright.
     fn size(&self) -> (u32, u32) {
         self.size
     }
@@ -1083,19 +1115,19 @@ mod tests {
             let Some((width, height)) = captured else {
                 panic!("no frame from {} within 10 s", info.device_name);
             };
-            // The texture, never the transposed mode.
+            // The desktop as displayed, a rotated output's texture upright.
             assert_eq!(source.size(), (width, height));
             assert_eq!(
-                info.rotation.swap_axes((width, height)),
+                (width, height),
                 (
                     info.desktop_rect.width() as u32,
                     info.desktop_rect.height() as u32
                 ),
-                "un-rotated texture does not match the desktop rect"
+                "the frame is not the desktop rect's size"
             );
             assert!(observed >= 1, "the pointer observer never ran");
             println!(
-                "{} texture {width}x{height} rotation={:?} observed={observed} pointer_news={pointer_news}",
+                "{} frame {width}x{height} rotation={:?} observed={observed} pointer_news={pointer_news}",
                 info.device_name, info.rotation
             );
         }

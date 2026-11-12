@@ -6,7 +6,7 @@ keywords: ["install software", "push installer", "remote install", "silent insta
 
 the **deploy** page (`/deployments`) installs software across a site's machines. each deployment is one record with one target per machine, and every target is tracked from queued to installed.
 
-**deployments run on Windows only.** the dashboard lets you pick a Mac or Linux machine as a target, but its agent cannot run the installer: it closes the processes you chose, downloads and checks the file, then fails the target with "Error: No interactive user session available for installation. A user must be logged in." see [platform support](/docs/reference/platform-support#software).
+**deployments run on Windows only.** the dashboard lets you pick a Mac or Linux machine as a target, but its agent cannot run the installer: it downloads and checks the file, then fails the target with "Error: No interactive user session available for installation. A user must be logged in." it closes nothing; an agent older than 4.2.0 closes the processes you chose first. see [platform support](/docs/reference/platform-support#software).
 
 creating, retrying, cancelling, uninstalling and deleting need a site owner or admin.
 
@@ -54,7 +54,9 @@ the dialog computes it for you. once the URL stops changing, owlette's server do
 **close running processes before install** opens two inputs:
 
 - **managed processes**: the processes owlette manages on the machines you selected, so select machines first. a ticked process is closed and kept from relaunching until the install ends, then owlette starts it again
-- **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says
+- **additional process names**: comma-separated executable names. the agent closes only processes owlette manages, so a name that matches no managed process on that machine is skipped, whatever the field's hint says. a managed process closed by name is kept from relaunching until the install ends, like a ticked one; an agent older than 4.2.0 relaunched it within seconds, while the installer ran
+
+the agent closes them last, right before it runs the installer: after the download, the checksum check and the check that someone is logged in. an install that fails any of those closes nothing. an agent older than 4.2.0 closes them first, before the download, so there a failed download or a checksum that does not match has already closed them; owlette starts them again when the install ends.
 
 a warning lists everything that will be closed before you deploy.
 
@@ -95,8 +97,8 @@ the page header counts **total**, **in progress** and **templates**. times follo
 | state | meaning |
 |---|---|
 | `pending` | the install is queued for the agent |
-| `closing_processes` | the agent is closing the processes you chose |
 | `downloading` | the agent is downloading the installer; progress may show |
+| `closing_processes` | the agent is closing the processes you chose, right before the installer runs. an agent older than 4.2.0 does this first, before `downloading` |
 | `installing` | the installer is running; progress may show |
 | `completed` | the installer succeeded, and the verify path exists if one was set. exit code 3010 counts as success and says a reboot is required |
 | `failed` | something stopped it; the error is on the target line |
@@ -121,7 +123,7 @@ on Windows the agent runs the installer with SYSTEM rights in the machine's cons
 
 the agent stops an installer that runs longer than 40 minutes. separately, a scheduled sweeper is meant to fail targets whose agent stops reporting: `pending` after 15 minutes, and `downloading`, `installing` or `uninstalling` after 30, both counted from when the deployment was created, not from the target's last change. it only reaches sites it is already sweeping, so do not count on it: a target whose agent never reports back can stay in its state.
 
-each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments).
+each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments), or `deployment_cancelled` when a cancel stopped the install on the machine.
 
 ---
 
@@ -145,7 +147,16 @@ a retry does not carry the deployment's active-hours reason over: it asks its ow
 
 the × on a target that is `pending`, `closing_processes` or `downloading` cancels **that machine only**, and asks for no confirm. the other machines in the deployment carry on. the target is marked `cancelled` at once.
 
-a cancel only stops an install the agent has not picked up: the queued install is removed, and the machine never runs it. an install the agent has picked up, which by then usually shows `closing_processes` or `downloading`, is marked `cancelled` too, but the agent carries on with it: it has closed, or is closing, the processes you chose. when it reports, the line shows that install's result, `completed` or `failed`.
+what the cancel does on the machine depends on how far the install has got:
+
+- **still waiting**, on the server or behind another install on the machine: it never starts. nothing is downloaded, closed or installed
+- **downloading**: the download stops, and what was fetched is deleted. nothing is closed or installed
+- **closing processes**: the installer does not run, and owlette starts the closed processes again
+- **the installer is already running**, because the cancel reached the machine a moment late: it is left to finish, since an installer ended part-way can leave the machine without the program. the line then shows that install's result, `completed` or `failed`
+
+the first three write `deployment_cancelled` to [activity logs](/docs/dashboard/activity-logs#deployments), unless the install was removed before the machine picked it up.
+
+an agent older than 4.2.0 only skips an install it has not picked up, and an online machine picks one up within seconds. after that it carries on to the end although the target says `cancelled`, closing the processes you chose on the way, and the line then shows that install's result.
 
 a target that is `installing` or finished cannot be cancelled, and has no ×. a machine that started installing while the click was on its way is not cancelled: the server refuses with `409 no_cancellable_targets`, and the page says the machine has already started installing or finished.
 

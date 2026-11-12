@@ -9,6 +9,9 @@ the agent mirrors changes (today the keep-screens-awake switch in
 refresh already make, so that projection stays the one place the agent learns
 its site's settings. A machine that was offline catches up on reconnect.
 
+The same command tells the fleet session keeper (`fleet_session.py`) to ask
+again: the server sends it to a machine it has just granted.
+
 The type is on the fast command lane (`firebase_client._FAST_COMMAND_TYPES`), so
 the handler hands the round trip to a daemon thread and returns at once.
 Single-flight: one fetch at a time, and any requests that land during a fetch
@@ -43,6 +46,10 @@ def register_handlers(router: CommandRouter) -> None:
 def handle_site_settings_refresh(cmd_data: dict, cmd_id: str, service: Any) -> str:
     """start a re-read of the site projection on its own thread. returns immediately."""
     global _running, _again
+    # the fleet grant is a site setting too: the keeper asks again on its next tick
+    keeper = getattr(service, 'fleet_session', None)
+    if keeper is not None:
+        keeper.request_refresh()
     client = getattr(service, 'firebase_client', None)
     if client is None:
         return "Error: firebase client unavailable; cannot refresh site settings"

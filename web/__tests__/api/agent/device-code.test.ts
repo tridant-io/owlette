@@ -71,6 +71,11 @@ jest.mock('@/lib/membership.server', () => ({
   pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
 }));
 
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
+}));
+
 const mockDocGet = jest.fn();
 const mockDocSet = jest.fn();
 const mockWhereGet = jest.fn();
@@ -434,8 +439,9 @@ describe('POST /api/agent/auth/device-code/poll', () => {
       { pairedAt: 'SERVER_TIMESTAMP' },
       { merge: true },
     ]);
-    // a machine new to the site leaves every machine scope
+    // a machine new to the site leaves every machine scope, and the fleet grant
     expect(mockPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: host });
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-1', machineId: host });
     expect(mockTransactionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         collectionPath: 'device_codes',

@@ -1,24 +1,13 @@
 /**
- * the local zoom's arithmetic in `lib/swoop/zoom.ts`: the letterbox, the
- * clamps that keep the picture over the stage, and a pinch anchored under the
- * fingers.
+ * the local zoom's arithmetic in `lib/swoop/zoom.ts`: the clamps that keep the
+ * picture over the stage, and a pinch anchored under the fingers.
  */
 
-import { NO_ZOOM, ZOOM_MAX, clampZoom, fitBox, pinchZoom, zoomTransform } from '@/lib/swoop/zoom';
+import { NO_ZOOM, ZOOM_MAX, clampZoom, pinchZoom, zoomTransform } from '@/lib/swoop/zoom';
 
-// a 16:9 machine in a 400x400 stage: letterboxed top and bottom
+// a 16:9 machine in a 400x400 stage, laid out with bars top and bottom
 const STAGE = { width: 400, height: 400 };
-const PICTURE = fitBox(STAGE, { width: 1920, height: 1080 });
-
-describe('fitBox', () => {
-  it('letterboxes a wide frame into a square element', () => {
-    expect(PICTURE).toEqual({ left: 0, top: 87.5, width: 400, height: 225 });
-  });
-
-  it('is the whole element before the first frame', () => {
-    expect(fitBox(STAGE, { width: 0, height: 0 })).toEqual({ left: 0, top: 0, width: 400, height: 400 });
-  });
-});
+const PICTURE = { left: 0, top: 87.5, width: 400, height: 225 };
 
 describe('clampZoom', () => {
   it('is no zoom at all at 1, whatever the pan said', () => {

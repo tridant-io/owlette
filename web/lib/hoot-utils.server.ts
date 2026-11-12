@@ -10,6 +10,7 @@ import { resolveSiteAccess, standingOf } from '@/lib/sitePolicy.server';
 import {
   ACTIVE_HOURS_OVERRIDE_PARAMS,
   EXISTING_COMMAND_MAPPINGS,
+  declaredParams,
   takesActiveHoursOverride,
   withoutActiveHoursOverride,
   type McpToolDefinition,
@@ -18,6 +19,7 @@ import {
 import { canonicalJson } from '@/lib/auditLogVerify';
 import { sanitizeForLog } from '@/lib/logSanitize';
 import type { LlmConfig } from '@/lib/llm';
+import { machineAuditActor } from '@/lib/actions/auditActor.server';
 import { createProcess, ActionInputError, type ActionContext } from '@/lib/actions/createProcess.server';
 import { updateProcess } from '@/lib/actions/updateProcess.server';
 import { deleteProcess } from '@/lib/actions/deleteProcess.server';
@@ -34,6 +36,7 @@ import {
   hasCapability,
   siteStanding,
   type Actor,
+  type MachineActor,
   type MemberStanding,
   type Role,
   type SystemActorName,
@@ -87,6 +90,18 @@ export const SITE_WIDE_SERVER_TOOLS: ReadonlySet<string> = new Set([
   'create_talon',
   'list_talons',
   'set_talon_enabled',
+]);
+
+/**
+ * tools that leave something standing in a person's name: a talon has an
+ * author, and a follow-up fires later as its chat's owner. a turn a granted
+ * machine started (ADR 0017) is never offered them.
+ */
+export const PERSON_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  'create_talon',
+  'set_talon_enabled',
+  'schedule_followup',
+  'cancel_followup',
 ]);
 
 export const COMMAND_POLL_INTERVAL_MS = 1500;
@@ -166,6 +181,11 @@ export interface BuildExecutableToolsOptions {
   /** Unattended attribution for the autonomous Hoot path (no session). Wins over
    *  userId/userRole so the audit row reads `system:<name>`, not a phantom user. */
   systemActor?: SystemActorName;
+  /** A granted machine is who asks (ADR 0017): its own call for a server-side
+   *  tool, or a hoot turn it started on `userId`'s key. Wins over userId/userRole
+   *  so the action runs, and its audit row reads, as `machine:<id>`; `systemActor`
+   *  wins over it. */
+  machineActor?: MachineActor;
   /** Chat this tool loop belongs to; defaulted from the positional `chatId` so
    *  server-side tools can stamp provenance (talon `createdVia` + `chatId`). */
   chatId?: string;
@@ -250,6 +270,14 @@ function actionContextForHoot(
       siteId,
       actor: { type: 'system', name: options.systemActor, siteId },
       auditActor: `system:${options.systemActor}`,
+    };
+  }
+
+  if (options.machineActor) {
+    return {
+      siteId,
+      actor: options.machineActor,
+      auditActor: machineAuditActor(options.machineActor.machineId),
     };
   }
 
@@ -1606,8 +1634,9 @@ async function executeAddProcessTool(
       const result = await createProcess(
         actionContextForHoot(siteId, options),
         {
-          machineId,
           ...params,
+          // last, so the tool's input can never name another machine
+          machineId,
         } as Parameters<typeof createProcess>[1],
       );
       return {
@@ -2102,7 +2131,12 @@ function toolRefusal(error: string, detail: string, status: number): ProcessTool
 
 /** A person drives this turn from a dashboard chat, so an override can go to their approval card. */
 function personCanApproveOverride(options: BuildExecutableToolsOptions): boolean {
-  return options.allowActiveHoursOverride === true && !options.systemActor && !!options.userId;
+  return (
+    options.allowActiveHoursOverride === true &&
+    !options.systemActor &&
+    !options.machineActor &&
+    !!options.userId
+  );
 }
 
 /**
@@ -2253,6 +2287,7 @@ export function buildExecutableTools(
   for (const def of toolDefs) {
     const toolName = def.name;
     if (scoped && SITE_WIDE_SERVER_TOOLS.has(toolName)) continue;
+    if (options.machineActor && PERSON_ONLY_TOOLS.has(toolName)) continue;
     const tierGate = def.tier >= 3 && options.requireTier3Approval !== false;
     const takesOverride = takesActiveHoursOverride(def);
     const offered = offerOverride ? def : withoutActiveHoursOverride(def);
@@ -2325,6 +2360,10 @@ export function buildExecutableTools(
           toolParams = grant.input;
           envelope = grant.envelope;
         }
+        // a machine's task reaches the tools as the model's words, so as in the
+        // machine's own calls a tool gets the parameters it declares and no
+        // others. after the refusals above, which read what the model sent.
+        if (options.machineActor) toolParams = declaredParams(offered, toolParams);
 
         // Run on the web server: no agent relay, so toolCallbacks never fire.
         if (SERVER_SIDE_TOOLS.has(toolName)) {

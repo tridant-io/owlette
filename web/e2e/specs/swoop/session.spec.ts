@@ -362,17 +362,18 @@ test.describe('the viewer page', () => {
 
     // the quality menu is one row per axis with what is chosen; the options
     // sit a level down.
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     const quality = page.getByRole('menu');
     await expect(quality.getByRole('menuitem')).toHaveText([
       /^bandwidth\s*auto$/,
       /^resolution\s*native$/,
       /^frame rate\s*60 fps$/,
       /^codec\s*auto$/,
+      /^size\s*fit$/,
     ]);
     await quality.getByRole('menuitem', { name: /^bandwidth/ }).click();
     await page.getByRole('menuitemradio', { name: '20 mbps' }).click();
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await expect(page.getByRole('menuitem', { name: /^bandwidth/ })).toHaveText(/^bandwidth\s*20 mbps$/);
     await page.keyboard.press('Escape');
 
@@ -459,7 +460,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByText(/connecting/i).first()).toBeVisible();
 
     // the letterbox follows the page: the night page at night, a neutral grey by day
-    const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+    const stage = page.getByTestId('swoop-stage');
     const background = (target: Locator) => target.evaluate((node) => getComputedStyle(node).backgroundColor);
     expect(await background(stage)).toBe(await background(page.locator('body')));
     await page.emulateMedia({ colorScheme: 'light' });
@@ -508,7 +509,7 @@ test.describe('the viewer page', () => {
     await expect.poll(async () => (await offers()).length).toBe(1);
     expect(videoCodecs((await offers())[0])).toContain('vp8');
 
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await page.getByRole('menuitem', { name: /^codec/ }).click();
     await expect(page.getByText('reconnects to apply.')).toBeVisible();
     const second = page.waitForResponse(minted, { timeout: 45_000 });
@@ -523,7 +524,7 @@ test.describe('the viewer page', () => {
 
     const stored = await page.evaluate((key) => sessionStorage.getItem(key), `owlette.swoop.codec/${SITE_ID}/${CODEC_ID}`);
     expect(stored).toBe('h264');
-    await page.getByRole('button', { name: 'quality ceiling' }).click();
+    await page.getByRole('button', { name: 'quality and display' }).click();
     await expect(page.getByRole('menuitem', { name: /^codec/ })).toHaveText(/^codec\s*h264$/);
     await page.keyboard.press('Escape');
     // replaced, not ended: a DELETE would void the tab's continuity.
@@ -1011,7 +1012,7 @@ test.describe('through a host, inside owlette swoop', () => {
       await expectHostPicture(page);
 
       // a picture, and no word from the host on its pointer yet: the local one is the only one.
-      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      const stage = page.getByTestId('swoop-stage');
       const drawn = page.getByTestId('machine-cursor');
       await expect(stage).not.toHaveCSS('cursor', 'none');
       await expect(drawn).toHaveCount(0);
@@ -1081,21 +1082,23 @@ test.describe('through a host, inside owlette swoop', () => {
       await expectHostPicture(page);
 
       const bar = page.getByTestId('session-bar');
-      const stage = page.locator('video[aria-label="remote screen"]').locator('..');
+      const stage = page.getByTestId('swoop-stage');
+      const video = page.locator('video[aria-label="remote screen"]');
+      const size = async (target: Locator) => {
+        const box = (await target.boundingBox())!;
+        return [box.width, box.height];
+      };
       // desktop/viewer/src/windows.rs: MAIN_SIZE, where the first session opens, and SWOOP_SIZE
       for (const [width, height] of [
         [1120, 678],
         [1280, 768],
       ]) {
         await page.setViewportSize({ width, height });
-        // one row of bar, and under it a stage the host's 640x360 fills with no bars
+        // one row of bar, and under it a stage the host's 640x360 fills with no bars: the
+        // video's own box is the picture's, so it fills the window, not just its element
         await expect.poll(async () => (await bar.boundingBox())?.height).toBe(48);
-        await expect
-          .poll(async () => {
-            const box = (await stage.boundingBox())!;
-            return box.width * 9 === box.height * 16 ? [box.width, box.height] : null;
-          })
-          .toEqual([width, height - 48]);
+        await expect.poll(() => size(stage)).toEqual([width, height - 48]);
+        await expect.poll(() => size(video)).toEqual([width, height - 48]);
       }
     } finally {
       await host.stop();
@@ -1314,7 +1317,7 @@ test.describe('through a host, on a phone', () => {
       };
       await expect.poll(async () => (await rowEdges()).bottom).toBe(844 - keyboardPx);
       const rowTop = (await rowEdges()).top;
-      // object-contain centres the picture in the video's box, so its centre is the box's
+      // the video's box is the picture's, laid out in the middle of the area
       const pictureCentre = () =>
         video.evaluate((node) => {
           const box = node.getBoundingClientRect();

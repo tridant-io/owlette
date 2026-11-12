@@ -29,7 +29,7 @@ export type AdminMinRole = 'admin' | 'superadmin';
  * The sidebar's sections, in the order they are shown. A feature with settings
  * of its own gets a section after fleet (owner, 2026-11-11).
  */
-export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'swoop', 'configuration', 'support'] as const;
+export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'swoop', 'hoot', 'configuration', 'support'] as const;
 export type AdminNavGroup = (typeof ADMIN_NAV_GROUPS)[number];
 
 export interface AdminNavItem {
@@ -91,6 +91,14 @@ const NAV_ITEMS: AdminNavItem[] = [
     description: 'turn swoop on or off for a site',
     minRole: 'admin',
     group: 'swoop',
+  },
+  {
+    name: 'settings',
+    href: '/admin/hoot',
+    icon: SlidersHorizontal,
+    description: 'which machines may act on others through hoot',
+    minRole: 'admin',
+    group: 'hoot',
   },
   {
     name: 'alerts',

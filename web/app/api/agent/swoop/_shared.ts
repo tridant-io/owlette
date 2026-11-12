@@ -15,18 +15,14 @@
 
 import type { NextRequest, NextResponse } from 'next/server';
 import { requireMachineAuthAndScope } from '@/app/api/_shared';
+import { agentClaims, type AgentPrincipal } from '@/lib/agentAuth.server';
 import { problemNotFound } from '@/lib/apiErrors';
 import type { ApiKeyPermission } from '@/lib/apiKeyTypes';
-import { getAdminAuth } from '@/lib/firebase-admin';
 
 /** PROTOCOL.md §8's `site` / `machine` / `sid` shape. */
 export const SWOOP_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 
-export interface SwoopAgentPrincipal {
-  siteId: string;
-  machineId: string;
-  userId: string;
-}
+export type SwoopAgentPrincipal = AgentPrincipal;
 
 export type SwoopAgentAuth =
   | { ok: true; agent: SwoopAgentPrincipal }
@@ -36,21 +32,6 @@ export type SwoopAgentAuth =
  * learns nothing about whether the machine exists. */
 function notFound(): { ok: false; response: NextResponse } {
   return { ok: false, response: problemNotFound('site not found or no access') };
-}
-
-/** The bearer's claims, but only for a verified `role=agent` id token. */
-async function agentClaims(req: NextRequest): Promise<SwoopAgentPrincipal | null> {
-  const bearer = (req.headers.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
-  // `owk_` is an api key — a user credential, never an agent principal.
-  if (!bearer || bearer[1].startsWith('owk_')) return null;
-  try {
-    const decoded = await getAdminAuth().verifyIdToken(bearer[1]);
-    if (decoded.role !== 'agent') return null;
-    if (typeof decoded.site_id !== 'string' || typeof decoded.machine_id !== 'string') return null;
-    return { siteId: decoded.site_id, machineId: decoded.machine_id, userId: decoded.uid };
-  } catch {
-    return null;
-  }
 }
 
 /**

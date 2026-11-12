@@ -34,7 +34,7 @@ live CPU, memory, disk, GPU, temperature and network metrics, with history and s
 add an app, a script or a TouchDesigner project from the dashboard or by dropping it on the desktop app. each process is off, always on, or on a weekly schedule; owlette relaunches it when it crashes (or, on Windows, stops responding) and restarts the machine when relaunching is not enough.
 
 **swoop: remote desktop**
-a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs a membership that reaches the machine; control needs a swoop mode of control there (site owners and admins have it unless set otherwise) and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS.
+a machine's screen, live in the browser, with keyboard, mouse and clipboard. watching needs a membership that reaches the machine; control needs a swoop mode of control there (site owners and admins have it unless set otherwise) and a fresh second factor. off until a site turns it on, every session leased and audited, and an API key can never start one. runs on Windows and macOS. small text stays legible at any window size: the picture lands on whole pixels of your screen, **sharp** shows the machine's pixels whole, and smooth scaling averages it down at any other size.
 
 **remote deployment**
 push software silently to any number of Windows machines: NSIS, Inno Setup, MSI, and custom installers. save deployment templates, track progress in real time, and cancel mid-install. the agent itself updates remotely on all three platforms.
@@ -43,7 +43,7 @@ push software silently to any number of Windows machines: NSIS, Inno Setup, MSI,
 drag a project folder onto the dashboard and it syncs to your fleet. files are split into 4 MiB content-addressed chunks, hashed in the browser, and uploaded once; re-deploys and machines that already hold a chunk skip it. every deploy is an immutable version you can roll back to in one click, and agents verify every chunk by SHA-256 before assembling files atomically into an allowlisted destination.
 
 **hoot: ai assistant**
-LLM-powered fleet management in natural language. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, shareable conversations, and Anthropic and OpenAI providers.
+LLM-powered fleet management in natural language. hoot runs tools on the machines you point it at, in three tiers from read-only diagnostics to privileged operations that wait for your approval. screenshot analysis, autonomous crash investigation, shareable conversations, and Anthropic and OpenAI providers. with hoot mcp, an AI agent running on one of your machines gets the same tools on the others, and the machine's pairing is the credential: no API key.
 
 **talons: automations**
 site-scoped automations: a trigger (a schedule, a machine or process event, a metric threshold), an optional condition, and one or more outputs. hoot can write them for you, and every run is recorded.
@@ -183,6 +183,7 @@ full documentation is available at **[owlette.app/docs](https://owlette.app/docs
 - [remote deployment](https://owlette.app/docs/dashboard/deployments): silent software installation across machines
 - [roost](https://owlette.app/docs/dashboard/roost): content-addressed project sync, versions, rollback
 - [hoot](https://owlette.app/docs/dashboard/hoot) and its [tools](https://owlette.app/docs/reference/hoot-tools): the AI assistant
+- [hoot mcp](https://owlette.app/docs/agent/hoot-mcp): hoot's tools for an AI agent on your machines
 - [talons](https://owlette.app/docs/dashboard/talons): automations
 - [API reference](https://owlette.app/docs/api) and [CLI](https://owlette.app/docs/cli/overview)
 - [architecture](https://owlette.app/docs/architecture): system design and data flow

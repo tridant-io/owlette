@@ -220,7 +220,7 @@ The idle WebSocket each agent holds to the swoop signalling worker, through whic
 _Avoid_: signalling socket, push channel
 
 **Quality ladder**:
-The streamer's ordered frame-rate and resolution caps below the viewer's chosen preset. A rung is one step on it, and a healthy session sits on the preset's own rung.
+The streamer's ordered frame-rate caps below the viewer's chosen preset. From 4.2.0 resolution is the viewer's alone; older streamers also step resolution down after the frame rate. A rung is one step on it, and a healthy session sits on the preset's own rung.
 _Avoid_: bitrate tiers
 
 **Encoder tier**:
@@ -240,6 +240,18 @@ _Avoid_: permission level
 **Local hoot**:
 hoot's model loop running on the agent itself through the Claude CLI, close to the machine and outside the web server's approval gate. Only the public conversations API reaches it.
 _Avoid_: agent hoot, offline hoot
+
+**hoot mcp**:
+hoot's tools offered to an AI agent on a paired machine, through the MCP server the owlette agent ships (`fleet_mcp.py`). The machine's pairing is the credential, and a site owner or site admin says per machine how far it goes and on which machines.
+_Avoid_: relay (that is swoop's TURN relay), local hoot, fleet mcp (the working name, kept only in file, route and collection names)
+
+**Sender**:
+A machine a site owner or site admin has allowed to act on other machines of its site through hoot mcp, up to a tool tier and on chosen machines or the whole site.
+_Avoid_: controller, master
+
+**Fleet session**:
+The 15-minute credential the server gives a sender's agent for its pairing, good on the `/api/agent/fleet/*` routes only. The agent keeps it in a file the signed-in user can read.
+_Avoid_: fleet token, agent token (a different credential)
 
 **hoot CLI pin**:
 The per-platform Firestore document (`installer_metadata/cortex_cli_<osFamily>_<arch>`) naming the Claude CLI build and SHA-256 that local hoot downloads. `scripts/upload-cortex-cli.mjs` refreshes it.

@@ -10,6 +10,137 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### changed — swoop's text stays clear at any window size
+
+Small text on a machine shown smaller than its own screen could look
+stair-stepped in swoop, because browsers shrink video with a filter that drops
+parts of thin strokes. The picture now lands on whole pixels of your screen, and
+a window a little bigger than the machine's screen, or than half of it, shows it
+at exactly full size or half size, where text is crisp. The quality menu gains
+two settings for how the picture is drawn on your screen. Its **size** row
+offers **sharp**: the largest of full size, a half, a third and so on that fits
+the window, for the clearest text (a third and smaller need smooth scaling). Its
+**smooth scaling** setting averages the picture down at any other size, so thin
+text keeps its strokes. It is on by default in Chrome, Edge and other Chromium
+browsers on a computer, and in owlette swoop on Windows; elsewhere it is off and
+you can turn it on, and wherever the picture lags or looks wrong you can turn it
+off. Both are kept in this browser and never sent to the machine. The latency
+stats add **shown at**, the picture's size against the machine's own pixels,
+**scaling**, how it is drawn, and, while smooth scaling draws, an estimate of
+the time it adds. Nothing to update on the machine: reload the swoop page.
+
+### changed — swoop keeps the machine's resolution on a slow connection
+
+On a connection that could not keep up, the machine lowered swoop's frame rate
+and then its resolution, down to 720p, where a big screen's small text could
+not be read. From agent 4.2.0 a slow connection costs frame rate and bitrate,
+never resolution: the picture keeps the resolution you chose in the quality
+menu, at down to 15 frames a second. When you would rather have smooth motion
+than readable text on a slow connection, pick 1080p or 720p there yourself.
+
+Text is sharper from a machine with an NVIDIA GPU: its encoder runs a slower,
+higher-quality setting, and goes back to its fastest one for the rest of the
+session when the GPU cannot keep up, which the machine's swoop log records. On
+an Intel or AMD GPU the streamer asks the GPU's encoder for balanced quality,
+under the same check. With an NVIDIA GPU a picture that stops moving also
+sharpens in about half a second instead of several: after a scroll or a drag
+ends, the machine sends the still picture again at the session's frame rate for
+half a second, then at the usual two frames a second.
+
+A Windows machine with no GPU, such as a virtual machine, now averages its
+screen when it scales it down, instead of skipping pixels, so thin text keeps
+its strokes. These need the machine's agent updated to 4.2.0; the viewer needs
+nothing.
+
+### fixed — a portrait display streams upright in swoop
+
+A display turned to portrait on a Windows machine reached swoop on its side.
+From agent 4.2.0 the machine turns the picture of a rotated display upright
+before it sends it, and the pointer and taps land where you point on the
+upright picture. A Mac already sent rotated displays upright.
+
+### fixed — swoop lets go of a viewer whose connection never comes back
+
+After a network change, a viewer's browser could ask the machine to restart
+the connection and then never finish. The machine kept that viewer in the
+session for good, so everyone else saw an extra, nameless watch-only viewer.
+From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
+already did for a viewer whose connection dropped.
+
+### fixed — an install queued behind one that ended at once is no longer refused
+
+When an install on a machine ended within five seconds, because it was refused
+or cancelled, the next install waiting for that machine was refused as rate
+limited and failed. Installs already run one at a time, so the limit no longer
+applies to them. A deployment refused inside active hours can also be retried
+with a reason straight away. Takes an agent update.
+
+### fixed — cancelling a deployment stops it on the machine
+
+Cancelling a target the machine had already picked up marked it cancelled while
+the install carried on: the cancel waited in line behind the install it was
+meant to stop. The agent now acts on a cancel at once. An install that is still
+waiting never starts. One that is downloading stops the download and deletes
+what it fetched, with nothing closed and nothing installed. One that is closing
+processes does not run the installer, and the processes start again. Once the
+installer is running it is left to finish, because an installer stopped part-way
+can leave the machine without the program; the target then shows how that
+install ended, and the deployments page says so on the cancel button. Each
+stopped install writes a deployment cancelled row to the activity log, and two
+deployments cancelled one after the other are both stopped. A cancel never
+touches another deployment, a later retry, or a new install of the same
+installer. Takes an agent update.
+
+### changed — a failed download's error names the link without its query string
+
+When an installer or an agent update cannot be downloaded, the error on the
+target and in the activity log now shows the link up to its question mark. Takes
+an agent update.
+
+### fixed — a process closed by name stays closed until the install ends
+
+A managed process closed because its program name was listed, and not because it
+was ticked, started again a few seconds later, while the installer was still
+running. It is now held until the install ends, like a ticked one, and starts
+again then. Other managed processes that run the same program are held with it.
+Takes an agent update.
+
+### fixed — an install closes your apps only when it is ready to run
+
+A deployment closed the processes you chose first, and only then downloaded the
+installer and checked it. A download that failed, a checksum that did not match,
+or a machine with nobody logged in stopped the show and installed nothing. The
+agent now downloads and checks first, and closes the processes last, right
+before it runs the installer. An install with no checksum is refused before
+anything is downloaded. On a Mac or Linux machine, where a deployment cannot
+install, nothing is closed any more. A target now reads downloading, then
+closing processes, then installing, and the show keeps running through the
+download. Takes an agent update.
+
+### added — hoot mcp: an AI agent on one machine can act on the others
+
+An AI agent running on a paired Windows machine (Claude Code, or any MCP client)
+can now use hoot's tools on the other machines of its site. The owlette agent
+on that machine is the MCP server and the machine's pairing is the credential:
+there is no API key and nothing to sign in to. It is off until a site owner or
+admin turns it on, in the admin panel under hoot, and says for each machine how
+far it may go (read, bounded changes or privileged) and on which machines. A
+machine can also hand hoot a task in words and read the answer back; that runs
+on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
+is in the audit log under the machine. Update the machine the AI agent runs on
+to use it; the machines it acts on need no update. The desktop app's menu has
+a new item, connect an ai agent, that shows the command to run. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+
+### changed — hoot's site settings have their own page in the admin panel
+
+The admin panel's sidebar has a hoot section. Its settings page holds the
+switch that makes hoot wait for approval before a privileged (tier 3) tool,
+which used to be the shield button in the hoot chat header, and the new
+settings for machines that act on other machines. The setting itself and its
+default are unchanged: approval is on unless a site owner or admin turns it
+off. Nothing to update on the machine.
+
 ### changed — swoop has its own section in the admin panel
 
 The admin panel's sidebar has a swoop section, after fleet, with two pages: live
@@ -53,6 +184,16 @@ hoot's reply, so later turns treated it as something hoot had said. The error
 now arrives as the stream's error line, which `owlette chat send` and the SDKs
 already report as an error, and nothing is saved for that turn. Nothing to
 update on the machine.
+
+### fixed — hoot sees a restarted process as running
+
+For up to five minutes after a process was restarted, hoot's `get_process_list`
+tool reported it as killed and not running while the dashboard showed it
+running: the tool read the record of the instance that had been stopped, not
+the new one's. A hoot chat, a talon and hoot mcp all read that tool, so each
+could report a healthy process as down. The tool now reads the record the
+dashboard reads, and a launch that failed outright can no longer make the tool
+fail. Takes an agent update.
 
 ### fixed — hoot's deployments install instead of closing the show and failing
 

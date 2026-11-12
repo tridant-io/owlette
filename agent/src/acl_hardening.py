@@ -156,6 +156,13 @@ def _build_specs() -> List['_SpecEntry']:
         (SID_ADMINISTRATORS, _FULL, _NO_INHERIT),
         (CONSOLE_USER, _MODIFY, _NO_INHERIT),
     ]
+    # the fleet session (fleet_session.py): the service writes it, and the
+    # console user's mcp script only ever reads it.
+    console_read_dir = [
+        (SID_SYSTEM, _FULL, _INHERIT),
+        (SID_ADMINISTRATORS, _FULL, _INHERIT),
+        (CONSOLE_USER, _READ_EXECUTE, _INHERIT),
+    ]
 
     entries: List[_SpecEntry] = []
     # payload root
@@ -175,6 +182,9 @@ def _build_specs() -> List['_SpecEntry']:
         entries.append(
             _SpecEntry(os.path.join(_DATA_ROOT, 'ipc', name), console_dir, False)
         )
+    entries.append(
+        _SpecEntry(os.path.join(_DATA_ROOT, 'ipc', 'fleet'), console_read_dir, False)
+    )
     # the pre-migration copy secure_storage keeps across a key-derivation
     # change is a credential store too, and takes the store's aces.
     for name in ('.tokens.enc', '.tokens.enc.v1'):

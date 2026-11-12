@@ -18,28 +18,27 @@
 //! compositor has throttled: all three present as a delay rise, and all three
 //! get the same 20%.
 //!
-//! Task 6.5 added the frame-rate and resolution ladders under that rule. It did
-//! not make any of the paragraph above less true, and the ladder in particular
-//! is not a second controller — see the next section for what it actually
-//! changes, which is less than its name suggests.
+//! Task 6.5 added the quality ladder under that rule. It did not make any of
+//! the paragraph above less true, and it is not a second controller — see the
+//! next section for what it actually changes, which is less than its name
+//! suggests.
 //!
 //! # The ladder does not reduce the rate, and saying so matters
 //!
 //! The encoder is CBR with a one-frame VBV (plan.md D7). Hand a CBR encoder
-//! half the frames and it spends the same budget on bigger ones; hand it a
-//! quarter of the pixels and it spends the same budget on fewer, better ones.
+//! half the frames and it spends the same budget on bigger ones.
 //! **[`Governor::target_bps`] is the only output of this module that changes
 //! how many bits go on the wire.** The rung is a *quality allocation*: once the
 //! rate is pinned at the floor and the path is still degrading, spending that
-//! floor on 15 fps at 720p is watchable where spending it on 60 fps at 4K is
-//! not. That is the whole claim, and it is worth less than a capacity estimate.
+//! floor on 15 frames a second gives each one four times the bits it had at
+//! 60. That is the whole claim, and it is worth less than a capacity estimate.
 //!
-//! So the ladder is deliberately one sequence and not two counters
-//! ([`Ceiling::rungs`]): frame rate first, then resolution, one index walked
-//! down and back up. Two independent axes with two independent triggers is how
-//! a ladder ends up trading fps for pixels and back at 2 Hz forever; a single
-//! monotone index cannot. On top of that a rung moves only after
-//! [`LADDER_DWELL`], and only ever one step per evaluation.
+//! So the ladder is one axis and one index ([`Ceiling::rungs`]): frame rate
+//! only, at the ceiling's own resolution, walked down and back up. Resolution
+//! is never a rung: below native a 4K desktop's small text is unreadable
+//! however clean the motion, and the menu's resolutions are there for a person
+//! who would rather have motion. A rung moves only after [`LADDER_DWELL`], and
+//! only ever one step per evaluation.
 //!
 //! # A rung change is a new encoder, and its first frame is an IDR
 //!
@@ -51,11 +50,15 @@
 //!
 //! What survives from the arm-A design is the only part of it that was ever
 //! about correctness: **never emit a chunk whose references the client cannot
-//! have.** A width or height change is a *new encoder* and not a reconfigure
-//! (`EncoderConfig`, spike 3.7), the capture loop's rebuild path forces an IRAP
-//! out of the new one, and nothing from the old encoder may follow it. The
-//! discipline is the IDR, not a handshake. [`LadderChange::needs_new_encoder`]
-//! is how a caller tells the two cases apart.
+//! have.** Every rung move is a frame-rate move, and that is a *new encoder*
+//! and not a reconfigure: rate control is sized for the rate an encoder was
+//! opened at, so `TierPass::retarget` (`session/mod.rs`) drops the encoder on
+//! any change of width, height or fps and forces an IRAP out of the next one,
+//! and nothing from the old encoder may follow it. The discipline is the IDR,
+//! not a handshake. No congestion move re-plans the encode size, so
+//! [`LadderChange::needs_new_encoder`], which says only whether the size must
+//! be re-planned, is false for every one of them; it is true only when a
+//! preset change ([`Governor::set_ceiling`]) moves the resolution.
 //!
 //! # Why the trigger is timing and never loss
 //!
@@ -139,12 +142,12 @@
 //! [`Governor::take_ladder`] is read straight after `on_report` and answers at
 //! most one change per evaluation. The caller owes it two different things:
 //!
-//! - **Resolution moved** ([`LadderChange::needs_new_encoder`]): re-plan the
-//!   encode size with `scale::plan(source, rung.resolution.narrow(limits))` and
-//!   open a new encoder at it. Its first frame is an IRAP and no frame from the
-//!   old one may follow it. Narrow by the **rung's** cap, not the ceiling's: the
-//!   ceiling is the top rung, so narrowing by it makes a resolution move a
-//!   re-plan that changes nothing. At the top rung the two are the same cap.
+//! - **Resolution moved** ([`LadderChange::needs_new_encoder`]), which only a
+//!   preset change does: re-plan the encode size with
+//!   `scale::plan(source, rung.resolution.narrow(limits))` and open a new
+//!   encoder at it. Its first frame is an IRAP and no frame from the old one
+//!   may follow it. Every rung carries its ceiling's own cap, so the rung's and
+//!   the ceiling's are the same cap.
 //! - **Frame rate moved**: feed the encoder at most [`QualityRung::fps`] frames
 //!   a second, and open a new encoder at that rate: `EncoderConfig::fps` sizes
 //!   rate control, and a constant-bitrate encoder opened at 60 and fed 30
@@ -751,8 +754,8 @@ impl Governor {
     /// At most one rung, in one direction, and never inside [`LADDER_DWELL`].
     ///
     /// Down only once the bitrate is pinned at the floor: until then the rate
-    /// itself is still the answer, and giving up frames or pixels while there
-    /// are bits left to give up costs picture for nothing.
+    /// itself is still the answer, and giving up frames while there are bits
+    /// left to give up costs motion for nothing.
     fn evaluate_ladder(&mut self, now: Instant, degraded: bool) {
         if self
             .rung_moved_at
@@ -1377,32 +1380,20 @@ mod tests {
                     fps: 15,
                     resolution: ResolutionCap::Native
                 },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P720
-                },
             ],
-            "frame rate first, then pixels, one rung at a time"
+            "frame rate only, one rung at a time"
         );
-        assert_eq!(f.governor.stats().ladder_down, 5);
+        assert_eq!(f.governor.stats().ladder_down, 2);
         assert_eq!(f.governor.stats().ladder_up, 0);
-        assert_eq!(f.governor.stats().rung_index, 5);
+        assert_eq!(f.governor.stats().rung_index, 2);
     }
 
-    /// Which changes are a new encoder, which are not. This is the whole of
-    /// what survived arm A's "reconfigure then IDR": a resolution move is a new
-    /// encoder whose first frame is an IRAP, and a frame-rate move is not a
-    /// move the running encoder ever hears about.
+    /// Every rung move is a frame-rate move: a new encoder at the new rate,
+    /// which the tier set carries, and never a new encode size. A preset
+    /// change is the one move that re-plans it, and
+    /// `a_new_preset_restarts_the_ladder_at_its_own_top` pins that half.
     #[test]
-    fn a_resolution_rung_is_a_new_encoder_and_a_frame_rate_rung_is_not() {
+    fn no_congestion_rung_re_plans_the_encode_size() {
         let mut f = Fixture::new();
         let mut changes = f.drive_to_the_floor();
         for _ in 0..40 {
@@ -1414,7 +1405,7 @@ mod tests {
             .iter()
             .map(LadderChange::needs_new_encoder)
             .collect();
-        assert_eq!(rebuilds, vec![false, false, true, true, true]);
+        assert_eq!(rebuilds, vec![false, false]);
     }
 
     #[test]
@@ -1439,7 +1430,7 @@ mod tests {
             f.degraded_window();
         }
         let down = f.governor.stats().ladder_down;
-        assert_eq!(down, 5);
+        assert_eq!(down, 2);
 
         let mut back = Vec::new();
         for _ in 0..400 {
@@ -1452,18 +1443,6 @@ mod tests {
         assert_eq!(
             rungs,
             vec![
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::Native
-                },
                 QualityRung {
                     fps: 30,
                     resolution: ResolutionCap::Native

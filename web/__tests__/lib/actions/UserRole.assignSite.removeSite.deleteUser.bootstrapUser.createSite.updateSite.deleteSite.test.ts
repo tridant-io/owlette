@@ -1004,6 +1004,10 @@ describe('site CRUD actions', () => {
     db.seed('users/bob', { sites: ['site-a'] });
     db.seed('agent_refresh_tokens/tok-1', { siteId: 'site-a', machineId: 'machine-1' });
     db.seed('agent_refresh_tokens/tok-other', { siteId: 'site-other' });
+    db.seed('fleet_sessions/hash-a', { siteId: 'site-a', machineId: 'machine-1' });
+    db.seed('fleet_sessions/hash-other', { siteId: 'site-other', machineId: 'machine-1' });
+    db.seed('fleet_calls/cmd_a', { siteId: 'site-a', callerMachineId: 'machine-1', machineId: 'machine-2' });
+    db.seed('fleet_calls/cmd_other', { siteId: 'site-other', callerMachineId: 'machine-1', machineId: 'machine-2' });
     db.seed('config/site-a/machines/machine-1', { processes: [{ exe_path: 'C:\\show.exe' }] });
     db.seed('config/site-a/schedule_presets/sched-1', { name: 'weekdays' });
     db.seed('config/site-other/machines/machine-9', { processes: [] });
@@ -1011,6 +1015,16 @@ describe('site CRUD actions', () => {
     const result = await deleteSite(ctx, { siteId: 'site-a', db: db.asFirestore() });
 
     expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+    // fleet sessions and call records (ADR 0017) live outside the site document,
+    // so the cascade has to name them. only this site's go.
+    expect(db.docs.get('fleet_sessions/hash-a')).toBeNull();
+    expect(db.docs.get('fleet_sessions/hash-other')).toEqual({ siteId: 'site-other', machineId: 'machine-1' });
+    expect(db.docs.get('fleet_calls/cmd_a')).toBeNull();
+    expect(db.docs.get('fleet_calls/cmd_other')).toEqual({
+      siteId: 'site-other',
+      callerMachineId: 'machine-1',
+      machineId: 'machine-2',
+    });
     expect(db.docs.get('sites/site-a')).toBeNull();
     // process configs and presets live under config/{siteId}, outside the site doc,
     // and are customer data too; another site's are untouched.

@@ -86,8 +86,7 @@ const barAt = (page: Page, position: 'top' | 'left' | 'right') =>
  * evaluate carries a user gesture in chromium, as the button's click would.
  */
 const stageFullscreen = (page: Page) =>
-  page.locator('video[aria-label="remote screen"]').evaluate(async (video) => {
-    const stage = video.parentElement!;
+  page.getByTestId('swoop-stage').evaluate(async (stage) => {
     await stage.requestFullscreen();
     return document.fullscreenElement === stage;
   });

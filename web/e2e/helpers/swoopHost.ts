@@ -19,6 +19,13 @@
  * `swoop-control` carries in section 11's order with `fp` against the offer,
  * and on a queued `swoop_kill` says `bye` with reason `kill` and stops.
  *
+ * the picture is 640x360 unless a spec passes `start` another `size`. above
+ * that the sender may spend 8 Mbps and keeps its resolution, so chrome's
+ * encoder never shrinks the frame a spec measures (`waitForFrameSize`). `detail` adds a
+ * static band of 1-px stripes and 10 px text in the lower-left quarter, clear
+ * of the moving block, the centre and `presentedPicture`'s sample point, so a
+ * screenshot shows what a filter does to thin strokes.
+ *
  * what it is not: capture, the encoder's tuning, audio, the rate governor or
  * `swoop-meta` records, and its pointer is whatever a spec has it send on
  * `swoop-cursor` (`cursor`), its roster only what a spec has it publish
@@ -31,7 +38,7 @@
 import crypto from 'crypto';
 import dgram from 'dgram';
 import os from 'os';
-import type { Browser, BrowserContext, Page, WebSocketRoute } from '@playwright/test';
+import { expect, type Browser, type BrowserContext, type Page, type WebSocketRoute } from '@playwright/test';
 import { getAdminDb } from './emulator';
 
 /** the e2e server's `SWOOP_SIGNAL_URL`: nothing answers there, so every room is this file's. */
@@ -45,6 +52,14 @@ export const HOST_COLOUR: readonly [number, number, number] = [32, 160, 96];
 const SUBPROTOCOL = 'owlette.swoop.v1';
 const PROTOCOL_VERSION = 1;
 const LEASE_MS = 5 * 60 * 1000;
+
+/** the size of the picture the fake host paints and sends. */
+interface FrameSize {
+  width: number;
+  height: number;
+}
+
+const DEFAULT_SIZE: FrameSize = { width: 640, height: 360 };
 
 /**
  * an ed25519 pair for the e2e server's swoop tokens: raw 32-byte halves,
@@ -247,23 +262,49 @@ interface HostWindow {
 }
 
 /**
- * the host page's half, run in that page: a canvas painted in `HOST_COLOUR`
- * with a block moving across its top, so the encoder always has a fresh frame,
- * and one sendonly peer per viewer. the answer goes out with its candidates in
- * it once gathering ends, as the real host's does, so nothing trickles behind it.
+ * the host page's half, run in that page: a canvas of `size` painted in
+ * `HOST_COLOUR` with a block moving across its top, so the encoder always has a
+ * fresh frame, the detail band under it when asked for, and one sendonly peer
+ * per viewer. the answer goes out with its candidates in it once gathering
+ * ends, as the real host's does, so nothing trickles behind it.
  */
-function installHostPage([colour, out]: [readonly number[], string]): void {
+function installHostPage([colour, out, { width, height }, detail]: [readonly number[], string, FrameSize, boolean]): void {
   const canvas = document.createElement('canvas');
-  canvas.width = 640;
-  canvas.height = 360;
+  canvas.width = width;
+  canvas.height = height;
   document.body.append(canvas);
   const paint = canvas.getContext('2d')!;
+  let band: HTMLCanvasElement | null = null;
+  if (detail) {
+    // drawn once at whole pixels, so each stripe is one pixel of the source.
+    band = document.createElement('canvas');
+    band.width = Math.round(width * 0.34);
+    band.height = Math.round(height * 0.4);
+    const ink = band.getContext('2d')!;
+    ink.fillStyle = '#ffffff';
+    ink.fillRect(0, 0, band.width, band.height);
+    ink.fillStyle = '#000000';
+    const lines = [
+      'the quick brown fox jumps over the lazy dog',
+      'il1| o0 rn m 0123456789',
+      'pack my box with five dozen liquor jugs',
+    ];
+    const stripes = band.height - lines.length * 12 - 8;
+    const half = Math.floor(band.width / 2);
+    for (let x = 0; x < half; x += 2) ink.fillRect(x, 0, 1, stripes);
+    for (let y = 0; y < stripes; y += 2) ink.fillRect(half, y, band.width - half, 1);
+    ink.font = '10px sans-serif';
+    ink.textBaseline = 'top';
+    lines.forEach((line, i) => ink.fillText(line, 2, stripes + 4 + i * 12));
+  }
   let tick = 0;
   setInterval(() => {
     paint.fillStyle = `rgb(${colour.join(',')})`;
-    paint.fillRect(0, 0, 640, 360);
+    paint.fillRect(0, 0, width, height);
+    if (band) paint.drawImage(band, Math.round(width / 16), Math.round(height * 0.55));
+    // the 640x360 block and step, scaled with the picture.
     paint.fillStyle = '#ffffff';
-    paint.fillRect((tick++ * 8) % 600, 10, 40, 40);
+    paint.fillRect((((tick++ * 8) % 600) * width) / 640, (10 * height) / 360, (40 * width) / 640, (40 * height) / 360);
   }, 33);
   const track = canvas.captureStream(30).getVideoTracks()[0];
   const peers = new Map<string, RTCPeerConnection>();
@@ -315,6 +356,12 @@ function installHostPage([colour, out]: [readonly number[], string]): void {
       if (!sendable) throw new Error('the offer has no h.264 this browser can send');
       // `codec` on an encoding is newer than typescript's dom lib.
       (parameters.encodings[0] as RTCRtpEncodingParameters & { codec?: RTCRtpCodec }).codec = sendable;
+      // chrome's encoder starts low and scales a big picture down to fit its
+      // bitrate; a spec measuring the frame needs it at the size it asked for.
+      if (width * height > 640 * 360) {
+        parameters.encodings[0].maxBitrate = 8_000_000;
+        parameters.degradationPreference = 'maintain-resolution';
+      }
       await video.sender.setParameters(parameters);
       if (pc.iceGatheringState !== 'complete') await gathered;
       return pc.localDescription!.sdp;
@@ -380,12 +427,17 @@ export class FakeSwoopHost {
     readonly link: LossyLink | null,
   ) {}
 
-  /** a host for one machine, and its room on the viewer page's socket. `lossy` puts one viewer behind a `LossyLink`. */
+  /**
+   * a host for one machine, streaming at `size` (640x360 if none), and its room on the viewer
+   * page's socket. `lossy` puts one viewer behind a `LossyLink`.
+   */
   static async start(args: {
     browser: Browser;
     viewer: Page;
     siteId: string;
     machineId: string;
+    size?: FrameSize;
+    detail?: boolean;
     lossy?: boolean;
   }): Promise<FakeSwoopHost> {
     const context = await args.browser.newContext();
@@ -393,7 +445,8 @@ export class FakeSwoopHost {
     const link = args.lossy ? await LossyLink.open() : null;
     const host = new FakeSwoopHost(args.siteId, args.machineId, context, hostPage, link);
     await hostPage.exposeFunction('swoopHostOut', (message: HostOut) => host.fromHostPage(message));
-    await hostPage.evaluate(installHostPage, [HOST_COLOUR, 'swoopHostOut'] as [readonly number[], string]);
+    const setup: Parameters<typeof installHostPage>[0] = [HOST_COLOUR, 'swoopHostOut', args.size ?? DEFAULT_SIZE, !!args.detail];
+    await hostPage.evaluate(installHostPage, setup);
 
     await host.addViewer(args.viewer);
 
@@ -666,4 +719,17 @@ export async function presentedPicture(page: Page): Promise<{
       pixel: [r, g, b] as [number, number, number],
     };
   });
+}
+
+/** waits until the viewer page's `<video>` decodes the host's picture at `width`x`height`. */
+export async function waitForFrameSize(page: Page, width: number, height: number): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const { width: shownWidth, height: shownHeight } = await presentedPicture(page);
+        return `${shownWidth}x${shownHeight}`;
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(`${width}x${height}`);
 }

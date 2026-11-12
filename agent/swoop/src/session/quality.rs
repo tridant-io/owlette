@@ -28,6 +28,14 @@
 //! [`crate::session::pick_codec`] reads it. A codec field on this ceiling would
 //! be a second, later, contradicting statement of the same choice.
 //!
+//! # The ladder spends frame rate, never resolution
+//!
+//! A congested path costs frames a second and bits, never pixels: every rung
+//! is at the ceiling's own resolution. Below native a 4K desktop's small text
+//! is unreadable however clean the motion, and a person who would rather have
+//! motion than text on a bad path picks 1080p or 720p in the menu, which
+//! [`ResolutionCap`] still applies at once.
+//!
 //! # The bottom rung is not the floor frame rate
 //!
 //! [`MIN_LADDER_FPS`] is the least *motion* this ladder will trade down to.
@@ -103,8 +111,7 @@ pub enum ResolutionCap {
 }
 
 impl ResolutionCap {
-    /// Richest first. This is the order the governor descends in and the order
-    /// the menu lists.
+    /// Richest first, the order the menu lists.
     pub const LADDER: [ResolutionCap; 4] = [
         ResolutionCap::Native,
         ResolutionCap::P1440,
@@ -152,12 +159,6 @@ impl ResolutionCap {
                 ..limits
             },
         }
-    }
-
-    /// The next cap down, or `None` at the bottom.
-    fn next_down(self) -> Option<ResolutionCap> {
-        let at = ResolutionCap::LADDER.iter().position(|&cap| cap == self)?;
-        ResolutionCap::LADDER.get(at + 1).copied()
     }
 }
 
@@ -232,37 +233,25 @@ impl Ceiling {
         self.resolution.narrow(limits)
     }
 
-    /// The ladder the governor descends, richest first, always starting at this
-    /// ceiling itself.
+    /// The ladder the governor descends, richest first: this ceiling's own
+    /// frame rate, then each lower [`FPS_CAPS`] entry, then
+    /// [`MIN_LADDER_FPS`], every rung at this ceiling's resolution.
     ///
-    /// Frame rate is spent before resolution because that is the cheaper thing
-    /// to give up and the easier one to give back, and the two are one sequence
-    /// rather than two so recovery can only ever retrace the descent. A single
-    /// index over a single ladder cannot oscillate between axes, which two
-    /// independent counters very much can.
+    /// Frame rate is the only axis it spends (the module head says why), and
+    /// one index over one sequence means recovery can only ever retrace the
+    /// descent.
     pub fn rungs(&self) -> Vec<QualityRung> {
-        let mut rungs = Vec::new();
-        let mut fps_steps = vec![self.fps];
+        let mut rungs = vec![QualityRung {
+            fps: self.fps,
+            resolution: self.resolution,
+        }];
         for fps in FPS_CAPS.into_iter().chain([MIN_LADDER_FPS]) {
-            if fps < *fps_steps.last().expect("seeded with the ceiling") {
-                fps_steps.push(fps);
+            if fps < rungs.last().expect("seeded with the ceiling").fps {
+                rungs.push(QualityRung {
+                    fps,
+                    resolution: self.resolution,
+                });
             }
-        }
-        for fps in &fps_steps {
-            rungs.push(QualityRung {
-                fps: *fps,
-                resolution: self.resolution,
-            });
-        }
-
-        let slowest = *fps_steps.last().expect("seeded with the ceiling");
-        let mut resolution = self.resolution;
-        while let Some(next) = resolution.next_down() {
-            resolution = next;
-            rungs.push(QualityRung {
-                fps: slowest,
-                resolution,
-            });
         }
         rungs
     }
@@ -353,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn the_ladder_spends_frame_rate_before_it_spends_pixels() {
+    fn the_ladder_spends_frame_rate_and_never_pixels() {
         let rungs = Ceiling::default().rungs();
         assert_eq!(
             rungs,
@@ -370,18 +359,6 @@ mod tests {
                     fps: 15,
                     resolution: ResolutionCap::Native
                 },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1440
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P1080
-                },
-                QualityRung {
-                    fps: 15,
-                    resolution: ResolutionCap::P720
-                },
             ]
         );
     }
@@ -393,25 +370,20 @@ mod tests {
             fps: 30,
             resolution: ResolutionCap::P1080,
         };
-        let rungs = ceiling.rungs();
-        assert_eq!(rungs[0], QualityRung {
-            fps: 30,
-            resolution: ResolutionCap::P1080
-        });
-        assert!(
-            rungs.iter().all(|rung| rung.fps <= 30),
-            "a 30 fps preset never produces a 60 fps rung"
+        assert_eq!(
+            ceiling.rungs(),
+            vec![
+                QualityRung {
+                    fps: 30,
+                    resolution: ResolutionCap::P1080
+                },
+                QualityRung {
+                    fps: 15,
+                    resolution: ResolutionCap::P1080
+                },
+            ],
+            "no 60 fps rung above a 30 fps preset, and no other resolution at all"
         );
-        assert!(
-            !rungs
-                .iter()
-                .any(|rung| matches!(rung.resolution, ResolutionCap::Native | ResolutionCap::P1440)),
-            "a 1080p preset never produces a rung above 1080p"
-        );
-        assert_eq!(rungs.last().expect("non-empty"), &QualityRung {
-            fps: 15,
-            resolution: ResolutionCap::P720
-        });
     }
 
     #[test]

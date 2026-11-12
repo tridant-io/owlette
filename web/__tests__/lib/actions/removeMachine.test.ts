@@ -50,6 +50,11 @@ jest.mock('@/lib/membership.server', () => ({
   pruneMachineFromMembers: (...a: unknown[]) => mockPrune(...a),
 }));
 
+const mockFleetPrune = jest.fn(async (..._a: unknown[]) => undefined);
+jest.mock('@/lib/fleet/cleanup.server', () => ({
+  pruneMachineFromFleet: (...a: unknown[]) => mockFleetPrune(...a),
+}));
+
 import { removeMachine } from '@/lib/actions/removeMachine.server';
 
 const AUDIT_ACTOR = 'user:admin-uid';
@@ -595,6 +600,48 @@ describe('removeMachine — machine scopes', () => {
     expect(loggerWarnSpy).toHaveBeenCalledWith(
       expect.stringContaining('machine scope prune'),
       expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1', err: 'members query down' }) }),
+    );
+  });
+});
+
+/**
+ * the same reuse of ids: a removed machine leaves the site's fleet grant, and
+ * its fleet sessions and call records go with it (ADR 0017).
+ */
+describe('removeMachine — the fleet grant', () => {
+  it('prunes the id from the fleet grant, with its sessions and calls, through the same db', async () => {
+    const fake = buildFakeDb();
+
+    await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(mockFleetPrune).toHaveBeenCalledTimes(1);
+    expect(mockFleetPrune).toHaveBeenCalledWith({ siteId: 'site-a', machineId: 'm1', db: fake.db });
+  });
+
+  it('prunes nothing when the removal itself fails', async () => {
+    const fake = buildFakeDb();
+    fake.setBatchCommitFailure(new Error('batch_blew_up'));
+
+    await expect(
+      removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db }),
+    ).rejects.toThrow('batch_blew_up');
+
+    expect(mockFleetPrune).not.toHaveBeenCalled();
+  });
+
+  it('logs a failed prune and removes the machine all the same', async () => {
+    const fake = buildFakeDb([{ id: 'tok-1', siteId: 'site-a', machineId: 'm1' }]);
+    mockFleetPrune.mockRejectedValueOnce(new Error('settings transaction down'));
+
+    const result = await removeMachine({ siteId: 'site-a', machineId: 'm1', auditActor: AUDIT_ACTOR, actor: ACTOR, db: fake.db });
+
+    expect(result.machineId).toBe('m1');
+    expect(fake.batchOps).toContainEqual({ op: 'delete', path: 'agent_refresh_tokens/tok-1' });
+    expect(mockEmitMutation).toHaveBeenCalledTimes(1);
+    expect(loggerWarnSpy).toHaveBeenCalledTimes(1);
+    expect(loggerWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('fleet prune'),
+      expect.objectContaining({ data: expect.objectContaining({ siteId: 'site-a', machineId: 'm1', err: 'settings transaction down' }) }),
     );
   });
 });

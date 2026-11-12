@@ -127,7 +127,7 @@ test.describe('as a superadmin', () => {
     await gotoSwoopSessions(page);
 
     const sections = page.locator('#admin-sidebar').getByRole('group');
-    await expect(sections).toHaveText([/^people/, /^fleet/, /^swoop/, /^configuration/, /^support/]);
+    await expect(sections).toHaveText([/^people/, /^fleet/, /^swoop/, /^hoot/, /^configuration/, /^support/]);
     await expect(sidebarSection(page, 'fleet')).toHaveText(['sites', 'installers', 'agent tokens']);
     const swoop = sidebarSection(page, 'swoop');
     await expect(swoop).toHaveText(['live sessions', 'settings']);

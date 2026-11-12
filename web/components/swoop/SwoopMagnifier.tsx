@@ -60,6 +60,9 @@ export function SwoopMagnifier({ session }: { session: SwoopSession | null }) {
     const dpr = window.devicePixelRatio || 1;
     context.canvas.width = Math.round(SIZE * dpr);
     context.canvas.height = Math.round(SIZE * dpr);
+    // sizing the canvas reset these; high averages a picture drawn smaller than the machine's pixels
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
     let frame = 0;
     const draw = (): void => {
       // the latest finger, read here so a move does not restart the loop

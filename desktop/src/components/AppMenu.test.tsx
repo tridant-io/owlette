@@ -8,6 +8,7 @@ const appearanceTheme = vi.fn()
 const setAppearanceTheme = vi.fn()
 const swoopViewerInstalled = vi.fn()
 const openSwoopViewer = vi.fn()
+const hootMcpCommand = vi.fn()
 
 vi.mock('@/lib/agentCli', () => ({
   openOwlettePath: (...args: unknown[]) => openOwlettePath(...args),
@@ -19,6 +20,7 @@ vi.mock('@/lib/ipc', async (importOriginal) => ({
   setAppearanceTheme: (theme: string) => setAppearanceTheme(theme),
   swoopViewerInstalled: () => swoopViewerInstalled(),
   openSwoopViewer: () => openSwoopViewer(),
+  hootMcpCommand: () => hootMcpCommand(),
 }))
 vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }))
 
@@ -30,6 +32,7 @@ function setup(paired: boolean) {
     onJoinSite: vi.fn(),
     onLeaveSite: vi.fn(),
     onReportIssue: vi.fn(),
+    onConnectAgent: vi.fn(),
     onRestartService: vi.fn(),
     startOnLogin: true,
     onStartOnLoginChange: vi.fn(),
@@ -59,6 +62,7 @@ beforeEach(() => {
   setAppearanceTheme.mockReset().mockImplementation((theme: string) => Promise.resolve(theme))
   swoopViewerInstalled.mockReset().mockResolvedValue(false)
   openSwoopViewer.mockReset().mockResolvedValue(undefined)
+  hootMcpCommand.mockReset().mockResolvedValue(null)
 })
 
 describe('AppMenu', () => {
@@ -122,6 +126,31 @@ describe('AppMenu', () => {
     fireEvent.click(await screen.findByTestId('menu-logs'))
     await vi.waitFor(() => expect(toastError).toHaveBeenCalled())
     expect(toastError.mock.calls[0][0]).toBe('could not open the logs folder')
+  })
+})
+
+describe('AppMenu connect an ai agent', () => {
+  it('offers it where the host has a command to show, and opens the dialog', async () => {
+    hootMcpCommand.mockResolvedValue(['python.exe', 'fleet_mcp.py'])
+    const props = setup(true)
+
+    const item = await screen.findByTestId('menu-connect-agent')
+    expect(item.textContent).toBe('connect an ai agent')
+
+    fireEvent.click(item)
+    expect(props.onConnectAgent).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['the host has none for this machine', () => hootMcpCommand.mockResolvedValue(null)],
+    ['the host cannot say', () => hootMcpCommand.mockRejectedValue(new Error('no bridge'))],
+  ])('has no such row when %s', async (_label, arrange) => {
+    arrange()
+    setup(true)
+
+    await vi.waitFor(() => expect(hootMcpCommand).toHaveBeenCalledOnce())
+    await screen.findByTestId('menu-leave-site')
+    expect(screen.queryByTestId('menu-connect-agent')).toBeNull()
   })
 })
 

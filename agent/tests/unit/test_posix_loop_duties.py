@@ -721,7 +721,8 @@ def test_a_deployment_resolves_its_close_names_against_the_managed_entries(
     # The negative control: folded, the name became `kiosk-app` and the entry
     # `\opt\kiosk\kiosk-app`, which share no basename — nothing was closed.
     assert terminated == [(4242, exe)]
-    assert locked == []
+    # held down for the install, like an entry ticked by id
+    assert locked == ['kiosk']
 
 
 def test_a_live_managed_process_is_adopted_rather_than_launched_again(

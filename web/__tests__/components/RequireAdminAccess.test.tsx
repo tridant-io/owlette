@@ -232,6 +232,7 @@ describe('visibleNavItems', () => {
       'fleet/agent tokens',
       'swoop/live sessions',
       'swoop/settings',
+      'hoot/settings',
       'configuration/alerts',
       'configuration/schedules',
       'configuration/webhooks',
@@ -245,6 +246,7 @@ describe('visibleNavItems', () => {
       'installers',
       'agent tokens',
       'live sessions',
+      'settings',
       'settings',
       'alerts',
       'schedules',
@@ -264,6 +266,7 @@ describe('visibleNavItems', () => {
       'people: users',
       'fleet: sites, installers, agent tokens',
       'swoop: live sessions, settings',
+      'hoot: settings',
       'configuration: alerts, schedules, template library, webhooks',
       'support: issues, email',
     ]);
@@ -271,6 +274,7 @@ describe('visibleNavItems', () => {
     expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
       'fleet',
       'swoop',
+      'hoot',
       'configuration',
     ]);
   });

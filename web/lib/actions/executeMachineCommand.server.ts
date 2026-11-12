@@ -81,7 +81,8 @@ export interface ExecuteMachineCommandInput {
   /**
    * a person's approval to act inside the machine's active hours, written onto
    * the envelope as `activeHoursOverride: { reason, approvedBy: ctx.auditActor }`;
-   * refused for any actor but `user:` and `apiKey:`.
+   * refused for any actor but `user:` and `apiKey:`, so `system:` and a granted
+   * machine's `machine:` never carry one (ADR 0013, ADR 0017).
    */
   activeHoursOverride?: { reason: string };
   /** added to the `machine_command_dispatched` audit row. */
@@ -98,7 +99,7 @@ export interface ExecuteMachineCommandContext {
   machineId: string;
   /** Acting principal. Kept as a hook for per-actor branching; unread today. */
   actor: Actor;
-  /** Audit-actor descriptor: `user:<uid>`, `apiKey:<keyId>` or `system:<name>`. */
+  /** Audit-actor descriptor: `user:<uid>`, `apiKey:<keyId>`, `system:<name>` or `machine:<machineId>`. */
   auditActor: string;
   /**
    * Stamped into the envelope so the agent write-back correlates with the
@@ -183,7 +184,7 @@ export type ResolvedActiveHoursOverride =
 /**
  * a caller's `active_hours_override` as the envelope value, `approvedBy` the
  * actor. only a person approves one: a dashboard user or an api key's owner,
- * never `system:`. undefined or null means no override.
+ * never `system:` or `machine:`. undefined or null means no override.
  */
 export function resolveActiveHoursOverride(value: unknown, actor: string): ResolvedActiveHoursOverride {
   const parsed = parseActiveHoursOverride(value);

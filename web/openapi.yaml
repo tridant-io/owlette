@@ -5469,10 +5469,11 @@ paths:
         `completed`, `failed` or `partial`; otherwise it stays `in_progress`.
         `409 no_cancellable_targets` when nothing is cancellable, or nothing
         named in `machines` is; a malformed `machines` is `400`. The same 409
-        comes back when every target moved past `downloading` while the call
-        ran, though `cancel_installation` may already have been sent to those
-        machines. If a write or read for some machine fails, the answer is
-        `500`; the record is settled first unless writing it is what failed.
+        comes back when every target started `installing` or finished while
+        the call ran, though `cancel_installation` may already have been sent
+        to those machines. If a write or read for some machine fails, the
+        answer is `500`; the record is settled first unless writing it is
+        what failed.
         Every target still `pending`, `closing_processes` or `downloading`
         whose queued install was removed is then `cancelled`, even if its
         `cancel_installation` could not be sent, and a target whose queued
@@ -9157,6 +9158,107 @@ paths:
         '429': { $ref: '#/components/responses/Problem429' }
         '500': { $ref: '#/components/responses/Problem500' }
         '503': { $ref: '#/components/responses/Problem503' }
+  /api/sites/{siteId}/fleet-settings:
+    parameters:
+      - $ref: '#/components/parameters/SiteIdPath'
+    get:
+      operationId: getFleetSettings
+      tags: [Sites]
+      summary: read which machines may act on a site's machines
+      description: |
+        Off until a site turns it on. Each sender is a machine of the site that
+        may act on the site's machines through the server, up to its tier and
+        only on the machines it names. Site-admin surface: requires
+        `site=<siteId>:read` and a site owner or site admin.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+      security:
+        - firebaseIdToken: []
+      responses:
+        '200':
+          description: Current settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data: { $ref: '#/components/schemas/FleetSettings' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (a site owner or admin is needed), or `api_key_not_permitted` (an
+            api key called this route). A caller with a machine scope gets
+            `capability_missing`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
+    patch:
+      operationId: setFleetSettings
+      tags: [Sites]
+      summary: change which machines may act on a site's machines
+      description: |
+        Changes `enabled`, `senders` or both; at least one is required.
+        `senders`, when sent, is the whole new set: a machine left out loses
+        its grant, and each entry replaces that machine's grant whole. A new
+        sender's `maxTier` defaults to 2; an existing one keeps its tier when
+        `maxTier` is left out. Every machine this change adds, as a sender or
+        to a sender's list, must be a machine of the site; one already
+        granted that has since left the site is dropped from what is written.
+        Requires `site=<siteId>:write` and a site owner or site admin, 30/min
+        per caller.
+
+        **API keys cannot call this operation** — `403`, `code:
+        api_key_not_permitted`.
+
+        Every call a granted machine makes is checked against the grant as it
+        stands, so a change applies from its next call. A machine removed from
+        the grant has its sessions deleted, and turning the setting off
+        deletes every session on the site.
+      security:
+        - firebaseIdToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/FleetSettings'
+                - type: object
+                  minProperties: 1
+      responses:
+        '200':
+          description: Settings updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  data:
+                    type: object
+                    properties:
+                      settings: { $ref: '#/components/schemas/FleetSettings' }
+        '400': { $ref: '#/components/responses/Problem400' }
+        '401': { $ref: '#/components/responses/Problem401' }
+        '403':
+          description: |
+            `code`, in check order: `scope_insufficient`, `capability_missing`
+            (a site owner or admin is needed), or `api_key_not_permitted` (an
+            api key called this route).
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '404': { $ref: '#/components/responses/Problem404' }
+        '429': { $ref: '#/components/responses/Problem429' }
+        '500': { $ref: '#/components/responses/Problem500' }
+        '503': { $ref: '#/components/responses/Problem503' }
   /api/sites/{siteId}/display-settings:
     parameters:
       - $ref: '#/components/parameters/SiteIdPath'
@@ -12833,6 +12935,42 @@ components:
           enum: [banner, tray, none]
           default: banner
           description: What the machine shows while a session is live.
+    FleetSender:
+      type: object
+      description: |
+        One machine's grant. It acts only up to `maxTier`, and only on the
+        machines in `machineIds`, or on every machine of the site when
+        `wholeSite` is true. A grant naming neither reaches no machine.
+      properties:
+        maxTier:
+          type: integer
+          enum: [1, 2, 3]
+          description: The highest hoot tool tier it may use.
+        machineIds:
+          type: array
+          items: { type: string }
+          maxItems: 30
+          description: |
+            The machines it may act on; itself only when listed. Never sent
+            beside `wholeSite: true`.
+        wholeSite:
+          type: boolean
+          description: Every machine of the site, now and later.
+    FleetSettings:
+      type: object
+      description: |
+        Which machines of a site may act on its machines through the server.
+        Off until a site owner or site admin turns it on.
+      properties:
+        enabled:
+          type: boolean
+          default: false
+          description: Whether any grant is honoured.
+        senders:
+          type: object
+          maxProperties: 64
+          additionalProperties: { $ref: '#/components/schemas/FleetSender' }
+          description: The granted machines, keyed by machine id.
     DisplaySiteSettings:
       type: object
       description: A site's display policy.
