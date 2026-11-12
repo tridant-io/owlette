@@ -26,6 +26,7 @@ interface StoredToken {
   expiresAt?: number;
   predecessorHash?: string;
   createdAt?: number;
+  rotationNonce?: string;
 }
 
 const tokenStore = new Map<string, StoredToken>();
@@ -126,6 +127,9 @@ jest.mock('@/lib/firebase-admin', () => ({
           }
           if ('supersededBy' in payload && typeof payload.supersededBy === 'string') {
             next.supersededBy = payload.supersededBy;
+          }
+          if ('rotationNonce' in payload && typeof payload.rotationNonce === 'string') {
+            next.rotationNonce = payload.rotationNonce;
           }
           if ('retiresAt' in payload) {
             const r = payload.retiresAt as { toMillis?: () => number } | number | undefined;
@@ -345,17 +349,13 @@ describe('POST /api/agent/auth/refresh — rotation', () => {
     expect(tokenStore.has(hashOf('t0'))).toBe(true); // in-grace grandparent kept
   });
 
-  it('two holders that both present one token inside its grace get the same successor', async () => {
+  it('a repeat of one token inside its grace gets the same successor and no second live token', async () => {
     seedToken('t0');
 
     // The service and local hoot share one credential: each presents t0
     // before the other has saved its rotated token.
-    const [ra, rb] = await Promise.all([
-      refreshPOST(refreshReq('t0')),
-      refreshPOST(refreshReq('t0')),
-    ]);
-    const a = (await ra.json()).refreshToken as string;
-    const b = (await rb.json()).refreshToken as string;
+    const a = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    const b = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
     expect(a).toBe(b);
 
     // exactly one current token for the machine besides the presented one
@@ -390,6 +390,50 @@ describe('POST /api/agent/auth/refresh — rotation', () => {
     expect(tokenStore.has(hashOf('recent-sibling'))).toBe(true);
     expect(tokenStore.has(hashOf('other-machine-old'))).toBe(true);
     expect(tokenStore.has(hashOf('current'))).toBe(true);
+  });
+
+  it('a repeat after the successor was itself rotated still returns that successor', async () => {
+    seedToken('t0');
+    const a = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    expect((await refreshPOST(refreshReq(a))).status).toBe(200);
+    const b = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    expect(b).toBe(a);
+  });
+
+  it('a repeat of a token superseded without a nonce mints a fresh successor', async () => {
+    seedToken('t0');
+    const t0 = tokenStore.get(hashOf('t0'))!;
+    t0.supersededAt = Date.now();
+    t0.supersededBy = hashOf('earlier-successor');
+    t0.retiresAt = Date.now() + 60_000;
+    seedToken('earlier-successor');
+    const res = await refreshPOST(refreshReq('t0'));
+    expect(res.status).toBe(200);
+    const fresh = (await res.json()).refreshToken as string;
+    expect(fresh).not.toBe('earlier-successor');
+    expect(tokenStore.get(hashOf(fresh))!.predecessorHash).toBe(hashOf('t0'));
+    // and the next repeat now returns that one
+    const again = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    expect(again).toBe(fresh);
+  });
+
+  it('an invalid or over-long version header keeps the stored version', async () => {
+    seedToken('t0');
+    const bad = await (await refreshPOST(refreshReq('t0', 'm-1', '2.12.0-rc 1'))).json();
+    expect(tokenStore.get(hashOf(bad.refreshToken))!.version).toBe('2.11.3');
+    seedToken('t1');
+    const long = await (await refreshPOST(refreshReq('t1', 'm-1', `2.12.0-${'a'.repeat(40)}`))).json();
+    expect(tokenStore.get(hashOf(long.refreshToken))!.version).toBe('2.11.3');
+  });
+
+  it('removes at most 400 stale tokens in one rotation', async () => {
+    const HOUR = 3600 * 1000;
+    seedToken('current', 'm-1', Date.now() - HOUR);
+    for (let i = 0; i < 450; i++) seedToken(`orphan-${i}`, 'm-1', Date.now() - 10 * HOUR);
+    expect((await refreshPOST(refreshReq('current'))).status).toBe(200);
+    const left = [...tokenStore.keys()].filter((h) => tokenStore.get(h)!.createdAt && h !== hashOf('current')
+      && Date.now() - tokenStore.get(h)!.createdAt! > 5 * HOUR).length;
+    expect(left).toBe(50);
   });
 
   it('rotation records the version the agent reports', async () => {

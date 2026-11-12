@@ -17,41 +17,24 @@ import logger from '@/lib/logger';
 
 const REFRESH_TOKEN_GRACE_MS = 5 * 60 * 1000;
 
-/**
- * A live token this much older than now, on a machine that just refreshed, is
- * not held by anyone: every holder refreshes about hourly.
- */
+// a live token this much older than now, on a machine that just refreshed, is
+// not held by anyone: every holder refreshes about hourly
 const STALE_TOKEN_AGE_MS = 3 * 60 * 60 * 1000;
 const MAX_STALE_DELETES = 400;
-
-let rotationKeyCache: Buffer | null = null;
-let rotationKeyWarned = false;
-
-/**
- * Subkey for deriving rotation successors, so the mfa key itself never keys a
- * second algorithm. null (random successors) when the mfa key is not set.
- */
-function getRotationKey(crypto: typeof import('crypto')): Buffer | null {
-  if (rotationKeyCache) return rotationKeyCache;
-  const secret = process.env.MFA_ENCRYPTION_KEY;
-  if (!secret) {
-    if (!rotationKeyWarned) {
-      rotationKeyWarned = true;
-      logger.warn('MFA_ENCRYPTION_KEY is not set: refresh token rotation cannot derive its successors');
-    }
-    return null;
-  }
-  rotationKeyCache = Buffer.from(
-    crypto.hkdfSync('sha256', secret, '', 'owlette agent refresh rotation', 32),
-  );
-  return rotationKeyCache;
-}
-
-const AGENT_VERSION_FORMAT = /^\d+(\.\d+){1,3}([-+][\w.-]+)?$/;
 
 /** Minimum agent version that knows how to persist a rotated refresh token. */
 const ROTATION_MIN_MAJOR = 2;
 const ROTATION_MIN_MINOR = 12;
+
+const REPORTED_VERSION_FORMAT = /^\d+(\.\d+){1,3}([-+][\w.-]+)?$/;
+const REPORTED_VERSION_MAX_LENGTH = 40;
+
+/** the version header when it is well formed, else the stored version */
+function parseReportedVersion(header: string | null, fallback: string): string {
+  return header && header.length <= REPORTED_VERSION_MAX_LENGTH && REPORTED_VERSION_FORMAT.test(header)
+    ? header
+    : fallback;
+}
 
 function timestampToMillis(value: unknown): number | undefined {
   if (!value) {
@@ -144,29 +127,15 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     const refreshTokenHash = crypto.createHash('sha256')
       .update(refreshToken)
       .digest('hex');
-    // Pre-generated even when unused: keeps the transaction's critical section
-    // branch-free, and the crypto cost is negligible. Derived from the
-    // presented token, so a repeat of it yields the same successor and a
-    // machine never ends up with two. Random when the key is not configured.
-    const rotationKey = getRotationKey(crypto);
-    const newRefreshToken = rotationKey
-      ? crypto.createHmac('sha512', rotationKey)
-          .update(`agent-refresh-rotation:${refreshToken}`)
-          .digest('base64url')
-      : crypto.randomBytes(64).toString('base64url');
-    const newRefreshTokenHash = crypto.createHash('sha256')
-      .update(newRefreshToken)
-      .digest('hex');
-
     // Validate and (when willRotate) rotate atomically — concurrent refreshes
     // must not produce inconsistent state.
     const adminDb = getAdminDb();
     const tokenRef = adminDb.collection('agent_refresh_tokens').doc(refreshTokenHash);
-    const newTokenRef = adminDb.collection('agent_refresh_tokens').doc(newRefreshTokenHash);
 
     let siteId: string;
     let version: string;
     let agentUid: string;
+    let newRefreshToken: string | undefined;
 
     try {
       const result = await adminDb.runTransaction(async (transaction) => {
@@ -178,29 +147,6 @@ export const POST = withRateLimit(async (request: NextRequest) => {
 
         const tokenData = tokenDoc.data();
         const now = Date.now();
-
-        // Firestore requires ALL reads before ANY write in a transaction, so
-        // read the rotation docs up front. `predecessorHash` is the back-pointer
-        // written when THIS token was minted — the GC candidate.
-        const predecessorHash = tokenData?.predecessorHash;
-        const gcCandidateRef =
-          willRotate &&
-          typeof predecessorHash === 'string' &&
-          predecessorHash.length > 0 &&
-          predecessorHash !== refreshTokenHash &&
-          predecessorHash !== newRefreshTokenHash
-            ? adminDb.collection('agent_refresh_tokens').doc(predecessorHash)
-            : null;
-        // Only read the new-token slot when rotating.
-        const newTokenDoc = willRotate ? await transaction.get(newTokenRef) : null;
-        const gcCandidateDoc = gcCandidateRef ? await transaction.get(gcCandidateRef) : null;
-
-        const alreadyRotated = Boolean(
-          newTokenDoc?.exists && tokenData?.supersededBy === newRefreshTokenHash,
-        );
-        if (newTokenDoc && newTokenDoc.exists && !alreadyRotated) {
-          throw new Error('Refresh token hash collision');
-        }
 
         // No expiresAt → never expires (long-duration installs).
         const expiresAt = timestampToMillis(tokenData?.expiresAt);
@@ -235,70 +181,107 @@ export const POST = withRateLimit(async (request: NextRequest) => {
         }
 
         // the token carries the version it was minted with; the header is newer
-        const txVersion =
-          agentVersionHeader && AGENT_VERSION_FORMAT.test(agentVersionHeader) && agentVersionHeader.length <= 40
-            ? agentVersionHeader
-            : storedVersion;
+        const txVersion = parseReportedVersion(agentVersionHeader, storedVersion);
 
-        if (willRotate && alreadyRotated) {
-          // the same token again: its successor already exists, hand it back
-        } else if (willRotate) {
-          const sameMachine = await transaction.get(
-            adminDb.collection('agent_refresh_tokens')
-              .where('siteId', '==', txSiteId)
-              .where('machineId', '==', machineId),
-          );
-
-          if (!isSuperseded) {
-            transaction.update(tokenRef, {
-              supersededAt: FieldValue.serverTimestamp(),
-              supersededBy: newRefreshTokenHash,
-              retiresAt: Timestamp.fromMillis(now + REFRESH_TOKEN_GRACE_MS),
-            });
-          }
-
-          transaction.set(newTokenRef, {
-            siteId: txSiteId,
-            machineId,
-            version: txVersion,
-            createdBy: txCreatedBy,
-            createdAt: FieldValue.serverTimestamp(),
-            lastUsed: FieldValue.serverTimestamp(),
-            agentUid: txAgentUid,
-            // Back-pointer for the NEXT rotation's GC, bounding the collection
-            // to ~2 docs per machine instead of leaking one per hourly refresh.
-            predecessorHash: refreshTokenHash,
-          });
-
-          // GC the predecessor, but ONLY if provably dead. Rotation cadence is
-          // NOT assumed: agent restarts, or service + GUI sharing one
-          // credential, can rotate twice inside the grace window. Reusing
-          // isTokenDead (same predicate as the admin prune) guarantees we never
-          // delete a token an agent could still present — that would 401 it into
-          // wiping its local credentials. Idempotent if already gone.
-          if (gcCandidateDoc && gcCandidateDoc.exists && isTokenDead(gcCandidateDoc.data(), now)) {
-            transaction.delete(gcCandidateDoc.ref);
-          }
-
-          // keep one current token per machine: clear live ones nobody holds
-          let removed = 0;
-          for (const doc of sameMachine.docs) {
-            if (removed >= MAX_STALE_DELETES) break;
-            if (doc.ref.id === refreshTokenHash || doc.ref.id === newRefreshTokenHash) continue;
-            const data = doc.data();
-            const createdAt = tokenTimestampToMillis(data.createdAt);
-            if (isTokenSuperseded(data) || createdAt === undefined || createdAt > now - STALE_TOKEN_AGE_MS) continue;
-            transaction.delete(doc.ref);
-            removed++;
-          }
-        } else {
-          // Legacy agent: keep the same token alive, no supersession.
+        if (!willRotate) {
+          // legacy agent: keep the same token alive, no supersession
           transaction.update(tokenRef, {
             lastUsed: FieldValue.serverTimestamp(),
           });
+          return { siteId: txSiteId, version: txVersion, agentUid: txAgentUid } as const;
         }
 
-        return { siteId: txSiteId, version: txVersion, agentUid: txAgentUid } as const;
+        // the successor is sha512(presented token + a nonce kept on the presented
+        // doc), so a repeat inside the grace recomputes the same one. gc'ing the
+        // doc drops the nonce, after which the token derives nothing.
+        const successorOf = (nonce: string) =>
+          crypto.createHash('sha512').update(refreshToken).update(nonce).digest('base64url');
+        const hashOfToken = (token: string) =>
+          crypto.createHash('sha256').update(token).digest('hex');
+        const recordedNonce = tokenData?.rotationNonce;
+        if (isSuperseded && typeof recordedNonce === 'string') {
+          const recorded = successorOf(recordedNonce);
+          const recordedHash = hashOfToken(recorded);
+          if (recordedHash === tokenData?.supersededBy) {
+            const recordedDoc = await transaction.get(
+              adminDb.collection('agent_refresh_tokens').doc(recordedHash),
+            );
+            if (recordedDoc.exists) {
+              return {
+                siteId: txSiteId, version: txVersion, agentUid: txAgentUid, refreshToken: recorded,
+              } as const;
+            }
+          }
+        }
+
+        const nonce = crypto.randomBytes(32).toString('base64url');
+        const successor = successorOf(nonce);
+        const successorHash = hashOfToken(successor);
+        const successorRef = adminDb.collection('agent_refresh_tokens').doc(successorHash);
+
+        // firestore requires all reads before any write. `predecessorHash` is the
+        // back-pointer written when this token was minted: the gc candidate
+        const predecessorHash = tokenData?.predecessorHash;
+        const gcCandidateDoc =
+          typeof predecessorHash === 'string' && predecessorHash.length > 0 && predecessorHash !== refreshTokenHash
+            ? await transaction.get(adminDb.collection('agent_refresh_tokens').doc(predecessorHash))
+            : null;
+        const sameMachine = await transaction.get(
+          adminDb.collection('agent_refresh_tokens')
+            .where('siteId', '==', txSiteId)
+            .where('machineId', '==', machineId),
+        );
+
+        transaction.update(tokenRef, {
+          ...(isSuperseded
+            ? {}
+            : {
+                supersededAt: FieldValue.serverTimestamp(),
+                retiresAt: Timestamp.fromMillis(now + REFRESH_TOKEN_GRACE_MS),
+              }),
+          supersededBy: successorHash,
+          rotationNonce: nonce,
+        });
+
+        transaction.set(successorRef, {
+          siteId: txSiteId,
+          machineId,
+          version: txVersion,
+          createdBy: txCreatedBy,
+          createdAt: FieldValue.serverTimestamp(),
+          lastUsed: FieldValue.serverTimestamp(),
+          agentUid: txAgentUid,
+          // back-pointer for the next rotation's gc, bounding the collection
+          // to ~2 docs per machine instead of leaking one per hourly refresh
+          predecessorHash: refreshTokenHash,
+        });
+
+        // gc the predecessor, but only if provably dead. rotation cadence is not
+        // assumed: agent restarts, or service + gui sharing one credential, can
+        // rotate twice inside the grace window. isTokenDead is the same predicate
+        // as the admin prune, so we never delete a token an agent could still
+        // present: that would 401 it into wiping its local credentials
+        if (gcCandidateDoc && gcCandidateDoc.exists && isTokenDead(gcCandidateDoc.data(), now)) {
+          transaction.delete(gcCandidateDoc.ref);
+        }
+
+        // keep one current token per machine by clearing live ones nobody holds.
+        // assumes one install per site and machine id: two installs sharing both
+        // are indistinguishable and already fight over the machine doc
+        let removed = 0;
+        for (const doc of sameMachine.docs) {
+          if (removed >= MAX_STALE_DELETES) break;
+          if (doc.ref.id === refreshTokenHash || doc.ref.id === successorHash) continue;
+          const data = doc.data();
+          const createdAt = tokenTimestampToMillis(data.createdAt);
+          if (isTokenSuperseded(data) || createdAt === undefined || createdAt > now - STALE_TOKEN_AGE_MS) continue;
+          transaction.delete(doc.ref);
+          removed++;
+        }
+
+        return {
+          siteId: txSiteId, version: txVersion, agentUid: txAgentUid, refreshToken: successor,
+        } as const;
       });
 
       if ('error' in result) {
@@ -308,6 +291,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
       siteId = result.siteId;
       version = result.version;
       agentUid = result.agentUid;
+      newRefreshToken = 'refreshToken' in result ? result.refreshToken : undefined;
     } catch (txError: unknown) {
       const message = txError instanceof Error ? txError.message : String(txError);
       logger.warn(`Refresh token transaction failed: ${message}`);
