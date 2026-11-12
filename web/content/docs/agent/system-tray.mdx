@@ -27,6 +27,7 @@ the icon is a HAL 9000-inspired owl eye whose state reflects the agent's health 
 | state | Windows and Linux | macOS | what it means |
 |-------|-------------------|-------|---------------|
 | **connected** | the eye lit warm amber | the owl's eye, as a template glyph macOS tints to match the menu bar | service running and connected to the cloud — everything healthy |
+| **swoop connected** | an amber-yellow orb | the same eye glyph in flat yellow, which keeps its colour | someone is connected through [swoop](/docs/dashboard/swoop) and the screen is being captured, under every `indicator` setting, `none` included. it outranks *connection issues* and gives way to *error* |
 | **connection issues** | the same eye dimmed almost to black | a closed eye, tinted the same way | service running but not reaching the cloud (offline, or still starting up) |
 | **error** | red, alternating with the amber eye about every 0.8 seconds | a red eye, the one state that keeps its colour, alternating with the open eye | service stopped or crashed, a health probe reports a failure while the cloud is unreachable, the service is running but has stopped publishing its status (*not responding*), or no cloud or site is configured so nothing is being monitored (*disabled*) |
 
@@ -112,7 +113,7 @@ when the error clears — all the way back to connected, not merely back to *con
 
 ### swoop sessions
 
-when a swoop session starts capturing this screen, the app raises **owlette — swoop session started** (*someone is viewing this screen.*) once per session — but only when the site's swoop `indicator` setting is `tray`. under `banner`, the default, the streamer shows its own badge on the screen instead, and under `none` the machine shows neither. the menu's swoop row appears whatever the setting. a session already running when the app starts is not announced. the setting is described in [swoop](/docs/dashboard/swoop#turning-it-on).
+when a swoop session starts capturing this screen, the app raises **owlette — swoop session started** (*someone is viewing this screen.*) once per session — but only when the site's swoop `indicator` setting is `tray`. under `banner`, the default, the streamer shows its own badge on the screen instead, and under `none` the machine shows neither. the menu's swoop row and the yellow icon appear whatever the setting. a session already running when the app starts is not announced. the setting is described in [swoop](/docs/dashboard/swoop#turning-it-on).
 
 <Callout type="warning" title={"on Windows, toasts need the Start menu shortcut"}>
 
