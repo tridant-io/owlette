@@ -1,14 +1,14 @@
 /**
  * @jest-environment jsdom
  *
- * `usePlan` — the signed-in user's plan from `/api/account/plan`. pins one fetch
- * per sign-in shared by every caller, nothing fetched before auth settles,
- * `plan` undefined while loading and after a failure (gates render children
- * then), and a refresh that keeps the plan it has while it reloads.
+ * `usePlan` — the signed-in user's account plan from `/api/account/plan`. pins
+ * one fetch per sign-in shared by every caller, nothing fetched before auth
+ * settles, `plan` undefined while loading and after a failure, and a refresh
+ * that keeps the plan it has while it reloads.
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
-import type { PlanResponse } from '@/lib/plan.server';
+import type { AccountPlanOn } from '@/lib/planResponse';
 
 let mockAuth: { user: { uid: string } | null; loading: boolean } = { user: null, loading: true };
 jest.mock('@/contexts/AuthContext', () => ({
@@ -17,38 +17,45 @@ jest.mock('@/contexts/AuthContext', () => ({
 
 import { __resetPlanForTests, usePlan } from '@/hooks/usePlan';
 
-const FREE: PlanResponse = {
+const FREE: AccountPlanOn = {
   enforced: true,
-  plan: 'free',
-  standing: 'expired',
-  limits: { machines: 1, sites: 1 },
-  flags: {
-    control: false,
-    deployments: false,
-    swoop: false,
-    hoot: false,
-    roost: false,
-    talons: false,
-    webhooks: false,
-    api_keys: false,
+  emailVerified: true,
+  trial: { status: 'ended', endsAt: 1_700_000_000_000 },
+  sites: [
+    {
+      siteId: 'site-a',
+      name: 'site a',
+      tier: 'free',
+      standing: 'expired',
+      inGoodStanding: false,
+      billing: null,
+      period: null,
+      activeMachinesThisPeriod: 1,
+    },
+  ],
+  free: {
+    sitesUsed: 1,
+    sitesLimit: 1,
+    machinesUsed: 1,
+    machinesLimit: 1,
+    liveMachines: [{ siteId: 'site-a', machineId: 'kiosk-1' }],
   },
-  activeMachinesThisMonth: 1,
+  foundersRemaining: null,
+  linkAvailable: false,
 };
-const PRO: PlanResponse = {
+const PRO: AccountPlanOn = {
   ...FREE,
-  plan: 'pro',
-  standing: 'active',
-  limits: { machines: null, sites: null },
-  flags: {
-    control: true,
-    deployments: true,
-    swoop: true,
-    hoot: true,
-    roost: true,
-    talons: true,
-    webhooks: true,
-    api_keys: true,
-  },
+  sites: [
+    {
+      ...FREE.sites[0],
+      tier: 'pro',
+      standing: 'active',
+      inGoodStanding: true,
+      billing: { tier: 'pro', founders: false, endsAt: null },
+      period: { start: 1_700_000_000_000, end: 1_702_000_000_000 },
+    },
+  ],
+  free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
 };
 
 function jsonResponse(body: unknown, status = 200): Response {

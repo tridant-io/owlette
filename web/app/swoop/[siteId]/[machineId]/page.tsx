@@ -30,6 +30,7 @@ import { isViewerApp } from '@/lib/swoop/viewerApp';
 import { closeViewerWindow, isSessionWindow } from '@/lib/swoop/viewerWindow';
 import { useSwoopSession } from '@/hooks/useSwoopSession';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { siteBillingPath } from '@/components/plan/UpgradeGate';
 import { SwoopStage } from '@/components/swoop/SwoopStage';
 import { SwoopToolbar } from '@/components/swoop/SwoopToolbar';
 import { SwoopStatsOverlay } from '@/components/swoop/SwoopStatsOverlay';
@@ -155,8 +156,8 @@ export default function SwoopPage({
           linkLost={!stats.linkUp}
           refusal={refusal}
           settingsHref={isSiteAdmin(siteId) ? siteSettingsPath(siteId, 'swoop') : null}
-          // a site runs on its owner's plan, so only the owner is sent to upgrade it
-          upgradeHref={isSiteOwner(siteId) ? '/settings/plan' : null}
+          // only the site's owner can change its billing, so only the owner is sent to upgrade it
+          upgradeHref={isSiteOwner(siteId) ? siteBillingPath(siteId) : null}
           noPath={noPath}
           stall={stats.stall.recovery}
           stageRef={stageRef}

@@ -2,18 +2,18 @@
 /**
  * @jest-environment jsdom
  *
- * TrialBanner: hidden while the plan loads, with plans off, on core or pro, and
- * for a user who owns no site; a pro trial and owlette free each get one line
- * linking to /settings/plan. A
+ * TrialBanner: hidden while the account plan loads, with plans off, when every
+ * owned site is on core or pro, and for a user who owns no site; an owned site
+ * on a pro trial or on owlette free gets one line linking to /settings/plan. A
  * dismissal holds for seven days on the shared device-prefs doc, and nothing
  * shows until that stored value has been read.
  */
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { DISMISS_DAYS, DISMISSED_AT_FIELD, TrialBanner } from '@/components/plan/TrialBanner';
-import type { PlanResponse } from '@/lib/plan.server';
+import type { AccountPlanOn, AccountPlanResponse, SiteTier } from '@/lib/planResponse';
 
-let mockPlan: PlanResponse | undefined;
+let mockPlan: AccountPlanResponse | undefined;
 jest.mock('@/hooks/usePlan', () => ({
   usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
 }));
@@ -41,48 +41,32 @@ jest.mock('@/hooks/useDevicePrefFlag', () => {
 });
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const NO_FLAGS = {
-  control: false,
-  deployments: false,
-  swoop: false,
-  hoot: false,
-  roost: false,
-  talons: false,
-  webhooks: false,
-  api_keys: false,
-};
-const ALL_FLAGS = {
-  control: true,
-  deployments: true,
-  swoop: true,
-  hoot: true,
-  roost: true,
-  talons: true,
-  webhooks: true,
-  api_keys: true,
-};
 
-const FREE: PlanResponse = {
-  enforced: true,
-  plan: 'free',
-  standing: 'expired',
-  limits: { machines: 1, sites: 1 },
-  flags: NO_FLAGS,
-  activeMachinesThisMonth: 1,
-  ownsSites: true,
-};
-const TRIAL: PlanResponse = { ...FREE, plan: 'trial', standing: 'trialing', flags: ALL_FLAGS };
-const CORE: PlanResponse = { ...FREE, plan: 'core', standing: 'active', flags: { ...NO_FLAGS, control: true } };
-const PRO: PlanResponse = { ...FREE, plan: 'pro', standing: 'active', flags: ALL_FLAGS };
-const OFF: PlanResponse = {
-  enforced: false,
-  reason: 'enforcement_off',
-  plan: null,
-  standing: null,
-  limits: { machines: null, sites: null },
-  flags: ALL_FLAGS,
-  activeMachinesThisMonth: null,
-};
+/** the account plan of a user who owns one site on each of `tiers`. */
+function owning(...tiers: SiteTier[]): AccountPlanOn {
+  return {
+    enforced: true,
+    emailVerified: true,
+    trial: { status: 'none', endsAt: null },
+    sites: tiers.map((tier, i) => ({
+      siteId: `site-${i}`,
+      name: `site ${i}`,
+      tier,
+      standing: tier === 'free' ? 'expired' : tier === 'trial' ? 'trialing' : 'active',
+      inGoodStanding: tier !== 'free',
+      billing: null,
+      period: null,
+      activeMachinesThisPeriod: 1,
+    })),
+    free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+    foundersRemaining: null,
+    linkAvailable: false,
+  };
+}
+
+const FREE = owning('free');
+const TRIAL = owning('trial');
+const OFF: AccountPlanResponse = { enforced: false, reason: 'enforcement_off' };
 
 beforeEach(() => {
   mockPlan = FREE;
@@ -95,21 +79,10 @@ describe('TrialBanner', () => {
   it.each([
     ['the plan is loading or failed', undefined],
     ['plans are off', OFF],
-    ['on core', CORE],
-    ['on pro', PRO],
+    ['every owned site is on core or pro', owning('core', 'pro')],
+    ['the user owns no site', owning()],
   ])('renders nothing when %s, and reads no dismissal', (_label, plan) => {
     mockPlan = plan;
-    const { container } = render(<TrialBanner />);
-
-    expect(container).toBeEmptyDOMElement();
-    expect(mockUseDevicePrefNumber).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['owlette free', FREE],
-    ['a pro trial', TRIAL],
-  ])('renders nothing on %s for a user who owns no site, whose sites run on their owners plans', (_label, plan) => {
-    mockPlan = { ...plan, ownsSites: false };
     const { container } = render(<TrialBanner />);
 
     expect(container).toBeEmptyDOMElement();

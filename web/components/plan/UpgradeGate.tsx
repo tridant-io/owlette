@@ -1,31 +1,29 @@
 'use client';
 
 /**
- * Stands in for a feature the signed-in user's plan leaves out, with a way to
- * upgrade. `card` replaces a whole surface; `inline` replaces one create
- * control while the list around it stays live, since list, revoke and delete
- * are never gated (plan.md decision 8).
+ * stands in for a feature the site's plan leaves out (adr 0018). `card`
+ * replaces a whole surface; `inline` replaces one create control while the list
+ * around it stays live, since list, revoke and delete are never gated.
  *
- * Renders the children while the plan loads, after a failed lookup and when
- * plans are not enforced: a gate that flashes at a paying customer costs more
- * than ungated UI for a beat, and the server refuses every gated action anyway.
+ * renders the children while the site's plan loads, after a failed lookup and
+ * when plans are not enforced: a gate that flashes at a paying customer costs
+ * more than ungated UI for a beat, and the server refuses every gated action
+ * anyway.
  *
- * The plan is the viewer's own, and a site runs on its owner's plan (plan.md
- * decision 1), so a site feature passes `siteOwner`: on someone else's site, or
- * while the owner is unknown (`null`), nothing is gated here and the server
- * decides. Account features (API keys) leave it out.
+ * only the site's owner can change its billing, so the owner gets a link to the
+ * site's billing section and anyone else is told to ask them.
  */
 
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { useAuth } from '@/contexts/AuthContext';
-import { usePlan } from '@/hooks/usePlan';
-import type { PlanResponse } from '@/lib/plan.server';
+import { useSitePlan } from '@/hooks/useSitePlan';
+import type { SitePlanResponse } from '@/lib/sitePlanResponse';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import { cn } from '@/lib/utils';
 
-export type UpgradeFlag = keyof PlanResponse['flags'];
+export type UpgradeFlag = keyof SitePlanResponse['flags'];
 
 const FEATURES: Record<UpgradeFlag, { name: string; tier: 'core' | 'pro' }> = {
   control: { name: 'remote control', tier: 'core' },
@@ -38,37 +36,29 @@ const FEATURES: Record<UpgradeFlag, { name: string; tier: 'core' | 'pro' }> = {
   api_keys: { name: 'API keys', tier: 'pro' },
 };
 
-/**
- * The viewer's plan when it governs what the viewer is looking at, else null:
- * plans are enforced, and it is an account feature (`siteOwner` left out) or a
- * site the viewer owns. The one place that owner rule lives; `useSitePlan`
- * builds on it too.
- */
-export function governingPlan(
-  plan: PlanResponse | undefined,
-  viewerUid: string | null | undefined,
-  siteOwner?: string | null,
-): PlanResponse | null {
-  if (!plan?.enforced) return null;
-  return siteOwner === undefined || (siteOwner !== null && siteOwner === viewerUid) ? plan : null;
+const ASK_OWNER = 'ask the site owner to upgrade this site.';
+
+/** the billing section of a site's settings, where its owner changes its plan. */
+export function siteBillingPath(siteId: string): string {
+  return `${siteSettingsPath(siteId)}?section=billing`;
+}
+
+function leftOut(plan: SitePlanResponse | undefined, flag: UpgradeFlag): plan is SitePlanResponse {
+  return !!plan?.enforced && !plan.flags[flag];
 }
 
 /**
- * Whether the viewer's plan leaves `flag` out, for a page that hides a second
- * create control rather than gating it twice. `siteOwner` as on UpgradeGate:
- * pass `site?.owner ?? null`, since leaving it out means an account feature.
+ * whether the site's plan leaves `flag` out, for a page that hides a second
+ * create control rather than gating it twice.
  */
-export function usePlanGated(flag: UpgradeFlag, siteOwner?: string | null): boolean {
-  const { plan } = usePlan();
-  const { user } = useAuth();
-  const governing = governingPlan(plan, user?.uid, siteOwner);
-  return !!governing && !governing.flags[flag];
+export function usePlanGated(flag: UpgradeFlag, siteId: string | null | undefined): boolean {
+  return leftOut(useSitePlan(siteId).plan, flag);
 }
 
 interface UpgradeGateProps {
   flag: UpgradeFlag;
-  /** the owner of the site the gated control acts on; omit for an account feature. */
-  siteOwner?: string | null;
+  /** the site the gated control acts on. */
+  siteId: string | null | undefined;
   /** the gated feature's name, where the flag's own doesn't fit it. */
   feature?: string;
   variant?: 'card' | 'inline';
@@ -76,15 +66,15 @@ interface UpgradeGateProps {
   children?: ReactNode;
 }
 
-export function UpgradeGate({ flag, siteOwner, feature, variant = 'card', className, children }: UpgradeGateProps) {
-  const gated = usePlanGated(flag, siteOwner);
-  if (!gated) return <>{children}</>;
+export function UpgradeGate({ flag, siteId, feature, variant = 'card', className, children }: UpgradeGateProps) {
+  const { plan } = useSitePlan(siteId);
+  if (!siteId || !leftOut(plan, flag)) return <>{children}</>;
 
   const { tier } = FEATURES[flag];
   const name = feature ?? FEATURES[flag].name;
-  const upgrade = (
+  const upgrade = plan.isOwner && (
     <Button asChild size="sm">
-      <Link href="/settings/plan">upgrade</Link>
+      <Link href={siteBillingPath(siteId)}>upgrade</Link>
     </Button>
   );
 
@@ -96,7 +86,9 @@ export function UpgradeGate({ flag, siteOwner, feature, variant = 'card', classN
       >
         {/* dropped on a phone, where the note then fits on one row */}
         <Sparkles className="hidden h-4 w-4 shrink-0 text-accent-cyan sm:block" aria-hidden />
-        <span className="text-sm text-muted-foreground">your plan doesn&apos;t include {name}.</span>
+        <span className="text-sm text-muted-foreground">
+          this site&apos;s plan doesn&apos;t include {name}.{!plan.isOwner && ` ${ASK_OWNER}`}
+        </span>
         {upgrade}
       </div>
     );
@@ -111,9 +103,11 @@ export function UpgradeGate({ flag, siteOwner, feature, variant = 'card', classN
         <div className="mx-auto mb-4 inline-flex rounded-md bg-accent-cyan/10 p-2.5 text-accent-cyan">
           <Sparkles className="h-5 w-5" aria-hidden />
         </div>
-        <h2 className="text-lg font-semibold text-foreground">your plan doesn&apos;t include {name}</h2>
-        <p className="mt-2 text-sm text-muted-foreground">upgrade to {tier} to use it.</p>
-        <div className="mt-6">{upgrade}</div>
+        <h2 className="text-lg font-semibold text-foreground">this site&apos;s plan doesn&apos;t include {name}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {plan.isOwner ? `upgrade to ${tier} to use it.` : ASK_OWNER}
+        </p>
+        {upgrade && <div className="mt-6">{upgrade}</div>}
       </div>
     </div>
   );

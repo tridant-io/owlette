@@ -179,8 +179,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
-  const siteOwner = sites.find((s) => s.id === currentSiteId)?.owner ?? null;
-  const hootGated = usePlanGated('hoot', siteOwner);
+  const hootGated = usePlanGated('hoot', currentSiteId);
   // What the user ticked, verbatim. Pruning against the site's machines happens
   // in a memo below, never here: a selection restored from a chat doc arrives
   // before the machine listing it would be pruned against.
@@ -859,7 +858,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                 debug, diagnose, and manage your remote machines.
               </p>
               {/* a key is no use on a plan without hoot, so the upgrade comes first */}
-              <UpgradeGate flag="hoot" siteOwner={siteOwner} className="mt-0 md:mt-0">
+              <UpgradeGate flag="hoot" siteId={currentSiteId} className="mt-0 md:mt-0">
                 <div className="rounded-lg border border-border bg-secondary p-5">
                   <KeyRound className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground mb-3">
@@ -1303,7 +1302,7 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
           {!showConversationNotFound && (
             <UpgradeGate
               flag="hoot"
-              siteOwner={siteOwner}
+              siteId={currentSiteId}
               variant="inline"
               // takes the composer's strip, so the transcript above keeps its place
               className="justify-center rounded-none border-x-0 border-b-0 bg-transparent px-4 py-3"

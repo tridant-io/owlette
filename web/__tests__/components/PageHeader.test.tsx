@@ -28,14 +28,14 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PageHeader } from '@/components/PageHeader';
 import { createSite } from '@/hooks/useFirestore';
-import type { PlanResponse } from '@/lib/plan.server';
+import type { AccountPlanResponse } from '@/lib/planResponse';
 
 const mockPush = jest.fn();
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-let mockPlan: PlanResponse | undefined;
+let mockPlan: AccountPlanResponse | undefined;
 jest.mock('@/hooks/usePlan', () => ({
   usePlan: () => ({ plan: mockPlan, loading: false, error: null, refresh: jest.fn() }),
 }));
@@ -493,41 +493,15 @@ describe('PageHeader menu scrim', () => {
 });
 
 describe('PageHeader plan entry', () => {
-  const FLAGS = {
-    control: true,
-    deployments: true,
-    swoop: true,
-    hoot: true,
-    roost: true,
-    talons: true,
-    webhooks: true,
-    api_keys: true,
-  };
-  const OFF: PlanResponse = {
-    enforced: false,
-    reason: 'enforcement_off',
-    plan: null,
-    standing: null,
-    limits: { machines: null, sites: null },
-    flags: FLAGS,
-    activeMachinesThisMonth: null,
-  };
-  const FREE: PlanResponse = {
+  const OFF: AccountPlanResponse = { enforced: false, reason: 'enforcement_off' };
+  const ENFORCED: AccountPlanResponse = {
     enforced: true,
-    plan: 'free',
-    standing: 'expired',
-    limits: { machines: 1, sites: 1 },
-    flags: {
-      control: false,
-      deployments: false,
-      swoop: false,
-      hoot: false,
-      roost: false,
-      talons: false,
-      webhooks: false,
-      api_keys: false,
-    },
-    activeMachinesThisMonth: 1,
+    emailVerified: true,
+    trial: { status: 'none', endsAt: null },
+    sites: [],
+    free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+    foundersRemaining: null,
+    linkAvailable: false,
   };
 
   afterEach(() => {
@@ -549,7 +523,7 @@ describe('PageHeader plan entry', () => {
   });
 
   it('links the plan page from the user menu while plans are enforced', async () => {
-    mockPlan = FREE;
+    mockPlan = ENFORCED;
     const { user } = renderHeader();
 
     await user.click(screen.getByTestId('user-menu-trigger'));

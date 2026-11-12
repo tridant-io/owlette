@@ -2,21 +2,21 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
-import type { PlanResponse } from '@/lib/plan.server';
+import type { AccountPlanResponse } from '@/lib/planResponse';
 
 /**
- * the signed-in user's plan from `/api/account/plan`, fetched once per sign-in
- * and shared by every caller: gates mount per page and per machine card, and
- * each one must not cost another tridant lookup.
+ * the signed-in user's account plan from `/api/account/plan` (adr 0018): their
+ * trial, the sites they own and how much of owlette free they use. fetched once
+ * per sign-in and shared by every caller. what a site may do is the site's
+ * plan, which `useSitePlan` reads.
  *
- * `plan` is undefined while loading or after a failure. gates render their
- * children then, so a slow or failed lookup never hides anything; the server
- * gates every action regardless.
+ * `plan` is undefined while loading or after a failure, and nothing is locked
+ * then; the server gates every action regardless.
  */
 
 interface PlanState {
   uid: string | null;
-  plan: PlanResponse | undefined;
+  plan: AccountPlanResponse | undefined;
   loading: boolean;
   error: string | null;
 }
@@ -60,7 +60,7 @@ async function load(uid: string): Promise<void> {
   try {
     const response = await fetch('/api/account/plan', { cache: 'no-store' });
     if (!response.ok) throw new Error(await readApiError(response, 'failed to load plan'));
-    next = { uid, plan: (await response.json()) as PlanResponse, loading: false, error: null };
+    next = { uid, plan: (await response.json()) as AccountPlanResponse, loading: false, error: null };
   } catch (err) {
     next = { uid, plan: undefined, loading: false, error: err instanceof Error ? err.message : 'failed to load plan' };
   }

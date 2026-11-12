@@ -106,7 +106,7 @@ it('tells a member who can turn it on, with no settings link', async () => {
   expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
 });
 
-it('a plan without swoop says so and links the owner to the plan, not the switch, and does not retry', async () => {
+it("a plan without swoop says so and links the owner to the site's billing, not the switch, and does not retry", async () => {
   siteAdmin = true;
   siteOwner = true;
   reply = {
@@ -115,7 +115,10 @@ it('a plan without swoop says so and links the owner to the plan, not the switch
   };
   const notice = await openViewer();
   expect(notice).toHaveTextContent('swoop is part of pro.');
-  expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute('href', '/settings/plan');
+  expect(within(notice).getByRole('link', { name: 'upgrade' })).toHaveAttribute(
+    'href',
+    '/admin/sites/site%201?section=billing',
+  );
   expect(notice).not.toHaveTextContent(/turn it on|reconnecting in/);
   expect(within(notice).queryByRole('link', { name: 'open site settings' })).toBeNull();
 });

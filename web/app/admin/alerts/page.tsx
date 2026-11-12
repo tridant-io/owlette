@@ -149,8 +149,7 @@ export default function AlertsPage() {
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
   // alert rules ride on control, the core flag (plan.md decision 4)
-  const siteOwner = sites.find((s) => s.id === selectedSiteId)?.owner ?? null;
-  const rulesGated = usePlanGated('control', siteOwner);
+  const rulesGated = usePlanGated('control', selectedSiteId);
   // rules carry the site they were read or saved for: a save that lands after the
   // admin moved to another site must not show, or be saved again, under that one
   const [loaded, setLoaded] = useState<{ siteId: string; rules: AlertRule[] }>({ siteId: '', rules: [] });
@@ -408,7 +407,7 @@ export default function AlertsPage() {
               )}
 
               {/* in the toolbar, not the actions: on a phone the actions share the title's row */}
-              <UpgradeGate flag="control" siteOwner={siteOwner} feature="alert rules" variant="inline">
+              <UpgradeGate flag="control" siteId={selectedSiteId} feature="alert rules" variant="inline">
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className="hover:bg-accent! hover:text-foreground! cursor-pointer" disabled={saving}>

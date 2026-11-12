@@ -58,8 +58,7 @@ export default function WebhooksSettingsPage() {
   const site = sites.find((s) => s.id === selectedSite);
   const canManage =
     !!selectedSite && (isSiteAdmin(selectedSite) || (!!user && site?.owner === user.uid));
-  const siteOwner = site?.owner ?? null;
-  const webhooksGated = usePlanGated('webhooks', siteOwner);
+  const webhooksGated = usePlanGated('webhooks', selectedSite);
   const [webhooks, setWebhooks] = useState<WebhookListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
@@ -167,7 +166,7 @@ export default function WebhooksSettingsPage() {
                 </Select>
               )}
               {canManage && (
-                <UpgradeGate flag="webhooks" siteOwner={siteOwner} variant="inline">
+                <UpgradeGate flag="webhooks" siteId={selectedSite} variant="inline">
                   <Button
                     type="button"
                     onClick={() => setCreateOpen(true)}

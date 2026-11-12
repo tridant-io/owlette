@@ -479,7 +479,6 @@ export default function LogsPage() {
     sites,
     sitesLoading,
     currentSiteId,
-    currentSite,
     siteTimezone,
     hasNoSites,
     selectSite,
@@ -492,8 +491,8 @@ export default function LogsPage() {
   // dashboard's write-action gating.
   const canManageLogs = !!currentSiteId && isSiteAdmin(currentSiteId);
   const scope = currentSiteId ? machineScope(currentSiteId) : null;
-  // crash screenshots are part of control; only on a site the viewer owns, see useSitePlan.
-  const { controlLocked } = useSitePlan(currentSiteId, currentSite?.owner);
+  // crash screenshots are part of control.
+  const { controlLocked } = useSitePlan(currentSiteId);
 
   const [logs, setLogs] = useState<LogEvent[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);

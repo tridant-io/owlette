@@ -32,8 +32,10 @@ type BannerKind = 'trial' | 'free';
 
 export function TrialBanner() {
   const { plan } = usePlan();
-  if (!plan?.enforced || !plan.ownsSites || (plan.plan !== 'trial' && plan.plan !== 'free')) return null;
-  return <DismissibleBanner kind={plan.plan} />;
+  if (!plan?.enforced) return null;
+  // the account plan lists only the sites the user owns, each with its own plan.
+  const kind = (['trial', 'free'] as const).find((tier) => plan.sites.some((site) => site.tier === tier));
+  return kind ? <DismissibleBanner kind={kind} /> : null;
 }
 
 // split out so the dismissal is read only when there is a banner to show.

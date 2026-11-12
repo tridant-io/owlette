@@ -48,7 +48,6 @@ import { machinesNotice, NoMachinesForYou, MachinesLoadError } from './component
 import { usePathCheck, type PathWarning } from '@/hooks/usePathCheck';
 import { PATH_FIELDS, withArgs, type PathField } from '@/lib/pathCheck';
 import { useDeviceCodeAuthorize } from '@/hooks/useDeviceCodeAuthorize';
-import { usePlan } from '@/hooks/usePlan';
 import { useSitePlan } from '@/hooks/useSitePlan';
 import { UpdateOwletteButton } from '@/components/UpdateOwletteButton';
 import { LoadingWord } from '@/components/LoadingWord';
@@ -961,15 +960,8 @@ export default function DashboardPage() {
     onSwoopApp,
   ]);
 
-  // sites the viewer doesn't own get no plan treatment here: their owner's
-  // plan applies, which this browser can't read, and the server gates every
-  // action on it regardless.
-  const sitePlan = useSitePlan(
-    currentSiteId,
-    sites.find((s) => s.id === currentSiteId)?.owner,
-    machinesLoading ? null : machineIdsKey,
-  );
-  const { plan } = usePlan();
+  // cosmetic: the server gates every action on the site's plan regardless.
+  const sitePlan = useSitePlan(currentSiteId, machinesLoading ? null : machineIdsKey);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -1167,7 +1159,7 @@ export default function DashboardPage() {
                 {/* with plans on, deployments can be outside the plan, and the
                     deployments page was the only way to update; every plan may
                     update, so the dashboard offers it too. */}
-                {plan?.enforced && isSiteAdmin(currentSiteId) && (
+                {sitePlan.plan?.enforced && isSiteAdmin(currentSiteId) && (
                   <UpdateOwletteButton siteId={currentSiteId} machines={machines} compact />
                 )}
                 {/* Add Machine Button */}
