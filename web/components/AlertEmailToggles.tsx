@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useAuth, type UserPreferences } from '@/contexts/AuthContext';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -73,10 +73,14 @@ export function AlertEmailToggles() {
   const [prefs, setPrefs] = useState<Record<AlertKey, boolean>>(() => pickAlertPrefs(userPreferences));
   const [savingKey, setSavingKey] = useState<AlertKey | null>(null);
 
-  // `userPreferences` only changes reference when preferences actually change
-  useEffect(() => {
+  // follow the stored preferences by value, not by object: a caller that hands a
+  // fresh object each render would otherwise re-sync forever
+  const stored = ALERT_TOGGLES.map(({ key }) => String(userPreferences[key])).join();
+  const [synced, setSynced] = useState(stored);
+  if (synced !== stored) {
+    setSynced(stored);
     setPrefs(pickAlertPrefs(userPreferences));
-  }, [userPreferences]);
+  }
 
   const toggle = async (key: AlertKey, value: boolean) => {
     setPrefs((prev) => ({ ...prev, [key]: value }));
