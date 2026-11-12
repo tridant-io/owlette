@@ -125,6 +125,8 @@
     },
     "@firebase/firestore": {
       "@grpc/grpc-js": "^1.14.5"
-    }
+    },
+    "fast-xml-parser": "^5.12.0",
+    "minimatch@>=7.0.0 <11.0.1": "^11.0.1"
   }
 }
