@@ -188,9 +188,9 @@ test("a site's settings fit, section by section", async ({ page }) => {
   await assertNoHorizontalOverflow(page);
 });
 
-test('swoop settings fit', async ({ page }) => {
-  await page.goto('/admin/swoop/settings');
-  await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
+test('the swoop page fits', async ({ page }) => {
+  await page.goto('/admin/swoop');
+  await expect(page.getByRole('heading', { level: 1, name: 'swoop', exact: true })).toBeVisible();
 
   // the switch writes the moment it moves, so here it is only reached, never tapped
   await expectFullyWithinViewport(

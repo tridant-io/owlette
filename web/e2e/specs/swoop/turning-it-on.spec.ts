@@ -1,7 +1,7 @@
 /**
  * swoop — finding the switch. while a site has swoop off, a machine that can
  * stream sends an admin from its menu to swoop settings
- * (`/admin/swoop/settings`), and tells a member who can turn swoop
+ * (`/admin/swoop`), and tells a member who can turn swoop
  * on, with live view in the meantime. the site switcher opens the current site's
  * settings in one click, and `/admin/sites/<siteId>?section=swoop`, the link the
  * swoop picker and the viewer gave an admin before swoop had its own section,
@@ -45,7 +45,7 @@ async function openMachineMenu(page: Page) {
 }
 
 async function expectSwoopSettings(page: Page) {
-  await expect(page).toHaveURL(/\/admin\/swoop\/settings$/);
+  await expect(page).toHaveURL(/\/admin\/swoop$/);
   await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toHaveAttribute(
     'aria-checked',
     'false',

@@ -1,9 +1,7 @@
 /**
- * Admin — the sidebar's swoop section: its live sessions page and its settings
- * page.
- *
- * Settings is one table, a row per site the caller may change with its swoop
- * switch, which writes `sites/{site}/settings/swoop` at once.
+ * Admin — swoop, one item under fleet: one page with a table of the sites the
+ * caller may change, each with its swoop switch, which writes
+ * `sites/{site}/settings/swoop` at once, and the live sessions under it.
  *
  * Session records are server-only (`sites/{site}/machines/{m}/swoop_sessions/{sid}`,
  * no rule reaches them), so the page reads them through
@@ -123,31 +121,20 @@ test.describe('as a superadmin', () => {
     expect(queued.some((cmd) => cmd.type === 'swoop_kill' && cmd.sid === SID)).toBe(true);
   });
 
-  test('the sidebar has a swoop section, after fleet, with live sessions and settings', async ({ page }) => {
+  test('swoop and hoot are single items under fleet, with no sections of their own', async ({ page }) => {
     await gotoSwoopSessions(page);
 
     const sections = page.locator('#admin-sidebar').getByRole('group');
-    await expect(sections).toHaveText([/^people/, /^fleet/, /^swoop/, /^hoot/, /^configuration/, /^support/]);
-    await expect(sidebarSection(page, 'fleet')).toHaveText(['sites', 'installers', 'agent tokens']);
-    const swoop = sidebarSection(page, 'swoop');
-    await expect(swoop).toHaveText(['live sessions', 'settings']);
-    await expect(swoop.nth(0)).toHaveAttribute('href', '/admin/swoop');
-    await expect(swoop.nth(1)).toHaveAttribute('href', '/admin/swoop/settings');
-    await expect(swoop.nth(0)).toHaveAttribute('aria-current', 'page');
-
-    await swoop.nth(1).click();
-    await expect(page).toHaveURL(/\/admin\/swoop\/settings$/);
-    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible();
-    // only the page itself is current, not live sessions, whose path it extends
-    await expect(swoop.nth(1)).toHaveAttribute('aria-current', 'page');
-    await expect(swoop.nth(0)).not.toHaveAttribute('aria-current');
+    await expect(sections).toHaveText([/^people/, /^fleet/, /^configuration/, /^support/]);
+    const fleet = sidebarSection(page, 'fleet');
+    await expect(fleet).toHaveText(['sites', 'installers', 'agent tokens', 'swoop', 'hoot']);
+    await expect(fleet.nth(3)).toHaveAttribute('href', '/admin/swoop');
+    await expect(fleet.nth(3)).toHaveAttribute('aria-current', 'page');
+    await expect(fleet.nth(4)).toHaveAttribute('href', '/admin/hoot');
   });
 
-  test("swoop settings lists the site, and its row's switch writes at once", async ({ page }) => {
-    await page.goto('/admin/swoop/settings');
-    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
-      timeout: 10_000,
-    });
+  test("the swoop page lists the site, and its row's switch writes at once", async ({ page }) => {
+    await gotoSwoopSessions(page);
 
     const swoop = page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true });
     // enabled means the snapshot has answered; with no document, swoop is off. the
@@ -177,11 +164,8 @@ test.describe('as a site admin of another site', () => {
     await expect(page.getByText(viewer.email)).toHaveCount(0);
   });
 
-  test('swoop settings never lists a site the admin does not run', async ({ page }) => {
-    await page.goto('/admin/swoop/settings');
-    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
-      timeout: 10_000,
-    });
+  test('the swoop page never lists a site the admin does not run', async ({ page }) => {
+    await gotoSwoopSessions(page);
 
     // the site the admin does run is listed
     await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeVisible();

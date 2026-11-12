@@ -228,7 +228,7 @@ describe('SwoopPicker', () => {
     expect(card('m1')).toBeDisabled();
     expect(reason('m1')).toHaveTextContent('swoop is off for this site');
     const link = within(reason('m1')).getByRole('link', { name: 'open swoop settings' });
-    expect(link).toHaveAttribute('href', '/admin/swoop/settings');
+    expect(link).toHaveAttribute('href', '/admin/swoop');
     expect(reason('m1')).not.toHaveTextContent('ask a site owner');
   });
 

@@ -544,7 +544,7 @@ test.describe('the viewer page', () => {
     await expect(page.getByText(/connecting/i)).toHaveCount(0);
     await expect(alertLine(page).getByRole('link', { name: 'open swoop settings' })).toHaveAttribute(
       'href',
-      '/admin/swoop/settings',
+      '/admin/swoop',
     );
     await expect(alertLine(page).getByRole('link', { name: 'back to dashboard' })).toBeVisible();
     await expect(page.getByTestId('session-bar').getByRole('link', { name: 'back to dashboard' })).toBeVisible();

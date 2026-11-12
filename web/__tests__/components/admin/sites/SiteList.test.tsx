@@ -147,6 +147,23 @@ describe('the header', () => {
   });
 });
 
+describe('the column header', () => {
+  const header = () => screen.getByText('timezone').parentElement!;
+
+  it('names each column, the last one your role for anyone but a superadmin', () => {
+    renderList();
+
+    expect([...header().children].map((cell) => cell.textContent)).toEqual(['site', 'id', 'timezone', 'your role']);
+  });
+
+  it('names the last column owner for a superadmin', () => {
+    mockAuth = { isSuperadmin: true, adminOf: [], ownerOf: [] };
+    renderList();
+
+    expect(header().lastElementChild).toHaveTextContent('owner');
+  });
+});
+
 describe('gears and roles', () => {
   it('links a gear only on the sites the caller administers', () => {
     renderList();

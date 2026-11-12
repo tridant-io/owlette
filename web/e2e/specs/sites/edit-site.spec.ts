@@ -7,7 +7,7 @@
  * re-seeded before every test, so the shared site-A / site-B baseline stays untouched.
  *
  * keep screens awake sits in the machines section (?section=machines), and the
- * swoop switch in the site's row on swoop settings (/admin/swoop/settings). both
+ * swoop switch in the site's row on admin panel → swoop (/admin/swoop). both
  * act at once, with no save, so the spec flips each and reads back
  * sites/site-to-rename/settings/{display,swoop}.
  */
@@ -88,10 +88,10 @@ test.describe("the site's switches", () => {
   test('keep screens awake, in the machines section, writes its document at once', async ({ page }) => {
     await page.goto(`/admin/sites/${RENAMEABLE_SITE_ID}?section=machines`);
 
-    const screens = page.getByRole('region', { name: 'screens', exact: true });
-    const keepAwake = screens.getByRole('switch', { name: 'keep screens awake', exact: true });
-    await expect(screens).toContainText('machines on this site never sleep, blank or lock');
-    await expect(page.getByRole('region', { name: 'machines', exact: true })).toBeVisible();
+    // one machines panel holds the switch and the list
+    const machines = page.getByRole('region', { name: 'machines', exact: true });
+    const keepAwake = machines.getByRole('switch', { name: 'keep screens awake', exact: true });
+    await expect(machines).toContainText('machines on this site never sleep, blank or lock');
     // the swoop switch left the site's page
     await expect(page.getByRole('switch', { name: 'swoop', exact: true })).toHaveCount(0);
 
@@ -107,9 +107,9 @@ test.describe("the site's switches", () => {
     expect((await settingsDoc('swoop').get()).exists).toBe(false);
   });
 
-  test("the site's row on swoop settings writes its switch at once", async ({ page }) => {
-    await page.goto('/admin/swoop/settings');
-    await expect(page.getByRole('heading', { level: 1, name: 'swoop settings', exact: true })).toBeVisible({
+  test("the site's row on the swoop page writes its switch at once", async ({ page }) => {
+    await page.goto('/admin/swoop');
+    await expect(page.getByRole('heading', { level: 1, name: 'swoop', exact: true })).toBeVisible({
       timeout: 10_000,
     });
     const swoop = page.getByRole('switch', { name: `swoop on ${ORIGINAL_NAME}`, exact: true });

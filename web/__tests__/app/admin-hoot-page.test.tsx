@@ -7,7 +7,7 @@
  * it turns off, and the senders show only while their switch is on.
  */
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import HootSettingsPage from '@/app/admin/hoot/page';
 
@@ -136,19 +136,24 @@ describe('the switch', () => {
     expect(JSON.parse(init.body)).toEqual({ enabled: true });
   });
 
-  it('shows the senders under it while it is on', () => {
+  it('shows the senders under it, in the same panel, while it is on', () => {
     fleetEnabled = true;
     render(<HootSettingsPage />);
 
-    expect(screen.getByRole('region', { name: 'machines' })).toContainElement(theSwitch());
-    expect(screen.getByRole('region', { name: 'machines that act on others' })).toBeInTheDocument();
+    const machines = screen.getByRole('region', { name: 'machines' });
+    expect(machines).toContainElement(theSwitch());
+    expect(within(machines).getByText('this site has no machines yet.')).toBeInTheDocument();
+    expect(screen.getAllByRole('region').map((region) => region.getAttribute('aria-labelledby'))).toEqual([
+      'hoot-approval',
+      'hoot-machines',
+    ]);
     expect(screen.queryByText('turn this on to choose which machines may act.')).not.toBeInTheDocument();
   });
 
   it('hides the senders while it is off, and says how to get them', () => {
     render(<HootSettingsPage />);
 
-    expect(screen.queryByRole('region', { name: 'machines that act on others' })).not.toBeInTheDocument();
+    expect(screen.queryByText('this site has no machines yet.')).not.toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'machines' })).toHaveTextContent(
       'turn this on to choose which machines may act.',
     );

@@ -134,22 +134,21 @@ a new item, connect an ai agent, that shows the command to run. See the
 
 ### changed — hoot's site settings have their own page in the admin panel
 
-The admin panel's sidebar has a hoot section. Its settings page holds the
+The admin panel has a hoot page, under fleet. It holds the
 switch that makes hoot wait for approval before a privileged (tier 3) tool,
 which used to be the shield button in the hoot chat header, and the new
 settings for machines that act on other machines. The setting itself and its
 default are unchanged: approval is on unless a site owner or admin turns it
 off. Nothing to update on the machine.
 
-### changed — swoop has its own section in the admin panel
+### changed — swoop is turned on from the admin panel's swoop page
 
-The admin panel's sidebar has a swoop section, after fleet, with two pages: live
-sessions, the list of everyone in a swoop session that was swoop under fleet,
-and settings, one table with a row for each site you own or administer and its
-swoop switch. A site's settings page no longer has a swoop & screens section:
+The admin panel's swoop page, under fleet, lists each site you own or administer
+with its swoop switch, above the live sessions. A site's settings page no longer
+has a swoop & screens section:
 keep screens awake is in its machines section. Old links to the swoop & screens
 section, turn on swoop… in a machine's menu, and open swoop settings in the swoop
-picker and the viewer all open the new page. Nothing to update on the machine.
+picker and the viewer all open the swoop page. Nothing to update on the machine.
 
 ### fixed — saving a talon edit keeps the switch where it is now
 

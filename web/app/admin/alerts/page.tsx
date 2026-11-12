@@ -30,6 +30,7 @@ import {
 import { Bell, Plus, Trash2, Loader2, Zap, Pencil, Sparkles, X } from 'lucide-react';
 import { toast } from '@/lib/toast';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
+import { AlertEmailToggles } from '@/components/AlertEmailToggles';
 import { CompactButton } from '@/components/admin/CompactButton';
 import { UpgradeGate, usePlanGated } from '@/components/plan/UpgradeGate';
 
@@ -389,7 +390,7 @@ export default function AlertsPage() {
         <AdminPageHeader
           className="mb-6 md:mb-8"
           title="alerts"
-          description="configure rules to get notified when machine metrics exceed thresholds"
+          description="the alerts you get, and this site's rules for machine metrics"
           toolbar={
             <>
               {sites.length > 1 && (
@@ -433,6 +434,16 @@ export default function AlertsPage() {
           }
           actions={!rulesGated && <CompactButton icon={Plus} label="create rule" onClick={openCreateDialog} disabled={saving} />}
         />
+
+        {/* the built-in alerts are each person's own emails, the same on every site (owner, 2026-11-11) */}
+        <section aria-labelledby="alerts-built-in" className="mb-6 md:mb-8">
+          <h2 id="alerts-built-in" className="mb-3 text-sm font-medium text-foreground">
+            built-in <span className="font-normal text-muted-foreground">· your emails, from every site</span>
+          </h2>
+          <AlertEmailToggles />
+        </section>
+
+        <h2 className="mb-3 text-sm font-medium text-foreground">custom rules</h2>
 
         {/* Empty state */}
         {rules.length === 0 && !loading && (

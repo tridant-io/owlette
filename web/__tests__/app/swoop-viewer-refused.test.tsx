@@ -96,7 +96,7 @@ it('tells an admin to turn swoop on and links to swoop settings', async () => {
   expect(notice).toHaveTextContent('turn it on in swoop settings.');
   expect(within(notice).getByRole('link', { name: 'open swoop settings' })).toHaveAttribute(
     'href',
-    '/admin/swoop/settings',
+    '/admin/swoop',
   );
 });
 

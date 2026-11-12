@@ -16,8 +16,8 @@ these open for anyone who is an **owner** or **admin** of the whole site on at l
 |------|-----|--------------|
 | sites | `/admin/sites` | list your sites, and open one's settings: its name and timezone, its members with their roles, swoop modes and access, its machines and keep screens awake, and deleting it. see [sites](/docs/dashboard/admin/sites) and [member management](/docs/dashboard/admin/member-management) |
 | agent tokens | `/admin/tokens` | list and revoke a site's agent refresh tokens. see [token management](/docs/dashboard/admin/token-management) |
-| swoop → live sessions | `/admin/swoop` | see everyone in a [swoop](/docs/dashboard/swoop) session right now, and end a session |
-| swoop → settings | `/admin/swoop/settings` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for a site |
+| swoop | `/admin/swoop` | turn [swoop](/docs/dashboard/swoop#turning-it-on) on or off for each site, see everyone in a swoop session right now, and end a session |
+| hoot | `/admin/hoot` | a site's [hoot](/docs/dashboard/hoot) approval setting and the machines that may act on others through [hoot mcp](/docs/agent/hoot-mcp) |
 | schedules | `/admin/schedules` | manage [schedule presets](/docs/dashboard/admin/schedule-presets) |
 | alerts | `/admin/alerts` | manage a site's threshold alert rules. see [email alerts](/docs/dashboard/admin/email-alerts) |
 | webhooks | `/admin/webhooks` | manage a site's outbound [webhook](/docs/dashboard/admin/webhooks) subscriptions |
@@ -59,7 +59,7 @@ ownership is not a role anyone can assign: it moves by transfer, from the curren
 ## opening the panel
 
 - **profile menu** → **admin panel**. the entry shows once you are an owner or admin of the whole site on at least one site, and opens on **sites** (owlette's superadmins land on installers)
-- **direct URLs**: `/admin/sites`, `/admin/sites/{siteId}`, `/admin/tokens`, `/admin/swoop`, `/admin/swoop/settings`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
+- **direct URLs**: `/admin/sites`, `/admin/sites/{siteId}`, `/admin/tokens`, `/admin/swoop`, `/admin/hoot`, `/admin/schedules`, `/admin/alerts`, `/admin/webhooks`
 
 someone who is owner or admin of the whole site on no site, an admin limited to some machines included, is sent back to the dashboard with **access denied**, and so is a site admin who opens an internal page directly.
 

@@ -19,7 +19,6 @@ const SITE_SCOPED_ROUTES = [
   '/admin/tokens',
   '/admin/schedules',
   '/admin/swoop',
-  '/admin/swoop/settings',
 ];
 
 /** each sites page's h1, which renders only once the guard admits the caller. */

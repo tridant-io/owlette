@@ -41,7 +41,7 @@ describe('parseSiteSection', () => {
 
 describe('movedSiteSectionPath', () => {
   it('sends the old swoop section to swoop settings', () => {
-    expect(movedSiteSectionPath('swoop')).toBe('/admin/swoop/settings');
+    expect(movedSiteSectionPath('swoop')).toBe('/admin/swoop');
   });
 
   it('leaves every section still on the page, and anything unknown, where it is', () => {

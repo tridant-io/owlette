@@ -167,15 +167,15 @@ const CAPTURES: Capture[] = [
     ready: (page) => expect(page.getByRole('switch', { name: 'keep screens awake', exact: true })).toBeEnabled({ timeout: 15_000 }),
   },
   {
-    slug: 'admin-swoop-settings',
-    path: '/admin/swoop/settings',
+    slug: 'admin-swoop',
+    path: '/admin/swoop',
     role: 'superadmin',
     scenario: 'dashboard-mixed-states',
     ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
   },
   {
     slug: 'admin-sidebar',
-    path: '/admin/swoop/settings',
+    path: '/admin/swoop',
     role: 'superadmin',
     scenario: 'dashboard-mixed-states',
     ready: (page) => expect(page.getByRole('switch', { name: /^swoop on / }).first()).toBeEnabled({ timeout: 15_000 }),
@@ -183,7 +183,7 @@ const CAPTURES: Capture[] = [
     act: async (page) => {
       const menu = page.getByRole('button', { name: 'open admin menu' });
       if (await menu.isVisible()) await menu.click();
-      await expect(page.locator('#admin-sidebar').getByRole('group', { name: 'swoop', exact: true })).toBeVisible();
+      await expect(page.locator('#admin-sidebar').getByRole('link', { name: 'hoot', exact: true })).toBeVisible();
     },
   },
 ];

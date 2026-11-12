@@ -24,7 +24,7 @@ export function siteSettingsPath(siteId: string, section?: SiteSection): string 
   return section && section !== 'general' ? `${path}?section=${section}` : path;
 }
 
-export const SWOOP_SETTINGS_PATH = '/admin/swoop/settings';
+export const SWOOP_SETTINGS_PATH = '/admin/swoop';
 
 /** where a section that left the site's page lives now, so its old links still land on it. */
 export function movedSiteSectionPath(raw: string | null): string | null {

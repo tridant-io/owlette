@@ -35,9 +35,9 @@ the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one:
 
 swoop is **off** until a site turns it on: that is the default, and it is per site.
 
-a site owner or admin flips the site's **swoop** switch on admin panel → **swoop** → **settings** (`/admin/swoop/settings`): one table, with a row for each site you own or administer with access to the whole site. the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease. by default, owners and admins watch and control, and members watch unless the site's policy says they don't; a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) changes that for them.
+a site owner or admin flips the site's **swoop** switch on admin panel → **swoop** (`/admin/swoop`): one table, with a row for each site you own or administer with access to the whole site. the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease. by default, owners and admins watch and control, and members watch unless the site's policy says they don't; a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) changes that for them.
 
-while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens swoop settings, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime. **open swoop settings** in the swoop picker and the viewer opens them too.
+while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens the admin panel's swoop page, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime. **open swoop settings** in the swoop picker and the viewer opens them too.
 
 the rest of the site policy is still API-only: `PATCH /api/sites/{siteId}/swoop-settings`, from a signed-in session as a site owner or admin; an API key is refused here too. a person's own swoop mode is set in the site's [members section](/docs/dashboard/admin/member-management#swoop-mode).
 
@@ -326,9 +326,9 @@ without Accessibility you can still watch: the picture, the cursor, the audio an
 
 ## admin → swoop
 
-the admin panel's **swoop** section has two pages: **live sessions**, below, and **settings** (`/admin/swoop/settings`), which holds each site's swoop switch: see [turning it on](#turning-it-on).
+the admin panel's **swoop** page (`/admin/swoop`) holds each site's swoop switch, see [turning it on](#turning-it-on), and under it the live sessions.
 
-**live sessions** (`/admin/swoop`) lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. the page and **kill** are for site owners and admins whose access is the whole site, whatever their own swoop mode: a member set to control gets neither, and nor does an admin [limited to some machines](/docs/dashboard/admin/member-management#machine-scope). see the [admin panel](/docs/dashboard/admin).
+**live sessions** lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. the page and **kill** are for site owners and admins whose access is the whole site, whatever their own swoop mode: a member set to control gets neither, and nor does an admin [limited to some machines](/docs/dashboard/admin/member-management#machine-scope). see the [admin panel](/docs/dashboard/admin).
 
 **kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
 

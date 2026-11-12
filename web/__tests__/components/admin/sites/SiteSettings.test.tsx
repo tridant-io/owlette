@@ -6,7 +6,7 @@
  * the header with the site ID and the caller's role, one section at a time
  * (danger zone for owners and superadmins only), and where a delete sends the
  * caller. the four sections and the keep screens awake switch are stubs; each
- * has its own test. swoop's switch lives on /admin/swoop/settings, and its old
+ * has its own test. swoop's switch lives on /admin/swoop, and its old
  * section link goes there.
  */
 
@@ -290,24 +290,18 @@ describe('sections', () => {
     expect(mockGeneral?.onSave).toBe(mockUpdateSite);
   });
 
-  it('puts the machines list in its own panel', () => {
+  it('puts keep screens awake and the machines list in one panel, the switch first', () => {
     renderSettings('site-a', 'machines');
 
     const panel = screen.getByRole('region', { name: 'machines' });
     expect(within(panel).getByRole('heading', { level: 2 })).toHaveAttribute('id', 'site-section-machines');
-    expect(panel).toHaveTextContent("restart or remove this site's machines. add one from the dashboard's + button.");
-    expect(within(panel).getByTestId('machines-section')).toHaveAttribute('data-site', 'site-a');
-  });
-
-  it('holds keep screens awake in the machines section, above the list', () => {
-    renderSettings('site-a', 'machines');
-
-    const screens = screen.getByRole('region', { name: 'screens' });
-    expect(within(screens).getByRole('heading', { level: 2 })).toHaveAttribute('id', 'site-section-screens');
-    expect(screens).toHaveTextContent('this switch acts the moment it moves.');
-    expect(within(screens).getByTestId('keep-awake-switch')).toHaveAttribute('data-site', 'site-a');
-    const regions = screen.getAllByRole('region').map((region) => region.getAttribute('aria-labelledby'));
-    expect(regions).toEqual(['site-section-screens', 'site-section-machines']);
+    expect(panel).toHaveTextContent("add one from the dashboard's + button.");
+    const keepAwake = within(panel).getByTestId('keep-awake-switch');
+    const list = within(panel).getByTestId('machines-section');
+    expect(keepAwake).toHaveAttribute('data-site', 'site-a');
+    expect(list).toHaveAttribute('data-site', 'site-a');
+    expect(keepAwake.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getAllByRole('region')).toHaveLength(1);
   });
 
   it.each(['general', 'members', 'danger'] as const)('has no keep screens awake in %s', (section) => {
@@ -431,7 +425,7 @@ describe('/admin/sites/[siteId]', () => {
     mockSearch = 'section=swoop';
     await openPage('site a');
 
-    expect(mockReplace).toHaveBeenCalledWith('/admin/swoop/settings');
+    expect(mockReplace).toHaveBeenCalledWith('/admin/swoop');
     expect(screen.queryByRole('group', { name: 'site settings sections' })).toBeNull();
     expect(screen.queryByTestId(/-section$/)).toBeNull();
   });

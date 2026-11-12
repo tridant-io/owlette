@@ -46,13 +46,7 @@ jest.mock('@/contexts/AuthContext', () => ({
 }));
 
 import RequireAdminAccess from '@/components/RequireAdminAccess';
-import {
-  activeNavItem,
-  groupNavItems,
-  navItemMatches,
-  visibleNavItems,
-  requiredRoleForPath,
-} from '@/app/admin/navItems';
+import { groupNavItems, navItemMatches, visibleNavItems, requiredRoleForPath } from '@/app/admin/navItems';
 
 const setAuth = (role: UserRole | null, overrides: Partial<typeof auth> = {}) => {
   auth = { user: { uid: 'u1' }, loading: false, role, userSites: ['site-a'], ...overrides };
@@ -207,35 +201,16 @@ describe('navItemMatches', () => {
   });
 });
 
-describe('activeNavItem', () => {
-  const items = visibleNavItems('superadmin', false);
-
-  it.each([
-    ['/admin/swoop', 'live sessions'],
-    ['/admin/swoop/settings', 'settings'],
-    ['/admin/swoop/settings/anything', 'settings'],
-    ['/admin/sites/site-a', 'sites'],
-    ['/admin/issues/42', 'issues'],
-  ])('puts %p under %p alone, the longest match', (pathname, name) => {
-    expect(activeNavItem(items, pathname)?.name).toBe(name);
-  });
-
-  it.each(['/admin', '/admin/swoopy', '/admin/something-new', null])('puts %p under nothing', (pathname) => {
-    expect(activeNavItem(items, pathname)).toBeUndefined();
-  });
-});
-
 describe('visibleNavItems', () => {
   it('gives a site administrator exactly the site-scoped destinations, sites first', () => {
-    expect(visibleNavItems('member', true).map((item) => `${item.group}/${item.name}`)).toEqual([
-      'fleet/sites',
-      'fleet/agent tokens',
-      'swoop/live sessions',
-      'swoop/settings',
-      'hoot/settings',
-      'configuration/alerts',
-      'configuration/schedules',
-      'configuration/webhooks',
+    expect(visibleNavItems('member', true).map((item) => item.name)).toEqual([
+      'sites',
+      'agent tokens',
+      'swoop',
+      'hoot',
+      'alerts',
+      'schedules',
+      'webhooks',
     ]);
   });
 
@@ -245,9 +220,8 @@ describe('visibleNavItems', () => {
       'sites',
       'installers',
       'agent tokens',
-      'live sessions',
-      'settings',
-      'settings',
+      'swoop',
+      'hoot',
       'alerts',
       'schedules',
       'template library',
@@ -264,17 +238,13 @@ describe('visibleNavItems', () => {
       ),
     ).toEqual([
       'people: users',
-      'fleet: sites, installers, agent tokens',
-      'swoop: live sessions, settings',
-      'hoot: settings',
+      'fleet: sites, installers, agent tokens, swoop, hoot',
       'configuration: alerts, schedules, template library, webhooks',
       'support: issues, email',
     ]);
     // a site admin has no people section: users is a superadmin's alone
     expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
       'fleet',
-      'swoop',
-      'hoot',
       'configuration',
     ]);
   });
@@ -296,7 +266,6 @@ describe('requiredRoleForPath', () => {
     expect(requiredRoleForPath('/admin/sites')).toBe('admin');
     expect(requiredRoleForPath('/admin/webhooks')).toBe('admin');
     expect(requiredRoleForPath('/admin/swoop')).toBe('admin');
-    expect(requiredRoleForPath('/admin/swoop/settings')).toBe('admin');
     expect(requiredRoleForPath('/admin/users')).toBe('superadmin');
   });
 

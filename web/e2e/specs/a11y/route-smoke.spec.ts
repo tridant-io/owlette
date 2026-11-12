@@ -129,8 +129,8 @@ for (const theme of ['dark', 'light'] as const) {
       }
 
       // the heading renders before the site list resolves, so the scan waits for the switch
-      test('/admin/swoop/settings has no serious/critical axe violations', async ({ page }) => {
-        await page.goto('/admin/swoop/settings');
+      test('/admin/swoop has no serious/critical axe violations', async ({ page }) => {
+        await page.goto('/admin/swoop');
         await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeEnabled({
           timeout: 10_000,
         });

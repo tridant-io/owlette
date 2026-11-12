@@ -111,18 +111,12 @@ export function SiteSettings({
       {/* the sections with dialogs are keyed on the site, so one left open never acts on the next site */}
       {effective === 'members' && <SiteMembersSection key={site.id} siteId={site.id} />}
       {effective === 'machines' && (
-        <div className="space-y-4">
-          <Panel id="site-section-screens" title="screens" description="this switch acts the moment it moves.">
+        <Panel id="site-section-machines" title="machines" description="add one from the dashboard's + button.">
+          <div className="space-y-4">
             <KeepScreensAwakeSwitch siteId={site.id} />
-          </Panel>
-          <Panel
-            id="site-section-machines"
-            title="machines"
-            description="restart or remove this site's machines. add one from the dashboard's + button."
-          >
             <SiteMachinesList key={site.id} siteId={site.id} />
-          </Panel>
-        </div>
+          </div>
+        </Panel>
       )}
       {effective === 'danger' && (
         <SiteDangerZone
