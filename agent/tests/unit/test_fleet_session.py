@@ -695,8 +695,10 @@ def on_mac(tmp_path, monkeypatch, client, clock):
     handed = []
 
     def grant(fd):
-        # the file must still be empty: no byte of the session before the group
-        handed.append((fd, os.fstat(fd).st_size))
+        # the file must still be empty: no byte of the session before the group.
+        # and still the service's alone: no group reads it before it is the service's group
+        info = os.fstat(fd)
+        handed.append((fd, info.st_size, stat.S_IMODE(info.st_mode)))
 
     monkeypatch.setattr(fleet_session.shared_utils, 'grant_data_group', grant)
     return SimpleNamespace(keeper=FleetSessionKeeper(lambda: client, clock=clock), handed=handed)
@@ -711,6 +713,7 @@ def test_on_macos_the_file_is_0640_granted_to_the_group_and_replaced_atomically(
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o640
     assert len(on_mac.handed) == 1 and isinstance(on_mac.handed[0][0], int)
     assert on_mac.handed[0][1] == 0
+    assert on_mac.handed[0][2] == 0o600
     assert stored()['token'] == 'owf_first'
     first_inode = os.stat(path).st_ino
 

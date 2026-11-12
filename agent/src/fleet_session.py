@@ -123,16 +123,17 @@ def _publish_session(session):
             os.unlink(temp_name, dir_fd=dir_fd)
         except FileNotFoundError:
             pass
+        # created for the service alone: the group may read it only once it
+        # is the service's group, never whatever group a new file starts with
         file_fd = os.open(
             temp_name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o640,
+            0o600,
             dir_fd=dir_fd,
         )
         with os.fdopen(file_fd, 'w', encoding='utf-8') as f:
-            # os.open subtracts the umask from the mode it is handed
-            os.fchmod(f.fileno(), 0o640)
             shared_utils.grant_data_group(f.fileno())
+            os.fchmod(f.fileno(), 0o640)
             json.dump(session, f)
         os.replace(temp_name, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
     finally:
