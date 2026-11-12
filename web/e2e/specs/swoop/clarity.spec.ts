@@ -198,13 +198,19 @@ test.describe('through a host, at dpr 1', () => {
     page,
     browser,
   }) => {
-    // the viewer's own swoop-meta channel, so the host's frame records can be played into it
+    // the viewer's own swoop-meta channel, so the host's frame records can be played into it, and
+    // every frame of its video dropped, as a gpu counts a video at opacity 0 (the watchdog, below)
     await page.addInitScript(() => {
       const create = RTCPeerConnection.prototype.createDataChannel;
       RTCPeerConnection.prototype.createDataChannel = function (this: RTCPeerConnection, label: string, init?: RTCDataChannelInit) {
         const channel = create.call(this, label, init);
         if (label === 'swoop-meta') (window as unknown as { swoopMeta: RTCDataChannel }).swoopMeta = channel;
         return channel;
+      };
+      const quality = HTMLVideoElement.prototype.getVideoPlaybackQuality;
+      HTMLVideoElement.prototype.getVideoPlaybackQuality = function (this: HTMLVideoElement) {
+        const { creationTime, totalVideoFrames, corruptedVideoFrames } = quality.call(this);
+        return { creationTime, totalVideoFrames, droppedVideoFrames: totalVideoFrames, corruptedVideoFrames } as VideoPlaybackQuality;
       };
     });
     const host = await FakeSwoopHost.start({
@@ -280,9 +286,11 @@ test.describe('through a host, at dpr 1', () => {
       await expect(statsRow(page, 'scaling')).toHaveText('smooth');
 
       // the watchdog judges a picture by the host's frame records against what was shown
-      // (stall.ts). the fake host sends no records, and swiftshader still counts a video at
-      // opacity 0 as shown where a gpu counts every frame dropped, so both are played in as a
-      // real machine and a gpu give them: only the canvas's draws are left to show it is alive
+      // (stall.ts). the fake host sends no records, so they are played in as a real machine
+      // sends them, and the video's frames have counted as dropped since the page loaded, as a
+      // gpu counts a video at opacity 0: only the canvas's draws are left to show it is alive.
+      // not from here: swiftshader had counted hundreds of hidden frames as shown, and taking
+      // them all back at once read as a dead picture (pr 494's ci)
       await expect.poll(() => page.evaluate(() => (window as unknown as { swoopMeta?: RTCDataChannel }).swoopMeta?.readyState)).toBe('open');
       await page.evaluate(() => {
         const channel = (window as unknown as { swoopMeta: RTCDataChannel }).swoopMeta;
@@ -298,17 +306,12 @@ test.describe('through a host, at dpr 1', () => {
           channel.dispatchEvent(new MessageEvent('message', { data: record.buffer }));
         }, 33);
         (window as unknown as { stopMeta: () => void }).stopMeta = () => clearInterval(timer);
-        const element = document.querySelector<HTMLVideoElement>('video[aria-label="remote screen"]')!;
-        const quality = element.getVideoPlaybackQuality.bind(element);
-        element.getVideoPlaybackQuality = () => {
-          const { creationTime, totalVideoFrames, corruptedVideoFrames } = quality();
-          return { creationTime, totalVideoFrames, droppedVideoFrames: totalVideoFrames, corruptedVideoFrames } as VideoPlaybackQuality;
-        };
       });
       const stalled = page.getByText(/picture stalled|the picture froze/);
       for (let second = 0; second < 12; second += 1) {
         await page.waitForTimeout(1_000);
-        await expect(stalled).toHaveCount(0);
+        // counted, not waited for: a reattach's notice is gone in 2 s, inside any retry
+        expect(await stalled.count()).toBe(0);
       }
       await expect(statsRow(page, 'frozen pictures')).toHaveText('0');
       expect(host.problems).toEqual([]);
