@@ -207,7 +207,7 @@ describe('visibleNavItems', () => {
       'sites',
       'agent tokens',
       'swoop',
-      'settings',
+      'hoot',
       'alerts',
       'schedules',
       'webhooks',
@@ -221,7 +221,7 @@ describe('visibleNavItems', () => {
       'installers',
       'agent tokens',
       'swoop',
-      'settings',
+      'hoot',
       'alerts',
       'schedules',
       'template library',
@@ -238,15 +238,13 @@ describe('visibleNavItems', () => {
       ),
     ).toEqual([
       'people: users',
-      'fleet: sites, installers, agent tokens, swoop',
-      'hoot: settings',
+      'fleet: sites, installers, agent tokens, swoop, hoot',
       'configuration: alerts, schedules, template library, webhooks',
       'support: issues, email',
     ]);
     // a site admin has no people section: users is a superadmin's alone
     expect(groupNavItems(visibleNavItems('member', true)).map(({ group }) => group)).toEqual([
       'fleet',
-      'hoot',
       'configuration',
     ]);
   });

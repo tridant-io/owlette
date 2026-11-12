@@ -6,7 +6,6 @@ import { Label } from '@/components/ui/label';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { Panel } from '@/components/admin/Panel';
 import { useFleetSettings } from '@/hooks/useFleetSettings';
 import { useSiteMachines } from '@/hooks/useSiteMachines';
 import { storedFleetGrant, type FleetGrant, type StoredFleetGrant } from '@/lib/fleet/grant';
@@ -18,8 +17,6 @@ export const FLEET_COPY = {
   switchDescription:
     "a machine you choose can use hoot's tools on other machines in this site, through an ai agent running on it. off until you turn it on.",
   offHint: 'turn this on to choose which machines may act.',
-  panelTitle: 'machines that act on others',
-  panelDescription: 'choose which machines may act, how far, and on which machines. each change saves as you make it.',
   senderToggle: 'may act on others',
   tierLabel: 'how far',
   tiers: { 1: 'read', 2: 'bounded changes', 3: 'privileged' },
@@ -29,6 +26,7 @@ export const FLEET_COPY = {
   pickNoun: 'machines',
   pickSearch: 'search machines…',
   tier3Warning: 'privileged runs shell commands on the machines it may act on, with nobody approving.',
+  reachesNothing: 'reaches no machines yet: pick them under on which machines.',
   loading: 'loading machines…',
   noMachines: 'this site has no machines yet.',
 } as const;
@@ -122,7 +120,7 @@ export function FleetSendersEditor({ siteId }: { siteId: string }) {
   const options = (machines ?? []).map((m) => ({ value: m.id, label: m.name }));
 
   return (
-    <Panel id="site-section-fleet-senders" title={FLEET_COPY.panelTitle} description={FLEET_COPY.panelDescription}>
+    <>
       {error ? (
         <p className="text-xs text-danger">{error}</p>
       ) : machines === null || loading ? (
@@ -153,8 +151,9 @@ export function FleetSendersEditor({ siteId }: { siteId: string }) {
                     checked={grant !== null}
                     aria-label={`${machine.name} ${FLEET_COPY.senderToggle}`}
                     onCheckedChange={(on) => {
-                      setPicks(machine.id, false);
-                      // a new sender starts at the lowest tier with no machines
+                      // a new sender starts at the lowest tier, picking its machines: the
+                      // owner turned rows on three times and never found where to pick them
+                      setPicks(machine.id, on);
                       change(machine.id, on ? { maxTier: 1 } : null);
                     }}
                   />
@@ -223,6 +222,12 @@ export function FleetSendersEditor({ siteId }: { siteId: string }) {
                         data-testid={`fleet-sender-${machine.id}-machines`}
                       />
                     )}
+                    {!grant.wholeSite && !grant.machineIds?.length && (
+                      <p className="flex items-start gap-2 text-xs text-warning" role="note">
+                        <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                        <span>{FLEET_COPY.reachesNothing}</span>
+                      </p>
+                    )}
                     {grant.maxTier === 3 && (
                       <p className="flex items-start gap-2 text-xs text-danger" role="note">
                         <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
@@ -236,6 +241,6 @@ export function FleetSendersEditor({ siteId }: { siteId: string }) {
           })}
         </ul>
       )}
-    </Panel>
+    </>
   );
 }

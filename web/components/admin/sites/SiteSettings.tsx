@@ -12,7 +12,7 @@ import { CopySiteIdButton } from '@/components/admin/sites/CopySiteIdButton';
 import { SiteDangerZone } from '@/components/admin/sites/SiteDangerZone';
 import { SiteGeneralSection } from '@/components/admin/sites/SiteGeneralSection';
 import { SiteMembersSection } from '@/components/admin/sites/SiteMembersSection';
-import { SiteSwitches } from '@/components/admin/sites/SiteSwitches';
+import { KeepScreensAwakeSwitch } from '@/components/admin/sites/SiteSwitches';
 import { SiteMachinesList } from '@/components/SiteMachinesList';
 import { Badge } from '@/components/ui/badge';
 
@@ -111,15 +111,13 @@ export function SiteSettings({
       {/* the sections with dialogs are keyed on the site, so one left open never acts on the next site */}
       {effective === 'members' && <SiteMembersSection key={site.id} siteId={site.id} />}
       {effective === 'machines' && (
-        <Panel
-          id="site-section-machines"
-          title="machines"
-          description="restart or remove this site's machines. add one from the dashboard's + button."
-        >
-          <SiteMachinesList key={site.id} siteId={site.id} />
+        <Panel id="site-section-machines" title="machines" description="add one from the dashboard's + button.">
+          <div className="space-y-4">
+            <KeepScreensAwakeSwitch siteId={site.id} />
+            <SiteMachinesList key={site.id} siteId={site.id} />
+          </div>
         </Panel>
       )}
-      {effective === 'swoop' && <SiteSwitches siteId={site.id} />}
       {effective === 'danger' && (
         <SiteDangerZone
           key={site.id}

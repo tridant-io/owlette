@@ -99,7 +99,7 @@ A person's own swoop on one site, set on their member row: `none`, `view` (watch
 _Avoid_: swoop role, swoop permission, swoop access level
 
 **Site settings**:
-A site's own page in the admin panel, `/admin/sites/{siteId}`: its name and timezone, members, machines, the swoop and keep screens awake switches, and deleting it. The site's owners and admins open it from the site switcher or from the site's gear on admin panel → sites.
+A site's own page in the admin panel, `/admin/sites/{siteId}`: its name and timezone, members, machines with the keep screens awake switch, and deleting it. The site's owners and admins open it from the site switcher or from the site's gear on admin panel → sites. The swoop switch is on admin panel → swoop (`/admin/swoop`), in the site's row.
 _Avoid_: site editor, manage sites dialog
 
 **Machine scope**:

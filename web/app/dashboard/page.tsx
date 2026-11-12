@@ -57,7 +57,7 @@ import type { Process } from '@/hooks/useFirestore';
 import { useScrollFade } from '@/hooks/useScrollFade';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
-import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 
 // Code-split: deferring parse+compile of the detail panels until a cell is clicked keeps
 // the grid-template-rows slide animation inside its frame budget. `ssr: false` because
@@ -913,7 +913,7 @@ export default function DashboardPage() {
   const onLiveView = useStableCallback(openLiveView);
   const onSwoop = useStableCallback(openSwoop);
   const onSwoopApp = useStableCallback(openSwoopApp);
-  const onSiteSettings = useStableCallback(() => router.push(siteSettingsPath(currentSiteId, 'swoop')));
+  const onSiteSettings = useStableCallback(() => router.push(SWOOP_SETTINGS_PATH));
   const swoopSettings = useSwoopSettings(currentSiteId);
   // not while loading: the hook reads off until the snapshot lands.
   const swoopOff = !swoopSettings.loading && !swoopSettings.settings.enabled;

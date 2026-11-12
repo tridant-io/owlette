@@ -7,8 +7,8 @@
  * which is what every self-serve customer is. `admin` administers a site it does not own.
  *
  * one capability separates the two: SITE_DELETE, on the owner row of
- * `SiteRoleCapabilityMatrix` and nowhere else. so an owner gets all five sections and a
- * site admin gets four, with no danger zone. a plain member administers nothing: the
+ * `SiteRoleCapabilityMatrix` and nowhere else. so an owner gets all four sections and a
+ * site admin gets three, with no danger zone. a plain member administers nothing: the
  * header offers them only new site, and the admin panel turns them away. a member who
  * administers another site, on a site they only belong to, is `delete-site-owner.spec.ts`.
  *
@@ -27,7 +27,7 @@ import { grantMembership, revokeMembership, TEST_USERS } from '../../helpers/see
 const OWNED_SITE_ID = 'site-C';
 const OWNED_SITE_NAME = 'Site C (Owned)';
 
-const ADMIN_SECTIONS = ['general', 'members', 'machines', 'swoop & screens'];
+const ADMIN_SECTIONS = ['general', 'members', 'machines'];
 const OWNER_SECTIONS = [...ADMIN_SECTIONS, 'danger zone'];
 
 function sectionButtons(page: Page) {
@@ -54,7 +54,7 @@ test.describe('per-site role — owner', () => {
     await expect(gear(page, OWNED_SITE_NAME)).toBeVisible();
   });
 
-  test('an owner gets all five sections, danger zone included', async ({ page }) => {
+  test('an owner gets all four sections, danger zone included', async ({ page }) => {
     await page.goto(`/admin/sites/${OWNED_SITE_ID}`);
     await expect(sectionButtons(page)).toHaveText(OWNER_SECTIONS);
   });
@@ -115,7 +115,7 @@ test.describe('per-site role — site admin', () => {
     { id: OWNED_SITE_ID, name: OWNED_SITE_NAME },
     { id: 'site-A', name: 'Site A (Assigned)' },
   ]) {
-    test(`a site admin gets four sections and no danger zone on ${site.name}`, async ({ page }) => {
+    test(`a site admin gets three sections and no danger zone on ${site.name}`, async ({ page }) => {
       await page.goto(`/admin/sites/${site.id}`);
       await expect(sectionButtons(page)).toHaveText(ADMIN_SECTIONS);
 

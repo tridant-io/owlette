@@ -35,7 +35,7 @@ const ROW_USER = TEST_USERS.owner;
 // seeded with no name, so the machines section lists it by its id
 const MACHINE_ID = 'e2e-mobile-sites-machine';
 const MACHINE_VERSION = '2.9.0';
-const SECTIONS = ['general', 'members', 'machines', 'swoop & screens', 'danger zone'];
+const SECTIONS = ['general', 'members', 'machines', 'danger zone'];
 
 /** site ids created by this file, released in afterAll. */
 const createdSiteIds: string[] = [];
@@ -150,13 +150,6 @@ test("a site's settings fit, section by section", async ({ page }) => {
   await expectFullyWithinViewport(page, page.getByLabel('site name', { exact: true }), 'the site name input');
   await expectFullyWithinViewport(page, page.getByRole('button', { name: 'save', exact: true }), 'save');
 
-  // the switches write the moment they move, so here they are only reached, never tapped
-  await sections.getByRole('button', { name: 'swoop & screens', exact: true }).tap();
-  for (const name of ['swoop', 'keep screens awake']) {
-    await expectFullyWithinViewport(page, page.getByRole('switch', { name, exact: true }), `the ${name} switch`);
-  }
-  await assertNoHorizontalOverflow(page);
-
   await sections.getByRole('button', { name: 'members', exact: true }).tap();
   await expectFullyWithinViewport(page, page.getByRole('button', { name: 'add member', exact: true }), 'add member');
   const row = page.getByRole('row').filter({ hasText: ROW_USER.email });
@@ -170,6 +163,12 @@ test("a site's settings fit, section by section", async ({ page }) => {
   await assertNoHorizontalOverflow(page);
 
   await sections.getByRole('button', { name: 'machines', exact: true }).tap();
+  // the switch writes the moment it moves, so here it is only reached, never tapped
+  await expectFullyWithinViewport(
+    page,
+    page.getByRole('switch', { name: 'keep screens awake', exact: true }),
+    'the keep screens awake switch',
+  );
   const machine = page.getByRole('listitem').filter({ hasText: MACHINE_ID });
   for (const action of ['restart', 'remove']) {
     await expectFullyWithinViewport(
@@ -186,6 +185,19 @@ test("a site's settings fit, section by section", async ({ page }) => {
 
   await sections.getByRole('button', { name: 'danger zone', exact: true }).tap();
   await expectFullyWithinViewport(page, page.getByRole('button', { name: 'delete site', exact: true }), 'delete site');
+  await assertNoHorizontalOverflow(page);
+});
+
+test('the swoop page fits', async ({ page }) => {
+  await page.goto('/admin/swoop');
+  await expect(page.getByRole('heading', { level: 1, name: 'swoop', exact: true })).toBeVisible();
+
+  // the switch writes the moment it moves, so here it is only reached, never tapped
+  await expectFullyWithinViewport(
+    page,
+    page.getByRole('switch', { name: `swoop on ${TAKEN_SITE_NAME}`, exact: true }),
+    'the swoop switch',
+  );
   await assertNoHorizontalOverflow(page);
 });
 

@@ -187,7 +187,7 @@ a hoot turn — the model's reasoning plus any tool calls it makes — runs on t
 
 ## approving privileged (tier-3) actions
 
-tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site setting, **require approval for privileged tools**. a site owner or admin finds it in the admin panel, under **hoot** → **settings**:
+tier-3 tools (shell, file writes, deployments, reboot, shutdown) are governed by a per-site setting, **require approval for privileged tools**. a site owner or admin finds it in the admin panel, under **fleet** → **hoot**:
 
 - **on** (the default) — privileged tool calls pause in the chat for an explicit approve or deny before they run.
 - **off** — privileged tool calls run at once, with no prompt. turning the gate off weakens safety, so the switch asks for confirmation first. it also re-enables the lower-latency [local hoot path](#local-hoot-public-conversations-api-only) on the public conversations API; the dashboard chat always runs server-side, gate or no gate.

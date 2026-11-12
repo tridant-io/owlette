@@ -1,5 +1,7 @@
 /**
- * Admin — swoop sessions page.
+ * Admin — swoop, one item under fleet: one page with a table of the sites the
+ * caller may change, each with its swoop switch, which writes
+ * `sites/{site}/settings/swoop` at once, and the live sessions under it.
  *
  * Session records are server-only (`sites/{site}/machines/{m}/swoop_sessions/{sid}`,
  * no rule reaches them), so the page reads them through
@@ -26,6 +28,7 @@ const SITE_ID = `site-admin-swoop-${SUFFIX}`;
 const SITE_OWNER = 'someone-else';
 const MACHINE_ID = `mach-admin-swoop-${SUFFIX}`;
 const SID = `sid-admin-swoop-${SUFFIX}`;
+const SITE_NAME = `Swoop admin ${SUFFIX}`;
 const MACHINE_PATH = `sites/${SITE_ID}/machines/${MACHINE_ID}`;
 
 let viewer: TestUser;
@@ -33,7 +36,7 @@ let viewer: TestUser;
 const sessionDoc = () => getAdminDb().doc(`${MACHINE_PATH}/swoop_sessions/${SID}`);
 
 test.beforeAll(async () => {
-  await seedSite({ id: SITE_ID, name: `Swoop admin ${SUFFIX}`, owner: SITE_OWNER, timezone: 'UTC' });
+  await seedSite({ id: SITE_ID, name: SITE_NAME, owner: SITE_OWNER, timezone: 'UTC' });
   // no monitors: a hardware subdoc would outlive the machine doc's delete.
   await seedMachine(SITE_ID, MACHINE_ID, { monitorCount: 0 });
   // a viewer of this site's machine is a member of this site, not of site-A.
@@ -62,12 +65,19 @@ test.afterAll(async () => {
   await db.doc(`${MACHINE_PATH}/swoop_step_up_revocations/current`).delete();
   await db.doc(`${MACHINE_PATH}/commands/pending`).delete();
   await db.doc(MACHINE_PATH).delete();
+  // the settings test's switch writes this one.
+  await db.doc(`sites/${SITE_ID}/settings/swoop`).delete();
   await db.doc(`sites/${SITE_ID}/members/${SITE_OWNER}`).delete();
   await db.doc(`sites/${SITE_ID}/members/${viewer.uid}`).delete();
   await db.doc(`sites/${SITE_ID}`).delete();
   await db.doc(`users/${viewer.uid}`).delete();
   await getAdminAuth().deleteUser(viewer.uid);
 });
+
+/** the sidebar's links in one of its sections, in order. */
+function sidebarSection(page: Page, name: string) {
+  return page.locator('#admin-sidebar').getByRole('group', { name, exact: true }).getByRole('link');
+}
 
 async function gotoSwoopSessions(page: Page) {
   await page.goto('/admin/swoop');
@@ -110,6 +120,35 @@ test.describe('as a superadmin', () => {
     const queued = Object.values(pending.data() ?? {}) as Array<{ type?: string; sid?: string }>;
     expect(queued.some((cmd) => cmd.type === 'swoop_kill' && cmd.sid === SID)).toBe(true);
   });
+
+  test('swoop and hoot are single items under fleet, with no sections of their own', async ({ page }) => {
+    await gotoSwoopSessions(page);
+
+    const sections = page.locator('#admin-sidebar').getByRole('group');
+    await expect(sections).toHaveText([/^people/, /^fleet/, /^configuration/, /^support/]);
+    const fleet = sidebarSection(page, 'fleet');
+    await expect(fleet).toHaveText(['sites', 'installers', 'agent tokens', 'swoop', 'hoot']);
+    await expect(fleet.nth(3)).toHaveAttribute('href', '/admin/swoop');
+    await expect(fleet.nth(3)).toHaveAttribute('aria-current', 'page');
+    await expect(fleet.nth(4)).toHaveAttribute('href', '/admin/hoot');
+  });
+
+  test("the swoop page lists the site, and its row's switch writes at once", async ({ page }) => {
+    await gotoSwoopSessions(page);
+
+    const swoop = page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true });
+    // enabled means the snapshot has answered; with no document, swoop is off. the
+    // switch follows its snapshot, so the flip on screen is the document answering.
+    await expect(swoop).toBeEnabled();
+    await expect(swoop).not.toBeChecked();
+    await swoop.click();
+    await expect(swoop).toBeChecked();
+    expect((await getAdminDb().doc(`sites/${SITE_ID}/settings/swoop`).get()).data()?.enabled).toBe(true);
+
+    // a reload reads it back
+    await page.reload();
+    await expect(page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true })).toBeChecked();
+  });
 });
 
 test.describe('as a site admin of another site', () => {
@@ -123,5 +162,13 @@ test.describe('as a site admin of another site', () => {
 
     await expect(page.getByText(MACHINE_ID)).toHaveCount(0);
     await expect(page.getByText(viewer.email)).toHaveCount(0);
+  });
+
+  test('the swoop page never lists a site the admin does not run', async ({ page }) => {
+    await gotoSwoopSessions(page);
+
+    // the site the admin does run is listed
+    await expect(page.getByRole('switch', { name: 'swoop on Site A (Assigned)', exact: true })).toBeVisible();
+    await expect(page.getByRole('switch', { name: `swoop on ${SITE_NAME}`, exact: true })).toHaveCount(0);
   });
 });

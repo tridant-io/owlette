@@ -35,6 +35,9 @@ function SkeletonRows() {
   );
 }
 
+// the header and every row share these columns from md up
+const SITE_COLUMNS = 'md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_2rem] md:gap-x-4';
+
 // one grid, two shapes, as the issue list. a phone: the name and the gear on the
 // first line, then id · timezone · role. md up: one row of columns, where the
 // second line's box drops out (display: contents) so each of its cells takes a column
@@ -53,7 +56,7 @@ function SiteRow({
   administered: boolean;
 }) {
   return (
-    <li className="site-row-cv grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-x-3 gap-y-1 px-3 py-2 sm:px-4 md:grid-cols-[minmax(0,2.2fr)_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1.6fr)_2rem] md:gap-x-4">
+    <li className={`site-row-cv grid grid-cols-[minmax(0,1fr)_2rem] items-center gap-x-3 gap-y-1 px-3 py-2 sm:px-4 ${SITE_COLUMNS}`}>
       <div className="col-[1] row-[1] flex min-w-0 items-center gap-2">
         <span className="min-w-0 text-sm font-medium text-foreground max-md:wrap-anywhere md:truncate">
           {highlightMatch(site.name, query)}
@@ -237,18 +240,30 @@ export function SiteList() {
                 <p className="text-sm text-muted-foreground">no sites match “{query}”</p>
               </div>
             ) : (
-              <ul aria-label="sites" className="divide-y divide-border">
-                {shownSites.map((site) => (
-                  <SiteRow
-                    key={site.id}
-                    site={site}
-                    current={site.id === currentSiteId}
-                    query={query}
-                    access={accessFor(site)}
-                    administered={isSiteAdmin(site.id)}
-                  />
-                ))}
-              </ul>
+              <>
+                {/* a phone stacks each row's cells, so the header is md up only */}
+                <div
+                  aria-hidden="true"
+                  className={`hidden border-b border-border px-3 py-2 text-xs font-medium text-muted-foreground sm:px-4 md:grid ${SITE_COLUMNS}`}
+                >
+                  <span>site</span>
+                  <span>id</span>
+                  <span>timezone</span>
+                  <span>{isSuperadmin ? 'owner' : 'your role'}</span>
+                </div>
+                <ul aria-label="sites" className="divide-y divide-border">
+                  {shownSites.map((site) => (
+                    <SiteRow
+                      key={site.id}
+                      site={site}
+                      current={site.id === currentSiteId}
+                      query={query}
+                      access={accessFor(site)}
+                      administered={isSiteAdmin(site.id)}
+                    />
+                  ))}
+                </ul>
+              </>
             )}
           </div>
         )}
