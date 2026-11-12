@@ -45,6 +45,11 @@ const INTERNAL_ROUTES = new Set([
   '/api/agent/alert',
   '/api/agent/screenshot',
   '/api/agent/generate-installer',
+  // a granted machine's own routes (ADR 0017): the agent and its local script call them, never an api key.
+  '/api/agent/fleet/session',
+  '/api/agent/fleet/tools',
+  '/api/agent/fleet/call',
+  '/api/agent/fleet/calls/{callId}',
   '/api/alerts/trigger',
   '/api/bug-report',
   // signs the dashboard issue dialog's file uploads; session only, like /api/bug-report.

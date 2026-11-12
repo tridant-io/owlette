@@ -332,6 +332,9 @@ function mintWebhookSecret(): string {
 
 /** `createdBy` is non-optional, so a system caller is recorded under its actor name rather than blank. */
 function authorIdentifier(actor: Actor): string {
+  // the machine principal lives only on the fleet routes (ADR 0017), and
+  // talonAuthorUid would read any createdBy without the system prefix as a uid
+  if (actor.type === 'machine') throw new Error('a machine never authors a talon');
   return actor.type === 'user' ? actor.userId : `${SYSTEM_AUTHOR_PREFIX}${actor.name}`;
 }
 

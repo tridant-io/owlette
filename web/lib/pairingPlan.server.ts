@@ -13,6 +13,7 @@
 import type { Auth } from 'firebase-admin/auth';
 import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { pruneMachineFromFleet } from '@/lib/fleet/cleanup.server';
 import logger from '@/lib/logger';
 import { pruneMachineFromMembers } from '@/lib/membership.server';
 import { machineSlotAvailable, payerForSite, plansEnforced } from '@/lib/plan.server';
@@ -59,6 +60,8 @@ export async function ensureAgentAuthUser(adminAuth: Auth, uid: string): Promise
  *   with no member's grant. a re-pair of a machine still on the site, a legacy
  *   doc with no `pairedAt` included, keeps its grants, and so does a failed read,
  *   which proves nothing.
+ * - in the same case, takes the id out of the site's fleet grant, with any fleet
+ *   session and call record left under it (ADR 0017), for the same reason.
  */
 export async function recordPairing(siteId: string, machineId: string): Promise<void> {
   let existed = true;
@@ -86,6 +89,15 @@ export async function recordPairing(siteId: string, machineId: string): Promise<
     await pruneMachineFromMembers({ siteId, machineId });
   } catch (error: unknown) {
     logger.warn(`machine scopes not pruned: site=${siteId}, machine=${machineId}`, {
+      context: 'pairing',
+      data: { error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+
+  try {
+    await pruneMachineFromFleet({ siteId, machineId });
+  } catch (error: unknown) {
+    logger.warn(`fleet grant not pruned: site=${siteId}, machine=${machineId}`, {
       context: 'pairing',
       data: { error: error instanceof Error ? error.message : String(error) },
     });

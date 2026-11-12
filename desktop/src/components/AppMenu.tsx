@@ -8,6 +8,7 @@ import {
   Monitor,
   MonitorPlay,
   Moon,
+  Plug,
   RotateCcw,
   RotateCw,
   ScrollText,
@@ -33,6 +34,7 @@ import { openExternalUrl, openOwlettePath } from '@/lib/agentCli'
 import {
   OWLETTE_FILES,
   appearanceTheme,
+  hootMcpCommand,
   openSwoopViewer,
   setAppearanceTheme,
   swoopViewerInstalled,
@@ -54,6 +56,8 @@ interface AppMenuProps {
   onJoinSite: () => void
   onLeaveSite: () => void
   onReportIssue: () => void
+  /** Open the dialog with the command that connects an AI agent to hoot. */
+  onConnectAgent: () => void
   /**
    * Restart the service without elevation: restart.flag on windows, the polkit
    * rule's `systemctl restart` on linux, a request to the daemon on macos.
@@ -82,12 +86,16 @@ interface AppMenuProps {
  *
  * swoop opens owlette swoop, the viewer app, and leads the menu: it is the row
  * people reach for. it is there only when the host finds the app installed.
+ *
+ * connect an ai agent is there only where the host has a command to show: a
+ * machine that cannot be the acting side of hoot mcp has nothing to connect.
  */
 export function AppMenu({
   paired,
   onJoinSite,
   onLeaveSite,
   onReportIssue,
+  onConnectAgent,
   onRestartService,
   startOnLogin,
   onStartOnLoginChange,
@@ -118,6 +126,7 @@ export function AppMenu({
 
   const [appearance, setAppearance] = useState<ThemeChoice>(DEFAULT_THEME)
   const [swoopInstalled, setSwoopInstalled] = useState(false)
+  const [canConnectAgent, setCanConnectAgent] = useState(false)
 
   useEffect(() => {
     let disposed = false
@@ -134,6 +143,13 @@ export function AppMenu({
       })
       .catch(() => {
         // no bridge: no app to open, so the row stays hidden
+      })
+    void hootMcpCommand()
+      .then((command) => {
+        if (!disposed) setCanConnectAgent(command !== null)
+      })
+      .catch(() => {
+        // no bridge: no command to show, so the row stays hidden
       })
     return () => {
       disposed = true
@@ -173,6 +189,12 @@ export function AppMenu({
           <BookOpen aria-hidden className="size-4" />
           docs
         </DropdownMenuItem>
+        {canConnectAgent && (
+          <DropdownMenuItem data-testid="menu-connect-agent" onSelect={onConnectAgent}>
+            <Plug aria-hidden className="size-4" />
+            connect an ai agent
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem data-testid="menu-report-issue" onSelect={onReportIssue}>
           <Bug aria-hidden className="size-4" />
           submit issue

@@ -25,7 +25,6 @@ import { ChatWindow } from './ChatWindow';
 import { ChatInput } from './ChatInput';
 import { MachineTargetPicker } from './MachineTargetPicker';
 import { HootPowerToggle } from './HootPowerToggle';
-import { HootApprovalToggle } from './HootApprovalToggle';
 import { ShareChatDialog } from './ShareChatDialog';
 import { ConversationResizeHandle } from './ConversationResizeHandle';
 import { FallingFeather } from '@/components/FallingFeather';
@@ -176,7 +175,7 @@ interface HootChatViewProps {
 
 export function HootChatView({ initialChatId }: HootChatViewProps) {
   const router = useRouter();
-  const { user, userSites, isSuperadmin, isSiteAdmin, machineScope, loading: authLoading, lastSiteId, lastMachineIds, updateLastSite, updateLastMachine } = useAuth();
+  const { user, userSites, isSuperadmin, machineScope, loading: authLoading, lastSiteId, lastMachineIds, updateLastSite, updateLastMachine } = useAuth();
   const { sites, loading: sitesLoading } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [currentSiteId, setCurrentSiteId] = useState<string>('');
@@ -1195,9 +1194,6 @@ export function HootChatView({ initialChatId }: HootChatViewProps) {
                     <p>share</p>
                   </TooltipContent>
                 </Tooltip>
-              )}
-              {currentSiteId && isSiteAdmin(currentSiteId) && (
-                <HootApprovalToggle siteId={currentSiteId} />
               )}
               {currentSiteId && singleTargetMachine && (
                 <HootPowerToggle siteId={currentSiteId} machine={singleTargetMachine} />

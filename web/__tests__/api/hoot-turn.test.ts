@@ -686,15 +686,20 @@ describe('POST /api/hoot — @mention narrowing', () => {
     expect(resolveRequest()).toEqual({ requested: null, mentions: [], machineScope: null });
   });
 
-  it('never narrows on a machine-authored opener', async () => {
+  it.each([
     // A follow-up note is the assistant's own words coming back; an `@id` in it
     // was never a person choosing a target.
+    ['a follow-up note', 'followup_msg_fu-1'],
+    ['a talon directive', 'talon_msg_run-1'],
+    // a granted machine's task for hoot is that machine's words, not the chat owner's
+    ["a machine's task", 'task_msg_turn_1'],
+  ])('never narrows on a machine-authored opener: %s', async (_label, id) => {
     await TURN(
       turnRequest(
         mentionBody({
           messages: [
             {
-              id: 'followup_msg_fu-1',
+              id,
               role: 'user',
               parts: [{ type: 'text', text: `[scheduled follow-up] check @${MACHINE_B}` }],
             },

@@ -14,7 +14,8 @@
  *   3. revoke `agent_refresh_tokens` for the site. FIRST among the destructive
  *      steps: a refresh token outlives the site document, so revoking last leaves
  *      a window where the site is gone and an agent can still mint access tokens
- *      against it.
+ *      against it. The site's fleet sessions and call records (ADR 0017) go with
+ *      them: top-level collections too, which step 5 never reaches.
  *   4. clear `users/{uid}.sites[]` for every member — read from the member rows,
  *      so it has to happen BEFORE they are deleted. Skipping it also strands a
  *      dead site id in the client's union, which reports as `membership_fallback`
@@ -46,6 +47,8 @@ import {
   writeGlobalAuditEntryBlocking,
   type AuditActor,
 } from '@/lib/auditLog.server';
+import { deleteFleetCalls } from '@/lib/fleet/calls.server';
+import { revokeFleetSessions } from '@/lib/fleet/session.server';
 
 export interface DeleteSiteInput {
   siteId: string;
@@ -147,6 +150,10 @@ export async function deleteSite(
     for (const doc of tokenSnap.docs.slice(i, i + CASCADE_BATCH)) batch.delete(doc.ref);
     await batch.commit();
   }
+  // A fleet session (ADR 0017) is an agent credential too. It and the call
+  // records live outside the site document, so the cascade below never reaches them.
+  await revokeFleetSessions(db, { siteId: input.siteId });
+  await deleteFleetCalls(db, { siteId: input.siteId });
 
   // 4. Clear the legacy membership pointer while the rows that name the members
   //    still exist.

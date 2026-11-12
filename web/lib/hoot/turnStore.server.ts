@@ -177,7 +177,7 @@ export function generateTurnId(): string {
   return `turn_${crypto.randomBytes(18).toString('base64url')}`;
 }
 
-function streamRef(db: FirebaseFirestore.Firestore, chatId: string) {
+export function streamRef(db: FirebaseFirestore.Firestore, chatId: string) {
   return db.collection('chats').doc(chatId).collection('stream').doc('current');
 }
 

@@ -146,11 +146,11 @@ class TestStartupRepair:
         assert svc._pending_anomaly_event == classified
 
 
-def test_console_user_entries_are_the_token_file_and_the_cortex_queues():
+def test_console_user_entries_are_the_token_file_the_cortex_queues_and_the_fleet_folder():
     import owlette_service
     names = sorted(os.path.basename(p) for p in owlette_service._console_user_acl_paths())
     assert names == ['.tokens.enc', '.tokens.enc.v1',
-                     'cortex_commands', 'cortex_events', 'cortex_results']
+                     'cortex_commands', 'cortex_events', 'cortex_results', 'fleet']
 
 
 def test_main_snapshots_the_console_then_repairs_after_the_classifier(monkeypatch):
