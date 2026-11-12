@@ -365,8 +365,9 @@ describe('startFleetCall: refusals, in order', () => {
 describe('startFleetCall: list_machines', () => {
   beforeEach(() => {
     const now = Date.now();
-    docs.set(machinePath(M1), { online: true, lastHeartbeat: now - 12_000, os: 'Windows 11', agent_version: '4.1.28' });
-    docs.set(machinePath(M2), { online: false, cortexEnabled: false, presence: { lastHeartbeat: now - 600_000, os: 'macOS', agent_version: '4.1.27' } });
+    // the os fields as an agent since 3.4 writes them; SENDER below is an older agent's doc
+    docs.set(machinePath(M1), { online: true, lastHeartbeat: now - 12_000, osFamily: 'linux', osVersion: 'Ubuntu 24.04.5 LTS', agent_version: '4.1.28' });
+    docs.set(machinePath(M2), { online: false, cortexEnabled: false, osFamily: 'macos', osVersion: 'macOS 26.6', presence: { lastHeartbeat: now - 600_000, agent_version: '4.1.27' } });
     docs.set(machinePath(SENDER), { online: 'yes' });
   });
 
@@ -377,8 +378,8 @@ describe('startFleetCall: list_machines', () => {
 
   it('answers inline with the machines the grant covers, each in the contract shape', async () => {
     expect(await listed({ maxTier: 1, machineIds: [M1, SENDER] })).toEqual([
-      { id: M1, online: true, lastHeartbeatAgeSeconds: expect.any(Number), os: 'Windows 11', agentVersion: '4.1.28', hootEnabled: true },
-      { id: SENDER, online: false, lastHeartbeatAgeSeconds: null, os: null, agentVersion: null, hootEnabled: true },
+      { id: M1, online: true, lastHeartbeatAgeSeconds: expect.any(Number), os: 'linux', osVersion: 'Ubuntu 24.04.5 LTS', agentVersion: '4.1.28', hootEnabled: true },
+      { id: SENDER, online: false, lastHeartbeatAgeSeconds: null, os: 'windows', osVersion: null, agentVersion: null, hootEnabled: true },
     ]);
   });
 
@@ -392,7 +393,7 @@ describe('startFleetCall: list_machines', () => {
 
   it('reads presence fields, a heartbeat age and the hoot switch', async () => {
     const [machine] = await listed({ maxTier: 1, machineIds: [M2] });
-    expect(machine).toMatchObject({ id: M2, online: false, os: 'macOS', agentVersion: '4.1.27', hootEnabled: false });
+    expect(machine).toMatchObject({ id: M2, online: false, os: 'macos', osVersion: 'macOS 26.6', agentVersion: '4.1.27', hootEnabled: false });
     expect(machine.lastHeartbeatAgeSeconds).toBeGreaterThanOrEqual(600);
     expect(machine.lastHeartbeatAgeSeconds).toBeLessThan(610);
   });
@@ -658,6 +659,39 @@ describe('startFleetCall: the two mappings', () => {
     });
     expect(body.timeoutSeconds).toBe(30);
     expect(admit).toHaveBeenCalledWith({ capability: Capability.MACHINE_VIEW, tool: 'get_system_info', machineId: M1 });
+  });
+
+  it('capture_screenshot queues the capture_screenshot command type with its monitor, and reads back as an image', async () => {
+    const { callId } = started(
+      await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, monitor: 2 } }, admit),
+    );
+    const cmd = onlyPending(M1);
+    expect(cmd).toMatchObject({ type: 'capture_screenshot', monitor: 2, status: 'pending', machineId: M1 });
+    expect(cmd).not.toHaveProperty('tool_name');
+    expect(cmd).not.toHaveProperty('machine');
+    const commandId = callId.split(':').pop()!;
+    docs.set(completedPath(M1), {
+      [commandId]: { type: 'capture_screenshot', status: 'completed', result: { storage_path: 'screenshots/a.jpg' } },
+    });
+    expect(readBody(await readFleetCall(TIER2_TO_M1, callId)).content).toEqual([
+      {
+        type: 'image_url',
+        url: 'https://signed.example/screenshots/a.jpg',
+        text: 'screenshot: https://signed.example/screenshots/a.jpg',
+      },
+    ]);
+  });
+
+  it.each([
+    ['no monitor', {}],
+    ['a monitor that is a string', { monitor: 'all' }],
+    ['a negative monitor', { monitor: -1 }],
+    ['a fractional monitor', { monitor: 1.5 }],
+  ])('capture_screenshot with %s sends no monitor, so the agent takes its default', async (_label, extra) => {
+    started(await startFleetCall(TIER2_TO_M1, { tool: 'capture_screenshot', params: { machine: M1, ...extra } }, admit));
+    const cmd = onlyPending(M1);
+    expect(cmd.type).toBe('capture_screenshot');
+    expect(cmd).not.toHaveProperty('monitor');
   });
 
   it('queues as the calling machine, with the correlation id, and the audit row names it and the tool', async () => {

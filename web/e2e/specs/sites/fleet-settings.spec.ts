@@ -46,17 +46,19 @@ test.describe('owner of site-C', () => {
 
     const row = page.getByTestId(`fleet-sender-${SENDER}`);
     await row.getByRole('switch').click();
-    // a new sender starts with no machines, at the lowest tier
-    await expect(row.getByRole('combobox', { name: `${SENDER} on which machines` })).toHaveText('no machines');
+    // a new sender starts at the lowest tier, picking its machines, and says it reaches none yet
+    await expect(row.getByRole('combobox', { name: `${SENDER} on which machines` })).toHaveText('chosen machines');
+    await expect(row.getByTestId(`fleet-sender-${SENDER}-machines`)).toBeVisible();
+    const nothing = row.getByText('reaches no machines yet: pick them under on which machines.');
+    await expect(nothing).toBeVisible();
 
     await row.getByRole('combobox', { name: `${SENDER} how far` }).click();
     await page.getByRole('option', { name: 'bounded changes' }).click();
     await expect(row.getByText('shell commands')).toHaveCount(0);
 
-    await row.getByRole('combobox', { name: `${SENDER} on which machines` }).click();
-    await page.getByRole('option', { name: 'chosen machines' }).click();
     await row.getByTestId(`fleet-sender-${SENDER}-machines`).click();
     await page.getByRole('checkbox', { name: TARGET }).click();
+    await expect(nothing).toHaveCount(0);
 
     await expect
       .poll(async () => (await fleetDoc().get()).data())

@@ -30,7 +30,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { SwoopWindowControls, TRAFFIC_LIGHTS_INSET_PX, dragRegion } from '@/components/swoop/SwoopWindowControls';
 import { useViewerAppPlatform } from '@/hooks/useViewerAppPlatform';
-import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 import { openInViewerApp } from '@/lib/swoop/openViewerApp';
 import { isThisMachine, subscribeThisMachine } from '@/lib/swoop/thisMachine';
 import { viewerLabel } from '@/lib/swoop/viewerName';
@@ -475,14 +475,14 @@ function PickerCard({
       )}
       {!ready && (
         <p id={reasonId} data-testid={reasonId} className="pb-3 pl-8 pr-4 text-xs text-muted-foreground">
-          <Reason state={state} siteId={siteId} canEnable={canEnable} />
+          <Reason state={state} canEnable={canEnable} />
         </p>
       )}
     </li>
   );
 }
 
-function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string; canEnable: boolean }) {
+function Reason({ state, canEnable }: { state: CardState; canEnable: boolean }) {
   switch (state) {
     case 'offline':
       return <>offline</>;
@@ -495,8 +495,8 @@ function Reason({ state, siteId, canEnable }: { state: CardState; siteId: string
         <>
           swoop is off for this site ·{' '}
           {canEnable ? (
-            <Link href={siteSettingsPath(siteId, 'swoop')} className="hl-link text-accent-cyan">
-              open site settings
+            <Link href={SWOOP_SETTINGS_PATH} className="hl-link text-accent-cyan">
+              open swoop settings
             </Link>
           ) : (
             'ask a site owner or admin to turn it on'

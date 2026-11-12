@@ -18,9 +18,9 @@ the machine the AI agent runs on must be on Windows, on owlette 4.2.0 or later. 
 
 you need to own the site or be one of its admins, with the whole site in reach. the site's plan must include hoot.
 
-1. open the **admin panel** and choose **settings** under **hoot** in the sidebar. with more than one site, pick the site at the top.
+1. open the **admin panel** and choose **hoot** under **fleet** in the sidebar. with more than one site, pick the site at the top.
 2. turn on **let machines act on other machines**.
-3. under **machines that act on others**, turn on the machine the AI agent runs on. it starts out able to read and reaching no machine.
+3. in the list of machines under it, turn on the machine the AI agent runs on. it starts out able to read and reaching no machine.
 4. set **how far** it may go and **on which machines**.
 
 every change saves as you make it and takes effect within seconds. the agent on a machine you just turned on picks its permission up on its own; nothing is restarted.
@@ -121,7 +121,7 @@ a refused call answers with a reason the AI agent can read. the common ones:
 
 | the tool says | why |
 |---|---|
-| `fleet_not_granted` | the site's switch is off, or this machine is not turned on under **machines that act on others** |
+| `fleet_not_granted` | the site's switch is off, or this machine is not turned on in the list under it |
 | `tool_not_allowed` | the tool is above what the machine is set to, or is not one a machine may call |
 | `machine_not_granted` | the machine named is not one this machine may act on |
 | `hoot_disabled` | hoot is turned off on the machine named. that switch stops machines as it stops people |
@@ -130,7 +130,7 @@ a refused call answers with a reason the AI agent can read. the common ones:
 | `hoot_unavailable` | `ask_hoot` has no LLM key to run on |
 | `rate_limited` | too many calls: 60 commands a minute per machine, or the task limits above |
 
-turning a machine off under **machines that act on others**, or turning the site's switch off, ends what it can do within seconds, a session in use included. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them.
+turning a machine off in that list, or turning the site's switch off, ends what it can do within seconds, a session in use included. removing a machine from the site or pairing a new machine under its name clears its settings, so a reused name never inherits them.
 
 ---
 

@@ -78,9 +78,11 @@ export type FleetCallRead = { ok: true; body: FleetCallState } | FleetRefusal;
 /**
  * a tool the server answers itself, with no command to an agent. dispatch does
  * every check before `run`: a 'machine' tool acts on the one machine `machine`
- * names, which is in the site, inside the grant and has hoot on; a 'site' tool
- * names none, so it is a read and narrows what it returns to the grant itself.
- * `run` is handed only the parameters `definition` declares.
+ * names, which is in the site, inside the grant and has hoot on; a 'machines'
+ * tool acts on several, each checked the same way, and is refused whole when
+ * one of them fails; a 'site' tool names none, so it is a read and narrows
+ * what it returns to the grant itself. `run` is handed only the parameters
+ * `definition` declares.
  */
 export type FleetServerTool =
   | {
@@ -92,4 +94,15 @@ export type FleetServerTool =
       target: 'machine';
       definition: McpToolDefinition;
       run(ctx: FleetContext, machine: string, params: Record<string, unknown>): Promise<FleetAnswer>;
+    }
+  | {
+      target: 'machines';
+      definition: McpToolDefinition;
+      /**
+       * every machine the call would act on: from its parameters, or from the
+       * stored thing they name (a deployment, a roost). `error` says why they
+       * cannot be told, in words for the caller.
+       */
+      machines(ctx: FleetContext, params: Record<string, unknown>): Promise<{ machines: string[] } | { error: string }>;
+      run(ctx: FleetContext, machines: string[], params: Record<string, unknown>): Promise<FleetAnswer>;
     };

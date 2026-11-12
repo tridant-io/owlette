@@ -17,22 +17,25 @@ import {
   Bell,
   MonitorPlay,
   Inbox,
-  SlidersHorizontal,
-  type LucideIcon,
 } from 'lucide-react';
+import type { ElementType } from 'react';
+import { HootIcon } from '@/components/icons/HootIcon';
 import type { UserRole } from '@/contexts/AuthContext';
 
 /** Lowest global role a destination admits; 'admin' also admits superadmins. */
 export type AdminMinRole = 'admin' | 'superadmin';
 
-/** The sidebar's sections, in the order they are shown. */
-export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'hoot', 'configuration', 'support'] as const;
+/**
+ * The sidebar's sections, in the order they are shown. A feature is one item
+ * under fleet, never a section of its own (owner, 2026-11-11).
+ */
+export const ADMIN_NAV_GROUPS = ['people', 'fleet', 'configuration', 'support'] as const;
 export type AdminNavGroup = (typeof ADMIN_NAV_GROUPS)[number];
 
 export interface AdminNavItem {
   name: string;
   href: string;
-  icon: LucideIcon;
+  icon: ElementType;
   description: string;
   minRole: AdminMinRole;
   group: AdminNavGroup;
@@ -77,17 +80,17 @@ const NAV_ITEMS: AdminNavItem[] = [
     name: 'swoop',
     href: '/admin/swoop',
     icon: MonitorPlay,
-    description: 'view and end live swoop sessions',
+    description: 'turn swoop on per site, and see and end live sessions',
     minRole: 'admin',
     group: 'fleet',
   },
   {
-    name: 'settings',
+    name: 'hoot',
     href: '/admin/hoot',
-    icon: SlidersHorizontal,
+    icon: HootIcon,
     description: 'which machines may act on others through hoot',
     minRole: 'admin',
-    group: 'hoot',
+    group: 'fleet',
   },
   {
     name: 'alerts',

@@ -2,10 +2,12 @@
 /**
  * @jest-environment jsdom
  *
- * /admin/swoop — one table of the swoop sessions on every site the user can
- * see, read per site from `GET /api/sites/{siteId}/swoop/sessions`. A site the
- * user is only a member of answers 403 and is left out quietly; kill goes
- * through the machine's own `swoop/kill` route with the session's sid.
+ * /admin/swoop — the sites table with each site's swoop switch (a stub here;
+ * SwoopSiteTable.test.tsx covers it), then one table of the swoop sessions on
+ * every site the user can see, read per site from
+ * `GET /api/sites/{siteId}/swoop/sessions`. A site the user is only a member of
+ * answers 403 and is left out quietly; kill goes through the machine's own
+ * `swoop/kill` route with the session's sid.
  */
 
 import React from 'react';
@@ -36,6 +38,12 @@ jest.mock('@/hooks/useFirestore', () => ({
 
 jest.mock('@/lib/toast', () => ({
   toast: { success: jest.fn(), error: jest.fn(), info: jest.fn(), warning: jest.fn() },
+}));
+
+jest.mock('@/components/admin/SwoopSiteTable', () => ({
+  SwoopSiteTable: ({ sites, loading }: { sites: { id: string }[]; loading: boolean }) => (
+    <div data-testid="swoop-site-table" data-sites={sites.map((site) => site.id).join(',')} data-loading={String(loading)} />
+  ),
 }));
 
 interface Reply {
@@ -92,6 +100,19 @@ function renderPage() {
 }
 
 describe('/admin/swoop', () => {
+  it('puts the sites table, fed the same sites, above the live sessions', async () => {
+    sessionsBySite['site-a'] = sessionsOk([]);
+    sessionsBySite['site-b'] = sessionsOk([]);
+    renderPage();
+
+    const table = screen.getByTestId('swoop-site-table');
+    expect(table).toHaveAttribute('data-sites', 'site-a,site-b');
+    expect(table).toHaveAttribute('data-loading', 'false');
+    const live = screen.getByRole('heading', { level: 2, name: 'live sessions' });
+    expect(table.compareDocumentPosition(live) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await screen.findByText('no one is in a swoop session right now');
+  });
+
   it('lists the sessions of every site in one table', async () => {
     sessionsBySite['site-a'] = sessionsOk([liveSession()]);
     sessionsBySite['site-b'] = sessionsOk([

@@ -323,7 +323,7 @@ export function SwoopStage({
           {retryIn !== null && <span className={NOTICE_DETAIL}>reconnecting in {retryIn} s…</span>}
           {swoopOff && (
             <span className={NOTICE_DETAIL}>
-              {settingsHref ? 'turn it on in site settings.' : 'ask a site owner or admin to turn it on.'}
+              {settingsHref ? 'turn it on in swoop settings.' : 'ask a site owner or admin to turn it on.'}
             </span>
           )}
           {planLocked && (
@@ -339,7 +339,7 @@ export function SwoopStage({
           <span className="pointer-events-auto mt-[7px] flex gap-2">
             {swoopOff && settingsHref && (
               <Button asChild size="sm">
-                <Link href={settingsHref}>open site settings</Link>
+                <Link href={settingsHref}>open swoop settings</Link>
               </Button>
             )}
             {planLocked && upgradeHref && (

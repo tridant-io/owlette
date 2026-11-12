@@ -1,15 +1,23 @@
 'use client';
 
-import { Suspense, use } from 'react';
+import { Suspense, use, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { BackLink } from '@/components/admin/BackLink';
 import { SiteSettings } from '@/components/admin/sites/SiteSettings';
-import { parseSiteSection, siteSettingsPath } from '@/lib/siteSettingsPath';
+import { movedSiteSectionPath, parseSiteSection, siteSettingsPath } from '@/lib/siteSettingsPath';
 
 // the section lives in the url, so a link can open one and a reload keeps it
 function SiteSettingsContent({ siteId }: { siteId: string }) {
   const router = useRouter();
-  const section = parseSiteSection(useSearchParams().get('section'));
+  const raw = useSearchParams().get('section');
+  // a bookmark or an older build's link to a section that moved out still lands on it
+  const movedTo = movedSiteSectionPath(raw);
+  useEffect(() => {
+    if (movedTo) router.replace(movedTo);
+  }, [movedTo, router]);
+
+  if (movedTo) return null;
+  const section = parseSiteSection(raw);
 
   return (
     <SiteSettings

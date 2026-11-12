@@ -17,11 +17,11 @@ export function HootSiteSettings({ siteId }: { siteId: string }) {
 
   return (
     <div className="space-y-4">
-      <Panel id="hoot-approval" title="approval" description="this switch acts the moment it moves.">
+      <Panel id="hoot-approval" title="approval">
         <HootApprovalSwitch siteId={siteId} />
       </Panel>
-      <Panel id="hoot-machines" title="machines" description="this switch acts the moment it moves.">
-        <div className="space-y-3">
+      <Panel id="hoot-machines" title="machines">
+        <div className="space-y-4">
           <SettingSwitch
             id={`fleet-${siteId}`}
             label={FLEET_COPY.switchLabel}
@@ -37,9 +37,9 @@ export function HootSiteSettings({ siteId }: { siteId: string }) {
               {FLEET_COPY.offHint}
             </p>
           )}
+          {fleet.settings.enabled && <FleetSendersEditor siteId={siteId} />}
         </div>
       </Panel>
-      {fleet.settings.enabled && <FleetSendersEditor siteId={siteId} />}
     </div>
   );
 }

@@ -44,6 +44,7 @@ import type {
   FleetCallStart,
   FleetContentItem,
   FleetContext,
+  FleetRefusal,
 } from '@/lib/fleet/context';
 import {
   CALL_RECORD_GRACE_MS,
@@ -65,9 +66,20 @@ const PRUNE_BATCH_LIMIT = 500;
 // a refused tool name is the caller's text, bounded before it reaches an audit row.
 const MAX_DENIED_TOOL_NAME = 128;
 
+// each machine of a call costs an allow row and a place in the rate limit
+const MAX_MACHINES_PER_CALL = 50;
+
 /** tier 1 reads a machine; tiers 2 and 3 run commands on it. */
 export function fleetToolCapability(def: McpToolDefinition): Capability {
   return def.tier === 1 ? Capability.MACHINE_VIEW : Capability.MACHINE_EXEC_COMMAND;
+}
+
+const SCREENSHOT_TOOL = 'capture_screenshot';
+
+/** the agent reads `monitor` as an index: anything but a whole number from 0 up is left out, so it takes its default. */
+function screenshotPayload(toolParams: Record<string, unknown>): Record<string, unknown> {
+  const { monitor } = toolParams;
+  return Number.isInteger(monitor) && (monitor as number) >= 0 ? { monitor } : {};
 }
 
 function errorMessage(err: unknown): string {
@@ -136,6 +148,65 @@ async function recordFleetCall(
   }
 }
 
+function noMachineNamed(tool: string): FleetRefusal {
+  return denied(
+    problemValidation('params.machine must be the id of a machine, from list_machines', {
+      'params.machine': ['required machine id'],
+    }),
+    'validation_failed',
+    tool,
+    null,
+  );
+}
+
+/** a 'machines' tool's call whose machines cannot be told, or are too many. */
+function notTheseMachines(tool: string, detail: string): FleetRefusal {
+  return denied(problemValidation(detail, { params: [detail] }), 'validation_failed', tool, null);
+}
+
+/** why a call may not act on `machine`, or null: it is a machine's id, inside the grant, in the site, with hoot on. */
+async function machineRefusal(
+  ctx: FleetContext,
+  capability: Capability,
+  tool: string,
+  machine: string,
+): Promise<FleetRefusal | null> {
+  if (!isValidMachineId(machine)) return noMachineNamed(tool);
+  if (!hasCapability(ctx.actor, capability, ctx.siteId, machine)) {
+    return denied(machineNotGranted(machine), 'machine_not_granted', tool, machine);
+  }
+
+  const target = await getMachineSummary(ctx.db, ctx.siteId, machine);
+  if (!target) {
+    return denied(
+      problem({
+        type: ProblemType.NotFound,
+        title: 'machine not found',
+        status: 404,
+        detail: `machine ${machine} is not in this site`,
+      }),
+      'not_found',
+      tool,
+      machine,
+    );
+  }
+  if (!target.hootEnabled) {
+    return denied(
+      problem({
+        type: ProblemType.Conflict,
+        title: 'hoot disabled',
+        status: 409,
+        detail: `hoot is turned off on machine ${machine}`,
+        code: 'hoot_disabled',
+      }),
+      'hoot_disabled',
+      tool,
+      machine,
+    );
+  }
+  return null;
+}
+
 export async function startFleetCall(
   ctx: FleetContext,
   input: { tool: unknown; params: unknown },
@@ -166,48 +237,30 @@ export async function startFleetCall(
     return { ok: true, kind: 'answered', body: await serverTool.run(ctx, declaredParams(serverTool.definition, toolParams)) };
   }
 
-  if (machine === null || !isValidMachineId(machine)) {
-    return denied(
-      problemValidation('params.machine must be the id of a machine, from list_machines', {
-        'params.machine': ['required machine id'],
-      }),
-      'validation_failed',
-      def.name,
-      null,
-    );
-  }
-  if (!hasCapability(ctx.actor, capability, ctx.siteId, machine)) {
-    return denied(machineNotGranted(machine), 'machine_not_granted', def.name, machine);
+  if (serverTool?.target === 'machines') {
+    const params = declaredParams(serverTool.definition, toolParams);
+    const named = await serverTool.machines(ctx, params);
+    if ('error' in named) return notTheseMachines(def.name, named.error);
+    const machines = [...new Set(named.machines)];
+    if (machines.length === 0) return notTheseMachines(def.name, 'the call names no machine');
+    if (machines.length > MAX_MACHINES_PER_CALL) {
+      return notTheseMachines(def.name, `one call acts on at most ${MAX_MACHINES_PER_CALL} machines, and this one names ${machines.length}`);
+    }
+    // every machine is checked before any is admitted: a call that fails on its last machine leaves no allow row
+    for (const id of machines) {
+      const refusal = await machineRefusal(ctx, capability, def.name, id);
+      if (refusal) return refusal;
+    }
+    for (const id of machines) {
+      const refused = await admit({ capability, tool: def.name, machineId: id });
+      if (refused) return { ok: false, response: refused };
+    }
+    return { ok: true, kind: 'answered', body: await serverTool.run(ctx, machines, params) };
   }
 
-  const target = await getMachineSummary(ctx.db, ctx.siteId, machine);
-  if (!target) {
-    return denied(
-      problem({
-        type: ProblemType.NotFound,
-        title: 'machine not found',
-        status: 404,
-        detail: `machine ${machine} is not in this site`,
-      }),
-      'not_found',
-      def.name,
-      machine,
-    );
-  }
-  if (!target.hootEnabled) {
-    return denied(
-      problem({
-        type: ProblemType.Conflict,
-        title: 'hoot disabled',
-        status: 409,
-        detail: `hoot is turned off on machine ${machine}`,
-        code: 'hoot_disabled',
-      }),
-      'hoot_disabled',
-      def.name,
-      machine,
-    );
-  }
+  if (machine === null) return noMachineNamed(def.name);
+  const refusal = await machineRefusal(ctx, capability, def.name, machine);
+  if (refusal) return refusal;
 
   const refused = await admit({ capability, tool: def.name, machineId: machine });
   if (refused) return { ok: false, response: refused };
@@ -220,7 +273,10 @@ export async function startFleetCall(
     };
   }
 
-  const commandType = EXISTING_COMMAND_MAPPINGS[def.name];
+  // a screenshot goes as its own command type: only that one stores the picture
+  // and gets a signed read url on the read, which mcp_tool_call never does.
+  const isScreenshot = def.name === SCREENSHOT_TOOL;
+  const commandType = isScreenshot ? SCREENSHOT_TOOL : EXISTING_COMMAND_MAPPINGS[def.name];
   const timeoutSeconds = commandType ? DEFAULT_CALL_TIMEOUT_SECONDS : callTimeoutSeconds(def, toolParams);
   let commandId: string;
   try {
@@ -234,7 +290,7 @@ export async function startFleetCall(
       },
       {
         ...(commandType
-          ? { type: commandType, payload: toolParams }
+          ? { type: commandType, payload: isScreenshot ? screenshotPayload(toolParams) : toolParams }
           : {
               type: 'mcp_tool_call',
               payload: { tool_name: def.name, tool_params: toolParams, timeout_seconds: timeoutSeconds },

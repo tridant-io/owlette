@@ -22,6 +22,7 @@ import { toast } from '@/lib/toast';
 import { AdminButton } from '@/components/admin/AdminButton';
 import { AdminPageHeader } from '@/components/admin/AdminPageHeader';
 import { CompactButton } from '@/components/admin/CompactButton';
+import { SwoopSiteTable } from '@/components/admin/SwoopSiteTable';
 
 /** One viewer, as `GET /api/sites/{siteId}/swoop/sessions` answers it. */
 interface SwoopViewerInfo {
@@ -167,7 +168,7 @@ export default function SwoopPage() {
         <AdminPageHeader
           className="mb-4 md:mb-6"
           title="swoop"
-          description="who is in a swoop session on your sites, and a way to end it"
+          description="turn swoop on for each of your sites, and see who is in a session"
           actions={
             <IconButton
               label="refresh sessions"
@@ -181,6 +182,10 @@ export default function SwoopPage() {
           }
         />
 
+        <h2 className="mb-3 text-sm font-medium text-foreground">sites</h2>
+        <SwoopSiteTable sites={sites} loading={sitesLoading} />
+
+        <h2 className="mt-6 mb-3 text-sm font-medium text-foreground md:mt-8">live sessions</h2>
         <Card className="bg-card border-border py-3 md:py-6">
           <CardContent className="px-3 sm:px-6 md:pt-6">
             {!loaded ? (

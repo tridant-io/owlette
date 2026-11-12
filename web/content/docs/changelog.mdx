@@ -48,6 +48,12 @@ cannot be read, nothing on it is limited. Active machines are now counted at
 If you self-host, move the `plan-daily` job to `30 23 * * *` UTC. See
 [plans](https://owlette.app/docs/plans). Nothing to update on the machine.
 
+### changed — the issues list shows each description, and opening an issue marks it triaged
+
+In the admin panel's issues list, each row shows the issue's description beside
+its title. Opening a new issue marks it triaged, since someone has now looked at
+it; its status can still be set back to new.
+
 ### changed — swoop's text stays clear at any window size
 
 Small text on a machine shown smaller than its own screen could look
@@ -157,27 +163,45 @@ download. Takes an agent update.
 
 ### added — hoot mcp: an AI agent on one machine can act on the others
 
-An AI agent running on a paired Windows machine (Claude Code, or any MCP client)
+An AI agent running on a paired Windows machine or Mac (Claude Code, or any MCP client)
 can now use hoot's tools on the other machines of its site. The owlette agent
 on that machine is the MCP server and the machine's pairing is the credential:
 there is no API key and nothing to sign in to. It is off until a site owner or
 admin turns it on, in the admin panel under hoot, and says for each machine how
-far it may go (read, bounded changes or privileged) and on which machines. A
-machine can also hand hoot a task in words and read the answer back; that runs
-on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
-is in the audit log under the machine. Update the machine the AI agent runs on
-to use it; the machines it acts on need no update. The desktop app's menu has
-a new item, connect an ai agent, that shows the command to run. See the
-[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+far it may go (read, bounded changes or privileged) and on which machines.
+Beside hoot's own machine tools it can read a machine's metrics history,
+installed software, recent screenshots (as pictures), saved display layout and
+reboot schedule; set that schedule; list, start and cancel software
+deployments; update owlette on a machine; and list, deploy and roll back
+roosts. A call that names several machines is refused whole unless every one
+of them is a machine it may act on, and what belongs to the whole site (alert
+rules, the audit log, display settings) is read only by a machine allowed on
+the whole site. A machine can also hand hoot a task in words and read the
+answer back; that runs on the site owner's LLM key, at tier 2 at most, six
+times an hour. What a machine changes is in the audit log under the machine.
+Update the machine the AI agent runs on to use it; the machines it acts on
+need no update. The desktop app's menu has a new item, connect an ai agent,
+that shows the command to run. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp) and the
+[tool reference](https://owlette.app/docs/reference/hoot-mcp-tools).
 
 ### changed — hoot's site settings have their own page in the admin panel
 
-The admin panel's sidebar has a hoot section. Its settings page holds the
+The admin panel has a hoot page, under fleet. It holds the
 switch that makes hoot wait for approval before a privileged (tier 3) tool,
 which used to be the shield button in the hoot chat header, and the new
 settings for machines that act on other machines. The setting itself and its
 default are unchanged: approval is on unless a site owner or admin turns it
 off. Nothing to update on the machine.
+
+### changed — swoop is turned on from the admin panel's swoop page
+
+The admin panel's swoop page, under fleet, lists each site you own or administer
+with its swoop switch, above the live sessions. A site's settings page no longer
+has a swoop & screens section:
+keep screens awake is in its machines section. Old links to the swoop & screens
+section, turn on swoop… in a machine's menu, and open swoop settings in the swoop
+picker and the viewer all open the swoop page. Nothing to update on the machine.
 
 ### fixed — saving a talon edit keeps the switch where it is now
 

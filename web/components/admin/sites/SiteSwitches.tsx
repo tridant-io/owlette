@@ -1,104 +1,40 @@
 'use client';
 
-import { useState } from 'react';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Panel } from '@/components/admin/Panel';
-import { toast } from '@/lib/toast';
+import { ImmediateSwitch, SettingSwitch } from '@/components/admin/SettingSwitch';
 import { useSwoopSettings } from '@/hooks/useSwoopSettings';
 import { useDisplaySettings } from '@/hooks/useDisplaySettings';
 
-interface SiteSettingSwitchProps {
-  id: string;
-  label: string;
-  description: string;
-  checked: boolean;
-  loading: boolean;
-  /** PATCHed with `{ [field]: next }` the moment the switch moves. */
-  url: string;
-  field: string;
-}
+const siteApi = (siteId: string) => `/api/sites/${encodeURIComponent(siteId)}`;
 
-/**
- * one immediate site setting, outside any save: the PATCH nudges the site's
- * online machines, which a cancel could not take back. the switch follows its
- * snapshot hook, so only a failure needs saying.
- */
-function SiteSettingSwitch({ id, label, description, checked, loading, url, field }: SiteSettingSwitchProps) {
-  const [busy, setBusy] = useState(false);
-
-  const save = async (next: boolean) => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const res = await fetch(url, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ [field]: next }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail || body?.title || 'try again in a moment.');
-      }
-    } catch (err) {
-      console.error(`Failed to update ${label}:`, err);
-      toast.error(`could not change ${label}`, {
-        description: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
+/** a site's swoop switch, in its row on admin panel → swoop → settings. */
+export function SwoopSwitch({ siteId, siteName }: { siteId: string; siteName: string }) {
+  const swoop = useSwoopSettings(siteId);
 
   return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0 space-y-0.5">
-        <Label htmlFor={id} className="text-foreground">
-          {label}
-        </Label>
-        <p className="text-xs text-muted-foreground">{description}</p>
-      </div>
-      <Switch
-        id={id}
-        checked={checked}
-        onCheckedChange={(next) => void save(next)}
-        disabled={busy || loading}
-      />
-    </div>
+    <ImmediateSwitch
+      id={`swoop-${siteId}`}
+      label={`swoop on ${siteName}`}
+      checked={swoop.settings.enabled}
+      loading={swoop.loading}
+      url={`${siteApi(siteId)}/swoop-settings`}
+      field="enabled"
+    />
   );
 }
 
-export function SiteSwitches({ siteId }: { siteId: string }) {
-  const swoop = useSwoopSettings(siteId);
+/** the site's keep screens awake switch, on its settings page's machines section. */
+export function KeepScreensAwakeSwitch({ siteId }: { siteId: string }) {
   const display = useDisplaySettings(siteId);
-  const base = `/api/sites/${encodeURIComponent(siteId)}`;
 
   return (
-    <Panel id="site-section-swoop" title="swoop & screens" description="these switches act the moment they move.">
-      <div className="space-y-3">
-        <SiteSettingSwitch
-          id={`swoop-${siteId}`}
-          label="swoop"
-          description={
-            swoop.settings.membersMayWatch
-              ? "by default, owners and admins watch and control this site's machines remotely, and members watch. change it per person in members."
-              : "by default, owners and admins watch and control this site's machines remotely; members don't watch. change it per person in members."
-          }
-          checked={swoop.settings.enabled}
-          loading={swoop.loading}
-          url={`${base}/swoop-settings`}
-          field="enabled"
-        />
-        <SiteSettingSwitch
-          id={`keep-awake-${siteId}`}
-          label="keep screens awake"
-          description="machines on this site never sleep, blank or lock"
-          checked={display.settings.keepAwake}
-          loading={display.loading}
-          url={`${base}/display-settings`}
-          field="keepAwake"
-        />
-      </div>
-    </Panel>
+    <SettingSwitch
+      id={`keep-awake-${siteId}`}
+      label="keep screens awake"
+      description="machines on this site never sleep, blank or lock"
+      checked={display.settings.keepAwake}
+      loading={display.loading}
+      url={`${siteApi(siteId)}/display-settings`}
+      field="keepAwake"
+    />
   );
 }

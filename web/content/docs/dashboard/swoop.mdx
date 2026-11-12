@@ -1,7 +1,7 @@
 ---
 title: "swoop (remote desktop)"
 description: "swoop is the dashboard's remote desktop: a live, interactive view of a Windows or Mac machine's screen, in a browser tab or in owlette swoop, the desktop viewer app, with keyboard and mouse control behind a second factor. it is off until a site turns it on, every session is leased and audited, and an API key can never start one."
-keywords: ["remote control", "remote desktop", "screen sharing", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers", "blurry text", "jagged text", "pixelated", "sharp", "scaling", "smooth scaling", "display scaling", "dpi"]
+keywords: ["remote control", "remote desktop", "screen sharing", "swoop settings", "turn on swoop", "swoop switch", "live sessions", "kvm", "vnc", "rdp", "take over a screen", "copy paste", "clipboard", "connecting", "cannot connect", "another network", "new network", "verified network", "nat", "relay", "turn", "uac", "ctrl alt del", "lock screen", "codec", "hevc", "h264", "frozen picture", "picture froze", "stuck", "picture stalled", "bandwidth", "passkey", "2fa", "linux", "macos", "nvidia", "intel", "amd", "no gpu", "virtual machine", "encoder", "media foundation", "agent version", "owlette swoop", "desktop app", "viewer app", "native app", "standalone app", "download", "install", "own window", "new window", "owlette-swoop-viewer", "owlette-swoop://", "alt+tab", "cmd+tab", "windows key", "pointer lock", "sign in with your browser", "verify in your browser", "machine picker", "cursor", "mouse pointer", "cursor too big", "cursor disappears", "retina", "who is watching", "who else is here", "viewers", "blurry text", "jagged text", "pixelated", "sharp", "scaling", "smooth scaling", "display scaling", "dpi"]
 ---
 
 swoop puts a machine's screen in your browser, or in a window of [owlette swoop](#owlette-swoop), the desktop viewer app, live, and lets you drive it. it replaces the old screenshot slideshow ("live view") on any machine whose agent can stream.
@@ -35,9 +35,9 @@ the Windows streamer encodes on an NVIDIA GPU's NVENC encoder when there is one:
 
 swoop is **off** until a site turns it on: that is the default, and it is per site.
 
-a site owner or admin flips the **swoop** switch on the site's settings page → **swoop & screens** (the site switcher's **site settings**, or admin panel → **sites** → the site's gear), beside [keep screens awake](/docs/dashboard/getting-started#site-settings). the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease.
+a site owner or admin flips the site's **swoop** switch on admin panel → **swoop** (`/admin/swoop`): one table, with a row for each site you own or administer with access to the whole site. the switch takes effect the moment it moves; there is no save. turning it off reaches machines that are already connected, so a live session ends rather than waiting out its lease. by default, owners and admins watch and control, and members watch unless the site's policy says they don't; a person's [swoop mode](/docs/dashboard/admin/member-management#swoop-mode) changes that for them.
 
-while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens that section, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime.
+while a site has swoop off, the menu of a machine that can stream shows **turn on swoop…** to a site owner or admin, which opens the admin panel's swoop page, and tells a member that swoop is off and to ask a site owner or admin. both get live view in the meantime. **open swoop settings** in the swoop picker and the viewer opens them too.
 
 the rest of the site policy is still API-only: `PATCH /api/sites/{siteId}/swoop-settings`, from a signed-in session as a site owner or admin; an API key is refused here too. a person's own swoop mode is set in the site's [members section](/docs/dashboard/admin/member-management#swoop-mode).
 
@@ -326,7 +326,9 @@ without Accessibility you can still watch: the picture, the cursor, the audio an
 
 ## admin → swoop
 
-**admin** → **swoop** (`/admin/swoop`) lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. the page and **kill** are for site owners and admins whose access is the whole site, whatever their own swoop mode: a member set to control gets neither, and nor does an admin [limited to some machines](/docs/dashboard/admin/member-management#machine-scope). see the [admin panel](/docs/dashboard/admin).
+the admin panel's **swoop** page (`/admin/swoop`) holds each site's swoop switch, see [turning it on](#turning-it-on), and under it the live sessions.
+
+**live sessions** lists everyone in a swoop session right now, pending or live, across the sites you can see: the machine, the site, each viewer with **control** or **watch**, the session's state, when it started and how long it has run. site owners and admins see the sessions on their own sites, and a superadmin sees every site. the page and **kill** are for site owners and admins whose access is the whole site, whatever their own swoop mode: a member set to control gets neither, and nor does an admin [limited to some machines](/docs/dashboard/admin/member-management#machine-scope). see the [admin panel](/docs/dashboard/admin).
 
 **kill** ends one session after a confirm. the viewer is disconnected at once, and, like every kill above, it also closes every open second-factor window on that machine, so anyone it cut off confirms again before taking control.
 
@@ -361,7 +363,7 @@ a refused session arrives as a [problem](/docs/api/errors) with a `code`. the vi
 | code | status | when | the viewer |
 |---|---|---|---|
 | `api_key_not_permitted` | 403 | the caller used an API key | stops |
-| `swoop_disabled` | 403 | the site has swoop off | stops, and offers a site owner or admin **open site settings**; a member is told to ask one |
+| `swoop_disabled` | 403 | the site has swoop off | stops, and offers a site owner or admin **open swoop settings**; a member is told to ask one |
 | `machine_excluded` | 403 | the machine is in `excludedMachineIds` | stops |
 | `capability_missing` | 403 | at the start of a session: your site role or swoop mode doesn't include what was asked. a control ask then asks to watch instead; a watch ask stops, and the viewer says **you can't use swoop on this site** | asks to watch instead, then stops |
 | `capability_missing` | 403 | the same, caught at a lease renewal: you lost control or access during the session | stops |

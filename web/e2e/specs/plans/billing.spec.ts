@@ -204,7 +204,7 @@ test('a site admin gets no billing section, and the billing api refuses them', a
   await page.goto(`/admin/sites/${FIRST.id}?section=billing`);
 
   const sections = page.getByRole('group', { name: 'site settings sections' }).getByRole('button');
-  await expect(sections).toHaveText(['general', 'members', 'machines', 'swoop & screens']);
+  await expect(sections).toHaveText(['general', 'members', 'machines']);
   await expect(sections.filter({ hasText: 'general' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByRole('region', { name: 'billing' })).toHaveCount(0);
 

@@ -18,7 +18,7 @@ import { use, useCallback, useEffect, useRef, useState, useSyncExternalStore } f
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useMachines } from '@/hooks/useFirestore';
-import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { SWOOP_SETTINGS_PATH } from '@/lib/siteSettingsPath';
 import {
   applyBarPosition,
   currentBarPosition,
@@ -155,7 +155,7 @@ export default function SwoopPage({
           restarting={restarting}
           linkLost={!stats.linkUp}
           refusal={refusal}
-          settingsHref={isSiteAdmin(siteId) ? siteSettingsPath(siteId, 'swoop') : null}
+          settingsHref={isSiteAdmin(siteId) ? SWOOP_SETTINGS_PATH : null}
           // only the site's owner can change its billing, so only the owner is sent to upgrade it
           upgradeHref={isSiteOwner(siteId) ? siteBillingPath(siteId) : null}
           noPath={noPath}
