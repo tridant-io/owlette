@@ -30,19 +30,39 @@ import { ACTIVE_HOURS_OVERRIDE_KEYS } from '@/lib/actions/executeMachineCommand.
 const TIERS: ToolTier[] = [1, 2, 3];
 
 /** the tools the server answers itself, in catalog order, with the tier each needs. */
-const SERVER_TOOLS: Array<[name: string, tier: ToolTier, target: 'site' | 'machine']> = [
+const SERVER_TOOLS: Array<[name: string, tier: ToolTier, target: 'site' | 'machine' | 'machines']> = [
   [LIST_MACHINES_TOOL, 1, 'site'],
   ['get_site_logs', 1, 'site'],
   ['update_process', 2, 'machine'],
   ['add_process', 2, 'machine'],
   ['delete_process', 2, 'machine'],
+  ['get_metrics_history', 1, 'machine'],
+  ['list_installed_software', 1, 'machine'],
+  ['list_alert_rules', 1, 'site'],
+  ['get_audit_log', 1, 'site'],
+  ['list_recent_screenshots', 1, 'machine'],
+  ['get_saved_display_layout', 1, 'machine'],
+  ['get_site_display_settings', 1, 'site'],
+  ['get_reboot_schedule', 1, 'machine'],
+  ['set_reboot_schedule', 3, 'machine'],
+  ['list_deployments', 1, 'site'],
+  ['get_deployment', 1, 'site'],
+  ['list_software_presets', 1, 'site'],
+  ['create_deployment', 3, 'machines'],
+  ['cancel_deployment', 2, 'machines'],
+  ['update_owlette_agent', 3, 'machine'],
+  ['list_roosts', 1, 'site'],
+  ['list_roost_versions', 1, 'site'],
+  ['deploy_roost_version', 3, 'machines'],
+  ['rollback_roost', 3, 'machines'],
 ];
 
 /** every catalog tool that acts on one machine, whoever answers it. */
 function machineTools(maxTier: ToolTier) {
-  return fleetCatalog(maxTier).filter(
-    (def) => def.name !== ASK_HOOT_TOOL && findFleetServerTool(def.name)?.target !== 'site',
-  );
+  return fleetCatalog(maxTier).filter((def) => {
+    const target = findFleetServerTool(def.name)?.target;
+    return def.name !== ASK_HOOT_TOOL && (target === undefined || target === 'machine');
+  });
 }
 
 describe('fleetCatalog', () => {
@@ -95,9 +115,23 @@ describe('fleetCatalog', () => {
     // a site tool is admitted with no machine, and a machine actor holds
     // nothing but the view there
     const siteTools = fleetCatalog(3).filter((def) => findFleetServerTool(def.name)?.target === 'site');
-    expect(siteTools.map((def) => def.name)).toEqual([LIST_MACHINES_TOOL, 'get_site_logs']);
+    expect(siteTools.map((def) => def.name)).toEqual(
+      SERVER_TOOLS.filter(([, , target]) => target === 'site').map(([name]) => name),
+    );
     for (const def of siteTools) {
       expect(def.tier).toBe(1);
+      expect(def.parameters.properties).not.toHaveProperty(MACHINE_PARAM);
+    }
+  });
+
+  it('gives a tool that names several machines no machine parameter, and never tier 1', () => {
+    // it names its machines in its own parameters, and dispatch checks each of them
+    const manyTools = fleetCatalog(3).filter((def) => findFleetServerTool(def.name)?.target === 'machines');
+    expect(manyTools.map((def) => def.name)).toEqual(
+      SERVER_TOOLS.filter(([, , target]) => target === 'machines').map(([name]) => name),
+    );
+    for (const def of manyTools) {
+      expect(def.tier).toBeGreaterThan(1);
       expect(def.parameters.properties).not.toHaveProperty(MACHINE_PARAM);
     }
   });
@@ -125,7 +159,10 @@ describe('fleetCatalog', () => {
 
   it("keeps each tool's own parameters and required list", () => {
     for (const def of machineTools(3)) {
-      const source = withoutActiveHoursOverride(allTools.find((tool) => tool.name === def.name)!);
+      // an area's own tool is defined beside its code; the rest are hoot's
+      const source =
+        findFleetServerTool(def.name)?.definition ??
+        withoutActiveHoursOverride(allTools.find((tool) => tool.name === def.name)!);
       const { [MACHINE_PARAM]: _machine, ...own } = def.parameters.properties;
       expect(own).toEqual(source.parameters.properties);
       expect(def.parameters.required).toEqual([MACHINE_PARAM, ...(source.parameters.required ?? [])]);

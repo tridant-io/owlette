@@ -248,7 +248,24 @@ export async function setFleetSettings(
         .filter((id) => !before.enabled || ownGrant(before.senders, id) === undefined)
         .sort()
     : [];
-  await refreshSenders(ctx, db, granted, options);
+  // a sender this write cut is refused by the server at once, but its agent
+  // keeps the session file until it asks again, so it is told to ask now
+  const cut = before.enabled ? (siteCut ? Object.keys(before.senders) : removed) : [];
+  // a stored sender may have left the site since, and a command queued under
+  // its name would create that machine a commands document
+  const told = await machinesInSite(db, ctx.siteId, [...granted, ...cut].sort());
+  await refreshSenders(ctx, db, told, options);
+
+  // a sender this write added, or whose tier or machines it changed, as stored:
+  // without it such a write leaves a row that says nothing changed
+  const storedBefore = storedFleetSettings(before).senders;
+  const changedSenders = Object.fromEntries(
+    Object.entries(storedFleetSettings(settings).senders).filter(
+      ([id, grant]) =>
+        !Object.prototype.hasOwnProperty.call(storedBefore, id) ||
+        JSON.stringify(grant) !== JSON.stringify(storedBefore[id]),
+    ),
+  );
 
   emitMutation({
     kind: 'site_mutated',
@@ -261,9 +278,10 @@ export async function setFleetSettings(
       method: 'PATCH',
       enabled: settings.enabled,
       senderIds: Object.keys(settings.senders).sort(),
+      changedSenders,
       revokedForSite: siteCut,
       revokedSenderIds: removed,
-      refreshedSenderIds: granted,
+      refreshedSenderIds: told,
       droppedMachineIds: requested?.dropped ?? [],
     },
   });
@@ -271,10 +289,18 @@ export async function setFleetSettings(
   return { siteId: ctx.siteId, settings };
 }
 
+/** the ids among `machineIds` that are machines of the site, in the order given. */
+async function machinesInSite(db: Firestore, siteId: string, machineIds: string[]): Promise<string[]> {
+  if (machineIds.length === 0) return [];
+  const machines = db.collection('sites').doc(siteId).collection('machines');
+  const snaps = await db.getAll(...machineIds.map((id) => machines.doc(id)));
+  return machineIds.filter((_, i) => snaps[i].exists);
+}
+
 /**
- * best-effort: a sender that misses the nudge fetches its session at its next
- * scheduled refresh anyway, so a failed queue is logged and never fails the
- * write.
+ * best-effort: a sender that misses the nudge fetches its session, or learns
+ * it has none, at its next scheduled refresh anyway, so a failed queue is
+ * logged and never fails the write.
  */
 async function refreshSenders(
   ctx: ActionContext,
@@ -298,7 +324,7 @@ async function refreshSenders(
   );
   const failed = results.filter((r) => !r.ok).map((r) => r.machineId);
   if (failed.length > 0) {
-    logger.warn('[fleet/settings] some new senders could not be told to fetch a session', {
+    logger.warn('[fleet/settings] some senders could not be told to refresh their session', {
       context: 'actions/setFleetSettings',
       data: { siteId: ctx.siteId, failed },
     });

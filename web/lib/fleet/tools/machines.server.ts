@@ -10,7 +10,7 @@ export const listMachinesTool: FleetServerTool = {
   target: 'site',
   definition: {
     name: LIST_MACHINES_TOOL,
-    description: 'List the machines you may act on, each with its id, whether it is online, seconds since its last heartbeat, OS, agent version and whether hoot is on. Pass an id as `machine` to any other tool.',
+    description: 'List the machines you may act on, each with its id, whether it is online, seconds since its last heartbeat, its OS (windows, macos or linux) and OS version, agent version and whether hoot is on. Pass an id as `machine` to any other tool.',
     tier: 1,
     parameters: {
       type: 'object',
@@ -30,7 +30,9 @@ export const listMachinesTool: FleetServerTool = {
           id: doc.id,
           online: data.online === true,
           lastHeartbeatAgeSeconds: heartbeatMs === null ? null : Math.max(0, Math.floor((now - heartbeatMs) / 1000)),
-          os: data.os ?? data.presence?.os ?? null,
+          // no agent writes `os`. an absent osFamily is a pre-3.4 agent, and those are all windows
+          os: data.osFamily ?? 'windows',
+          osVersion: data.osVersion ?? null,
           agentVersion: data.agent_version ?? data.presence?.agent_version ?? null,
           // as isHootEnabled reads it: absent means on
           hootEnabled: data.cortexEnabled !== false,
