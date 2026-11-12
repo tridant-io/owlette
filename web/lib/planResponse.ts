@@ -89,7 +89,8 @@ export interface AccountPlanFree {
   /**
    * the machines the machine limit keeps live: the first `machinesLimit` on the
    * caller's free sites, earliest paired first, then by machine id. the
-   * dashboard shows the rest of those sites' machines behind an upgrade notice.
+   * dashboard shows the rest of those sites' machines behind an upgrade notice,
+   * to everyone on the site (`freeMachines` in the site plan answer).
    */
   liveMachines: AccountPlanLiveMachine[];
 }
@@ -121,6 +122,15 @@ export interface AccountPlanFounders {
   pro: number | null;
 }
 
+/**
+ * per plan, whether a site the caller owns is billed at its founders rate, or
+ * was: tridant id keeps the rate for them past the cap.
+ */
+export interface AccountPlanFoundersHeld {
+  core: boolean;
+  pro: boolean;
+}
+
 export interface AccountPlanOff {
   enforced: false;
   reason: PlanOffReason;
@@ -136,6 +146,7 @@ export interface AccountPlanOn {
   siteCreation: AccountPlanSiteCreation;
   /** null when tridant id could not be asked. */
   foundersRemaining: AccountPlanFounders | null;
+  foundersHeld: AccountPlanFoundersHeld;
   /** whether "link your tridant account" can be offered on this deployment. */
   linkAvailable: boolean;
   /** the origin of the tridant portal, where the card and invoices are. null when this deployment does not know it. */

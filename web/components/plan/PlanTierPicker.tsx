@@ -4,7 +4,7 @@
  * core and pro side by side, with each one's price and what it adds: how an
  * owner picks a site's plan, in the upgrade dialog and when a new site is
  * created on a plan. prices are PRICING_FACTS; a plan shows its founders price
- * while `foundersLeft` says a place is left.
+ * while `foundersRate` says the owner gets it.
  */
 
 import { Check } from 'lucide-react';
@@ -15,9 +15,13 @@ import { cn } from '@/lib/utils';
 
 const TIERS: readonly BillingTier[] = ['core', 'pro'];
 
-/** whether the account plan says a founders place is left for `tier`. */
-export function foundersPlaceLeft(account: AccountPlanOn | null, tier: BillingTier): boolean {
-  return (account?.foundersRemaining?.[tier] ?? 0) > 0;
+/**
+ * whether the account plan says the owner gets the founders rate on `tier`: a
+ * place is left, or a site they own is billed at it, or was, which tridant id
+ * honours past the cap.
+ */
+export function foundersRate(account: AccountPlanOn | null, tier: BillingTier): boolean {
+  return (account?.foundersRemaining?.[tier] ?? 0) > 0 || account?.foundersHeld?.[tier] === true;
 }
 
 const FEATURES: Record<BillingTier, readonly string[]> = {
@@ -32,17 +36,17 @@ const FEATURES: Record<BillingTier, readonly string[]> = {
 interface PlanTierPickerProps {
   selected: BillingTier;
   onSelect: (tier: BillingTier) => void;
-  foundersLeft: (tier: BillingTier) => boolean;
+  foundersRate: (tier: BillingTier) => boolean;
   /** the plan the site is billed at: shown, and not picked again. */
   current?: BillingTier;
 }
 
-export function PlanTierPicker({ selected, onSelect, foundersLeft, current }: PlanTierPickerProps) {
+export function PlanTierPicker({ selected, onSelect, foundersRate, current }: PlanTierPickerProps) {
   return (
     <div role="radiogroup" aria-label="plan" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       {TIERS.map((tier) => {
         const facts = PRICING_FACTS[tier];
-        const founders = foundersLeft(tier);
+        const founders = foundersRate(tier);
         const isCurrent = tier === current;
         const isSelected = tier === selected;
         return (

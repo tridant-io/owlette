@@ -94,7 +94,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
   "type": "https://owlette.app/problems/plan-required",
   "title": "plan required",
   "status": 402,
-  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "detail": "this site's plan doesn't include remote control. upgrade to continue.",
   "code": "plan_required",
   "entitlement": "owlette.control",
   "upgradeUrl": "/settings/plan",
@@ -336,7 +336,7 @@ a site's billing is changed from the dashboard, in site settings → billing, by
 |---|---:|---|
 | <span id="email_unverified" />`email_unverified` | 403 | upgrading a site before the owner's email address is verified |
 | <span id="already_billed" />`already_billed` | 409 | upgrading a site that is already billed; switch its plan instead |
-| <span id="not_billed" />`not_billed` | 404 | switching the plan of a site that is not billed, or stopping its billing |
+| <span id="not_billed" />`not_billed` | 404 | switching the plan of a site that is not billed, or stopping its billing. when the site was billed and its billing has since ended (a subscription cancelled after failed payments), the detail says so and the site can be upgraded again |
 | <span id="billed_by_previous_owner" />`billed_by_previous_owner` | 409 | upgrading a transferred site, or switching its plan, while it is still billed to its previous owner. it can be changed once that billing period has ended |
 | <span id="link_required" />`link_required` | 409 | the owner's email already has a tridant account, which has to be [linked](/docs/plans#if-your-email-already-has-a-tridant-account) first |
 | <span id="site_billed_elsewhere" />`site_billed_elsewhere` | 409 | the site is already billed under another tridant account |

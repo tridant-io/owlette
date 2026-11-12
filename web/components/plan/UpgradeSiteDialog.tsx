@@ -3,18 +3,19 @@
 /**
  * the plan picker for one site (adr 0018): upgrade it from owlette free or the
  * trial, or switch a billed site between core and pro. the server decides where
- * an upgrade goes: the owner's first billed site to stripe checkout, a later
- * one straight onto their running subscription.
+ * an upgrade goes: the owner's first purchase to stripe checkout, every later
+ * one straight onto their running subscription, which keeps running at no
+ * charge once every site on it has stopped.
  *
  * the cards are PlanTierPicker's, and a plan shows its founders price while the
- * account plan says a place is left. when the server answers that the places
+ * account plan says the owner gets it. when the server answers that the places
  * are taken, the dialog says the list price and waits for a second confirm: the
  * card on file is never billed a price the owner has not seen.
  */
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
-import { foundersPlaceLeft, PlanTierPicker } from '@/components/plan/PlanTierPicker';
+import { foundersRate, PlanTierPicker } from '@/components/plan/PlanTierPicker';
 import { EmailUnverifiedNotice, LinkRequiredNotice } from '@/components/plan/UpgradeNotices';
 import { Button } from '@/components/ui/button';
 import {
@@ -61,10 +62,18 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
 
   const account = plan?.enforced ? plan : null;
   const selected = picked ?? (current === 'pro' ? 'core' : 'pro');
-  const foundersLeft = (tier: BillingTier) => !soldOut.includes(tier) && foundersPlaceLeft(account, tier);
-  // a guess at the server's choice, for the wording only: with another site billed, there is no checkout.
-  const subscribed =
-    !current && !!account?.sites.some((s) => s.siteId !== site.id && s.billing !== null && s.inGoodStanding);
+  const founders = (tier: BillingTier) => !soldOut.includes(tier) && foundersRate(account, tier);
+  // a guess at the server's choice, for the wording only. with a site billed now (tridant id's period),
+  // the subscription runs and there is no checkout. an account that has paid before may still have it,
+  // since a subscription with every site stopped runs on at no charge, or not: the dialog can't tell.
+  const sites = account?.sites ?? [];
+  const route = current
+    ? 'switch'
+    : sites.some((s) => s.period !== null)
+      ? 'card_on_file'
+      : sites.some((s) => s.billing !== null)
+        ? 'either'
+        : 'checkout';
   const linkRequired = refusal === 'link_required' || account?.trial.status === 'link_required';
   const unverified = refusal === 'email_unverified' || account?.emailVerified === false;
 
@@ -85,8 +94,8 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
   const submit = async () => {
     setSubmitting(true);
     setRefusal(null);
-    const founders = foundersLeft(selected);
-    const result = current ? await switchTier(selected, founders) : await upgrade(selected, founders);
+    const atFounders = founders(selected);
+    const result = current ? await switchTier(selected, atFounders) : await upgrade(selected, atFounders);
     if (result.ok && 'checkoutUrl' in result) {
       // still submitting: the page is leaving for checkout
       window.location.assign(result.checkoutUrl);
@@ -94,7 +103,7 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
     }
     setSubmitting(false);
     if (!result.ok) {
-      if (result.code === 'founders_sold_out' && founders) {
+      if (result.code === 'founders_sold_out' && atFounders) {
         setSoldOut((tiers) => [...tiers, selected]);
         void refreshAccount();
       } else if (result.code === 'link_required' || result.code === 'email_unverified') {
@@ -110,8 +119,9 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
     close();
   };
 
-  const action = current ? `switch to ${selected}` : subscribed ? 'upgrade site' : 'continue to checkout';
-  const working = current ? 'switching…' : subscribed ? 'upgrading…' : 'starting checkout…';
+  const action =
+    route === 'switch' ? `switch to ${selected}` : route === 'checkout' ? 'continue to checkout' : 'upgrade site';
+  const working = route === 'switch' ? 'switching…' : route === 'checkout' ? 'starting checkout…' : 'upgrading…';
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -126,11 +136,17 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
           </DialogDescription>
         </DialogHeader>
 
-        <PlanTierPicker selected={selected} onSelect={setPicked} foundersLeft={foundersLeft} current={current} />
+        <PlanTierPicker selected={selected} onSelect={setPicked} foundersRate={founders} current={current} />
 
-        {subscribed && (
+        {route === 'card_on_file' && (
           <p className="text-xs text-muted-foreground">
             this site goes on your subscription and is billed to the card on file. there is no checkout.
+          </p>
+        )}
+        {route === 'either' && (
+          <p className="text-xs text-muted-foreground">
+            checkout opens, or, if your subscription from an earlier site is still running, this site goes straight on
+            the card on file.
           </p>
         )}
 

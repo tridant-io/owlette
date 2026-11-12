@@ -78,6 +78,7 @@ const ACCOUNT: AccountPlanOn = {
   free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
   siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: { core: 0, pro: 3 },
+  foundersHeld: { core: false, pro: false },
   linkAvailable: true,
   portalUrl: null,
 };
@@ -175,7 +176,7 @@ describe('the free site taken: create on a plan', () => {
     const step = screen.getByTestId('create-site-plan');
     expect(step).toHaveTextContent('owlette free covers one site, and Lobby is on it. pick a plan for this one.');
     expect(step).toHaveTextContent(
-      'then checkout opens, or, if one of your sites is already billed, this one goes straight on the card on file.',
+      'then checkout opens, or, if you already have a subscription, this site goes straight on the card on file.',
     );
     const core = within(step).getByRole('radio', { name: /^core/ });
     const pro = within(step).getByRole('radio', { name: /^pro/ });
@@ -203,6 +204,21 @@ describe('the free site taken: create on a plan', () => {
     expect(onSiteCreated).toHaveBeenCalledWith('new-site');
     // closed and handed over first, so back from checkout restores a page with no dialog mid-request
     expect(onSiteCreated.mock.invocationCallOrder[0]).toBeLessThan(assign.mock.invocationCallOrder[0]);
+  });
+
+  // tridant id keeps the founders rate for an account that has a founders site of the plan, past the cap.
+  it('asks for the founders rate on core once the account holds it there, with no place left', async () => {
+    mockAccount = { ...CHOOSE_PLAN, foundersHeld: { core: true, pro: false } };
+    mockRequestSiteUpgrade.mockResolvedValue({ ok: true, added: true });
+    const { user, onSiteCreated } = openDialog();
+
+    const core = screen.getByRole('radio', { name: /^core/ });
+    expect(core).toHaveTextContent(usd(PRICING_FACTS.core.founders));
+    await user.click(core);
+    await create(user, 'create on core');
+
+    await waitFor(() => expect(onSiteCreated).toHaveBeenCalledWith('new-site'));
+    expect(mockRequestSiteUpgrade).toHaveBeenCalledWith('new-site', 'core', true);
   });
 
   it('puts the site on the card on file when a subscription already runs', async () => {

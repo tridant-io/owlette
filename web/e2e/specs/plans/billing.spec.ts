@@ -5,10 +5,10 @@
  * `lib/tridantBillingE2e.server.ts`: a checkout returns straight to its success
  * url, its confirm writes the site's plan to the entitlement seam, and switch
  * and stop rewrite it (e2e/helpers/plans.ts). as tridant id does, it opens a
- * checkout only for a payer with no running subscription: once one of the
- * payer's sites is billed, every later site, and a resumed one, is billed at
- * once to the card on file. this spec seeds its own accounts and sites and
- * takes them away again:
+ * checkout only for a payer with no subscription: once the payer has completed
+ * one, every later site, and a resumed one, is billed at once to the card on
+ * file, even after every site on it has stopped. this spec seeds its own
+ * accounts and sites and takes them away again:
  * - an owner whose trial has ended, whose first site starts on owlette free, and
  *   who creates three more: one left unpaid, one on pro and one on core;
  * - a site admin on that first site;
@@ -257,8 +257,8 @@ test('during the trial a second site is created with the plain dialog', async ({
   expect((await getAdminDb().doc(`sites/${TRIAL_SECOND.id}`).get()).get('owner')).toBe(TRIALIST.uid);
 });
 
-// a checkout opens only while none of the owner's sites is billed; after the first upgrade, every site
-// goes on the card on file. each test still sends a checkout's return back here, so nothing leaves the machine.
+// a checkout opens only until the owner has completed one; after the first upgrade, every site goes on the
+// card on file. each test still sends a checkout's return back here, so nothing leaves the machine.
 test.describe.serial("an owner changes a site's billing", () => {
   test('a checkout left unpaid leaves the new site unbilled, and no further site is created until it is billed', async ({
     page,
@@ -450,5 +450,33 @@ test.describe.serial("an owner changes a site's billing", () => {
     expect(await checkouts(FIRST.id)).toBe(opened);
     expect(await pointer(FIRST.id)).toMatchObject({ tier: 'core', endsAt: null });
     expect((await siteEntitlements(FIRST.id).get()).get('billing.endsAt')).toBeNull();
+  });
+
+  // tridant id now bills none of the owner's sites (their periods ran out, or stripe cancelled the
+  // subscription), while owlette's record of the first still says it runs. tridant's answer decides.
+  test("upgrades again once tridant id bills nothing, whatever owlette's record says, with no checkout while the subscription runs", async ({
+    page,
+    baseURL,
+  }) => {
+    await returnFromCheckoutHere(page, baseURL!);
+    await Promise.all([FIRST, ON_PRO, ON_CORE].map((site) => siteEntitlements(site.id).set(FREE)));
+    expect(await pointer(FIRST.id)).toMatchObject({ endsAt: null });
+    await signIn(page, OWNER);
+    const section = await openBilling(page, FIRST.id);
+    await expect(badges(section)).toHaveText(['owlette free']);
+    const opened = await checkouts(FIRST.id);
+
+    await section.getByRole('button', { name: 'upgrade', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: `upgrade ${FIRST.name}` });
+    // with no site billed now the dialog can't tell whether the subscription still runs, so it promises neither.
+    await expect(dialog).toContainText(
+      'checkout opens, or, if your subscription from an earlier site is still running, this site goes straight on the card on file.',
+    );
+    await dialog.getByRole('button', { name: 'upgrade site' }).click();
+
+    await expect(page.getByText(`${FIRST.name} is on pro`)).toBeVisible();
+    await expect(badges(section)).toHaveText(['pro', 'founders rate']);
+    expect(await checkouts(FIRST.id)).toBe(opened);
+    expect(await pointer(FIRST.id)).toMatchObject({ tier: 'pro', founders: true, payerUid: OWNER.uid, endsAt: null });
   });
 });

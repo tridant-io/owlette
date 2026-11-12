@@ -27,6 +27,10 @@ export interface SitePlanResponse {
     webhooks: boolean;
     api_keys: boolean;
   };
+  /**
+   * owlette's record of the site's billing. with plans enforced it is left out
+   * once tridant id bills nothing for the site, whatever the record says.
+   */
   billing: SiteBilling | null;
   /** the billing period of a billed site, epoch ms. */
   period: { start: number; end: number } | null;
@@ -37,4 +41,12 @@ export interface SitePlanResponse {
    * the new owner can stop it, and upgrade or switch only once it has ended.
    */
   billedByPreviousOwner: boolean;
+  /**
+   * owlette free's machine limit on this site, the same for everyone who views
+   * it. owlette free is counted across the owner's free sites, so it is set only
+   * when the site is on owlette free and those sites have no machine to spare:
+   * `live` is this site's machines the limit covers, and every other machine on
+   * the site is locked. null when nothing on the site is locked.
+   */
+  freeMachines: { limit: number; live: string[] } | null;
 }

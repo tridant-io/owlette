@@ -85,6 +85,16 @@ export function useSiteBilling(siteId: string) {
     await Promise.all([refreshSite(), refreshAccount()]);
   }, [refreshSite, refreshAccount]);
 
+  // `not_billed` on a site the section showed as billed: tridant id had already ended its billing,
+  // and the server has closed owlette's record of it, so the section reloads to offer an upgrade.
+  const refreshIfEnded = useCallback(
+    async (refusal: BillingRefusal): Promise<BillingRefusal> => {
+      if (refusal.code === 'not_billed') await refresh();
+      return refusal;
+    },
+    [refresh],
+  );
+
   /** puts the site on a paid plan, or back on the one it was stopping. */
   const upgrade = useCallback(
     async (tier: BillingTier, founders: boolean): Promise<UpgradeResult> => {
@@ -99,19 +109,19 @@ export function useSiteBilling(siteId: string) {
   const switchTier = useCallback(
     async (tier: BillingTier, founders: boolean): Promise<BillingChangeResult> => {
       const answer = await send(url, 'PATCH', { tier, founders });
-      if (!answer.ok) return answer;
+      if (!answer.ok) return refreshIfEnded(answer);
       await refresh();
       return { ok: true, billing: answer.data.billing as SiteBilling };
     },
-    [url, refresh],
+    [url, refresh, refreshIfEnded],
   );
 
   const stop = useCallback(async (): Promise<BillingChangeResult> => {
     const answer = await send(url, 'DELETE');
-    if (!answer.ok) return answer;
+    if (!answer.ok) return refreshIfEnded(answer);
     await refresh();
     return { ok: true, billing: answer.data.billing as SiteBilling };
-  }, [url, refresh]);
+  }, [url, refresh, refreshIfEnded]);
 
   /** asks whether a checkout is fulfilled; the server records the site's billing once it is. */
   const confirmCheckout = useCallback(

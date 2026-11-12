@@ -428,6 +428,19 @@ describe('stopping billing', () => {
     expect(screen.getByRole('dialog', { name: 'stop billing' })).toBeInTheDocument();
     expect(toast.success).not.toHaveBeenCalled();
   });
+
+  // tridant id had already ended the billing (stripe cancelled the subscription): nothing is left to confirm.
+  it('closes the dialog and says why when the site is no longer billed', async () => {
+    const detail = 'this site is no longer billed: its billing has ended. upgrade it to put it on core or pro again.';
+    mockStop.mockResolvedValue(refused('not_billed', detail, 404));
+    const user = show(PRO);
+
+    await user.click(screen.getByRole('button', { name: 'stop billing' }));
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'stop billing' }));
+
+    expect(toast.error).toHaveBeenCalledWith('could not stop billing', { description: detail });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
 });
 
 describe('a site whose billing is stopping', () => {

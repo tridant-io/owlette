@@ -111,7 +111,7 @@ test.describe('landing — pricing', () => {
     await expect(pricing).toContainText('each site has its own plan, billed per active machine per month.');
     await expect(pricing).toContainText('a machine counts if it was online at any point in the billing period.');
     await expect(pricing).toContainText(
-      "a billing period is a calendar month from the 1st (UTC), and a site's first part month is charged by the day.",
+      'a billing period is a calendar month from the 1st (UTC). the first month you are billed is charged by the day, and a site added later is charged for the whole month it is added in.',
     );
   });
 });

@@ -791,7 +791,27 @@ describe('the e2e fake', () => {
     expect(await startCheckout({ ...CHECKOUT, uid: 'u2' })).toMatchObject({ ok: true });
   });
 
-  it('opens a checkout again once every billed site has ended', async () => {
+  // decided with tridant 2026-11-12: a subscription with every site stopped runs on at no charge,
+  // so the next upgrade goes on the card on file.
+  it('opens no checkout once the payer has completed one, even with every billed site ended', async () => {
+    const started = await startCheckout(CHECKOUT);
+    if (!started.ok) throw new Error('expected a checkout');
+    await confirmCheckout(started.sessionId);
+    mockStore.set('e2e_entitlements/site:site-7', {
+      ...mockStore.get('e2e_entitlements/site:site-7'),
+      billing: { ...BILLING, endsAt: NOW - 1 },
+    });
+
+    expect(await startCheckout({ ...CHECKOUT, siteId: 'site-8' })).toMatchObject({
+      ok: false,
+      code: 'subscription_exists',
+    });
+    expect(await startCheckout({ ...CHECKOUT, uid: 'u2' })).toMatchObject({ ok: true });
+  });
+
+  it('opens a checkout while the payer has none completed: an abandoned one, or sites that all ended', async () => {
+    expect(await startCheckout(CHECKOUT)).toMatchObject({ ok: true });
+
     await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
     mockStore.set('e2e_entitlements/site:site-8', {
       ...mockStore.get('e2e_entitlements/site:site-8'),

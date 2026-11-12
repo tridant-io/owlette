@@ -37,10 +37,14 @@ jest.mock('@/lib/securityConfig.server', () => ({
   },
 }));
 
-// site creation and transfer count an account's free sites by each site's plan.
-const mockGetSiteEntitlements = jest.fn();
+// site creation and transfer count an account's free sites by each site's plan, and a delete asks
+// whether tridant bills a site with no billing pointer: not configured, unless a test says otherwise.
+const mockGetSiteEntitlements = jest.fn(
+  async (_siteId: string): Promise<unknown> => ({ ok: false, reason: 'not_configured' }),
+);
 jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+  invalidateSiteEntitlements: jest.fn(),
 }));
 
 jest.mock('firebase-admin/firestore', () => {

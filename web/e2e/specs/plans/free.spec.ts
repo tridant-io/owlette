@@ -3,15 +3,16 @@
  *
  * a site's plan is whatever `e2e_entitlements/site:{siteId}` holds, and a site
  * without that doc fails open (e2e/helpers/plans.ts). only this spec's own site
- * ever gets one: a dedicated member owns one site with one machine, signed in
- * fresh per test, never a shared fixture user. each test sets the plan it needs.
+ * ever gets one: a dedicated member owns one site with one machine, and a
+ * dedicated site admin shares it, each signed in fresh per test, never a shared
+ * fixture user. each test sets the plan it needs.
  */
 
 import crypto from 'crypto';
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { getAdminDb } from '../../helpers/emulator';
+import { getAdminAuth, getAdminDb } from '../../helpers/emulator';
 import { CORE, FREE, clearPlanState, endTrial, signIn, siteEntitlements } from '../../helpers/plans';
-import { seedMachine, seedSite, seedUser, type TestUser } from '../../helpers/seed';
+import { revokeMembership, seedMachine, seedSite, seedUser, type TestUser } from '../../helpers/seed';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -33,6 +34,17 @@ const PAYER: TestUser = {
   sites: [SITE_ID],
   siteRoles: { [SITE_ID]: 'owner' },
   displayName: 'E2E Plan Owner',
+};
+
+/** a site admin of the same site: a member who is not the owner, and who manages its machines. */
+const SITE_ADMIN: TestUser = {
+  uid: 'plan-admin-uid',
+  email: 'plan-admin@e2e.test',
+  password: 'e2e-plan-admin-password',
+  role: 'member',
+  sites: [SITE_ID],
+  siteRoles: { [SITE_ID]: 'admin' },
+  displayName: 'E2E Plan Admin',
 };
 
 const machineDoc = (machineId: string) => getAdminDb().doc(`sites/${SITE_ID}/machines/${machineId}`);
@@ -84,6 +96,7 @@ test.beforeAll(async () => {
   // named to sort after the baseline sites, so even a leftover never displaces site-A as a superadmin's default.
   await seedSite({ id: SITE_ID, name: 'Site Z (Plan)', owner: PAYER.uid, timezone: 'UTC' });
   await seedUser(PAYER);
+  await seedUser(SITE_ADMIN);
   await endTrial(PAYER.uid);
   await seedMachine(SITE_ID, LIVE_MACHINE, { monitorCount: 0 });
   // after seedMachine, which writes without merge. pairedAt makes this the machine free keeps live.
@@ -99,7 +112,10 @@ test.beforeEach(async () => {
 
 test.afterAll(async () => {
   const db = getAdminDb();
-  await clearPlanState([PAYER.uid], [SITE_ID]);
+  await clearPlanState([PAYER.uid, SITE_ADMIN.uid], [SITE_ID]);
+  await revokeMembership(SITE_ID, SITE_ADMIN.uid);
+  await db.doc(`users/${SITE_ADMIN.uid}`).delete();
+  await getAdminAuth().deleteUser(SITE_ADMIN.uid).catch(() => undefined);
   await Promise.all(
     [
       pendingDoc(),
@@ -267,5 +283,34 @@ test.describe('no entitlement doc', () => {
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('machine-plan-notice')).toHaveCount(0);
     await expect(page.getByTestId('trial-banner')).toHaveCount(0);
+  });
+});
+
+// the server counts the owner's free sites and names the machines owlette free keeps live, so a site
+// admin sees the lock the owner sees, and is told to ask the owner where the owner gets a link.
+test.describe('a site admin, who is not the owner', () => {
+  test.beforeEach(async () => {
+    await setPlan(FREE);
+    await seedMachine(SITE_ID, EXTRA_MACHINE, { monitorCount: 0 });
+  });
+
+  test('sees the machine past the limit locked, and reads ask the site owner on a locked feature', async ({ page }) => {
+    await signIn(page, SITE_ADMIN);
+
+    const extra = cardFor(page, EXTRA_MACHINE);
+    await expect(extra.getByTestId('machine-plan-notice')).toHaveText(
+      'owlette free covers 1 machine. ask the site owner to upgrade this site to see this one.',
+    );
+    await expect(extra.getByRole('link', { name: 'upgrade' })).toHaveCount(0);
+    // a locked machine offers no configuration, to an admin either.
+    await expect(extra.getByRole('button', { name: /^add process$/i })).toHaveCount(0);
+    await expect(cardFor(page, LIVE_MACHINE).getByTestId('machine-plan-notice')).toHaveCount(0);
+
+    const menu = await openMenu(page, cardFor(page, LIVE_MACHINE));
+    const locked = menu.getByTestId('machine-context-menu-control-upgrade');
+    await expect(locked).toContainText('part of core');
+    await expect(locked).toContainText('ask the site owner to upgrade this site');
+    await expect(locked.locator('a')).toHaveCount(0);
+    await page.keyboard.press('Escape');
   });
 });

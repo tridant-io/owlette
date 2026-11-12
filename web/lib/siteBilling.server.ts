@@ -1,9 +1,10 @@
 /**
  * a site's billing as its owner changes it (adr 0018): upgrade, switch, stop,
- * and the return from checkout. tridant id bills; `sites/{id}.billing` is a
- * pointer to what it bills, kept for the ui. it is written here, and by an
- * ownership transfer when it stops the outgoing owner's billing. a tridant
- * failure comes back as a refusal for the route to answer, never as a throw.
+ * and the return from checkout. tridant id bills, and its answer decides
+ * whether a site is billed; `sites/{id}.billing` is a pointer to what it bills,
+ * kept for the ui. it is written here, and by an ownership transfer when it
+ * stops the outgoing owner's billing. a tridant failure comes back as a refusal
+ * for the route to answer, never as a throw.
  */
 
 import 'server-only';
@@ -12,14 +13,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { problem, ProblemType } from '@/lib/apiErrors';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
-import {
-  plansEnforced,
-  planTier,
-  readBillingPointer,
-  resolveSitePlan,
-  type BillingPointer,
-  type Plan,
-} from '@/lib/plan.server';
+import { plansEnforced, planTier, resolveSitePlan, type Plan } from '@/lib/plan.server';
 import {
   getCheckout,
   getPlanAccount,
@@ -27,8 +21,9 @@ import {
   recordCheckout,
   recordOrg,
 } from '@/lib/planAccounts.server';
+import type { AccountPlanSiteBilling } from '@/lib/planResponse';
 import { trustedBaseUrl } from '@/lib/resendClient.server';
-import type { SiteBilling } from '@/lib/sitePlanResponse';
+import type { SiteBilling, SitePlanResponse } from '@/lib/sitePlanResponse';
 import {
   addSite,
   confirmCheckout,
@@ -39,7 +34,7 @@ import {
   type BillingFailure,
   type BillingTier,
 } from '@/lib/tridantBilling.server';
-import { invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
+import { getSiteEntitlements, invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
 
 export type BillingRefusal = { ok: false; status: 403 | 404 | 409 | 502 | 503; code: string; detail: string };
 
@@ -51,6 +46,17 @@ export type CheckoutOutcome =
 
 type SiteData = Record<string, unknown>;
 
+/** `sites/{id}.billing`, less its `updatedAt`: owlette's record of what tridant id bills for the site. */
+export type BillingPointer = AccountPlanSiteBilling & { payerUid: string };
+
+export function readBillingPointer(siteData: SiteData | null | undefined): BillingPointer | null {
+  const billing = siteData?.billing;
+  if (typeof billing !== 'object' || billing === null) return null;
+  const { tier, founders, payerUid, endsAt } = billing as Record<string, unknown>;
+  if ((tier !== 'core' && tier !== 'pro') || typeof payerUid !== 'string') return null;
+  return { tier, founders: founders === true, payerUid, endsAt: typeof endsAt === 'number' ? endsAt : null };
+}
+
 const refuse = (status: BillingRefusal['status'], code: string, detail: string): BillingRefusal => ({
   ok: false,
   status,
@@ -61,6 +67,12 @@ const refuse = (status: BillingRefusal['status'], code: string, detail: string):
 const UNAVAILABLE = refuse(503, 'billing_unavailable', 'billing is not available right now. try again later.');
 const NOT_OWNER = refuse(403, 'not_owner', "only the site owner can change a site's billing.");
 const NOT_BILLED = refuse(404, 'not_billed', 'this site is not billed.');
+const NO_LONGER_BILLED = refuse(
+  404,
+  'not_billed',
+  'this site is no longer billed: its billing has ended. upgrade it to put it on core or pro again.',
+);
+const ALREADY_BILLED = refuse(409, 'already_billed', 'this site is already billed. switch its plan instead.');
 const CHECKOUT_NOT_FOUND = refuse(404, 'not_found', 'checkout not found');
 const PREVIOUS_OWNER = refuse(
   409,
@@ -117,6 +129,39 @@ async function writePointer(siteId: string, pointer: BillingPointer): Promise<vo
     .update({ billing: { ...pointer, updatedAt: FieldValue.serverTimestamp() } });
 }
 
+/** ends now a record that still says the site is billed, once tridant id says it bills nothing. */
+async function closeRecord(siteId: string, pointer: BillingPointer): Promise<void> {
+  const now = Date.now();
+  if (pointer.endsAt !== null && pointer.endsAt <= now) return;
+  await writePointer(siteId, { ...pointer, endsAt: now });
+}
+
+/** after a transfer the outgoing owner pays while that billing runs, and only they may change it. */
+function billedToPreviousOwner(pointer: BillingPointer | null, owner: unknown, runs: boolean): boolean {
+  return !!pointer && runs && pointer.payerUid !== owner;
+}
+
+/**
+ * the record as the site plan answer shows it. with plans enforced, tridant id's
+ * answer decides whether the site is billed, so once it bills nothing the record
+ * is left out and the billing section offers an upgrade, before the daily job
+ * has closed a record that still says it runs. with plans off nothing was asked,
+ * and the record's own end stands.
+ */
+export function siteBillingView(
+  siteData: SiteData,
+  plan: Plan,
+  now: number = Date.now(),
+): Pick<SitePlanResponse, 'billing' | 'billedByPreviousOwner'> {
+  const pointer = readBillingPointer(siteData);
+  if (!pointer || (plan.enforced && !plan.billing)) return { billing: null, billedByPreviousOwner: false };
+  const runs = plan.enforced || pointer.endsAt === null || pointer.endsAt > now;
+  return {
+    billing: billingSummary(pointer),
+    billedByPreviousOwner: billedToPreviousOwner(pointer, siteData.owner, runs),
+  };
+}
+
 /** the site, when `uid` owns it. a superadmin holds the capability too, but the payer is always the owner. */
 async function ownedSite(siteId: string, uid: string): Promise<SiteData | null> {
   const data = (await getAdminDb().collection('sites').doc(siteId).get()).data();
@@ -150,8 +195,9 @@ async function billedPointer(siteId: string, site: SiteData): Promise<BillingPoi
 }
 
 /**
- * puts the site on a paid plan: a stripe checkout for the owner's first billed
- * site, or straight onto their running subscription (the card is on file).
+ * puts the site on a paid plan: a stripe checkout for the owner's first
+ * purchase, or straight onto their running subscription (the card is on file).
+ * a subscription keeps running at no charge once every site on it has stopped.
  */
 export async function upgradeSite(input: {
   siteId: string;
@@ -167,14 +213,15 @@ export async function upgradeSite(input: {
   if (!user.emailVerified || !user.email) {
     return refuse(403, 'email_unverified', 'verify your email before upgrading a site.');
   }
-  const pointer = readBillingPointer(site);
+  // tridant id's answer, not the record: a subscription stripe cancelled leaves a record that
+  // still says it runs, and the owner must be able to pay again.
+  invalidateSiteEntitlements(siteId);
+  const answer = await getSiteEntitlements(siteId);
+  if (!answer.ok) return UNAVAILABLE;
   // after a transfer the outgoing owner pays to the end of the period; tridant would refuse too.
-  if (pointer && pointer.payerUid !== uid && (pointer.endsAt === null || pointer.endsAt > Date.now())) {
-    return PREVIOUS_OWNER;
-  }
-  if (pointer?.endsAt === null) {
-    return refuse(409, 'already_billed', 'this site is already billed. switch its plan instead.');
-  }
+  if (billedToPreviousOwner(readBillingPointer(site), uid, !!answer.billing)) return PREVIOUS_OWNER;
+  // a stop still inside its period is resumed below, on the running subscription.
+  if (answer.billing?.endsAt === null) return ALREADY_BILLED;
 
   const siteName = typeof site.name === 'string' && site.name ? site.name : siteId;
   // a base url with a trailing slash would make `//admin`, which tridant refuses as a return url.
@@ -238,7 +285,9 @@ export async function switchSiteTier(input: {
   if (pointer.payerUid !== uid) return PREVIOUS_OWNER;
 
   const switched = await switchTier(siteId, tier, founders);
-  if (!switched.ok) return refusalFor(switched, 'switch_tier', siteId);
+  if (!switched.ok) {
+    return switched.code === 'site_not_billed' ? billingEnded(siteId, site) : refusalFor(switched, 'switch_tier', siteId);
+  }
   const next = { ...pointer, tier, founders: founders ?? pointer.founders };
   await writePointer(siteId, next);
   return { ok: true, billing: billingSummary(next) };
@@ -253,10 +302,65 @@ export async function stopSiteBilling(input: { siteId: string; uid: string }): P
   if (!pointer) return NOT_BILLED;
 
   const stopped = await stopSite(siteId);
-  if (!stopped.ok) return refusalFor(stopped, 'stop_site', siteId);
+  if (!stopped.ok) {
+    return stopped.code === 'site_not_billed' ? billingEnded(siteId, site) : refusalFor(stopped, 'stop_site', siteId);
+  }
   const next = { ...pointer, endsAt: stopped.endsAt };
   await writePointer(siteId, next);
   return { ok: true, billing: billingSummary(next) };
+}
+
+/**
+ * tridant id bills nothing for a site owlette has a record of billing: stripe
+ * cancelled the subscription, the organization was closed, or an admin ended it.
+ * the record is closed, and the owner told.
+ */
+async function billingEnded(siteId: string, site: SiteData): Promise<BillingRefusal> {
+  const pointer = readBillingPointer(site);
+  if (pointer) await closeRecord(siteId, pointer);
+  else invalidateSiteEntitlements(siteId);
+  return NO_LONGER_BILLED;
+}
+
+/**
+ * closes a record that says the site is billed once tridant id bills nothing for
+ * it, so the record is never what keeps an owner from paying again. the daily job
+ * calls it with the plan it already read. never throws.
+ */
+export async function closeEndedBilling(siteId: string, siteData: SiteData | null | undefined, plan: Plan): Promise<void> {
+  try {
+    const pointer = readBillingPointer(siteData);
+    if (pointer && plan.enforced && !plan.billing) await closeRecord(siteId, pointer);
+  } catch (error) {
+    logger.warn('[billing] ended billing not closed', {
+      context: 'billing',
+      data: { siteId, error: error instanceof Error ? error.message : String(error) },
+    });
+  }
+}
+
+/**
+ * stops a site's billing before the site is deleted: when owlette has a record of
+ * it, or when tridant id says it bills the site, since a checkout whose return
+ * never loaded leaves none. whatever the enforcement switch says: someone is
+ * being billed. nothing retries once the site is gone, but a stop that did not
+ * land costs no more than one that did: with no usage reported for the site,
+ * tridant id writes it no line after this period. it is logged at error, so the
+ * leftover item can be closed by hand. never throws: neither tridant call does.
+ */
+export async function stopBillingBeforeDelete(siteId: string, siteData: SiteData | null | undefined): Promise<void> {
+  if (!readBillingPointer(siteData)) {
+    invalidateSiteEntitlements(siteId);
+    const answer = await getSiteEntitlements(siteId);
+    if (!answer.ok || !answer.billing || answer.billing.endsAt !== null) return;
+  }
+  const stopped = await stopSite(siteId);
+  if (!stopped.ok && stopped.code !== 'site_not_billed') {
+    logger.error('[plan] billing not stopped for a deleted site', {
+      context: 'plan',
+      data: { siteId, reason: stopped.reason, status: stopped.status, code: stopped.code },
+    });
+  }
 }
 
 /**
@@ -273,7 +377,7 @@ export async function stopStrandedBilling(siteId: string, siteData: SiteData | n
       await writePointer(siteId, { ...pointer, endsAt: stopped.endsAt });
     } else if (stopped.code === 'site_not_billed') {
       // tridant bills nothing here, so the pointer is what is stale.
-      await writePointer(siteId, { ...pointer, endsAt: Date.now() });
+      await closeRecord(siteId, pointer);
     } else {
       logger.error('[billing] stranded billing not stopped', {
         context: 'billing',

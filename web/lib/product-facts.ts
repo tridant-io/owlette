@@ -49,8 +49,10 @@ export const PRICING_FACTS = {
   trialDays: 14,
   billingUnit: "per active machine per month",
   activeMachine: "a machine counts if it was online at any point in the billing period",
-  billingPeriod:
-    "a billing period is a calendar month from the 1st (UTC), and a site's first part month is charged by the day",
+  billingPeriod: "a billing period is a calendar month from the 1st (UTC)",
+  // tridant id prorates only a subscription's first period: a site added, switched or stopped later pays the whole month.
+  proration:
+    "the first month you are billed is charged by the day, and a site added later is charged for the whole month it is added in",
 } as const;
 
 /** `20` -> `"$20"`, `0.05` -> `"$0.05"`: no trailing `.00` on whole dollars. */
@@ -95,7 +97,7 @@ export const PRICE_LINE = `free during beta, then free for ${count(
 )}`;
 
 /** The model once beta ends. Nothing here is billed today. */
-export const AFTER_BETA = `after beta, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card, once its email is verified. when it ends, a site falls back to owlette free unless you upgrade it to core or pro. each site has its own plan, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}. ${PRICING_FACTS.billingPeriod}.`;
+export const AFTER_BETA = `after beta, every account starts with a ${PRICING_FACTS.trialDays}-day pro trial, no card, once its email is verified. when it ends, a site falls back to owlette free unless you upgrade it to core or pro. each site has its own plan, billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}. ${PRICING_FACTS.billingPeriod}. ${PRICING_FACTS.proration}.`;
 
 export interface Tier {
   name: string;

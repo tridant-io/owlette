@@ -56,6 +56,13 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   invalidateSiteEntitlements: jest.fn(),
 }));
 
+// the free machine count has its own suite (plan.server); here it only matters what the route does with it.
+const mockOwnerFreeMachines = jest.fn();
+jest.mock('@/lib/plan.server', () => ({
+  ...jest.requireActual('@/lib/plan.server'),
+  ownerFreeMachines: (owner: string) => mockOwnerFreeMachines(owner),
+}));
+
 import { GET } from '@/app/api/sites/[siteId]/plan/route';
 
 const SITE = 'site-a';
@@ -94,6 +101,7 @@ beforeEach(() => {
   signIn(MEMBER);
 
   mockGetSiteEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+  mockOwnerFreeMachines.mockResolvedValue({ machinesUsed: 0, machinesLimit: 1, liveMachines: [] });
 });
 
 afterAll(stopEnforcingPlans);
@@ -163,7 +171,10 @@ describe('what the plan says', () => {
       period: { start: Date.UTC(2026, 10, 1), end: Date.UTC(2026, 11, 1) },
       isOwner: false,
       billedByPreviousOwner: false,
+      freeMachines: null,
     });
+    // a billed site locks no machine, so the owner's free sites are not counted.
+    expect(mockOwnerFreeMachines).not.toHaveBeenCalled();
   });
 
   it('keeps who pays out of the answer', async () => {
@@ -172,19 +183,45 @@ describe('what the plan says', () => {
     expect(JSON.stringify((await parseResponse(await get())).body)).not.toContain('payerUid');
   });
 
-  // after a transfer the pointer still names the outgoing owner, until the billing it stopped has ended
+  // after a transfer the pointer still names the outgoing owner, until tridant id stops billing the site
   it.each([
-    ['a stop that has not landed', null, true],
-    ['billing that ends later', Date.now() + 86_400_000, true],
-    ['billing that has ended', Date.now() - 1, false],
-  ])('says whether the previous owner still pays, with %s', async (_case, endsAt, billedByPreviousOwner) => {
+    ['a stop that has not landed', null, PRO_ENTITLEMENTS, true],
+    ['billing that ends later', Date.now() + 86_400_000, PRO_ENTITLEMENTS, true],
+    ['billing that has ended', Date.now() - 1, FREE_ENTITLEMENTS, false],
+    ['a record that still says it runs, once tridant id bills nothing', null, FREE_ENTITLEMENTS, false],
+  ])('says whether the previous owner still pays, with %s', async (_case, endsAt, answer, billedByPreviousOwner) => {
     stageSite({ billing: { tier: 'pro', founders: false, payerUid: 'user-previous-owner', endsAt } });
+    mockGetSiteEntitlements.mockResolvedValue(answer);
     signIn(SITE_OWNER);
 
     const { body } = await parseResponse(await get());
 
     expect(body.billedByPreviousOwner).toBe(billedByPreviousOwner);
     expect(body.isOwner).toBe(true);
+  });
+
+  it("leaves out a record that says the site is billed once tridant id bills nothing for it, so the owner can upgrade", async () => {
+    stageSite({ billing: { tier: 'pro', founders: false, payerUid: SITE_OWNER, endsAt: null } });
+    mockGetSiteEntitlements.mockResolvedValue({ ...FREE_ENTITLEMENTS, resolved: true, orgId: 'org_1' });
+    signIn(SITE_OWNER);
+
+    const { body } = await parseResponse(await get());
+
+    expect(body).toMatchObject({ tier: 'free', billing: null, period: null, billedByPreviousOwner: false });
+  });
+
+  it("keeps the record's own end while plans are off, since tridant was not asked", async () => {
+    stopEnforcingPlans();
+    stageSite({ billing: { tier: 'pro', founders: false, payerUid: 'user-previous-owner', endsAt: null } });
+    signIn(SITE_OWNER);
+
+    const { body } = await parseResponse(await get());
+
+    expect(body).toMatchObject({
+      enforced: false,
+      billing: { tier: 'pro', founders: false, endsAt: null },
+      billedByPreviousOwner: true,
+    });
   });
 
   it('does not say so while the owner is the one who pays', async () => {
@@ -235,7 +272,10 @@ describe('what the plan says', () => {
       period: null,
       isOwner: false,
       billedByPreviousOwner: false,
+      freeMachines: null,
     });
+    // owlette free is counted across the owner's sites, whoever reads the plan.
+    expect(mockOwnerFreeMachines).toHaveBeenCalledWith(SITE_OWNER);
   });
 
   it('reads a pointer that is not a billing pointer as none', async () => {
@@ -261,8 +301,10 @@ describe('what the plan says', () => {
       period: null,
       isOwner: false,
       billedByPreviousOwner: false,
+      freeMachines: null,
     });
     expect(mockGetSiteEntitlements).not.toHaveBeenCalled();
+    expect(mockOwnerFreeMachines).not.toHaveBeenCalled();
   });
 
   it('fails open with the reason when tridant cannot be reached', async () => {
@@ -271,5 +313,56 @@ describe('what the plan says', () => {
     const { body } = await parseResponse(await get());
 
     expect(body).toMatchObject({ enforced: false, reason: 'unreachable', tier: null, flags: flags(ALL_FLAGS) });
+  });
+});
+
+describe("which machines the owner's owlette free covers", () => {
+  beforeEach(() => {
+    mockGetSiteEntitlements.mockResolvedValue(FREE_ENTITLEMENTS);
+  });
+
+  // the owner, a site admin and a member read the same answer, so they see the same lock.
+  it.each([
+    ['the owner', SITE_OWNER],
+    ['a member', MEMBER],
+    ['a machine-scoped member', SCOPED],
+  ])('names the live machines on this site to %s once the free sites have none to spare', async (_who, uid) => {
+    signIn(uid);
+    mockOwnerFreeMachines.mockResolvedValue({
+      machinesUsed: 3,
+      machinesLimit: 1,
+      liveMachines: [{ siteId: SITE, machineId: 'machine-1' }],
+    });
+
+    const { body } = await parseResponse(await get());
+
+    expect(body.freeMachines).toEqual({ limit: 1, live: ['machine-1'] });
+    expect(mockOwnerFreeMachines).toHaveBeenCalledWith(SITE_OWNER);
+  });
+
+  it('locks every machine here when the one owlette free covers is on another of the owner\'s sites', async () => {
+    mockOwnerFreeMachines.mockResolvedValue({
+      machinesUsed: 2,
+      machinesLimit: 1,
+      liveMachines: [{ siteId: 'site-other', machineId: 'machine-9' }],
+    });
+
+    expect((await parseResponse(await get())).body.freeMachines).toEqual({ limit: 1, live: [] });
+  });
+
+  it.each([
+    ['a machine to spare', { machinesUsed: 0, machinesLimit: 1, liveMachines: [] }],
+    ['no limit', { machinesUsed: 4, machinesLimit: null, liveMachines: [] }],
+  ])('locks nothing with %s', async (_case, usage) => {
+    mockOwnerFreeMachines.mockResolvedValue(usage);
+
+    expect((await parseResponse(await get())).body.freeMachines).toBeNull();
+  });
+
+  it('locks nothing on a site under the trial', async () => {
+    mockGetSiteEntitlements.mockResolvedValue(TRIAL_ENTITLEMENTS);
+
+    expect((await parseResponse(await get())).body.freeMachines).toBeNull();
+    expect(mockOwnerFreeMachines).not.toHaveBeenCalled();
   });
 });

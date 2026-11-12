@@ -44,6 +44,13 @@ jest.mock('@/lib/tridantBilling.server', () => ({
   stopSite: (siteId: string) => mockStopSite(siteId),
 }));
 
+// what tridant bills for a site with no billing pointer: none, unless a test says so.
+const mockGetSiteEntitlements = jest.fn(async (_siteId: string): Promise<unknown> => ({ ok: true, billing: null }));
+jest.mock('@/lib/tridantEntitlements.server', () => ({
+  getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
+  invalidateSiteEntitlements: jest.fn(),
+}));
+
 jest.mock('firebase-admin/firestore', () => ({
   FieldValue: {
     arrayUnion: (...items: unknown[]) => ({ __op: 'arrayUnion', items }),
@@ -1341,12 +1348,29 @@ describe('site CRUD actions', () => {
       expect(logger.error).not.toHaveBeenCalled();
     });
 
-    it('asks tridant nothing for a site with no billing pointer', async () => {
+    it('stops nothing for a site with no billing pointer that tridant does not bill', async () => {
       const unbilled = new FakeDb();
       unbilled.seed('sites/site-a', { name: 'a', owner: 'alice' });
       await deleteSite(ctx, { siteId: 'site-a', db: unbilled.asFirestore() });
 
+      expect(mockGetSiteEntitlements).toHaveBeenCalledWith('site-a');
       expect(mockStopSite).not.toHaveBeenCalled();
+    });
+
+    // a paid checkout whose return never loaded leaves a billed site with no pointer.
+    it('stops a site with no billing pointer that tridant bills', async () => {
+      const unrecorded = new FakeDb();
+      unrecorded.seed('sites/site-a', { name: 'a', owner: 'alice' });
+      mockGetSiteEntitlements.mockResolvedValue({
+        ok: true,
+        billing: { periodStart: 1, periodEnd: 2, endsAt: null, cancelAtPeriodEnd: false },
+      });
+      mockStopSite.mockResolvedValue({ ok: true, endsAt: 2 });
+
+      const result = await deleteSite(ctx, { siteId: 'site-a', db: unrecorded.asFirestore() });
+
+      expect(result).toEqual({ kind: 'deleted', siteId: 'site-a' });
+      expect(mockStopSite).toHaveBeenCalledWith('site-a');
     });
 
     it('stops a billed site even while plans are not enforced', async () => {

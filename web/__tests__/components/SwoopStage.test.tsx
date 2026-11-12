@@ -455,7 +455,7 @@ describe('SwoopStage — a session that failed or ended', () => {
   it('says a plan refusal is about the plan, with the way to upgrade, not the swoop switch', () => {
     renderStage({
       state: 'error',
-      error: "your plan doesn't include swoop. upgrade to continue.",
+      error: "this site's plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
       settingsHref: '/admin/swoop',
       upgradeHref: '/settings/plan',
@@ -469,7 +469,7 @@ describe('SwoopStage — a session that failed or ended', () => {
   it('tells someone who does not pay for the site to ask its owner, with no upgrade link', () => {
     renderStage({
       state: 'error',
-      error: "your plan doesn't include swoop. upgrade to continue.",
+      error: "this site's plan doesn't include swoop. upgrade to continue.",
       refusal: 'plan_required',
       settingsHref: '/admin/swoop',
     });

@@ -2,14 +2,13 @@
  * GET /api/account/plan — the signed-in user's account as an owner who pays for
  * sites (adr 0018): the trial, every site they own with its plan, how much of
  * owlette free they use, whether they can create a site, and the founders
- * places left.
+ * places left, or held.
  *
  * session or the user's own firebase id token; never an agent or an api key.
  * with plans off it answers `enforced: false` with the reason and reads nothing.
  * otherwise the first read by an account with a verified email starts its
  * trial. the runbook checks this route to confirm enforcement is live.
  */
-import type { Timestamp } from 'firebase-admin/firestore';
 import type { NextRequest } from 'next/server';
 import { NextResponse } from 'next/server';
 import { ApiAuthError, requireSessionOrIdToken } from '@/lib/apiAuth.server';
@@ -20,34 +19,29 @@ import logger from '@/lib/logger';
 import {
   countsAsUnpaid,
   FREE_SITES,
+  freeMachineUsage,
   missingPlanKeys,
-  planLimit,
+  pairedMachines,
   planOffReason,
   planTier,
-  readBillingPointer,
   resolveSitePlan,
   siteCreationState,
+  type PairedMachine,
   type Plan,
-  type PlanLimit,
 } from '@/lib/plan.server';
-import { getPlanAccount, trialActive, type PlanAccount } from '@/lib/planAccounts.server';
+import { billedFrom, getPlanAccount, trialActive, type PlanAccount } from '@/lib/planAccounts.server';
 import type {
+  AccountPlanFoundersHeld,
   AccountPlanResponse,
   AccountPlanSite,
   AccountPlanTrial,
 } from '@/lib/planResponse';
 import { ensureTrial, type TrialStatus } from '@/lib/planTrial.server';
 import { activeMachinesBetween } from '@/lib/planUsage.server';
-import { billingSummary } from '@/lib/siteBilling.server';
+import { billingSummary, readBillingPointer } from '@/lib/siteBilling.server';
 import { foundersRemaining } from '@/lib/tridantBilling.server';
 import { oidcConfigured } from '@/lib/tridantOidc.server';
 import { withRateLimit } from '@/lib/withRateLimit';
-
-interface PairedMachine {
-  siteId: string;
-  machineId: string;
-  pairedAt: number;
-}
 
 interface OwnedSite {
   entry: AccountPlanSite;
@@ -80,13 +74,13 @@ function trialOf(start: TrialStatus, account: PlanAccount | null, now: number): 
 }
 
 /**
- * the free machine limit as the pairing gate reads it (`freeLimit` in
- * plan.server.ts): tridant's count, 1 when it sends none, null for unlimited.
+ * the plans an owned site is billed at the founders rate on, or was: tridant id
+ * keeps the rate for an organization that has a founders site of that plan, past
+ * the cap. owlette knows it only from its records on the sites the account still owns.
  */
-function freeLimit(plan: Plan | undefined, key: PlanLimit): number | null {
-  if (!plan || missingPlanKeys(plan).includes(key)) return 1;
-  const limit = planLimit(plan, key);
-  return limit === Infinity ? null : limit;
+function foundersHeld(sites: AccountPlanSite[]): AccountPlanFoundersHeld {
+  const held = (tier: 'core' | 'pro') => sites.some(({ billing }) => billing?.founders === true && billing.tier === tier);
+  return { core: held('core'), pro: held('pro') };
 }
 
 /** the tridant portal is tridant id's oidc issuer, so its origin needs no env var of its own. */
@@ -103,6 +97,7 @@ function portalUrl(): string | null {
 async function readOwnedSite(
   site: FirebaseFirestore.QueryDocumentSnapshot,
   monthStart: number,
+  account: PlanAccount | null,
   now: number,
 ): Promise<OwnedSite> {
   const data = site.data();
@@ -135,17 +130,14 @@ async function readOwnedSite(
   const periodEnd = plan.billing?.periodEnd ?? null;
   const [active, machines] = await Promise.all([
     degrade(`the usage count of site ${site.id}`, () =>
-      activeMachinesBetween(site.id, periodStart ?? monthStart, now),
+      // the count the daily job bills, which leaves out the trial.
+      activeMachinesBetween(site.id, periodStart === null ? monthStart : billedFrom(periodStart, account), now),
     ),
-    plan.inGoodStanding ? null : site.ref.collection('machines').select('pairedAt').get(),
+    plan.inGoodStanding ? [] : pairedMachines(site.ref),
   ]);
   return {
     plan,
-    machines: (machines?.docs ?? []).map((doc) => ({
-      siteId: site.id,
-      machineId: doc.id,
-      pairedAt: (doc.get('pairedAt') as Timestamp | undefined)?.toMillis() ?? Infinity,
-    })),
+    machines,
     createdAt,
     entry: {
       ...base,
@@ -181,7 +173,9 @@ export const GET = withRateLimit(
       const now = Date.now();
       const today = new Date(now);
       const monthStart = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1);
-      const owned = await Promise.all(sites.docs.map((site) => readOwnedSite(site, monthStart, now)));
+      const owned = await Promise.all(
+        sites.docs.map((site) => readOwnedSite(site, monthStart, account, now)),
+      );
 
       // every owned site unrestricted (tridant id failing, or a superadmin's sites) is plans off for this account.
       const off = owned.length > 0 && owned.every(({ plan }) => !plan.enforced) ? owned[0].plan : null;
@@ -189,32 +183,21 @@ export const GET = withRateLimit(
         return NextResponse.json({ enforced: false, reason: off.reason } satisfies AccountPlanResponse);
       }
 
-      const freeSites = owned.filter(({ plan }) => plan.enforced && !plan.inGoodStanding);
-      const unpaid = owned.filter(({ plan, entry }) => countsAsUnpaid(plan, entry.billing));
-      const machinesLimit = freeLimit(freeSites[0]?.plan, 'owlette.machines');
-      const freeMachines = freeSites
-        .flatMap(({ machines }) => machines)
-        // infinity minus infinity is NaN, which falls through to the id like a tie.
-        .sort((a, b) => a.pairedAt - b.pairedAt || (a.machineId < b.machineId ? -1 : a.machineId > b.machineId ? 1 : 0));
-      // the limit counts distinct ids, as pairing does: a machine left on two free sites is one machine.
-      const machineIds = Array.from(new Set(freeMachines.map(({ machineId }) => machineId)));
-      const liveIds = new Set(machineIds.slice(0, machinesLimit ?? undefined));
+      const unpaid = owned.filter(({ plan }) => countsAsUnpaid(plan));
       const missingKeys = Array.from(new Set(owned.flatMap(({ plan }) => missingPlanKeys(plan))));
+      const entries = owned.map(({ entry }) => entry);
 
       const body: AccountPlanResponse = {
         enforced: true,
         // without the auth read, what the trial start saw.
         emailVerified: user ? user.emailVerified : trialStart.status !== 'unverified',
         trial: trialOf(trialStart.status, account, now),
-        sites: owned.map(({ entry }) => entry),
+        sites: entries,
         free: {
           sitesUsed: unpaid.length,
           sitesLimit: FREE_SITES,
-          machinesUsed: machineIds.length,
-          machinesLimit,
-          liveMachines: freeMachines
-            .filter(({ machineId }) => liveIds.has(machineId))
-            .map(({ siteId, machineId }) => ({ siteId, machineId })),
+          // the same rule every viewer's machine lock follows (GET /api/sites/{siteId}/plan).
+          ...freeMachineUsage(owned.filter(({ plan }) => plan.enforced && !plan.inGoodStanding)),
         },
         // the same answer POST /api/sites gives, so the create dialog shows the step the server will ask for.
         siteCreation: siteCreationState(
@@ -222,6 +205,7 @@ export const GET = withRateLimit(
           trialActive(account, now),
         ),
         foundersRemaining: founders.ok ? { core: founders.core, pro: founders.pro } : null,
+        foundersHeld: foundersHeld(entries),
         linkAvailable: oidcConfigured(),
         portalUrl: portalUrl(),
         ...(missingKeys.length > 0 && { missingKeys }),

@@ -34,9 +34,18 @@ jest.mock('@/lib/tridantBilling.server', () => ({
 
 const mockStopStranded = jest.fn();
 const mockAdopt = jest.fn();
+const mockCloseEnded = jest.fn();
 jest.mock('@/lib/siteBilling.server', () => ({
   stopStrandedBilling: (...args: unknown[]) => mockStopStranded(...args),
   adoptBilling: (...args: unknown[]) => mockAdopt(...args),
+  closeEndedBilling: (...args: unknown[]) => mockCloseEnded(...args),
+}));
+
+/** `plan_accounts/{uid}`, for the owner's trial end. */
+let mockAccounts: Record<string, { trialEndsAt: number | null }> = {};
+jest.mock('@/lib/planAccounts.server', () => ({
+  getPlanAccount: async (uid: string) => mockAccounts[uid] ?? null,
+  billedFrom: jest.requireActual('@/lib/planAccounts.server').billedFrom,
 }));
 
 // the reconcile has its own suite; here it only matters which sites reach it, and with what.
@@ -232,6 +241,7 @@ function plans(bySite: Record<string, EntitlementsResult>) {
 
 beforeEach(() => {
   mockSites = [];
+  mockAccounts = {};
   mockStore = new Map();
   mockSitePages = 0;
   mockSiteFields = [];
@@ -496,6 +506,20 @@ describe('runPlanDaily: site registration', () => {
     expect(summary.errors).toBe(0);
   });
 
+  // a record that still says billed once tridant id bills nothing (stripe cancelled the subscription) is closed.
+  it('offers every site whose plan it read for closing ended billing, with that plan', async () => {
+    plans({ billed: CORE, trial: TRIAL, unread: UNREACHABLE });
+
+    await runPlanDaily(NOW);
+
+    expect(mockCloseEnded.mock.calls.map(([siteId]) => siteId).sort()).toEqual(['billed', 'trial']);
+    expect(mockCloseEnded).toHaveBeenCalledWith(
+      'trial',
+      { owner: 'u1', name: 'lobby' },
+      expect.objectContaining({ enforced: true, billing: null }),
+    );
+  });
+
   it('offers every site for a stranded-billing stop, whatever the enforcement switch says', async () => {
     mockEnforced = false;
 
@@ -544,6 +568,30 @@ describe('runPlanDaily: usage report', () => {
     );
     expect(summary).toMatchObject({ reported: 4, recorded: 4, errors: 0 });
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  // nothing in the trial is billed: a site bought during it is in a period that started at the purchase.
+  it("counts a site bought during its owner's trial only from the trial's end", async () => {
+    mockSites = [{ id: 'core', machines: { c1: seenAgo(HOUR_MS) }, data: { owner: 'u1' } }];
+    mockStore.set('billing_usage/core/days/2026-10-03', { machineIds: ['in-trial'] });
+    mockStore.set('billing_usage/core/days/2026-10-05', { machineIds: ['after-trial'] });
+    mockAccounts = { u1: { trialEndsAt: Date.UTC(2026, 9, 4, 12) } };
+    plans({ core: CORE });
+
+    await runPlanDaily(NOW);
+
+    expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
+  });
+
+  it("counts from the period start once the owner's trial ended before it", async () => {
+    mockSites = [{ id: 'core', machines: { c1: seenAgo(HOUR_MS) }, data: { owner: 'u1' } }];
+    mockStore.set('billing_usage/core/days/2026-10-03', { machineIds: ['early'] });
+    mockAccounts = { u1: { trialEndsAt: Date.UTC(2026, 8, 20) } };
+    plans({ core: CORE });
+
+    await runPlanDaily(NOW);
+
+    expect(mockReportUsage).toHaveBeenCalledWith([{ siteId: 'core', machines: 2 }], NOW.getTime());
   });
 
   it('skips a billed site whose answer carries no period start', async () => {

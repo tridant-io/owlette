@@ -288,7 +288,7 @@ A machine that was online at any point in the billing period. It is what a bille
 _Avoid_: seat, paired machine (pairing alone costs nothing)
 
 **Billing period**:
-One calendar month from the 1st, 00:00 UTC. A site's first period is the rest of the month it started in, charged by the day.
+One calendar month from the 1st, 00:00 UTC. The first month an owner is billed is charged by the day, from the purchase or the trial's end; a site added later is charged for the whole month it is added in.
 _Avoid_: cycle, term
 
 **tridant organization**:

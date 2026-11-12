@@ -56,6 +56,7 @@ const mockGetPlanAccount = jest.fn();
 jest.mock('@/lib/planAccounts.server', () => ({
   getPlanAccount: (uid: string) => mockGetPlanAccount(uid),
   trialActive: jest.requireActual('@/lib/planAccounts.server').trialActive,
+  billedFrom: jest.requireActual('@/lib/planAccounts.server').billedFrom,
 }));
 
 const mockFoundersRemaining = jest.fn();
@@ -110,6 +111,7 @@ jest.mock('@/lib/firebase-admin', () => ({
                       ...(site.createdAt === undefined ? {} : { createdAt: { toMillis: () => site.createdAt } }),
                     }),
                     ref: {
+                      id: siteId,
                       collection: (sub: string) => ({
                         select: (...machineFields: string[]) => ({
                           get: async () => {
@@ -172,6 +174,7 @@ const FREE_SITE = {
 };
 
 const OPEN = { state: 'open', unpaidSite: null };
+const NO_FOUNDERS_HELD = { core: false, pro: false };
 const LOBBY_TAKEN = { state: 'choose_plan', unpaidSite: { siteId: 'site-a', name: 'lobby' } };
 
 const FREE_ONE_OF_ONE = {
@@ -287,6 +290,7 @@ describe('GET /api/account/plan', () => {
       free: FREE_ONE_OF_ONE,
       siteCreation: LOBBY_TAKEN,
       foundersRemaining: { core: 40, pro: null },
+      foundersHeld: NO_FOUNDERS_HELD,
       linkAvailable: false,
       portalUrl: null,
     });
@@ -310,6 +314,7 @@ describe('GET /api/account/plan', () => {
       free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
       siteCreation: OPEN,
       foundersRemaining: { core: 40, pro: null },
+      foundersHeld: NO_FOUNDERS_HELD,
       linkAvailable: false,
       portalUrl: null,
     });
@@ -397,6 +402,9 @@ describe('GET /api/account/plan', () => {
   it('answers billed sites with their pointer, period and usage since the period started', async () => {
     const firstPeriod = Date.UTC(2026, 10, 5);
     const periodEnd = Date.UTC(2026, 11, 1);
+    mockGetPlanAccount.mockResolvedValue(
+      account({ trialStartedAt: Date.UTC(2026, 9, 1), trialEndsAt: Date.UTC(2026, 9, 15), orgId: 'org_1' }),
+    );
     mockSites = {
       'site-a': {
         owner: 'u1',
@@ -459,6 +467,30 @@ describe('GET /api/account/plan', () => {
     // only a free site's machines are read.
     expect(mockMachinesRead).toHaveBeenCalledTimes(1);
     expect(mockMachinesRead).toHaveBeenCalledWith('site-c', 'machines', ['pairedAt']);
+    // the pro site is billed at the founders rate, which tridant id keeps for the account past the cap.
+    expect(res.body.foundersHeld).toEqual({ core: false, pro: true });
+  });
+
+  it("counts a site bought during the trial from the trial's end, as the daily job bills it", async () => {
+    const bought = Date.UTC(2026, 10, 5);
+    mockSites = {
+      'site-a': { owner: 'u1', name: 'lobby', billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null } },
+    };
+    mockEntitlements = { 'site-a': { ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, periodStart: bought } } };
+
+    await getPlan();
+
+    expect(mockActiveMachinesBetween).toHaveBeenCalledWith('site-a', TRIAL_END, NOW);
+  });
+
+  it('holds the founders rate for a plan a site was billed at and has stopped', async () => {
+    mockSites['site-a'] = {
+      owner: 'u1',
+      name: 'lobby',
+      billing: { tier: 'core', founders: true, payerUid: 'u1', endsAt: Date.UTC(2026, 9, 1) },
+    };
+
+    expect((await getPlan()).body.foundersHeld).toEqual({ core: true, pro: false });
   });
 
   it.each([
@@ -549,6 +581,7 @@ describe('GET /api/account/plan', () => {
       // without the plan account no trial can be seen, so the free site reads taken.
       siteCreation: LOBBY_TAKEN,
       foundersRemaining: null,
+      foundersHeld: NO_FOUNDERS_HELD,
       linkAvailable: false,
       portalUrl: null,
     });
@@ -582,12 +615,39 @@ describe('GET /api/account/plan', () => {
       billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null },
       machines: { 'kiosk-2': Date.UTC(2026, 9, 1) },
     };
-    // past tridant's grace the site is not in good standing, with owlette free's values.
-    mockEntitlements = { 'site-d': { ...FREE_ENTITLEMENTS, resolved: true, standing: 'past_due', orgId: 'org_1' } };
+    // past tridant's grace the site is not in good standing, with owlette free's values, and its billing
+    // block stays while the billing runs.
+    mockEntitlements = {
+      'site-d': {
+        ...FREE_ENTITLEMENTS,
+        resolved: true,
+        standing: 'past_due',
+        orgId: 'org_1',
+        billing: PRO_ENTITLEMENTS.billing,
+      },
+    };
 
     const res = await getPlan();
     expect(res.body.free).toMatchObject({ sitesUsed: 1, machinesUsed: 2 });
     expect(res.body.siteCreation).toEqual(LOBBY_TAKEN);
+  });
+
+  it("counts a site as unpaid once stripe has cancelled its subscription, whatever owlette's record says", async () => {
+    mockGetPlanAccount.mockResolvedValue(account({ trialStartedAt: 1, trialEndsAt: Date.UTC(2026, 10, 1) }));
+    mockSites = {
+      'site-d': {
+        owner: 'u1',
+        name: 'due',
+        billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null },
+        machines: { 'kiosk-2': Date.UTC(2026, 9, 1) },
+      },
+    };
+    // the subscription is gone, so tridant answers the site with no billing block.
+    mockEntitlements = { 'site-d': { ...FREE_ENTITLEMENTS, resolved: true, orgId: 'org_1' } };
+
+    const res = await getPlan();
+    expect(res.body.free).toMatchObject({ sitesUsed: 1 });
+    expect(res.body.siteCreation).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'site-d', name: 'due' } });
   });
 
   it('answers unverified from the trial start when the auth read fails', async () => {

@@ -36,6 +36,9 @@ test.describe('landing faq + footer', () => {
     await expect(answer).not.toContainText('unlimited sites');
     await expect(answer).toContainText('owlette free covers 1 machine and 1 site');
     await expect(answer).toContainText('a machine counts if it was online at any point in the billing period');
+    await expect(answer).toContainText(
+      'the first month you are billed is charged by the day, and a site added later is charged for the whole month it is added in',
+    );
     await expect(answer).toContainText('$20/machine/month');
     await expect(answer).toContainText('$60/machine/month');
   });

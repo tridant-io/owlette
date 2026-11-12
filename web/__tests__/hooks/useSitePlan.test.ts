@@ -6,9 +6,9 @@
  * every caller, nothing fetched before auth and the account plan settle (the
  * account read is what starts the trial), nothing locked while the
  * plan loads, after a failure or with plans off, control and swoop by the
- * site's flags for every viewer, the machine lock on a free site for its owner
- * alone (from the account plan's live machines), and a fresh account plan when
- * that site's machine set changes.
+ * site's flags for every viewer, the machine lock on a free site the same for
+ * every viewer (from the site plan's `freeMachines`), and a fresh site plan
+ * when that free site's machine set changes.
  */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -50,6 +50,7 @@ const ALL_FLAGS = {
   api_keys: true,
 };
 
+// a free site whose owner's free sites hold two machines, one over the limit.
 const FREE: SitePlanResponse = {
   enforced: true,
   tier: 'free',
@@ -60,6 +61,7 @@ const FREE: SitePlanResponse = {
   period: null,
   isOwner: true,
   billedByPreviousOwner: false,
+  freeMachines: { limit: 1, live: ['kiosk-1'] },
 };
 const CORE: SitePlanResponse = {
   ...FREE,
@@ -69,6 +71,7 @@ const CORE: SitePlanResponse = {
   flags: { ...NO_FLAGS, control: true },
   billing: { tier: 'core', founders: false, endsAt: null },
   period: { start: 1_700_000_000_000, end: 1_702_000_000_000 },
+  freeMachines: null,
 };
 const PRO: SitePlanResponse = {
   ...CORE,
@@ -87,9 +90,9 @@ const OFF: SitePlanResponse = {
   period: null,
   isOwner: true,
   billedByPreviousOwner: false,
+  freeMachines: null,
 };
 
-// an account whose free sites hold two machines, one over the limit.
 const ACCOUNT: AccountPlanOn = {
   enforced: true,
   emailVerified: true,
@@ -104,11 +107,10 @@ const ACCOUNT: AccountPlanOn = {
   },
   siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: null,
+  foundersHeld: { core: false, pro: false },
   linkAvailable: false,
   portalUrl: null,
 };
-const ACCOUNT_OFF: AccountPlanResponse = { enforced: false, reason: 'enforcement_off' };
-const UNLIMITED: AccountPlanOn = { ...ACCOUNT, free: { ...ACCOUNT.free, machinesLimit: null } };
 
 const ONE_MACHINE = 'kiosk-1';
 const TWO_MACHINES = ['kiosk-1', 'kiosk-2'].join('\n');
@@ -118,15 +120,19 @@ describe('sitePlan', () => {
     ['plans are not enforced', OFF],
     ['the plan is loading or failed', undefined],
   ])('leaves everything alone when %s', (_, site) => {
-    const state = sitePlan(site, ACCOUNT, 'site-a');
+    const state = sitePlan(site);
 
     expect(state.machineLimitFor('kiosk-2')).toBeNull();
     expect(state.controlLocked).toBe(false);
     expect(state.swoopLocked).toBe(false);
   });
 
-  it('on a free site the viewer owns, keeps the live machine and locks the rest behind the limit', () => {
-    const state = sitePlan(FREE, ACCOUNT, 'site-a');
+  // the server counts the owner's free sites, so the owner, a site admin and a member see one lock.
+  it.each([
+    ['its owner', true],
+    ['anyone else on the site', false],
+  ])('on a free site, keeps the live machine and locks the rest behind the limit for %s', (_, isOwner) => {
+    const state = sitePlan({ ...FREE, isOwner });
 
     expect(state.machineLimitFor('kiosk-1')).toBeNull();
     expect(state.machineLimitFor('kiosk-2')).toBe(1);
@@ -134,37 +140,19 @@ describe('sitePlan', () => {
     expect(state.swoopLocked).toBe(true);
   });
 
-  it("locks control and swoop for a member of a free site, but no machine: the count is its owner's", () => {
-    const state = sitePlan({ ...FREE, isOwner: false }, ACCOUNT, 'site-a');
-
-    expect(state.machineLimitFor('kiosk-2')).toBeNull();
-    expect(state.controlLocked).toBe(true);
-    expect(state.swoopLocked).toBe(true);
+  it('locks every machine when the one the limit covers is on another site', () => {
+    expect(sitePlan({ ...FREE, freeMachines: { limit: 1, live: [] } }).machineLimitFor('kiosk-1')).toBe(1);
   });
 
-  it('locks a machine whose id is live only on another site', () => {
-    expect(sitePlan(FREE, ACCOUNT, 'site-b').machineLimitFor('kiosk-1')).toBe(1);
-  });
-
-  it('locks nothing while the account has a slot to spare, as for a machine paired after it loaded', () => {
-    const account = { ...ACCOUNT, free: { ...ACCOUNT.free, machinesUsed: 0, liveMachines: [] } };
-    const state = sitePlan(FREE, account, 'site-a');
+  it('locks no machine while the owner has one to spare, or no limit', () => {
+    const state = sitePlan({ ...FREE, freeMachines: null });
 
     expect(state.machineLimitFor('kiosk-new')).toBeNull();
     expect(state.controlLocked).toBe(true);
   });
 
-  it.each([
-    ['is loading or failed', undefined],
-    ['is not enforced', ACCOUNT_OFF],
-    ['has no machine limit', UNLIMITED],
-  ])('locks no machine while the account plan %s', (_, account) => {
-    expect(sitePlan(FREE, account, 'site-a').machineLimitFor('kiosk-2')).toBeNull();
-  });
-
   it('on core, leaves control and every machine alone, and locks swoop', () => {
-    // the account's free sites are full, which says nothing about a billed one.
-    const state = sitePlan(CORE, ACCOUNT, 'site-b');
+    const state = sitePlan(CORE);
 
     expect(state.machineLimitFor('kiosk-2')).toBeNull();
     expect(state.controlLocked).toBe(false);
@@ -432,19 +420,26 @@ describe('useSitePlan', () => {
       return hook;
     }
 
-    it('asks for the account plan again when a machine is paired or removed on a free site the viewer owns', async () => {
-      const { rerender } = await render('site-a', null);
-      rerender({ siteId: 'site-a', key: ONE_MACHINE });
-      expect(mockRefreshAccount).not.toHaveBeenCalled();
+    // the owner's account plan counts the same machines for the plan page, so it is asked again too.
+    it.each([
+      ['its owner', true, 2],
+      ['anyone else on the site', false, 0],
+    ])(
+      'asks for the site plan again when a machine is paired or removed on a free site, for %s',
+      async (_, isOwner, accountReads) => {
+        fetchMock.mockResolvedValue(jsonResponse({ ...FREE, isOwner }));
+        const { rerender } = await render('site-a', null);
+        rerender({ siteId: 'site-a', key: ONE_MACHINE });
+        expect(fetchMock).toHaveBeenCalledTimes(1);
 
-      rerender({ siteId: 'site-a', key: TWO_MACHINES });
-      expect(mockRefreshAccount).toHaveBeenCalledTimes(1);
+        rerender({ siteId: 'site-a', key: TWO_MACHINES });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-      rerender({ siteId: 'site-a', key: 'kiosk-2' });
-      expect(mockRefreshAccount).toHaveBeenCalledTimes(2);
-      // the site's own plan does not change with its machines.
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    });
+        rerender({ siteId: 'site-a', key: 'kiosk-2' });
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+        expect(mockRefreshAccount).toHaveBeenCalledTimes(accountReads);
+      },
+    );
 
     it('does not ask again on a site switch or while machines load', async () => {
       const { result, rerender } = await render('site-a', ONE_MACHINE);
@@ -452,21 +447,19 @@ describe('useSitePlan', () => {
       await waitFor(() => expect(result.current.loading).toBe(false));
       rerender({ siteId: 'site-b', key: 'kiosk-9' });
 
-      expect(mockRefreshAccount).not.toHaveBeenCalled();
+      // one read per site, and no more.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it.each([
-      ['a site someone else owns', { ...FREE, isOwner: false }, ACCOUNT],
-      ['a site in good standing', PRO, ACCOUNT],
-      ['an account with no machine limit', FREE, UNLIMITED],
-      ['plans not enforced', OFF, ACCOUNT_OFF],
-    ])('does not ask again for %s', async (_, site, account) => {
+      ['a site in good standing', PRO],
+      ['plans not enforced', OFF],
+    ])('does not ask again for %s', async (_, site) => {
       fetchMock.mockResolvedValue(jsonResponse(site));
-      mockAccount = account;
       const { rerender } = await render('site-a', ONE_MACHINE);
       rerender({ siteId: 'site-a', key: TWO_MACHINES });
 
-      expect(mockRefreshAccount).not.toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -165,10 +165,28 @@ describe('stop', () => {
   });
 
   it('reloads nothing when it is refused', async () => {
-    fetchMock.mockResolvedValue(problem(404, 'not_billed', 'this site is not billed.'));
+    fetchMock.mockResolvedValue(problem(503, 'billing_unavailable', 'billing is not available right now.'));
 
-    expect(await billing().stop()).toEqual({ ok: false, status: 404, code: 'not_billed', detail: 'this site is not billed.' });
+    expect(await billing().stop()).toEqual({
+      ok: false,
+      status: 503,
+      code: 'billing_unavailable',
+      detail: 'billing is not available right now.',
+    });
     expect(refreshed()).toEqual([0, 0]);
+  });
+
+  // the server closed owlette's record of billing tridant id had already ended, so the section reloads
+  // to offer an upgrade.
+  it.each([
+    ['stop', () => billing().stop()],
+    ['switch', () => billing().switchTier('core', false)],
+  ])('reloads both plans when a %s finds the site no longer billed', async (_verb, call) => {
+    const detail = 'this site is no longer billed: its billing has ended. upgrade it to put it on core or pro again.';
+    fetchMock.mockResolvedValue(problem(404, 'not_billed', detail));
+
+    expect(await call()).toEqual({ ok: false, status: 404, code: 'not_billed', detail });
+    expect(refreshed()).toEqual([1, 1]);
   });
 });
 

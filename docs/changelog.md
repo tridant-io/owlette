@@ -19,8 +19,9 @@ switched on.
 A plan is now a site's, not an account's. Each site is on owlette free, core
 or pro on its own, and what can be done on a site follows that site's plan,
 whoever does it. Core no longer stops at one site: core and pro are billed per
-site, per active machine, by calendar month from the 1st (UTC), with a site's
-first part month charged by the day. Pro bills at least three machines per
+site, per active machine, by calendar month from the 1st (UTC). The first month
+an owner is billed is charged by the day, and a site added later is charged for
+the whole month it is added in. Pro bills at least three machines per
 site. owlette free is counted per account: one free site, with one machine
 across an account's free sites. Every further site is created on core or pro,
 picked per site, and an account can own any number of each: new site asks for
@@ -34,12 +35,15 @@ any number of sites can be created.
 Only a site's owner can change its billing, in a new billing section of site
 settings that appears when plans are switched on: upgrade, switch between core
 and pro, or stop. While plans are off, the section appears only for a site
-still billed, and offers only stop. A first upgrade goes through a checkout; a
-site added while another is billed goes on the card on file with no checkout.
-Stopping runs to the end of the billing period, and that period is still
-billed. A transferred site stays billed to its previous owner until that
-period ends, and its new owner upgrades it after that. Deleting a site stops
-its billing. An account whose email already has a tridant account links it by
+still billed, and offers only stop. The first purchase goes through a
+checkout; every later site goes on the card on file with no checkout, since the
+subscription keeps running, at no charge, even once every site on it has
+stopped. Stopping runs to the end of the billing period, and that period is
+still billed. A transferred site stays billed to its previous owner until that
+period ends, and its new owner upgrades it after that. Deleting a site, or an
+account with the sites it owns alone, stops their billing. A site whose
+subscription was cancelled after failed payments is on owlette free and can be
+upgraded again. An account whose email already has a tridant account links it by
 signing in to tridant. The plan page becomes an overview: your trial, your free
 usage and each site you own with its plan.
 

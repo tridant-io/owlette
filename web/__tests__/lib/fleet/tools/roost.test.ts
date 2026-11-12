@@ -296,7 +296,7 @@ describe('deploy_roost_version', () => {
     mockRequireEntitlement.mockResolvedValue({ status: 402 });
     expect(await tool().run(whole, [M1], { roost_id: R1 })).toEqual({
       status: 'failed',
-      error: "your plan doesn't include roost. upgrade to continue.",
+      error: "this site's plan doesn't include roost. upgrade to continue.",
     });
     expect(mockRequireEntitlement).toHaveBeenCalledWith(SITE, 'owlette.roost');
     expect(mockDeploy).not.toHaveBeenCalled();
@@ -393,7 +393,7 @@ describe('rollback_roost', () => {
     mockRequireEntitlement.mockResolvedValue({ status: 402 });
     expect(await tool().run(whole, [M1], { roost_id: R1 })).toEqual({
       status: 'failed',
-      error: "your plan doesn't include roost. upgrade to continue.",
+      error: "this site's plan doesn't include roost. upgrade to continue.",
     });
     expect(mockRollback).not.toHaveBeenCalled();
   });

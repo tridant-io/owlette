@@ -16,7 +16,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { InlineNotice } from '@/components/ui/inline-notice';
-import { foundersPlaceLeft, PlanTierPicker } from '@/components/plan/PlanTierPicker';
+import { foundersRate, PlanTierPicker } from '@/components/plan/PlanTierPicker';
 import { LINK_TRIDANT_HREF } from '@/components/plan/TrialBanner';
 import { EmailUnverifiedNotice, LinkRequiredNotice } from '@/components/plan/UpgradeNotices';
 import { toast } from '@/lib/toast';
@@ -84,7 +84,7 @@ export function CreateSiteDialog({
         : account.trial.status === 'link_required'
           ? 'link_required'
           : null;
-  const foundersLeft = (picked: BillingTier) => foundersPlaceLeft(account, picked);
+  const founders = (picked: BillingTier) => foundersRate(account, picked);
 
   // Generate a random ID when the dialog opens
   useEffect(() => {
@@ -223,7 +223,7 @@ export function CreateSiteDialog({
         freeSite ? true : undefined,
       );
       // the site exists from here on: a refused or abandoned upgrade leaves it on owlette free.
-      const upgrade = freeSite ? await requestSiteUpgrade(createdSiteId, tier, foundersLeft(tier)) : null;
+      const upgrade = freeSite ? await requestSiteUpgrade(createdSiteId, tier, founders(tier)) : null;
       // the account plan counts the new site, which changes what the next create needs.
       if (account) void refreshPlan();
       if (!upgrade) {
@@ -448,10 +448,10 @@ export function CreateSiteDialog({
               <p className="text-sm text-foreground wrap-anywhere">
                 owlette free covers one site, and {freeSite.name} is on it. pick a plan for this one.
               </p>
-              <PlanTierPicker selected={tier} onSelect={setTier} foundersLeft={foundersLeft} />
+              <PlanTierPicker selected={tier} onSelect={setTier} foundersRate={founders} />
               <p className="text-xs text-muted-foreground">
-                then checkout opens, or, if one of your sites is already billed, this one goes straight on the card
-                on file.
+                then checkout opens, or, if you already have a subscription, this site goes straight on the card on
+                file.
               </p>
               {upgradeBlocker === 'email_unverified' && (
                 <EmailUnverifiedNotice testId="create-site-email-unverified" doing="adding a site on core or pro" />

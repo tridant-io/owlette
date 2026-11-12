@@ -19,7 +19,7 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
 import { getPlanAccount, trialActive } from '@/lib/planAccounts.server';
-import type { AccountPlanSiteBilling, AccountPlanSiteCreation, PlanOffReason, SiteTier } from '@/lib/planResponse';
+import type { AccountPlanFree, AccountPlanSiteCreation, PlanOffReason, SiteTier } from '@/lib/planResponse';
 import { PRICING_FACTS } from '@/lib/product-facts';
 import { tridantApiUrl } from '@/lib/tridant.server';
 import {
@@ -61,14 +61,14 @@ export type Plan =
 export type PlanTier = SiteTier;
 
 export const PLAN_REQUIRED_DETAIL: Record<PlanFlag, string> = {
-  'owlette.control': "your plan doesn't include remote control. upgrade to continue.",
-  'owlette.deployments': "your plan doesn't include deployments. upgrade to continue.",
-  'owlette.swoop': "your plan doesn't include swoop. upgrade to continue.",
-  'owlette.hoot': "your plan doesn't include hoot. upgrade to continue.",
-  'owlette.roost': "your plan doesn't include roost. upgrade to continue.",
-  'owlette.talons': "your plan doesn't include talons. upgrade to continue.",
-  'owlette.webhooks': "your plan doesn't include webhooks. upgrade to continue.",
-  'owlette.api_keys': "your plan doesn't include API keys. upgrade to continue.",
+  'owlette.control': "this site's plan doesn't include remote control. upgrade to continue.",
+  'owlette.deployments': "this site's plan doesn't include deployments. upgrade to continue.",
+  'owlette.swoop': "this site's plan doesn't include swoop. upgrade to continue.",
+  'owlette.hoot': "this site's plan doesn't include hoot. upgrade to continue.",
+  'owlette.roost': "this site's plan doesn't include roost. upgrade to continue.",
+  'owlette.talons': "this site's plan doesn't include talons. upgrade to continue.",
+  'owlette.webhooks': "this site's plan doesn't include webhooks. upgrade to continue.",
+  'owlette.api_keys': "this site's plan doesn't include API keys. upgrade to continue.",
 };
 
 // these states hold until the env changes, which redeploys, so once per process is enough.
@@ -118,17 +118,6 @@ function ownerOf(siteData: SiteData): string | null {
 async function readSite(siteId: string, siteData?: SiteData): Promise<SiteData> {
   if (siteData !== undefined) return siteData;
   return (await getAdminDb().collection('sites').doc(siteId).get()).data() ?? null;
-}
-
-/** `sites/{id}.billing`, less its `updatedAt`: owlette's record of what tridant id bills for the site. */
-export type BillingPointer = AccountPlanSiteBilling & { payerUid: string };
-
-export function readBillingPointer(siteData: SiteData | undefined): BillingPointer | null {
-  const billing = siteData?.billing;
-  if (typeof billing !== 'object' || billing === null) return null;
-  const { tier, founders, payerUid, endsAt } = billing as Record<string, unknown>;
-  if ((tier !== 'core' && tier !== 'pro') || typeof payerUid !== 'string') return null;
-  return { tier, founders: founders === true, payerUid, endsAt: typeof endsAt === 'number' ? endsAt : null };
 }
 
 /** a failed read is "no": the owner is then held to what tridant says, where a throw would be a 500 on every gate. */
@@ -245,7 +234,7 @@ async function ownedSitePlans(ownerUid: string) {
   const owned = await getAdminDb()
     .collection('sites')
     .where('owner', '==', ownerUid)
-    .select('name', 'createdAt', 'billing')
+    .select('name', 'createdAt')
     .get();
   return Promise.all(
     owned.docs.map(async (site) => ({ site, plan: planFromAnswer(await getSiteEntitlements(site.id)) })),
@@ -277,17 +266,70 @@ export async function machineSlotAvailable(
   return onFree.has(machineId) || onFree.size < freeLimit(plan, 'owlette.machines');
 }
 
+/** a machine on a free site. `pairedAt` is epoch ms, Infinity for one paired before it was stamped. */
+export interface PairedMachine {
+  siteId: string;
+  machineId: string;
+  pairedAt: number;
+}
+
+export async function pairedMachines(site: FirebaseFirestore.DocumentReference): Promise<PairedMachine[]> {
+  const snap = await site.collection('machines').select('pairedAt').get();
+  return snap.docs.map((machine) => ({
+    siteId: site.id,
+    machineId: machine.id,
+    pairedAt: timestampToMs(machine.get('pairedAt')) ?? Infinity,
+  }));
+}
+
+export type FreeMachineUsage = Pick<AccountPlanFree, 'machinesUsed' | 'machinesLimit' | 'liveMachines'>;
+
+/**
+ * owlette free's machine limit across an account's free sites (adr 0018). it
+ * counts distinct ids, as pairing does, and keeps the first `machinesLimit` live,
+ * earliest paired first, then by machine id. every other machine on those sites
+ * is locked on the dashboard, for everyone who views the site.
+ */
+export function freeMachineUsage(freeSites: { plan: Plan; machines: PairedMachine[] }[]): FreeMachineUsage {
+  const limit = freeSites.length > 0 ? freeLimit(freeSites[0].plan, 'owlette.machines') : 1;
+  const machinesLimit = limit === Infinity ? null : limit;
+  const machines = freeSites
+    .flatMap((site) => site.machines)
+    // infinity minus infinity is NaN, which falls through to the id like a tie.
+    .sort((a, b) => a.pairedAt - b.pairedAt || (a.machineId < b.machineId ? -1 : a.machineId > b.machineId ? 1 : 0));
+  // a machine left on two free sites is one machine.
+  const machineIds = Array.from(new Set(machines.map(({ machineId }) => machineId)));
+  const liveIds = new Set(machineIds.slice(0, machinesLimit ?? undefined));
+  return {
+    machinesUsed: machineIds.length,
+    machinesLimit,
+    liveMachines: machines
+      .filter(({ machineId }) => liveIds.has(machineId))
+      .map(({ siteId, machineId }) => ({ siteId, machineId })),
+  };
+}
+
+/** `freeMachineUsage` across the sites `ownerUid` owns. for an owner known not to be a superadmin. */
+export async function ownerFreeMachines(ownerUid: string): Promise<FreeMachineUsage> {
+  const free = (await ownedSitePlans(ownerUid)).filter(({ plan }) => isFree(plan));
+  return freeMachineUsage(
+    await Promise.all(free.map(async ({ site, plan }) => ({ plan, machines: await pairedMachines(site.ref) }))),
+  );
+}
+
 /** owlette free covers one site per account; every further site is created on core or pro. */
 export const FREE_SITES = PRICING_FACTS.free.sites;
 
 /**
  * whether a site counts as unpaid when the account creates another (adr 0018):
- * not billed, and no trial covers it. a site whose billing still runs is billed
- * even once a failed card has put it on owlette free, since its owner has
- * nothing to upgrade; the free machine count still includes it.
+ * not billed, and no trial covers it. tridant id's answer decides: its billing
+ * block is there while the site's billing runs, whatever the standing, so a
+ * site whose card failed is never unpaid, since its owner has nothing to
+ * upgrade (the free machine count still includes it). the block is gone once
+ * the subscription is cancelled, whatever owlette's record on the site says.
  */
-export function countsAsUnpaid(plan: Plan, billing: Pick<AccountPlanSiteBilling, 'endsAt'> | null): boolean {
-  return isFree(plan) && (billing === null || billing.endsAt !== null);
+export function countsAsUnpaid(plan: Plan): boolean {
+  return plan.enforced && !plan.inGoodStanding && !plan.billing;
 }
 
 interface UnpaidSite {
@@ -322,7 +364,7 @@ export function siteCreationState(unpaid: UnpaidSite[], inTrial: boolean): Accou
 export async function siteCreation(ownerUid: string): Promise<AccountPlanSiteCreation> {
   if (planOffReason() || (await isSuperadmin(ownerUid))) return OPEN;
   const unpaid = (await ownedSitePlans(ownerUid))
-    .filter(({ site, plan }) => countsAsUnpaid(plan, readBillingPointer(site.data())))
+    .filter(({ plan }) => countsAsUnpaid(plan))
     .map(({ site }): UnpaidSite => {
       const { name, createdAt } = site.data();
       return {

@@ -19,9 +19,10 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
 import { plansEnforced, resolveSitePlan, type Plan } from '@/lib/plan.server';
+import { billedFrom, getPlanAccount } from '@/lib/planAccounts.server';
 import { reconcileSiteRegistration } from '@/lib/planTrial.server';
 import { PRICING_FACTS } from '@/lib/product-facts';
-import { adoptBilling, stopStrandedBilling } from '@/lib/siteBilling.server';
+import { adoptBilling, closeEndedBilling, stopStrandedBilling } from '@/lib/siteBilling.server';
 import { reportUsage, type UsageEntry } from '@/lib/tridantBilling.server';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -156,12 +157,16 @@ async function runSite(run: Run, site: FirebaseFirestore.QueryDocumentSnapshot):
   if (plan) await reconcileSiteRegistration(site.id, site.data(), plan);
   // a site billed with no pointer on it: its checkout was paid and the return never loaded.
   if (plan) await adoptBilling(site.id, site.data(), plan);
+  // a pointer that says billed on a site tridant id no longer bills: stripe cancelled the subscription.
+  if (plan) await closeEndedBilling(site.id, site.data(), plan);
 
   // a site under a trial, or on free, has no billing period and nothing to report.
   const periodStart = plan?.billing?.periodStart ?? null;
   if (plan === null || periodStart === null) return null;
   try {
-    const machines = await activeMachinesBetween(site.id, periodStart, run.nowMs);
+    const owner = site.data().owner;
+    const account = typeof owner === 'string' ? await getPlanAccount(owner) : null;
+    const machines = await activeMachinesBetween(site.id, billedFrom(periodStart, account), run.nowMs);
     // an explicit '1' only: the floor adds to a bill, so a key tridant left out never raises it.
     const pro = plan.ent['owlette.deployments'] === '1';
     return { siteId: site.id, machines: pro ? Math.max(machines, PRICING_FACTS.pro.minMachines) : machines };

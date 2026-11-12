@@ -5,6 +5,8 @@
  * is `e2e_billing/{sessionId}`, and the calls with nothing to show are
  * appended to `e2e_billing_calls`. like tridant, it opens a checkout only for a
  * payer with no running subscription, and bills every later site on it at once.
+ * a subscription keeps running at no charge once every site on it has stopped,
+ * so a payer who ever completed a checkout never gets another.
  */
 
 import 'server-only';
@@ -108,8 +110,13 @@ function logged<T extends object>(fn: string, args: Record<string, unknown>, ans
 export function startCheckout(input: CheckoutInput): Promise<BillingResult<Checkout>> {
   return guarded(async () => {
     const orgId = orgFor(input.uid);
-    const billed = await getAdminDb().collection('e2e_entitlements').where('orgId', '==', orgId).get();
-    if (billed.docs.some((doc) => runs(doc.data(), orgId))) return refused(409, 'subscription_exists');
+    const [billed, checkouts] = await Promise.all([
+      getAdminDb().collection('e2e_entitlements').where('orgId', '==', orgId).get(),
+      getAdminDb().collection('e2e_billing').where('uid', '==', input.uid).get(),
+    ]);
+    const subscribed =
+      billed.docs.some((doc) => runs(doc.data(), orgId)) || checkouts.docs.some((doc) => doc.data().completed === true);
+    if (subscribed) return refused(409, 'subscription_exists');
     const sessionId = `e2e_${randomBytes(8).toString('hex')}`;
     await getAdminDb().collection('e2e_billing').doc(sessionId).set({
       uid: input.uid,
@@ -130,6 +137,8 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
     const { uid, siteId, tier, founders } = session as { uid: string; siteId: string; tier: BillingTier; founders: boolean };
     const orgId = orgFor(uid);
     await siteDoc(siteId).set(billedSite(tier, orgId, founders));
+    // the payer's subscription from here on, whatever becomes of this site.
+    await getAdminDb().collection('e2e_billing').doc(sessionId).update({ completed: true });
     return {
       ok: true,
       status: 'complete',

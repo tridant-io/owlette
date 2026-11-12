@@ -12,7 +12,8 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
   getSiteEntitlements: (siteId: string) => mockGetSiteEntitlements(siteId),
 }));
 
-type FakeSite = { data: Record<string, unknown>; machines: string[] };
+/** `pairedAt`: ms per machine id; a machine left out was never stamped. */
+type FakeSite = { data: Record<string, unknown>; machines: string[]; pairedAt?: Record<string, number> };
 let mockUsers: Record<string, Record<string, unknown>> = {};
 let mockSites: Record<string, FakeSite> = {};
 /** `plan_accounts/{uid}`: the trial the site-creation gate reads. */
@@ -22,11 +23,17 @@ let mockAnswers: Record<string, unknown> = {};
 
 function mockSiteRef(siteId: string) {
   return {
+    id: siteId,
     collection: (name: string) => {
       if (name !== 'machines') throw new Error(`unexpected subcollection ${name}`);
       return {
         select: () => ({
-          get: async () => ({ docs: mockSites[siteId].machines.map((id) => ({ id })) }),
+          get: async () => ({
+            docs: mockSites[siteId].machines.map((id) => ({
+              id,
+              get: (field: string) => (field === 'pairedAt' ? mockSites[siteId].pairedAt?.[id] : undefined),
+            })),
+          }),
         }),
       };
     },
@@ -77,6 +84,7 @@ import {
   entitled,
   machineSlotAvailable,
   missingPlanKeys,
+  ownerFreeMachines,
   planLimit,
   planTier,
   requireEntitlement,
@@ -96,8 +104,9 @@ import {
 // a site tridant knows whose licences all ended: the defaults again, under its organization.
 const LAPSED = { ...FREE, resolved: true, orgId: 'org_1' };
 const PAST_DUE = { ...PRO, standing: 'past_due', graceUntil: Date.UTC(2026, 10, 20) };
-// past the grace window tridant stops entitling: not in good standing, and the defaults.
-const GRACE_OVER = { ...LAPSED, standing: 'past_due' };
+// past the grace window tridant stops entitling: not in good standing, and the defaults. the
+// billing block stays while the site's billing item is open, whatever the standing.
+const GRACE_OVER = { ...LAPSED, standing: 'past_due', billing: PRO.billing };
 const UNREACHABLE = { ok: false, reason: 'unreachable' };
 
 const FLAGS = [
@@ -438,7 +447,7 @@ describe('requireEntitlement', () => {
       type: 'https://owlette.app/problems/plan-required',
       code: 'plan_required',
       status: 402,
-      detail: "your plan doesn't include roost. upgrade to continue.",
+      detail: "this site's plan doesn't include roost. upgrade to continue.",
       entitlement: 'owlette.roost',
       upgradeUrl: '/settings/plan',
     });
@@ -606,6 +615,51 @@ describe('machineSlotAvailable', () => {
   });
 });
 
+// the rule every viewer's machine lock follows, and the plan page's free usage.
+describe('ownerFreeMachines', () => {
+  it("keeps the earliest paired machines live across the owner's free sites, then by machine id", async () => {
+    mockSites = {
+      lobby: { ...site('u1', ['kiosk-c', 'kiosk-b']), pairedAt: { 'kiosk-c': 2 } },
+      annex: { ...site('u1', ['kiosk-a', 'kiosk-d']), pairedAt: { 'kiosk-d': 1 } },
+      billed: site('u1', ['kiosk-e']),
+      theirs: site('u2', ['kiosk-f']),
+    };
+    mockAnswers = { billed: PRO, annex: { ...FREE, ent: { ...FREE.ent, 'owlette.machines': '3' } } };
+
+    expect(await ownerFreeMachines('u1')).toEqual({
+      machinesUsed: 4,
+      // the limit is the first free site's answer: lobby says 1.
+      machinesLimit: 1,
+      liveMachines: [{ siteId: 'annex', machineId: 'kiosk-d' }],
+    });
+  });
+
+  it('counts a machine left on two free sites once, and keeps it live on both', async () => {
+    mockSites = {
+      lobby: { ...site('u1', ['kiosk-1']), pairedAt: { 'kiosk-1': 1 } },
+      annex: { ...site('u1', ['kiosk-1', 'kiosk-2']), pairedAt: { 'kiosk-1': 2, 'kiosk-2': 3 } },
+    };
+
+    expect(await ownerFreeMachines('u1')).toEqual({
+      machinesUsed: 2,
+      machinesLimit: 1,
+      liveMachines: [
+        { siteId: 'lobby', machineId: 'kiosk-1' },
+        { siteId: 'annex', machineId: 'kiosk-1' },
+      ],
+    });
+  });
+
+  it("answers no limit for tridant's 'unlimited', and one with nothing free to count", async () => {
+    mockSites = { lobby: site('u1', ['kiosk-1', 'kiosk-2']) };
+    mockAnswers = { lobby: { ...FREE, ent: { ...FREE.ent, 'owlette.machines': 'unlimited' } } };
+    expect(await ownerFreeMachines('u1')).toMatchObject({ machinesUsed: 2, machinesLimit: null });
+
+    mockAnswers = { lobby: PRO };
+    expect(await ownerFreeMachines('u1')).toEqual({ machinesUsed: 0, machinesLimit: 1, liveMachines: [] });
+  });
+});
+
 const created = (owner: string, name: string, createdAt?: number): FakeSite => ({
   data: { owner, name, ...(createdAt === undefined ? {} : { createdAt: new Date(createdAt) }) },
   machines: [],
@@ -680,10 +734,10 @@ describe('siteCreation', () => {
     expect(await siteCreation('u1')).toEqual(OPEN);
   });
 
-  it('counts a lapsed site, and one past its grace, as on owlette free', async () => {
+  it('counts a lapsed site as on owlette free, but never one past its grace whose billing still runs', async () => {
     mockSites = { lapsed: created('u1', 'lapsed', 1), due: created('u1', 'due', 2) };
     mockAnswers = { lapsed: LAPSED, due: GRACE_OVER };
-    expect(await siteCreation('u1')).toEqual({ state: 'blocked', unpaidSite: { siteId: 'due', name: 'due' } });
+    expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'lapsed', name: 'lapsed' } });
   });
 
   it('is blocked with two sites on owlette free, and names the newer', async () => {
@@ -704,7 +758,8 @@ describe('siteCreation', () => {
   });
 
   describe('a billed site whose card failed past its grace', () => {
-    // its plan reads free, but its billing runs: the upgrade route answers already_billed for it.
+    // its plan reads free, but tridant id still carries its billing block: the upgrade route
+    // answers already_billed for it.
     const pastDue = (createdAt: number, machines: string[] = []): FakeSite => ({
       data: {
         owner: 'u1',
@@ -738,6 +793,24 @@ describe('siteCreation', () => {
       (mockSites.due.data.billing as Record<string, unknown>).endsAt = Date.now() - 1000;
       mockAnswers = { due: LAPSED };
       expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'due', name: 'Due' } });
+    });
+
+    it('counts as unpaid once stripe has cancelled its subscription, though owlette still records it as billed', async () => {
+      mockSites = { due: pastDue(1) };
+      mockAnswers = { due: LAPSED };
+      expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'due', name: 'Due' } });
+    });
+
+    it('is never unpaid while tridant id bills it, even with no record of it in owlette', async () => {
+      mockSites = { lobby: created('u1', 'Lobby', 1), due: created('u1', 'Due', 2) };
+      mockAnswers = { due: GRACE_OVER };
+      expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'lobby', name: 'Lobby' } });
+    });
+
+    it('is never unpaid inside its grace', async () => {
+      mockSites = { lobby: created('u1', 'Lobby', 1), due: pastDue(2) };
+      mockAnswers = { due: PAST_DUE };
+      expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'lobby', name: 'Lobby' } });
     });
   });
 

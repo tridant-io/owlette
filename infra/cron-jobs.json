@@ -258,7 +258,7 @@
       "environments": [],
       "environmentsJustification": "run by hand once per environment, just before plans are switched on; never scheduled on cron-job.org",
       "urls": {},
-      "purpose": "Starts the free trial for existing accounts, one page of 250 Firebase Auth users per call. A dry run counting the eligible accounts unless called with ?apply=1; ?pageToken= continues from the previous answer's nextPageToken until it is null. Runs with PLAN_ENFORCEMENT still off, and answers 503 while tridant id is not configured.",
+      "purpose": "Starts the free trial for existing accounts, one page of 100 Firebase Auth users per call. A dry run counting the eligible accounts unless called with ?apply=1; ?pageToken= continues from the previous answer's nextPageToken until it is null. Runs with PLAN_ENFORCEMENT still off, and answers 503 while tridant id is not configured.",
       "failureMode": {
         "silent": false,
         "description": "Nothing runs it on a timer, so existing accounts get a trial only when they next open the plan page or are started by hand. A call that fails answers 401, 503 or 500."

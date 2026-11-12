@@ -3,8 +3,9 @@
  * @jest-environment jsdom
  *
  * UpgradeSiteDialog: the plan picker for one site. pins the prices (the
- * founders price only while a place is left), the rate sent with the plan, the
- * leave for checkout, the site going straight onto a running subscription, the
+ * founders price only while a place is left or the account holds the rate),
+ * the rate sent with the plan, the leave for checkout, the site going straight
+ * onto a running subscription, the wording when the dialog can't tell which, the
  * founders places running out (the list price shown, and sent only on a second
  * confirm), the link and verify notices, a refusal's detail as a toast, the
  * switch mode for a billed site, and a request in flight holding the dialog
@@ -56,10 +57,12 @@ const ACCOUNT: AccountPlanOn = {
   free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
   siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: { core: 0, pro: 0 },
+  foundersHeld: { core: false, pro: false },
   linkAvailable: true,
   portalUrl: null,
 };
 
+// billed now: tridant id's answer carries its period.
 const BILLED_ELSEWHERE: AccountPlanSite = {
   siteId: 'site-b',
   name: 'bravo',
@@ -67,8 +70,17 @@ const BILLED_ELSEWHERE: AccountPlanSite = {
   standing: 'active',
   inGoodStanding: true,
   billing: { tier: 'core', founders: false, endsAt: null },
-  period: null,
+  period: { start: 1_790_000_000_000, end: 1_792_000_000_000 },
   activeMachinesThisPeriod: 1,
+};
+// billed once: owlette's record, with no period, since tridant id bills it no more.
+const BILLED_BEFORE: AccountPlanSite = {
+  ...BILLED_ELSEWHERE,
+  tier: 'free',
+  standing: 'expired',
+  inGoodStanding: false,
+  billing: { tier: 'core', founders: false, endsAt: 1_788_000_000_000 },
+  period: null,
 };
 
 const SITE = { id: 'site-a', name: 'Alpha' };
@@ -177,6 +189,19 @@ describe('upgrading', () => {
     expect(screen.getByRole('button', { name: 'continue to checkout' })).toBeEnabled();
   });
 
+  // tridant id keeps the founders rate for an organization that already has a founders site of the plan.
+  it('asks for the founders rate, and shows its price, on a plan the account holds it on past the cap', async () => {
+    mockAccount = { ...ACCOUNT, foundersRemaining: { core: 0, pro: 0 }, foundersHeld: { core: false, pro: true } };
+    const { user } = open();
+
+    expect(card('pro')).toHaveTextContent('$30per active machine per month');
+    expect(card('pro')).toHaveTextContent('founders rate. the list price is $60.');
+    expect(card('core')).toHaveTextContent('$20per active machine per month');
+
+    await user.click(screen.getByRole('button', { name: 'continue to checkout' }));
+    expect(mockUpgrade).toHaveBeenLastCalledWith('pro', true);
+  });
+
   it('asks for the founders rate only for a plan with places left', async () => {
     mockAccount = { ...ACCOUNT, foundersRemaining: { core: 0, pro: 3 } };
     mockUpgrade.mockResolvedValue(refused('billing_unavailable', 'billing is not available right now.', 503));
@@ -206,18 +231,37 @@ describe('upgrading', () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("does not count this site's own billing, or a site that ran out, as a subscription", () => {
+  // a subscription with every site stopped runs on at no charge, or stripe has cancelled it: the dialog
+  // can't tell which, so it promises neither a checkout nor the card on file.
+  it.each([
+    ['another site', BILLED_BEFORE],
+    ['this site', { ...BILLED_BEFORE, siteId: 'site-a' }],
+  ])('after %s was billed and has ended, says either may follow, with a neutral button', async (_, site) => {
+    mockAccount = { ...ACCOUNT, sites: [site] };
+    mockUpgrade.mockResolvedValue({ ok: true, added: true });
+    const { user } = open();
+
+    expect(
+      screen.getByText(
+        'checkout opens, or, if your subscription from an earlier site is still running, this site goes straight on the card on file.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'continue to checkout' })).toBeNull();
+    expect(screen.queryByText(/there is no checkout/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'upgrade site' }));
+    expect(mockUpgrade).toHaveBeenCalledWith('pro', false);
+    expect(toast.success).toHaveBeenCalledWith('Alpha is on pro');
+  });
+
+  it('promises a checkout to an account that has never had a site billed', () => {
     mockAccount = {
       ...ACCOUNT,
-      sites: [
-        { ...BILLED_ELSEWHERE, siteId: 'site-a' },
-        { ...BILLED_ELSEWHERE, siteId: 'site-c', tier: 'free', standing: 'expired', inGoodStanding: false },
-      ],
+      sites: [{ ...BILLED_BEFORE, siteId: 'site-c', billing: null }],
     };
     open();
 
     expect(screen.getByRole('button', { name: 'continue to checkout' })).toBeInTheDocument();
-    expect(screen.queryByText(/there is no checkout/)).toBeNull();
+    expect(screen.queryByText(/card on file/)).toBeNull();
   });
 
   it("toasts a refusal's detail and stays open", async () => {

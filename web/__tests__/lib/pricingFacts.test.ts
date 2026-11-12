@@ -105,6 +105,9 @@ describe('pricing is single-sourced from PRICING_FACTS', () => {
     expect(AFTER_BETA).toContain(PRICING_FACTS.billingUnit);
     expect(AFTER_BETA).toContain(PRICING_FACTS.activeMachine);
     expect(AFTER_BETA).toContain(PRICING_FACTS.billingPeriod);
+    expect(AFTER_BETA).toContain(PRICING_FACTS.proration);
+    // tridant id prorates only the first period, so no surface may promise a site's own part month.
+    expect(AFTER_BETA).not.toContain('first part month');
     expect(AFTER_BETA).toContain('once its email is verified');
     // assistants read the guardrails, not the landing page.
     expect(GUARDRAILS.join(' ')).toContain(AFTER_BETA);

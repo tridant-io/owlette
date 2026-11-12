@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePlan } from '@/hooks/usePlan';
-import type { AccountPlanFree, AccountPlanResponse } from '@/lib/planResponse';
 import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 
 /**
@@ -104,38 +103,32 @@ async function load(uid: string, siteId: string): Promise<void> {
   emit();
 }
 
-/**
- * the account's free usage when it limits this site's machines. owlette free
- * is counted per account, across the free sites it owns, so it applies on a
- * free site to its owner alone: nobody else's account plan knows the count.
- */
-function freeUsage(site: SitePlanResponse | undefined, account: AccountPlanResponse | undefined): AccountPlanFree | null {
-  return site?.enforced && !site.inGoodStanding && site.isOwner && account?.enforced ? account.free : null;
-}
-
 const LIVE = () => null;
 const UNRESTRICTED: SitePlan = { machineLimitFor: LIVE, controlLocked: false, swoopLocked: false };
 
-export function sitePlan(
-  site: SitePlanResponse | undefined,
-  account: AccountPlanResponse | undefined,
-  siteId: string,
-): SitePlan {
+/**
+ * the locks every viewer of the site sees. owlette free is counted across the
+ * owner's free sites, which only the server can read, so the site plan answer
+ * names the machines it covers here (`freeMachines`); a machine paired since
+ * that answer is outside them.
+ */
+export function sitePlan(site: SitePlanResponse | undefined): SitePlan {
   if (!site?.enforced) return UNRESTRICTED;
   const flags = { controlLocked: !site.flags.control, swoopLocked: !site.flags.swoop };
-  const free = freeUsage(site, account);
-  const limit = free?.machinesLimit ?? null;
-  // with a slot to spare, a machine missing from the list was paired after the plan loaded, and fits.
-  if (!free || limit === null || free.machinesUsed < limit) return { ...flags, machineLimitFor: LIVE };
-  const liveHere = new Set(free.liveMachines.filter((m) => m.siteId === siteId).map((m) => m.machineId));
-  return { ...flags, machineLimitFor: (machineId) => (liveHere.has(machineId) ? null : limit) };
+  const free = site.freeMachines;
+  if (!free) return { ...flags, machineLimitFor: LIVE };
+  const live = new Set(free.live);
+  return { ...flags, machineLimitFor: (machineId) => (live.has(machineId) ? null : free.limit) };
 }
+
+/** a site on owlette free, whose machine locks change when a machine is paired or removed. */
+const onFree = (site: SitePlanResponse | undefined) => !!site?.enforced && !site.inGoodStanding;
 
 /**
  * `machineIdsKey` is the site's machine ids joined, or null while they load.
- * the account plan is fetched once per sign-in, and pairing or removing a
+ * the site's plan is fetched once per sign-in, and pairing or removing a
  * machine changes which one owlette free keeps live, so a change to the set
- * asks for it again.
+ * on a free site asks for it again.
  */
 export function useSitePlan(siteId: string | null | undefined, machineIdsKey: string | null = null): SitePlanState {
   const { user, loading: authLoading } = useAuth();
@@ -143,7 +136,7 @@ export function useSitePlan(siteId: string | null | undefined, machineIdsKey: st
   const uid = !authLoading && user ? user.uid : null;
   const getSnapshot = useCallback(() => (siteId ? cache.get(siteId) : undefined), [siteId]);
   const current = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
-  const { plan: account, loading: accountLoading, refresh: refreshAccount } = usePlan();
+  const { loading: accountLoading, refresh: refreshAccount } = usePlan();
 
   useEffect(() => {
     claim(uid);
@@ -159,16 +152,20 @@ export function useSitePlan(siteId: string | null | undefined, machineIdsKey: st
   // another account's entry, mid-switch, is not this user's view of the site.
   const mine = current?.uid === uid ? current : undefined;
   const plan = mine?.plan;
-  const locks = useMemo(() => sitePlan(plan, account, siteId ?? ''), [plan, account, siteId]);
-  const counted = freeUsage(plan, account)?.machinesLimit != null;
+  const locks = useMemo(() => sitePlan(plan), [plan]);
+  const counted = onFree(plan);
+  const owner = !!plan?.isOwner;
 
   const seen = useRef<{ siteId: string; key: string } | null>(null);
   useEffect(() => {
     if (!siteId || machineIdsKey === null) return;
     const previous = seen.current;
     seen.current = { siteId, key: machineIdsKey };
-    if (counted && previous?.siteId === siteId && previous.key !== machineIdsKey) void refreshAccount();
-  }, [counted, siteId, machineIdsKey, refreshAccount]);
+    if (!counted || previous?.siteId !== siteId || previous.key === machineIdsKey) return;
+    void refresh();
+    // the owner's plan page counts the same machines.
+    if (owner) void refreshAccount();
+  }, [counted, owner, siteId, machineIdsKey, refresh, refreshAccount]);
 
   const loading = !!authLoading || (uid !== null && !!siteId && (!mine || mine.loading));
   const error = mine?.error ?? null;

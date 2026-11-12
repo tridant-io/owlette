@@ -95,6 +95,19 @@ export type UserDeleteOutcome =
       authDisabled: boolean;
     };
 
+/**
+ * forgets a deleted account's link to its tridant organization (adr 0018); the
+ * organization, its sites and their billing stay. both account deletes call it,
+ * this cascade and `DELETE /api/users/me`. best effort: unlinkAccount never throws.
+ */
+export async function unlinkTridantAccount(uid: string): Promise<void> {
+  if (!tridantConfigured()) return;
+  const unlinked = await unlinkAccount(uid);
+  if (!unlinked.ok) {
+    console.warn(`[account delete] tridant unlink failed for ${uid}: ${unlinked.code ?? unlinked.reason}`);
+  }
+}
+
 /** Sites this user owns — the route handler surfaces the orphan guard before any mutation. */
 export async function findOwnedSites(uid: string): Promise<string[]> {
   const db = getAdminDb();
@@ -349,17 +362,8 @@ export async function performUserDeleteCascade(
     deletedBy: 'superadmin', // route handler doesn't pass actor here; auditLog has it
   });
 
-  // forget the account's link to its tridant organization (adr 0018); the organization,
-  // its sites and their billing stay. after the stamp, so an account whose delete
-  // failed keeps its link. best effort: unlinkAccount never throws.
-  if (tridantConfigured()) {
-    const unlinked = await unlinkAccount(uid);
-    if (!unlinked.ok) {
-      console.warn(
-        `[userDeleteCascade] tridant unlink failed for ${uid}: ${unlinked.code ?? unlinked.reason}`,
-      );
-    }
-  }
+  // after the stamp, so an account whose delete failed keeps its link.
+  await unlinkTridantAccount(uid);
 
   // Rules (`isNotDeletedUser`) gate on `deletedAt`, but outstanding ID tokens stay valid for ~1h
   // unless revoked; `disabled: true` also blocks new sign-ins and custom-token mints. Best-effort:

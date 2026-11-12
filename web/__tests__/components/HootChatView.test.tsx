@@ -710,14 +710,14 @@ describe('HootChatView plan', () => {
         type: 'https://owlette.app/docs/api/errors#plan_required',
         title: 'Payment Required',
         status: 402,
-        detail: "your plan doesn't include hoot. upgrade to continue.",
+        detail: "this site's plan doesn't include hoot. upgrade to continue.",
         code: 'plan_required',
       }),
     );
     renderView();
 
     const alert = screen.getByRole('alert');
-    expect(alert).toHaveTextContent("your plan doesn't include hoot. upgrade to continue.");
+    expect(alert).toHaveTextContent("this site's plan doesn't include hoot. upgrade to continue.");
     expect(alert).not.toHaveTextContent('plan_required');
   });
 

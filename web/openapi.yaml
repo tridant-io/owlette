@@ -11570,7 +11570,7 @@ components:
             type: https://owlette.app/problems/plan-required
             title: plan required
             status: 402
-            detail: your plan doesn't include remote control. upgrade to continue.
+            detail: this site's plan doesn't include remote control. upgrade to continue.
             entitlement: owlette.control
             upgradeUrl: /settings/plan
             code: plan_required
@@ -14439,8 +14439,8 @@ components:
       description: |
         With `enforced: false`, only `enforced` and `reason` are sent. With
         `enforced: true`, `reason` is absent and `emailVerified`, `trial`,
-        `sites`, `free`, `siteCreation`, `foundersRemaining`, `linkAvailable`
-        and `portalUrl` are always sent.
+        `sites`, `free`, `siteCreation`, `foundersRemaining`, `foundersHeld`,
+        `linkAvailable` and `portalUrl` are always sent.
       example:
         enforced: true
         emailVerified: true
@@ -14470,6 +14470,7 @@ components:
           liveMachines: [{ siteId: my-other-site, machineId: KIOSK-01 }]
         siteCreation: { state: choose_plan, unpaidSite: { siteId: my-other-site, name: annex } }
         foundersRemaining: { core: 42, pro: 17 }
+        foundersHeld: { core: false, pro: true }
         linkAvailable: true
         portalUrl: https://id.tridant.io
       properties:
@@ -14557,8 +14558,10 @@ components:
                 nullable: true
                 description: |
                   Distinct machines online since `period.start`, or since the
-                  1st of the current month (UTC) with no period. `null` when
-                  the count could not be read or the tier is `null`.
+                  caller's trial ended when that is later (nothing in the
+                  trial is billed), or since the 1st of the current month
+                  (UTC) with no period. `null` when the count could not be
+                  read or the tier is `null`.
         free:
           type: object
           required: [sitesUsed, sitesLimit, machinesUsed, machinesLimit, liveMachines]
@@ -14572,8 +14575,11 @@ components:
               minimum: 0
               description: |
                 The caller's unpaid sites: not billed, and no trial covers
-                them. A billed site whose payment failed is never one, even
-                once it reads owlette free.
+                them. Whether a site is billed is the license server's
+                answer, not the site's `billing` record: a billed site whose
+                payment failed is never one, even once it reads owlette free,
+                and a site whose subscription was cancelled is one, whatever
+                its record says.
             sitesLimit:
               type: integer
               minimum: 1
@@ -14593,7 +14599,8 @@ components:
                 The machines the machine limit keeps live: the first
                 `machinesLimit` on the caller's free sites, earliest paired
                 first, then by machine ID. The dashboard shows the rest of
-                those sites' machines behind an upgrade notice.
+                those sites' machines behind an upgrade notice, the same to
+                everyone on the site.
               items:
                 type: object
                 required: [siteId, machineId]
@@ -14608,6 +14615,18 @@ components:
           properties:
             core: { type: integer, minimum: 0, nullable: true }
             pro: { type: integer, minimum: 0, nullable: true }
+        foundersHeld:
+          type: object
+          required: [core, pro]
+          description: |
+            Per plan, whether a site the caller owns is billed at that plan's
+            founders rate, or was. tridant id keeps the founders rate for an
+            account that already has a founders site of the plan, so the rate
+            is offered on that plan even once `foundersRemaining` reaches 0.
+            Read from the billing records on the sites the caller still owns.
+          properties:
+            core: { type: boolean }
+            pro: { type: boolean }
         siteCreation:
           $ref: '#/components/schemas/SiteCreation'
         linkAvailable:

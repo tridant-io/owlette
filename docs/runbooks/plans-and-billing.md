@@ -60,8 +60,9 @@ enforcement still off (see [the bulk trial start](#the-bulk-trial-start)).
   `enforced: false`. It asks tridant id nothing and reports nothing;
 - pairing stamps `pairedAt` on new machines;
 - password sign-ups get the email-verification link;
-- deleting or transferring a site that carries a billing pointer still stops its billing with
-  tridant id, whatever the switch says. Someone is being billed for it;
+- transferring a site that carries a billing pointer, and deleting one that carries a pointer or
+  that tridant id says it bills (an account delete included), still stops its billing with tridant
+  id, whatever the switch says. Someone is being billed for it;
 - once tridant id is configured, [the bulk trial start](#the-bulk-trial-start) runs, and a new site
   is registered with tridant id when its owner already has a tridant organization, so it is under
   the owner's trial when the switch flips.
@@ -117,6 +118,9 @@ tridant_link_not_configured`.
 
 - The client must be bound to the app `owlette` in tridant id, or its ID tokens are refused as
   link consent.
+- The client must allow the `orgs` scope. Owlette asks for `openid email orgs` to learn which
+  organizations the owner owns, and tridant id's default for a client is `openid email profile`,
+  so without it tridant id refuses the sign-in as `invalid_scope`.
 - Its redirect URI is `https://<origin>/api/auth/tridant/callback` (`dev.owlette.app`,
   `owlette.app`). Register every origin that serves the app.
 - The secret comes from the tridant id admin, who sees it once when the client is registered or its
@@ -265,7 +269,7 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
      file.
    - with both sites billed, **create new site** is a plain create: `siteCreation.state` is
      `"open"`, since no site is unpaid (the trial would open it anyway), and the trial covers the
-     new site. Creating a site on core or pro while another is billed goes on the card on file
+     new site. Creating a site on core or pro once the account has paid goes on the card on file
      with no checkout; that needs an account past its trial with its free site taken, which e2e
      (`plans/billing.spec.ts`) covers.
    - switch plan, then stop billing: the section reads "ends" with the period's last day, and
@@ -397,7 +401,8 @@ and send it with the prod bulk trial start. It must say:
 - owlette free is per account: one free site with one machine, monitoring and updates. Every
   further site is created on core or pro, and an account can own any number of each;
 - core and pro are billed per site, per active machine per calendar month from the 1st (UTC), the
-  first part month by the day; "active" means online at any point in the billing period; pro bills
+  first month an owner is billed by the day and a site added later for the whole month it is added
+  in; "active" means online at any point in the billing period; pro bills
   at least three machines per site;
 - on free, agents keep running, supervising crash-restarts and updating; nothing is unpaired, and
   one machine stays live;
@@ -428,8 +433,9 @@ impossible, so investigate it as a bug. Also roll back if trialing or billed sit
 **What rollback does not undo.** Nothing a customer paid for is lost, because tridant id holds it:
 - **Billed sites stay billed.** Their subscriptions run on in tridant id and Stripe. While the
   switch is off, `plan-daily` reports no usage, so tridant id bills each site on the last report
-  it holds. Turn enforcement back on before the month's last 23:30 run, or stop the affected
-  subscriptions in tridant id.
+  it holds. Turn enforcement back on before the month's last 23:30 run. Stopping the affected
+  sites in tridant id does not waive the current period: a stop still bills it, on the last
+  report held, and ends the billing only after it.
 - **Nothing can be bought or switched from the dashboard:** an upgrade or a switch answers `503
   billing_unavailable`. The billing section stays only on a billed site, for its owner, and offers
   only **stop billing**, which still reaches tridant id, as the stop on delete and transfer does.
@@ -456,7 +462,7 @@ tridant id is the source of truth for every plan. Owlette keeps:
 
 | path | holds |
 |---|---|
-| `sites/{siteId}.billing` | the pointer the dashboard shows: `{tier, founders, payerUid, endsAt, updatedAt}`. Written when the owner upgrades, switches or stops, when a checkout is confirmed, and when ownership is transferred. `endsAt` is null while billing runs |
+| `sites/{siteId}.billing` | the pointer the dashboard shows: `{tier, founders, payerUid, endsAt, updatedAt}`. Written when the owner upgrades, switches or stops, when a checkout is confirmed, and when ownership is transferred. `endsAt` is null while billing runs. It decides nothing: whether a site is billed is tridant id's answer (its `billing` block), and a pointer that still says billed once tridant id bills nothing is closed by a switch, a stop or the daily job |
 | `plan_accounts/{uid}` | an account's trial and link state: `trialStartedAt`, `trialEndsAt`, `orgId`, `linkRequired`, `trialError`, `claimedAt` |
 | `billing_checkouts/{sessionId}` | what a Stripe Checkout session was started for (`uid`, `siteId`, `tier`, `founders`), so only the account that started it can confirm it |
 | `billing_usage/{siteId}/days/{YYYY-MM-DD}` | the site's active machines per UTC day |
@@ -475,11 +481,14 @@ it:
 2. stops billing that was left running for a previous owner (a transfer whose stop did not land);
 3. writes `plan_snapshot/{siteId}`;
 4. re-registers a site that tridant id holds under another organization than its owner's (a
-   transferred site moves once nothing is billed on it there), and writes the billing pointer for
-   a billed site that has none (a checkout that was paid and whose return never loaded).
+   transferred site moves once nothing is billed on it there), writes the billing pointer for
+   a billed site that has none (a checkout that was paid and whose return never loaded), and
+   closes a pointer that still says billed on a site tridant id no longer bills (Stripe cancelled
+   the subscription after failed payments, the organization was closed, or an admin revoked it).
 
 Then, with enforcement on, it reports every billed site to tridant id in one `POST /v1/usage`: the
-site's distinct active machines since its billing period started, a pro site as at least 3, with
+site's distinct active machines since its billing period started, or since the owner's trial
+ended when that is later (nothing in the trial is billed), a pro site as at least 3, with
 `as_of` set to the run. Last, it prunes day docs older than 100 days. With enforcement off it asks
 tridant id nothing and reports nothing.
 
@@ -535,9 +544,12 @@ api_key_not_permitted`. `SITE_BILLING_MANAGE` is the owner's alone and is checke
 `capability_enforcement` is off, and the payer is always the owner: a superadmin who is not the
 owner gets `403 not_owner`.
 
-- **Upgrade** (`POST`): the owner's first billed site answers `{checkoutUrl}` for Stripe Checkout.
+- **Upgrade** (`POST`): the owner's first purchase answers `{checkoutUrl}` for Stripe Checkout.
   Once the owner has a subscription, tridant id answers `subscription_exists` and owlette adds the
-  site to it instead (`{added: true}`): card on file, no checkout. Needs a verified email.
+  site to it instead (`{added: true}`): card on file, no checkout. A subscription with every site
+  stopped keeps running at no charge (decided with tridant 2026-11-12), so that holds after every
+  site has ended too. Needs a verified email. Whether the site is already billed is asked of
+  tridant id afresh, never read from the pointer.
 - **The return from checkout** lands on `/admin/sites/{siteId}?section=billing&session_id=…`. The
   section polls `GET /api/billing/checkout/{sessionId}` until tridant id says `complete`, and the
   pointer is written then. If the tab is closed first, the site is still billed: the daily job
@@ -546,8 +558,11 @@ owner gets `403 not_owner`.
 - **Stop** (`DELETE`): the site keeps its plan to the end of the billing period, which is billed,
   then goes to owlette free. Upgrading it again before then resumes the same billing.
 - **Founders** rates are offered while tridant id's `founders_remaining` is above 0 (cached 5
-  minutes). If the places run out first, the request is refused with `founders_sold_out` and the
-  dialog asks the owner to confirm the list price. Nothing is retried silently.
+  minutes), or when a site the owner owns is, or was, billed at the founders rate on that plan:
+  tridant id keeps the rate for that organization past the cap (`foundersHeld` in
+  `/api/account/plan`, read from the pointers on the sites the owner still owns). If tridant id
+  refuses it anyway with `founders_sold_out`, the dialog asks the owner to confirm the list price.
+  Nothing is retried silently.
 - Every change writes a `billing_mutated` audit row.
 
 Refusals are problem+json with these codes:
@@ -558,8 +573,8 @@ Refusals are problem+json with these codes:
 | `billing_upstream` | 502 | tridant id refused the call for a reason owlette does not map. Logged `[billing] tridant id refused a billing call` with tridant id's `code` |
 | `not_owner` | 403 | the caller does not own the site |
 | `email_unverified` | 403 | upgrading before the owner's email is verified |
-| `already_billed` | 409 | upgrading a site that is billed and not stopped |
-| `not_billed` | 404 | switching or stopping a site that is not billed |
+| `already_billed` | 409 | upgrading a site tridant id bills and that is not stopped |
+| `not_billed` | 404 | switching or stopping a site that is not billed. When the pointer still said billed, it is closed, and the detail says the site is no longer billed |
 | `billed_by_previous_owner` | 409 | upgrading or switching a transferred site while the previous owner's billing runs |
 | `link_required` | 409 | the owner's email already has a tridant organization. Also marks the account, so the plan page offers the link |
 | `site_billed_elsewhere`, `site_is_default` | 409 | the site is billed under, or belongs to, another tridant organization |
@@ -582,10 +597,14 @@ Refusals are problem+json with these codes:
 - A site on owlette free can be transferred only to an owner whose free site isn't taken, or who
   is in their trial (`402`, `entitlement: owlette.sites`). The free machine limit is not checked on
   transfer.
-- **Deleting a site** stops its billing first. A failed stop is logged `[plan] billing not stopped
-  for a deleted site` and is not retried: stop it in tridant id.
-- **Deleting an account** unlinks it from its tridant organization. The organization and its
-  billing stay.
+- **Deleting a site** stops its billing first, when the site carries a pointer or tridant id says
+  it bills the site (a paid checkout whose return never loaded leaves no pointer). A failed stop is
+  logged `[plan] billing not stopped for a deleted site` and is not retried: stop it in tridant id.
+- **Deleting an account** unlinks it from its tridant organization, both from the admin panel
+  (`DELETE /api/users/{uid}`, which transfers the account's sites first) and by the account itself
+  (`DELETE /api/users/me`, which deletes the sites it owns alone, stopping each one's billing as a
+  site delete does). The organization stays, and so does the billing of any site it did not
+  delete. A failed unlink is logged `[account delete] tridant unlink failed`.
 
 ### linking a tridant account
 
@@ -660,9 +679,12 @@ Accepted in review:
   exemption applies only to sites the superadmin owns. A superadmin who opens the plan page gets a
   trial start like anyone.
 - `webhooks/test` stays open on free.
-- The lapse overlay (one live machine across an owner's free sites) is cosmetic and shown to the
-  owner only. Clients read Firestore directly and the rules are unchanged; every action is gated on
-  the server.
+- The lapse overlay (one live machine across an owner's free sites) is the same for everyone on the
+  site: `/api/sites/{siteId}/plan` names the machines it keeps live (`freeMachines`). It is
+  cosmetic. The server refuses pairing a machine past the limit and, since owlette free has no
+  control, remote control on every machine of the site (updates still go through); a locked
+  machine's metrics, processes and configuration are only hidden. Clients read Firestore directly
+  and the rules are unchanged.
 - `lastHeartbeat` is written by the agent, so active-machine metering can be forged. Hardening
   would stamp it at `agent/auth/refresh`.
 - A report after the 1st is lost for that month: a machine first seen after the last 23:30 run of a

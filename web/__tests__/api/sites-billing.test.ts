@@ -10,6 +10,7 @@
 
 import {
   enforcePlans,
+  FREE_ENTITLEMENTS,
   PRO_ENTITLEMENTS,
   stopEnforcingPlans,
   TRIAL_ENTITLEMENTS,
@@ -281,10 +282,38 @@ describe('POST: upgrade a site', () => {
     await expectUntouched(await post({ tier: 'pro', founders: false }), 403, 'email_unverified');
   });
 
-  it('refuses a site that is already billed', async () => {
+  it('refuses a site that is already billed, asking tridant afresh', async () => {
     stageSite({ billing: POINTER });
+    mockSiteEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
 
     await expectUntouched(await post({ tier: 'core', founders: false }), 409, 'already_billed');
+    expect(mockInvalidate).toHaveBeenCalledWith(SITE);
+    expect(mockSiteEntitlements).toHaveBeenCalledWith(SITE);
+  });
+
+  it('refuses a site tridant bills that has no record: its checkout return never loaded', async () => {
+    mockSiteEntitlements.mockResolvedValue(PRO_ENTITLEMENTS);
+
+    await expectUntouched(await post({ tier: 'core', founders: false }), 409, 'already_billed');
+  });
+
+  // stripe cancelled the subscription after failed payments, so tridant bills nothing, while owlette's
+  // record still says the site runs. the owner must be able to pay again.
+  it('upgrades a site whose record still says billed once tridant id bills nothing for it', async () => {
+    stageSite({ billing: POINTER });
+    mockSiteEntitlements.mockResolvedValue({ ...FREE_ENTITLEMENTS, resolved: true, orgId: 'org_1' });
+
+    const { status, body } = await parseResponse(await post({ tier: 'pro', founders: false }));
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ checkoutUrl: 'https://checkout.stripe.com/c/pay_1' });
+    expect(mockStartCheckout).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers 503, and starts nothing, when tridant cannot say whether the site is billed', async () => {
+    mockSiteEntitlements.mockResolvedValue({ ok: false, reason: 'unreachable' });
+
+    await expectUntouched(await post({ tier: 'pro', founders: false }), 503, 'billing_unavailable');
   });
 
   it('starts a checkout that returns to the site\'s billing section, and records what it was for', async () => {
@@ -378,7 +407,9 @@ describe('POST: upgrade a site', () => {
   });
 
   it('refuses an upgrade while the previous owner still pays for the site', async () => {
-    stageSite({ billing: { ...POINTER, payerUid: 'user-previous', endsAt: Date.now() + 86_400_000 } });
+    const endsAt = Date.now() + 86_400_000;
+    stageSite({ billing: { ...POINTER, payerUid: 'user-previous', endsAt } });
+    mockSiteEntitlements.mockResolvedValue({ ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, endsAt } });
 
     await expectUntouched(await post({ tier: 'pro', founders: false }), 409, 'billed_by_previous_owner');
   });
@@ -390,11 +421,15 @@ describe('POST: upgrade a site', () => {
     expect(mockStartCheckout).toHaveBeenCalledTimes(1);
   });
 
-  it('lets a site whose billing was stopped upgrade again', async () => {
+  it('lets a site whose billing was stopped upgrade again, inside its period too', async () => {
     stageSite({ billing: { ...POINTER, endsAt: ENDS_AT } });
 
     expect((await post({ tier: 'pro', founders: false })).status).toBe(200);
     expect(mockStartCheckout).toHaveBeenCalledTimes(1);
+
+    mockSiteEntitlements.mockResolvedValue({ ...PRO_ENTITLEMENTS, billing: { ...PRO_ENTITLEMENTS.billing!, endsAt: ENDS_AT } });
+    expect((await post({ tier: 'pro', founders: false })).status).toBe(200);
+    expect(mockStartCheckout).toHaveBeenCalledTimes(2);
   });
 
   it('adds the site to a running subscription when tridant says one exists', async () => {
@@ -577,7 +612,6 @@ describe('PATCH: switch plan', () => {
   });
 
   it.each([
-    ['tridant bills no such site', refused('site_not_billed', 404), 404, 'not_billed'],
     ['the new tier has no founders place left', refused('founders_sold_out'), 409, 'founders_sold_out'],
     ['tridant cannot be reached', { ok: false, reason: 'unreachable' }, 503, 'billing_unavailable'],
     ['tridant answers anything else', refused('product_not_in_key_scope', 403), 502, 'billing_upstream'],
@@ -586,6 +620,21 @@ describe('PATCH: switch plan', () => {
 
     await expectProblem(await patch({ tier: 'core' }), status, code);
     expect(pointerWrites()).toHaveLength(0);
+    expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  // stripe cancelled the subscription after failed payments: owlette's record still said it ran.
+  it('closes the record and says the site is no longer billed when tridant bills no such site', async () => {
+    mockSwitchTier.mockResolvedValue(refused('site_not_billed', 404));
+    const before = Date.now();
+
+    const body = await expectProblem(await patch({ tier: 'core' }), 404, 'not_billed');
+
+    expect(body.detail).toContain('this site is no longer billed');
+    expect(pointerWrites()).toEqual([
+      { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: expect.any(Number), updatedAt: '__SERVER_TS__' },
+    ]);
+    expect((pointerWrites()[0] as { endsAt: number }).endsAt).toBeGreaterThanOrEqual(before);
     expect(mockEmitMutation).not.toHaveBeenCalled();
   });
 });
@@ -642,7 +691,6 @@ describe('DELETE: stop billing', () => {
   });
 
   it.each([
-    ['tridant bills no such site', refused('site_not_billed', 404), 404, 'not_billed'],
     ['tridant cannot be reached', { ok: false, reason: 'unreachable' }, 503, 'billing_unavailable'],
     ['the answer is unreadable', { ok: false, reason: 'malformed_response', status: 200 }, 502, 'billing_upstream'],
   ])('answers a problem when %s, and leaves the pointer alone', async (_case, failure, status, code) => {
@@ -651,5 +699,27 @@ describe('DELETE: stop billing', () => {
     await expectProblem(await del(), status, code);
     expect(pointerWrites()).toHaveLength(0);
     expect(mockEmitMutation).not.toHaveBeenCalled();
+  });
+
+  it('closes the record and says the site is no longer billed when tridant bills no such site', async () => {
+    mockStopSite.mockResolvedValue(refused('site_not_billed', 404));
+    const before = Date.now();
+
+    const body = await expectProblem(await del(), 404, 'not_billed');
+
+    expect(body.detail).toContain('this site is no longer billed');
+    expect(pointerWrites()).toEqual([
+      { tier: 'pro', founders: true, payerUid: SITE_OWNER, endsAt: expect.any(Number), updatedAt: '__SERVER_TS__' },
+    ]);
+    expect((pointerWrites()[0] as { endsAt: number }).endsAt).toBeGreaterThanOrEqual(before);
+    expect(mockInvalidate).toHaveBeenCalledWith(SITE);
+  });
+
+  it('leaves a record that already ended as it is when tridant bills no such site', async () => {
+    stageSite({ billing: { ...POINTER, endsAt: Date.now() - 1000 } });
+    mockStopSite.mockResolvedValue(refused('site_not_billed', 404));
+
+    await expectProblem(await del(), 404, 'not_billed');
+    expect(pointerWrites()).toHaveLength(0);
   });
 });

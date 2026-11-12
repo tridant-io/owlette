@@ -739,7 +739,7 @@ describe('useSwoopSession — how a session ends', () => {
   it('a plan refusal on the mint is final, and names the plan', async () => {
     mint = {
       status: 402,
-      body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+      body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
     };
     await open();
     expect(swoop.state).toBe('error');
@@ -789,9 +789,9 @@ describe('useSwoopSession — how a session ends', () => {
       await mintToken();
     });
 
-    lease = { status: 402, body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue." } };
+    lease = { status: 402, body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue." } };
     await act(async () => {
-      await expect(mintToken()).rejects.toThrow("your plan doesn't include swoop. upgrade to continue.");
+      await expect(mintToken()).rejects.toThrow("this site's plan doesn't include swoop. upgrade to continue.");
     });
     expect(swoop.state).toBe('ended');
     expect(swoop.refusal).toBe('plan_required');

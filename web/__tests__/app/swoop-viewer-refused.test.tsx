@@ -111,7 +111,7 @@ it("a plan without swoop says so and links the owner to the site's billing, not 
   siteOwner = true;
   reply = {
     status: 402,
-    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
   expect(notice).toHaveTextContent('swoop is part of pro.');
@@ -127,7 +127,7 @@ it('a member on a site whose plan leaves swoop out is told to ask the owner, wit
   siteAdmin = true;
   reply = {
     status: 402,
-    body: { code: 'plan_required', detail: "your plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
+    body: { code: 'plan_required', detail: "this site's plan doesn't include swoop. upgrade to continue.", upgradeUrl: '/settings/plan' },
   };
   const notice = await openViewer();
   expect(notice).toHaveTextContent('swoop is part of pro. ask the site owner to upgrade.');

@@ -57,6 +57,16 @@ export function trialActive(account: PlanAccount | null, now: number = Date.now(
   return !!account?.trialStartedAt && account.trialEndsAt !== null && account.trialEndsAt > now;
 }
 
+/**
+ * where a billed site's usage counts from: its billing period, but never inside
+ * the account's trial, since nothing in the trial is billed. a site bought during
+ * the trial is in a period that started at the purchase.
+ */
+export function billedFrom(periodStart: number, account: PlanAccount | null): number {
+  const trialEndsAt = account?.trialEndsAt ?? null;
+  return trialEndsAt === null ? periodStart : Math.max(periodStart, trialEndsAt);
+}
+
 /** true when this caller may start the trial: none recorded, no link needed, no fresh claim. */
 export async function claimTrialStart(uid: string, now: number = Date.now()): Promise<boolean> {
   const ref = accountRef(uid);

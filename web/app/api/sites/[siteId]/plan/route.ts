@@ -1,11 +1,12 @@
 /**
  * GET /api/sites/{siteId}/plan — the site's plan as tridant id states it (adr
  * 0018): tier, standing, what the plan includes, the billing owlette recorded
- * for the site and its billing period. with plans not enforced it answers
- * `enforced: false` with the reason and every flag on.
+ * for the site and its billing period, and which machines owlette free covers.
+ * with plans not enforced it answers `enforced: false` with the reason and
+ * every flag on.
  *
- * any member of the site reads it, a machine-scoped one included: it says
- * nothing about machines, and every gate in the dashboard follows it.
+ * any member of the site reads it, a machine-scoped one included: every gate in
+ * the dashboard follows it, so everyone on the site sees the same locks.
  */
 
 import type { NextRequest } from 'next/server';
@@ -13,8 +14,8 @@ import { NextResponse } from 'next/server';
 import { applyAuthDeprecations, requireSiteAuthAndScope } from '@/app/api/_shared';
 import { problemFromError, problemNotFound } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { entitled, planTier, readBillingPointer, resolveSitePlan, type Plan } from '@/lib/plan.server';
-import { billingSummary } from '@/lib/siteBilling.server';
+import { entitled, ownerFreeMachines, planTier, resolveSitePlan, type Plan } from '@/lib/plan.server';
+import { siteBillingView } from '@/lib/siteBilling.server';
 import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 
 function periodOf(plan: Plan): SitePlanResponse['period'] {
@@ -22,6 +23,18 @@ function periodOf(plan: Plan): SitePlanResponse['period'] {
   return billing && billing.periodStart !== null && billing.periodEnd !== null
     ? { start: billing.periodStart, end: billing.periodEnd }
     : null;
+}
+
+/** the machines this site's owner's owlette free leaves live here, when it locks any. */
+async function freeMachinesOf(siteId: string, owner: unknown, plan: Plan): Promise<SitePlanResponse['freeMachines']> {
+  if (!plan.enforced || plan.inGoodStanding || typeof owner !== 'string') return null;
+  const { machinesUsed, machinesLimit, liveMachines } = await ownerFreeMachines(owner);
+  // with a slot to spare, a machine paired after this answer fits too.
+  if (machinesLimit === null || machinesUsed < machinesLimit) return null;
+  return {
+    limit: machinesLimit,
+    live: liveMachines.filter((machine) => machine.siteId === siteId).map((machine) => machine.machineId),
+  };
 }
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ siteId: string }> }) {
@@ -34,7 +47,6 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!siteData) return problemNotFound(`site ${siteId} not found`);
 
     const plan = await resolveSitePlan(siteId, siteData);
-    const pointer = readBillingPointer(siteData);
     const body: SitePlanResponse = {
       enforced: plan.enforced,
       ...(plan.enforced ? {} : { reason: plan.reason }),
@@ -51,12 +63,11 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
         webhooks: entitled(plan, 'owlette.webhooks'),
         api_keys: entitled(plan, 'owlette.api_keys'),
       },
-      billing: pointer ? billingSummary(pointer) : null,
       period: periodOf(plan),
       isOwner: siteData.owner === auth.userId,
-      // the same test the billing routes refuse an upgrade on, so the ui can say it before the owner asks.
-      billedByPreviousOwner:
-        !!pointer && pointer.payerUid !== siteData.owner && (pointer.endsAt === null || pointer.endsAt > Date.now()),
+      // the same rule the billing routes refuse an upgrade on, so the ui can say it before the owner asks.
+      ...siteBillingView(siteData, plan),
+      freeMachines: await freeMachinesOf(siteId, siteData.owner, plan),
     };
     return applyAuthDeprecations(NextResponse.json(body), auth.scopeCheck);
   } catch (err) {

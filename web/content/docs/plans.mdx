@@ -85,7 +85,7 @@ if the email you use for owlette already has a tridant account, owlette does not
 
 once plans apply, the first unpaid site you own, not billed and not covered by a trial, is your **free site**. after that:
 
-- **every further site is created on core or pro.** **create new site** asks you to pick one, with its price, creates the site and goes straight to its upgrade: a checkout for your first billed site, or, while another of your sites is billed, the card on file with no checkout.
+- **every further site is created on core or pro.** **create new site** asks you to pick one, with its price, creates the site and goes straight to its upgrade: a checkout the first time you pay for a site, or, once you have a subscription, the card on file with no checkout.
 - **a checkout you leave unpaid** leaves the new site on owlette free. it shares your one free machine with the free site, so while the free site holds that machine nothing can be paired to the new one. upgrade it in its billing section whenever you like.
 - **while such a site is not billed, no other site can be created.** **create new site** names it and links its billing section: upgrade it, or delete it.
 - **during the trial** you can create as many sites as you like. when the trial ends, nothing is deleted or disconnected: sites you haven't upgraded go to owlette free, and new sites wait until no more than one of them is left.
@@ -98,8 +98,8 @@ a site past your free site is added from the dashboard. `POST /api/sites` takes 
 
 each site is upgraded, switched and stopped on its own, in **site settings → billing** (`/admin/sites/{siteId}?section=billing`). only the site's owner sees that section, and only the owner can change a site's billing: an admin or a member who meets a feature the site's plan leaves out is told to ask the owner. an API key cannot change a site's billing.
 
-- **upgrade** puts a site on core or pro. your first billed site goes through a checkout, where you enter a card, and you come back to the billing section once it is paid. you need a verified email.
-- **another site** needs no checkout. while one of your sites is billed, upgrading another puts it on the same card, and the dialog says so before you confirm.
+- **upgrade** puts a site on core or pro. the first site you pay for goes through a checkout, where you enter a card, and you come back to the billing section once it is paid. you need a verified email.
+- **later sites** need no checkout. the checkout starts your subscription, which keeps running, at no charge, even once every site on it has stopped, so every later upgrade puts the site on the same card. while one of your sites is billed, the dialog says there is no checkout; once none is, it says either may follow, since a subscription can also have been cancelled after failed payments.
 - **switch plan** moves a billed site between core and pro at once. the whole billing period is billed at the plan the site is on when the period ends.
 - **stop billing** ends the site's billing at the end of the billing period. the site keeps its plan until then, that period is still billed, and after it the site goes to owlette free. until then, **resume billing** undoes the stop.
 
@@ -107,17 +107,19 @@ your card and invoices are in your tridant account, which the plan page links to
 
 ### billing periods
 
-a billing period is a calendar month, from the 1st at 00:00 UTC. a site's first period is the rest of the month it was upgraded in, charged by the day.
+a billing period is a calendar month, from the 1st at 00:00 UTC. the first month you are billed is charged by the day, from your first upgrade, or from the end of your trial if you upgrade during it. a site added later is charged for the whole month it is added in, and a site switched or stopped mid-month pays for the whole month too.
 
 ### when a payment fails
 
 the site reads **past due** in its billing section and on the plan page. it keeps its plan for a short grace period, then goes to owlette free. update the card in your tridant account. its billing still runs, so it never counts as an unpaid site and never stops you creating one.
 
+if the payments keep failing and the subscription is cancelled, its sites' billing ends with it. each one is then on owlette free like any site that isn't billed, and upgrading it again starts a new checkout.
+
 ### transferring or deleting a billed site
 
 - **transferring ownership** stops the site's billing. the previous owner pays to the end of the billing period, and the site keeps its plan until then. the new owner can stop that billing, but cannot upgrade the site or switch its plan until the period has ended; after that they upgrade it on their own card.
 - **a site on owlette free** can only be transferred to someone whose free site isn't taken, or who is in their trial.
-- **deleting a site** stops its billing.
+- **deleting a site** stops its billing. so does deleting your account, for each site it deletes with it.
 
 ---
 
@@ -138,7 +140,7 @@ once plans apply, the plan page at `/settings/plan` shows your trial, how much o
 when the trial ends, or a site's billing does, the site goes to owlette free. nothing is deleted and nothing is unpaired.
 
 - **every agent keeps running.** it supervises its processes, restarts crashes, reports metrics and heartbeats as before. a plan never touches an agent's credentials, and every machine can still be updated.
-- **one machine stays live for the owner:** the one paired first across the free sites they own, with ties going to the lowest machine ID. the owner sees an upgrade notice in place of the others' metrics, while they keep running on site.
+- **one machine stays live:** the one paired first across the free sites the owner owns, with ties going to the lowest machine ID. everyone on the site sees a notice in place of the others' metrics, while they keep running on site: the owner's leads to the site's billing, and anyone else's says to ask the owner.
 - **every site stays.** nothing is removed from an account left with more than one site on owlette free. it cannot pair another machine to a free site, and it cannot create a site until no more than one of them is left without a plan.
 - **paid features refuse new work**, as listed [above](#what-it-leaves-out), and talons stop firing. a roost rollout scheduled before the lapse is cancelled when it comes due, with the reason on the rollout; scheduled rollouts check plans once a day. alerts and webhook events raised meanwhile are not sent later.
 - **upgrading the site turns it all back on** as you left it: swoop settings, talons, webhooks and alert rules are kept.
@@ -168,7 +170,7 @@ every other refusal is a `402` with `code: plan_required`. the dashboard shows t
   "type": "https://owlette.app/problems/plan-required",
   "title": "plan required",
   "status": 402,
-  "detail": "your plan doesn't include remote control. upgrade to continue.",
+  "detail": "this site's plan doesn't include remote control. upgrade to continue.",
   "code": "plan_required",
   "entitlement": "owlette.control",
   "upgradeUrl": "/settings/plan",

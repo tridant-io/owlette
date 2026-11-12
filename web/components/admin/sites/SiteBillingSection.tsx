@@ -253,6 +253,8 @@ function BillingDetails({
     setBusy(false);
     if (!result.ok) {
       toast.error('could not stop billing', { description: result.detail });
+      // its billing had already ended, so there is nothing left to confirm.
+      if (result.code === 'not_billed') setConfirmingStop(false);
       return;
     }
     const until = result.billing.endsAt;
