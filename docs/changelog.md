@@ -66,6 +66,7 @@ the connection and then never finish. The machine kept that viewer in the
 session for good, so everyone else saw an extra, nameless watch-only viewer.
 From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
 already did for a viewer whose connection dropped.
+
 ### added — hoot mcp: an AI agent on one machine can act on the others
 
 An AI agent running on a paired Windows machine (Claude Code, or any MCP client)

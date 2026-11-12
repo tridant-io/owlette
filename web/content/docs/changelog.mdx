@@ -64,6 +64,30 @@ session for good, so everyone else saw an extra, nameless watch-only viewer.
 From agent 4.2.0 the machine lets such a viewer go after 60 seconds, as it
 already did for a viewer whose connection dropped.
 
+### added — hoot mcp: an AI agent on one machine can act on the others
+
+An AI agent running on a paired Windows machine (Claude Code, or any MCP client)
+can now use hoot's tools on the other machines of its site. The owlette agent
+on that machine is the MCP server and the machine's pairing is the credential:
+there is no API key and nothing to sign in to. It is off until a site owner or
+admin turns it on, in the admin panel under hoot, and says for each machine how
+far it may go (read, bounded changes or privileged) and on which machines. A
+machine can also hand hoot a task in words and read the answer back; that runs
+on the site owner's LLM key, at tier 2 at most, six times an hour. Every call
+is in the audit log under the machine. Update the machine the AI agent runs on
+to use it; the machines it acts on need no update. The desktop app's menu has
+a new item, connect an ai agent, that shows the command to run. See the
+[hoot mcp guide](https://owlette.app/docs/agent/hoot-mcp).
+
+### changed — hoot's site settings have their own page in the admin panel
+
+The admin panel's sidebar has a hoot section. Its settings page holds the
+switch that makes hoot wait for approval before a privileged (tier 3) tool,
+which used to be the shield button in the hoot chat header, and the new
+settings for machines that act on other machines. The setting itself and its
+default are unchanged: approval is on unless a site owner or admin turns it
+off. Nothing to update on the machine.
+
 ### fixed — saving a talon edit keeps the switch where it is now
 
 The talon editor sent the on or off state from the moment it was opened. If the
