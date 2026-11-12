@@ -71,7 +71,7 @@ for `restart_process`, `timeout_seconds` is the graceful-terminate window before
 | command | description | data payload |
 |---------|-------------|--------------|
 | `install_software` | download, checksum, and install software. refused inside active hours on Windows, see [active hours](#active-hours) | `{installer_url, sha256_checksum, installer_name?, silent_flags?, verify_path?, timeout_seconds?, deployment_id?, parallel_install?, close_processes?, suppress_projects?, activeHoursOverride?}` |
-| `cancel_installation` | cancel an in-progress installer process | `{installer_name}` |
+| `cancel_installation` | stop an install the agent holds, before its installer runs. from agent 4.2.0 `deployment_id` alone is enough; an older agent refuses a cancel without `installer_name`, and acts on one only after the install has ended | `{installer_name, deployment_id?}` |
 | `uninstall_software` | run a software uninstaller | `{software_name, uninstall_command, silent_flags?, installer_type?, verify_paths?, timeout_seconds?, deployment_id?}` |
 | `cancel_uninstall` | cancel an in-progress uninstall process | `{software_name}` |
 | `refresh_software_inventory` | force an immediate installed-software inventory sync | `{}` |

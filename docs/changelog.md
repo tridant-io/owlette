@@ -10,6 +10,56 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+### fixed — an install queued behind one that ended at once is no longer refused
+
+When an install on a machine ended within five seconds, because it was refused
+or cancelled, the next install waiting for that machine was refused as rate
+limited and failed. Installs already run one at a time, so the limit no longer
+applies to them. A deployment refused inside active hours can also be retried
+with a reason straight away. Takes an agent update.
+
+### fixed — cancelling a deployment stops it on the machine
+
+Cancelling a target the machine had already picked up marked it cancelled while
+the install carried on: the cancel waited in line behind the install it was
+meant to stop. The agent now acts on a cancel at once. An install that is still
+waiting never starts. One that is downloading stops the download and deletes
+what it fetched, with nothing closed and nothing installed. One that is closing
+processes does not run the installer, and the processes start again. Once the
+installer is running it is left to finish, because an installer stopped part-way
+can leave the machine without the program; the target then shows how that
+install ended, and the deployments page says so on the cancel button. Each
+stopped install writes a deployment cancelled row to the activity log, and two
+deployments cancelled one after the other are both stopped. A cancel never
+touches another deployment, a later retry, or a new install of the same
+installer. Takes an agent update.
+
+### changed — a failed download's error names the link without its query string
+
+When an installer or an agent update cannot be downloaded, the error on the
+target and in the activity log now shows the link up to its question mark. Takes
+an agent update.
+
+### fixed — a process closed by name stays closed until the install ends
+
+A managed process closed because its program name was listed, and not because it
+was ticked, started again a few seconds later, while the installer was still
+running. It is now held until the install ends, like a ticked one, and starts
+again then. Other managed processes that run the same program are held with it.
+Takes an agent update.
+
+### fixed — an install closes your apps only when it is ready to run
+
+A deployment closed the processes you chose first, and only then downloaded the
+installer and checked it. A download that failed, a checksum that did not match,
+or a machine with nobody logged in stopped the show and installed nothing. The
+agent now downloads and checks first, and closes the processes last, right
+before it runs the installer. An install with no checksum is refused before
+anything is downloaded. On a Mac or Linux machine, where a deployment cannot
+install, nothing is closed any more. A target now reads downloading, then
+closing processes, then installing, and the show keeps running through the
+download. Takes an agent update.
+
 ### added — hoot mcp: an AI agent on one machine can act on the others
 
 An AI agent running on a paired Windows machine (Claude Code, or any MCP client)

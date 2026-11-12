@@ -126,7 +126,7 @@ an **unexpected reboot** — one the agent did not see coming — is reported on
 
 ## software
 
-**deployments** are Windows only. a deployment can be created for a Mac or Linux machine, but its agent cannot run the installer: it first closes the processes you chose, then downloads and checks the file, and fails the install with *no interactive user session available for installation*.
+**deployments** are Windows only. a deployment can be created for a Mac or Linux machine, but its agent cannot run the installer: it downloads and checks the file, and fails the install with *no interactive user session available for installation*. it closes nothing; an agent older than 4.2.0 closes the processes you chose first.
 
 **the installed software list** comes from the registry on Windows, from the application bundles in `/Applications` and each user's Applications folder on macOS (which carry no publisher), and from `dpkg` on Linux.
 

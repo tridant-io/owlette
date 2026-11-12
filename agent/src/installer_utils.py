@@ -7,6 +7,7 @@ import logging
 import re
 import subprocess
 import tempfile
+import threading
 import requests
 import psutil
 import hashlib
@@ -137,6 +138,7 @@ def download_file(
     connect_timeout: int = 30,
     read_timeout: int = 600,
     strict_path: bool = False,
+    should_stop: Optional[Callable[[], bool]] = None,
 ) -> tuple[bool, str]:
     """Download a URL with progress reporting and retries.
 
@@ -147,6 +149,10 @@ def download_file(
     when the destination was locked by another process. With ``strict_path`` a
     locked destination raises PermissionError instead, so a success is always
     ``dest_path`` itself.
+
+    ``should_stop`` is asked before each attempt and before each chunk is
+    written. Once it answers true the download ends there: the partial file is
+    removed, nothing is retried, and the answer is ``(False, "")``.
     """
     logging.debug(f"Starting download from {redact_query_strings(url)}")
 
@@ -179,6 +185,12 @@ def download_file(
                 logging.info(f"Retry attempt {attempt}/{max_retries} after {wait_time}s delay...")
                 time.sleep(wait_time)
 
+            # before each attempt as well as each chunk, and after the retry
+            # wait: a stop that lands during the wait opens no new connection
+            if should_stop is not None and should_stop():
+                logging.info(f"Download stopped before attempt {attempt}")
+                return False, ""
+
             # Stream so a multi-GB installer never lands in memory. Separate
             # connect/read timeouts: large files need the longer read window.
             response = requests.get(
@@ -193,9 +205,13 @@ def download_file(
             downloaded_size = 0
 
             chunk_size = 64 * 1024  # 64KB chunks
+            stopped = False
 
             with open(dest_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=chunk_size):
+                    if should_stop is not None and should_stop():
+                        stopped = True
+                        break
                     if chunk:
                         f.write(chunk)
                         downloaded_size += len(chunk)
@@ -203,6 +219,16 @@ def download_file(
                         if total_size > 0 and progress_callback:
                             progress = int((downloaded_size / total_size) * 100)
                             progress_callback(progress)
+
+            if stopped:
+                # asked for, so not a failure: no retry, and no partial file
+                response.close()
+                try:
+                    os.remove(dest_path)
+                except OSError as e:
+                    logging.warning(f"Could not remove the partial download {dest_path}: {e}")
+                logging.info(f"Download stopped after {downloaded_size:,} bytes")
+                return False, ""
 
             if total_size > 0 and downloaded_size < total_size:
                 raise requests.exceptions.RequestException(
@@ -649,6 +675,90 @@ def cancel_installation(installer_name: str, active_processes: Dict[str, int]) -
         error_msg = f"Error cancelling installation: {str(e)}"
         logging.error(error_msg)
         return False, error_msg
+
+
+# the install_software commands this agent holds, from the slow queue to their
+# end: {command id: {installer_name, deployment_id, cancel, launched}}.
+# process-global like sync_commands' cancel registries, so a cancel_installation
+# on the fast lane reaches an install that is waiting or running on the slow one.
+# the cancel is a field of the entry: one that matches nothing held leaves
+# nothing behind to stop a later retry, or another install of the same installer.
+_held_installs: Dict[str, dict] = {}
+_held_installs_lock = threading.Lock()
+
+# how every answer of an install that stopped for a cancel begins. the install
+# arm and the slow worker build their answers on it, and finish_command records
+# `cancelled` only for an answer that starts with it.
+INSTALL_CANCELLED = "Error: Installation cancelled"
+
+
+def hold_install(cmd_id: str, installer_name: Optional[str], deployment_id: Optional[str]) -> None:
+    """Start holding an install command, before it enters the slow queue."""
+    with _held_installs_lock:
+        _held_installs[cmd_id] = {
+            'installer_name': installer_name, 'deployment_id': deployment_id,
+            'cancel': False, 'launched': False}
+
+
+def release_install(cmd_id: str) -> bool:
+    """Stop holding an install command, and say whether a cancel had named it.
+
+    The terminal status is decided on this answer, so the cancel is read and
+    the hold dropped in one step: a cancel that lands later finds nothing held.
+    Releasing a command that is not held answers False.
+    """
+    with _held_installs_lock:
+        held = _held_installs.pop(cmd_id, None)
+        return bool(held and held['cancel'])
+
+
+def request_cancel(installer_name: Optional[str], deployment_id: Optional[str]) -> tuple[List[str], List[str]]:
+    """Flag every held install a cancel names, unless its installer has launched.
+
+    Returns ``(cancelled, launched)`` command ids: the installs flagged, which
+    stop at their next look, and the ones left to finish. An installer is never
+    ended part-way, which can leave the machine without the program at all.
+
+    A cancel that carries a deployment id matches on it alone. The installer
+    name decides only for the older cancel that carries none.
+    """
+    key, wanted = (('deployment_id', deployment_id) if deployment_id
+                   else ('installer_name', installer_name))
+    cancelled, launched = [], []
+    with _held_installs_lock:
+        for cmd_id, held in _held_installs.items():
+            if not wanted or held[key] != wanted:
+                continue
+            if held['launched']:
+                launched.append(cmd_id)
+            else:
+                held['cancel'] = True
+                cancelled.append(cmd_id)
+    return cancelled, launched
+
+
+def cancel_requested(cmd_id: str) -> bool:
+    """Whether a cancel has named this held install."""
+    with _held_installs_lock:
+        held = _held_installs.get(cmd_id)
+        return bool(held and held['cancel'])
+
+
+def claim_launch(cmd_id: str) -> bool:
+    """The last look before an installer runs: False when a cancel has named
+    this held install.
+
+    Otherwise the install is marked launched in the same step, so a cancel is
+    never recorded against an installer that then runs anyway.
+    """
+    with _held_installs_lock:
+        held = _held_installs.get(cmd_id)
+        if held is None:
+            return True
+        if held['cancel']:
+            return False
+        held['launched'] = True
+        return True
 
 
 # The transient unit and the launchd job the update runs as. Named rather than
