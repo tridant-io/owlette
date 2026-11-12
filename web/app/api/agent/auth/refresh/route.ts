@@ -24,6 +24,29 @@ const REFRESH_TOKEN_GRACE_MS = 5 * 60 * 1000;
 const STALE_TOKEN_AGE_MS = 3 * 60 * 60 * 1000;
 const MAX_STALE_DELETES = 400;
 
+let rotationKeyCache: Buffer | null = null;
+let rotationKeyWarned = false;
+
+/**
+ * Subkey for deriving rotation successors, so the mfa key itself never keys a
+ * second algorithm. null (random successors) when the mfa key is not set.
+ */
+function getRotationKey(crypto: typeof import('crypto')): Buffer | null {
+  if (rotationKeyCache) return rotationKeyCache;
+  const secret = process.env.MFA_ENCRYPTION_KEY;
+  if (!secret) {
+    if (!rotationKeyWarned) {
+      rotationKeyWarned = true;
+      logger.warn('MFA_ENCRYPTION_KEY is not set: refresh token rotation cannot derive its successors');
+    }
+    return null;
+  }
+  rotationKeyCache = Buffer.from(
+    crypto.hkdfSync('sha256', secret, '', 'owlette agent refresh rotation', 32),
+  );
+  return rotationKeyCache;
+}
+
 const AGENT_VERSION_FORMAT = /^\d+(\.\d+){1,3}([-+][\w.-]+)?$/;
 
 /** Minimum agent version that knows how to persist a rotated refresh token. */
@@ -125,7 +148,7 @@ export const POST = withRateLimit(async (request: NextRequest) => {
     // branch-free, and the crypto cost is negligible. Derived from the
     // presented token, so a repeat of it yields the same successor and a
     // machine never ends up with two. Random when the key is not configured.
-    const rotationKey = process.env.MFA_ENCRYPTION_KEY;
+    const rotationKey = getRotationKey(crypto);
     const newRefreshToken = rotationKey
       ? crypto.createHmac('sha512', rotationKey)
           .update(`agent-refresh-rotation:${refreshToken}`)
