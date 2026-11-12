@@ -16,7 +16,7 @@
  */
 
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MachineContextMenu } from '@/components/MachineContextMenu';
@@ -81,6 +81,7 @@ async function openMenu(props: {
   planLocked?: boolean;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  hootLocked?: boolean;
   planSite?: { siteId: string; isOwner: boolean };
   swoopOff?: boolean;
   noSwoop?: boolean;
@@ -371,6 +372,21 @@ describe('MachineContextMenu — plan', () => {
     expect(item).toHaveTextContent('swooppart of proask the site owner to upgrade this site');
     expect(item).not.toHaveAttribute('href');
     expect(screen.queryByTestId('machine-context-menu-swoop')).not.toBeInTheDocument();
+  });
+
+  it("marks hoot part of pro as swoop is: a link to the site's billing for its owner, ask the owner for anyone else", async () => {
+    await openMenu({ hootLocked: true, planSite: OWNER });
+
+    const item = screen.getByTestId('machine-context-menu-hoot-upgrade');
+    expect(item).toHaveTextContent('hootpart of pro');
+    expect(item).toHaveAttribute('href', BILLING);
+    expect(screen.queryByTestId('machine-context-menu-hoot')).not.toBeInTheDocument();
+    cleanup();
+
+    await openMenu({ hootLocked: true, planSite: MEMBER_OF_SITE });
+    const row = screen.getByTestId('machine-context-menu-hoot-upgrade');
+    expect(row).toHaveTextContent('hootpart of proask the site owner to upgrade this site');
+    expect(row).not.toHaveAttribute('href');
   });
 
   it('links a locked swoop to the plan page even with the site switch off, since turning it on would not help', async () => {

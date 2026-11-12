@@ -14,6 +14,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { Panel } from '@/components/admin/Panel';
+import { PlanBadge } from '@/components/plan/PlanBadge';
 import { UpgradeSiteDialog } from '@/components/plan/UpgradeSiteDialog';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -27,6 +28,7 @@ import {
 } from '@/components/ui/dialog';
 import { usePlan } from '@/hooks/usePlan';
 import { useSiteBilling, type BillingTier } from '@/hooks/useSiteBilling';
+import { useSiteMachines } from '@/hooks/useSiteMachines';
 import { useSitePlan } from '@/hooks/useSitePlan';
 import type { AccountPlanOn } from '@/lib/planResponse';
 import { FREE_COVERS, PRICING_FACTS, usd } from '@/lib/product-facts';
@@ -207,6 +209,7 @@ function BillingDetails({
   now: number;
 }) {
   const { upgrade, stop } = useSiteBilling(site.id);
+  const { machines: siteMachines } = useSiteMachines(site.id);
   const [picking, setPicking] = useState(false);
   const [confirmingStop, setConfirmingStop] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -227,6 +230,9 @@ function BillingDetails({
     plan.isOwner && billing !== null && endsAt === null && (plan.enforced || plan.reason !== 'not_configured');
   const minMachines = billing?.tier === 'pro' ? PRICING_FACTS.pro.minMachines : 0;
   const portalUrl = account?.portalUrl ?? null;
+  // owlette free's machine limit is the account's, so once billing ends this site's machines past it are locked
+  const freeLimit = account ? account.free.machinesLimit : PRICING_FACTS.free.machines;
+  const othersLocked = plan.enforced && freeLimit !== null && (siteMachines?.length ?? 0) > freeLimit;
 
   const resume = async () => {
     if (!billing) return;
@@ -267,13 +273,8 @@ function BillingDetails({
   return (
     <>
       <div className="flex flex-wrap items-center gap-1.5">
-        {billing ? (
-          <Badge>{billing.tier}</Badge>
-        ) : onTrial ? (
-          <Badge>pro</Badge>
-        ) : (
-          <Badge variant="secondary">owlette free</Badge>
-        )}
+        {/* the trial is pro here, with its end on the badge beside it */}
+        <PlanBadge tier={billing ? billing.tier : onTrial ? 'pro' : 'free'} />
         {billing?.founders && <Badge variant="outline">founders rate</Badge>}
         {onTrial && (
           <Badge variant="outline">{trialEnds === null ? 'trial' : `trial until ${formatDay(trialEnds)}`}</Badge>
@@ -413,7 +414,11 @@ function BillingDetails({
             <DialogDescription className="wrap-anywhere">
               {`stop billing ${site.name}? it stays on ${billing?.tier ?? 'its plan'} until ${
                 plan.period ? lastDay(plan.period.end) : 'the end of the billing period'
-              }, and that billing period is still billed.${plan.enforced ? ' after that it goes to owlette free.' : ''}`}
+              }, and that billing period is still billed.${plan.enforced ? ' after that it goes to owlette free.' : ''}${
+                othersLocked
+                  ? ` owlette free covers ${freeLimit} machine${freeLimit === 1 ? '' : 's'} across your account, so this site's other machines will be locked.`
+                  : ''
+              }`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

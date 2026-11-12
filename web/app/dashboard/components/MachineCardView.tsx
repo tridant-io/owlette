@@ -133,6 +133,7 @@ interface MachineCardProps extends MachineCardHandlers {
   planLimit?: number | null;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  hootLocked?: boolean;
   planSite?: PlanSite;
 }
 
@@ -212,6 +213,7 @@ const MachineCard = memo(function MachineCard({
   planLimit,
   controlLocked,
   swoopLocked,
+  hootLocked,
   planSite,
 }: MachineCardProps) {
   const machineId = machine.machineId;
@@ -481,6 +483,7 @@ const MachineCard = memo(function MachineCard({
                 planLocked={planLocked}
                 controlLocked={controlLocked}
                 swoopLocked={swoopLocked}
+                hootLocked={hootLocked}
                 planSite={planSite}
               />
             )}
@@ -1044,8 +1047,11 @@ const MachineCard = memo(function MachineCard({
                         {/* grow (not shrink-0): the cluster has to own the row's
                             spare width so the run controls can sit hard right,
                             including on the wrapped line where the name takes
-                            its own row */}
-                        <div className="flex grow items-center gap-2 md:gap-3 sm:ml-2 md:ml-4">
+                            its own row. flex-wrap: where they don't fit beside
+                            the configuration actions (a phone, or "part of core"
+                            on a narrow card), they drop to a line of their own
+                            instead of clipping or squeezing the mode control */}
+                        <div className="flex grow flex-wrap items-center gap-2 md:gap-3 sm:ml-2 md:ml-4">
                           {(() => {
                             const currentMode = effectiveLaunchMode(process);
                             const modeLabels = { off: 'off', always: 'always on', scheduled: 'scheduled' } as const;
@@ -1348,6 +1354,7 @@ export function MachineCardView({
           planLimit={sitePlan?.machineLimitFor(machine.machineId)}
           controlLocked={sitePlan?.controlLocked}
           swoopLocked={sitePlan?.swoopLocked}
+          hootLocked={sitePlan?.hootLocked}
           planSite={planSite}
         />
       ))}

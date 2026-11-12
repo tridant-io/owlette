@@ -212,19 +212,25 @@ test.describe('owlette free', () => {
     expect(await pendingTypes()).toEqual(['update_owlette']);
   });
 
-  test('the dashboard banner says owlette free and leads to the plan page, which lists the site on it', async ({ page }) => {
+  test("the dashboard banner says the site is on owlette free and leads to its billing; the plan page lists it with no banner", async ({
+    page,
+  }) => {
     await signIn(page, PAYER);
     const banner = page.getByTestId('trial-banner');
     await expect(banner).toHaveAttribute('data-banner-state', 'free');
-    await expect(banner).toContainText("you're on owlette free");
+    await expect(banner).toContainText('this site is on owlette free');
+    await expect(banner).not.toContainText('ask the site owner');
 
     await banner.getByRole('link', { name: 'upgrade' }).click();
-    await expect(page).toHaveURL(/\/settings\/plan$/);
+    await expect(page).toHaveURL(new RegExp(`/admin/sites/${SITE_ID}\\?section=billing$`));
 
+    // a plan belongs to a site, and the plan page is about none
+    await page.goto('/settings/plan');
     const row = page.getByTestId(`plan-site-${SITE_ID}`);
     await expect(row).toContainText('Site Z (Plan)');
     await expect(row).toContainText('owlette free');
     await expect(row.getByRole('link', { name: 'billing for Site Z (Plan)' })).toHaveAttribute('href', BILLING_SECTION);
+    await expect(page.getByTestId('trial-banner')).toHaveCount(0);
 
     // the one free site, and its one machine, are all owlette free allows.
     const usage = page.getByTestId('free-usage');
@@ -238,10 +244,12 @@ test.describe('core', () => {
     await setPlan(CORE);
   });
 
-  test('swoop reads part of pro, and remote commands go through', async ({ page }) => {
+  test('swoop and hoot read part of pro, and remote commands go through', async ({ page }) => {
     await signIn(page, PAYER);
     const menu = await openMenu(page, cardFor(page, LIVE_MACHINE));
     await expect(menu.getByTestId('machine-context-menu-swoop-upgrade')).toContainText('part of pro');
+    await expect(menu.getByTestId('machine-context-menu-hoot-upgrade')).toContainText('part of pro');
+    await expect(menu.getByTestId('machine-context-menu-hoot')).toHaveCount(0);
     await expect(menu.getByTestId('machine-context-menu-reboot')).toBeVisible();
     await page.keyboard.press('Escape');
 
@@ -312,5 +320,12 @@ test.describe('a site admin, who is not the owner', () => {
     await expect(locked).toContainText('ask the site owner to upgrade this site');
     await expect(locked.locator('a')).toHaveCount(0);
     await page.keyboard.press('Escape');
+
+    // the site's plan is the same for everyone on it, and only its owner can change it
+    const banner = page.getByTestId('trial-banner');
+    await expect(banner).toHaveAttribute('data-banner-state', 'free');
+    await expect(banner).toContainText('this site is on owlette free');
+    await expect(banner).toContainText('ask the site owner to upgrade this site.');
+    await expect(banner.getByRole('link')).toHaveCount(0);
   });
 });

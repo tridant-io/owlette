@@ -42,6 +42,11 @@ jest.mock('@/hooks/usePlan', () => ({
   usePlan: () => ({ plan: mockAccount }),
 }));
 
+let mockSiteMachines: { id: string }[] | null;
+jest.mock('@/hooks/useSiteMachines', () => ({
+  useSiteMachines: () => ({ machines: mockSiteMachines, error: null, refresh: jest.fn() }),
+}));
+
 const mockUpgrade = jest.fn();
 const mockStop = jest.fn();
 const mockConfirmCheckout = jest.fn();
@@ -192,6 +197,7 @@ beforeEach(() => {
   mockSearch = '';
   mockSitePlan = { plan: FREE, loading: false, error: null };
   mockAccount = ACCOUNT;
+  mockSiteMachines = [{ id: 'kiosk-1' }];
   // clearMocks keeps a queued answer, and one left over would land in the next test
   mockUpgrade.mockReset();
   mockStop.mockReset();
@@ -403,6 +409,17 @@ describe('stopping billing', () => {
     expect(mockStop).not.toHaveBeenCalled();
   });
 
+  it('says owlette free covers one machine across the account, so a site with more has the others locked', async () => {
+    mockSiteMachines = [{ id: 'kiosk-1' }, { id: 'kiosk-2' }];
+    const user = show(PRO);
+
+    await user.click(screen.getByRole('button', { name: 'stop billing' }));
+
+    expect(screen.getByRole('dialog', { name: 'stop billing' })).toHaveTextContent(
+      `after that it goes to owlette free. owlette free covers 1 machine across your account, so this site's other machines will be locked.`,
+    );
+  });
+
   it('stops on the confirm, says until when, and closes', async () => {
     mockStop.mockResolvedValue({ ok: true, billing: { tier: 'pro', founders: true, endsAt: DEC_1 } });
     const user = show(PRO);
@@ -567,6 +584,7 @@ describe('a billed site while plans are switched off', () => {
 
   it('says nothing of owlette free in the stop dialog: with plans off the site is not held to it', async () => {
     mockAccount = { enforced: false, reason: 'enforcement_off' };
+    mockSiteMachines = [{ id: 'kiosk-1' }, { id: 'kiosk-2' }];
     const user = show({ ...OFF_BILLED, period: { start: NOV_1, end: DEC_1 } });
 
     await user.click(screen.getByRole('button', { name: 'stop billing' }));

@@ -20,6 +20,7 @@ import { EmailUnverifiedNotice, LinkRequiredNotice } from '@/components/plan/Upg
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -125,51 +126,54 @@ export function UpgradeSiteDialog({ open, onOpenChange, site, current }: Upgrade
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto p-4 sm:max-w-2xl sm:p-6">
-        <DialogHeader>
-          {/* a site name can be one unbroken word wider than a phone */}
-          <DialogTitle className="wrap-anywhere">{current ? 'switch plan' : `upgrade ${site.name}`}</DialogTitle>
-          <DialogDescription>
-            {current
-              ? 'the switch is immediate, and the whole billing period is billed at the plan the site is on when it ends.'
-              : `billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}.`}
-          </DialogDescription>
-        </DialogHeader>
+      {/* the plans scroll under the actions, which stay in view on a phone */}
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] flex-col p-4 sm:max-w-2xl sm:p-6">
+        <DialogBody>
+          <DialogHeader>
+            {/* a site name can be one unbroken word wider than a phone */}
+            <DialogTitle className="wrap-anywhere">{current ? 'switch plan' : `upgrade ${site.name}`}</DialogTitle>
+            <DialogDescription>
+              {current
+                ? 'the switch is immediate, and the whole billing period is billed at the plan the site is on when it ends.'
+                : `billed ${PRICING_FACTS.billingUnit}. ${PRICING_FACTS.activeMachine}.`}
+            </DialogDescription>
+          </DialogHeader>
 
-        <PlanTierPicker selected={selected} onSelect={setPicked} foundersRate={founders} current={current} />
+          <PlanTierPicker selected={selected} onSelect={setPicked} foundersRate={founders} current={current} />
 
-        {route === 'card_on_file' && (
-          <p className="text-xs text-muted-foreground">
-            this site goes on your subscription and is billed to the card on file. there is no checkout.
-          </p>
-        )}
-        {route === 'either' && (
-          <p className="text-xs text-muted-foreground">
-            checkout opens, or, if your subscription from an earlier site is still running, this site goes straight on
-            the card on file.
-          </p>
-        )}
-
-        {soldOut.includes(selected) && (
-          <InlineNotice data-testid="upgrade-founders-sold-out">
-            <p className="text-sm text-foreground">
-              the founders places for {selected} are taken. the price is now {usd(PRICING_FACTS[selected].list)}{' '}
-              {PRICING_FACTS.billingUnit}.
+          {route === 'card_on_file' && (
+            <p className="text-xs text-muted-foreground">
+              this site goes on your subscription and is billed to the card on file. there is no checkout.
             </p>
-          </InlineNotice>
-        )}
-        {linkRequired && (
-          <LinkRequiredNotice
-            testId="upgrade-link-required"
-            doing="upgrading a site"
-            linkHref={
-              account?.linkAvailable
-                ? `/api/auth/tridant/link?return=${encodeURIComponent(siteSettingsPath(site.id, 'billing'))}`
-                : null
-            }
-          />
-        )}
-        {unverified && <EmailUnverifiedNotice testId="upgrade-email-unverified" doing="upgrading a site" />}
+          )}
+          {route === 'either' && (
+            <p className="text-xs text-muted-foreground">
+              checkout opens, or, if your subscription from an earlier site is still running, this site goes straight on
+              the card on file.
+            </p>
+          )}
+
+          {soldOut.includes(selected) && (
+            <InlineNotice data-testid="upgrade-founders-sold-out">
+              <p className="text-sm text-foreground">
+                the founders places for {selected} are taken. the price is now {usd(PRICING_FACTS[selected].list)}{' '}
+                {PRICING_FACTS.billingUnit}.
+              </p>
+            </InlineNotice>
+          )}
+          {linkRequired && (
+            <LinkRequiredNotice
+              testId="upgrade-link-required"
+              doing="upgrading a site"
+              linkHref={
+                account?.linkAvailable
+                  ? `/api/auth/tridant/link?return=${encodeURIComponent(siteSettingsPath(site.id, 'billing'))}`
+                  : null
+              }
+            />
+          )}
+          {unverified && <EmailUnverifiedNotice testId="upgrade-email-unverified" doing="upgrading a site" />}
+        </DialogBody>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={submitting}>

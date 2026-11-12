@@ -93,6 +93,7 @@ const FREE_SITE: SitePlan = {
   machineLimitFor: (id) => (id === 'kiosk-1' ? null : 1),
   controlLocked: true,
   swoopLocked: true,
+  hootLocked: true,
 };
 
 function renderCards(sitePlan?: SitePlan, props: Partial<React.ComponentProps<typeof MachineCardView>> = {}) {
@@ -158,7 +159,12 @@ describe('machine card outside the plan', () => {
     expect(live.getByTestId('reboot-pending-banner')).toBeInTheDocument();
     expect(live.getByText('show.exe')).toBeInTheDocument();
     expect(mockSparkline).toHaveBeenCalledWith(SITE_ID, 'kiosk-1');
-    expect(menuPropsFor('kiosk-1')).toMatchObject({ planLocked: false, controlLocked: true, swoopLocked: true });
+    expect(menuPropsFor('kiosk-1')).toMatchObject({
+      planLocked: false,
+      controlLocked: true,
+      swoopLocked: true,
+      hootLocked: true,
+    });
   });
 
   it('without control, keeps process configuration but trades restart, kill and approval for a part-of-core link', () => {
@@ -201,6 +207,7 @@ describe('machine card outside the plan', () => {
     expect(menuPropsFor('kiosk-2')).toMatchObject({ planLocked: false });
     expect(menuPropsFor('kiosk-2').controlLocked).toBeFalsy();
     expect(menuPropsFor('kiosk-2').swoopLocked).toBeFalsy();
+    expect(menuPropsFor('kiosk-2').hootLocked).toBeFalsy();
   });
 
   it('counts machines in the copy past one', () => {

@@ -2,14 +2,17 @@
 
 /**
  * tells a site owner where their account stands and what to do next: a pro
- * trial and the day it ends, an email to verify (which starts the trial), an
- * email that already has a tridant account (which is linked first), or owlette
- * free. mounted under the app header.
+ * trial and the day it ends, an email to verify (which starts the trial), or an
+ * email that already has a tridant account (which is linked first). on a page
+ * about one site (`siteId`) it also tells anyone who views that site that it is
+ * on owlette free. mounted under the app header.
  *
- * it reads the signed-in user's own account plan, which lists only the sites
- * they own (adr 0018), so a member never sees an owner's state here. renders
- * null while the plan loads, when plans are not enforced, for a user who owns
- * no site, and when every owned site is on core or pro.
+ * the account's states come from the signed-in user's own account plan, which
+ * lists only the sites they own (adr 0018), so a member never sees an owner's
+ * state here. owlette free is a site's plan (`useSitePlan`), the same for every
+ * viewer: its owner gets a link to the site's billing section, anyone else is
+ * told to ask the owner. renders null while the plans load, when plans are not
+ * enforced, and when neither applies.
  *
  * the unverified state says what verifying gets and carries the resend, so
  * PageHeader leaves VerifyEmailBanner out while it applies: one prompt, not two.
@@ -18,17 +21,21 @@
  */
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Mail, Sparkles, X } from 'lucide-react';
+import type { PlanSite } from '@/components/plan/MachinePlanNotice';
+import { ASK_OWNER, siteBillingPath } from '@/components/plan/UpgradeGate';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
 import { VerifyEmailBanner } from '@/components/VerifyEmailBanner';
 import { useDevicePrefNumber } from '@/hooks/useDevicePrefFlag';
+import { useEmailVerifiedOnReturn } from '@/hooks/useEmailVerifiedOnReturn';
 import { usePlan } from '@/hooks/usePlan';
 import { useSendVerification } from '@/hooks/useSendVerification';
-import { auth } from '@/lib/firebase';
+import { useSitePlan } from '@/hooks/useSitePlan';
 import type { AccountPlanOn, AccountPlanResponse } from '@/lib/planResponse';
 import { PRICING_FACTS } from '@/lib/product-facts';
+import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 import { formatDay } from '@/lib/timeUtils';
 
 /** how long a dismissal holds before the banner returns. */
@@ -42,54 +49,45 @@ export const LINK_TRIDANT_HREF = '/api/auth/tridant/link?return=/settings/plan';
 
 export type PlanBannerKind = 'unverified' | 'link' | 'trial' | 'free';
 
-/** the banner's state for an account plan, before any dismissal. null is no banner. */
-export function planBannerKind(plan: AccountPlanResponse | undefined): PlanBannerKind | null {
+/**
+ * the banner's state, before any dismissal. null is no banner. `site` is the
+ * plan of the site the page is about; without one there is no free state.
+ */
+export function planBannerKind(
+  plan: AccountPlanResponse | undefined,
+  site?: SitePlanResponse,
+): PlanBannerKind | null {
   // the account plan lists only the sites the user owns, so none means not an owner.
-  if (!plan?.enforced || plan.sites.length === 0) return null;
-  if (plan.trial.status === 'unverified') return 'unverified';
-  if (plan.trial.status === 'link_required') return 'link';
-  if (plan.sites.some((site) => site.tier === 'trial')) return 'trial';
-  return plan.sites.some((site) => site.tier === 'free') ? 'free' : null;
+  if (plan?.enforced && plan.sites.length > 0) {
+    if (plan.trial.status === 'unverified') return 'unverified';
+    if (plan.trial.status === 'link_required') return 'link';
+    if (plan.sites.some((owned) => owned.tier === 'trial')) return 'trial';
+  }
+  return site?.enforced && site.tier === 'free' ? 'free' : null;
 }
 
-export function TrialBanner() {
+export function TrialBanner({ siteId }: { siteId?: string }) {
   const { plan, refresh } = usePlan();
-  const kind = planBannerKind(plan);
+  const { plan: site } = useSitePlan(siteId);
+  const kind = planBannerKind(plan, site);
 
-  // the verification link usually opens in another tab. once this one comes back
-  // verified, the next plan read starts the trial, whether or not the banner was dismissed.
-  useEffect(() => {
-    if (kind !== 'unverified') return;
-    // focus and visibilitychange both fire on the way back, and two plan reads would race to start the trial.
-    let checking = false;
-    const recheck = () => {
-      const current = auth?.currentUser;
-      if (checking || !current || document.visibilityState !== 'visible') return;
-      checking = true;
-      current
-        .reload()
-        .then(() => (current.emailVerified ? refresh() : undefined))
-        // offline or signed out mid-flight; the next focus tries again
-        .catch(() => undefined)
-        .finally(() => {
-          checking = false;
-        });
-    };
-    window.addEventListener('focus', recheck);
-    document.addEventListener('visibilitychange', recheck);
-    return () => {
-      window.removeEventListener('focus', recheck);
-      document.removeEventListener('visibilitychange', recheck);
-    };
-  }, [kind, refresh]);
+  // once this tab comes back verified, the next plan read starts the trial, whether or not the banner was dismissed.
+  useEmailVerifiedOnReturn(kind === 'unverified', refresh);
 
-  return kind && plan?.enforced ? <DismissibleBanner kind={kind} plan={plan} /> : null;
+  if (!kind) return null;
+  return (
+    <DismissibleBanner
+      kind={kind}
+      account={plan?.enforced ? plan : null}
+      site={siteId ? { siteId, isOwner: !!site?.isOwner } : null}
+    />
+  );
 }
 
-function PlanLink({ label }: { label: string }) {
+function PlanLink({ label, href = '/settings/plan' }: { label: string; href?: string }) {
   return (
     <Button asChild variant="link" size="sm">
-      <Link href="/settings/plan">{label}</Link>
+      <Link href={href}>{label}</Link>
     </Button>
   );
 }
@@ -118,7 +116,15 @@ function SendVerificationLink() {
 }
 
 // split out so the dismissal is read only when there is a banner to show.
-function DismissibleBanner({ kind, plan }: { kind: PlanBannerKind; plan: AccountPlanOn }) {
+function DismissibleBanner({
+  kind,
+  account,
+  site,
+}: {
+  kind: PlanBannerKind;
+  account: AccountPlanOn | null;
+  site: PlanSite | null;
+}) {
   const dismissedAt = useDevicePrefNumber(DISMISSED_AT_FIELD, 0, 0, Number.MAX_SAFE_INTEGER);
   const [now, setNow] = useState(() => Date.now());
 
@@ -137,7 +143,7 @@ function DismissibleBanner({ kind, plan }: { kind: PlanBannerKind; plan: Account
   };
 
   const Icon = kind === 'unverified' ? Mail : Sparkles;
-  const trialEndsAt = plan.trial.status === 'active' ? plan.trial.endsAt : null;
+  const trialEndsAt = account?.trial.status === 'active' ? account.trial.endsAt : null;
 
   return (
     <div
@@ -166,7 +172,7 @@ function DismissibleBanner({ kind, plan }: { kind: PlanBannerKind; plan: Account
               <span className="sm:hidden">you have a tridant account.</span>
               <span className="hidden sm:inline">this email already has a tridant account.</span>
             </span>
-            {plan.linkAvailable ? (
+            {account?.linkAvailable ? (
               <Button asChild variant="link" size="sm">
                 {/* an api route that redirects to tridant id: a plain anchor, never a prefetched Link */}
                 <a href={LINK_TRIDANT_HREF}>link it</a>
@@ -188,15 +194,15 @@ function DismissibleBanner({ kind, plan }: { kind: PlanBannerKind; plan: Account
         {kind === 'free' && (
           <>
             <span className="text-foreground">
-              you&apos;re on owlette free
-              {/* the scope is dropped on a phone */}
+              this site is on owlette free
+              {/* the scope, and whom anyone but the owner should ask, are dropped on a phone */}
               <span className="hidden sm:inline">
                 {' '}
                 — {PRICING_FACTS.free.machines} machine, monitoring only
               </span>
-              .
+              .{!site?.isOwner && <span className="hidden sm:inline"> {ASK_OWNER}.</span>}
             </span>
-            <PlanLink label="upgrade" />
+            {site?.isOwner && <PlanLink label="upgrade" href={siteBillingPath(site.siteId)} />}
           </>
         )}
         <IconButton

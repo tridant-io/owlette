@@ -94,6 +94,21 @@ function DialogHeader({ className, ...props }: React.ComponentProps<"div">) {
   )
 }
 
+/**
+ * the part of a dialog that scrolls, so the DialogFooter after it stays in
+ * view. the DialogContent around it takes `flex flex-col` and a max height.
+ * its 4px gutter keeps a focus ring at its edge from being clipped.
+ */
+function DialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="dialog-body"
+      className={cn("-mx-1 flex min-h-0 flex-col gap-4 overflow-y-auto px-1", className)}
+      {...props}
+    />
+  )
+}
+
 function DialogFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
@@ -135,6 +150,7 @@ function DialogDescription({
 
 export {
   Dialog,
+  DialogBody,
   DialogClose,
   DialogContent,
   DialogDescription,

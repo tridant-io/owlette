@@ -14,6 +14,7 @@ import Link from 'next/link';
 import { Lock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { IconButton } from '@/components/ui/icon-button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ASK_OWNER, siteBillingPath } from '@/components/plan/UpgradeGate';
 import { cn } from '@/lib/utils';
 
@@ -75,7 +76,9 @@ export function MachinePlanLock({ planSite }: { planSite?: PlanSite }) {
 
 /**
  * `label` names what it stands in for, for screen readers: "restore is part of
- * core". `className` sizes it to the controls it sits among.
+ * core". `className` sizes it to the controls it sits among. anyone but the
+ * owner reads the same short label, with whom to ask on hover and to a screen
+ * reader, so it never crowds the controls beside it.
  */
 export function ControlUpgradeLink({
   label,
@@ -88,14 +91,23 @@ export function ControlUpgradeLink({
 }) {
   if (!planSite?.isOwner) {
     return (
-      <span
-        aria-label={`${label}. ${ASK_OWNER}`}
-        data-testid="control-upgrade"
-        className={cn('inline-flex items-center gap-1.5 text-xs text-muted-foreground', className)}
-      >
-        <Lock className="h-4 w-4 flex-shrink-0" />
-        part of core. {ASK_OWNER}
-      </span>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            data-testid="control-upgrade"
+            className={cn('inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs text-muted-foreground', className)}
+          >
+            <Lock className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+            <span aria-hidden="true">part of core</span>
+            <span className="sr-only">
+              {label}. {ASK_OWNER}
+            </span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>{ASK_OWNER}</p>
+        </TooltipContent>
+      </Tooltip>
     );
   }
   return (

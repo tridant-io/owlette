@@ -28,7 +28,7 @@ export default function ApiKeysSettingsPage() {
   if (authLoading || !user) return null;
 
   return (
-    <PageCascade className="min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background sm:pb-24">
       <PageHeader currentPage="api keys" />
       <main className="relative z-10 mx-auto max-w-4xl px-4 py-8 sm:px-6">
         <ApiKeysManager />

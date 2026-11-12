@@ -332,6 +332,15 @@ describe('/settings/plan', () => {
       expect(prices).not.toHaveTextContent('$30/machine/month');
     });
 
+    it('names the founders price an owner holds, places left or not', () => {
+      show(enforced({ foundersRemaining: { core: 12, pro: 0 }, foundersHeld: { core: true, pro: true } }));
+
+      const prices = screen.getByTestId('plan-prices');
+      expect(prices).toHaveTextContent('core$20/machine/monthyour founders price $10/machine/month');
+      expect(prices).toHaveTextContent('pro$60/machine/month, 3-machine minimumyour founders price $30/machine/month');
+      expect(prices).not.toHaveTextContent('places left');
+    });
+
     it('says where the invoices and the card are, linking the tridant portal in a new tab', () => {
       show(enforced({ portalUrl: 'https://id-staging.tridant.io' }));
 

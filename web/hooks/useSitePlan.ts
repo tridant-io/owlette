@@ -28,6 +28,7 @@ export interface SitePlan {
    */
   controlLocked: boolean;
   swoopLocked: boolean;
+  hootLocked: boolean;
 }
 
 export interface SitePlanState extends SitePlan {
@@ -104,7 +105,7 @@ async function load(uid: string, siteId: string): Promise<void> {
 }
 
 const LIVE = () => null;
-const UNRESTRICTED: SitePlan = { machineLimitFor: LIVE, controlLocked: false, swoopLocked: false };
+const UNRESTRICTED: SitePlan = { machineLimitFor: LIVE, controlLocked: false, swoopLocked: false, hootLocked: false };
 
 /**
  * the locks every viewer of the site sees. owlette free is counted across the
@@ -114,7 +115,7 @@ const UNRESTRICTED: SitePlan = { machineLimitFor: LIVE, controlLocked: false, sw
  */
 export function sitePlan(site: SitePlanResponse | undefined): SitePlan {
   if (!site?.enforced) return UNRESTRICTED;
-  const flags = { controlLocked: !site.flags.control, swoopLocked: !site.flags.swoop };
+  const flags = { controlLocked: !site.flags.control, swoopLocked: !site.flags.swoop, hootLocked: !site.flags.hoot };
   const free = site.freeMachines;
   if (!free) return { ...flags, machineLimitFor: LIVE };
   const live = new Set(free.live);

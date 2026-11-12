@@ -113,7 +113,7 @@ export default function WebhooksSettingsPage() {
   }
 
   return (
-    <PageCascade className="min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background sm:pb-24">
       <PageHeader currentPage="webhooks" />
       <main className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 py-8">
           {/* Developer-preview banner. Subscription management, manual probes,

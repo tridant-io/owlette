@@ -276,6 +276,7 @@ interface MachineRowProps {
   planLimit?: number | null;
   controlLocked?: boolean;
   swoopLocked?: boolean;
+  hootLocked?: boolean;
   /** who may upgrade the site, for the lock rows (`useSitePlan`). */
   planSite?: PlanSite;
 }
@@ -316,6 +317,7 @@ export const MachineRow = memo(function MachineRow({
   planLimit,
   controlLocked,
   swoopLocked,
+  hootLocked,
   planSite,
 }: MachineRowProps) {
   const planLocked = planLimit != null;
@@ -789,6 +791,7 @@ export const MachineRow = memo(function MachineRow({
               planLocked={planLocked}
               controlLocked={controlLocked}
               swoopLocked={swoopLocked}
+              hootLocked={hootLocked}
               planSite={planSite}
             />
           )}

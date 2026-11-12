@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore, type ComponentType } from 'react';
 import Link from 'next/link';
-import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff, type LucideIcon } from 'lucide-react';
+import { MoreVertical, Trash2, KeyRound, RotateCcw, Power, Camera, Settings2, Eye, BellOff, Bell, XCircle, Monitor, MonitorPlay, MonitorOff } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -125,6 +125,8 @@ interface MachineContextMenuProps {
   controlLocked?: boolean;
   /** the site's plan leaves out swoop: its row links to the site's billing section instead. */
   swoopLocked?: boolean;
+  /** the site's plan leaves out hoot: its row links to the site's billing section instead, as swoop's does. */
+  hootLocked?: boolean;
   /** who may upgrade the site, for the locked rows (`useSitePlan`). */
   planSite?: PlanSite;
 }
@@ -137,7 +139,7 @@ function UpgradeMenuItem({
   testId,
   planSite,
 }: {
-  icon: LucideIcon;
+  icon: ComponentType<{ className?: string }>;
   label: string;
   tier: 'core' | 'pro';
   testId: string;
@@ -199,6 +201,7 @@ export function MachineContextMenu({
   planLocked,
   controlLocked,
   swoopLocked,
+  hootLocked,
   planSite,
 }: MachineContextMenuProps) {
   const [showRevokeDialog, setShowRevokeDialog] = useState(false);
@@ -595,17 +598,27 @@ export function MachineContextMenu({
               be delivered */}
           {!planLocked && (
             <>
-              <DropdownMenuItem
-                asChild
-                onClick={(e) => e.stopPropagation()}
-                data-testid="machine-context-menu-hoot"
-                className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
-              >
-                <Link href={hootMachineHref(siteId, machineId)}>
-                  <HootIcon className="mr-2 h-4 w-4" />
-                  hoot
-                </Link>
-              </DropdownMenuItem>
+              {hootLocked ? (
+                <UpgradeMenuItem
+                  icon={HootIcon}
+                  label="hoot"
+                  tier="pro"
+                  testId="machine-context-menu-hoot-upgrade"
+                  planSite={planSite}
+                />
+              ) : (
+                <DropdownMenuItem
+                  asChild
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="machine-context-menu-hoot"
+                  className="text-foreground focus:bg-accent focus:text-foreground cursor-pointer"
+                >
+                  <Link href={hootMachineHref(siteId, machineId)}>
+                    <HootIcon className="mr-2 h-4 w-4" />
+                    hoot
+                  </Link>
+                </DropdownMenuItem>
+              )}
               <DropdownMenuSeparator className="bg-border" />
             </>
           )}

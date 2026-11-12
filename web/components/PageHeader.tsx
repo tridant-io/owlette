@@ -479,7 +479,8 @@ export function PageHeader({
     {/* the plan banner's unverified state is the same prompt with its reason, so it stands alone. once
         dismissed, TrialBanner itself puts VerifyEmailBanner back. */}
     {planBannerKind(plan) !== 'unverified' && <VerifyEmailBanner />}
-    <TrialBanner />
+    {/* owlette free is a site's plan, so it shows only on a page about one site; the demo's site has none */}
+    <TrialBanner siteId={disableNav ? undefined : currentSiteId} />
 
     {/* Mobile nav drawer — carries the site + page switchers that the `md`
         bar shows inline. Plain fixed positioning rather

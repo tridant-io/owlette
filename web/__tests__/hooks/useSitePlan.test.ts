@@ -125,6 +125,7 @@ describe('sitePlan', () => {
     expect(state.machineLimitFor('kiosk-2')).toBeNull();
     expect(state.controlLocked).toBe(false);
     expect(state.swoopLocked).toBe(false);
+    expect(state.hootLocked).toBe(false);
   });
 
   // the server counts the owner's free sites, so the owner, a site admin and a member see one lock.
@@ -138,6 +139,7 @@ describe('sitePlan', () => {
     expect(state.machineLimitFor('kiosk-2')).toBe(1);
     expect(state.controlLocked).toBe(true);
     expect(state.swoopLocked).toBe(true);
+    expect(state.hootLocked).toBe(true);
   });
 
   it('locks every machine when the one the limit covers is on another site', () => {
@@ -151,12 +153,13 @@ describe('sitePlan', () => {
     expect(state.controlLocked).toBe(true);
   });
 
-  it('on core, leaves control and every machine alone, and locks swoop', () => {
+  it('on core, leaves control and every machine alone, and locks swoop and hoot', () => {
     const state = sitePlan(CORE);
 
     expect(state.machineLimitFor('kiosk-2')).toBeNull();
     expect(state.controlLocked).toBe(false);
     expect(state.swoopLocked).toBe(true);
+    expect(state.hootLocked).toBe(true);
   });
 });
 

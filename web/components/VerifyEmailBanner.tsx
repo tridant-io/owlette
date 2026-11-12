@@ -8,11 +8,11 @@
  * (Google) accounts, which arrive verified, and verified accounts.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Mail } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useEmailVerifiedOnReturn } from '@/hooks/useEmailVerifiedOnReturn';
 import { useSendVerification } from '@/hooks/useSendVerification';
-import { auth } from '@/lib/firebase';
 import { Button } from '@/components/ui/button';
 
 export function VerifyEmailBanner() {
@@ -26,27 +26,10 @@ export function VerifyEmailBanner() {
     !verified &&
     (user.providerData ?? []).some((provider) => provider.providerId === 'password');
 
-  // the link usually opens in another tab, so recheck whenever this one comes back
-  useEffect(() => {
-    if (!pending) return;
-    const recheck = () => {
-      const current = auth?.currentUser;
-      if (!current || document.visibilityState !== 'visible') return;
-      current.reload().then(
-        () => {
-          if (current.emailVerified) setVerified(true);
-        },
-        // offline or signed out mid-flight; the next focus tries again
-        () => undefined,
-      );
-    };
-    window.addEventListener('focus', recheck);
-    document.addEventListener('visibilitychange', recheck);
-    return () => {
-      window.removeEventListener('focus', recheck);
-      document.removeEventListener('visibilitychange', recheck);
-    };
-  }, [pending]);
+  useEmailVerifiedOnReturn(
+    pending,
+    useCallback(() => setVerified(true), []),
+  );
 
   if (!pending) return null;
 

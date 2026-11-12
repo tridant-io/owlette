@@ -1282,6 +1282,7 @@ export default function DashboardPage() {
                         planLimit={sitePlan.machineLimitFor(machine.machineId)}
                         controlLocked={sitePlan.controlLocked}
                         swoopLocked={sitePlan.swoopLocked}
+                        hootLocked={sitePlan.hootLocked}
                         planSite={planSite}
                       />
                     ))}

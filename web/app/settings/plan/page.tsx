@@ -22,29 +22,17 @@ import { usePlan } from '@/hooks/usePlan';
 import { useSendVerification } from '@/hooks/useSendVerification';
 import { PageCascade } from '@/components/PageCascade';
 import { PageHeader } from '@/components/PageHeader';
+import { PlanBadge } from '@/components/plan/PlanBadge';
 import { LINK_TRIDANT_HREF } from '@/components/plan/TrialBanner';
 import { siteBillingPath } from '@/components/plan/UpgradeGate';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { InlineNotice } from '@/components/ui/inline-notice';
-import type {
-  AccountPlanFounders,
-  AccountPlanFree,
-  AccountPlanOn,
-  AccountPlanSite,
-  SiteTier,
-} from '@/lib/planResponse';
+import type { AccountPlanFree, AccountPlanOn, AccountPlanSite } from '@/lib/planResponse';
 import { PRICING_FACTS, perMachineMonth } from '@/lib/product-facts';
 import { formatDay } from '@/lib/timeUtils';
 import { toast } from '@/lib/toast';
-
-const PLAN_NAMES: Record<SiteTier, string> = {
-  free: 'owlette free',
-  trial: 'pro trial',
-  core: 'core',
-  pro: 'pro',
-};
 
 const SUPPORT_HREF = 'mailto:support@tridant.io';
 
@@ -318,18 +306,17 @@ function Sites({ sites }: { sites: AccountPlanSite[] }) {
     <Card className="gap-0 py-0">
       <ul className="divide-y divide-border">
         {sites.map((site) => (
+          // no wrap: the details wrap beside the button, so every row keeps its button on the right
           <li
             key={site.siteId}
             data-testid={`plan-site-${site.siteId}`}
-            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3 sm:px-6"
+            className="flex items-center justify-between gap-x-4 px-4 py-3 sm:px-6"
           >
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="truncate text-sm font-medium text-foreground">{site.name}</span>
                 {/* a site whose plan is not enforced has no plan to name */}
-                {site.tier !== null && (
-                  <Badge variant={site.tier === 'free' ? 'outline' : 'secondary'}>{PLAN_NAMES[site.tier]}</Badge>
-                )}
+                {site.tier !== null && <PlanBadge tier={site.tier} />}
                 {site.standing === 'past_due' && <Badge variant="destructive">past due</Badge>}
               </div>
               <p className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
@@ -350,24 +337,40 @@ function Sites({ sites }: { sites: AccountPlanSite[] }) {
   );
 }
 
-function Prices({ founders, portalUrl }: { founders: AccountPlanFounders | null; portalUrl: string | null }) {
+function Prices({ plan }: { plan: AccountPlanOn }) {
+  const { portalUrl } = plan;
   return (
     <Card data-testid="plan-prices" className="gap-0 py-0">
       <ul className="divide-y divide-border">
         {(['core', 'pro'] as const).map((tier) => {
-          const places = founders?.[tier] ?? 0;
+          const places = plan.foundersRemaining?.[tier] ?? 0;
+          // tridant id keeps the rate for an owner who holds it, past the cap
+          const held = plan.foundersHeld?.[tier] === true;
+          const founders = perMachineMonth(PRICING_FACTS[tier].founders);
           return (
-            <li key={tier} className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3 sm:px-6">
-              <span className="w-10 text-sm font-medium text-foreground">{tier}</span>
-              <span className="text-sm text-foreground">
-                {perMachineMonth(PRICING_FACTS[tier].list)}
-                {tier === 'pro' && `, ${PRICING_FACTS.pro.minMachines}-machine minimum`}
-              </span>
-              {places > 0 && (
-                <span className="text-sm text-muted-foreground">
-                  founders price {perMachineMonth(PRICING_FACTS[tier].founders)}, {plural(places, 'place')} left
+            // the tier keeps its own column, so a price that wraps stays beside it
+            <li key={tier} className="flex items-baseline gap-x-4 px-4 py-3 sm:px-6">
+              <span className="w-10 shrink-0 text-sm font-medium text-foreground">{tier}</span>
+              <span className="flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-sm">
+                <span className="text-foreground">
+                  {perMachineMonth(PRICING_FACTS[tier].list)}
+                  {/* a narrow column breaks after the comma, never inside "3-machine" */}
+                  {tier === 'pro' && (
+                    <>
+                      , <span className="whitespace-nowrap">{PRICING_FACTS.pro.minMachines}-machine minimum</span>
+                    </>
+                  )}
                 </span>
-              )}
+                {held ? (
+                  <span className="text-muted-foreground">your founders price {founders}</span>
+                ) : (
+                  places > 0 && (
+                    <span className="text-muted-foreground">
+                      founders price {founders}, {plural(places, 'place')} left
+                    </span>
+                  )
+                )}
+              </span>
             </li>
           );
         })}
@@ -440,7 +443,7 @@ function PlanSettings() {
             <Sites sites={plan.sites} />
           </Section>
           <Section title="prices">
-            <Prices founders={plan.foundersRemaining} portalUrl={plan.portalUrl} />
+            <Prices plan={plan} />
           </Section>
         </div>
       );
@@ -463,7 +466,7 @@ function PlanSettings() {
   }
 
   return (
-    <PageCascade className="min-h-screen bg-background">
+    <PageCascade className="min-h-screen bg-background sm:pb-24">
       <PageHeader currentPage="plan" />
       <main className="relative z-10 mx-auto max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
         <div className="mb-6">

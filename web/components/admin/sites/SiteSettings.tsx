@@ -108,7 +108,8 @@ export function SiteSettings({
         </div>
       </header>
 
-      {/* flex, so the control is as wide as its buttons and still wraps on a phone */}
+      {/* flex, so the control is as wide as its buttons. its five sections fit one row at 390px
+          (button.tsx's xs size); narrower than that they wrap rather than clip */}
       <div className="mb-4 flex">
         <SegmentedControl
           label="site settings sections"
