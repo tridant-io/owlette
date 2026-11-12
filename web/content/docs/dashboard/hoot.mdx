@@ -202,7 +202,9 @@ a turn aimed at chosen machines names them (*on kiosk-01 and kiosk-02*, or *on 7
 
 in a turn on several machines the card names the machines **that call** is for, which can be fewer than the turn's: *on kiosk-02* when you asked about kiosk-02 in a chat aimed at **all machines**. approving runs it on those and no others.
 
-if another turn has run in the conversation since the approval was requested — a scheduled follow-up firing, or a message sent from another device — the approval no longer matches the turn it belongs to, and it is refused: *that approval expired — another turn ran in this chat. ask again.* nothing is queued on any machine and the approval is not spent; the conversation reloads and the request can be made again.
+if another turn has run in the conversation since the approval was requested — a scheduled follow-up firing, or a message sent from another device — the approval no longer matches the turn it belongs to, and it is refused: *that approval expired — another turn ran in this chat. ask again.* nothing is queued on any machine and the approval is not spent; the conversation reloads and the request can be made again. a card that a later message in the chat has left behind reads *approval expired* and offers no buttons, since its answer would be refused.
+
+if the answer fails for any other reason — hoot switched off on the machine in the meantime, a server error, no network — the card goes back to waiting with both buttons, and the error is shown in the chat. nothing ran, and the approval can be answered again.
 
 the bound machines are re-checked when you answer. one that went offline, or had hoot switched off while the card waited, is dropped from the call. if none of them is reachable, the approval is left unanswered rather than consumed, so it can still be approved once a machine comes back.
 

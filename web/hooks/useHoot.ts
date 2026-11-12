@@ -310,9 +310,9 @@ export function useOwletteChat({
     chatContextRef.current.set(activeChatId, { ...pinned, target });
   }, []);
 
-  // Re-read the runner-persisted history for the open chat. Used when the server
-  // refuses a resume: the local transcript still offers approve/deny buttons for
-  // a turn that is no longer the chat's latest.
+  // Re-read the runner-persisted history for the open chat. Used when an
+  // approval's answer fails: the local transcript says the approval was answered,
+  // and the saved one says what became of it — still waiting, or taken by a turn.
   const reloadPersistedMessages = useCallback(async () => {
     if (!db) return;
     const forChatId = chatIdRef.current;
@@ -342,7 +342,13 @@ export function useOwletteChat({
       return;
     }
 
-    if (code !== 'turn_active') return;
+    if (code !== 'turn_active') {
+      // Any other failure of an approval's answer (hoot switched off, a 5xx, no
+      // network): the click already marked the card answered, and with no turn to
+      // run the call it would read "executing..." until a page reload.
+      if (holdsAnsweredApproval(chatRef.current.messages)) void reloadPersistedMessages();
+      return;
+    }
     if (turnActiveRetriedRef.current) return;
     turnActiveRetriedRef.current = true;
     forceSupersedeRef.current = true;
@@ -1162,6 +1168,15 @@ export function useOwletteChat({
     searchQuery,
     setSearchQuery,
   };
+}
+
+/** The last reply holds an approval that was answered and has not run: what a failed answer leaves behind. */
+function holdsAnsweredApproval(messages: UIMessage[]): boolean {
+  const last = messages[messages.length - 1];
+  return (
+    last?.role === 'assistant' &&
+    last.parts.some((part) => 'state' in part && part.state === 'approval-responded')
+  );
 }
 
 function generateChatId(): string {
