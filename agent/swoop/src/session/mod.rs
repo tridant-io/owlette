@@ -5737,9 +5737,11 @@ mod host {
             for output in rotated_outputs("the upright frame's proof") {
                 let rect = output.desktop_rect;
                 let (width, height) = (rect.width() as u32, rect.height() as u32);
+                // before the duplication: it moves this thread onto the input
+                // desktop without the right to create windows
+                let popup = Popup::open(rect.left, rect.top);
                 let mut source = Duplication::open(&output, RebuildSignal::new())
                     .unwrap_or_else(|e| panic!("duplicate {}: {e:#}", output.device_name));
-                let popup = Popup::open(rect.left, rect.top);
                 let mut scaler: Option<Downscaler> = None;
                 let mut fed_size = (0, 0);
                 for white in [true, false] {
