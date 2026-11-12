@@ -287,6 +287,14 @@ buttons dead until the page was reloaded. A refused answer now hands both
 buttons back, and an approval that a later message has left behind reads
 **approval expired** with nothing to press: ask hoot again to run it.
 
+### fixed — a hoot approval whose answer fails goes back to waiting
+
+When you approved or denied a hoot tool call and the answer could not be
+delivered (hoot switched off on the machine in the meantime, a server error, no
+network), the card read **executing...** with nothing running until the page
+was reloaded. The card now goes back to waiting with both buttons, and the
+error is shown in the chat, so the approval can be answered again.
+
 ### fixed — hoot's deployments install instead of closing the show and failing
 
 A deployment hoot started carried no installer checksum, so every machine closed

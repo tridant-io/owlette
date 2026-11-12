@@ -444,6 +444,32 @@ test.describe('hoot conversations and controls', () => {
     }
   });
 
+  test('an approval whose answer fails goes back to waiting, with both buttons', async ({ page }) => {
+    // Any failure but a stale approval: the click had already marked the card
+    // answered, and with no turn to run the call it read "executing..." for
+    // as long as the page stayed open.
+    const chat = await seedPendingApproval('failed');
+    await page.route('**/api/hoot', async (route) => {
+      await route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'LLM unavailable in e2e' }),
+      });
+    });
+
+    try {
+      await page.goto(`/hoot/${chat.id}`);
+      await page.getByRole('button', { name: /^approve$/i }).click();
+
+      await expect(page.getByText(/LLM unavailable in e2e/i)).toBeVisible();
+      await expect(page.getByRole('button', { name: /^approve$/i })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /^deny$/i })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /reboot_machine/ })).not.toContainText('executing');
+    } finally {
+      await chat.delete();
+    }
+  });
+
   test('an approval a later message left behind offers nothing to press', async ({ page }) => {
     const chat = await seedPendingApproval('expired', [
       { id: 'm-expired-user-2', role: 'user', parts: [{ type: 'text', text: 'never mind. how long has it been up?' }] },
