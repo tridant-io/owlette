@@ -514,6 +514,16 @@ describe('PATCH: switch plan', () => {
     await expectUntouched(await patch({ tier: 'core' }), 404, 'not_billed');
   });
 
+  it.each([
+    ['switched off', () => delete process.env.PLAN_ENFORCEMENT],
+    ['on without tridant id configured', () => delete process.env.TRIDANT_LICENSE_KEY],
+  ])('answers 503 while plans are %s, before any tridant call', async (_case, turnOff) => {
+    turnOff();
+
+    await expectUntouched(await patch({ tier: 'core' }), 503, 'billing_unavailable');
+    expect(mockSwitchTier).not.toHaveBeenCalled();
+  });
+
   it('refuses a switch by a new owner while the previous owner still pays', async () => {
     stageSite({ billing: { ...POINTER, payerUid: 'user-previous', endsAt: ENDS_AT } });
 
@@ -597,6 +607,13 @@ describe('DELETE: stop billing', () => {
 
     expect(status).toBe(200);
     expect(body).toEqual({ billing: { tier: 'pro', founders: false, endsAt: ENDS_AT } });
+    expect(mockStopSite).toHaveBeenCalledWith(SITE);
+  });
+
+  it('stops a billed site while plans are switched off: tridant id bills it whatever the switch says', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+
+    expect((await del()).status).toBe(200);
     expect(mockStopSite).toHaveBeenCalledWith(SITE);
   });
 

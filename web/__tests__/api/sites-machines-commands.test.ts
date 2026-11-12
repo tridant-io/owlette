@@ -1015,7 +1015,7 @@ describe('POST /api/sites/{siteId}/machines/{machineId}/commands', () => {
     expect(body.code).toBe('idempotency_key_mismatch');
   });
 
-  describe('on owlette free (plan.md decision 7)', () => {
+  describe('on owlette free', () => {
     const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
     const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
 

@@ -376,7 +376,8 @@ paths:
       description: |
         The caller's account as the owner who pays for their sites: the
         trial, every site they own with its plan, how much of owlette free
-        they use, and the founders places left. A plan belongs to a site, so
+        they use, whether they can create a site (`siteCreation`), and the
+        founders places left. A plan belongs to a site, so
         there is no account-wide tier. No body; no query params. Agent
         credentials get `403`.
 
@@ -4737,6 +4738,18 @@ paths:
         Returns 409 `site_already_exists` for a live id, or `site_id_retired`
         for one belonging to a deleted site (ids are not reusable).
 
+        Once plans are enforced, an account's first unpaid site (not billed,
+        and no trial covers it) is its free site. With that taken, a site is
+        created only with `onPlan: true` from a session or Firebase ID token,
+        and the dashboard then puts it on core or pro with
+        `POST /api/sites/{siteId}/billing`. That route refuses API keys, so
+        an API key's `onPlan` is ignored and its create answers 402: further
+        sites are added from the dashboard. A site created on a plan whose
+        checkout is never paid stays on owlette free, and while the account
+        has it, every create answers 402. During the account's trial any site
+        can be created. The 402's `siteCreation` says which case it is, and
+        `GET /api/account/plan` answers the same before the call.
+
         ### Authentication and scopes
 
         Send a scoped API key as `Authorization: Bearer $OWLETTE_API_KEY` (or
@@ -4775,6 +4788,17 @@ paths:
                     each machine's own clock. Omit the field to leave the site
                     undecided — omission is not the same as `false`, which
                     records an explicit decision to keep machine clocks.
+                onPlan:
+                  type: boolean
+                  description: |
+                    The caller puts the new site on core or pro right after
+                    creating it, with `POST /api/sites/{siteId}/billing`. Needed
+                    once the account's free site is taken
+                    (`siteCreation.state: choose_plan`). Honoured only from a
+                    session or Firebase ID token, since the billing route
+                    refuses API keys: from an API key, and as anything but
+                    `true`, it counts as not sent. Nothing of it is stored on
+                    the site.
       responses:
         '201':
           description: Site created.
@@ -11514,10 +11538,14 @@ components:
       description: |
         Plan required (`code: plan_required`): the site's plan does not
         include what the request needs, and `entitlement` names it. On
-        `POST /api/sites` it is the caller's owlette free site limit, which
-        is counted per account; on an ownership transfer, the new owner's.
-        Plans are not enforced during the beta, so no route answers this yet.
-        See `/docs/plans`.
+        `POST /api/sites` (`entitlement: owlette.sites`) the account's free
+        site is taken: `siteCreation` says whether the site can still be
+        created with `onPlan: true` from a session (`choose_plan`) or not at
+        all until `siteCreation.unpaidSite` is upgraded or deleted
+        (`blocked`, with `upgradeUrl` at that site's billing section). On an
+        ownership transfer it is the new owner's free site. Plans are not
+        enforced during the beta, so no route answers this yet. See
+        `/docs/plans`.
       content:
         application/problem+json:
           schema:
@@ -11532,7 +11560,12 @@ components:
                     description: The plan entitlement the request needs.
                   upgradeUrl:
                     type: string
-                    description: Where the account's plan is managed, relative to the dashboard origin.
+                    description: |
+                      Where to act on it, relative to the dashboard origin: the
+                      account's plan page, or, for a blocked site create, the
+                      billing section of the site it names.
+                  siteCreation:
+                    $ref: '#/components/schemas/SiteCreation'
           example:
             type: https://owlette.app/problems/plan-required
             title: plan required
@@ -14406,8 +14439,8 @@ components:
       description: |
         With `enforced: false`, only `enforced` and `reason` are sent. With
         `enforced: true`, `reason` is absent and `emailVerified`, `trial`,
-        `sites`, `free`, `foundersRemaining`, `linkAvailable` and `portalUrl`
-        are always sent.
+        `sites`, `free`, `siteCreation`, `foundersRemaining`, `linkAvailable`
+        and `portalUrl` are always sent.
       example:
         enforced: true
         emailVerified: true
@@ -14435,6 +14468,7 @@ components:
           machinesUsed: 1
           machinesLimit: 1
           liveMachines: [{ siteId: my-other-site, machineId: KIOSK-01 }]
+        siteCreation: { state: choose_plan, unpaidSite: { siteId: my-other-site, name: annex } }
         foundersRemaining: { core: 42, pro: 17 }
         linkAvailable: true
         portalUrl: https://id.tridant.io
@@ -14529,15 +14563,21 @@ components:
           type: object
           required: [sitesUsed, sitesLimit, machinesUsed, machinesLimit, liveMachines]
           description: |
-            owlette free is per account: counted across the caller's free
-            sites. Sites in a trial or a billed period never count.
+            owlette free is per account: counted across the caller's sites on
+            owlette free. A site in a trial, or billed in good standing, never
+            counts.
           properties:
-            sitesUsed: { type: integer, minimum: 0 }
-            sitesLimit:
+            sitesUsed:
               type: integer
               minimum: 0
-              nullable: true
-              description: "`null` is unlimited."
+              description: |
+                The caller's unpaid sites: not billed, and no trial covers
+                them. A billed site whose payment failed is never one, even
+                once it reads owlette free.
+            sitesLimit:
+              type: integer
+              minimum: 1
+              description: "One: every further site is created on core or pro."
             machinesUsed:
               type: integer
               minimum: 0
@@ -14568,6 +14608,8 @@ components:
           properties:
             core: { type: integer, minimum: 0, nullable: true }
             pro: { type: integer, minimum: 0, nullable: true }
+        siteCreation:
+          $ref: '#/components/schemas/SiteCreation'
         linkAvailable:
           type: boolean
           description: Whether linking an existing tridant account is set up on this server.
@@ -14583,6 +14625,30 @@ components:
           type: array
           items: { type: string }
           description: Entitlement keys a site's answer left out, which read as unrestricted. Sent only when there are any.
+    SiteCreation:
+      type: object
+      required: [state, unpaidSite]
+      description: |
+        Whether the caller can create a site, and how (`POST /api/sites`).
+        `open`: a plain create, which is the account's free site, or any site
+        during the trial. `choose_plan`: the free site is taken by
+        `unpaidSite`, so a site is created with `onPlan: true` from a session
+        and then put on core or pro. `blocked`: `unpaidSite` is a further
+        unpaid site, and no site is created until it is upgraded or deleted;
+        the newest such site is named. A site is unpaid when it is not billed
+        and no trial covers it.
+      properties:
+        state:
+          type: string
+          enum: [open, choose_plan, blocked]
+        unpaidSite:
+          type: object
+          nullable: true
+          required: [siteId, name]
+          description: "An unpaid site the caller owns: not billed, and no trial covers it. `null` with `open`."
+          properties:
+            siteId: { type: string }
+            name: { type: string }
 
     # operational logs
     SiteLogEntry:

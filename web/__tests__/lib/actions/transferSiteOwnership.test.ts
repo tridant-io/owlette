@@ -31,12 +31,12 @@ function versionOf(path: string): number {
   return versions.get(path) ?? 0;
 }
 
-/** the collection's direct children matching one equality, as an id-only query snapshot. */
+/** the collection's direct children matching one equality, as a query snapshot. */
 function query(colPath: string, field?: string, value?: unknown) {
   const ids = [...docs.entries()]
     .filter(([p, d]) => d !== null && p.startsWith(`${colPath}/`) && !p.slice(colPath.length + 1).includes('/'))
     .filter(([, d]) => field === undefined || (d as Record<string, unknown>)[field] === value)
-    .map(([p]) => ({ id: p.slice(colPath.length + 1) }));
+    .map(([p, d]) => ({ id: p.slice(colPath.length + 1), data: () => d }));
   return { docs: ids };
 }
 
@@ -178,8 +178,10 @@ const FREE = {
   orgId: null,
   billing: null,
 };
-// billed or trialing: either way the site is in good standing.
+// in good standing with no flags sent, so every feature reads unrestricted: the site reads as pro.
 const PAID = { ...FREE, resolved: true, standing: 'active', inGoodStanding: true, orgId: 'org_owner' };
+const TRIAL = { ...PAID, standing: 'trialing' };
+const CORE = { ...PAID, ent: { ...FREE.ent, 'owlette.control': '1', 'owlette.deployments': '0', 'owlette.roost': '0' } };
 
 /** plans enforced, with tridant's answer per site; a site not named is free. */
 function enforcePlans(bySite: Record<string, unknown> = {}) {
@@ -308,7 +310,7 @@ describe('transferSiteOwnership — refusals', () => {
   });
 });
 
-describe("transferSiteOwnership — the successor's free site slot", () => {
+describe("transferSiteOwnership — the successor's free site", () => {
   const transferToAlice = (over: Record<string, unknown> = {}) =>
     transferSiteOwnership({ ...base, successorUid: ALICE, actorUid: OWNER, actorIsSuperadmin: false, ...over });
 
@@ -329,14 +331,26 @@ describe("transferSiteOwnership — the successor's free site slot", () => {
     expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 
-  it('lets a billed or trialing site through: it never counts toward the free limit', async () => {
-    enforcePlans({ [SITE]: PAID });
+  it.each([
+    ['on core', CORE],
+    ['on pro', PAID],
+    ['in a trial', TRIAL],
+  ])('lets a site %s through beside a free one of theirs: only a free site needs room', async (_plan, answer) => {
+    enforcePlans({ [SITE]: answer });
 
     expect(await transferToAlice()).toEqual({ ok: true, previousOwnerUid: OWNER, newOwnerUid: ALICE });
   });
 
-  it("does not count the successor's paid sites against a free one", async () => {
-    enforcePlans({ 'site-b': PAID });
+  it("lets a free site through when the successor's sites are billed or in a trial", async () => {
+    docs.set('sites/site-c', { owner: ALICE, name: 'Site C' });
+    enforcePlans({ 'site-b': CORE, 'site-c': TRIAL });
+
+    expect((await transferToAlice()).ok).toBe(true);
+  });
+
+  it("lets a free site through during the successor's trial, beside a free one of theirs", async () => {
+    docs.set(`plan_accounts/${ALICE}`, { trialStartedAt: 1, trialEndsAt: Date.now() + 86_400_000 });
+    enforcePlans();
 
     expect((await transferToAlice()).ok).toBe(true);
   });
@@ -490,13 +504,21 @@ describe('transferSiteOwnership — billing follows the transfer', () => {
     expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 
-  it('still stops a billed site while plans are not enforced, and registers nothing', async () => {
+  it('still stops and registers a billed site while plans are not enforced', async () => {
     billed(null);
     delete process.env.PLAN_ENFORCEMENT;
 
     expect((await transferToAlice()).ok).toBe(true);
-    // the old owner is being charged whatever the switch says.
+    // the old owner is being charged whatever the switch says, and the bulk trial start runs before the switch.
     expect(mockStopSite).toHaveBeenCalledWith(SITE);
+    expect(mockRegisterSite).toHaveBeenCalledWith(ALICE, SITE, 'Site A');
+  });
+
+  it('registers nothing while tridant id is not configured', async () => {
+    delete process.env.PLAN_ENFORCEMENT;
+    delete process.env.TRIDANT_LICENSE_KEY;
+
+    expect((await transferToAlice()).ok).toBe(true);
     expect(mockRegisterSite).not.toHaveBeenCalled();
   });
 });

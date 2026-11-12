@@ -277,7 +277,8 @@ function FreeUsage({ free }: { free: AccountPlanFree }) {
         ))}
       </dl>
       <p className="border-t border-border px-4 py-3 text-xs text-muted-foreground sm:px-6">
-        the sites you own that aren&apos;t billed or in a trial share this allowance.
+        the sites you own that aren&apos;t billed or in a trial share this allowance. every further site you
+        create goes on core or pro.
       </p>
     </Card>
   );

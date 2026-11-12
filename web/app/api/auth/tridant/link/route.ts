@@ -2,7 +2,7 @@
  * GET /api/auth/tridant/link?org=<org_id>&return=<path>: sends the signed-in
  * user to tridant id to sign in, so the id token that comes back can stand as
  * their consent to link this account to an organization they own there
- * (plan.md, "link"). the flow's state rides a sealed cookie to
+ * (adr 0018). the flow's state rides a sealed cookie to
  * /api/auth/tridant/callback, which answers on `return`.
  *
  * session only, and a verified email, as for the trial. 503 when the oidc

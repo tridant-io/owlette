@@ -3,7 +3,8 @@
  * firestore so the playwright rig can seed and read it: a billed site is the
  * `e2e_entitlements/site:{siteId}` doc the entitlement seam reads, a checkout
  * is `e2e_billing/{sessionId}`, and the calls with nothing to show are
- * appended to `e2e_billing_calls`.
+ * appended to `e2e_billing_calls`. like tridant, it opens a checkout only for a
+ * payer with no running subscription, and bills every later site on it at once.
  */
 
 import 'server-only';
@@ -63,13 +64,15 @@ function monthEnd(now: Date): number {
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1);
 }
 
-function billedSite(tier: BillingTier, orgId: string) {
+// `founders` is the fake's own field: the entitlement seam reads the rest, as tridant's answer.
+function billedSite(tier: BillingTier, orgId: string, founders: boolean) {
   const now = new Date();
   return {
     resolved: true,
     standing: 'active',
     ent: entFor(tier),
     orgId,
+    founders,
     billing: {
       periodStart: Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
       periodEnd: monthEnd(now),
@@ -77,6 +80,13 @@ function billedSite(tier: BillingTier, orgId: string) {
       cancelAtPeriodEnd: false,
     },
   };
+}
+
+/** a site billed under `orgId` that has not ended: billing that runs, or a stop still inside its period. */
+function runs(seed: Record<string, unknown> | undefined, orgId: string): boolean {
+  const billing = seed?.billing as { endsAt?: unknown } | undefined;
+  if (seed?.orgId !== orgId || !billing) return false;
+  return billing.endsAt === null || (typeof billing.endsAt === 'number' && billing.endsAt > Date.now());
 }
 
 /** like the client it stands in for, the fake never throws: a firestore failure reads as tridant being down. */
@@ -97,6 +107,9 @@ function logged<T extends object>(fn: string, args: Record<string, unknown>, ans
 
 export function startCheckout(input: CheckoutInput): Promise<BillingResult<Checkout>> {
   return guarded(async () => {
+    const orgId = orgFor(input.uid);
+    const billed = await getAdminDb().collection('e2e_entitlements').where('orgId', '==', orgId).get();
+    if (billed.docs.some((doc) => runs(doc.data(), orgId))) return refused(409, 'subscription_exists');
     const sessionId = `e2e_${randomBytes(8).toString('hex')}`;
     await getAdminDb().collection('e2e_billing').doc(sessionId).set({
       uid: input.uid,
@@ -116,7 +129,7 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
     if (!session) return refused(404, 'checkout_not_found');
     const { uid, siteId, tier, founders } = session as { uid: string; siteId: string; tier: BillingTier; founders: boolean };
     const orgId = orgFor(uid);
-    await siteDoc(siteId).set(billedSite(tier, orgId));
+    await siteDoc(siteId).set(billedSite(tier, orgId, founders));
     return {
       ok: true,
       status: 'complete',
@@ -128,22 +141,33 @@ export function confirmCheckout(sessionId: string): Promise<BillingResult<Checko
 
 export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: boolean; sites: BilledSite[] }>> {
   return guarded(async () => {
-    await siteDoc(input.siteId).set(billedSite(input.tier, orgFor(input.uid)));
-    return {
-      ok: true,
-      already: false,
-      sites: [
-        { siteId: input.siteId, productId: productId(input.tier), founders: input.founders, status: 'active', endsAt: null },
-      ],
-    };
+    const doc = siteDoc(input.siteId);
+    const seed = (await doc.get()).data();
+    const billed = (tier: BillingTier, founders: boolean): BilledSite => ({
+      siteId: input.siteId,
+      productId: productId(tier),
+      founders,
+      status: 'active',
+      endsAt: null,
+    });
+    // a site billed here, or whose removal is pending, keeps the plan it had, whatever was asked for.
+    if (runs(seed, orgFor(input.uid))) {
+      const tier: BillingTier = (seed?.ent as Record<string, unknown>)?.['owlette.deployments'] === true ? 'pro' : 'core';
+      const already = (seed?.billing as { endsAt: unknown }).endsAt === null;
+      if (!already) await doc.update({ 'billing.endsAt': null });
+      return { ok: true, already, sites: [billed(tier, seed?.founders === true)] };
+    }
+    await doc.set(billedSite(input.tier, orgFor(input.uid), input.founders));
+    return { ok: true, already: false, sites: [billed(input.tier, input.founders)] };
   });
 }
 
-export function switchTier(siteId: string, tier: BillingTier): Promise<BillingResult> {
+export function switchTier(siteId: string, tier: BillingTier, founders?: boolean): Promise<BillingResult> {
   return guarded(async () => {
     const doc = siteDoc(siteId);
     if (!(await doc.get()).data()?.billing) return refused(404, 'site_not_billed');
-    await doc.update({ ent: entFor(tier) });
+    // without `founders`, the site keeps its rate.
+    await doc.update({ ent: entFor(tier), ...(founders === undefined ? {} : { founders }) });
     return { ok: true };
   });
 }

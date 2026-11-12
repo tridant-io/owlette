@@ -55,6 +55,8 @@ const THIRD_PARTY_CREDENTIALS = [
   'R2_S3_SECRET_ACCESS_KEY',
   // reaches tridant id; under OWLETTE_E2E entitlements come from e2e_entitlements/site:{siteId} instead.
   'TRIDANT_LICENSE_KEY',
+  // tridant id's oidc client; blank, linking reads as not configured (specs/plans/billing.spec.ts).
+  'TRIDANT_OIDC_CLIENT_SECRET',
   // local tooling (terraform, wrangler, `vercel env pull`), never read by web/;
   // blanked so a developer's .env.local still starts the suite.
   'CLOUDFLARE_API_TOKEN',

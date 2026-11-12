@@ -1111,7 +1111,7 @@ describe('WEBHOOK_MANAGE enforcement', () => {
   });
 });
 
-// plan gate — creating needs the payer's owlette.webhooks; the rest stay open (plan.md decision 8)
+// plan gate — creating needs the site's owlette.webhooks; the rest stay open
 
 describe('owlette.webhooks plan gate', () => {
   const create = () =>

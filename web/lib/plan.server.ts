@@ -1,7 +1,8 @@
 /**
  * a site's plan from tridant id, and the gates built on it (adr 0018). owlette
- * free is per account, so the free limits are counted here across the sites an
- * account owns.
+ * free is per account, so its limits are counted here across the sites an
+ * account owns: one free site, one machine across the free sites, and every
+ * further site created on core or pro.
  *
  * a leaf module: it must not import `apiAuth.server`. the gates sit inside the
  * auth layer (`authorizedSiteHandler`, the `_shared` resolvers), so an import
@@ -15,8 +16,11 @@
 import type { NextResponse } from 'next/server';
 import { problemPlanRequired } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
+import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
-import type { PlanOffReason, SiteTier } from '@/lib/planResponse';
+import { getPlanAccount, trialActive } from '@/lib/planAccounts.server';
+import type { AccountPlanSiteBilling, AccountPlanSiteCreation, PlanOffReason, SiteTier } from '@/lib/planResponse';
+import { PRICING_FACTS } from '@/lib/product-facts';
 import { tridantApiUrl } from '@/lib/tridant.server';
 import {
   getSiteEntitlements,
@@ -24,7 +28,8 @@ import {
   type SiteBillingPeriod,
 } from '@/lib/tridantEntitlements.server';
 
-export const PLAN_LIMITS = ['owlette.machines', 'owlette.sites'] as const;
+// the site limit is owlette's own rule, not a tridant value: tridant reads one site at a time.
+export const PLAN_LIMITS = ['owlette.machines'] as const;
 export const PLAN_FLAGS = [
   'owlette.control',
   'owlette.deployments',
@@ -113,6 +118,17 @@ function ownerOf(siteData: SiteData): string | null {
 async function readSite(siteId: string, siteData?: SiteData): Promise<SiteData> {
   if (siteData !== undefined) return siteData;
   return (await getAdminDb().collection('sites').doc(siteId).get()).data() ?? null;
+}
+
+/** `sites/{id}.billing`, less its `updatedAt`: owlette's record of what tridant id bills for the site. */
+export type BillingPointer = AccountPlanSiteBilling & { payerUid: string };
+
+export function readBillingPointer(siteData: SiteData | undefined): BillingPointer | null {
+  const billing = siteData?.billing;
+  if (typeof billing !== 'object' || billing === null) return null;
+  const { tier, founders, payerUid, endsAt } = billing as Record<string, unknown>;
+  if ((tier !== 'core' && tier !== 'pro') || typeof payerUid !== 'string') return null;
+  return { tier, founders: founders === true, payerUid, endsAt: typeof endsAt === 'number' ? endsAt : null };
 }
 
 /** a failed read is "no": the owner is then held to what tridant says, where a throw would be a 500 on every gate. */
@@ -226,7 +242,11 @@ function freeLimit(plan: Plan, key: PlanLimit): number {
 
 /** every site `ownerUid` owns, with its plan. for an owner known not to be a superadmin. */
 async function ownedSitePlans(ownerUid: string) {
-  const owned = await getAdminDb().collection('sites').where('owner', '==', ownerUid).select().get();
+  const owned = await getAdminDb()
+    .collection('sites')
+    .where('owner', '==', ownerUid)
+    .select('name', 'createdAt', 'billing')
+    .get();
   return Promise.all(
     owned.docs.map(async (site) => ({ site, plan: planFromAnswer(await getSiteEntitlements(site.id)) })),
   );
@@ -234,9 +254,11 @@ async function ownedSitePlans(ownerUid: string) {
 
 /**
  * whether credentials may be minted for `machineId` on this site. a billed or
- * trialing site always fits. owlette free is per account (adr 0018): the owner's free sites
- * share one machine limit, counted as distinct ids, and an id already on any
- * site the owner has is a re-pair, which always fits.
+ * trialing site always fits. owlette free is per account (adr 0018): the owner's
+ * free sites share one machine limit, counted as distinct ids. an id already on
+ * one of them is a re-pair or a move between them, which always fits; one that
+ * comes from a billed or trialing site is new to owlette free, so a further site
+ * on owlette free cannot be filled from a billed one.
  */
 export async function machineSlotAvailable(
   siteId: string,
@@ -249,24 +271,69 @@ export async function machineSlotAvailable(
   const plan = await resolveSitePlan(siteId, data);
   if (!owner || !isFree(plan)) return true;
 
-  const owned = await ownedSitePlans(owner);
-  const machineSnaps = await Promise.all(owned.map(({ site }) => site.ref.collection('machines').select().get()));
-  const known = new Set<string>();
-  const onFree = new Set<string>();
-  owned.forEach(({ plan: sitePlan }, i) => {
-    for (const machine of machineSnaps[i].docs) {
-      known.add(machine.id);
-      if (isFree(sitePlan)) onFree.add(machine.id);
-    }
-  });
-  return known.has(machineId) || onFree.size < freeLimit(plan, 'owlette.machines');
+  const free = (await ownedSitePlans(owner)).filter(({ plan: sitePlan }) => isFree(sitePlan));
+  const machineSnaps = await Promise.all(free.map(({ site }) => site.ref.collection('machines').select().get()));
+  const onFree = new Set(machineSnaps.flatMap((snap) => snap.docs.map((machine) => machine.id)));
+  return onFree.has(machineId) || onFree.size < freeLimit(plan, 'owlette.machines');
 }
 
-/** whether `ownerUid` may own one more free site. billed and trialing sites never count. */
-export async function siteSlotAvailable(ownerUid: string): Promise<boolean> {
-  if (planOffReason() || (await isSuperadmin(ownerUid))) return true;
-  const free = (await ownedSitePlans(ownerUid)).filter(({ plan }) => isFree(plan));
-  return free.length === 0 || free.length < freeLimit(free[0].plan, 'owlette.sites');
+/** owlette free covers one site per account; every further site is created on core or pro. */
+export const FREE_SITES = PRICING_FACTS.free.sites;
+
+/**
+ * whether a site counts as unpaid when the account creates another (adr 0018):
+ * not billed, and no trial covers it. a site whose billing still runs is billed
+ * even once a failed card has put it on owlette free, since its owner has
+ * nothing to upgrade; the free machine count still includes it.
+ */
+export function countsAsUnpaid(plan: Plan, billing: Pick<AccountPlanSiteBilling, 'endsAt'> | null): boolean {
+  return isFree(plan) && (billing === null || billing.endsAt !== null);
+}
+
+interface UnpaidSite {
+  siteId: string;
+  name: string;
+  /** epoch ms; 0 when the site has none. */
+  createdAt: number;
+}
+
+const OPEN: AccountPlanSiteCreation = { state: 'open', unpaidSite: null };
+
+/**
+ * where creating a site stands for an account, from its unpaid sites
+ * (`countsAsUnpaid`). the first is the account's free site. with it taken, a
+ * site is created only on its way to core or pro, which leaves at most one more
+ * if its checkout is abandoned; with that one too, none. the newest is named,
+ * since it is the one the owner meant to put on a plan. during the trial every
+ * create is allowed.
+ */
+export function siteCreationState(unpaid: UnpaidSite[], inTrial: boolean): AccountPlanSiteCreation {
+  if (unpaid.length < FREE_SITES || inTrial) return OPEN;
+  const [newest] = [...unpaid].sort(
+    (a, b) => b.createdAt - a.createdAt || (a.siteId < b.siteId ? -1 : a.siteId > b.siteId ? 1 : 0),
+  );
+  return {
+    state: unpaid.length > FREE_SITES ? 'blocked' : 'choose_plan',
+    unpaidSite: { siteId: newest.siteId, name: newest.name },
+  };
+}
+
+/** where creating a site stands for `ownerUid`. with plans off, and for a superadmin, every create is allowed. */
+export async function siteCreation(ownerUid: string): Promise<AccountPlanSiteCreation> {
+  if (planOffReason() || (await isSuperadmin(ownerUid))) return OPEN;
+  const unpaid = (await ownedSitePlans(ownerUid))
+    .filter(({ site, plan }) => countsAsUnpaid(plan, readBillingPointer(site.data())))
+    .map(({ site }): UnpaidSite => {
+      const { name, createdAt } = site.data();
+      return {
+        siteId: site.id,
+        name: typeof name === 'string' && name ? name : site.id,
+        createdAt: timestampToMs(createdAt) ?? 0,
+      };
+    });
+  // the trial is read only when it can change the answer.
+  if (unpaid.length < FREE_SITES) return OPEN;
+  return siteCreationState(unpaid, trialActive(await getPlanAccount(ownerUid)));
 }
 
 export function __resetForTests(): void {

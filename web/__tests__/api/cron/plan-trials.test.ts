@@ -123,10 +123,10 @@ describe('GET /api/cron/plan-trials', () => {
     expect(body).toMatchObject({ alreadyStarted: 1, subscribed: 1, busy: 1, failed: 3, started: 0 });
   });
 
-  it('pages: passes pageToken on and answers null when done', async () => {
+  it('pages 100 users at a time: passes pageToken on and answers null when done', async () => {
     mockListUsers.mockResolvedValue({ users: [user('c')], pageToken: undefined });
     const body = await (await GET(request('?pageToken=next-page', 'cron-secret'))).json();
-    expect(mockListUsers).toHaveBeenCalledWith(expect.any(Number), 'next-page');
+    expect(mockListUsers).toHaveBeenCalledWith(100, 'next-page');
     expect(body.nextPageToken).toBeNull();
   });
 

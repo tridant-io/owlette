@@ -23,7 +23,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
 import type { MemberDoc } from '@/lib/membership.server';
-import { plansEnforced, resolveSitePlan, siteSlotAvailable } from '@/lib/plan.server';
+import { resolveSitePlan, siteCreation, tridantConfigured } from '@/lib/plan.server';
 import { registerSite } from '@/lib/planTrial.server';
 import { stopSite } from '@/lib/tridantBilling.server';
 import { invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
@@ -166,13 +166,13 @@ export async function transferSiteOwnership(input: TransferInput): Promise<Trans
 
 /**
  * the refusal when the successor has no room for the site, or null. a billed or
- * trialing site never counts toward the free limits (adr 0018), so only a free
- * site needs a free-site slot on the successor's account.
+ * trialing site never counts toward owlette free (adr 0018), so only a free site
+ * needs room on the successor's account: their free site not taken, or their trial running.
  */
 async function successorPlanRefusal(siteId: string, successorUid: string): Promise<TransferFailure | null> {
   const plan = await resolveSitePlan(siteId);
   if (!plan.enforced || plan.inGoodStanding) return null;
-  return (await siteSlotAvailable(successorUid)) ? null : { kind: 'plan_limit', entitlement: 'owlette.sites' };
+  return (await siteCreation(successorUid)).state === 'open' ? null : { kind: 'plan_limit', entitlement: 'owlette.sites' };
 }
 
 /**
@@ -205,7 +205,7 @@ async function handOverBilling(
       }
     }
     // refused with `site_running` while the old period runs; the daily job asks again.
-    if (plansEnforced()) await registerSite(successorUid, siteId, typeof site.name === 'string' && site.name ? site.name : siteId);
+    if (tridantConfigured()) await registerSite(successorUid, siteId, typeof site.name === 'string' && site.name ? site.name : siteId);
   } catch (error) {
     logger.error('[plan] billing hand-over failed for a transferred site', {
       context: 'plan',

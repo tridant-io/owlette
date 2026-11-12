@@ -2,7 +2,7 @@
 
 /**
  * what the machine views show where the site's plan leaves something out.
- * a machine outside owlette free's machine limit (plan.md decision 9) gets a
+ * a machine outside owlette free's machine limit, counted per account, gets a
  * notice with a way to upgrade instead of its metrics, and a lock where its
  * display button was, which still reads where the notice has no room. without
  * control, the controls that send a command (process restart and kill, display

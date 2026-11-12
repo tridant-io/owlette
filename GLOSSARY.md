@@ -264,12 +264,16 @@ _Avoid_: screenshot check, AI check
 ### Plans and billing
 
 **Plan**:
-What one site may do: `free`, `core` or `pro`, or `trial` while a trial covers it. tridant id decides it per site and owlette reads it there; nothing is enforced unless `PLAN_ENFORCEMENT` is on (ADR 0018).
+What one site may do: `free`, `core` or `pro`, or `trial` while a trial covers it. tridant id decides it per site and owlette reads it there; nothing is enforced unless `PLAN_ENFORCEMENT` is on (ADR 0018). An account has one free site, and every further site is created on core or pro, chosen per site: any number of each, mixed. Core and pro differ by features and pro's three-machine minimum, never by how many sites they allow.
 _Avoid_: tier alone, subscription, license, "the owner's plan"
 
 **owlette free**:
-The plan of a site nobody pays for: live status, metrics, the agent's own crash-restart and updates. It is counted per account, not per site: an account's free sites are at most one, with at most one machine between them.
+The plan of a site nobody pays for: live status, metrics, the agent's own crash-restart and updates. It is counted per account, not per site: an account has one free site, and its sites on owlette free hold at most one machine between them.
 _Avoid_: lite, basic, free tier
+
+**Free site**:
+The first site an account owns on owlette free, neither billed nor in a trial. With it taken, a new site is created on its way to core or pro and goes straight into its upgrade; one whose checkout is left unpaid stays on owlette free, and while it does the account creates no other site. The API names either one in `siteCreation.unpaidSite`. During the trial any number of sites can be created.
+_Avoid_: second free site, free slot
 
 **Trial**:
 14 days of pro with no card, once per tridant organization, started when an account with a verified email first opens owlette. It covers every site the owner has registered with tridant id, and those sites become free when it ends unless they are billed.

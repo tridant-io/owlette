@@ -86,6 +86,7 @@ function enforced(over: Partial<AccountPlanOn> = {}): AccountPlanOn {
     trial: { status: 'none', endsAt: null },
     sites: [],
     free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+    siteCreation: { state: 'open', unpaidSite: null },
     foundersRemaining: null,
     linkAvailable: false,
     portalUrl: null,
@@ -222,6 +223,9 @@ describe('/settings/plan', () => {
     const usage = screen.getByTestId('free-usage');
     expect(within(usage).getByText('sites').nextElementSibling).toHaveTextContent('1 of 1');
     expect(within(usage).getByText('machines').nextElementSibling).toHaveTextContent('2 (unlimited)');
+    expect(usage).toHaveTextContent(
+      "the sites you own that aren't billed or in a trial share this allowance. every further site you create goes on core or pro.",
+    );
   });
 
   describe('owned sites', () => {

@@ -229,8 +229,8 @@ export function formatForPlatform(
 /**
  * Fire all enabled webhooks for a site subscribed to the given event. Non-blocking
  * (Promise.allSettled), never throws. Returns the number delivered successfully.
- * Paused, not failed, when the site's payer has no `owlette.webhooks`; pass a
- * batch's `planMemo` to resolve each payer once.
+ * Paused, not failed, when the site's plan has no `owlette.webhooks`; pass a
+ * batch's `planMemo` to resolve each site's plan once.
  */
 export async function fireWebhooks(
   siteId: string,

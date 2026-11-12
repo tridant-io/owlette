@@ -54,6 +54,7 @@ const ACCOUNT: AccountPlanOn = {
   trial: { status: 'active', endsAt: 1_800_000_000_000 },
   sites: [],
   free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+  siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: { core: 0, pro: 0 },
   linkAvailable: true,
   portalUrl: null,
@@ -364,7 +365,7 @@ describe('an email that already has a tridant account', () => {
     await user.click(screen.getByRole('button', { name: 'continue to checkout' }));
 
     const notice = screen.getByTestId('upgrade-link-required');
-    expect(notice).toHaveTextContent('this email already has a tridant account.');
+    expect(notice).toHaveTextContent('this email already has a tridant account. link it before upgrading a site.');
     expect(within(notice).getByRole('link', { name: 'link it' })).toHaveAttribute(
       'href',
       '/api/auth/tridant/link?return=%2Fadmin%2Fsites%2Fsite-a%3Fsection%3Dbilling',

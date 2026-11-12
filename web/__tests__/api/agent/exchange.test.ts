@@ -1,7 +1,7 @@
 /** @jest-environment node */
 
 /**
- * /api/agent/auth/exchange and the machine limit (plan.md decision 6): a
+ * /api/agent/auth/exchange and the machine limit, held where a machine pairs: a
  * registration code mints credentials, so the limit is checked before the mint,
  * refused as 402 `{ error }` (never 401/403, which an agent reads as a dead
  * credential), and a successful mint records the pairing: `pairedAt` once, and

@@ -126,7 +126,7 @@ export const POST = authorizedSiteHandler<RouteParams>({
               });
             case 'plan_limit':
               return problemPlanRequired(
-                "the new owner's plan covers no more sites. they need to upgrade before taking this one.",
+                'the new owner already has a site on owlette free. they need to upgrade it, or delete it, before taking this one.',
                 result.failure.entitlement,
               );
           }

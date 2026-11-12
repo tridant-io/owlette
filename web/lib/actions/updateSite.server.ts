@@ -18,6 +18,8 @@
 import type { Firestore } from 'firebase-admin/firestore';
 import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
+import { tridantConfigured } from '@/lib/plan.server';
+import { registerSite } from '@/lib/planTrial.server';
 
 const NAME_MAX_LENGTH = 200;
 const ALLOWED_TIME_FORMATS = new Set<'12h' | '24h'>(['12h', '24h']);
@@ -149,6 +151,14 @@ export async function updateSite(
       fields: Object.keys(updates),
     },
   });
+
+  // a billed site's invoice line carries the name tridant id holds, so a rename is
+  // registered again. best effort, as at creation: registerSite never throws.
+  const { owner, name: previousName } = existing.data() ?? {};
+  const renamedTo = typeof updates.name === 'string' && updates.name !== previousName ? updates.name : null;
+  if (renamedTo && typeof owner === 'string' && owner && tridantConfigured()) {
+    await registerSite(owner, input.siteId, renamedTo);
+  }
 
   return { kind: 'updated', updated: updates };
 }

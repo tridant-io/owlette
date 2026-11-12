@@ -58,10 +58,28 @@ async function send(url: string, method: string, body?: unknown): Promise<Answer
   }
 }
 
+const billingUrl = (siteId: string) => `/api/sites/${encodeURIComponent(siteId)}/billing`;
+
+/**
+ * puts a site on a paid plan, or back on the one it was stopping, and reloads
+ * nothing. for a site with no hook of its own yet: the one the create dialog
+ * has just made.
+ */
+export async function requestSiteUpgrade(
+  siteId: string,
+  tier: BillingTier,
+  founders: boolean,
+): Promise<UpgradeResult> {
+  const answer = await send(billingUrl(siteId), 'POST', { tier, founders });
+  if (!answer.ok) return answer;
+  const { checkoutUrl } = answer.data;
+  return typeof checkoutUrl === 'string' ? { ok: true, checkoutUrl } : { ok: true, added: true };
+}
+
 export function useSiteBilling(siteId: string) {
   const { refresh: refreshAccount } = usePlan();
   const { refresh: refreshSite } = useSitePlan(siteId);
-  const url = `/api/sites/${encodeURIComponent(siteId)}/billing`;
+  const url = billingUrl(siteId);
 
   const refresh = useCallback(async () => {
     await Promise.all([refreshSite(), refreshAccount()]);
@@ -70,15 +88,12 @@ export function useSiteBilling(siteId: string) {
   /** puts the site on a paid plan, or back on the one it was stopping. */
   const upgrade = useCallback(
     async (tier: BillingTier, founders: boolean): Promise<UpgradeResult> => {
-      const answer = await send(url, 'POST', { tier, founders });
-      if (!answer.ok) return answer;
-      const { checkoutUrl } = answer.data;
+      const result = await requestSiteUpgrade(siteId, tier, founders);
       // nothing is billed until the checkout is paid, so there is nothing to reload yet.
-      if (typeof checkoutUrl === 'string') return { ok: true, checkoutUrl };
-      await refresh();
-      return { ok: true, added: true };
+      if (result.ok && 'added' in result) await refresh();
+      return result;
     },
-    [url, refresh],
+    [siteId, refresh],
   );
 
   const switchTier = useCallback(

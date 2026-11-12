@@ -490,7 +490,7 @@ export async function GET(request: NextRequest) {
   const resendClient = getResend();
   const baseUrl = publicOrigin(request);
   let alertsSent = 0;
-  // one plan lookup per payer for the whole run, shared by recipients, webhooks and talons
+  // one plan lookup per site for the whole run, shared by recipients, webhooks and talons
   const planMemo = createPlanMemo();
 
   for (const plan of sendPlans) {

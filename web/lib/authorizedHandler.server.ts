@@ -20,7 +20,7 @@
  *   7. rate limit — skipped when `rate_limit_enforcement === false`, logged
  *      the same way.
  *   8. plan lockout — writes (POST/PUT/PATCH) whose capability is in
- *      PLAN_GATED_CAPABILITIES need the site payer's tridant key, and every
+ *      PLAN_GATED_CAPABILITIES need that tridant key on the site's plan, and every
  *      api-key request needs its `owlette.api_keys`, else 402. Not part of the
  *      kill switch: it is billing, not authorization.
  *   9. allow audit — BLOCKING: an uncommittable row means 503 and no handler
@@ -140,9 +140,9 @@ export const BYPASS_EXEMPT_CAPABILITIES: ReadonlySet<Capability> = new Set<Capab
 ]);
 
 /**
- * the tridant key a write under each capability needs (plan.md decision 7).
- * reads and DELETEs never need one, so a lapsed payer keeps its dashboard and
- * can still remove what it built.
+ * the tridant key a write under each capability needs on the site's plan.
+ * reads and DELETEs never need one, so a site whose plan lapsed keeps its
+ * dashboard and what was built on it can still be removed.
  */
 export const PLAN_GATED_CAPABILITIES: ReadonlyMap<Capability, PlanFlag> = new Map<Capability, PlanFlag>([
   [Capability.DEPLOYMENT_MANAGE, 'owlette.deployments'],
@@ -220,8 +220,8 @@ export interface SiteHandlerOptions {
   roostVersioned?: boolean;
   /**
    * skip the capability half of the plan lockout. only for a route that stops
-   * something already running: a payer whose plan lapsed mid-session must still
-   * be able to stop it. an api key still needs `owlette.api_keys`.
+   * something already running: on a site whose plan lapsed mid-session it must
+   * still be stoppable. an api key still needs `owlette.api_keys`.
    */
   planExempt?: boolean;
 }

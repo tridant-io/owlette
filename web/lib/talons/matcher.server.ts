@@ -225,8 +225,8 @@ async function readEnabledTalons(db: Firestore, siteId: string): Promise<StoredT
  * to the engine. A talon carrying a delay is deferred instead of run: it counts
  * as matched but contributes no run until the sweep fires it.
  *
- * Paused — nothing run or deferred — when the site's payer has no
- * `owlette.talons`; pass a batch's `planMemo` to resolve each payer once.
+ * Paused — nothing run or deferred — when the site's plan has no
+ * `owlette.talons`; pass a batch's `planMemo` to resolve each site's plan once.
  */
 export async function matchAndRunTalons(
   db: Firestore,

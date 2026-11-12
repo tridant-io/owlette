@@ -224,7 +224,7 @@ export function addSite(input: AddSiteInput): Promise<BillingResult<{ already: b
 
 /** without `founders`, tridant keeps the site's current rate. */
 export function switchTier(siteId: string, tier: BillingTier, founders?: boolean): Promise<BillingResult> {
-  if (e2e()) return fake.switchTier(siteId, tier);
+  if (e2e()) return fake.switchTier(siteId, tier, founders);
   return request(sitePath(siteId), 'PATCH', { product: PRODUCT[tier], founders }, () => ({}));
 }
 

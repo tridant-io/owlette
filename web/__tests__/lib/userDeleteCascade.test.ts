@@ -108,8 +108,8 @@ jest.mock('@/lib/actions/transferSiteOwnership.server', () => ({
   transferSiteOwnership: (...args: unknown[]) => mockTransfer(...args),
 }));
 
-const mockPlansEnforced = jest.fn();
-jest.mock('@/lib/plan.server', () => ({ plansEnforced: () => mockPlansEnforced() }));
+const mockTridantConfigured = jest.fn();
+jest.mock('@/lib/plan.server', () => ({ tridantConfigured: () => mockTridantConfigured() }));
 
 const mockUnlinkAccount = jest.fn();
 jest.mock('@/lib/tridantBilling.server', () => ({
@@ -125,7 +125,7 @@ beforeEach(() => {
   deletePaths = [];
   ownedSiteIds = [];
   mockTransfer.mockResolvedValue({ ok: true, previousOwnerUid: 'alice', newOwnerUid: 'bob' });
-  mockPlansEnforced.mockReturnValue(false);
+  mockTridantConfigured.mockReturnValue(false);
   mockUnlinkAccount.mockResolvedValue({ ok: true });
   mockRevokeRefreshTokens.mockResolvedValue(undefined);
   mockUpdateUser.mockResolvedValue(undefined);
@@ -390,7 +390,7 @@ describe('performUserDeleteCascade — the tridant link', () => {
   }
 
   beforeEach(() => {
-    mockPlansEnforced.mockReturnValue(true);
+    mockTridantConfigured.mockReturnValue(true);
   });
 
   it('unlinks the account once its sites are handed over and it is stamped deleted', async () => {
@@ -431,9 +431,9 @@ describe('performUserDeleteCascade — the tridant link', () => {
     expect(mockUnlinkAccount).not.toHaveBeenCalled();
   });
 
-  it('asks tridant nothing while plans are not enforced', async () => {
+  it('asks tridant nothing while tridant id is not configured', async () => {
     docs.set('users/uid-victim', { exists: true, data: { uid: 'uid-victim', role: 'member', sites: [] } });
-    mockPlansEnforced.mockReturnValue(false);
+    mockTridantConfigured.mockReturnValue(false);
 
     const outcome = await performUserDeleteCascade('uid-victim');
 

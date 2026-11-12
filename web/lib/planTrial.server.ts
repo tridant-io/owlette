@@ -1,5 +1,5 @@
 /**
- * the trial and site registration with tridant id (plan.md, "trial"). tridant
+ * the trial and site registration with tridant id (adr 0018). tridant
  * owns the trial; owlette starts it the first time a verified account reads its
  * plan, then registers the account's sites under the organization it created;
  * new sites are registered at creation, and the daily job repairs the rest.

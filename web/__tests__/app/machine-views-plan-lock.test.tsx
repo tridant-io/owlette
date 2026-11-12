@@ -2,12 +2,13 @@
 /**
  * @jest-environment jsdom
  *
- * A machine outside the viewer's machine limit, on both machine views (plan.md
- * decision 9): the name and status stay, an upgrade notice stands in for the
- * metrics, displays and processes, a lock replaces the display button, and the
- * menu learns the machine is locked. Without control, the live machine keeps
- * process configuration but trades restart, kill and restart approval for a
- * "part of core" link. Every machine with no plan passed renders as before.
+ * A machine outside the viewer's machine limit, on both machine views: a
+ * lapse never hides a machine, so the name and status stay, an upgrade notice
+ * stands in for the metrics, displays and processes, a lock replaces the
+ * display button, and the menu learns the machine is locked. Without control,
+ * the live machine keeps process configuration but trades restart, kill and
+ * restart approval for a "part of core" link. Every machine with no plan
+ * passed renders as before.
  *
  * Who may act is per machine too (machine scope, ADR 0016): an admin limited
  * to some machines gets commands and process editing on those, and the menu

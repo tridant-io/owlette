@@ -148,7 +148,7 @@ export default function AlertsPage() {
   const { sites } = useSites(user?.uid, userSites, isSuperadmin);
 
   const [selectedSiteId, setSelectedSiteId] = useState<string>('');
-  // alert rules ride on control, the core flag (plan.md decision 4)
+  // alert rules ride on control, the core flag: alerts are a core feature, not owlette free's
   const rulesGated = usePlanGated('control', selectedSiteId);
   // rules carry the site they were read or saved for: a save that lands after the
   // admin moved to another site must not show, or be saved again, under that one

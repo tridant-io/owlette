@@ -105,7 +105,7 @@ the API key's `expiresAt` has passed; the body carries `expiredAt`. rotate the k
 
 | `entitlement` | refused |
 |---|---|
-| `owlette.sites` | creating a site while the caller already owns one on owlette free, or transferring a site on owlette free to an owner who does |
+| `owlette.sites` | creating a site once the caller's free site is taken, without `onPlan: true` from a signed-in session (an API key's is ignored), or at all while a further site of theirs is unpaid; or transferring a site on owlette free to an owner whose free site is taken. a create refusal carries `siteCreation` with the site to upgrade, and a blocked one points `upgradeUrl` at that site's billing section; see [adding a site](/docs/plans#adding-a-site) |
 | `owlette.control` | remote commands other than `update_owlette`, `cancel_reboot`, `dismiss_reboot_pending`, `stop_live_view`, `cancel_mcp_tool` and `mcp_tool_call`; process start, stop, restart and kill; alert rules |
 | `owlette.deployments` | creating, retrying and uninstalling deployments |
 | `owlette.swoop` | starting and renewing swoop sessions |
@@ -330,7 +330,7 @@ see [swoop](/docs/dashboard/swoop).
 
 ## billing codes
 
-a site's billing is changed from the dashboard, in site settings → billing, by the site's owner. the requests behind it need a signed-in session: an API key gets `api_key_not_permitted`, and anyone but the owner `forbidden` or `not_owner`. [plans](/docs/plans#upgrading-a-site) apply after the beta; until then nothing is billed, and an upgrade answers `billing_unavailable`.
+a site's billing is changed from the dashboard, in site settings → billing, by the site's owner. the requests behind it need a signed-in session: an API key gets `api_key_not_permitted`, and anyone but the owner `forbidden` or `not_owner`. [plans](/docs/plans#upgrading-a-site) apply after the beta; until then nothing is billed, an upgrade or a switch answers `billing_unavailable`, and only stopping a site that is still billed goes through.
 
 | code | status | meaning |
 |---|---:|---|

@@ -15,6 +15,8 @@ jest.mock('@/lib/tridantEntitlements.server', () => ({
 type FakeSite = { data: Record<string, unknown>; machines: string[] };
 let mockUsers: Record<string, Record<string, unknown>> = {};
 let mockSites: Record<string, FakeSite> = {};
+/** `plan_accounts/{uid}`: the trial the site-creation gate reads. */
+let mockPlanAccounts: Record<string, Record<string, unknown>> = {};
 /** tridant's answer per site; a site not listed answers free. */
 let mockAnswers: Record<string, unknown> = {};
 
@@ -32,21 +34,33 @@ function mockSiteRef(siteId: string) {
 }
 
 const mockSiteGet = jest.fn(async (siteId: string) => ({ data: () => mockSites[siteId]?.data }));
-const mockOwnedSites = jest.fn(async (owner: unknown) => ({
+// a select query answers only the fields it names, so a field the code forgets to select reads as missing.
+const mockOwnedSites = jest.fn(async (owner: unknown, fields: string[]) => ({
   docs: Object.keys(mockSites)
     .filter((id) => mockSites[id].data.owner === owner)
-    .map((id) => ({ id, ref: mockSiteRef(id) })),
+    .map((id) => ({
+      id,
+      ref: mockSiteRef(id),
+      data: () => Object.fromEntries(fields.filter((field) => field in mockSites[id].data).map((field) => [field, mockSites[id].data[field]])),
+    })),
 }));
 const mockCollection = jest.fn((name: string) => {
   if (name === 'users') {
     return { doc: (uid: string) => ({ get: async () => ({ data: () => mockUsers[uid] }) }) };
+  }
+  if (name === 'plan_accounts') {
+    return {
+      doc: (uid: string) => ({
+        get: async () => ({ exists: uid in mockPlanAccounts, data: () => mockPlanAccounts[uid] }),
+      }),
+    };
   }
   if (name === 'sites') {
     return {
       doc: (siteId: string) => ({ get: () => mockSiteGet(siteId) }),
       where: (field: string, op: string, value: unknown) => {
         if (field !== 'owner' || op !== '==') throw new Error(`unexpected query ${field} ${op}`);
-        return { select: () => ({ get: () => mockOwnedSites(value) }) };
+        return { select: (...fields: string[]) => ({ get: () => mockOwnedSites(value, fields) }) };
       },
     };
   }
@@ -67,7 +81,8 @@ import {
   planTier,
   requireEntitlement,
   resolveSitePlan,
-  siteSlotAvailable,
+  siteCreation,
+  siteCreationState,
   tridantConfigured,
   type Plan,
 } from '@/lib/plan.server';
@@ -112,6 +127,7 @@ beforeEach(() => {
   __resetForTests();
   mockUsers = { u1: { role: 'user' }, root: { role: 'superadmin' } };
   mockSites = {};
+  mockPlanAccounts = {};
   mockAnswers = {};
   mockGetSiteEntitlements.mockImplementation(async (siteId: string) => mockAnswers[siteId] ?? FREE);
   process.env.PLAN_ENFORCEMENT = 'on';
@@ -308,11 +324,10 @@ describe('planLimit and entitled', () => {
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(true);
   });
 
-  it('read free: no flags, one machine, one site', () => {
+  it('read free: no flags, one machine', () => {
     const plan = enforced(FREE.ent, 'expired', false);
     for (const flag of FLAGS) expect(entitled(plan, flag)).toBe(false);
     expect(planLimit(plan, 'owlette.machines')).toBe(1);
-    expect(planLimit(plan, 'owlette.sites')).toBe(1);
   });
 
   it('read core: control and unlimited machines, none of pro', () => {
@@ -334,11 +349,11 @@ describe('planLimit and entitled', () => {
 
     expect(entitled(plan, 'owlette.control')).toBe(true);
     expect(entitled(plan, 'owlette.control')).toBe(true);
-    expect(planLimit(plan, 'owlette.sites')).toBe(Infinity);
+    expect(entitled(plan, 'owlette.deployments')).toBe(true);
 
     expect(logger.warn).toHaveBeenCalledTimes(2);
     expect(jest.mocked(logger.warn).mock.calls[0][0]).toContain('owlette.control');
-    expect(jest.mocked(logger.warn).mock.calls[1][0]).toContain('owlette.sites');
+    expect(jest.mocked(logger.warn).mock.calls[1][0]).toContain('owlette.deployments');
   });
 
   it.each(['-1', 'lots', '1.5', ''])('treat an unreadable value %p as unrestricted', (value) => {
@@ -354,9 +369,9 @@ describe('missingPlanKeys', () => {
   });
 
   it('lists the keys sent without a readable value, limits first', () => {
-    const plan = enforced({ 'owlette.machines': '1', 'owlette.sites': 'lots', 'owlette.control': '0' });
+    const plan = enforced({ 'owlette.machines': 'lots', 'owlette.control': '0' });
     expect(missingPlanKeys(plan)).toEqual([
-      'owlette.sites',
+      'owlette.machines',
       'owlette.deployments',
       'owlette.swoop',
       'owlette.hoot',
@@ -528,13 +543,34 @@ describe('machineSlotAvailable', () => {
     expect(await machineSlotAvailable('free2', 'm2')).toBe(false);
   });
 
-  it('fits a machine already on any site the owner has, as a re-pair', async () => {
-    mockSites = { free1: site('u1'), free2: site('u1', ['m1']), pro: site('u1', ['p1']), theirs: site('u2', ['x1']) };
-    mockAnswers = { pro: PRO };
+  it("fits a machine already on one of the owner's free sites, as a re-pair or a move between them", async () => {
+    mockSites = { free1: site('u1'), free2: site('u1', ['m1']), theirs: site('u2', ['x1']) };
 
     expect(await machineSlotAvailable('free1', 'm1')).toBe(true);
-    expect(await machineSlotAvailable('free1', 'p1')).toBe(true);
     expect(await machineSlotAvailable('free1', 'x1')).toBe(false);
+  });
+
+  it('counts a machine moved over from a billed or trialing site as new to owlette free', async () => {
+    mockSites = { free1: site('u1'), free2: site('u1', ['m1']), pro: site('u1', ['p1']), trial: site('u1', ['t1']) };
+    mockAnswers = { pro: PRO, trial: TRIAL };
+
+    expect(await machineSlotAvailable('free1', 'p1')).toBe(false);
+    expect(await machineSlotAvailable('free1', 't1')).toBe(false);
+
+    mockSites.free2.machines = [];
+    expect(await machineSlotAvailable('free1', 'p1')).toBe(true);
+  });
+
+  it('leaves a further site on owlette free with nothing to pair while the free site holds its machine', async () => {
+    // a site created on its way to a plan whose checkout was left: it is on owlette free beside the free one.
+    mockSites = { lobby: site('u1', ['kiosk-1']), gallery: site('u1') };
+
+    expect(await machineSlotAvailable('gallery', 'kiosk-2')).toBe(false);
+    expect(await machineSlotAvailable('lobby', 'kiosk-2')).toBe(false);
+    expect(await machineSlotAvailable('lobby', 'kiosk-1')).toBe(true);
+
+    mockAnswers.gallery = PRO;
+    expect(await machineSlotAvailable('gallery', 'kiosk-2')).toBe(true);
   });
 
   it('counts a machine id on two free sites once', async () => {
@@ -570,57 +606,144 @@ describe('machineSlotAvailable', () => {
   });
 });
 
-describe('siteSlotAvailable', () => {
-  it('fits before any read when enforcement is off', async () => {
+const created = (owner: string, name: string, createdAt?: number): FakeSite => ({
+  data: { owner, name, ...(createdAt === undefined ? {} : { createdAt: new Date(createdAt) }) },
+  machines: [],
+});
+
+describe('siteCreationState', () => {
+  const unpaid = (siteId: string, createdAt = 0) => ({ siteId, name: `${siteId} name`, createdAt });
+
+  it('is open with no site on owlette free', () => {
+    expect(siteCreationState([], false)).toEqual({ state: 'open', unpaidSite: null });
+  });
+
+  it('asks for a plan once the free site is taken, and names it', () => {
+    expect(siteCreationState([unpaid('lobby')], false)).toEqual({
+      state: 'choose_plan',
+      unpaidSite: { siteId: 'lobby', name: 'lobby name' },
+    });
+  });
+
+  it('is blocked with a further site on owlette free, and names the newest', () => {
+    expect(siteCreationState([unpaid('lobby', 1), unpaid('gallery', 3), unpaid('foyer', 2)], false)).toEqual({
+      state: 'blocked',
+      unpaidSite: { siteId: 'gallery', name: 'gallery name' },
+    });
+  });
+
+  it('breaks a createdAt tie by site id', () => {
+    expect(siteCreationState([unpaid('b', 5), unpaid('a', 5)], false).unpaidSite?.siteId).toBe('a');
+  });
+
+  it('is open during the trial, however many sites are on owlette free', () => {
+    expect(siteCreationState([unpaid('lobby')], true)).toEqual({ state: 'open', unpaidSite: null });
+    expect(siteCreationState([unpaid('lobby'), unpaid('gallery')], true)).toEqual({ state: 'open', unpaidSite: null });
+  });
+});
+
+describe('siteCreation', () => {
+  const OPEN = { state: 'open', unpaidSite: null };
+
+  it('is open before any read when enforcement is off', async () => {
     delete process.env.PLAN_ENFORCEMENT;
-    mockSites.s1 = site('u1');
-    expect(await siteSlotAvailable('u1')).toBe(true);
+    mockSites = { a: site('u1'), b: site('u1') };
+    expect(await siteCreation('u1')).toEqual(OPEN);
     expectNoReads();
   });
 
-  it('gives an account its first site, counting only its own', async () => {
-    mockSites.theirs = site('u2');
-    expect(await siteSlotAvailable('u1')).toBe(true);
-  });
-
-  it('refuses a second free site', async () => {
-    mockSites.s1 = site('u1');
-    expect(await siteSlotAvailable('u1')).toBe(false);
-  });
-
-  it('never counts billed or trialing sites', async () => {
-    mockSites = { core: site('u1'), pro: site('u1'), trial: site('u1'), due: site('u1') };
-    mockAnswers = { core: CORE, pro: PRO, trial: TRIAL, due: PAST_DUE };
-    expect(await siteSlotAvailable('u1')).toBe(true);
-
-    mockSites.free = site('u1');
-    expect(await siteSlotAvailable('u1')).toBe(false);
-  });
-
-  it('leaves a site whose plan cannot be read out of the count', async () => {
-    mockSites.s1 = site('u1');
-    mockAnswers.s1 = UNREACHABLE;
-    expect(await siteSlotAvailable('u1')).toBe(true);
-  });
-
-  it('counts a lapsed site as free', async () => {
-    mockSites.s1 = site('u1');
-    mockAnswers.s1 = LAPSED;
-    expect(await siteSlotAvailable('u1')).toBe(false);
-  });
-
-  it('takes the free limit from a free answer, and one when tridant sends none', async () => {
-    mockSites.s1 = site('u1');
-    mockAnswers.s1 = { ...FREE, ent: { ...FREE.ent, 'owlette.sites': '2' } };
-    expect(await siteSlotAvailable('u1')).toBe(true);
-
-    mockAnswers.s1 = { ...FREE, ent: {} };
-    expect(await siteSlotAvailable('u1')).toBe(false);
-  });
-
-  it('fits a superadmin without counting', async () => {
-    mockSites.s1 = site('root');
-    expect(await siteSlotAvailable('root')).toBe(true);
+  it('is open for a superadmin without counting', async () => {
+    mockSites = { a: site('root'), b: site('root') };
+    expect(await siteCreation('root')).toEqual(OPEN);
     expect(mockOwnedSites).not.toHaveBeenCalled();
+  });
+
+  it("gives an account its free site, counting only its own, and reads no trial to do it", async () => {
+    mockSites.theirs = site('u2');
+    expect(await siteCreation('u1')).toEqual(OPEN);
+    expect(mockCollection).not.toHaveBeenCalledWith('plan_accounts');
+  });
+
+  it('asks for a plan while the account owns a site on owlette free, and names it', async () => {
+    mockSites.lobby = created('u1', 'Lobby');
+    expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'lobby', name: 'Lobby' } });
+  });
+
+  it('names a site with no name by its id', async () => {
+    mockSites.lobby = site('u1');
+    expect((await siteCreation('u1')).unpaidSite).toEqual({ siteId: 'lobby', name: 'lobby' });
+  });
+
+  it('never counts billed, trialing, past-due-in-grace or unreadable sites', async () => {
+    mockSites = { core: site('u1'), pro: site('u1'), trial: site('u1'), due: site('u1'), unread: site('u1') };
+    mockAnswers = { core: CORE, pro: PRO, trial: TRIAL, due: PAST_DUE, unread: UNREACHABLE };
+    expect(await siteCreation('u1')).toEqual(OPEN);
+  });
+
+  it('counts a lapsed site, and one past its grace, as on owlette free', async () => {
+    mockSites = { lapsed: created('u1', 'lapsed', 1), due: created('u1', 'due', 2) };
+    mockAnswers = { lapsed: LAPSED, due: GRACE_OVER };
+    expect(await siteCreation('u1')).toEqual({ state: 'blocked', unpaidSite: { siteId: 'due', name: 'due' } });
+  });
+
+  it('is blocked with two sites on owlette free, and names the newer', async () => {
+    mockSites = { lobby: created('u1', 'Lobby', Date.UTC(2026, 9, 1)), gallery: created('u1', 'Gallery', Date.UTC(2026, 10, 1)) };
+    expect(await siteCreation('u1')).toEqual({ state: 'blocked', unpaidSite: { siteId: 'gallery', name: 'Gallery' } });
+  });
+
+  it("is open during the account's trial, even with sites on owlette free", async () => {
+    mockSites = { lobby: site('u1'), gallery: site('u1') };
+    mockPlanAccounts.u1 = { trialStartedAt: Date.now() - 1000, trialEndsAt: Date.now() + 86_400_000 };
+    expect(await siteCreation('u1')).toEqual(OPEN);
+  });
+
+  it('counts again once the trial has ended', async () => {
+    mockSites = { lobby: created('u1', 'Lobby', 1), gallery: created('u1', 'Gallery', 2) };
+    mockPlanAccounts.u1 = { trialStartedAt: 1, trialEndsAt: Date.now() - 1000 };
+    expect(await siteCreation('u1')).toEqual({ state: 'blocked', unpaidSite: { siteId: 'gallery', name: 'Gallery' } });
+  });
+
+  describe('a billed site whose card failed past its grace', () => {
+    // its plan reads free, but its billing runs: the upgrade route answers already_billed for it.
+    const pastDue = (createdAt: number, machines: string[] = []): FakeSite => ({
+      data: {
+        owner: 'u1',
+        name: 'Due',
+        createdAt: new Date(createdAt),
+        billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null },
+      },
+      machines,
+    });
+
+    it('never counts as unpaid, so the free site beside it asks for a plan and names the free site', async () => {
+      mockSites = { lobby: created('u1', 'Lobby', 1), due: pastDue(2) };
+      mockAnswers = { due: GRACE_OVER };
+      expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'lobby', name: 'Lobby' } });
+    });
+
+    it('alone leaves creation open', async () => {
+      mockSites = { due: pastDue(1) };
+      mockAnswers = { due: GRACE_OVER };
+      expect(await siteCreation('u1')).toEqual(OPEN);
+    });
+
+    it('still counts toward the free machine', async () => {
+      mockSites = { lobby: created('u1', 'Lobby', 1), due: pastDue(2, ['kiosk-1']) };
+      mockAnswers = { due: GRACE_OVER };
+      expect(await machineSlotAvailable('lobby', 'kiosk-2')).toBe(false);
+    });
+
+    it('counts as unpaid once its billing was stopped and has ended', async () => {
+      mockSites = { due: pastDue(1) };
+      (mockSites.due.data.billing as Record<string, unknown>).endsAt = Date.now() - 1000;
+      mockAnswers = { due: LAPSED };
+      expect(await siteCreation('u1')).toEqual({ state: 'choose_plan', unpaidSite: { siteId: 'due', name: 'Due' } });
+    });
+  });
+
+  it("ignores tridant's owlette.sites: the free site is owlette's rule", async () => {
+    mockSites.lobby = site('u1');
+    mockAnswers.lobby = { ...FREE, ent: { ...FREE.ent, 'owlette.sites': '5' } };
+    expect((await siteCreation('u1')).state).toBe('choose_plan');
   });
 });

@@ -1006,7 +1006,7 @@ describe('authorizedSiteHandler — handler error path', () => {
   });
 });
 
-describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
+describe('authorizedSiteHandler — plan lockout', () => {
   const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;
   const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};
   const FREE = {
@@ -1198,7 +1198,7 @@ describe('authorizedSiteHandler — plan lockout (plan.md decision 7)', () => {
     expect(siteDocReads).toBe(1);
   });
 
-  describe('api keys need owlette.api_keys on every request (plan.md decision 8)', () => {
+  describe('api keys need owlette.api_keys on every request', () => {
     beforeEach(() => {
       resolveAuthResult = { userId: 'uid_alice', keyContext: { keyId: 'key-a' } };
     });

@@ -1,7 +1,8 @@
 /**
  * GET /api/account/plan — the signed-in user's account as an owner who pays for
  * sites (adr 0018): the trial, every site they own with its plan, how much of
- * owlette free they use, and the founders places left.
+ * owlette free they use, whether they can create a site, and the founders
+ * places left.
  *
  * session or the user's own firebase id token; never an agent or an api key.
  * with plans off it answers `enforced: false` with the reason and reads nothing.
@@ -14,17 +15,22 @@ import { NextResponse } from 'next/server';
 import { ApiAuthError, requireSessionOrIdToken } from '@/lib/apiAuth.server';
 import { problemForbidden, problemFromError, problemUnauthorized } from '@/lib/apiErrors';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
+import { timestampToMs } from '@/lib/firestoreTime.server';
 import logger from '@/lib/logger';
 import {
+  countsAsUnpaid,
+  FREE_SITES,
   missingPlanKeys,
   planLimit,
   planOffReason,
   planTier,
+  readBillingPointer,
   resolveSitePlan,
+  siteCreationState,
   type Plan,
   type PlanLimit,
 } from '@/lib/plan.server';
-import { getPlanAccount, type PlanAccount } from '@/lib/planAccounts.server';
+import { getPlanAccount, trialActive, type PlanAccount } from '@/lib/planAccounts.server';
 import type {
   AccountPlanResponse,
   AccountPlanSite,
@@ -32,7 +38,7 @@ import type {
 } from '@/lib/planResponse';
 import { ensureTrial, type TrialStatus } from '@/lib/planTrial.server';
 import { activeMachinesBetween } from '@/lib/planUsage.server';
-import { billingSummary, readBillingPointer } from '@/lib/siteBilling.server';
+import { billingSummary } from '@/lib/siteBilling.server';
 import { foundersRemaining } from '@/lib/tridantBilling.server';
 import { oidcConfigured } from '@/lib/tridantOidc.server';
 import { withRateLimit } from '@/lib/withRateLimit';
@@ -48,6 +54,8 @@ interface OwnedSite {
   plan: Plan;
   /** read only for a free site. */
   machines: PairedMachine[];
+  /** epoch ms; 0 when the site has none. */
+  createdAt: number;
 }
 
 /** a part of the answer that fails reads as null, so the plan page still loads. */
@@ -65,16 +73,14 @@ async function degrade<T>(what: string, read: () => Promise<T>): Promise<T | nul
 
 function trialOf(start: TrialStatus, account: PlanAccount | null, now: number): AccountPlanTrial {
   if (account?.trialStartedAt) {
-    // a started trial with no end is an account that already paid when it first read its plan.
-    const endsAt = account.trialEndsAt;
-    return { status: endsAt !== null && endsAt > now ? 'active' : 'ended', endsAt };
+    return { status: trialActive(account, now) ? 'active' : 'ended', endsAt: account.trialEndsAt };
   }
   if (account?.linkRequired || start === 'link_required') return { status: 'link_required', endsAt: null };
   return { status: start === 'unverified' ? 'unverified' : 'none', endsAt: null };
 }
 
 /**
- * a free limit as the pairing and site gates read it (`freeLimit` in
+ * the free machine limit as the pairing gate reads it (`freeLimit` in
  * plan.server.ts): tridant's count, 1 when it sends none, null for unlimited.
  */
 function freeLimit(plan: Plan | undefined, key: PlanLimit): number | null {
@@ -102,6 +108,7 @@ async function readOwnedSite(
   const data = site.data();
   const plan = await resolveSitePlan(site.id, data);
   const pointer = readBillingPointer(data);
+  const createdAt = timestampToMs(data.createdAt) ?? 0;
   const base = {
     siteId: site.id,
     name: typeof data.name === 'string' && data.name ? data.name : site.id,
@@ -111,6 +118,7 @@ async function readOwnedSite(
     return {
       plan,
       machines: [],
+      createdAt,
       entry: {
         ...base,
         tier: null,
@@ -138,6 +146,7 @@ async function readOwnedSite(
       machineId: doc.id,
       pairedAt: (doc.get('pairedAt') as Timestamp | undefined)?.toMillis() ?? Infinity,
     })),
+    createdAt,
     entry: {
       ...base,
       tier: planTier(plan),
@@ -166,7 +175,7 @@ export const GET = withRateLimit(
       // after the trial start: it registers the caller's sites, which then read as trialing.
       const [account, sites] = await Promise.all([
         degrade('the plan account read', () => getPlanAccount(uid)),
-        getAdminDb().collection('sites').where('owner', '==', uid).select('name', 'owner', 'billing').get(),
+        getAdminDb().collection('sites').where('owner', '==', uid).select('name', 'owner', 'billing', 'createdAt').get(),
       ]);
 
       const now = Date.now();
@@ -181,6 +190,7 @@ export const GET = withRateLimit(
       }
 
       const freeSites = owned.filter(({ plan }) => plan.enforced && !plan.inGoodStanding);
+      const unpaid = owned.filter(({ plan, entry }) => countsAsUnpaid(plan, entry.billing));
       const machinesLimit = freeLimit(freeSites[0]?.plan, 'owlette.machines');
       const freeMachines = freeSites
         .flatMap(({ machines }) => machines)
@@ -198,14 +208,19 @@ export const GET = withRateLimit(
         trial: trialOf(trialStart.status, account, now),
         sites: owned.map(({ entry }) => entry),
         free: {
-          sitesUsed: freeSites.length,
-          sitesLimit: freeLimit(freeSites[0]?.plan, 'owlette.sites'),
+          sitesUsed: unpaid.length,
+          sitesLimit: FREE_SITES,
           machinesUsed: machineIds.length,
           machinesLimit,
           liveMachines: freeMachines
             .filter(({ machineId }) => liveIds.has(machineId))
             .map(({ siteId, machineId }) => ({ siteId, machineId })),
         },
+        // the same answer POST /api/sites gives, so the create dialog shows the step the server will ask for.
+        siteCreation: siteCreationState(
+          unpaid.map(({ entry: { siteId, name }, createdAt }) => ({ siteId, name, createdAt })),
+          trialActive(account, now),
+        ),
         foundersRemaining: founders.ok ? { core: founders.core, pro: founders.pro } : null,
         linkAvailable: oidcConfigured(),
         portalUrl: portalUrl(),

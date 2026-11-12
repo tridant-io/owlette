@@ -18,7 +18,7 @@ import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { MIN_SUPERADMINS } from '@/lib/actions/setUserRole.server';
 import { transferSiteOwnership } from '@/lib/actions/transferSiteOwnership.server';
-import { plansEnforced } from '@/lib/plan.server';
+import { tridantConfigured } from '@/lib/plan.server';
 import { unlinkAccount } from '@/lib/tridantBilling.server';
 
 function asRole(raw: unknown): string | null {
@@ -352,7 +352,7 @@ export async function performUserDeleteCascade(
   // forget the account's link to its tridant organization (adr 0018); the organization,
   // its sites and their billing stay. after the stamp, so an account whose delete
   // failed keeps its link. best effort: unlinkAccount never throws.
-  if (plansEnforced()) {
+  if (tridantConfigured()) {
     const unlinked = await unlinkAccount(uid);
     if (!unlinked.ok) {
       console.warn(

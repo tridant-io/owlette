@@ -1,5 +1,5 @@
 # site billing — Context
-**Last updated**: 2026-11-11
+**Last updated**: 2026-11-12
 
 ## Where things are
 - Worktree `C:\Users\admin\Documents\Git-restored\Owlette-site-billing-wt`, branch `feat/site-billing`, rebased on `origin/dev` 3634ad5a. Push only with `git push origin feat/site-billing:feat/site-billing` (a bare push lands on dev).
@@ -33,8 +33,8 @@
 ## Decisions
 1. **Per-site entitlement read.** tridant bills per site, and an organization-level read merges every licence (one pro site would make all of an owner's sites pro).
 2. **The payer is the site owner; only the owner changes billing** (owner). tridant supports a payer who isn't the owner; owlette doesn't expose it.
-3. **Free is per account, counted by owlette.** tridant's `owlette.sites`/`owlette.machines` in a free answer are the limits (1 and 1); owlette counts the account's free owned sites and the machines across them.
-4. **Core has no site cap** (owner).
+3. **Free is per account, counted by owlette.** One free site per account is owlette's own rule (`FREE_SITES` in `plan.server.ts`); tridant's `owlette.sites` is not read. tridant's `owlette.machines` on a free answer (1) is the machine limit, counted as distinct ids across the account's sites on owlette free.
+4. **Every further site is on core or pro, any number of each** (owner, confirmed 2026-11-12). `siteCreation(uid)` and the account plan's `siteCreation` answer `open`, `choose_plan` or `blocked`; `POST /api/sites` takes `onPlan: true` past a taken free site, and refuses every create while a further site is on owlette free (402 `plan_required`, `entitlement: owlette.sites`, `siteCreation` naming it, `upgradeUrl` at its billing section). The trial lifts it. A one-core-site rule was built and reversed the same day.
 5. **The trial starts lazily on the first plan read with a verified email,** only while enforcement is on. An unverified account is on free and is told to verify. Existing accounts are started through a cron-secret route, dry run by default.
 6. **Sites are registered with tridant after the trial starts and at creation,** because the trial covers only sites registered under the organization. Needs `site.write`.
 7. **Ownership transfer stops billing at the period end** (owner). Delete stops billing first. Account deletion unlinks the subject. The daily job moves a transferred site to its new owner's organization once it is idle.

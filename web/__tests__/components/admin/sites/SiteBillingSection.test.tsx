@@ -179,6 +179,7 @@ const ACCOUNT: AccountPlanOn = {
   trial: { status: 'active', endsAt: TRIAL_ENDS },
   sites: [owned(2)],
   free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+  siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: { core: 0, pro: 0 },
   linkAvailable: true,
   portalUrl: null,
@@ -549,6 +550,29 @@ describe('a billed site while plans are switched off', () => {
 
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(toast.success).toHaveBeenCalledWith('billing stopped', { description: `Alpha is billed until ${NOV_30}.` });
+  });
+
+  it('says nothing of owlette free in the stop dialog: with plans off the site is not held to it', async () => {
+    mockAccount = { enforced: false, reason: 'enforcement_off' };
+    const user = show({ ...OFF_BILLED, period: { start: NOV_1, end: DEC_1 } });
+
+    await user.click(screen.getByRole('button', { name: 'stop billing' }));
+
+    expect(within(screen.getByRole('dialog')).getByText(/^stop billing Alpha\?/)).toHaveTextContent(
+      `stop billing Alpha? it stays on pro until ${NOV_30}, and that billing period is still billed.`,
+    );
+    expect(screen.getByRole('dialog')).not.toHaveTextContent('owlette free');
+  });
+
+  it('offers no stop while tridant id is not configured, since nothing could stop it', () => {
+    mockAccount = { enforced: false, reason: 'not_configured' };
+    show({ ...OFF_BILLED, reason: 'not_configured' });
+
+    expect(within(panel()).getByText('pro')).toBeInTheDocument();
+    expect(screen.getByTestId('billing-plans-off')).toHaveTextContent(
+      /^plans are switched off right now, so nothing on this site is limited\.$/,
+    );
+    expect(buttons()).toEqual([]);
   });
 
   it('says until when a stopping site is billed, with nothing to resume', () => {

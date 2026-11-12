@@ -34,6 +34,7 @@ jest.mock('@/hooks/usePlan', () => ({
       trial: { status: 'ended', endsAt: null },
       sites: [],
       free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+      siteCreation: { state: 'open', unpaidSite: null },
       foundersRemaining: null,
       linkAvailable: false,
     },

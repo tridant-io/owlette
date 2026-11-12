@@ -39,7 +39,17 @@ jest.mock('@/lib/firebase-admin', () => ({
           },
         };
       };
-      return { doc, add: async (data: Record<string, unknown>) => doc(`auto-${mockAutoId++}`).set(data) };
+      const where = (field: string, op: string, value: unknown) => {
+        if (op !== '==') throw new Error(`unexpected query ${field} ${op}`);
+        return {
+          get: async () => ({
+            docs: [...mockStore]
+              .filter(([key, data]) => key.startsWith(`${name}/`) && data[field] === value)
+              .map(([, data]) => ({ data: () => data })),
+          }),
+        };
+      };
+      return { doc, where, add: async (data: Record<string, unknown>) => doc(`auto-${mockAutoId++}`).set(data) };
     },
   }),
 }));
@@ -764,8 +774,31 @@ describe('the e2e fake', () => {
       standing: 'active',
       ent: PRO_ENT,
       orgId: 'org_e2e_u1',
+      founders: true,
       billing: BILLING,
     });
+  });
+
+  it('opens no checkout for a payer with a running subscription, as tridant answers subscription_exists', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+
+    expect(await startCheckout(CHECKOUT)).toEqual({ ok: false, reason: 'rejected', status: 409, code: 'subscription_exists' });
+    expect([...mockStore.keys()].some((key) => key.startsWith('e2e_billing/'))).toBe(false);
+
+    // a stop still inside its period keeps the subscription running; another payer's sites never count.
+    await stopSite('site-8');
+    expect(await startCheckout(CHECKOUT)).toMatchObject({ ok: false, code: 'subscription_exists' });
+    expect(await startCheckout({ ...CHECKOUT, uid: 'u2' })).toMatchObject({ ok: true });
+  });
+
+  it('opens a checkout again once every billed site has ended', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+    mockStore.set('e2e_entitlements/site:site-8', {
+      ...mockStore.get('e2e_entitlements/site:site-8'),
+      billing: { ...BILLING, endsAt: NOW - 1 },
+    });
+
+    expect(await startCheckout(CHECKOUT)).toMatchObject({ ok: true });
   });
 
   it('does not know a session it never started', async () => {
@@ -788,8 +821,32 @@ describe('the e2e fake', () => {
       standing: 'active',
       ent: CORE_ENT,
       orgId: 'org_e2e_u1',
+      founders: false,
       billing: BILLING,
     });
+  });
+
+  it('adds a site whose removal is pending back at the plan it had, whatever was asked for', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: true });
+    await stopSite('site-8');
+
+    expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false })).toEqual({
+      ok: true,
+      already: false,
+      sites: [{ siteId: 'site-8', productId: 'prd_owlette_pro', founders: true, status: 'active', endsAt: null }],
+    });
+    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: PRO_ENT, billing: BILLING });
+  });
+
+  it('answers already for a site it bills, and changes nothing', async () => {
+    await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'core', founders: false });
+
+    expect(await addSite({ uid: 'u1', siteId: 'site-8', siteName: 'Venue B', tier: 'pro', founders: true })).toMatchObject({
+      ok: true,
+      already: true,
+      sites: [{ productId: 'prd_owlette_core', founders: false }],
+    });
+    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: CORE_ENT, founders: false });
   });
 
   it('switches a billed site and keeps its organization and period', async () => {
@@ -801,8 +858,12 @@ describe('the e2e fake', () => {
       standing: 'active',
       ent: PRO_ENT,
       orgId: 'org_e2e_u1',
+      founders: false,
       billing: BILLING,
     });
+
+    expect(await switchTier('site-8', 'core', true)).toEqual({ ok: true });
+    expect(mockStore.get('e2e_entitlements/site:site-8')).toMatchObject({ ent: CORE_ENT, founders: true });
   });
 
   it('stops a billed site at the month end', async () => {

@@ -1,7 +1,7 @@
 /**
  * @jest-environment node
  *
- * plan.md decision 8 in the `_shared` resolvers: creating roosts and webhooks
+ * the pro flags in the `_shared` resolvers: creating roosts and webhooks
  * needs the site's flag, an api-key request needs the site's
  * `owlette.api_keys` (minting one is not gated), and agent tokens are
  * never plan-gated. the real plan resolver runs; only tridant and firestore are faked.

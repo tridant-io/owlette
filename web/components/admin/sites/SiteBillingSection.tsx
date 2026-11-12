@@ -221,8 +221,10 @@ function BillingDetails({
   const previousOwner = plan.isOwner && (plan.billedByPreviousOwner || refusedAsNewOwner);
   // with plans off the server starts no checkout, so a billed site can only be stopped
   const canChange = plan.enforced && plan.isOwner && !previousOwner;
-  // the new owner may stop what the previous owner still pays for, and nothing else
-  const canStop = plan.isOwner && billing !== null && endsAt === null;
+  // the new owner may stop what the previous owner still pays for, and nothing else. without
+  // tridant id configured there is no one to ask to stop it.
+  const canStop =
+    plan.isOwner && billing !== null && endsAt === null && (plan.enforced || plan.reason !== 'not_configured');
   const minMachines = billing?.tier === 'pro' ? PRICING_FACTS.pro.minMachines : 0;
   const portalUrl = account?.portalUrl ?? null;
 
@@ -409,7 +411,7 @@ function BillingDetails({
             <DialogDescription className="wrap-anywhere">
               {`stop billing ${site.name}? it stays on ${billing?.tier ?? 'its plan'} until ${
                 plan.period ? lastDay(plan.period.end) : 'the end of the billing period'
-              }, and that billing period is still billed. after that it goes to owlette free.`}
+              }, and that billing period is still billed.${plan.enforced ? ' after that it goes to owlette free.' : ''}`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

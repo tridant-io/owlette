@@ -1,5 +1,5 @@
 /**
- * server-only plan stores (plan.md, trial and purchase). `firestore.rules` has no
+ * server-only plan stores for the trial and purchases (adr 0018). `firestore.rules` has no
  * rule for either: the catch-all deny covers them, and
  * `__tests__/rules/planCollections.test.ts` holds it there.
  *
@@ -50,6 +50,11 @@ function toAccount(data: Record<string, unknown>): PlanAccount {
 export async function getPlanAccount(uid: string): Promise<PlanAccount | null> {
   const snap = await accountRef(uid).get();
   return snap.exists ? toAccount(snap.data() ?? {}) : null;
+}
+
+/** whether the account's trial runs now. a started trial with no end is an account that already paid when it first read its plan. */
+export function trialActive(account: PlanAccount | null, now: number = Date.now()): boolean {
+  return !!account?.trialStartedAt && account.trialEndsAt !== null && account.trialEndsAt > now;
 }
 
 /** true when this caller may start the trial: none recorded, no link needed, no fresh claim. */

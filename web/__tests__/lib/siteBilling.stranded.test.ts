@@ -25,6 +25,7 @@ jest.mock('@/lib/firebase-admin', () => ({
 }));
 
 jest.mock('@/lib/plan.server', () => ({
+  readBillingPointer: jest.requireActual('@/lib/plan.server').readBillingPointer,
   plansEnforced: () => true,
   planTier: (plan: { ent: Record<string, string> }) => (plan.ent['owlette.deployments'] === '1' ? 'pro' : 'core'),
 }));

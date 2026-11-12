@@ -19,20 +19,26 @@ whoever does it. Core no longer stops at one site: core and pro are billed per
 site, per active machine, by calendar month from the 1st (UTC), with a site's
 first part month charged by the day. Pro bills at least three machines per
 site. owlette free is counted per account: one free site, with one machine
-across an account's free sites. The 14-day pro trial needs a verified email
-and no card, comes once per tridant account, starts the first time such an
-account opens owlette, and covers the sites it owns.
+across an account's free sites. Every further site is created on core or pro,
+picked per site, and an account can own any number of each: new site asks for
+the plan with its price, creates the site and goes straight to its upgrade. A
+site whose checkout is left unpaid stays on owlette free, and no other site
+can be created until it is upgraded or deleted. The 14-day pro trial needs a
+verified email and no card, comes once per tridant account, starts the first
+time such an account opens owlette, and covers the sites it owns; during it,
+any number of sites can be created.
 
 Only a site's owner can change its billing, in a new billing section of site
 settings that appears when plans are switched on: upgrade, switch between core
-and pro, or stop. A first upgrade goes through a checkout; a site added while
-another is billed goes on the card on file with no checkout. Stopping runs to
-the end of the billing period, and that period is still billed. A transferred
-site stays billed to its previous owner until that period ends, and its new
-owner upgrades it after that. Deleting a site stops its billing. An account
-whose email already has a tridant account links it by signing in to tridant.
-The plan page becomes an overview: your trial, your free usage and each site
-you own with its plan.
+and pro, or stop. While plans are off, the section appears only for a site
+still billed, and offers only stop. A first upgrade goes through a checkout; a
+site added while another is billed goes on the card on file with no checkout.
+Stopping runs to the end of the billing period, and that period is still
+billed. A transferred site stays billed to its previous owner until that
+period ends, and its new owner upgrades it after that. Deleting a site stops
+its billing. An account whose email already has a tridant account links it by
+signing in to tridant. The plan page becomes an overview: your trial, your free
+usage and each site you own with its plan.
 
 API keys are checked against the plan of each site they act on, on every
 request, so creating a key or signing in the CLI is no longer held to a plan.

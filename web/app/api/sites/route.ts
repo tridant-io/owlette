@@ -34,6 +34,8 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { withIdempotency } from '@/lib/idempotency';
 import { withRateLimit } from '@/lib/withRateLimit';
 import { createSite } from '@/lib/actions/createSite.server';
+import { notBilledDetail } from '@/lib/planResponse';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
 import {
   applyAuthDeprecations as applyScopedAuthDeprecations,
   readAndParseJsonBody,
@@ -44,6 +46,7 @@ interface CreateSiteBody {
   name?: unknown;
   timezone?: unknown;
   schedulesFollowSiteTime?: unknown;
+  onPlan?: unknown;
 }
 
 export async function GET(request: NextRequest) {
@@ -204,6 +207,9 @@ export const POST = withRateLimit(async (request: NextRequest) => {
               typeof body.schedulesFollowSiteTime === 'boolean'
                 ? body.schedulesFollowSiteTime
                 : undefined,
+            // a site created on its way to a plan is upgraded next, and the billing route refuses
+            // every api key: a key's site would be left unpaid, and block every create after it.
+            onPlan: body.onPlan === true && !auth.keyContext,
           },
         );
 
@@ -239,10 +245,19 @@ export const POST = withRateLimit(async (request: NextRequest) => {
           });
         }
         if (result.kind === 'plan_limit') {
-          return problemPlanRequired(
-            "your plan doesn't cover another site. upgrade for more sites.",
-            'owlette.sites',
-          );
+          const { siteCreation } = result;
+          const { unpaidSite } = siteCreation;
+          return siteCreation.state === 'blocked'
+            ? problemPlanRequired(
+                notBilledDetail(unpaidSite.name),
+                'owlette.sites',
+                { siteCreation, upgradeUrl: siteSettingsPath(unpaidSite.siteId, 'billing') },
+              )
+            : problemPlanRequired(
+                `owlette free covers one site, and ${unpaidSite.name} is on it. add this site on core or pro.`,
+                'owlette.sites',
+                { siteCreation },
+              );
         }
         return applyScopedAuthDeprecations(
           NextResponse.json(

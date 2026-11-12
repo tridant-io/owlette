@@ -95,8 +95,8 @@ beforeEach(() => {
 });
 
 /**
- * Plans (plan.md decision 7): no remote control means no alerts. Runs the real
- * resolver; only tridant's answer is mocked.
+ * plans: alerts are part of remote control, so a site without it sends none.
+ * runs the real resolver; only tridant's answer is mocked.
  */
 describe('getSiteAlertRecipients — plan pause', () => {
   const ent = (control: '0' | '1') => ({

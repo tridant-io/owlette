@@ -1,6 +1,6 @@
 /**
  * tridant id as an openid connect provider, as owlette uses it to link an
- * account to a tridant organization that already exists (plan.md, "link"). the
+ * account to a tridant organization that already exists (adr 0018). the
  * contract is tridant-id `internal-docs/oidc.md`: authorization code, pkce
  * s256, `client_secret_basic` at the token endpoint.
  *

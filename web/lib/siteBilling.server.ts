@@ -12,7 +12,14 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { problem, ProblemType } from '@/lib/apiErrors';
 import { getAdminAuth, getAdminDb } from '@/lib/firebase-admin';
 import logger from '@/lib/logger';
-import { plansEnforced, planTier, resolveSitePlan, type Plan } from '@/lib/plan.server';
+import {
+  plansEnforced,
+  planTier,
+  readBillingPointer,
+  resolveSitePlan,
+  type BillingPointer,
+  type Plan,
+} from '@/lib/plan.server';
 import {
   getCheckout,
   getPlanAccount,
@@ -33,9 +40,6 @@ import {
   type BillingTier,
 } from '@/lib/tridantBilling.server';
 import { invalidateSiteEntitlements } from '@/lib/tridantEntitlements.server';
-
-/** `sites/{id}.billing`, less its `updatedAt`. */
-export type BillingPointer = SiteBilling & { payerUid: string };
 
 export type BillingRefusal = { ok: false; status: 403 | 404 | 409 | 502 | 503; code: string; detail: string };
 
@@ -96,14 +100,6 @@ function refusalFor(failure: BillingFailure, call: string, siteId: string): Bill
     data: { call, siteId, reason: failure.reason, status: failure.status, code: failure.code },
   });
   return refuse(502, 'billing_upstream', 'billing answered something unexpected. try again, or contact support.');
-}
-
-export function readBillingPointer(siteData: SiteData | null | undefined): BillingPointer | null {
-  const billing = siteData?.billing;
-  if (typeof billing !== 'object' || billing === null) return null;
-  const { tier, founders, payerUid, endsAt } = billing as Record<string, unknown>;
-  if ((tier !== 'core' && tier !== 'pro') || typeof payerUid !== 'string') return null;
-  return { tier, founders: founders === true, payerUid, endsAt: typeof endsAt === 'number' ? endsAt : null };
 }
 
 /** the part of the pointer the ui shows. */
@@ -221,7 +217,10 @@ export async function upgradeSite(input: {
   return { ok: true, added: true };
 }
 
-/** core to pro or back. without `founders`, the site keeps its rate. */
+/**
+ * core to pro or back. without `founders`, the site keeps its rate. refused while
+ * plans are off, like an upgrade: only stopping stays open then.
+ */
 export async function switchSiteTier(input: {
   siteId: string;
   uid: string;
@@ -229,6 +228,7 @@ export async function switchSiteTier(input: {
   founders?: boolean;
 }): Promise<BillingChange> {
   const { siteId, uid, tier, founders } = input;
+  if (!plansEnforced()) return UNAVAILABLE;
   const site = await ownedSite(siteId, uid);
   if (!site) return NOT_OWNER;
   const pointer = await billedPointer(siteId, site);

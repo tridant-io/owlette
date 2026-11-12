@@ -3,7 +3,8 @@
 Operator reference for owlette's plans. A plan belongs to a site (ADR 0018): each site is on
 owlette free, core or pro, or in its owner's 14-day pro trial. The owner pays, per active machine
 per calendar month, and owlette free is counted per account (one free site, one machine across an
-account's free sites). This runbook covers turning enforcement on, dev first and then prod, checking
+account's free sites; every further site is created on core or pro). This runbook covers turning
+enforcement on, dev first and then prod, checking
 it is really on, rolling it back, and running it day to day.
 
 Design source of truth: [ADR 0018](../adr/0018-a-site-has-a-plan-and-its-owner-pays.md) and the
@@ -144,8 +145,9 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
   `in_good_standing: false`, and an `ent` holding all ten keys
   (`owlette.machines`, `owlette.sites`, `owlette.control`, `owlette.deployments`, `owlette.swoop`,
   `owlette.hoot`, `owlette.roost`, `owlette.talons`, `owlette.webhooks`, `owlette.api_keys`):
-  machines and sites `1`, the eight flags `false`. Any key absent here shows up later in
-  `missingKeys`.
+  machines and sites `1`, the eight flags `false`. Any key absent here, `owlette.sites` aside, shows
+  up later in `missingKeys`. owlette does not read `owlette.sites`: the one free site per account is
+  its own rule, since tridant id reads one site at a time.
 - [ ] **Key and URL set on railway-dev.** Create the key in admin-staging.tridant.io as described
   under [the tridant id key](#the-tridant-id-key). In the Railway UI (service `owlette-dev`,
   environment `dev`), set it as `TRIDANT_LICENSE_KEY`, and set
@@ -210,7 +212,9 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
    the bulk run, and each entry in `sites` with `tier: "trial"`, `standing: "trialing"`,
    `inGoodStanding: true`.
    The unverified test account should show `trial.status: "unverified"`, `emailVerified: false`,
-   its site with `tier: "free"`, and `free: { sitesUsed: 1, sitesLimit: 1, machinesLimit: 1, … }`.
+   its site with `tier: "free"`, `free: { sitesUsed: 1, sitesLimit: 1, machinesLimit: 1, … }` and
+   `siteCreation: { state: "choose_plan", unpaidSite: { siteId, name } }` naming that site. Every
+   account in its trial answers `siteCreation: { state: "open" }`.
 
    | you see | meaning | fix |
    |---|---|---|
@@ -228,14 +232,23 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
    `enforced` and `reason`, the eight feature flags, `isOwner`, and `billedByPreviousOwner`.
    Failures are cached for 60 s per site, so wait a minute after a config fix.
 5. **Smoke checks**, as the unverified test account (its site is on owlette free):
-   - create a second site: refused with `402` and "your plan doesn't cover another site. upgrade
-     for more sites."
+   - create a second site: the dialog names the free site and asks for core or pro. A plain
+     `POST /api/sites` answers `402` with "owlette free covers one site, and {name} is on it. add
+     this site on core or pro." and `siteCreation.state: "choose_plan"`; with `onPlan: true` it
+     answers `201`. The same create with an API key answers `402` even with `onPlan: true`, since
+     the key could never upgrade the site.
+   - leave that second site's checkout unpaid: the site stays, on owlette free. A third create, on a
+     plan or not, answers `402` with "{name} isn't billed. upgrade it to core or pro, or delete it,
+     before adding another site.", `siteCreation.state: "blocked"` and `upgradeUrl` at that site's
+     billing section; the dialog shows the same with **go to its billing**. A machine's phrase on
+     that site is refused while the free site holds its machine.
    - pair one machine: allowed. Pairing a second machine's phrase on `/add` toasts "owlette free
      covers one machine. upgrade to add more, or remove a machine first." The second agent logs
      `Device code poll failed: owlette free covers one machine…` and stays unpaired. A
      dashboard-generated `/ADD=` code for that machine gets the same refusal at poll.
-   - re-pair the first machine (reinstall, or run pairing again): allowed. A re-pair is always
-     exempt.
+   - re-pair the first machine (reinstall, or run pairing again): allowed. A machine already on
+     the site, or on another of the account's free sites, keeps its place; one moved onto a free
+     site from a billed or trialing site counts as new.
    - from the dashboard, restart a process or reboot the machine: refused; the dashboard reads
      "this site's plan doesn't include remote control", and the API answers `402 plan_required`.
    - update owlette on an out-of-date machine with the update owlette button: accepted, and the
@@ -250,6 +263,11 @@ Do these in order. Do not flip `PLAN_ENFORCEMENT` until every box is ticked.
      pointer.
    - upgrade a second site to core: no checkout, and the dialog said so. It goes on the card on
      file.
+   - with both sites billed, **create new site** is a plain create: `siteCreation.state` is
+     `"open"`, since no site is unpaid (the trial would open it anyway), and the trial covers the
+     new site. Creating a site on core or pro while another is billed goes on the card on file
+     with no checkout; that needs an account past its trial with its free site taken, which e2e
+     (`plans/billing.spec.ts`) covers.
    - switch plan, then stop billing: the section reads "ends" with the period's last day, and
      offers resume billing.
 7. **Agents keep heartbeating.** No plan gate touches `/api/agent/auth/refresh`, but this is the
@@ -280,7 +298,7 @@ on cron-job.org.
 - It runs **before** `PLAN_ENFORCEMENT=on`, with enforcement still off: it needs only
   `TRIDANT_API_URL` and `TRIDANT_LICENSE_KEY`, and answers `503` while either is blank. Each
   trial's 14 days start counting when this run starts it, so run it close to the switch.
-- **A dry run by default.** It reads one page of 250 Firebase Auth users and counts the eligible
+- **A dry run by default.** It reads one page of 100 Firebase Auth users and counts the eligible
   ones: enabled, email verified, and not an agent's account (`agent_…`). `?apply=1` starts the
   trial for each.
 - **One page per call.** Pass the answer's `nextPageToken` back as `?pageToken=` until it is
@@ -294,7 +312,7 @@ curl -s -H "X-Cron-Secret: $CRON_SECRET" \
 ```
 
 ```json
-{"ok":true,"apply":true,"scanned":250,"eligible":180,"started":171,"alreadyStarted":4,"linkRequired":3,"subscribed":0,"busy":0,"failed":2,"nextPageToken":"…"}
+{"ok":true,"apply":true,"scanned":100,"eligible":72,"started":66,"alreadyStarted":3,"linkRequired":2,"subscribed":0,"busy":0,"failed":1,"nextPageToken":"…"}
 ```
 
 | field | meaning |
@@ -360,7 +378,8 @@ switch, and `trial.status: "active"` after it.
    ```
 
 5. Light smoke checks on prod, with a throwaway unverified password account that creates one site:
-   `/api/account/plan` shows the site on free, and a second site is refused. Delete the account
+   `/api/account/plan` shows the site on free and `siteCreation.state: "choose_plan"`, and a plain
+   second create is refused. Delete the account
    afterwards. The pairing and billing checks were proved on dev.
 6. Run `plan-daily` by hand.
 7. Watch for 24 h: the number of online machines, `[plan]`, `[billing]` and `[tridant] request
@@ -375,7 +394,8 @@ and send it with the prod bulk trial start. It must say:
   site the account owns;
 - a plan belongs to a site. After the trial, each site is on owlette free unless its owner upgrades
   it to core or pro in site settings → billing;
-- owlette free is per account: one free site with one machine, monitoring and updates;
+- owlette free is per account: one free site with one machine, monitoring and updates. Every
+  further site is created on core or pro, and an account can own any number of each;
 - core and pro are billed per site, per active machine per calendar month from the 1st (UTC), the
   first part month by the day; "active" means online at any point in the billing period; pro bills
   at least three machines per site;
@@ -410,7 +430,7 @@ impossible, so investigate it as a bug. Also roll back if trialing or billed sit
   switch is off, `plan-daily` reports no usage, so tridant id bills each site on the last report
   it holds. Turn enforcement back on before the month's last 23:30 run, or stop the affected
   subscriptions in tridant id.
-- **Nothing can be bought or switched from the dashboard:** an upgrade answers `503
+- **Nothing can be bought or switched from the dashboard:** an upgrade or a switch answers `503
   billing_unavailable`. The billing section stays only on a billed site, for its owner, and offers
   only **stop billing**, which still reaches tridant id, as the stop on delete and transfer does.
 - **Trials keep counting down** while enforcement is off, so a long rollback means sites come back
@@ -559,8 +579,9 @@ Refusals are problem+json with these codes:
   (`site_running`) until the period ends, and `plan-daily` asks again each night. `[plan] site
   cannot move to its owner organization` at error means it never will on its own
   (`site_is_default`, `subject_not_of_provider`): fix it in tridant id.
-- A site on owlette free can be transferred only to an owner with room for a free site (`402`,
-  `entitlement: owlette.sites`). The free machine limit is not checked on transfer.
+- A site on owlette free can be transferred only to an owner whose free site isn't taken, or who
+  is in their trial (`402`, `entitlement: owlette.sites`). The free machine limit is not checked on
+  transfer.
 - **Deleting a site** stops its billing first. A failed stop is logged `[plan] billing not stopped
   for a deleted site` and is not retried: stop it in tridant id.
 - **Deleting an account** unlinks it from its tridant organization. The organization and its
@@ -607,11 +628,20 @@ A change in tridant id (a support override, a failed payment, a lapse) reaches t
 per process (the per-site entitlement cache), and functions at the next `plan-daily` run. Owlette's
 own billing changes clear the site's cache entry on the process that made them.
 
-The free limits count per account, across the sites an owner has on owlette free: at most one such
-site, and one distinct machine ID across them, online or not. Sites in a trial or billed never
-count. A trial that ends can therefore leave an account over the limits; nothing is unpaired or
-deleted, new pairings to a free site and new sites are refused, and a customer frees a slot by
-removing a machine or upgrading a site. Billing counts only active machines.
+The free limits count per account. The machine limit is one distinct machine ID across the sites
+an owner has on owlette free, online or not. A re-pair, or a move between them, keeps its place;
+a machine moved over from a billed site counts as new. The site limit is one unpaid site: not
+billed, and no trial covers it. A billed site past due and out of grace reads owlette free and
+counts toward the machine, but its billing still runs, so it is never an unpaid site (the upgrade
+route answers it `409 already_billed`). With the free site taken, `POST /api/sites` needs
+`onPlan: true` from a session (an API key's is ignored, since the billing route refuses keys),
+and the dashboard sends the owner straight into that site's upgrade. A checkout left unpaid
+leaves one more unpaid site, which the machine limit keeps empty while the free site holds its
+machine; while it exists, every create answers `402` with `siteCreation.state: "blocked"`. During
+the account's trial creation is unrestricted. A trial that ends can leave an account with several
+sites on owlette free; nothing is unpaired or deleted, new pairings to a free site and new sites
+are refused, and a customer makes room by removing a machine, or by upgrading or deleting a site.
+Billing counts only active machines.
 
 A failed payment sets the site `past_due`. It keeps its plan through tridant id's grace period
 (`in_good_standing` stays true), then reads owlette free. The billing section tells the owner to
@@ -624,7 +654,8 @@ Accepted in review:
 - A missing entitlement key is unrestricted (`missingKeys`).
 - Fail-open hides misconfiguration: a wrong or expired key makes every site unrestricted. Watch for
   the `rejected` and `Sunset` log lines, and check `/api/account/plan` after every key change.
-- Concurrent pairings or site creates can overshoot a free limit by one.
+- Concurrent pairings or site creates can overshoot a free limit by one. A signed-in client that
+  sends `onPlan: true` and never pays ends with the one allowed extra site on owlette free.
 - A superadmin acting on someone else's site is gated by that site's plan. The superadmin
   exemption applies only to sites the superadmin owns. A superadmin who opens the plan page gets a
   trial start like anyone.

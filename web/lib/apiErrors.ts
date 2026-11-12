@@ -205,10 +205,15 @@ export function problemQuotaExceeded(detail: string, upgradeUrl?: string): NextR
 }
 
 /**
- * the payer's plan lacks `entitlement`, a tridant key such as `owlette.control`
- * (plan.md decision 5). agent routes never answer this: agents read `error`.
+ * the site's plan lacks `entitlement`, a tridant key such as `owlette.control`
+ * (docs/adr/0018). agent routes never answer this: agents read `error`.
+ * `extra` adds fields to the body, and can point `upgradeUrl` elsewhere.
  */
-export function problemPlanRequired(detail: string, entitlement: string): NextResponse {
+export function problemPlanRequired(
+  detail: string,
+  entitlement: string,
+  extra: Record<string, unknown> = {},
+): NextResponse {
   return problem({
     type: ProblemType.PlanRequired,
     title: 'plan required',
@@ -216,6 +221,7 @@ export function problemPlanRequired(detail: string, entitlement: string): NextRe
     detail,
     entitlement,
     upgradeUrl: '/settings/plan',
+    ...extra,
   });
 }
 

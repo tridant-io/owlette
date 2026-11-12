@@ -55,6 +55,7 @@ jest.mock('@/lib/planTrial.server', () => ({
 const mockGetPlanAccount = jest.fn();
 jest.mock('@/lib/planAccounts.server', () => ({
   getPlanAccount: (uid: string) => mockGetPlanAccount(uid),
+  trialActive: jest.requireActual('@/lib/planAccounts.server').trialActive,
 }));
 
 const mockFoundersRemaining = jest.fn();
@@ -71,6 +72,8 @@ interface MockSite {
   owner: string;
   name?: string;
   billing?: unknown;
+  /** ms; the document holds a timestamp. */
+  createdAt?: number;
   /** each machine's pairedAt in ms (null: never stamped). */
   machines?: Record<string, number | null>;
 }
@@ -100,7 +103,12 @@ jest.mock('@/lib/firebase-admin', () => ({
                   .filter(([, site]) => site.owner === value)
                   .map(([siteId, site]) => ({
                     id: siteId,
-                    data: () => ({ owner: site.owner, name: site.name, billing: site.billing }),
+                    data: () => ({
+                      owner: site.owner,
+                      name: site.name,
+                      billing: site.billing,
+                      ...(site.createdAt === undefined ? {} : { createdAt: { toMillis: () => site.createdAt } }),
+                    }),
                     ref: {
                       collection: (sub: string) => ({
                         select: (...machineFields: string[]) => ({
@@ -162,6 +170,9 @@ const FREE_SITE = {
   period: null,
   activeMachinesThisPeriod: 1,
 };
+
+const OPEN = { state: 'open', unpaidSite: null };
+const LOBBY_TAKEN = { state: 'choose_plan', unpaidSite: { siteId: 'site-a', name: 'lobby' } };
 
 const FREE_ONE_OF_ONE = {
   sitesUsed: 1,
@@ -274,12 +285,13 @@ describe('GET /api/account/plan', () => {
       trial: { status: 'unverified', endsAt: null },
       sites: [FREE_SITE],
       free: FREE_ONE_OF_ONE,
+      siteCreation: LOBBY_TAKEN,
       foundersRemaining: { core: 40, pro: null },
       linkAvailable: false,
       portalUrl: null,
     });
     expect(mockEnsureTrial).toHaveBeenCalledWith('u1');
-    expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', ['name', 'owner', 'billing']);
+    expect(mockSitesQuery).toHaveBeenCalledWith('owner', '==', 'u1', ['name', 'owner', 'billing', 'createdAt']);
     expect(mockActiveMachinesBetween).toHaveBeenCalledWith('site-a', MONTH_START, NOW);
     expect(mockMachinesRead).toHaveBeenCalledWith('site-a', 'machines', ['pairedAt']);
   });
@@ -296,6 +308,7 @@ describe('GET /api/account/plan', () => {
       trial: { status: 'active', endsAt: TRIAL_END },
       sites: [{ ...FREE_SITE, tier: 'trial', standing: 'trialing', inGoodStanding: true }],
       free: { sitesUsed: 0, sitesLimit: 1, machinesUsed: 0, machinesLimit: 1, liveMachines: [] },
+      siteCreation: OPEN,
       foundersRemaining: { core: 40, pro: null },
       linkAvailable: false,
       portalUrl: null,
@@ -314,13 +327,25 @@ describe('GET /api/account/plan', () => {
       account({ trialStartedAt: Date.UTC(2026, 9, 20), trialEndsAt: Date.UTC(2026, 10, 3), orgId: 'org_1' }),
     );
     mockSites = {
-      'site-a': { owner: 'u1', name: 'lobby', machines: { 'kiosk-b': null, 'kiosk-c': Date.UTC(2026, 9, 2) } },
-      'site-b': { owner: 'u1', name: 'annex', machines: { 'kiosk-a': null, 'kiosk-d': Date.UTC(2026, 9, 1) } },
+      'site-a': {
+        owner: 'u1',
+        name: 'lobby',
+        createdAt: Date.UTC(2026, 8, 1),
+        machines: { 'kiosk-b': null, 'kiosk-c': Date.UTC(2026, 9, 2) },
+      },
+      'site-b': {
+        owner: 'u1',
+        name: 'annex',
+        createdAt: Date.UTC(2026, 9, 1),
+        machines: { 'kiosk-a': null, 'kiosk-d': Date.UTC(2026, 9, 1) },
+      },
     };
 
     const res = await getPlan();
 
     expect(res.body.trial).toEqual({ status: 'ended', endsAt: Date.UTC(2026, 10, 3) });
+    // nothing is taken away: the newer of the two is named as the one to upgrade or delete.
+    expect(res.body.siteCreation).toEqual({ state: 'blocked', unpaidSite: { siteId: 'site-b', name: 'annex' } });
     expect(res.body.sites.map((site: { siteId: string; tier: string }) => [site.siteId, site.tier])).toEqual([
       ['site-a', 'free'],
       ['site-b', 'free'],
@@ -521,10 +546,48 @@ describe('GET /api/account/plan', () => {
       trial: { status: 'none', endsAt: null },
       sites: [{ ...FREE_SITE, activeMachinesThisPeriod: null }],
       free: FREE_ONE_OF_ONE,
+      // without the plan account no trial can be seen, so the free site reads taken.
+      siteCreation: LOBBY_TAKEN,
       foundersRemaining: null,
       linkAvailable: false,
       portalUrl: null,
     });
+  });
+
+  it('answers site creation open during the trial, even for a site that reads owlette free', async () => {
+    // a site whose registration under the trial has not landed yet reads free.
+    const res = await getPlan();
+
+    expect(res.body.trial).toEqual({ status: 'active', endsAt: TRIAL_END });
+    expect(res.body.free).toMatchObject({ sitesUsed: 1, sitesLimit: 1 });
+    expect(res.body.siteCreation).toEqual(OPEN);
+  });
+
+  it('answers site creation open when every owned site is billed, and choose_plan beside one on owlette free', async () => {
+    mockGetPlanAccount.mockResolvedValue(account({ trialStartedAt: 1, trialEndsAt: Date.UTC(2026, 10, 1) }));
+    mockSites = { 'site-p': { owner: 'u1', name: 'pro site' }, 'site-c': { owner: 'u1', name: 'core site' } };
+    mockEntitlements = { 'site-p': PRO_ENTITLEMENTS, 'site-c': CORE_ENTITLEMENTS };
+
+    expect((await getPlan()).body.siteCreation).toEqual(OPEN);
+
+    mockSites['site-a'] = { owner: 'u1', name: 'lobby' };
+    expect((await getPlan()).body.siteCreation).toEqual(LOBBY_TAKEN);
+  });
+
+  it('counts a billed site whose card failed past its grace toward the free machine, never as an unpaid site', async () => {
+    mockGetPlanAccount.mockResolvedValue(account({ trialStartedAt: 1, trialEndsAt: Date.UTC(2026, 10, 1) }));
+    mockSites['site-d'] = {
+      owner: 'u1',
+      name: 'due',
+      billing: { tier: 'pro', founders: false, payerUid: 'u1', endsAt: null },
+      machines: { 'kiosk-2': Date.UTC(2026, 9, 1) },
+    };
+    // past tridant's grace the site is not in good standing, with owlette free's values.
+    mockEntitlements = { 'site-d': { ...FREE_ENTITLEMENTS, resolved: true, standing: 'past_due', orgId: 'org_1' } };
+
+    const res = await getPlan();
+    expect(res.body.free).toMatchObject({ sitesUsed: 1, machinesUsed: 2 });
+    expect(res.body.siteCreation).toEqual(LOBBY_TAKEN);
   });
 
   it('answers unverified from the trial start when the auth read fails', async () => {

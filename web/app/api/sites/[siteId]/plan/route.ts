@@ -13,8 +13,8 @@ import { NextResponse } from 'next/server';
 import { applyAuthDeprecations, requireSiteAuthAndScope } from '@/app/api/_shared';
 import { problemFromError, problemNotFound } from '@/lib/apiErrors';
 import { getAdminDb } from '@/lib/firebase-admin';
-import { entitled, planTier, resolveSitePlan, type Plan } from '@/lib/plan.server';
-import { billingSummary, readBillingPointer } from '@/lib/siteBilling.server';
+import { entitled, planTier, readBillingPointer, resolveSitePlan, type Plan } from '@/lib/plan.server';
+import { billingSummary } from '@/lib/siteBilling.server';
 import type { SitePlanResponse } from '@/lib/sitePlanResponse';
 
 function periodOf(plan: Plan): SitePlanResponse['period'] {

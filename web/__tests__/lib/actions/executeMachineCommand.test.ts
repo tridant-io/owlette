@@ -880,7 +880,7 @@ describe('resolveActiveHoursOverride', () => {
   });
 });
 
-// plan gate (plan.md decision 7)
+// plan gate: remote commands need the site's owlette.control
 
 describe('executeMachineCommand — plan gate', () => {
   const ENV_KEYS = ['PLAN_ENFORCEMENT', 'TRIDANT_API_URL', 'TRIDANT_LICENSE_KEY'] as const;

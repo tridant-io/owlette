@@ -1,14 +1,33 @@
 'use client';
 
+/**
+ * create a site. with plans on, the account plan's `siteCreation` decides the
+ * step (adr 0018): the account's free site, or any site during the trial, is a
+ * plain create; once the free site is taken, the new site is created on its way
+ * to core or pro and goes straight into the upgrade; and with one more site not
+ * billed, nothing is created until that one is upgraded or deleted.
+ */
+
 import React, { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { InlineNotice } from '@/components/ui/inline-notice';
+import { foundersPlaceLeft, PlanTierPicker } from '@/components/plan/PlanTierPicker';
+import { LINK_TRIDANT_HREF } from '@/components/plan/TrialBanner';
+import { EmailUnverifiedNotice, LinkRequiredNotice } from '@/components/plan/UpgradeNotices';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { usePlan } from '@/hooks/usePlan';
+import { requestSiteUpgrade, type BillingTier } from '@/hooks/useSiteBilling';
+import { notBilledDetail } from '@/lib/planResponse';
 import { validateSiteId, generateRandomSiteId } from '@/lib/validators';
 import { getBrowserTimezone } from '@/lib/timeUtils';
+import { siteSettingsPath } from '@/lib/siteSettingsPath';
+import { cn } from '@/lib/utils';
 import { TimezoneSelect } from '@/components/TimezoneSelect';
 import { CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -24,6 +43,7 @@ interface CreateSiteDialogProps {
     siteName: string,
     timezone?: string,
     schedulesFollowSiteTime?: boolean,
+    onPlan?: boolean,
   ) => Promise<string>;
   onSiteCreated?: (siteId: string) => void;
 }
@@ -37,6 +57,7 @@ export function CreateSiteDialog({
   onSiteCreated,
 }: CreateSiteDialogProps) {
   const { user } = useAuth();
+  const router = useRouter();
   const [newSiteName, setNewSiteName] = useState('');
   const [newSiteId, setNewSiteId] = useState('');
   const [customIdOpen, setCustomIdOpen] = useState(false);
@@ -46,6 +67,24 @@ export function CreateSiteDialog({
   const [isCreating, setIsCreating] = useState(false);
   const [availabilityStatus, setAvailabilityStatus] = useState<AvailabilityStatus>('idle');
   const [validationError, setValidationError] = useState<string>('');
+  const { plan, refresh: refreshPlan } = usePlan();
+  const [tier, setTier] = useState<BillingTier>('pro');
+
+  const account = plan?.enforced ? plan : null;
+  const creation = account?.siteCreation;
+  // the account's free site is taken, so this site is created on core or pro
+  const freeSite = creation?.state === 'choose_plan' ? creation.unpaidSite : null;
+  const blockedBy = creation?.state === 'blocked' ? creation.unpaidSite : null;
+  // an upgrade the server would refuse, which would leave the new site on owlette free
+  const upgradeBlocker =
+    !freeSite || !account
+      ? null
+      : !account.emailVerified
+        ? 'email_unverified'
+        : account.trial.status === 'link_required'
+          ? 'link_required'
+          : null;
+  const foundersLeft = (picked: BillingTier) => foundersPlaceLeft(account, picked);
 
   // Generate a random ID when the dialog opens
   useEffect(() => {
@@ -53,6 +92,7 @@ export function CreateSiteDialog({
       setNewSiteId(generateRandomSiteId());
       setNewSiteName('');
       setCustomIdOpen(false);
+      setTier('pro');
       // Detected here rather than in a useState initializer so a dialog kept
       // mounted across a timezone change (laptop moved, OS setting edited)
       // re-reads it on the next open instead of serving a stale zone. Kept
@@ -180,8 +220,22 @@ export function CreateSiteDialog({
         newSiteName,
         resolvedTimezone || undefined,
         resolvedTimezone ? true : undefined,
+        freeSite ? true : undefined,
       );
-      toast.success('site created', { description: `${newSiteName} is ready for its first machine.` });
+      // the site exists from here on: a refused or abandoned upgrade leaves it on owlette free.
+      const upgrade = freeSite ? await requestSiteUpgrade(createdSiteId, tier, foundersLeft(tier)) : null;
+      // the account plan counts the new site, which changes what the next create needs.
+      if (account) void refreshPlan();
+      if (!upgrade) {
+        toast.success('site created', { description: `${newSiteName} is ready for its first machine.` });
+      } else if (!upgrade.ok) {
+        toast.error(`${newSiteName} is created, but not on ${tier}`, {
+          description: `${upgrade.detail} it stays on owlette free until you upgrade it in its billing section.`,
+          action: { label: 'go to its billing', onClick: () => router.push(siteSettingsPath(createdSiteId, 'billing')) },
+        });
+      } else if ('added' in upgrade) {
+        toast.success('site created', { description: `${newSiteName} is on ${tier}, billed to the card on file.` });
+      }
       setNewSiteId('');
       setNewSiteName('');
       setAvailabilityStatus('idle');
@@ -191,8 +245,11 @@ export function CreateSiteDialog({
       if (onSiteCreated) {
         onSiteCreated(createdSiteId);
       }
+      if (upgrade?.ok && 'checkoutUrl' in upgrade) window.location.assign(upgrade.checkoutUrl);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
+      // a plan refusal means the account plan this dialog read is behind the server's
+      if ((error as { status?: unknown } | null)?.status === 402) void refreshPlan();
       toast.error('could not create the site', { description: message || 'try again in a moment.' });
     } finally {
       setIsCreating(false);
@@ -221,15 +278,52 @@ export function CreateSiteDialog({
     }
   };
 
+  const header = (
+    <DialogHeader>
+      <DialogTitle className="text-foreground">create new site</DialogTitle>
+      <DialogDescription className="text-muted-foreground">
+        sites organize your machines by location, purpose, or project. for example, create separate sites for different offices, studios, or installations.
+      </DialogDescription>
+    </DialogHeader>
+  );
+  const cancel = (
+    <Button variant="outline" onClick={() => onOpenChange(false)}>
+      cancel
+    </Button>
+  );
+
+  if (blockedBy) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="border-border text-foreground">
+          {header}
+          <div className="py-4">
+            <InlineNotice data-testid="create-site-blocked">
+              <p className="text-sm text-foreground wrap-anywhere">{notBilledDetail(blockedBy.name)}</p>
+            </InlineNotice>
+          </div>
+          <DialogFooter>
+            {cancel}
+            <Button asChild>
+              <Link href={siteSettingsPath(blockedBy.siteId, 'billing')} onClick={() => onOpenChange(false)}>
+                go to its billing
+              </Link>
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="border-border text-foreground">
-        <DialogHeader>
-          <DialogTitle className="text-foreground">create new site</DialogTitle>
-          <DialogDescription className="text-muted-foreground">
-            sites organize your machines by location, purpose, or project. for example, create separate sites for different offices, studios, or installations.
-          </DialogDescription>
-        </DialogHeader>
+      <DialogContent
+        className={cn(
+          'border-border text-foreground',
+          freeSite && 'max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl',
+        )}
+      >
+        {header}
         <div className="space-y-4 py-4">
           {/* Site Name Input */}
           <div className="space-y-2">
@@ -348,21 +442,38 @@ export function CreateSiteDialog({
               </>
             )}
           </div>
+
+          {freeSite && (
+            <div data-testid="create-site-plan" className="space-y-3">
+              <p className="text-sm text-foreground wrap-anywhere">
+                owlette free covers one site, and {freeSite.name} is on it. pick a plan for this one.
+              </p>
+              <PlanTierPicker selected={tier} onSelect={setTier} foundersLeft={foundersLeft} />
+              <p className="text-xs text-muted-foreground">
+                then checkout opens, or, if one of your sites is already billed, this one goes straight on the card
+                on file.
+              </p>
+              {upgradeBlocker === 'email_unverified' && (
+                <EmailUnverifiedNotice testId="create-site-email-unverified" doing="adding a site on core or pro" />
+              )}
+              {upgradeBlocker === 'link_required' && (
+                <LinkRequiredNotice
+                  testId="create-site-link-required"
+                  doing="adding a site on core or pro"
+                  linkHref={account?.linkAvailable ? LINK_TRIDANT_HREF : null}
+                />
+              )}
+            </div>
+          )}
         </div>
         <DialogFooter>
-          <Button
-            variant="ghost"
-            onClick={() => onOpenChange(false)}
-            className="bg-secondary border border-border cursor-pointer"
-          >
-            cancel
-          </Button>
+          {cancel}
           <Button
             onClick={handleCreateSite}
-            disabled={isCreating || availabilityStatus !== 'available'}
+            disabled={isCreating || availabilityStatus !== 'available' || upgradeBlocker !== null}
             className="cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isCreating ? 'creating...' : 'create site'}
+            {isCreating ? 'creating...' : freeSite ? `create on ${tier}` : 'create site'}
           </Button>
         </DialogFooter>
       </DialogContent>

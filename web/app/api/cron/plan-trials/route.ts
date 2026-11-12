@@ -5,10 +5,13 @@ import { getAdminAuth } from '@/lib/firebase-admin';
 import { tridantConfigured } from '@/lib/plan.server';
 import { ensureTrial } from '@/lib/planTrial.server';
 
-// at 10 in parallel and a 5 s tridant timeout a page takes at most PAGE_SIZE / 10 * 5 s: 125 s of the 300 s limit.
+// an account costs one trial call and then one round of site registrations per ten sites it owns, each
+// round up to tridant's 5 s timeout. at 10 accounts in parallel, a page of accounts that own ten sites
+// or fewer takes at most PAGE_SIZE / 10 * 10 s: 100 s of the 300 s limit. every further ten sites an
+// account owns adds 5 s to its worker.
 export const maxDuration = 300;
 
-const PAGE_SIZE = 250;
+const PAGE_SIZE = 100;
 const PARALLEL = 10;
 
 /**

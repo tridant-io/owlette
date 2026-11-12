@@ -393,7 +393,7 @@ function runScopeCheck(
  * matrix is keyed on per-site standing now and `owner` is a row in it, so
  * ownership is granted by the matrix rather than routed around it.
  *
- * `planFlag` also requires the site payer's plan flag, once the capability holds.
+ * `planFlag` also requires the site's plan to include that flag, once the capability holds.
  */
 async function requireSiteCapability(
   auth: ResolvedAuth,
@@ -425,8 +425,8 @@ async function requireSiteCapability(
 }
 
 /**
- * DISTRIBUTION_MANAGE plus the payer's `owlette.roost`, for creating a roost and
- * uploading to one (plan.md decision 8).
+ * DISTRIBUTION_MANAGE plus `owlette.roost` on the site's plan, for creating a
+ * roost and uploading to one (docs/adr/0018).
  */
 export async function requireDistributionManageCapability(
   auth: ResolvedAuth,
@@ -440,8 +440,8 @@ export async function requireDistributionManageCapability(
  * update, delete, rotate-secret, test). Read paths — list, detail, deliveries,
  * probe — stay at member level.
  *
- * `create` also requires the payer's `owlette.webhooks` (plan.md decision 8). the
- * rest stay open, so a payer who lapsed can still tidy up what they made.
+ * `create` also requires `owlette.webhooks` on the site's plan (docs/adr/0018). the
+ * rest stay open, so a site whose plan lapsed can still be tidied up.
  */
 export async function requireWebhookManageCapability(
   auth: ResolvedAuth,
@@ -457,8 +457,8 @@ export async function requireWebhookManageCapability(
 }
 
 /**
- * an api-key request also needs the site payer's `owlette.api_keys` (plan.md
- * decision 8). sessions are untouched: the dashboard is gated feature by feature.
+ * an api-key request also needs `owlette.api_keys` on the site's plan
+ * (docs/adr/0018). sessions are untouched: the dashboard is gated feature by feature.
  */
 async function requireApiKeyPlan(
   auth: ResolvedAuth,
@@ -753,7 +753,7 @@ export async function requireRoostAuthAndScope(
   const planError = await requireApiKeyPlan(authResult.auth, siteId, access.siteData);
   if (planError) return { ok: false, response: planError };
 
-  // deleting stays open on every plan (plan.md decision 8), so a payer who lapsed can clean up.
+  // deleting stays open on every plan (docs/adr/0018), so a site whose plan lapsed can be cleaned up.
   if (isMutationPermission(permission) && req.method !== 'DELETE') {
     const roostError = await requireEntitlement(siteId, 'owlette.roost', access.siteData);
     if (roostError) return { ok: false, response: roostError };

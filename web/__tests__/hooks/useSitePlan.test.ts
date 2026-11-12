@@ -102,6 +102,7 @@ const ACCOUNT: AccountPlanOn = {
     machinesLimit: 1,
     liveMachines: [{ siteId: 'site-a', machineId: 'kiosk-1' }],
   },
+  siteCreation: { state: 'open', unpaidSite: null },
   foundersRemaining: null,
   linkAvailable: false,
   portalUrl: null,

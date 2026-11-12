@@ -19,7 +19,8 @@ import { getAdminDb } from '@/lib/firebase-admin';
 import { emitMutation } from '@/lib/auditLogClient';
 import { validateSiteId } from '@/lib/validators';
 import { addOwnerToBatch } from '@/lib/membership.server';
-import { siteSlotAvailable, tridantConfigured } from '@/lib/plan.server';
+import { siteCreation, tridantConfigured } from '@/lib/plan.server';
+import type { AccountPlanSiteCreation } from '@/lib/planResponse';
 import { registerSite } from '@/lib/planTrial.server';
 
 const NAME_MAX_LENGTH = 200;
@@ -36,6 +37,12 @@ export interface CreateSiteInput {
    * `false` means the operator declined and must not be confused with it.
    */
   schedulesFollowSiteTime?: boolean;
+  /**
+   * the caller puts the site on core or pro right after creating it, which lets
+   * it past an account whose free site is taken (adr 0018). a checkout left
+   * unpaid leaves the site on owlette free, and the next create is refused.
+   */
+  onPlan?: boolean;
   /** Tests pass a mock; production omits. */
   db?: Firestore;
   /** Tests pass a fixed clock; production omits. */
@@ -53,7 +60,7 @@ export type CreateSiteResult =
   | { kind: 'invalid_name'; reason: string }
   | { kind: 'already_exists' }
   | { kind: 'id_retired' }
-  | { kind: 'plan_limit' }
+  | { kind: 'plan_limit'; siteCreation: Exclude<AccountPlanSiteCreation, { state: 'open' }> }
   | {
       kind: 'created';
       siteId: string;
@@ -123,8 +130,9 @@ export async function createSite(
 
   // outside the batch, so two creates racing for the last slot can both land;
   // the plan accepts that overshoot.
-  if (!(await siteSlotAvailable(input.ownerUid))) {
-    return { kind: 'plan_limit' };
+  const creation = await siteCreation(input.ownerUid);
+  if (creation.state === 'blocked' || (creation.state === 'choose_plan' && input.onPlan !== true)) {
+    return { kind: 'plan_limit', siteCreation: creation };
   }
 
   const nowDate = (input.now ?? (() => new Date()))();
