@@ -25,6 +25,7 @@ interface StoredToken {
   retiresAt?: number;
   expiresAt?: number;
   predecessorHash?: string;
+  createdAt?: number;
 }
 
 const tokenStore = new Map<string, StoredToken>();
@@ -60,6 +61,9 @@ jest.mock('@/lib/firebase-admin', () => ({
   }),
   getAdminDb: () => ({
     collection: (name: string) => ({
+      where: (f1: string, _o1: string, v1: unknown) => ({
+        where: (f2: string, _o2: string, v2: unknown) => ({ query: [[f1, v1], [f2, v2]] }),
+      }),
       doc: (id: string) =>
         name === 'agent_refresh_tokens'
           ? tokenRef(id)
@@ -70,7 +74,21 @@ jest.mock('@/lib/firebase-admin', () => ({
       // The callback drives read → supersession/expiry check → write new token →
       // mark old superseded.
       const tx = {
-        async get(ref: { hash: string }) {
+        async get(ref: { hash: string; query?: [string, unknown][] }) {
+          if (ref.query) {
+            const docs = [...tokenStore.entries()]
+              .filter(([, d]) =>
+                ref.query!.every(([f, v]) => (d as unknown as Record<string, unknown>)[f] === v))
+              .map(([hash, d]) => ({
+                ref: { hash, id: hash },
+                data: () => ({
+                  ...d,
+                  createdAt: d.createdAt ? { toMillis: () => d.createdAt as number } : undefined,
+                  retiresAt: d.retiresAt ? { toMillis: () => d.retiresAt as number } : undefined,
+                }),
+              }));
+            return { docs };
+          }
           const data = tokenStore.get(ref.hash);
           return {
             exists: !!data,
@@ -133,6 +151,7 @@ jest.mock('@/lib/firebase-admin', () => ({
               typeof payload.predecessorHash === 'string'
                 ? (payload.predecessorHash as string)
                 : undefined,
+            createdAt: Date.now(),
           });
         },
       };
@@ -178,8 +197,9 @@ function hashOf(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
-function seedToken(token: string, machineId = 'm-1') {
+function seedToken(token: string, machineId = 'm-1', createdAt?: number) {
   tokenStore.set(hashOf(token), {
+    createdAt,
     siteId: 'site-a',
     machineId,
     version: '2.11.3',
@@ -192,6 +212,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   tokenStore.clear();
   process.env.NEXT_PUBLIC_FIREBASE_API_KEY = 'test-firebase-key';
+  process.env.MFA_ENCRYPTION_KEY = 'test-key';
   mockCreateCustomToken.mockResolvedValue('fake-custom-token');
   mockSetCustomUserClaims.mockResolvedValue(undefined);
 });
@@ -324,24 +345,57 @@ describe('POST /api/agent/auth/refresh — rotation', () => {
     expect(tokenStore.has(hashOf('t0'))).toBe(true); // in-grace grandparent kept
   });
 
-  it('two holders that both rotate one token inside its grace both keep a working token', async () => {
+  it('two holders that both present one token inside its grace get the same successor', async () => {
     seedToken('t0');
 
     // The service and local hoot share one credential: each presents t0
     // before the other has saved its rotated token.
-    const a = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
-    const b = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
-    expect(a).not.toBe(b);
+    const [ra, rb] = await Promise.all([
+      refreshPOST(refreshReq('t0')),
+      refreshPOST(refreshReq('t0')),
+    ]);
+    const a = (await ra.json()).refreshToken as string;
+    const b = (await rb.json()).refreshToken as string;
+    expect(a).toBe(b);
 
-    // t0's grace ends.
+    // exactly one current token for the machine besides the presented one
+    const live = [...tokenStore.entries()].filter(([h, d]) => h !== hashOf('t0') && !d.supersededAt);
+    expect(live.map(([h]) => h)).toEqual([hashOf(a)]);
+
+    // t0's grace ends; the shared token still refreshes.
     const t0 = tokenStore.get(hashOf('t0'))!;
     t0.retiresAt = Date.now() - 1;
-    tokenStore.set(hashOf('t0'), t0);
-
-    // Whichever token the shared store kept still refreshes, so neither
-    // holder is 401'd into wiping the machine's credentials.
     expect((await refreshPOST(refreshReq(a))).status).toBe(200);
-    expect((await refreshPOST(refreshReq(b))).status).toBe(200);
+  });
+
+  it('a repeat mints a fresh successor when the first one is gone', async () => {
+    seedToken('t0');
+    const a = (await (await refreshPOST(refreshReq('t0'))).json()).refreshToken as string;
+    tokenStore.delete(hashOf(a));
+    const again = await refreshPOST(refreshReq('t0'));
+    expect(again.status).toBe(200);
+    const b = (await again.json()).refreshToken as string;
+    expect(tokenStore.has(hashOf(b))).toBe(true);
+  });
+
+  it('rotation retires older live tokens of the same machine and keeps recent ones', async () => {
+    const HOUR = 3600 * 1000;
+    seedToken('current', 'm-1', Date.now() - HOUR);
+    seedToken('old-orphan', 'm-1', Date.now() - 10 * HOUR);
+    seedToken('recent-sibling', 'm-1', Date.now() - HOUR / 2);
+    seedToken('other-machine-old', 'm-2', Date.now() - 10 * HOUR);
+    const res = await refreshPOST(refreshReq('current'));
+    expect(res.status).toBe(200);
+    expect(tokenStore.has(hashOf('old-orphan'))).toBe(false);
+    expect(tokenStore.has(hashOf('recent-sibling'))).toBe(true);
+    expect(tokenStore.has(hashOf('other-machine-old'))).toBe(true);
+    expect(tokenStore.has(hashOf('current'))).toBe(true);
+  });
+
+  it('rotation records the version the agent reports', async () => {
+    seedToken('t0');
+    const body = await (await refreshPOST(refreshReq('t0', 'm-1', '4.2.0'))).json();
+    expect(tokenStore.get(hashOf(body.refreshToken))!.version).toBe('4.2.0');
   });
 
   it('machine_id_mismatch when refresh token machineId differs from claim', async () => {

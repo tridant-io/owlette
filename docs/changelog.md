@@ -214,6 +214,12 @@ While a swoop session is capturing this screen, the owlette icon in the tray
 indicator setting says: a machine always shows that someone is connected.
 Errors still show red, and the yellow goes out when the capture stops.
 
+### fixed — agent token rotation keeps one current token per machine
+
+A machine's tokens no longer pile up on the admin agent tokens page, and the
+version shown for a token follows the agent that last refreshed it. Tokens left
+over from before clear themselves the next time the machine refreshes.
+
 ### changed — a plan belongs to a site, and its owner pays for it
 
 None of this is enforced or billed yet: plans stay switched off during the
