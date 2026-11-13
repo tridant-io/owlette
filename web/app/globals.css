@@ -1014,11 +1014,13 @@ input[type="week"] {
 
 .hoot-markdown a {
   color: var(--accent-cyan);
+  /* weight, not only colour, marks a link in a paragraph (wcag 1.4.1) */
+  font-weight: 600;
   text-decoration: none;
 }
 
 .hoot-markdown a:hover {
-  text-decoration: underline;
+  color: var(--accent-cyan-hover);
 }
 
 /* Slide-panel performance hint — the dashboard marks the machines-list

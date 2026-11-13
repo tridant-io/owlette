@@ -345,7 +345,7 @@ export function AddMachineButton({
                         href="/docs/agent/installation#the-pairing-preseed-macos-and-linux"
                         target="_blank"
                         rel="noopener"
-                        className="underline underline-offset-2"
+                        className="hl-link text-accent-cyan"
                       >
                         paths and commands
                       </a>

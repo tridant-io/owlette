@@ -1030,7 +1030,7 @@ export function AccountSettingsDialog({ open, onOpenChange, initialSection }: Ac
                         href="/docs/agent/hoot-mcp"
                         target="_blank"
                         rel="noreferrer"
-                        className="text-foreground underline underline-offset-2 hover:text-accent-cyan"
+                        className="hl-link text-accent-cyan"
                       >
                         the hoot mcp guide
                       </a>

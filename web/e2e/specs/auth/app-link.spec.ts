@@ -173,7 +173,7 @@ test('a cold start signs owlette swoop in through the signed-in browser, mfa inc
     await expect(page.getByTestId('sign-in-as-someone-else')).toBeVisible();
     await expect(page.getByTestId('signed-in-email')).toHaveText(user.email);
     await expectSignedInFooterOnOneLine(page);
-    await expect(page.getByRole('heading', { name: 'sign in owlette swoop on this computer?' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'sign in to owlette swoop?' })).toBeVisible();
     await page.getByRole('button', { name: 'approve' }).click();
     await expect(page.getByText('done, go back to owlette swoop')).toBeVisible();
 

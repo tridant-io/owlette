@@ -11,6 +11,14 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### changed — the swoop step-up and app sign-in pages are one small card
+
+The browser pages that ask "allow control of this machine?" and "sign in to owlette swoop?" are a single compact card: a short question, one line of context, the signed-in account and the one action. The code entry on the step-up page opens from "enter a code instead".
+
+### fixed — links read as links without an underline
+
+Every link in the dashboard, the docs and the emails is accent-coloured with the highlight sweep on hover and focus, instead of an underline. This includes the "not you? sign in as someone else" link and the docs article links.
+
 ## [4.2.0] - 2026-11-12
 ### changed — a new password or a factor change signs your other sessions out
 
