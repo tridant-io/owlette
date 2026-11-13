@@ -10,6 +10,8 @@ All notable changes to owlette are documented here. The format is based on [Keep
 ---
 
 ## [Unreleased]
+
+## [4.2.0] - 2026-11-12
 ### changed — a new password or a factor change signs your other sessions out
 
 A dashboard session started before your password was reset or changed now stops working
