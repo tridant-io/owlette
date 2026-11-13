@@ -263,6 +263,8 @@ export function buildScratchRoot(): string {
   for (const relative of ['config', 'tmp', 'agent/src', 'logs']) {
     fs.mkdirSync(path.join(SCRATCH_ROOT, ...relative.split('/')), { recursive: true })
   }
+  // the app offers "connect an ai agent" only when the hoot mcp script is installed
+  fs.writeFileSync(path.join(SCRATCH_ROOT, 'agent', 'src', 'fleet_mcp.py'), '')
 
   if (fs.existsSync(PYTHON_DIR)) {
     fs.symlinkSync(PYTHON_DIR, path.join(SCRATCH_ROOT, 'python'), 'junction')
