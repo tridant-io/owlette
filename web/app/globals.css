@@ -1018,7 +1018,7 @@ input[type="week"] {
 }
 
 .hoot-markdown a:hover {
-  text-decoration: underline;
+  color: var(--accent-cyan-hover);
 }
 
 /* Slide-panel performance hint — the dashboard marks the machines-list

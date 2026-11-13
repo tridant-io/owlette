@@ -277,7 +277,7 @@ export default function DmcaFormPage() {
           href="https://www.copyright.gov/dmca-directory/"
           target="_blank"
           rel="noreferrer"
-          className="underline"
+          className="hl-link text-accent-cyan"
         >
           copyright.gov/dmca-directory
         </a>

@@ -288,7 +288,7 @@ export function AuthSignedInAs({ email, onSwitch }: { email: string; onSwitch: (
       <button
         type="button"
         onClick={onSwitch}
-        className="mt-1 underline-offset-2 hover:underline"
+        className="hl-link mt-1 cursor-pointer text-accent-cyan"
         data-testid="sign-in-as-someone-else"
       >
         not you? sign in as someone else

@@ -126,10 +126,10 @@ export function wrapEmailLayout(content: string, options: EmailLayoutOptions = {
   const isAlertEmail = 'unsubscribeUrl' in options;
   const footerLinks: string[] = [];
   if (isAlertEmail) {
-    footerLinks.push(`<a href="${baseUrl}/settings/alerts" style="color:${EMAIL_COLORS.cyan};text-decoration:underline;">manage alerts</a>`);
+    footerLinks.push(`<a href="${baseUrl}/settings/alerts" style="color:${EMAIL_COLORS.cyan};text-decoration:none;font-weight:600;">manage alerts</a>`);
   }
   if (unsubscribeUrl) {
-    footerLinks.push(`<a href="${unsubscribeUrl}" style="color:${EMAIL_COLORS.muted};text-decoration:underline;">unsubscribe</a>`);
+    footerLinks.push(`<a href="${unsubscribeUrl}" style="color:${EMAIL_COLORS.muted};text-decoration:none;font-weight:600;">unsubscribe</a>`);
   }
   const sep = `<span style="color:${EMAIL_COLORS.border};padding:0 6px;">·</span>`;
   const actionsHtml = footerLinks.length

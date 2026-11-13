@@ -11,6 +11,10 @@ All notable changes to owlette are documented here. The format is based on [Keep
 
 ## [Unreleased]
 
+### fixed — links read as links without an underline
+
+Every link in the dashboard, the docs and the emails is accent-coloured with the highlight sweep on hover and focus, instead of an underline. This includes the "not you? sign in as someone else" link and the docs article links.
+
 ## [4.2.0] - 2026-11-12
 ### changed — a new password or a factor change signs your other sessions out
 

@@ -255,7 +255,7 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
       </p>
       <p className="text-center text-xs text-muted-foreground">
         didn&apos;t open?{' '}
-        <a href={browserWait} target="_blank" rel="noopener" className="underline underline-offset-2">
+        <a href={browserWait} target="_blank" rel="noopener" className="hl-link text-accent-cyan">
           open the verification page
         </a>
       </p>
@@ -311,7 +311,7 @@ function StepUpForm({ enrolled, onProof, onCancel }: Omit<SwoopStepUpProps, 'ope
           <p className="text-xs text-muted-foreground">
             signing in with google or a password is not a second factor. enroll an
             authenticator app or a passkey in{' '}
-            <Link href="/setup-2fa" className="underline underline-offset-2">
+            <Link href="/setup-2fa" className="hl-link text-accent-cyan">
               security settings
             </Link>
             , then start the session again.

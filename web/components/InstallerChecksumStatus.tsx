@@ -48,7 +48,7 @@ export default function InstallerChecksumStatus({
         />
         <button
           type="button"
-          className="text-xs text-muted-foreground hover:text-foreground underline cursor-pointer"
+          className="hl-link text-xs text-accent-cyan cursor-pointer"
           onClick={exitManualChecksum}
         >
           compute automatically instead
@@ -64,7 +64,7 @@ export default function InstallerChecksumStatus({
         computing sha256 checksum…
         <button
           type="button"
-          className="underline cursor-pointer hover:text-foreground"
+          className="hl-link text-accent-cyan cursor-pointer"
           onClick={enterManualChecksum}
         >
           enter manually
@@ -90,7 +90,7 @@ export default function InstallerChecksumStatus({
           {checksumError || 'failed to compute checksum'}{' — '}
           <button
             type="button"
-            className="underline cursor-pointer"
+            className="hl-link text-accent-cyan cursor-pointer"
             onClick={() => {
               const url = installerUrl.trim();
               if (url) void computeChecksum(url);
@@ -101,7 +101,7 @@ export default function InstallerChecksumStatus({
           {' or '}
           <button
             type="button"
-            className="underline cursor-pointer"
+            className="hl-link text-accent-cyan cursor-pointer"
             onClick={enterManualChecksum}
           >
             enter manually

@@ -264,7 +264,7 @@ export function ShareChatDialog({
               <CollapsibleTrigger asChild>
                 <button
                   type="button"
-                  className="cursor-pointer text-accent-cyan underline-offset-2 transition-colors hover:text-accent-cyan-hover hover:underline"
+                  className="hl-link cursor-pointer text-accent-cyan"
                 >
                   {detailsOpen ? 'less' : 'more'}
                 </button>

@@ -243,7 +243,7 @@ export function TalonRunRow({ run }: TalonRunRowProps) {
           <TooltipTrigger asChild>
             <Link
               href={`/hoot/${encodeURIComponent(run.chatId)}`}
-              className="flex flex-shrink-0 items-center gap-1 text-accent-cyan hover:underline"
+              className="flex flex-shrink-0 items-center gap-1 hl-link text-accent-cyan"
             >
               <MessageSquare className="h-3 w-3" />
               view hoot chat
