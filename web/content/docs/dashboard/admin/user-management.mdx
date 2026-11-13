@@ -92,7 +92,7 @@ both routes are superadmin-only, as is everything on this page.
 for someone who has lost every second factor and their backup codes. `reset 2FA...` asks **reset 2FA**, and confirming calls `POST /api/users/{uid}/mfa-reset`, which:
 
 - removes the authenticator app, every passkey and the backup codes
-- revokes their trusted devices, so no browser skips the second-factor step any more. a session they already hold stays signed in until it expires
+- revokes their trusted devices, so no browser skips the second-factor step any more, and ends every dashboard session they hold, so each of their browsers is signed out
 - has them set up 2FA again at their next sign-in
 - emails them that their second factors were removed
 

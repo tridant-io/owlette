@@ -144,6 +144,7 @@ ctrl+c shuts it down cleanly; `sudo systemctl start owlette-agent` hands the mac
 - **OAuth token expired**: look for token refresh errors in `service.log`; the agent refreshes on its own while the stored refresh token is valid.
 - **wrong site_id**: the config is paired to a different dashboard site.
 - **Firebase disabled**: check that `firebase.enabled` is `true` in `config.json`.
+- **the machine left its site**: revoking its agent token from the dashboard makes the agent leave the site, and `service.log` says `Unpairing from the site`. the app's footer then reads `disabled`; pair the machine again with a new phrase.
 - **the heartbeat has not refreshed yet**: presence and metrics use an adaptive interval — about 5 seconds while the desktop app's window is open, 30 seconds when monitored processes are active, and 120 seconds when idle.
 
 ---

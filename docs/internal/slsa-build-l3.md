@@ -17,10 +17,11 @@ SLSA Build L3 is distinct from **authenticode signing** (wave 5.9), which protec
 
 ```mermaid
 flowchart LR
-    Tag["git push v3.4.0"] --> Win["build-windows\n(windows-latest, payload)"]
+    Tag["git push v3.4.0"] --> Gate["security-gate\n(open advisories)"]
+    Gate --> Win["build-windows\n(windows-latest, payload)"]
     Win --> WinPkg["package-windows\n(sign + compile)"]
-    Tag --> Mac["build-macos\n(macos-15, sign + notarize)"]
-    Tag --> Lin["build-linux\n(ubuntu-24.04)"]
+    Gate --> Mac["build-macos\n(macos-26, sign + notarize)"]
+    Gate --> Lin["build-linux\n(ubuntu-24.04)"]
     WinPkg --> Digest["digest\n(sha256sum of all three)"]
     Mac --> Digest
     Lin --> Digest
@@ -35,6 +36,7 @@ flowchart LR
 
 ### Job isolation
 
+0. **security-gate** runs `.github/workflows/security-gate.yml` first; every build job waits on it, so nothing builds past a live advisory.
 1. **build-windows / build-macos / build-linux** each run on their own hosted runner and produce one installer, Windows in two jobs: `build-windows` builds the payload with no credential, and `package-windows`, the only job with an Azure token, signs our executables and compiles the installer. `build-macos` signs the app and the runtime, signs the pkg and notarizes it with the Apple secrets of the `release` GitHub environment, then staples — all before the digest, because signing mutates the bytes. None of the build jobs can touch the provenance signing key.
 2. **digest** downloads the three artifacts and emits one base64 `sha256sum` listing, one line per file. This is the subject list the generator attests.
 3. **provenance** runs in the `slsa-framework/slsa-github-generator` reusable workflow. It reads the digest job's output, produces one signed in-toto attestation via sigstore + GitHub OIDC, and uploads it to the release. The build jobs cannot impersonate this — OIDC scoping prevents a malicious build step from claiming to be the generator.
@@ -45,18 +47,18 @@ Everything past the builds needs all three, so a run in which one build fails at
 ## Running a release
 
 ```bash
-# 1. Update VERSION + changelog + commit (per CLAUDE.md)
+# 1. Bump, both changelogs, a local `release: 3.4.0` commit on release/3.4.0,
+#    then build, upload and verify (docs/runbooks/agent-installer-release.md)
 node scripts/sync-versions.js 3.4.0
-# edit docs/changelog.md, add [3.4.0] entry
-git add -A && git commit -m "chore: bump version to 3.4.0"
 
-# 2. Tag + push. The workflow triggers on tag push.
-git tag v3.4.0
-git push origin main --tags
+# 2. After the release PR merges into dev, tag its merge commit and push the tag.
+#    The workflow triggers on the tag push.
+git tag v3.4.0 <merge-commit>
+git push origin v3.4.0
 ```
 
 The workflow then:
-- Builds the exe on `windows-latest` via `agent/build_installer_full.bat payload`, then signs and compiles it in a second job via `build_installer_full.bat compile`, the pkg on `macos-15` via `agent/build/macos/build.sh` (signed, notarized, stapled), the deb on `ubuntu-24.04` via `agent/build/linux/build.sh`
+- Builds the exe on `windows-latest` via `agent/build_installer_full.bat payload`, then signs and compiles it in a second job via `build_installer_full.bat compile`, the pkg on `macos-26` via `agent/build/macos/build.sh` (signed, notarized, stapled), the deb on `ubuntu-24.04` via `agent/build/linux/build.sh`
 - Generates one in-toto provenance over the three files
 - Attaches all four to the GitHub release
 - Runs `slsa-verifier` smoke to confirm the chain
@@ -102,6 +104,7 @@ Expected output: `PASSED: Verified SLSA provenance` for each file. Any failure (
 
 - The provenance itself needs nothing: GitHub-hosted runners + the keyless sigstore path need no stored secrets.
 - `build-macos` needs the `release` GitHub environment, restricted to `v*` tags, holding the eight Apple secrets listed under `github-repo-secrets` in `scripts/env-manifest.json` (the two Developer ID p12s and their passwords, the team id, and the App Store Connect API key, key id and issuer id).
+- `package-windows` signs through the same environment: `scripts/setup-ci-signing.sh` creates the Entra app `owlette-ci-signing`, federates it to the `release` environment only, and sets that environment's `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`.
 
 ## Known caveats
 
@@ -111,5 +114,5 @@ Expected output: `PASSED: Verified SLSA provenance` for each file. Any failure (
 
 ## Follow-ups
 
-- Vendor Inno Setup as a build asset to remove the `choco install` supply-chain link
+- Vendor Inno Setup as a build asset, so the installer compiler no longer comes from the runner image
 - Add a scheduled verify job that re-checks the latest release's provenance weekly (catches sigstore-side regressions in rekor)

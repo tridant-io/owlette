@@ -1,7 +1,7 @@
 ---
 title: "site"
 description: "a site is the scope every operator command nests under — roosts, machines, the audit log, quota, deploys and processes are all site-scoped. the CLI reads site records and manages site membership; it has no verbs to create, update or delete a site."
-keywords: ["team", "invite", "permissions"]
+keywords: ["team", "invite", "permissions", "unverified email", "machine scope"]
 ---
 
 verbs:
@@ -79,7 +79,7 @@ lists the active members of a site with the role each holds **on that site**.
 owlette site members <siteId> [--json]
 ```
 
-no verb-specific flags. the table has `uid`, `email`, `role` and `globalRole`, or prints `(no members)`. `--json` prints `{ "members": [...] }`, each with `uid`, `email`, `role`, `globalRole` and `displayName`.
+no verb-specific flags. the table has `uid`, `email`, `role` and `globalRole`, or prints `(no members)`. `--json` prints `{ "members": [...] }`, each with `uid`, `email`, `role`, `globalRole`, `displayName`, `swoop` (their own swoop mode, or `null` when their role decides) and `machineIds` (`null` for the whole site, else the machines they can reach).
 
 `role` comes from the member record and is `owner`, `admin` or `member`. `globalRole` is the account-wide role, which grants nothing on this site by itself. a member's other site memberships are never returned — that would show a site admin the IDs of every other organisation the person belongs to.
 
@@ -115,7 +115,7 @@ owlette site add-member <siteId> (--uid <uid> | --email <email>) [--role member|
 
 supplying both identifiers or neither, or any other `--role`, fails before a request is sent.
 
-adding someone who is already a member is a no-op that still succeeds, and their existing role is kept. the response then carries `roleHonored: false`; when you asked for `admin`, the CLI prints a `WARNING role 'admin' was NOT honored` line. to change an existing member's role, use [`set-role`](#set-role). the site owner cannot be re-added: `409 target_is_owner`.
+adding someone who is already a member is a no-op that still succeeds, and their existing role is kept. the response then carries `roleHonored: false`, and the CLI prints `owlette: WARNING role '<role>' was NOT honored - <uid> is already a member of <siteId> and keeps their role.` with a pointer to `owlette site set-role`. to change an existing member's role, use [`set-role`](#set-role). the site owner cannot be re-added: `409 target_is_owner`. adding by `--email` someone who signed up with a password and has not verified that address yet answers `409 email_unverified`: ask them to verify it, then add them again.
 
 `--json` prints the raw response: `uid`, `siteId`, `requestedRole`, `roleHonored` and `globalRole`.
 
@@ -147,7 +147,7 @@ owlette site set-role <siteId> <uid> <admin|member> [--idempotency-key <key>]
 
 `owner` is not a settable role — ownership moves only through [`transfer-ownership`](#transfer-ownership), and the CLI refuses `set-role ... owner` before sending anything. the server refuses to change the owner's role (`409 cannot_change_owner_role`), to change your own role (`403 cannot_modify_own_membership`), and answers `404` when the uid is not a member.
 
-`--json` prints the raw response: `siteId`, `uid` and `role`.
+`--json` prints the raw response: `siteId`, `uid`, `role`, `swoop` and `machineIds`. a role change keeps the member's swoop mode and machine scope.
 
 ### examples
 

@@ -8,7 +8,7 @@ keywords: ["site settings", "manage sites", "new site", "rename site", "delete s
 
 <Callout type="info" title={"permissions"}>
 
-the page opens for anyone who is an owner or admin on at least one site, and lists every site they belong to. owlette's superadmins see every site. anyone else is sent back to the dashboard with **access denied**.
+the page opens for anyone who is an owner or admin of the whole site on at least one site, and lists every site they belong to. owlette's superadmins see every site. anyone else is sent back to the dashboard with **access denied**.
 
 </Callout>
 
@@ -23,14 +23,14 @@ the site switcher's **manage sites** opens this page. its **site settings** open
 | **name** | the site's name. a `current` badge marks the site you are on, which comes first; the rest follow by name |
 | **site ID** | the site's permanent ID. click it to copy it |
 | **timezone** | the site's timezone, or `UTC` when it has none |
-| **role** | your role on the site: `owner`, `admin` or `member`. owlette's superadmins see the site's owner here instead: the owner's email, `you` on their own sites, or `—` when none is recorded |
-| gear | opens the site's settings. it is there only on sites where you are owner or admin, and on every site for owlette's superadmins |
+| **role** | your role on the site: `owner`, `admin` or `member`, with the count of your machines when your access is limited to some, such as `admin · 2 machines`. owlette's superadmins see the site's owner here instead: the owner's email, `you` on their own sites, or `—` when none is recorded |
+| gear | opens the site's settings. it is there only on sites where you are owner or admin of the whole site, and on every site for owlette's superadmins |
 
 on a phone, a row puts the name and the gear on its first line, and the ID, timezone and role on its second.
 
 with two or more sites, **filter sites…** narrows the list to the sites whose name, ID or timezone contains what you type (and, for owlette's superadmins, whose owner's email does). **Escape** clears it. while it is on, the list says how many of your sites it shows.
 
-a site you only belong to as a member has no gear. open its settings anyway and the page says you're a member, and to ask its owner or an admin.
+a site you only belong to as a member, or where your access is [limited to some machines](/docs/dashboard/admin/member-management#machine-scope), has no gear. open its settings anyway and the page says which, and to ask its owner or an admin.
 
 ---
 

@@ -110,7 +110,7 @@ in the member/admin column, a **whole-site** row is a member row with no `machin
 | `sites/{siteId}/cortex-events/{eventId}` | read with a whole-site row; no write | read all; no write | create, and update its own, for its own machine | full write |
 | `sites/{siteId}/logs/{logId}` | read entries whose `machineId` your access covers; no write. a scoped member's list query must pin `machineId` (`==` or `in`) to their machines, and an entry with no `machineId` is whole-site only | read all; no write | read site logs and create own-machine entries | create/delete |
 | `sites/{siteId}/audit_log/{entryId}` | site admins (whole site) read; members and scoped admins cannot | read all | no access | server only; nobody can edit or delete an entry from a client |
-| `sites/{siteId}/settings/{settingId}` | read `swoop`, `display` and `cortex` with any row, a scoped one included; `alerts` only with a whole-site row. no write | read all; no write | no access | write |
+| `sites/{siteId}/settings/{settingId}` | read `swoop`, `display` and `cortex` with any row, a scoped one included; every other document, such as `alerts` and `fleet`, only with a whole-site row. no write | read all; no write | no access | write |
 | `config/{siteId}/machines/{machineId}` | read for machines your access covers; no write | read all; no write | read/write/delete own machine's config | full write |
 | `config/{siteId}/schedule_presets`, `reboot_presets` | read with any row, a scoped one included; no write | read all; no write | no access | write/delete |
 | `config/{siteId}/project_distribution_presets`, `talon_presets` | read with a whole-site row; no write | read all; no write | no access | write/delete |
@@ -120,7 +120,7 @@ in the member/admin column, a **whole-site** row is a member row with no `machin
 | `users/{userId}/api_keys/{keyId}` | read your own key inventory; no write | read your own only; no write | no access | server only |
 | `installer_metadata/{document=**}` | public read | public read | public read | write |
 | `system_presets/{presetId}` | read if authenticated; no write | read if authenticated; no write | read if authenticated; no write | create/update/delete |
-| `chats/{chatId}`, its `messages` and `stream` | create your own chats; read/write your own chats and messages; read autonomous chats and their streams for sites where your row is whole site. a scoped member sees no autonomous chat | same, for all sites | no site-scoped reads; the owner-only rules apply as to any signed-in caller | Admin SDK bypass only |
+| `chats/{chatId}`, its `messages` and `stream` | create your own chats, only as a person's (`source` absent or `user`); read/write your own chats and messages, where an update sets no other `source` than `user` or the one the chat has; read autonomous chats and their streams for sites where your row is whole site. a scoped member sees no autonomous chat | same, for all sites | no site-scoped reads; the owner-only rules apply as to any signed-in caller | Admin SDK bypass only |
 | `cortex-followups/{followupId}` | read your own | read your own | no access | server only |
 | `agent_tokens`, `agent_refresh_tokens`, `device_codes`, `api_keys` | no access | no access | no access | server only |
 | any unmatched path, including `sites/{siteId}/machines/{machineId}/swoop_sessions` | no access | no access | no access | Admin SDK bypass only |
@@ -153,7 +153,7 @@ the repository's rules tests run against the Firestore emulator. with JDK 21 and
 npm run test:rules
 ```
 
-the specs live in `web/__tests__/rules/`: the baseline matrix, explicit denials, membership, swoop sessions, the hardening cases, `siteReadControls.test.ts` (what a whole-site member reads on every site path) and `machineScope.test.ts` (what a scoped member reads, and what stays out of reach). run them after any change to `firestore.rules`.
+the specs live in `web/__tests__/rules/`: the baseline matrix, explicit denials, membership, swoop sessions, the hardening cases, chats, an agent's `commands/pending`, hoot mcp's grant and sessions, hoot key handoffs, the plan collections, `siteReadControls.test.ts` (what a whole-site member reads on every site path) and `machineScope.test.ts` (what a scoped member reads, and what stays out of reach). run them after any change to `firestore.rules`.
 
 ### rules playground
 

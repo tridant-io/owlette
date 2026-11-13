@@ -36,8 +36,9 @@ it is asserted in four places:
 
 1. **the websocket subprotocol.** a browser dials the room with
    `Sec-WebSocket-Protocol: owlette.swoop.v1, jwt.<token>` and the worker echoes back only `owlette.swoop.v1`.
-   the agent dials with `Authorization: Bearer <token>` and the same subprotocol. a worker that does not
-   recognise the subprotocol refuses the upgrade.
+   the streamer dials with `Authorization: Bearer <token>` and the same subprotocol; the agent's doorbell sends
+   the header and offers no subprotocol, which the worker accepts. a worker that does not recognise the
+   subprotocol refuses the upgrade.
 2. **the `hello` frame.** the room's first frame to every socket carries `protocolVersion`. a client whose
    compiled-in version differs MUST send `bye` with `reason: "version_mismatch"`, close, and surface the
    mismatch to the user as "this machine needs an agent update" (or the reverse). it MUST NOT attempt to
@@ -357,7 +358,8 @@ token's `uid` where it carries one and the viewer id otherwise, because §8's cl
 | `ping` | `id`, `tUs`; the host answers `pong` with `id`, `tUs` echoed, and its own `hostUs` |
 
 `ping`/`pong` is the app-level round trip, and its one-way half is the offset that makes section 4's
-timestamps comparable across the two clocks. feedback drives the rate governor: bitrate, fps and resolution.
+timestamps comparable across the two clocks. feedback drives the rate governor: bitrate and fps, and on a
+streamer older than 4.2.0 resolution too.
 
 golden vectors: `messages/msg-input-batch.json`, `messages/msg-input-no-ctl.json` (reject, `not_permitted`),
 `messages/msg-cursor.json`, `messages/msg-clipboard-text.json`, `messages/msg-clipboard-oversize.json`
@@ -400,6 +402,9 @@ a control line:
   is dropped with a log line. `"ok": false` means the service did not raise the sequence: the
   `SoftwareSASGeneration` policy does not allow a service to, or one was raised in the last 2 s.
   windows honours `SendSAS` only from session 0, which is why the streamer asks rather than calls it.
+- `{"type":"token","host_token":"…"}` — a fresh host token, which the service mints a minute before the
+  running one expires and in answer to `token_needed`. the streamer redials the room with it and every viewer
+  keeps its peer. the field is `host_token`, not the bundle's `hostToken`.
 
 **eof on stdin means the service is gone.** the streamer byes its viewers `restart`, tears the session down
 and exits 0. it does not try to carry on, and it does not try to reach the service any other way.
@@ -454,7 +459,7 @@ out. with a single viewer every one of these is the number it always was.
 | `encoder` | which backend of the fallback chain the session is encoding on: `nvenc` \| `mf-hw` \| `mf-sw` \| `videotoolbox` (macos's only one). absent until a viewer's offer has named a codec and the first encoder is open, and absent again once the last viewer leaves — the pause closes the encoders with the duplication. `ready`'s `codecs[]` says what the machine *can* do; this says what it did. |
 | `tiers` | how many encode sessions the viewers are costing this machine: `min(distinct codec classes present, the measured encoder budget)`. **absent means one**, which is every session whose viewers all negotiated the same codec, and a session with nobody watching. one capture feeds all of them, so this is the whole of what multi-viewer costs the gpu. |
 
-the five below are the rate governor's, and they ride a `status` **only while at least one viewer's peer is
+the six below are the rate governor's, and they ride a `status` **only while at least one viewer's peer is
 connected**: with nobody watching there is no rate being governed, `bitrateKbps` and `fps` are already zero,
 and the nine-field line is what a quiet session promises. there is one governor **per viewer**, so `preset`,
 `rungFps`, `rungResolution`, `rungIndex` and `governor` report the **most degraded** of them — the viewer
@@ -625,8 +630,8 @@ its viewers keep renewing. the point of the lease is that authorisation is re-ch
 site, a site that turns swoop off, a capability revoked, a machine excluded or a machine dropped from the
 viewer's machine scope all take effect within one lease rather than at the next reconnect.
 
-1. every `leaseSeconds` (default 300, from the bundle's `enablement`) the browser calls
-   `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, machine scope, site enablement and
+1. at about 60% of what is left of each lease (`leaseSeconds`, default 300, from the bundle's `enablement`)
+   the browser calls `POST …/swoop/sessions/{sid}/lease`. the api re-checks membership, machine scope, site enablement and
    capability and, if all still hold, mints a **fresh viewer jwt** — same claims, new `iat`/`exp`/`jti` — and
    returns it with the new `expiresAt`. a machine outside the viewer's scope answers 404, which is not a
    withdrawal: the browser retries it, as it does for a removed member, until the host drops the viewer at
@@ -823,6 +828,13 @@ k         = HKDF-SHA256(
   dedicated action module, so the generic commands route cannot reach them.
 
 ---
+
+### rule citations
+
+the block cites `firestore.rules` as the memo found it. the commands collection's read rule is now
+`canAccessMachine(siteId, machineId)`: a superadmin, or an active member whose access covers that machine, which a
+machine scope narrows. the point stands: anyone who can see the machine can read the collection, so it carries
+nothing secret.
 
 ### golden vector names
 

@@ -372,9 +372,9 @@ one swoop session: one streamer's time on the machine, which every viewer of the
 | `createdAt`, `updatedAt` | timestamp | |
 | `viewers` | array | `{ viewerId, uid, ctl, joinedAt, leaseExpiresAt, renewedAt? }`, one per viewer in the session; `ctl` is whether that viewer holds control, and `renewedAt` is absent until its first lease renewal. |
 | `continuity` | map | reconnect continuity, by viewer ID: `{ uid, hash, usedAt? }` for each control viewer. |
-| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked`, `machine_removed` (the machine was removed from the site) or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
+| `endReason` | string | `closed`, `idle`, `killed`, `lease_expired`, `session_cap`, `signal_lost`, `host_exit`, `revoked`, `kicked`, `machine_removed` (the machine was removed from the site) or `error`; or the machine's own reason for showing no picture, which the viewer stops on: `no_capture_source`, `no_encoder`, `spawn_failed`, `spawn_rate_ceiling`, `bundle_unavailable`, `not_installed`, `install_unverified`, `version_mismatch` or `bundle_invalid`. |
 | `viewerReason`, `endedAt` | string, timestamp | the page's own reason for ending, and when. |
-| `endedFor` | string | the uid a `revoked` end was for. removing a member, or taking control from them, ends the session for everyone in it, and everyone else starts the next one on their own. |
+| `endedFor` | string | the uid a `revoked` or `kicked` end was for. removing a member, taking control from them, or kicking them ends the session for everyone in it, and everyone else starts the next one on their own. |
 
 a daily cron (`/api/cron/swoop-retention`) closes sessions whose leases have expired and deletes sessions older than 30 days.
 
@@ -532,7 +532,7 @@ chunk bytes and version bodies live in R2, never in Firestore:
 
 every dashboard hoot conversation, and the autonomous and talon conversations. IDs are `chat_{ms}_{random}` for a user chat, `auto_{ms}_{machine}` for an autonomous investigation, `talon_{ms}_{runId}` for a talon's hoot output, and `machine_{ms}_{random}` for a task a machine handed hoot.
 
-**access**: the owner reads, creates, updates and deletes their own; any whole-site member reads an autonomous chat on their site.
+**access**: the owner reads, creates, updates and deletes their own, and a browser writes a chat only as a person's (`source` absent or `user`), or keeps the `source` a server-written one has; any whole-site member reads an autonomous chat on their site.
 
 | field | type | notes |
 | --- | --- | --- |
@@ -659,6 +659,8 @@ the user's profile and preferences. **access**: the user reads their own and may
 | `mfaSecret`, `backupCodes` | string, array | encrypted TOTP secret and hashed backup codes. server only. |
 | `mfaFactors` | map | `{ totp, passkeys }`, the authoritative second-factor tally. server only. |
 | `mfaEnrolled`, `requiresMfaSetup` | boolean | derived from `mfaFactors`; server only. `requiresMfaSetup` re-arms when the last factor is removed, and the proxy redirects such a session to `/setup-2fa`. |
+| `sessionsValidAfter` | number | ms, written with every second-factor change. a dashboard session started before it stops working, except the one that made the change, which is re-stamped. server only. |
+| `totpLastStep` | number | the time step of the last authenticator code accepted, so a code works once. server only. |
 
 `mfaFactors`, `mfaEnrolled` and `requiresMfaSetup` have exactly one writer, `lib/mfaFactors.server.ts`.
 
@@ -696,7 +698,7 @@ dashboard layout memory. **access**: the owner reads and writes their own. one d
 | `users/{uid}/api_keys/{keyId}` | the owner reads; writes are server only | `name`, `keyHash`, `keyPrefix`, `environment`, `scopes`, `maxToolTier` (absent means 1), `expiresAt` (ms), `createdAt`, `lastUsedAt`, `expiredMarkedAt`, `rotatedAt`, `rotatedFromKeyId`, `retiresAt`, `revokedAt`, `expiryNoticedStages`. |
 | `users/{uid}/passkeys/{credentialId}` | server only | passkey credentials and their metadata. |
 | `users/{uid}/trustedDevices/{tokenHash}` | server only | SHA-256-hashed "trust this device for 30 days" tokens. the raw token lives only in the HTTP-only `owlette_device_trust` cookie; records expire after about 30 days and are revoked when two-factor is disabled or the account is deleted. |
-| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, network, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). `network` (`{ key, prefix, asn }`) is the network it was opened from, absent when network binding is off. |
+| `users/{uid}/swoop_step_up/{key}` | server only | an open swoop control window for one machine: `{ openedAt, expiresAt, openedBy, factorUsed, network, updatedAt }`, 7 days from `openedAt`. `openedBy` is `ceremony` (a step-up, with `factorUsed` totp, backup_code or passkey) or `fresh_sign_in` (the sign-in's own second factor, under five minutes old, with `openedAt` the time it was passed and no `factorUsed`). `network` (`{ key, prefix, asn }`) is the network it was opened from, absent when network binding is off. a person's tier-3 hoot tool call through the machine commands route needs the same window. |
 | `users/{uid}/verified_networks/{key}` | server only | a network the user passed a second factor on, keyed `asn:<n>`: `{ firstSeenAt, lastVerifiedAt, asn, label }` (ms). it counts for swoop control for 7 days after `lastVerifiedAt`, checked on read; nothing expires it, and deleting the account removes it. the first entry for a key emails the user while network binding is enforced. |
 | `users/{uid}/account_deletion/operation` | server only | progress of a self-service account deletion. |
 
@@ -709,7 +711,7 @@ these are server only unless noted.
 | path | holds |
 | --- | --- |
 | `api_keys/{keyHash}` | the API key lookup: `{ userId, keyId, environment, scopes, maxToolTier, expiresAt, retiresAt, revokedAt }`. the rules deny it explicitly. |
-| `agent_refresh_tokens/{tokenHash}` | hashed agent refresh tokens: `siteId`, `machineId`, `version`, `createdBy`, `createdAt`, `lastUsed`, `agentUid`, and for rotation `predecessorHash`, `supersededAt`, `supersededBy`, `retiresAt`. `expiresAt` absent means the token never expires. see [token management](/docs/dashboard/admin/token-management). |
+| `agent_refresh_tokens/{tokenHash}` | hashed agent refresh tokens: `siteId`, `machineId`, `version`, `createdBy`, `createdAt`, `lastUsed`, `agentUid`, and for rotation `predecessorHash`, `supersededAt`, `supersededBy`, `retiresAt`, `rotationNonce`. a rotation also deletes the machine's other tokens that were never rotated and are over three hours old, so each machine keeps one current token. `expiresAt` absent means the token never expires. see [token management](/docs/dashboard/admin/token-management). |
 | `agent_tokens/{tokenId}` | legacy registration codes. nothing reads or writes them any more. |
 | `device_codes/{phrase}` | a pairing phrase's state, alive for 10 minutes and deleted once the agent consumes it: `deviceCodeHash`, `wrapVersion`, `machineId`, `version`, `status`, `createdAt`, `expiresAt`, `siteId`, `authorizedBy`, `authorizedAt`, `encryptedCredentials`, `preauthorizedIntent`, `deferTokenMint`, and on a generated code made to reinstall machines already on the site, `replaceMachineId` (one machine) or `replaceAnyMachine` (any). `status` is `refused`, with the message in `refusedReason`, when the plan's machine limit turned the authorization down. see [authentication](/docs/reference/authentication). |
 | `fleet_sessions/{tokenHash}` | a [hoot mcp](/docs/agent/hoot-mcp) session, keyed by the SHA-256 of its token: `siteId`, `machineId`, `createdAt`, `expiresAt` (15 minutes). deleted when the machine is turned off as a sender, removed, re-paired or has its agent token revoked. |

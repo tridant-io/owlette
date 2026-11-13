@@ -121,7 +121,7 @@ one exception: when a cancel is what finishes the last targets, a mix of failed 
 
 on Windows the agent runs the installer with SYSTEM rights in the machine's console session, not in the service's own session, so installers that start sub-installers have a desktop to run them on. anything the installer shows appears on the machine's screen. with no active console session, the target fails with the message above.
 
-the agent stops an installer that runs longer than 40 minutes. separately, a scheduled sweeper is meant to fail targets whose agent stops reporting: `pending` after 15 minutes, and `downloading`, `installing` or `uninstalling` after 30, both counted from when the deployment was created, not from the target's last change. it only reaches sites it is already sweeping, so do not count on it: a target whose agent never reports back can stay in its state.
+the agent stops an installer that runs longer than 40 minutes. separately, the server fails a target whose agent stops reporting: `pending` after 15 minutes, and `downloading`, `installing` or `uninstalling` after 30, counted from the deployment's creation or its last retry, not from the target's last change. see [a target is stuck](#a-target-is-stuck).
 
 each finished target also writes `deployment_completed` or `deployment_failed` to [activity logs](/docs/dashboard/activity-logs#deployments), or `deployment_cancelled` when a cancel stopped the install on the machine.
 

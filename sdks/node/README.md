@@ -71,10 +71,10 @@ or api keys.
 ### plan refusals
 
 Plans are not enforced during the beta. Once they apply, a request that the
-site owner's plan does not cover throws `OwletteApiError` with
+site's plan does not cover throws `OwletteApiError` with
 `code === 'plan_required'` and `status === 402`, and is not retried.
 `error.problem.entitlement` names what the plan lacks — `owlette.api_keys`
-for every request made with a key on a plan without API keys. See
+for every request made with a key on a site whose plan lacks API keys. See
 [plans](https://owlette.app/docs/plans).
 
 `onBillingWarning` is still accepted for compatibility but never fires: the
@@ -90,17 +90,21 @@ removed.
 | `owlette.chunks`  | `check`, `uploadUrls`, `downloadUrls`, `mount`, `referrers`        |
 | `owlette.versions` | `list`, `get`, `patch`, `files`, `diff`                           |
 | `owlette.deployments` | `list`, `get`                                                  |
-| `owlette.keys`    | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
+| `owlette.keys`    | legacy session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke` |
 | `owlette.webhooks` | `subscribe`, `list`, `get`, `update`, `remove`, `rotateSecret`, `probe`, `deliveries`, `delivery`, `retryDelivery` |
 | `owlette.sites`   | `list`, `get`                                                      |
 | `owlette.machines` | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatchCommand`, `getCommand`, `captureScreenshot` |
 | `owlette.installerDeployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete` |
 | `owlette.installer` | `list`, `latest`, `upload`, `setLatest`, `delete`                |
-| `owlette.processes(siteId, machineId)` | `list`, `create`, `update`, `start`, `stop`, `restart`, `kill`, `schedule`, `delete` |
+| `owlette.processes(siteId, machineId)` | `list`, `get`, `create`, `update`, `start`, `stop`, `restart`, `kill`, `schedule`, `delete` |
 | `owlette.chat`    | `new`, `list`, `send`, `rename`, `delete`                          |
-| `owlette.users`   | `list`, `promote`, `demote`, `assignSites`, `removeSites`, `delete` |
-| `owlette.members(siteId)` | `list`, `add`, `remove`                                    |
+| `owlette.users`   | `list`, `get`, `promote`, `demote`, `assignSites`, `removeSites`, `delete` |
+| `owlette.members(siteId)` | `list`, `add`, `setRole`, `remove`, `transferOwnership`    |
 | `owlette.quotas`  | `current`, `history`                                               |
+
+`account.apiKeys` is superadmin only. `owlette.keys` takes a dashboard session or a Firebase ID token, never an API
+key, and the API refuses an ID token for an account with a second factor
+(`403 mfa_challenge_required`); manage those keys in the dashboard.
 
 `installerDeployments.uninstall(siteId, deploymentId, { softwareName })` takes
 the program's exact name in the machines' software list, since a deployment

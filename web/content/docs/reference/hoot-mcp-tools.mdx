@@ -1,10 +1,12 @@
 ---
 title: "hoot mcp tools reference"
 description: "every tool an AI agent gets through hoot mcp: its tier, what it acts on and what it does, from list_machines and get_site_logs to ask_hoot and hoot's machine tools."
-keywords: ["hoot mcp", "mcp tools", "tool list", "fleet_status", "list_machines", "get_site_logs", "ask_hoot", "get_metrics_history", "list_installed_software", "list_alert_rules", "get_audit_log", "list_recent_screenshots", "capture_screenshot", "get_saved_display_layout", "get_reboot_schedule", "set_reboot_schedule", "create_deployment", "cancel_deployment", "update_owlette_agent", "update_process", "add_process", "delete_process", "tool tier", "tool_not_allowed", "machine_not_granted", "claude code tools", "which tools can an ai agent use"]
+keywords: ["hoot mcp", "mcp tools", "tool list", "fleet_status", "list_machines", "get_site_logs", "ask_hoot", "get_metrics_history", "list_installed_software", "list_alert_rules", "get_audit_log", "list_recent_screenshots", "capture_screenshot", "get_saved_display_layout", "get_reboot_schedule", "set_reboot_schedule", "create_deployment", "cancel_deployment", "update_owlette_agent", "update_process", "add_process", "delete_process", "tool tier", "tool_not_allowed", "machine_not_granted", "max_tool_tier_exceeded", "claude code tools", "which tools can an ai agent use"]
 ---
 
 every tool an AI agent gets through [hoot mcp](/docs/agent/hoot-mcp), with the tier it needs and what it acts on. a machine is offered only the tools at or below the tier it was given, so the list a client shows is shorter on a machine set to **read** than on one set to **privileged**. how to turn a machine on, set its tier and connect a client is in the [guide](/docs/agent/hoot-mcp); this page is the list.
+
+a call that changes what a machine launches counts as tier 3 whatever its tool's tier, so a machine set lower than **privileged** gets `max_tool_tier_exceeded`: `add_process`, `delete_process` and `set_launch_mode` always, `update_process` for any field but the name, priority and visibility, and the actions of `manage_windows_service`, `manage_scheduled_task`, `manage_windows_update`, `manage_windows_feature` and `registry_operation` that change what runs. the [guide](/docs/agent/hoot-mcp#how-far) says what counts.
 
 **acts on** is one of: *nothing*, for a tool that reads the site; *one machine*, named in `machine`; *several machines*, named in the call; or, for `ask_hoot`, the machines the task names. a call that names a machine the calling machine may not act on is refused with `machine_not_granted`. a call that names several machines is refused whole when any one of them is outside what the machine may act on, and names at most 50 machines.
 

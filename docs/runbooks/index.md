@@ -47,6 +47,8 @@ Use [hotfix-rollback.md](hotfix-rollback.md) when production is actively unhealt
 - emergency validation
 - follow-up cleanup
 
+[upgrade-2.12.0.md](upgrade-2.12.0.md) is the 2.12.x promotion chain, kept as history for the procedure; do not rerun it.
+
 Use [dev-to-prod-workflow.md](dev-to-prod-workflow.md) when you need the meta-model:
 
 - how `dev` and `main` relate

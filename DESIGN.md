@@ -182,7 +182,7 @@ owlette has two themes: dark, the night shift and the brand default, and light, 
 - dense telemetry: 12–14px type, 36px controls, usage-coloured bars and sparklines inside rows
 - Geist for everything, Geist Mono for readouts, commands and identifiers
 - all copy lowercase
-- motion is functional and directional: sweeps run left to right, entrances fade up, and everything stops under reduced motion
+- motion is functional and directional: sweeps run left to right, pages fade in row by row from the top, and everything stops under reduced motion
 
 ## Colors
 
@@ -192,7 +192,7 @@ a cool, near-monochrome navy console lit by one cyan signal and an occasional am
 - **Signal Cyan** (`signal-cyan`): primary buttons, focus rings, links, selected checkmarks, the landing CTA, and inline code inside hoot answers. it means "live, interactive, yours to act on". `signal-cyan-bright` is its hover step. `signal-cyan-dim` is for quiet cyan structure such as accent grid lines and tinted borders. text on a cyan fill is `signal-cyan-ink`, never white.
 
 ### Secondary
-- **Sodium Amber** (`sodium-amber`): the warm counterpoint, used sparingly on the landing page (section eyebrows, "attention" states in the display mock-ups) and wherever something warm has to stand apart from the cyan. `sodium-amber-bright` and `sodium-amber-dim` are its hover and quiet steps. the code also defines an `--accent-coral` (oklch 0.70 0.14 30), used in 3 files; treat it as part of the amber family rather than a third accent.
+- **Sodium Amber** (`sodium-amber`): the warm counterpoint, used sparingly on the landing page (section eyebrows, "attention" states in the display mock-ups) and wherever something warm has to stand apart from the cyan. `sodium-amber-bright` and `sodium-amber-dim` are its hover and quiet steps. the code also defines an `--accent-coral` (oklch 0.70 0.14 30), used in 6 files; treat it as part of the amber family rather than a third accent.
 
 ### Neutral
 - **Console Navy** (`console-navy`): the page. carries the 20px cyan dot grid on `body`.
@@ -296,11 +296,11 @@ corners are small and engineered. the base radius is 6px (`--radius: 0.375rem`).
 
 ### Buttons
 quiet and precise. the fill is flat at rest and wakes up with a directional sweep.
-- **Shape:** gently squared (4px). default height 36px, small 32px, large 40px. icon buttons are square at the same heights.
+- **Shape:** gently squared (4px). default height 36px, small 32px, large 40px, and extra small 28px for a toggle inside a segmented control. icon buttons are square at the default, small and large heights.
 - **Primary:** signal cyan fill, cyan-ink text, control type.
 - **Hover / Focus:** `.btn-sweep` draws a translucent tint across the button from left to right over 200ms (`cubic-bezier(0.4, 0, 0.2, 1)`), and on exit the tint keeps travelling right. the tint is a scrim, not a colour: blue (`oklch(0.62 0.16 250)` at 26%) in dark mode, so it brightens any base without fighting it. keyboard focus adds a faint ring on top of the sweep (see Keyboard Focus). disabled sits at 50% opacity.
 - **Outline:** input-navy fill with a hairline-blue border. never revert it to the old `--input` border, which is invisible on a card.
-- **Secondary / Ghost:** control-navy fill, or no fill. ghost picks up only the sweep tint.
+- **Secondary / Ghost:** control-navy fill, or no fill. ghost picks up only the sweep tint, except as a toggle that is on (`aria-pressed`), which takes the accent fill.
 - **Destructive:** alarm coral at 60% with white text. `ghost-destructive` is a red glyph with no fill, for icon-only deletes.
 - **Link:** opts out of the sweep and uses the highlighter link below.
 - **Icon-only:** always `IconButton` (`web/components/ui/icon-button.tsx`). its `label` is required and becomes both the accessible name and the tooltip, and it defaults to `type="button"` so it never submits a form by accident.

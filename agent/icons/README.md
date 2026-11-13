@@ -18,7 +18,7 @@ ICO files are multi-resolution (16x16–256x256) so Windows can pick the right s
 
 ### Icon Usage
 
-- **tray**: these PNGs are the source art. The desktop app embeds 64 px downsamples of them from `desktop/src-tauri/icons/tray/` and never reads this folder
+- **tray**: these PNGs are the source art. The desktop app embeds 64 px downsamples of them from `desktop/src-tauri/icons/tray/` on Windows and Linux and never reads this folder; the macOS menu bar uses its own glyphs there (`template-*.png`, `glyph-*.png`). The yellow icon shown while a swoop session captures the screen, `swoop.png` (`glyph-swoop.png` on macOS), lives only in that folder
 - **installer**: `normal.ico` is the Inno Setup installer window icon, and `normal.png` the icon of the uninstall entry
 - **warning**: nothing uses it
 

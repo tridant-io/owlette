@@ -24,6 +24,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [runbooks/manual-infrastructure.md](runbooks/manual-infrastructure.md) — the artifacts no `git push` deploys: cron schedules, firestore indexes, functions, load balancer.
 - [runbooks/app-check-rollout.md](runbooks/app-check-rollout.md) — turning on firebase app check enforcement without locking out the real app.
 - [runbooks/talons.md](runbooks/talons.md) — the once-a-minute talon sweep, missed-fire grace, and stale-run janitor; written for "my talon didn't run".
+- [runbooks/plans-and-billing.md](runbooks/plans-and-billing.md) — turning plan enforcement (owlette free, the trial, per-site billing through tridant id) on and off, checking it, and running it day to day.
 - [runbooks/upgrade-2.12.0.md](runbooks/upgrade-2.12.0.md) — the self-contained 2.12.x promotion chain (legacy keys, env vars, R2, migrations); kept for the procedure.
 - [runbooks/roost-kill-switch.md](runbooks/roost-kill-switch.md) — per-site emergency stop for roost publish, signed-URL, and agent sync.
 - [runbooks/security-boundary-kill-switches.md](runbooks/security-boundary-kill-switches.md) — the two W9 enforcement switches (capability, privileged rate limit); incident or drill only.
@@ -38,7 +39,7 @@ two trees, one rule. **published product docs live in `web/content/docs/`** — 
 - [internal/v1-v2-migration.md](internal/v1-v2-migration.md) — canonical v1 → v2 (roost) migration design.
 - [internal/version-management.md](internal/version-management.md) — what `scripts/sync-versions.js` writes, why `firestore.rules` keeps its own version, and the tag patterns.
 - [internal/slsa-build-l3.md](internal/slsa-build-l3.md) — hermetic CI installer build with signed in-toto provenance, verifiable with `slsa-verifier`.
-- [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned `claude.exe` that agents fetch on demand.
+- [internal/cortex-cli-provisioning.md](internal/cortex-cli-provisioning.md) — publishing and refreshing the sha256-pinned hoot CLI, one pin per platform, that agents fetch on demand.
 - [internal/dmca-takedown-sop.md](internal/dmca-takedown-sop.md) — 17 U.S.C. § 512(c) safe-harbor operator SOP for roost user content.
 - [internal/public-api-launch-runbook.md](internal/public-api-launch-runbook.md) — the public API launch sequence, go/no-go gates, and incident table.
 - [internal/public-api-developer-preview-checklist.md](internal/public-api-developer-preview-checklist.md) — the developer-preview release checklist.

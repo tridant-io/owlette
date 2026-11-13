@@ -74,5 +74,5 @@ Roughly prioritized. Not a commitment — just a living list of what's next.
 
 ## billing
 
-- **Stripe integration** — core and pro, priced per active machine, after a 14-day pro trial; the prices, the pro minimum and the included storage are `PRICING_FACTS` in `web/lib/product-facts.ts`, never restated here. Metered billing keyed off active machine count + per-tier flag on each site doc. What is built and how it is switched on: `docs/runbooks/plans-and-billing.md`.
-- **Usage dashboard** — show machine count, current tier, projected bill, and roost storage usage vs cap in account settings.
+- **Billing on prod** — per-site billing through tridant id (core and pro per active machine, after a 14-day pro trial) shipped in 4.2.0, and plans stay switched off on prod; the prices, the pro minimum and the included storage are `PRICING_FACTS` in `web/lib/product-facts.ts`, never restated here. What is built and how it is switched on: `docs/runbooks/plans-and-billing.md`.
+- **Usage dashboard** — the plan page (`/settings/plan`) shows each site's plan and its active machines this period since 4.2.0; still missing are a projected bill and roost storage usage vs cap.

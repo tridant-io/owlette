@@ -1,6 +1,6 @@
 # owlette-sdk — python SDK
 
-Async Python SDK for the [roost](https://owlette.app) public API. Built on
+Async Python SDK for the [owlette](https://owlette.app) public API. Built on
 `httpx.AsyncClient`, typed end-to-end, mypy-strict clean.
 
 Requires Python ≥ 3.10.
@@ -62,10 +62,10 @@ Roost(
 ### plan refusals
 
 Plans are not enforced during the beta. Once they apply, a request that the
-site owner's plan does not cover raises `RoostApiError` with
+site's plan does not cover raises `RoostApiError` with
 `code == "plan_required"` and `status == 402`, and is not retried.
 `error.problem["entitlement"]` names what the plan lacks — `owlette.api_keys`
-for every request made with a key on a plan without API keys. See
+for every request made with a key on a site whose plan lacks API keys. See
 [plans](https://owlette.app/docs/plans).
 
 `on_billing_warning` is still accepted for compatibility but never fires: the
@@ -81,11 +81,21 @@ removed.
 | `roost.chunks`    | `check`, `upload_urls`, `download_urls`, `mount`, `referrers`           |
 | `roost.versions`  | `list`, `list_page`, `get`, `patch`, `files`, `diff`                    |
 | `roost.deployments` | `list`, `list_page`, `get`                                            |
-| `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `rotate`, `revoke` |
-| `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe` |
+| `roost.keys`      | legacy session/ID-token key admin: `create`, `list`, `update`, `rotate`, `revoke` |
+| `roost.webhooks`  | `subscribe`, `list`, `get`, `update`, `remove`, `rotate_secret`, `probe`, `deliveries`, `delivery`, `retry_delivery` |
 | `roost.sites`     | `list`, `get`                                                           |
 | `roost.machines`  | `list`, `get`, `deployments`, `reboot`, `shutdown`, `dispatch_command`, `get_command`, `capture_screenshot` |
+| `roost.installer_deployments` | `list`, `get`, `create`, `retry`, `cancel`, `uninstall`, `delete` |
+| `roost.installer` | `list`, `latest`, `upload`, `set_latest`, `delete`                     |
+| `roost.processes(site_id, machine_id)` | `list`, `get`, `create`, `update`, `start`, `stop`, `kill`, `schedule`, `delete` |
+| `roost.chat`      | `new`, `list`, `send`, `rename`, `delete`                               |
+| `roost.users`     | `list`, `get`, `promote`, `demote`, `assign_sites`, `remove_sites`, `delete` |
+| `roost.members(site_id)` | `list`, `add`, `set_role`, `remove`, `transfer_ownership`        |
 | `roost.quotas`    | `current`, `history`                                                    |
+
+`roost.keys` takes a dashboard session or a Firebase ID token, never an API
+key, and the API refuses an ID token for an account with a second factor
+(`403 mfa_challenge_required`); manage those keys in the dashboard.
 
 Roost, version, deployment, and chunk-referrer paginated lists expose
 **async generators** that auto-walk the `nextPageToken` cursor:
@@ -109,8 +119,8 @@ print(identity.email or identity.user_id, identity.key.key_prefix if identity.ke
 version = await client.account.version()
 print(version.current, version.supported)
 
-# API-key-compatible key management. New keys inherit the caller's allowed
-# scopes, so an API-key caller cannot widen its own privileges.
+# API-key-compatible key management, superadmin only. New keys inherit the
+# caller's allowed scopes, so an API-key caller cannot widen its own privileges.
 created = await client.account.api_keys.create(name="preview publisher")
 keys = await client.account.api_keys.list()
 await client.account.api_keys.revoke(created["keyId"])

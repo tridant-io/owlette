@@ -1,7 +1,7 @@
 ---
 title: "platform support"
 description: "what owlette does on Windows, macOS and Linux: one table of every capability, then what each difference means for a machine on that platform."
-keywords: ["mac support", "macos support", "linux support", "ubuntu", "apple silicon", "what works on mac", "what works on linux", "feature matrix", "compatibility", "supported platforms", "wayland", "x11", "unsupported_on_platform", "owlette swoop"]
+keywords: ["mac support", "macos support", "linux support", "ubuntu", "apple silicon", "what works on mac", "what works on linux", "feature matrix", "compatibility", "supported platforms", "wayland", "x11", "unsupported_on_platform", "owlette swoop", "hoot mcp"]
 ---
 
 the owlette agent runs on three platforms. most of owlette works the same on all of them; this page is the list of what does not.
@@ -48,6 +48,7 @@ how to install each one is in [installation](/docs/agent/installation). the dash
 | **installed software list** | yes | yes (application bundles) | yes (`dpkg` packages) |
 | **uninstall** | yes | yes (removes the application bundle) | no |
 | **[hoot](/docs/dashboard/hoot) tools** | all 52 | 13 refused, plus `run_python` | same as macOS |
+| **[hoot mcp](/docs/agent/hoot-mcp)** (an AI agent here acting on other machines) | yes | yes | no — it can still be acted on |
 | **on-screen notifications** | yes | through the owlette app | through the owlette app |
 
 the rest of this page explains each difference.
@@ -155,6 +156,8 @@ the model is offered every tool on every machine, and the agent refuses what its
 `configure_gpu_tdr`, `manage_windows_update`, `suppress_setup_screens`, `manage_notifications`, `configure_power_plan`, `manage_scheduled_task`, `network_reset`, `registry_operation`, `clean_disk_space`, `get_event_logs_filtered`, `manage_windows_feature`, `run_powershell`, `execute_script`
 
 `run_python`, and `run_command` with `user_session: true`, are refused too. the read tools, process control, files, `run_command` with its own allow-list, service control through `systemctl` and `launchctl`, and the system log through `journalctl` and `log show` all work. with nobody signed in, hoot still works, because its tools run in the service; only the tools the owlette app carries out — `show_notification`, and `capture_screenshot` on a Mac — need someone's session. the [hoot tools reference](/docs/reference/hoot-tools#platforms) has the per-tool detail.
+
+**[hoot mcp](/docs/agent/hoot-mcp)**, which lets an AI agent on one machine use hoot's tools on the site's other machines, runs on the acting machine on Windows and macOS. a Linux machine cannot act through it yet, and the desktop app there has no **connect an ai agent** item, but it can be one of the machines acted on.
 
 ---
 

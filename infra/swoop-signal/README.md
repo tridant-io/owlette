@@ -123,7 +123,8 @@ a bare `wrangler deploy` with no `-e` would publish a *fourth*, unenvironmented 
 | `gh workflow run swoop-signal-deploy.yml --ref main -f environment=prod` | `wrangler deploy -e prod` | `swoop-signal-prod` | owlette.app's `SWOOP_SIGNAL_URL`, both origins |
 
 [`.github/workflows/swoop-signal-deploy.yml`](../../.github/workflows/swoop-signal-deploy.yml) does it: path
-filters on `infra/swoop-signal/**` and the workflow itself, the vitest suite first on every pull request and
+filters on `infra/swoop-signal/**` and the workflow itself (and, for a pull request only, the golden vectors in
+`agent/swoop/testdata/protocol/**`), the vitest suite first on every pull request and
 every push, then the deploy on a push to `dev` or on a `workflow_dispatch`, then `GET /health` against the
 deployed origin with a non-200 failing the job. **a push to `main` deploys nothing**: the prod worker is a
 deliberate dispatch with `environment=prod`, and the dispatch input defaults to `dev` so a mis-click lands on
@@ -221,7 +222,8 @@ targets.
 
 all in `src/messages.ts`, each with its number: 4 KiB token, 64 KiB frame, 4 viewers per room, 10 rings per
 60 s per machine. a viewer that has not sent a frame or had a keepalive `ping` answered for 90 s is stale:
-when the room is full it is evicted (`bye` to the host, close `stale`) rather than counted, because a
+when the room is full it is evicted (close `stale`, and a `bye` to the host only for a viewer whose offer
+never reached it, PROTOCOL.md section 2) rather than counted, because a
 browser that vanished without a close keeps its socket in the hibernation set for a long time and four of
 those refused every live viewer as `room_full` (dev, 2026-09-24). the test worker sets
 `SWOOP_VIEWER_STALE_MS` to 1500 for that test. `jti` is single use, enforced in the room because it is the only verifier here with durable

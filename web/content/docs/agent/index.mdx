@@ -69,9 +69,12 @@ service host — Windows: tools\owlette-host.exe · macOS: launchd (app.owlette.
               │     ├── machine_commands.py (public-API commands — capture_screenshot)
               │     ├── process_commands.py (process control — restart_process)
               │     ├── swoop_commands.py (swoop session requests, kills and refreshes)
-              │     └── site_commands.py (site setting refreshes)
+              │     ├── site_commands.py (site setting refreshes)
+              │     ├── pairing_commands.py (unpair — a revoked agent token)
+              │     └── path_commands.py (check_path — the process editor's path check)
               ├── swoop_manager.py (swoop streamer lifecycle)
               │     └── swoop_doorbell.py (the signalling room's idle socket)
+              ├── fleet_session.py (hoot mcp's fleet session — Windows and macOS)
               ├── keep_awake.py (keep screens awake — the service's sleep hold)
               ├── sync_scrub.py (roost integrity scrub + orphan-chunk reap — hourly check)
               ├── config_sync.py (config reconciliation — local, cloud, cached remote)
@@ -96,8 +99,10 @@ started in the signed-in user's session:
   └── session_exec.py (user-session command executor — Windows)
 
 launched on demand:
-  └── configure_site.py (device-code pairing, and the back end for the desktop
-        app's join and leave site, submit issue and reboot control)
+  ├── configure_site.py (device-code pairing, and the back end for the desktop
+  │     app's join and leave site, submit issue and reboot control)
+  └── fleet_mcp.py (hoot mcp's MCP server, started by an AI agent's MCP client —
+        Windows and macOS)
 ```
 
 see the [hoot tools reference](/docs/reference/hoot-tools) for the current tool list.
@@ -176,7 +181,7 @@ under the data root, the same layout on every platform:
 | `.tokens.enc` | the encrypted OAuth tokens. the key is derived from the machine itself, so the file is useless anywhere else; on macOS and Linux only root can read it |
 | `logs/` | the service's logs, pairing and installer logs, and `logs/swoop/` for the streamer. the desktop app logs per-user, elsewhere — see [log locations](/docs/agent/troubleshooting#log-locations) |
 | `tmp/` | runtime state — `session_state.json`, `app_states.json`, `service_status.json` and the desktop app's PID files; on Windows also the `restart.flag` the app writes to restart the service |
-| `ipc/` | the queues between the service and the processes in the user's session — hoot, and the desktop app's jobs and requests |
+| `ipc/` | the queues between the service and the processes in the user's session — hoot, and the desktop app's jobs and requests — and `ipc/fleet/`, hoot mcp's [fleet session](/docs/agent/hoot-mcp#how-it-works) |
 | `content/`, `sync-state.db` | roost's chunk store and sync state |
 | `cache/` | the hoot CLI, and on macOS and Linux the staged self-update package |
 

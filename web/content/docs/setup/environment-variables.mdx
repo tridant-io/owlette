@@ -1,14 +1,14 @@
 ---
 title: "environment variables"
 description: "every environment variable the owlette web dashboard reads: what each one does, whether it is required, what breaks without it, and which values must be identical on every origin that serves the same site."
-keywords: ["env vars", ".env", ".env.local", "secrets", "configuration", "railway variables", "vercel environment", "turn relay", "signalling", "turnstile", "captcha", "jwt key rotation"]
+keywords: ["env vars", ".env", ".env.local", "secrets", "configuration", "railway variables", "vercel environment", "turn relay", "signalling", "turnstile", "captcha", "jwt key rotation", "plan enforcement", "tridant id", "edge secret", "network binding"]
 ---
 
 the canonical list of keys lives in `scripts/env-manifest.json`: names, which deployment each key belongs on, and notes, never values. `node scripts/sync-env.mjs check` compares that list with what each deployment actually holds. this page explains what the keys do.
 
 <Callout type="warning" title={"must match"}>
 
-when two origins serve the same site, as a primary and a failover origin do, seven secrets must be byte-identical on both: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY` and `SWOOP_SIGNAL_RING_SECRET`. a mismatch fails silently, and only on the origin that differs: people are signed out, second factors stop verifying, stored LLM keys stop decrypting, or swoop sessions break.
+when two origins serve the same site, as a primary and a failover origin do, fourteen values must be byte-identical on both: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, `LLM_ENCRYPTION_KEY`, `TURNSTILE_SECRET`, `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY`, `SWOOP_SIGNAL_RING_SECRET`, `EDGE_SHARED_SECRET`, `PLAN_ENFORCEMENT`, `TRIDANT_API_URL`, `TRIDANT_LICENSE_KEY`, `TRIDANT_OIDC_ISSUER`, `TRIDANT_OIDC_CLIENT_ID` and `TRIDANT_OIDC_CLIENT_SECRET`. a mismatch fails silently, and only on the origin that differs: people are signed out, second factors stop verifying, stored LLM keys stop decrypting, swoop sessions break, every request reads as one from an unknown network, plans go unenforced, or linking a tridant account fails.
 
 </Callout>
 
@@ -145,21 +145,21 @@ agent installers go to R2 behind tridant's download host when these are set, rea
 |----------|--------|-------------|
 | `INSTALLER_R2_ACCESS_KEY_ID` | R2 access key ID | an R2 token with object read and write on this environment's installer bucket only: `owlette-downloads` for `prod`, `owlette-downloads-staging` for `dev` |
 | `INSTALLER_R2_SECRET_ACCESS_KEY` | R2 secret access key | the matching secret |
-| `TRIDANT_API_URL` | `https://api.tridant.io` (dev: `https://api-staging.tridant.io`) | tridant id, where promoted installers are registered |
+| `TRIDANT_API_URL` | `https://api.tridant.io` (dev: `https://api-staging.tridant.io`) | tridant id, where promoted installers are registered. [plans](#plans-and-tridant-id-optional) use the same value |
 | `TRIDANT_RELEASE_KEY` | tridant id API key | a `release.write` key for owlette Core. without it, or without `TRIDANT_API_URL`, nothing is registered |
 
 the bucket and the public link follow the roost environment: `https://download.tridant.io/owlette/<file>` for `prod`, `https://download-staging.tridant.io/owlette/<file>` for `dev`. `R2_S3_ENDPOINT` is shared with roost.
 
 ### issue logs
 
-the log zips a machine attaches to an issue (**attach logs** in the desktop app's submit issue dialog) go to R2, read in `web/lib/issueLogsStorage.server.ts`:
+the log zip a machine attaches to an issue (**attach logs** in the desktop app's submit issue dialog), and the screenshots and videos added to an issue from the dashboard, go to R2, read in `web/lib/issueLogsStorage.server.ts`:
 
 | variable | format | what it does |
 |----------|--------|-------------|
 | `ISSUE_LOGS_R2_ACCESS_KEY_ID` | R2 access key ID | an R2 token with object read and write on `owlette-dev-issue-logs` and `owlette-prod-issue-logs` only. the same pair goes on every deployment |
 | `ISSUE_LOGS_R2_SECRET_ACCESS_KEY` | R2 secret access key | the matching secret |
 
-the bucket follows the roost environment: `owlette-prod-issue-logs` for `prod`, `owlette-dev-issue-logs` for `dev`. `R2_S3_ENDPOINT` is shared with roost. `scripts/provision-r2.mjs` creates both buckets and the rule that deletes every zip 30 days after upload. without the pair, the upload-url route fails and every issue goes out without its zip, with the reason in its text.
+the bucket follows the roost environment: `owlette-prod-issue-logs` for `prod`, `owlette-dev-issue-logs` for `dev`. `R2_S3_ENDPOINT` is shared with roost. `scripts/provision-r2.mjs` creates both buckets and the rule that deletes every file 30 days after upload. without the pair, the upload-url route fails and every issue goes out without its zip, with the reason in its text.
 
 ---
 
@@ -174,11 +174,21 @@ the bucket follows the roost environment: `owlette-prod-issue-logs` for `prod`, 
 
 ---
 
+## Cloudflare edge (when Cloudflare fronts the origin)
+
+| variable | what it does |
+|----------|-------------|
+| `EDGE_SHARED_SECRET` | the value the Cloudflare transform rule in `infra/cloudflare` sends as `X-Owlette-Edge` on every request. with it set, the client address (`CF-Connecting-IP`, which rate limits key on) and network (`X-Owlette-Asn`, which swoop's network binding reads) count only on a request that carries it. must-match, one value on every origin and in the rule |
+
+set it on every origin Cloudflare fronts. unset, every request's network reads as unknown. see [failover](/docs/setup/web-deployment#failover-behind-a-cloudflare-load-balancer).
+
+---
+
 ## cron (required for the scheduled endpoints)
 
 | variable | what it does |
 |----------|-------------|
-| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the eight `/api/cron/*` routes (`api-key-expiry`, `display-alerts`, `health-check`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
+| `CRON_SECRET` | authenticates every scheduled endpoint: sent as `X-Cron-Secret` to the ten `/api/cron/*` routes (`api-key-expiry`, `display-alerts`, `health-check`, `plan-daily`, `plan-trials`, `process-alerts`, `retention`, `status-ping`, `swoop-retention`, `talons`) and as `Authorization: Bearer` to `/api/hoot/escalation`. give each environment its own value. see [scheduled endpoints](/docs/setup/web-deployment#scheduled-endpoints) |
 
 `CRON_SECRET` also signs the unsubscribe links in alert emails, so changing it breaks every unsubscribe link already sent. it has no default: without it an alert email to a person is not sent, since its unsubscribe link cannot be signed, and every unsubscribe link is refused.
 
@@ -203,6 +213,7 @@ python -c "import secrets; print(secrets.token_hex(32))"
 | `SWOOP_SESSION_MASTER_KEY` | yes | the root every session's keys are derived from: the key the machine authenticates its connection details with, and each viewer's key. used as raw UTF-8 bytes, so a long random hex string works | every session start fails with `500` |
 | `CLOUDFLARE_TURN_KEY_ID` | no | a Cloudflare Realtime TURN key ID | swoop offers STUN only (`stun.cloudflare.com`): fine on one network and through most routers, but two ends behind strict routers cannot connect |
 | `CLOUDFLARE_TURN_KEY_API_TOKEN` | no | the bearer token that mints TURN credentials for that key, per session and per site | as above |
+| `SWOOP_NETWORK_BINDING` | no | ties swoop control to the networks a person passed a second factor on in the last 7 days. `log` records each control request's network and changes nothing; `enforce` makes a control request from a network not verified for that person ask for a step-up; `off` does neither. `enforce` needs `EDGE_SHARED_SECRET`, or every network reads as unknown and every control request asks | `log` |
 
 swoop's must-match keys are `SWOOP_JWT_PRIVATE_KEY`, `SWOOP_SESSION_MASTER_KEY` and `SWOOP_SIGNAL_RING_SECRET`: a session's start and its machine's bundle fetch can land on different origins. `SWOOP_SIGNAL_URL`, `SWOOP_JWT_KID` and `SWOOP_JWT_PUBLIC_KEY` must agree across origins too, and with the worker.
 
@@ -247,6 +258,23 @@ server-side only. these connect `/api/cron/status-ping` to the hosted status pag
 | `INSTATUS_COMPONENT_TALON_DISPATCH_ID` | optional component ID for talon dispatch |
 
 the page counts as configured only when the API key, the page ID and the seven non-optional component IDs are set. keep the Instatus API key out of docs and screenshots; record only component IDs and variable names.
+
+---
+
+## plans and tridant id (optional)
+
+[plans](/docs/plans) come from tridant id, read in `web/lib/plan.server.ts`. all of these are must-match: a failover origin that lacks one silently stops enforcing plans or linking accounts.
+
+| variable | what it does |
+|----------|-------------|
+| `PLAN_ENFORCEMENT` | only the exact string `on` enforces plans. anything else, or unset, leaves every plan gate open |
+| `TRIDANT_API_URL` | tridant id's API origin, `https://api.tridant.io` (dev: `https://api-staging.tridant.io`). shared with installer registration |
+| `TRIDANT_LICENSE_KEY` | the tridant id key for plans and billing, with the scopes `license.read`, `site.write` and `billing.write`. it expires, and owlette logs an error in its last 30 days |
+| `TRIDANT_OIDC_ISSUER` | tridant id's OIDC issuer, `https://id.tridant.io` (dev: `https://id-staging.tridant.io`) |
+| `TRIDANT_OIDC_CLIENT_ID` | owlette's OIDC client at tridant id, for linking an existing tridant account |
+| `TRIDANT_OIDC_CLIENT_SECRET` | that client's secret |
+
+with `PLAN_ENFORCEMENT=on` but `TRIDANT_API_URL` or `TRIDANT_LICENSE_KEY` unset, plans stay off and the server logs a warning. a wrong or expired key also fails every plan gate open. without all three `TRIDANT_OIDC_*`, linking a tridant account answers `503 tridant_link_not_configured`.
 
 ---
 
@@ -447,6 +475,17 @@ INSTATUS_COMPONENT_CORTEX_CHAT_ID=...
 
 # llm key encryption
 LLM_ENCRYPTION_KEY=your-64-char-hex
+
+# cloudflare edge
+EDGE_SHARED_SECRET=your-64-char-hex
+
+# plans and tridant id (optional)
+PLAN_ENFORCEMENT=on
+TRIDANT_API_URL=https://api.tridant.io
+TRIDANT_LICENSE_KEY=...
+TRIDANT_OIDC_ISSUER=https://id.tridant.io
+TRIDANT_OIDC_CLIENT_ID=...
+TRIDANT_OIDC_CLIENT_SECRET=...
 
 # autonomous hoot (optional)
 CORTEX_INTERNAL_SECRET=your-64-char-hex

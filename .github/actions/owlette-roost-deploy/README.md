@@ -2,7 +2,7 @@
 
 Publishes a directory as a new Owlette Roost version and optionally deploys that exact version to the Roost target fleet.
 
-This action is a launch asset. It depends on `@owlette/cli@rc`, so it becomes externally usable after the Wave 5.3 npm publish gate is complete.
+This action is a launch asset. It installs `@owlette/cli@rc` from npm, which is not published yet, so until it is the install step fails (see [distribution](https://owlette.app/docs/api/distribution)).
 
 ## Usage
 
@@ -43,7 +43,7 @@ jobs:
 
 Use a dedicated CI key with the narrowest scope that supports the workflow:
 
-- `site:<site-id>:read`
-- `roost:<roost-id>:write,deploy`
+- `site=<site-id>:write` for the chunk dedup check and signed upload URLs
+- `roost=<roost-id>:write,deploy` for the version publish and the deploy
 
-Use `deploy: false` when you only want to publish a version and trigger deployment manually.
+Use `deploy: false` when you only want to publish a version and trigger deployment manually; the key can then omit roost `deploy`.

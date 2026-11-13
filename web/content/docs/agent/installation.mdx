@@ -1,7 +1,7 @@
 ---
 title: "installation"
 description: "install the owlette agent on Windows, macOS or Linux, pair it with a site, check that it is running, and remove it. one installer version ships one file per platform."
-keywords: ["add a machine", "new machine", "onboard", "macos", "linux", "pkg", "deb", "apt", "uninstall", "remove owlette", "preseed", "mdm", "golden image", "kiosk account"]
+keywords: ["add a machine", "new machine", "onboard", "macos", "linux", "pkg", "deb", "apt", "uninstall", "remove owlette", "preseed", "mdm", "golden image", "kiosk account", "smartscreen", "signed", "publisher"]
 ---
 
 there are four supported ways to install or update the agent:
@@ -48,6 +48,8 @@ download the file for the machine's platform, run it with administrator rights, 
 ![the owlette window on join a site, showing the pairing phrase, the host to approve it on, and the button that opens the pairing page](/docs-screens/agent-join-site.png)
 
 pairing phrases expire after 10 minutes. credentials are stored encrypted at `C:\ProgramData\Owlette\.tokens.enc`.
+
+the installer, its uninstaller and owlette's own programs are signed by Tridant, Inc., so Windows names that publisher rather than an unknown one. SmartScreen can still warn about the download until the name has built reputation.
 
 > **kiosks, signage, media servers, and headless or RDP machines:** nothing opens a browser on the target machine on its own. the phrase and its link are displayed, polling starts, and you authorize from your phone or another computer. `--no-browser` and `OWLETTE_NO_BROWSER=1` are still accepted by `configure_site.py` so existing deployment scripts keep working, but they no longer change anything. for machines nobody is standing in front of, enroll with `/ADD=` instead — see [method 2](#method-2-silent-install-with-add).
 

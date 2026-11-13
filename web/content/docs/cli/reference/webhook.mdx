@@ -19,7 +19,7 @@ what the CLI does have:
 
 ## API routes
 
-every route takes `?siteId=<siteId>`. reads need `site=<id>:read`; writes need `site=<id>:write`.
+every route takes `?siteId=<siteId>`. reads need `site=<id>:read`; writes need `site=<id>:write`. every route, reads included, also needs the site's owner, a site admin with the whole site, or a superadmin, and answers anyone else `403 forbidden`.
 
 | route | what it does |
 |---|---|

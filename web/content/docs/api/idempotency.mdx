@@ -4,7 +4,7 @@ description: "mutating routes that opt into idempotency take an Idempotency-Key 
 keywords: ["retry", "retries", "duplicate requests", "safe retry", "replay", "Idempotency-Key"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-12
 
 <Callout type="warning" title={"route-specific support"}>
 
@@ -66,7 +66,7 @@ these return `400 idempotency_key_required` when the header is missing or blank:
 | processes | `POST .../machines/{machineId}/processes`; `POST .../processes/{processId}/start`, `/stop`, `/restart`, `/kill`, `/schedule`; `PATCH .../processes/{processId}/launch-mode` |
 | installer deployments | `POST /api/sites/{siteId}/deployments`; `DELETE .../deployments/{deploymentId}`; `POST .../deployments/{deploymentId}/retry`, `/cancel`, `/uninstall` |
 | logs | `DELETE /api/sites/{siteId}/logs` |
-| installer releases | `POST` and `PUT /api/installer/upload`; `POST /api/installer/{version}/set-latest` |
+| installer releases | `POST` and `PUT /api/installer/upload`; `POST /api/installer/{version}/set-latest`, `/register` |
 | hoot | `POST /api/hoot/conversations`; `POST /api/hoot/conversations/{conversationId}` |
 
 ### optional

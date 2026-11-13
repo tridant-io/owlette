@@ -165,14 +165,13 @@ So before `dev` is merged into `main` for 4.1.28 or later:
 1. Deploy rules 2.12.0 to prod:
 
    ```bash
-   firebase use prod
-   firebase deploy --only firestore:rules
+   firebase deploy --only firestore:rules --project prod
    ```
 
 2. Deploy the usage function, which needs whole-site standing from the same release:
 
    ```bash
-   firebase deploy --only functions:getUsageSummaryHttp
+   firebase deploy --only functions:getUsageSummaryHttp --project prod
    ```
 
 3. Prove the read path against prod's deployed rules:
@@ -205,12 +204,11 @@ Before `dev` is merged into `main` for 4.2.0:
 2. Deploy rules 2.13.0 to dev, if dev is not on it yet:
 
    ```bash
-   firebase use dev
-   firebase deploy --only firestore:rules
+   firebase deploy --only firestore:rules --project dev
    ```
 
 3. On dev, queue a screenshot on an online machine and confirm it completes and its entry leaves `commands/pending`.
-4. Deploy the same file to prod (`firebase use prod`, then the same deploy), and repeat step 3 on one prod machine.
+4. Deploy the same file to prod (the same deploy with `--project prod`), and repeat step 3 on one prod machine.
 
 Never deploy rules older than 2.13.0 to a project that has it (see [hotfix-rollback.md](hotfix-rollback.md)).
 
@@ -278,24 +276,14 @@ Full hotfix decision tree:
 
 ## tags and releases
 
-Current state: tag discipline has lapsed.
+Current state: every release from `v4.1.5` on is tagged (4.1.12 never shipped).
 
-Only three tags exist:
+Earlier releases are mostly untagged.
+The older tags are `v2.0.43`, `v2.0.46`, `v2.0.47`, `v2.12.3`, `v2.12.21`, `v3.0.0`, `v3.3.3` and `v4.1.0` to `v4.1.3`; prod's 3.3.6 has none.
 
-- `v2.0.43`
-- `v2.0.46`
-- `v2.0.47`
+The tag pattern is in [version-management.md](../internal/version-management.md) ("tags"): `vX.Y.Z` on the release's merge commit into `dev`.
 
-Tagging stopped early in project history.
-Releases `2.6.0` through `2.11.0` are not tagged.
-
-The internal version-management doc still documents release tagging:
-
-- `/docs/internal/version-management.md:171` documents `git tag v2.1.0`
-
-Practice has diverged from that written process.
-
-Recommendation: resume tagging on every production release.
+Tag every release.
 
 Tagging matters because the CI installer build workflow is triggered by tag push:
 
@@ -310,18 +298,14 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-If the release includes an agent installer, do not tag until the version and changelog are ready.
+If the release includes an agent installer, do not push or tag until every installer is built, uploaded to dev and its download verified ([agent-installer-release.md](agent-installer-release.md)).
 The installer filename bakes in the version.
 
 ## version coordination
 
 Owlette has multiple versioned surfaces.
 
-The coordinated app version is stored in:
-
-- `/VERSION`
-- `/agent/VERSION`
-- `/web/package.json`
+The coordinated app version is stored in `/VERSION`, `/agent/VERSION`, `/web/package.json` and the other surfaces listed in [version-management.md](../internal/version-management.md).
 
 Use the sync script to bump them together:
 
@@ -329,18 +313,14 @@ Use the sync script to bump them together:
 node scripts/sync-versions.js X.Y.Z
 ```
 
-The script updates:
-
-- root `VERSION`
-- agent `VERSION`
-- web `package.json`
+The script updates every one of them; the list is in [version-management.md](../internal/version-management.md).
 
 The script does not update:
 
 - `firestore.rules`
 
 Firestore rules are independently versioned.
-The Firestore rules schema version is a security-schema version, currently `v2.2.0`.
+The Firestore rules schema version is a security-schema version, currently `2.13.0` (the `// Version:` line at the top of `firestore.rules`).
 Do not assume an app patch release implies a Firestore rules version bump.
 
 Default bump granularity is `PATCH` unless the user explicitly says otherwise.
@@ -349,9 +329,9 @@ Critical release ordering:
 
 1. Pick the release version.
 2. Run `node scripts/sync-versions.js X.Y.Z`.
-3. Update the changelog.
-4. Build the agent installer.
-5. Tag the release when appropriate.
+3. Update both changelogs (`docs/changelog.md` and `web/content/docs/changelog.mdx`).
+4. Build the agent installers, upload them to dev and verify the downloads ([agent-installer-release.md](agent-installer-release.md)).
+5. Only then push, merge, and tag the release.
 
 Do not build the installer before bumping the version.
 The installer bakes the version into the EXE filename.
@@ -449,7 +429,7 @@ For emergency response, use [hotfix-rollback.md](hotfix-rollback.md).
 
 ## known gaps in this workflow
 
-- Tag discipline lapsed. Restart with the next release.
+- Tags are complete only from `v4.1.5`; earlier releases, prod's 3.3.6 among them, are mostly untagged.
 - Branch protection on `main` is GitHub-side, not pinned in repo.
 - Functions/rules/storage deploys are 100% manual. No CI automation pushes them on merge to `main`.
 - `main` has 38 commits not in `dev` (cherry-picked hotfixes or doc-only main edits). No back-merge automation.
@@ -462,4 +442,4 @@ For emergency response, use [hotfix-rollback.md](hotfix-rollback.md).
 - [agent-installer-release.md](agent-installer-release.md)
 - [hotfix-rollback.md](hotfix-rollback.md)
 - `/docs/internal/version-management.md`
-- `/CLAUDE.md` (Git Workflow section)
+- `/.claude/CLAUDE.md` (Git Workflow section)

@@ -6,7 +6,7 @@ keywords: ["revert"]
 
 ## required env vars
 
-- `OWLETTE_TOKEN` — API key with `roost=<roost-id>:rollback` for rollback calls. for probe testing, also grant `site=<site-id>:write` or use a separate probe token. to cover multiple roosts, grant per-roost rollback scopes or `roost=*:rollback`; `site=<site-id>:write` is not a rollback substitute.
+- `OWLETTE_TOKEN` — API key with `roost=<roost-id>:rollback` for rollback calls. for probe testing, also grant `site=<site-id>:write` or use a separate probe token; the probe also needs the key's owner to be a site admin or owner. to cover multiple roosts, grant per-roost rollback scopes or `roost=*:rollback`; `site=<site-id>:write` is not a rollback substitute.
 - `OWLETTE_API_URL` — `https://owlette.app` or `https://dev.owlette.app`.
 - `WEBHOOK_SIGNING_SECRET` — a 32+ character secret shared with `POST /api/webhooks/probe` while testing. when automatic dispatch is enabled, use the `signingSecret` returned from `POST /api/webhooks`. store it once; never logged.
 - `SLACK_WEBHOOK_URL` — incoming-webhook URL from a Slack app (`https://hooks.slack.com/services/...`).

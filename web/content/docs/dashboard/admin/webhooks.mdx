@@ -1,7 +1,7 @@
 ---
 title: "webhooks"
 description: "send a site's events to an HTTPS endpoint. roost version publishes and rollbacks go through the signed, retried dispatcher; machine-offline alerts go through the older alert sender. manage subscriptions from admin panel → webhooks or settings → webhooks."
-keywords: ["callback", "slack", "discord", "pagerduty", "integration", "notify", "http post", "signing secret", "hmac", "auto-disabled", "test webhook"]
+keywords: ["callback", "slack", "discord", "pagerduty", "integration", "notify", "http post", "signing secret", "hmac", "auto-disabled", "test webhook", "redirect"]
 ---
 
 **locations**: admin panel → webhooks (`/admin/webhooks`), settings → webhooks (`/settings/webhooks`)
@@ -15,7 +15,7 @@ keywords: ["callback", "slack", "discord", "pagerduty", "integration", "notify",
 | admin panel → webhooks | site owners and admins | site selector, **add webhook**, an on/off switch, **test**, edit, delete |
 | settings → webhooks | site owners and admins | the list, **recent deliveries**, retrying a delivery, **create webhook**, pause and resume, rotating the secret, and delete |
 
-every webhook action, reading the list and its deliveries included, needs `WEBHOOK_MANAGE` on the site, which owners and admins hold. a member who opens settings → webhooks is told the site's admins manage them, and the API refuses their calls. the admin panel page opens only for someone who is an owner or admin on at least one site.
+every webhook action, reading the list and its deliveries included, needs `WEBHOOK_MANAGE` on the site, which owners and admins hold. a member who opens settings → webhooks is told the site's admins manage them, and the API refuses their calls. the admin panel page opens only for someone who is an owner or admin of the whole site on at least one site.
 
 the probe, `POST /api/webhooks/probe`, has no button: call it from the API or with [`owlette trigger --via-api`](/docs/cli/reference/trigger#server-probe-mode).
 
@@ -40,7 +40,7 @@ from settings:
 3. enter the **endpoint url**, an optional description, and one or more **events** (**select all** ticks every one).
 4. copy the secret from the banner, "signing secret issued — copy it now".
 
-either way the secret is shown once. no list, detail or edit call returns it again. the URL must be `https`, on an allowed port, and resolve to a public address (`bad_scheme`, `bad_port`, `private_ip`), and every event must come from the catalog below.
+either way the secret is shown once. no list, detail or edit call returns it again. the URL must be `https`, on an allowed port, and resolve to a public address (`bad_scheme`, `bad_port`, `private_ip`), and every event must come from the catalog below. deliveries follow no redirects: a `3xx` answer fails the delivery, so give the endpoint's final URL.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "self-update"
 description: "the owlette agent updates itself remotely, on Windows, macOS and Linux, without anyone at the machine: the dashboard sends each machine the installer for its own platform, and the agent verifies it and hands it to the OS."
-keywords: ["upgrade", "update agent", "update owlette", "new version", "fleet update", "rollback", "downgrade"]
+keywords: ["upgrade", "update agent", "update owlette", "new version", "fleet update", "rollback", "downgrade", "installer_not_published"]
 ---
 
 ---
@@ -107,6 +107,8 @@ the installer upgrades in place. it does not run a separate config backup and re
 | `target_version` | recommended | used for post-restart verification. if omitted, the agent tries to infer it from `vX.Y.Z` in the URL or records `unknown`. |
 | `deployment_id` | no | passed through when updating command progress and completion. |
 
+the server queues `update_owlette` only for a published installer: `installer_url` and `checksum_sha256` must match a file of `target_version`, or of the latest version when `target_version` is left out. anything else is refused with `403 installer_not_published`, and nothing is queued.
+
 ---
 
 ## version verification
@@ -165,4 +167,4 @@ if the agent reports the same version after the update:
 
 ### rollback
 
-to roll back to a previous version, send another `update_owlette` command that points to the older installer for the machine's platform and includes that installer's SHA-256 checksum. on Linux the agent installs with `--allow-downgrades`, so an older package goes on like a newer one.
+to roll back to a previous version, send another `update_owlette` command that points to the older installer for the machine's platform, with that installer's SHA-256 checksum and the older version as `target_version`. the version must still be published on `/admin/installers`: without `target_version` the server checks the file against the latest version and refuses it. on Linux the agent installs with `--allow-downgrades`, so an older package goes on like a newer one.

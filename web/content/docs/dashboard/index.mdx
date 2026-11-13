@@ -32,11 +32,12 @@ the dashboard watches and controls machines on Windows, macOS and Linux. a few f
 | **settings: webhooks** | `/settings/webhooks` | site webhook subscriptions, delivery history, retries and secret rotation |
 | **settings: api keys** | `/settings/api-keys` | scoped API keys for automation |
 | **settings: alerts** | `/settings/alerts` | your alert email switches; where every alert email's **manage alerts** link lands |
+| **plan** | `/settings/plan` | once [plans](/docs/plans) apply: your trial, your free usage and each site you own with its plan |
 | **unsubscribe** | `/unsubscribe` | where the unsubscribe link in alert emails lands; it asks before turning them off |
 
 ### admin
 
-the admin panel's sidebar shows what your role allows, in sections: people, fleet, configuration and support. anyone who owns or administers a site sees the site-scoped pages, limited to their sites; superadmins see everything.
+the admin panel's sidebar shows what your role allows, in sections: people, fleet, configuration and support. anyone who owns or administers the whole of a site sees the site-scoped pages, limited to their sites; superadmins see everything.
 
 | page | URL | who | what it is |
 |------|-----|-----|------------|
@@ -45,11 +46,12 @@ the admin panel's sidebar shows what your role allows, in sections: people, flee
 | **swoop** | `/admin/swoop` | site admins | each site's swoop switch, and live swoop sessions — see [admin → swoop](/docs/dashboard/swoop#admin--swoop) |
 | **hoot** | `/admin/hoot` | site admins | hoot's approval setting and the machines that act on others — see [hoot mcp](/docs/agent/hoot-mcp) |
 | **schedules** | `/admin/schedules` | site admins | [schedule presets](/docs/dashboard/admin/schedule-presets) |
-| **alerts** | `/admin/alerts` | site admins | [threshold alert rules](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
+| **alerts** | `/admin/alerts` | site admins | your own alert emails, and [threshold alert rules](/docs/dashboard/admin/email-alerts#threshold-alert-rules) |
 | **webhooks** | `/admin/webhooks` | site admins | [outbound webhooks](/docs/dashboard/admin/webhooks) |
 | **users** | `/admin/users` | superadmins | [accounts, global roles and site assignment](/docs/dashboard/admin/user-management) |
 | **installers** | `/admin/installers` | superadmins | [agent installer versions](/docs/dashboard/admin/installer-management) |
 | **template library** | `/admin/presets` | superadmins | [the deployment template library](/docs/dashboard/admin/system-presets) |
+| **issues** | `/admin/issues` | superadmins | the issues people send with **submit issue**, to read and triage |
 | **email** | `/admin/email` | superadmins | email configuration and testing |
 
 ---

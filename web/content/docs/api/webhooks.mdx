@@ -4,7 +4,7 @@ description: "webhooks are how roost tells your systems that something happened 
 keywords: ["callback", "callback url", "notifications"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-12
 
 a webhook is an HTTP `POST` that owlette sends to a URL you control when a subscribed event happens on your site. the body is a JSON envelope describing the event, and the `Roost-Signature` header lets you prove owlette sent it. answer with any `2xx` status to acknowledge it.
 
@@ -211,7 +211,7 @@ app.listen(8080);
 ### Python
 
 ```python
-# pip install --pre owlette-sdk fastapi uvicorn   (run with: uvicorn server:app --port 8080)
+# needs fastapi, uvicorn and owlette-sdk (from a checkout until it is on PyPI); run with: uvicorn server:app --port 8080
 import json
 import os
 

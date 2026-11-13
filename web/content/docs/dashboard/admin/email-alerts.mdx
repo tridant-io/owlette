@@ -1,7 +1,7 @@
 ---
 title: "email alerts"
 description: "owlette emails a site's people when a machine goes offline, a process crashes, a metric breaks a rule, hoot escalates, a display fails, a talon fires or an API key is about to expire. site owners and admins write threshold rules on admin → alerts; each person picks which emails they get in account settings."
-keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest"]
+keywords: ["notifications", "alert rules", "thresholds", "not getting emails", "stop emails", "offline email", "crash email", "metric alert", "temperature alert", "disk full", "resend", "cooldown", "digest", "built-in alerts", "custom rules"]
 ---
 
 alert email goes to the people on a site, not to a fixed address. each person decides which categories they get; site owners and admins decide what counts as a threshold breach.
@@ -60,7 +60,7 @@ the email lists the machines **not responding**, any that **reported shutting do
 
 ## threshold alert rules
 
-**admin** → **alerts** (`/admin/alerts`) holds one site's threshold rules, stored at `sites/{siteId}/settings/alerts`. the site selector offers the sites you belong to; saving needs `ALERT_RULES_MANAGE` on the site, which owners and admins hold. every save replaces the whole rule list through `PUT /api/sites/{siteId}/alerts`.
+**admin** → **alerts** (`/admin/alerts`) opens with **built-in**: your own alert email switches, the same seven as [your own switches](#your-own-switches), for every site, each saving as you flip it. under it, **custom rules** holds one site's threshold rules, stored at `sites/{siteId}/settings/alerts`. the site selector offers the sites you belong to; saving needs `ALERT_RULES_MANAGE` on the site, which owners and admins hold. every save replaces the whole rule list through `PUT /api/sites/{siteId}/alerts`.
 
 **create rule** opens **create alert rule**:
 
@@ -110,7 +110,7 @@ the **webhook** channel sends `threshold.breached`, an event new subscriptions c
 
 ## your own switches
 
-each person sets these for themselves in [account settings → alerts](/docs/dashboard/account-settings#alerts), or on `/settings/alerts`:
+each person sets these for themselves in [account settings → alerts](/docs/dashboard/account-settings#alerts), on `/settings/alerts`, or, as a site owner or admin, under **built-in** on admin → alerts:
 
 | switch | stored as |
 |---|---|

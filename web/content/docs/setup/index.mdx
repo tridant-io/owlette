@@ -47,7 +47,7 @@ each release also receives a future Apache License, Version 2.0 grant on the sec
 ## setup sequence
 
 1. [Firebase setup](/docs/setup/firebase): create the project, enable Authentication, Firestore and Storage, and generate service-account credentials.
-2. **Cloudflare R2**: run `node scripts/provision-r2.mjs` to create the four roost buckets (`owlette-{prod,dev}-{content,manifests}`) and the CORS rules on the content and issue-logs buckets. it reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` from `.claude/.env.local`, and `--verify-only` checks without changing anything. then, in the Cloudflare dashboard under **R2 → manage R2 API tokens**, mint an S3 access key with object read and write on the four buckets.
+2. **Cloudflare R2**: run `node scripts/provision-r2.mjs` to create the four roost buckets (`owlette-{prod,dev}-{content,manifests}`), the two issue-logs buckets (`owlette-{prod,dev}-issue-logs`, with the rule that deletes their files 30 days after upload) and the CORS rules on the content and issue-logs buckets. it reads `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_R2_API_TOKEN` from `.claude/.env.local`, and `--verify-only` checks without changing anything. then, in the Cloudflare dashboard under **R2 → manage R2 API tokens**, mint an S3 access key with object read and write on the four roost buckets, and a second on the two issue-logs buckets.
 3. **Cloudflare Turnstile**: add a widget covering your dashboard hostnames. without its secret, production refuses every sign-up and password reset.
 4. [environment variables](/docs/setup/environment-variables): collect the Firebase client and admin values, session and encryption secrets, R2, Turnstile, Upstash, email, cron and, for swoop, its signing keys.
 5. [Firestore rules](/docs/setup/firestore-rules): deploy the repository's Firestore rules and indexes and the Storage rules.
@@ -68,7 +68,7 @@ a few values name the hosted service in code rather than in configuration. chang
 |------|-------|----------------------|
 | the agent's server | `get_api_base_url`, `get_project_id` and `get_web_host` in `agent/src/shared_utils.py`, with the host names in `agent/src/configure_site.py`, `agent/owlette_installer.iss` and `desktop/src/lib/environment.ts` | the agent only ever talks to `owlette.app` or `dev.owlette.app` and their Firebase projects, and ignores any other `api_base` in its `config.json`, so it never sends its tokens to a host it does not know. build your own installers after changing them |
 | passkeys | `getRpId` and `getExpectedOrigins` in `web/lib/webauthn.server.ts` | in production the relying party is `owlette.app`, so passkeys fail on any other domain. authenticator-app codes work everywhere |
-| R2 CORS origins | `CORS_ALLOWED_ORIGINS` in `scripts/provision-r2.mjs` | browser uploads to roost fail CORS from your domain. add it and re-run the script |
+| R2 CORS origins | `HOSTED_ORIGINS` in `scripts/provision-r2.mjs` | browser uploads to roost, and files added to an issue from the dashboard, fail CORS from your domain. add it and re-run the script |
 | Cloud Functions callback URL | `API_BASE_URL` in `functions/.env.<projectId>` | unset, functions call `dev.owlette.app` when the project ID contains `dev` and `owlette.app` otherwise |
 | swoop signalling hostnames | `routes` in `infra/swoop-signal/wrangler.toml` | the worker deploys to `signal.owlette.app` and `signal-dev.owlette.app` |
 
@@ -81,7 +81,7 @@ Firebase and R2 serve different parts of the system:
 | storage service | used for |
 |-----------------|----------|
 | **Firestore** | sites, members, users, machines, commands, settings, audit and activity data, and agent state |
-| **Firebase Storage** | installer binaries, screenshots, chat images and profile photos |
-| **Cloudflare R2** | roost content chunks, immutable version bodies, signed upload and download URLs |
+| **Firebase Storage** | installer binaries until the installer R2 keys are set, screenshots, chat images and profile photos |
+| **Cloudflare R2** | roost content chunks, immutable version bodies, signed upload and download URLs; issue logs and the files added to an issue; installers once the installer R2 keys are set |
 
 for the complete variable inventory, use [environment variables](/docs/setup/environment-variables). for host configuration, failover and the scheduled jobs, use [web deployment](/docs/setup/web-deployment).

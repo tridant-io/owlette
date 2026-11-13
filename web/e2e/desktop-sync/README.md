@@ -56,19 +56,16 @@ close the app and stop the live service yourself first.
   `cd agent && python -m pytest`. Override with `OWLETTE_PYTHON` if it is not
   `python`.
 
-### `SESSION_SECRET` is required
+### `SESSION_SECRET`
 
-`lib/sessionManager.server.ts:69` throws at **module load** when `SESSION_SECRET`
+`lib/sessionManager.server.ts:101` throws at **module load** when `SESSION_SECRET`
 is missing or under 32 characters, and `next build` evaluates route modules while
-collecting page data. `scripts/e2e-build.mjs` does not set it, so a checkout
-without `web/.env.local` — a fresh worktree, or CI — must supply it in the
-environment. `.github/workflows/e2e.yml:105` does exactly this for `npm run e2e`.
+collecting page data. `scripts/e2e-build.mjs` and the web server in
+`playwright.config.ts` (which this suite reuses) each set an emulator-only value
+when the environment has none, so a checkout without `web/.env.local` — a fresh
+worktree, or CI — needs nothing exported.
 
-```bash
-export SESSION_SECRET='ci-e2e-emulator-session-secret-do-not-reuse-in-prod'
-```
-
-Do **not** solve this by copying `web/.env.local` into a worktree: its
+Do **not** copy `web/.env.local` into a worktree: its
 `FIREBASE_PROJECT_ID` points firebase-admin at a real project, and the emulator
 run would seed and read the wrong database.
 
@@ -128,7 +125,6 @@ cd desktop && npx tauri build --no-bundle --config "$SCRATCH/tauri-isolate.json"
 cp src-tauri/target/release/owlette-desktop.exe "$SCRATCH/owlette-desktop-e2e.exe"
 
 export OWLETTE_DESKTOP_EXE="$SCRATCH/owlette-desktop-e2e.exe"
-export SESSION_SECRET='ci-e2e-emulator-session-secret-do-not-reuse-in-prod'
 cd ../web && npm run e2e:desktop-sync:nobuild
 ```
 
@@ -155,7 +151,6 @@ clears at the start of a run.
 3. Point the suite at the build and run it:
    ```bash
    export OWLETTE_DESKTOP_EXE="$PWD/desktop/src-tauri/target/release/owlette-desktop.exe"
-   export SESSION_SECRET='ci-e2e-emulator-session-secret-do-not-reuse-in-prod'
    cd web && npm run e2e:desktop-sync:nobuild
    ```
 4. Restart the service afterwards (`net start OwletteService`); it re-spawns the
@@ -211,7 +206,7 @@ asserting the agent's metrics upload, not the config sync. See
 ### Setup takes ~100s, and that is expected
 
 The agent opens with a network gate that TCP-probes `api_base`'s host on a
-**hardcoded port 443** (`agent/src/health_probe.py:38`, `:327`). That is correct
+**hardcoded port 443** (`agent/src/health_probe.py:38`, `:326`). That is correct
 for the `https` api_base every real agent has, and unreachable for this suite's
 loopback `http://127.0.0.1:3100`, so the gate always spends its full 90s budget
 (`NETWORK_GATE_MAX_WAIT`) before proceeding. It is non-fatal by design and the
@@ -252,9 +247,9 @@ Other safety properties:
 - `.migrations/legacy-launch-tasks-swept` and `.migrations/content-store-moved`
   are pre-created. Without them the boot migrations run, and
   `_sweep_legacy_launch_tasks` shells out to `schtasks` against the **real**
-  machine's task store (`owlette_service.py:6815`) — the sandbox does not contain
+  machine's task store (`owlette_service.py:9526`) — the sandbox does not contain
   scheduled tasks, so there is nothing there to isolate it.
-- `OWLETTE_DISABLE_WATCHDOG_RESTART=1` (`connection_manager.py:51`) — no
+- `OWLETTE_DISABLE_WATCHDOG_RESTART=1` (`connection_manager.py:56`) — no
   self-restart storms out of a test sandbox.
 - The agent is stopped the way `owlette-host` stops it: a `tmp/stop_signal.json`
   sentinel written **while it is running** (freshness is the guard —

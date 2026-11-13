@@ -409,6 +409,6 @@ Task Scheduler does not keep a task's output, so the action runs Node through `c
 
 ## error handling summary
 
-- `quota_exceeded` (402) — script sends an optional `ALERT_WEBHOOK` alert pointing at the site's quota route. exit code 2 is distinct from 1 so an operator's `OnFailure=` unit can escalate differently.
+- `quota_exceeded` (402) — script sends an optional `ALERT_WEBHOOK` alert pointing at the site's quota route. exit code 2 is distinct from 1 so an operator's `OnFailure=` unit can escalate differently. the code is reserved: no public route returns it today, so check the site's quota before a large sync (see [roost storage](/docs/api/rate-limits#roost-storage)).
 - other API errors, including `precondition_failed` / `version_stale` (412), are logged and exit 1; the next scheduled run tries again against the latest head.
 - `rate_limited` (429) — not specially handled in this raw REST variant. for fleets syncing hundreds of roosts from one host, add a `Retry-After`-aware retry loop around `api()`.

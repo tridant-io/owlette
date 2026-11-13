@@ -1,12 +1,12 @@
 ---
 title: "SDK workflow examples"
-description: "small runnable SDK examples live in the Node and Python SDK example folders and run against a dev or staging tenant with explicit env vars."
+description: "small runnable SDK examples live in the Node and Python SDK example folders and run against a dev or staging environment with explicit env vars."
 ---
 
 - `sdks/node/examples/*.ts`
 - `sdks/python/examples/*.py`
 
-they are designed to run against a dev or staging tenant with explicit env vars.
+they are designed to run against a dev or staging environment with explicit env vars.
 they do not read local credential files.
 
 for CI/CD examples, see [CI/CD with GitHub Actions](/docs/api/examples/ci-cd-github-actions).
@@ -121,6 +121,6 @@ each also honors `OWLETTE_API_URL` (default `https://owlette.app`). the SDK nigh
 ## CI note
 
 these examples are intentionally gated by env instead of running against a
-shared live tenant by default. a CI job can validate the offline webhook fixture
+shared live environment by default. a CI job can validate the offline webhook fixture
 without network access, and a dev/staging smoke job can run the full set by
 providing the fixture env above.

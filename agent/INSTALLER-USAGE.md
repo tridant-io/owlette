@@ -54,7 +54,7 @@ Owlette-Installer-v<version>.exe /SILENT /SERVER=prod /ADD=silver-compass-drift
 Owlette-Installer-v<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVER=prod /ADD=silver-compass-drift
 ```
 
-**Note:** For unattended installs, pass `/ADD=<phrase>` with a preauthorized pairing phrase from the dashboard. A silent install without `/ADD=` skips pairing entirely — nobody can read a pairing phrase on that path — and installs the machine unpaired. The service is still registered and started; pair it later from the desktop app or `configure_site.py`.
+**Note:** For unattended installs, pass `/ADD=<phrase>` with a preauthorized pairing phrase from the dashboard. By default a generated phrase adds only new machines: to reinstall a machine already on the site, name it in the generate dialog, or tick **let this code reinstall any machine already on this site**; any other machine already there is refused and the phrase stays unspent. A silent install without `/ADD=` skips pairing entirely — nobody can read a pairing phrase on that path — and installs the machine unpaired. The service is still registered and started; pair it later from the desktop app or `configure_site.py`.
 
 ## Installation Process
 
@@ -123,9 +123,9 @@ Owlette-Installer-v<version>.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SERVE
 - Automatic refresh: Agent handles this transparently
 
 **Token revocation:**
-- Via web dashboard: "Remove Machine" button
+- Via web dashboard: **revoke token** or **remove machine** in the machine's menu, or **revoke token** on the admin panel's agent tokens page
 - Immediately revokes agent access
-- Agent stops syncing within 1 hour (when access token expires)
+- A running agent leaves the site within a minute of a revoke (the server queues an `unpair` command) and within seconds of a remove; an agent that is offline then leaves when its next token refresh is refused
 
 ### Verify Installation
 

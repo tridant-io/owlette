@@ -157,7 +157,7 @@ when a process crashes, the agent reports the event to the web dashboard through
 
 ![the desktop app's restart and kill buttons greyed out on a process that is not running](/docs-screens/agent-run-controls.png)
 
-the desktop app stamps a marker on the PID's row in `tmp/app_states.json` so the service reads the exit as intended rather than a crash. `RESTARTING` is written before the terminate and re-asserted once the process is really gone — a service tick during the close would otherwise overwrite it — and `KILLED` is written once the terminate succeeds. a restart also produces a `process_restarted` event; a kill from the desktop app produces none.
+before it stops anything, the desktop app checks that the PID still runs the process's executable, and on Windows that it is still the very process the service recorded, by its start time; a PID that fails is refused rather than closed. it then stamps a marker on the PID's row in `tmp/app_states.json` so the service reads the exit as intended rather than a crash. `RESTARTING` is written before the terminate and re-asserted once the process is really gone — a service tick during the close would otherwise overwrite it — and `KILLED` is written once the terminate succeeds. a restart also produces a `process_restarted` event; a kill from the desktop app produces none.
 
 what happens after the stop follows the launch mode:
 

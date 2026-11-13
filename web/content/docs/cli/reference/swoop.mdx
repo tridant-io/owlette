@@ -65,7 +65,7 @@ the `--json` envelope is:
 
 `viewer` is `app` when owlette swoop opened the URL and `browser` when your browser did. under `--no-open`, `opened` is `false` and `viewer` is `null`.
 
-human mode prints the URL alone on stdout and its notes on stderr, so `owlette swoop … | …` stays clean. the notes are: that taking control asks for a second factor in the viewer (always), that the machine is offline, that the machine record carries no capabilities, and where the URL opened (`opened in owlette swoop` or `opened in your browser`). `--json` prints no notes.
+human mode prints the URL alone on stdout and its notes on stderr, so `owlette swoop … | …` stays clean. the notes are: that taking control asks for a second factor in the viewer (always), that the machine is offline, that the machine record carries no capabilities, and where the URL opened (`opened in the owlette swoop desktop app` or `opened in your browser`). `--json` prints no notes.
 
 backing: `GET /api/sites/{siteId}/machines/{machineId}`.
 

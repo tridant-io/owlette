@@ -1,7 +1,7 @@
 ---
 title: "installer"
 description: "installer manages the platform-wide catalog of owlette agent installers that new machines download. superadmin only: installer=*:read for list and latest, installer=*:write for upload, installer=*:admin for set-latest, delete and an upload that marks the version latest."
-keywords: ["agent release", "publish agent"]
+keywords: ["agent release", "publish agent", "release notes"]
 ---
 
 each installer version carries one file per platform, keyed the way machines report their platform:
@@ -105,6 +105,8 @@ owlette installer upload <file> --version=<X.Y.Z> [--platform <key>] [--release-
 | `--set-latest` | boolean | no | mark the version latest after upload — already the default |
 | `--no-set-latest` | boolean | no | upload without moving the latest pointer |
 | `--idempotency-key <key>` | string | no | `Idempotency-Key` for both server calls (default `cli-installer-upload-<uuid>`) |
+
+`--release-notes` is stored only by the upload that creates the version, so pass it with the first file. to correct a published version's notes later, use `PATCH /api/installer/{version}`; the CLI has no verb for it.
 
 a file name without one of the three extensions fails before upload unless `--platform` names a platform, and the server still rejects any file name that does not end in `.exe`, `.pkg` or `.deb`, or whose extension does not match `--platform`.
 

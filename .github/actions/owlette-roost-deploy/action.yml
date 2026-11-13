@@ -6,7 +6,7 @@ branding:
 
 inputs:
   token:
-    description: Owlette API key with site read plus roost write/deploy scope.
+    description: Owlette API key with site write plus roost write/deploy scope.
     required: true
   site-id:
     description: Owlette site id that owns the Roost.

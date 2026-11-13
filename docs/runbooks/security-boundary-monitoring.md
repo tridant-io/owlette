@@ -23,7 +23,7 @@ W8.2 adds the scaffolding required before wave 9.1 enforcement/prod work. The we
 | `request_duration_seconds{route,method}` | Sentry request duration for privileged routes. | latency ticket/page |
 | `railway_memory_bytes`, `railway_cpu_seconds`, `railway_restart_total` | Railway service health. | railway-restarts |
 | `firestore_qps{collection,op}` | Firestore read/write health. | audit-qps-drop |
-| `cortex_events_processed_total{site}` | Autonomous Cortex event heartbeat. | cortex-events-stalled |
+| `cortex_events_processed_total{site}` | Autonomous hoot event heartbeat. | cortex-events-stalled |
 
 ## Alert Wiring
 
@@ -100,7 +100,7 @@ Trigger: any sustained `rate_limit_hits_total{bucket='system'}` for 5 minutes.
 Triage:
 
 1. Break down by `capability` and `site`.
-2. Check autonomous Cortex event volume and whether a runaway loop is dispatching repeated commands.
+2. Check autonomous hoot event volume and whether a runaway loop is dispatching repeated commands.
 3. If the burst is legitimate, flip `rate_limit_enforcement=false` temporarily and patch `SYSTEM_LIMITS` with W8.0 calibration data.
 4. Re-enable the flag after the patch deploys and verify no new system hits.
 
@@ -166,11 +166,11 @@ Triage:
 
 Alert: `cortex-events-stalled`
 
-Trigger: incoming Cortex events exist but processed events are zero for 15 minutes.
+Trigger: incoming autonomous hoot events exist but processed events are zero for 15 minutes.
 
 Triage:
 
-1. Check `/api/cortex/autonomous` and `/api/agent/alert` logs.
+1. Check `/api/hoot/autonomous` (old path `/api/cortex/autonomous`) and `/api/agent/alert` logs.
 2. Confirm the internal `x-cortex-secret` gate has not changed.
 3. Check system bucket rate-limit hits.
 4. Verify audit rows for `actor.type=system`, `actor.name=cortex_autonomous`.
@@ -201,4 +201,4 @@ Deploy to dev:
 firebase deploy --only firestore:indexes --project owlette-dev-3838a --config firebase.json --non-interactive
 ```
 
-After deployment, rerun the W8.1 Cortex member-list read if needed; the missing-index failure should be gone once Firestore finishes building indexes.
+After deployment, rerun the W8.1 hoot member-list read if needed; the missing-index failure should be gone once Firestore finishes building indexes.

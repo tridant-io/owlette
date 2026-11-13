@@ -38,8 +38,8 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 - `chat` - create, list, send, rename, and delete hoot chat sessions.
 - `deploy` - manage classic installer deploys; use `roost deploy` for content-addressed project deploys.
 - `process` - manage process lifecycle on site machines.
-- `key` - list your api keys and mint new ones with the calling key's scopes; rotate and revoke them in the dashboard.
-- `site` - list accessible sites and inspect site details.
+- `key` - list your api keys and mint new ones with the calling key's scopes, with a superadmin key (`user=*:admin`); rotate and revoke them, and anything a non-superadmin needs, in the dashboard.
+- `site` - list accessible sites, inspect site details, and manage members: list, add, set a role, remove, and transfer ownership.
 - `user` - manage platform users when your key has superadmin scope.
 - `installer` - list, inspect latest, upload, set latest, and delete installer binaries.
 - `auth` - log in, log out, and inspect the active authentication state.
@@ -52,11 +52,11 @@ owlette roost push ./my-project --to rst_my_project_id --site site-1
 ## plans
 
 Plans are not enforced during the beta. Once they apply, a command that the
-site owner's plan does not cover fails with `402 plan_required`, and the
-message says what the plan lacks. API keys are part of pro: on a
-plan without them every command made with a key fails that way, and
-`owlette auth login` cannot complete — the browser shows why, and the cli
-reports the phrase as expired. See [plans](https://owlette.app/docs/plans).
+site's plan does not cover fails with `402 plan_required`, and the
+message says what the plan lacks. API keys are part of pro, checked against
+the plan of the site each command acts on: on a site without them every
+command made with a key fails that way. `owlette auth login` and creating a
+key are never refused by a plan. See [plans](https://owlette.app/docs/plans).
 
 full docs at [owlette.app/docs/cli/overview](https://owlette.app/docs/cli/overview).
 

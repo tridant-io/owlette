@@ -4,7 +4,7 @@ description: "list endpoints use cursor pagination: page_size and page_token on 
 keywords: ["paging", "cursor", "next page", "page_size", "page_token", "limit", "offset"]
 ---
 
-**last updated**: 2026-10-05
+**last updated**: 2026-11-12
 
 ---
 
@@ -56,6 +56,7 @@ a `page_size` that is not a whole number between 1 and the route's maximum is re
 | `GET /api/webhooks/{webhookId}/deliveries` | `deliveries` | 20 | 100 |
 | `GET /api/installer` | `versions` | 20 | 100 |
 | `GET /api/users` | `users` | 20 | 100 |
+| `GET /api/admin/issues` | `issues` | 20 | 100 |
 | `GET /api/hoot/conversations` | `data.conversations` | 25 | 100 |
 
 shape differences to know about:

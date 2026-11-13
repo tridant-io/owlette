@@ -26,8 +26,8 @@ API paths are rooted at `/api`. the rendered endpoint reference is at [`/docs/ap
 
 | resource | purpose |
 |---|---|
-| sites | the tenant boundary for machines, members, quotas, logs, webhooks, deployments, and roost content |
-| machines | agents on Windows, macOS, and Linux machines registered to a site |
+| sites | the boundary for machines, members, quotas, logs, webhooks, deployments, and roost content |
+| machines | Windows, macOS, and Linux machines running the agent, each paired to one site |
 | commands | async work queued to a machine, such as screenshots, restarts, or process actions |
 | processes | the monitored processes configured on each machine |
 | deployments | installer fan-out records and per-target status |
@@ -35,6 +35,7 @@ API paths are rooted at `/api`. the rendered endpoint reference is at [`/docs/ap
 | hoot | AI diagnostics over [`/api/hoot/conversations`](/docs/api/hoot) |
 | webhooks | outbound event subscriptions and their delivery history |
 | API keys | scoped credentials for automation |
+| issues | what people filed with submit issue, their attached logs and files, and triage status. superadmin only |
 
 ---
 
