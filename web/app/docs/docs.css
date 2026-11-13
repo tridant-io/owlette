@@ -61,7 +61,8 @@
   padding-bottom: 8rem;
 }
 
-/* links never underline: article links read as links by accent colour */
+/* links never underline: article links read as links by accent colour, and a heavier
+   weight so colour is not the only cue (wcag 1.4.1, axe link-in-text-block) */
 #nd-page a,
 #nd-toc a {
   text-decoration: none;
@@ -69,6 +70,7 @@
 
 #nd-page .prose a:not([data-card]) {
   color: var(--accent-cyan);
+  font-weight: 600;
 }
 
 #nd-page a:hover,
