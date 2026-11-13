@@ -101,6 +101,7 @@ Version files: `/VERSION`, `agent/VERSION`, `web/package.json`, `firestore.rules
 **E2E verification (two layers).** The `playwright e2e` GitHub Action ([.github/workflows/e2e.yml](../.github/workflows/e2e.yml)) gates pushes to `dev`/`main` that touch `web/**`, `functions/**`, `firestore.rules`, `firestore.indexes.json`, `storage.rules`, or `firebase.json`.
 - **Proactive (preferred):** before pushing such changes, run `/preflight` — it runs lint, typecheck, unit tests, and the local e2e suite (the exact mirror of CI; about 5 minutes cold, 2–3 warm, against about 27 minutes on the hosted runner). Fix reds locally; don't ship them to a branch that auto-deploys.
 - **Reactive (safety net):** after a `git push` or `gh pr merge` lands on `dev`/`main` in e2e scope, the `post-push-e2e.mjs` hook reminds you to watch the triggered run with `gh run watch <id> --exit-status --interval 60` (run it in the background; the default 3-second poll drains the API limit every session on this machine shares, and a watcher's 403 then reads like a red run). On failure: `gh run view <id> --log-failed`, diagnose, and **propose** a fix — never auto-fix-and-repush (`dev` auto-deploys, `main` is protected).
+- **A merge queue shares one run.** When several PRs merge into `dev` back to back, wait only on the e2e run of the last merge, which covers them all. Skip the hook's reminders for the earlier ones, and don't hold a merge or a deploy for an earlier run. If the last run is red, tell from its failing specs which merge broke it.
 
 ---
 
@@ -271,4 +272,4 @@ detail that changes a decision.
 
 ---
 
-**Last Updated**: 2026-11-10
+**Last Updated**: 2026-11-12
