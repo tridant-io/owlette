@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "owlette-swoop-viewer"
-version = "4.1.28"
+version = "4.2.0"
 dependencies = [
  "block2",
  "log",
